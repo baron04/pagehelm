@@ -17,7 +17,7 @@ from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStat
 from web_operation_agent.goal import executor as executor_module
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexField, IndexPage
-from web_operation_agent.goal.ports import Aggregate, Fact, PagePlan, Resolution, Resolved
+from web_operation_agent.goal.ports import OPTIONAL, Aggregate, Fact, PagePlan, Resolution, Resolved
 from web_operation_agent.goal.spec import DECLARE_GOAL_TOOL, GoalSpec
 from web_operation_agent.goal.understand import understand
 from web_operation_agent.schemas.browser import ActionReceipt, ElementRef, PageObservation
@@ -44,11 +44,16 @@ def _index() -> ApplicationIndex:
 class _Port:
     """A resolver whose answers are scripted per deliverable kind."""
 
-    def __init__(self, resolved: list[Resolved], then: list[Resolved] | None = None):
+    def __init__(self, resolved: list[Resolved], then: list[Resolved] | None = None,
+                 offers: frozenset[str] = OPTIONAL):
         self.resolved = resolved
         #: What the second resolution of a turn answers, when a repair is expected.
         self.then = then
+        self.offers = offers
         self.specs: list[GoalSpec] = []
+
+    def capabilities(self):
+        return self.offers
 
     def index(self, *, context=None):
         return _index()
@@ -197,10 +202,10 @@ class GoalTurnTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run(self, script, resolved, *, decision="approved", text="S00006 的客户是谁？看看其他信息",
-             resolved_then=None):
+             resolved_then=None, offers=OPTIONAL):
         channel = _Channel(page_url="http://127.0.0.1:8080/home", decision=decision)
         chat = _AgreeingChat(script)
-        port = _Port(resolved, resolved_then)
+        port = _Port(resolved, resolved_then, offers)
         executor = GoalTurnExecutor(
             channel=channel,
             config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
@@ -359,6 +364,23 @@ class GoalTurnTests(unittest.TestCase):
         self.assertFalse(reading["agrees"])
         self.assertTrue(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
         self.assertIn("Lumber Inc", execution.user_answer)
+
+    def test_a_port_without_an_optional_capability_gets_a_plain_answer_not_a_call(self):
+        # A port offering only the required level: the fact is resolved by it, the tab
+        # is not asked of it, and the reply says what this application does not offer.
+        execution, _channel, _chat, port, events = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]},
+                {"kind": "page", "entity": "order", "record": "S00006", "section": "Other Info"}]})],
+            [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            offers=frozenset())
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertIn("does not offer sections", execution.user_answer)
+        self.assertEqual([d.kind for d in port.specs[0].deliverables], ["fact"])
+        missing = next(e for e in events if e["event"] == "goal_capability_missing")
+        self.assertEqual(missing["missing"], [["sections"]])
+        # Nothing was left to open, so the page was not even looked at.
+        self.assertEqual(_Browser.instances[0].actions, [])
 
     def test_a_handoff_highlights_and_never_presses(self):
         execution, _channel, _chat, _port, events = self._run(

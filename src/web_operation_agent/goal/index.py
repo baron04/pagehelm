@@ -84,6 +84,9 @@ class IndexPage:
     aliases: tuple[str, ...] = ()
     #: Key of the page whose filters and groups this page shares, when it lists none.
     filters_as: str = ""
+    #: Tabs on the page itself (a workspace with tabs), by their visible names; a
+    #: record's tabs are on its entity instead.
+    sections: tuple[str, ...] = ()
     #: Filters the page applies on its own when opened, by name: the page shows a
     #: narrower set than its entity (customers among contacts), and a declaration that
     #: means every record of the entity names the entity without this page.
@@ -156,7 +159,7 @@ class ApplicationIndex:
                 parts.append("actions: " + ", ".join(entity.actions))
             lines.append(" | ".join(parts))
         lines.append("")
-        lines.append("PAGES (key: breadcrumb [aliases] | entity | views | filters | groups | shows only | operations)")
+        lines.append("PAGES (key: breadcrumb [aliases] | entity | views | filters | groups | shows only | operations | sections)")
         for page in self.pages:
             parts = [f"{page.key}: {page.breadcrumb}"
                      + (f" [{', '.join(page.aliases)}]" if page.aliases else ""),
@@ -171,6 +174,8 @@ class ApplicationIndex:
                 parts.append(f"filters/groups: as {page.filters_as}")
             if page.scope:
                 parts.append("shows only: " + ", ".join(page.scope))
+            if page.sections:
+                parts.append("sections: " + ", ".join(page.sections))
             if page.operations:
                 parts.append("operations: " + ", ".join(page.operations))
             lines.append(" | ".join(parts))

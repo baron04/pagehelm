@@ -21,6 +21,12 @@ def _norm(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
+#: The vendor desks: read-only pages with two tabs each, by page key.
+_DESKS = {"desk-partner": "/contacts/workflows/partner",
+          "desk-supplier": "/contacts/workflows/supplier"}
+_DESK_SECTIONS = ("Overview", "Terms")
+
+
 class ContactsGoalPort:
     """Resolve a small, real REST application's goals under its delegated actor."""
 
@@ -57,8 +63,19 @@ class ContactsGoalPort:
             pages=(IndexPage(key="contacts", label="Contacts", breadcrumb="Contacts",
                              entity="contacts", views=("list",),
                              operations=(("create",) if "contacts:write" in permissions
-                                         else ())),),
+                                         else ())),
+                   IndexPage(key="desk-partner", label="Partner desk",
+                             breadcrumb="Vendor workspaces / Partner desk", entity="contacts",
+                             sections=_DESK_SECTIONS),
+                   IndexPage(key="desk-supplier", label="Supplier desk",
+                             breadcrumb="Vendor workspaces / Supplier desk", entity="contacts",
+                             sections=_DESK_SECTIONS)),
             source_digest=digest)
+
+    def capabilities(self) -> frozenset[str]:
+        """Beyond the required level this application offers tabs on its vendor desks
+        and the creation handoff; it has no page filters, search box, lines or values."""
+        return frozenset({"sections", "handoffs"})
 
     def resolve(self, spec: GoalSpec, *, context: OperationContext | None = None,
                 current_path: str = "") -> Resolution:
@@ -91,8 +108,20 @@ class ContactsGoalPort:
     def _resolve_one(self, d: Deliverable, rows: list[dict], *, can_create: bool) -> Resolved:
         if _norm(d.entity) not in {"", "contacts", "contact", "联系人", "通讯录"}:
             return Resolved(kind=d.kind, problem="entity is not in this application's index")
-        if d.via or d.section or d.page.filters_on or d.page.filters_off or d.page.group_by:
+        if d.via or d.page.filters_on or d.page.filters_off or d.page.group_by:
             return Resolved(kind=d.kind, problem="requested relation or page part is unsupported")
+        if d.kind == "page" and d.page.key in _DESKS:
+            # A vendor desk: a read-only page with two tabs, reached by its own route.
+            section = next((s for s in _DESK_SECTIONS if _norm(s) == _norm(d.section)), "")
+            if d.section and not section:
+                return Resolved(kind=d.kind, problem="this desk has no such section")
+            path = _DESKS[d.page.key]
+            label = d.page.key.replace("desk-", "").title() + " desk"
+            return Resolved(kind=d.kind, page=PagePlan(
+                url=path, expected_path=path,
+                label=f"{label} · {section}" if section else label, section=section))
+        if d.section:
+            return Resolved(kind=d.kind, problem="this page has no sections")
         if d.kind == "handoff" and _norm(d.action) == "create":
             if d.page.key and _norm(d.page.key) != "contacts":
                 return Resolved(kind=d.kind, problem="page is not in the index")

@@ -97,8 +97,29 @@ class Resolution:
     reads: tuple[tuple[str, str], ...] = ()
 
 
+#: What every adapter must provide for the goal turn to answer questions and open
+#: pages: an index of entities, fields and pages; records found by name; field values;
+#: counts and lists with conditions; the address of a page or record. These have no
+#: capability name because they cannot be absent.
+REQUIRED = ("index", "records", "facts", "aggregates", "pages")
+#: What an adapter may add, each named so that the core can say honestly what this
+#: application does not offer rather than fail: page filters and groups ("facets"),
+#: tabs on a record's page ("sections"), the lines a record's form embeds ("lines"),
+#: business controls to point at ("handoffs"), entering a value before handing over
+#: ("fill"), free text searched on a page ("search"), and rules compiled from the
+#: deployment's source ("source").
+OPTIONAL = frozenset({"facets", "sections", "lines", "handoffs", "fill", "search", "source"})
+
+
 class GoalPort(Protocol):
-    """Compiled by the adapter under the acting user; read-only by construction."""
+    """Compiled by the adapter under the acting user; read-only by construction.
+
+    The contract has two levels. The required level is `index` and `resolve` for facts,
+    aggregates, lists and pages of named records. The optional level is declared by
+    `capabilities()`, a subset of `OPTIONAL`; a port without the method offers none of
+    them, and the core answers a deliverable that needs a missing one with a plain
+    statement instead of asking the port.
+    """
 
     def index(self, *, context: OperationContext | None = None) -> ApplicationIndex: ...
 
@@ -106,4 +127,13 @@ class GoalPort(Protocol):
                 current_path: str = "") -> Resolution: ...
 
 
-__all__ = ["Aggregate", "Fact", "GoalPort", "PagePlan", "Resolution", "Resolved"]
+def capabilities_of(port) -> frozenset[str]:
+    """The optional capabilities a port declares, restricted to the known names."""
+    method = getattr(port, "capabilities", None)
+    if not callable(method):
+        return frozenset()
+    return frozenset(str(name) for name in method()) & OPTIONAL
+
+
+__all__ = ["Aggregate", "Fact", "GoalPort", "OPTIONAL", "PagePlan", "REQUIRED", "Resolution",
+           "Resolved", "capabilities_of"]

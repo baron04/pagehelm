@@ -64,8 +64,14 @@ agent.
   deliverable kinds and condition types, all read-only RPC). Odoo implements the full
   reference index and resolver; the structurally different Contacts REST test application
   implements the same core port for actor-scoped facts, counts, lists and basic pages, and
-  explicitly refuses unsupported page controls and handoffs. A turn is marked complete only
-  when every declared deliverable settles.
+  explicitly refuses unsupported page controls and handoffs. The port contract has two
+  levels: the required index, records, facts, counts, lists and page addresses, and
+  optional capabilities a port declares by name (page filters and groups, tabs, embedded
+  lines, controls to point at, value entry, page search, source rules); a deliverable
+  that needs an undeclared one is answered with what the application does not offer,
+  without asking the port. The Contacts application declares tabs and handoffs and takes
+  goal turns in its demo. A turn is marked complete only when every declared deliverable
+  settles.
   If the model declares a write intent but only resolves read-only pages or facts, opening
   those pages is reported as partial guidance, never as the requested change having occurred.
   For a new record, an adapter may expose an actor-scoped `create` operation on a collection

@@ -35,7 +35,7 @@ from ..state.conversation import ConversationState
 from ..state.identity import PrincipalError
 from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
-from .ports import GoalPort, PagePlan, Resolution, Resolved
+from .ports import GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
 from .understand import understand
 
@@ -419,18 +419,34 @@ class GoalTurnExecutor:
         return third
 
     def _resolve(self, s: _TurnState, spec: GoalSpec) -> Resolution:
-        resolution = self.goal_port.resolve(
-            spec, context=s.approvals.context(s.step, "resolve"),
-            current_path=_path_of(s.obs.url))
-        if (len(resolution.deliverables) != len(spec.deliverables)
+        # A deliverable that needs something this application's port does not offer is
+        # answered here, plainly; the port sees only what it can resolve.
+        offered = capabilities_of(self.goal_port)
+        missing = [_needs_beyond(d, offered) for d in spec.deliverables]
+        asked = GoalSpec(deliverables=tuple(d for d, m in zip(spec.deliverables, missing) if not m),
+                         write_intent=spec.write_intent, unsupported=spec.unsupported)
+        if any(missing):
+            s.ledger.append("goal_capability_missing", step=s.step,
+                            missing=[sorted(m) for m in missing if m], offered=sorted(offered))
+        partial = self.goal_port.resolve(
+            asked, context=s.approvals.context(s.step, "resolve"),
+            current_path=_path_of(s.obs.url)) if asked.deliverables else Resolution(
+            deliverables=(), reads=())
+        if (len(partial.deliverables) != len(asked.deliverables)
                 or any(actual.kind != declared.kind for declared, actual in
-                       zip(spec.deliverables, resolution.deliverables, strict=True))):
-            # The adapter must answer each declared deliverable with one of the same
-            # kind; anything else is a broken port, reported as such, not acted on.
+                       zip(asked.deliverables, partial.deliverables, strict=True))):
+            # The adapter must answer each deliverable it was asked with one of the
+            # same kind; anything else is a broken port, reported as such, not acted on.
             s.ledger.append("goal_resolution_contract_refused", step=s.step,
-                            declared=len(spec.deliverables),
-                            resolved=len(resolution.deliverables))
+                            declared=len(asked.deliverables),
+                            resolved=len(partial.deliverables))
             raise _ContractBroken()
+        resolved = iter(partial.deliverables)
+        resolution = Resolution(deliverables=tuple(
+            Resolved(kind=d.kind, problem="this application does not offer "
+                     + ", ".join(sorted(m)) + " here")
+            if m else next(resolved)
+            for d, m in zip(spec.deliverables, missing)), reads=partial.reads)
         s.ledger.append("goal_resolved", step=s.step,
                         kinds=[d.kind for d in resolution.deliverables],
                         problems=[d.problem for d in resolution.deliverables],
@@ -477,24 +493,36 @@ class GoalTurnExecutor:
         """
         confirmed = 0
         last_confirmed_epoch = -1
+        last_names: frozenset[str] | None = None
         for _ in range(_READY_WAITS):
             obs = s.obs
             path_ok = not expected_path or _path_of(obs.url) == expected_path
-            rendered = (bool(obs.record_route) if record else bool(obs.active_view)) \
-                or (obs.page_facets is not None)
+            # An application that reports what it rendered (a record route, the active
+            # view, its facets) is believed when it does; one that reports nothing of the
+            # kind counts as rendered when it is not pending and shows some controls,
+            # and the two consecutive observations below must then list the same ones.
+            markers = bool(obs.record_route) or bool(obs.active_view) or obs.page_facets is not None
+            reports = markers or obs.render_state in ("ready", "pending")
+            rendered = ((bool(obs.record_route) if record else bool(obs.active_view))
+                        or obs.page_facets is not None) if markers else (
+                not reports and bool(obs.elements)) or obs.render_state == "ready"
+            names = frozenset(e.name for e in obs.elements)
             if obs.render_state == "blocked":
                 return False
             if path_ok and obs.render_state != "pending" and rendered:
                 # Seen rendered twice, half a second apart: the header controls and tabs
                 # of a form arrive a beat after its route does.
-                if obs.epoch != last_confirmed_epoch:
+                if obs.epoch != last_confirmed_epoch and (markers or names == last_names
+                                                          or last_names is None):
                     confirmed += 1
                     last_confirmed_epoch = obs.epoch
+                last_names = names
                 if confirmed >= 2:
                     return True
             else:
                 confirmed = 0
                 last_confirmed_epoch = -1
+                last_names = None
             receipt = self._dispatch(s, "wait_for", {"ms": 500})
             if receipt is None:
                 return False
@@ -565,7 +593,10 @@ class GoalTurnExecutor:
                         selected_controls=list(s.obs.selected_controls)[:8],
                         facets=[str(f.get("name", "")) for f in (s.obs.page_facets or [])][:8],
                         elements=len(s.obs.elements),
-                        roles=sorted({e.role for e in s.obs.elements})[:12])
+                        roles=sorted({e.role for e in s.obs.elements})[:12],
+                        controls=[(e.role, e.name[:40], {k: v for k, v in e.attrs.items()
+                                                          if k in ("role", "aria-selected", "selected", "field")})
+                                  for e in s.obs.elements[:16]])
         return out
 
     def _facet(self, s: _TurnState, name: str, *, active: bool) -> bool:
@@ -606,11 +637,11 @@ class GoalTurnExecutor:
 
     @staticmethod
     def _tab(obs: PageObservation, wanted: str):
-        tab = next((e for e in obs.elements if e.role == "tab" and _norm(e.name) == wanted),
+        tab = next((e for e in obs.elements if _is_tab(e) and _norm(e.name) == wanted),
                    None)
         if tab is None:
             tab = next((e for e in obs.elements
-                        if e.role == "tab" and wanted and wanted in _norm(e.name)), None)
+                        if _is_tab(e) and wanted and wanted in _norm(e.name)), None)
         return tab
 
     @staticmethod
@@ -618,7 +649,7 @@ class GoalTurnExecutor:
         if any(_norm(c) == wanted for c in obs.selected_controls):
             return True
         for element in obs.elements:
-            if element.role == "tab" and _norm(element.name) == wanted:
+            if _is_tab(element) and _norm(element.name) == wanted:
                 return any(str(element.attrs.get(attr, "")).lower() == "true"
                            for attr in _SELECTED_ATTRS)
         return False
@@ -843,8 +874,31 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
     return False
 
 
+def _is_tab(element) -> bool:
+    """A tab is an element the page marks as one, or one that carries selection state
+    the way tabs do; a runtime may report a `<button role="tab">` as a button."""
+    return element.role == "tab" or "aria-selected" in element.attrs
+
+
 class _ContractBroken(Exception):
     """The port answered a declaration with deliverables that do not match it."""
+
+
+def _needs_beyond(d, offered: frozenset[str]) -> frozenset[str]:
+    """The optional capabilities a deliverable needs that the port does not offer."""
+    needs = set()
+    if d.page.filters_on or d.page.filters_off or d.page.group_by or (
+            d.metric is not None and d.metric.page_filters):
+        needs.add("facets")
+    if d.section:
+        needs.add("sections")
+    if d.page.search:
+        needs.add("search")
+    if d.kind == "handoff":
+        needs.add("handoffs")
+        if d.value:
+            needs.add("fill")
+    return frozenset(needs) - offered
 
 
 def _unresolved(spec: GoalSpec, resolution: Resolution) -> int:

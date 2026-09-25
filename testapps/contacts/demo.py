@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from testapps.contacts.adapter import MinimalContactsAdapter
+from testapps.contacts.goal import ContactsGoalPort
 from testapps.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
                                    MinimalContactsApplication)
 from web_operation_agent import python_is_supported, supported_python_text
@@ -31,6 +32,7 @@ from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.business.runtime import BusinessSkill
 from web_operation_agent.business.control import ReadOnlyControl
+from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.state.identity import bind_matching_identity
 from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.modeling.client import ChatModel, ProviderError, SpendMeter, load_env
@@ -131,6 +133,10 @@ class DemoConfig:
     #: start from, and a template that enabled writes by default would teach the wrong
     #: default.
     allow_mutations: bool = False
+    #: Take the goal-directed turn (one declaration, deterministic resolution through
+    #: the Contacts goal port) instead of the tool loop. Read-only sessions only; a
+    #: scripted session declares its goal from the script.
+    goal_turns: bool = False
     #: Qualification-only approval behavior.  The public CLI keeps ``approved``; tests use
     #: the other values to drive the same visible card without a privileged server shortcut.
     approval_decision: str = "approved"
@@ -519,7 +525,23 @@ def run_demo(config: DemoConfig) -> dict:
         holder: dict[str, LiveConversationRunner] = {}
 
         def runner_factory(channel):
-            executor = AgentTurnExecutor(
+            executor = None
+            if config.goal_turns and not config.allow_mutations:
+                executor = GoalTurnExecutor(
+                    channel=channel,
+                    config=AgentTurnConfig(
+                        supported_scope="Read current contacts and open their pages.",
+                        ledger_path=run_dir / "audit.jsonl",
+                        step_budget=config.step_budget,
+                        wall_budget_s=max(1, int(config.turn_timeout_s)),
+                        transport_timeout_s=min(30, config.turn_timeout_s),
+                        require_identity=True, source=config.source),
+                    chat=chat, application=bound, goal_port=ContactsGoalPort(adapter),
+                    control=ReadOnlyControl(),
+                    run_id_factory=lambda _message: "minimal-" + uuid.uuid4().hex[:16],
+                    # A scripted apparatus declares once; a provider reads twice.
+                    readings=1 if isinstance(chat, ScriptedDemoChat) else 2)
+            executor = executor or AgentTurnExecutor(
                 channel=channel,
                 config=AgentTurnConfig(
                     supported_scope=(

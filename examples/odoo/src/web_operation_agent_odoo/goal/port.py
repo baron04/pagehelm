@@ -48,6 +48,10 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
         self._found_one: tuple | None = None
 
     # -- resolution -----------------------------------------------------------------
+    def capabilities(self) -> frozenset[str]:
+        """Everything optional but source entries, which are not compiled yet."""
+        return frozenset({"facets", "sections", "lines", "handoffs", "fill", "search"})
+
     def resolve(self, spec: GoalSpec, *, context: OperationContext | None = None,
                 current_path: str = "") -> Resolution:
         index = self.index(context=context)

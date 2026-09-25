@@ -268,6 +268,32 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertNotIn("grace@example.test", turn["answer"])
         self.assertEqual(turn["page_actions"], 0)
 
+    def test_a_goal_turn_opens_a_desk_and_selects_its_tab_in_the_real_browser(self):
+        # The same core turn that drives Odoo, on this structurally different application:
+        # one declaration against the Contacts index, the desk opened by its route, the
+        # tab selected by its visible name, and the reply rendered from the settled page.
+        script = (("declare_goal", {"deliverables": [
+            {"kind": "page", "page": {"key": "desk-partner"}, "section": "Terms"}]}),)
+
+        def probe(page) -> dict[str, bool]:
+            return {"terms_tab_active": page.evaluate(
+                "() => document.querySelector('[data-workflow-desk=\"partner\"]')"
+                "?.dataset.activeTab === 'terms'")}
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(
+                tasks=("看看 Partner desk 的 Terms。",), headless=True, goal_turns=True,
+                scripted=False, output_dir=Path(directory), keep_open_seconds=0,
+                turn_timeout_s=30, final_page_probe=probe))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        turn = summary["turns"][0]
+        self.assertEqual(turn["status"], "finished")
+        self.assertIn("Partner desk · Terms", turn["answer"])
+        self.assertTrue(summary["panel"]["final_page_probe"]["terms_tab_active"])
+        self.assertTrue(any(e["event"] == "goal_page_settled" and e["reached"] for e in events))
+        self.assertFalse(any(e["event"] == "business_tool_result" for e in events))
+
     def test_page_answer_uses_a_real_observation_without_calling_the_contacts_api(self):
         script = (("observe", {"answer_evidence": True}),
                   ("finish", {"outcome": "answered", "answer": {
