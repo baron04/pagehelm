@@ -318,6 +318,10 @@ class GoalTurnExecutor:
                 if accepted:
                     spec, resolution = repaired, second
         outcomes: list[_PageOutcome | None] = []
+        if any(r.page is not None for r in resolution.deliverables):
+            # The declarations took their time; the page has gone on rendering meanwhile
+            # and the observation the turn holds may be stale. Look once before acting.
+            self._dispatch(s, "observe", {})
         for resolved in resolution.deliverables:
             if resolved.page is None:
                 outcomes.append(None)
@@ -456,7 +460,14 @@ class GoalTurnExecutor:
                 out.reached = False
                 out.unmet.append("page switch not confirmed")
                 return out
-            if self._dispatch(s, "goto", {"url": target}, navigating=True) is None:
+            receipt = self._dispatch(s, "goto", {"url": target}, navigating=True)
+            if receipt is not None and not receipt.ok and receipt.error_code == "stale_observation" \
+                    and not s.terminal_reason:
+                # The page changed under the turn between looking and acting: look again
+                # and act once more on what is there now.
+                self._dispatch(s, "observe", {})
+                receipt = self._dispatch(s, "goto", {"url": target}, navigating=True)
+            if receipt is None:
                 out.reached = False
                 return out
         if not self._wait_ready(s, plan.expected_path,

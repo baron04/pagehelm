@@ -218,7 +218,7 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(chat.tool_names, [{"declare_goal"}, {"declare_goal"}])
         self.assertIn("APPLICATION INDEX", chat.messages[0][1]["content"])
         browser = _Browser.instances[0]
-        self.assertEqual([a for a, _ in browser.actions if a != "wait_for"],
+        self.assertEqual([a for a, _ in browser.actions if a not in ("wait_for", "observe")],
                          ["goto", "click"])
         self.assertEqual(browser.selected, ["Other Info"])
         self.assertEqual(len(channel.approvals), 1)
@@ -292,7 +292,7 @@ class GoalTurnTests(unittest.TestCase):
             text="S00005 的有效期延长到十月底")
         browser = _Browser.instances[0]
         self.assertEqual(browser.fields["Expiration"], "2026-10-31")
-        self.assertEqual([a for a, _ in browser.actions if a not in ("wait_for", "goto")],
+        self.assertEqual([a for a, _ in browser.actions if a not in ("wait_for", "goto", "observe")],
                          ["fill", "highlight"])
         self.assertNotIn("submit", [a for a, _ in browser.actions])
         self.assertIn("已在「Expiration」填入「2026-10-31」并标出", execution.user_answer)
@@ -313,7 +313,7 @@ class GoalTurnTests(unittest.TestCase):
             text="S00005 的客户换成 Azure Interior")
         browser = _Browser.instances[0]
         self.assertEqual(browser.fields["Customer"], "Azure Interior")
-        self.assertEqual([a for a, _ in browser.actions if a not in ("wait_for", "goto")],
+        self.assertEqual([a for a, _ in browser.actions if a not in ("wait_for", "goto", "observe")],
                          ["fill", "click", "highlight"])
         self.assertIn("填入「Azure Interior」", execution.user_answer)
 
@@ -409,7 +409,8 @@ class GoalTurnTests(unittest.TestCase):
             decision="denied", text="打开订单")
         self.assertEqual(execution.status, AgentTurnStatus.CANCELLED)
         self.assertEqual(execution.terminal_reason, "navigation_not_confirmed")
-        self.assertEqual(_Browser.instances[0].actions, [])
+        # Looking at the page is not acting on it; nothing else was dispatched.
+        self.assertEqual([a for a, _ in _Browser.instances[0].actions], ["observe"])
 
     def test_nothing_declared_is_an_honest_refusal(self):
         execution, *_ = self._run(
