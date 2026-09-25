@@ -244,6 +244,26 @@ class GoalSpec:
         return {"deliverables": [d.to_json() for d in self.deliverables],
                 "write_intent": self.write_intent, "unsupported": self.unsupported}
 
+    def differences(self, other: "GoalSpec") -> list[str]:
+        """Where two readings of one request disagree, in the declaration's own terms.
+
+        Empty when they say the same thing. Values are compared as written; a name the
+        two readings spell differently counts as a difference, since the resolver would
+        treat them differently too.
+        """
+        if len(self.deliverables) != len(other.deliverables):
+            return [f"{len(self.deliverables)} deliverables versus {len(other.deliverables)}"]
+        out = []
+        if self.write_intent != other.write_intent:
+            out.append(f"write_intent {self.write_intent} versus {other.write_intent}")
+        for i, (a, b) in enumerate(zip(self.deliverables, other.deliverables), start=1):
+            first, second = a.to_json(), b.to_json()
+            for key in sorted(set(first) | set(second)):
+                if first.get(key) != second.get(key):
+                    out.append(f"deliverable {i} {key}: {json.dumps(first.get(key), ensure_ascii=False)} "
+                               f"versus {json.dumps(second.get(key), ensure_ascii=False)}")
+        return out
+
 
 #: The one function the model may call to declare the goal.
 DECLARE_GOAL_TOOL = {

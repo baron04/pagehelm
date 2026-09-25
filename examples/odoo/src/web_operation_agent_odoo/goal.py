@@ -1083,6 +1083,11 @@ class OdooGoalPort:
                     self._models[page.entity] = self._model_meta(page.entity)
                 return Resolved(kind="page", page=self._record_page(
                     found[0], found[1], found[2], section=d.section, highlight=""))
+            if found is None and not self._call(page.entity, "search_count",
+                                                [[["display_name", "ilike", d.page.search]]], {}):
+                # Nothing on this page is named so: opening the list would show the
+                # person something else and say the words were found.
+                return Resolved(kind="page", problem=f"no {page.label} record matches {d.page.search!r}")
         action = next((a for a in self._actions if f"p{a['action_id']}" == page.key), None)
         if action is None:
             return Resolved(kind="page", problem="the page named is not in the index")

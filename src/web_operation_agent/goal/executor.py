@@ -9,6 +9,7 @@ question and the rest of the turn is server code the audit can replay.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import re
 import time
 from typing import Callable
@@ -101,7 +102,13 @@ class GoalTurnExecutor:
     def __init__(self, *, channel, config, chat, application: BoundApplication,
                  goal_port: GoalPort, control, run_id_factory,
                  ledger_factory=SessionLedger,
-                 conversation_state: ConversationState | None = None):
+                 conversation_state: ConversationState | None = None,
+                 readings: int = 2):
+        #: How many independent readings of the request are declared before acting.
+        #: With two, a request the model reads differently each time is caught: the two
+        #: readings are shown to it side by side and it declares once more, deciding.
+        #: One reading trusts the first declaration as it is.
+        self.readings = max(1, int(readings))
         self.channel = channel
         self.config = config
         self.chat = require_chat_port(chat, role="executor chat")
@@ -270,6 +277,8 @@ class GoalTurnExecutor:
             return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                              else "The model service did not respond; please try again.")
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
+        if self.readings > 1 and spec.deliverables:
+            spec = self._agree(s, chat, index, spec, today)
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
@@ -321,6 +330,52 @@ class GoalTurnExecutor:
             achieved = any(_achieved(r, o) for r, o in zip(resolution.deliverables, outcomes))
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
         return self._reply(s, resolution.deliverables, outcomes)
+
+    def _agree(self, s: _TurnState, chat, index, first: GoalSpec, today) -> GoalSpec:
+        """A second, independent reading of the request; when it disagrees with the
+        first, both are put in front of the model and a third reading decides.
+
+        A small model reads the same request differently from one call to the next --
+        a list of lines as a count, a field as a page -- and a resolver cannot tell a
+        plausible wrong reading from a right one. Two readings that agree are kept;
+        two that differ are a question the model itself answers best when it sees both.
+        A reading that fails to arrive leaves the first in place.
+        """
+        elapsed = time.time() - s.started_at
+        s.step += 1
+        try:
+            second, projection = understand(
+                chat, prompt=s.message.text, index=index, run_id=s.run_id,
+                timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
+                today=str(today() or "") if callable(today) else "")
+        except (ValueError, ProviderError) as exc:
+            s.ledger.append("goal_second_reading_failed", step=s.step, detail=str(exc)[:200])
+            return first
+        differences = first.differences(second)
+        s.ledger.append("goal_second_reading", step=s.step, spec=second.to_json(),
+                        agrees=not differences, differences=differences[:8], **projection)
+        if not differences:
+            return first
+        problems = ("a second reading of the same request declared "
+                    + json.dumps(second.to_json(), ensure_ascii=False)
+                    + "; the readings differ in: " + "; ".join(differences[:6])
+                    + ". Decide which reading the request means and declare that",)
+        s.step += 1
+        elapsed = time.time() - s.started_at
+        try:
+            third, projection = understand(
+                chat, prompt=s.message.text, index=index, run_id=s.run_id,
+                timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
+                today=str(today() or "") if callable(today) else "",
+                previous=first, problems=problems)
+        except (ValueError, ProviderError) as exc:
+            s.ledger.append("goal_readings_unreconciled", step=s.step, detail=str(exc)[:200])
+            return first
+        if not third.deliverables:
+            return first
+        s.ledger.append("goal_declared", step=s.step, spec=third.to_json(), attempt=3,
+                        reconciled=True, **projection)
+        return third
 
     def _resolve(self, s: _TurnState, spec: GoalSpec) -> Resolution:
         resolution = self.goal_port.resolve(

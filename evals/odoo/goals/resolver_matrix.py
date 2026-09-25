@@ -690,6 +690,11 @@ case("l-entity-without-page-ignores-page-defaults", "res.partner", "list", "text
      lst("res.partner", filters=[F("Email", ["example.com"], "contains"), F("Company Type", ["Company"])]),
      records_len=7, records_any=[r"Wood Corner", r"Lumber Inc"])
 
+case("p-search-names-nothing", "product.template", "page", "text",
+     page(key="Products", entity="product.template") | {"deliverables": [
+         {"kind": "page", "entity": "product.template", "page": {"key": "Products", "search": "Lunar Filing Cabinet ZX-9"}}]},
+     problem=r"no Products record matches")
+
 
 def _check(expect: dict, resolved) -> list[str]:
     errors = []

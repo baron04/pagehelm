@@ -166,6 +166,16 @@ def _declaration(**deliverable) -> tuple:
     return ("declare_goal", {"deliverables": [deliverable]})
 
 
+class _AgreeingChat(_Chat):
+    """A scripted chat whose second reading repeats the first, as a steady model would,
+    unless the script provides a different one."""
+
+    def complete(self, messages, tools, _run_id, **_kwargs):
+        if len(self.script) == 1:
+            self.script.append(self.script[0])
+        return super().complete(messages, tools, _run_id, **_kwargs)
+
+
 class GoalTurnTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -181,7 +191,7 @@ class GoalTurnTests(unittest.TestCase):
     def _run(self, script, resolved, *, decision="approved", text="S00006 的客户是谁？看看其他信息",
              resolved_then=None):
         channel = _Channel(page_url="http://127.0.0.1:8080/home", decision=decision)
-        chat = _Chat(script)
+        chat = _AgreeingChat(script)
         port = _Port(resolved, resolved_then)
         executor = GoalTurnExecutor(
             channel=channel,
@@ -203,8 +213,9 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
         self.assertIn("Lumber Inc", execution.user_answer)
         self.assertIn("已打开：S00006 · Other Info", execution.user_answer)
-        self.assertEqual(len(chat.messages), 1)
-        self.assertEqual(chat.tool_names, [{"declare_goal"}])
+        # One reading, and a second that agreed with it; nothing more.
+        self.assertEqual(len(chat.messages), 2)
+        self.assertEqual(chat.tool_names, [{"declare_goal"}, {"declare_goal"}])
         self.assertIn("APPLICATION INDEX", chat.messages[0][1]["content"])
         browser = _Browser.instances[0]
         self.assertEqual([a for a, _ in browser.actions if a != "wait_for"],
@@ -223,15 +234,16 @@ class GoalTurnTests(unittest.TestCase):
         port_first = Resolved(kind="fact", problem="no field 'Validity' on Order",
                               repair="'Validity' is not a field of Order; its fields are: Expiration")
         port_second = Resolved(kind="fact", facts=(Fact("S00001", "Expiration", "2026-10-31"),))
-        scripts = [_declaration(kind="fact", entity="order", record="S00001", fields=["Validity"]),
+        first = _declaration(kind="fact", entity="order", record="S00001", fields=["Validity"])
+        scripts = [first, first,
                    _declaration(kind="fact", entity="order", record="S00001", fields=["Expiration"])]
         execution, _channel, chat, port, events = self._run(
             scripts, [port_first], text="S00001 有效期到哪天？", resolved_then=[port_second])
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
         self.assertIn("2026-10-31", execution.user_answer)
-        self.assertEqual(len(chat.messages), 2)
-        self.assertIn("PROBLEMS", chat.messages[1][1]["content"])
-        self.assertIn("Expiration", chat.messages[1][1]["content"])
+        self.assertEqual(len(chat.messages), 3)
+        self.assertIn("PROBLEMS", chat.messages[2][1]["content"])
+        self.assertIn("Expiration", chat.messages[2][1]["content"])
         self.assertEqual(len(port.specs), 2)
         repaired = next(e for e in events if e["event"] == "goal_repaired")
         self.assertTrue(repaired["accepted"])
@@ -239,20 +251,22 @@ class GoalTurnTests(unittest.TestCase):
 
     def test_a_second_declaration_that_is_no_better_is_not_taken(self):
         problem = Resolved(kind="fact", problem="no Order matches 'X'", repair="no Order is named 'X'")
-        scripts = [_declaration(kind="fact", entity="order", record="X", fields=["Customer"]),
+        first = _declaration(kind="fact", entity="order", record="X", fields=["Customer"])
+        scripts = [first, first,
                    _declaration(kind="fact", entity="order", record="Y", fields=["Customer"])]
         execution, _channel, chat, port, events = self._run(
             scripts, [problem], text="X 的客户是谁？", resolved_then=[problem])
-        self.assertEqual(len(chat.messages), 2)
+        self.assertEqual(len(chat.messages), 3)
         self.assertEqual(port.specs[0].deliverables[0].record, "X")
         repaired = next(e for e in events if e["event"] == "goal_repaired")
         self.assertFalse(repaired["accepted"])
         self.assertIn("无法完成", execution.user_answer)
 
     def test_a_change_asked_for_without_a_handoff_is_sent_back_once(self):
-        scripts = [("declare_goal", {"deliverables": [{"kind": "page", "entity": "order",
-                                                        "record": "S00005"}],
-                                      "write_intent": True}),
+        first = ("declare_goal", {"deliverables": [{"kind": "page", "entity": "order",
+                                                    "record": "S00005"}],
+                                  "write_intent": True})
+        scripts = [first, first,
                    _declaration(kind="handoff", entity="order", record="S00005",
                                 action="Send by Email")]
         page = Resolved(kind="page", page=PagePlan(url="/orders/5", label="S00005",
@@ -262,7 +276,7 @@ class GoalTurnTests(unittest.TestCase):
                                                          highlight="Send by Email"))
         execution, _channel, chat, _port, events = self._run(
             scripts, [page], text="把 S00005 发邮件给客户", resolved_then=[handoff])
-        self.assertIn("write_intent", chat.messages[1][1]["content"])
+        self.assertIn("write_intent", chat.messages[2][1]["content"])
         self.assertIn("标出「Send by Email」", execution.user_answer)
         self.assertTrue(next(e for e in events if e["event"] == "goal_repaired")["accepted"])
 
@@ -316,6 +330,23 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(_Browser.instances[0].fields["Customer"], "Gemini Furniture")
         self.assertIn("没能填入「Nobody」", execution.user_answer)
         self.assertIn("标出「Customer」", execution.user_answer)
+
+    def test_two_readings_that_differ_are_decided_by_a_third(self):
+        as_list = _declaration(kind="list", entity="order", record="S00006", fields=["Customer"])
+        as_fact = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])
+        execution, _channel, chat, port, events = self._run(
+            [as_list, as_fact, as_fact],
+            [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？")
+        self.assertEqual(len(chat.messages), 3)
+        self.assertIn("a second reading of the same request declared", chat.messages[2][1]["content"])
+        self.assertIn("deliverable 1 kind", chat.messages[2][1]["content"])
+        self.assertEqual(port.specs[0].deliverables[0].kind, "fact")
+        self.assertEqual(len(port.specs), 1)
+        reading = next(e for e in events if e["event"] == "goal_second_reading")
+        self.assertFalse(reading["agrees"])
+        self.assertTrue(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
+        self.assertIn("Lumber Inc", execution.user_answer)
 
     def test_a_handoff_highlights_and_never_presses(self):
         execution, _channel, _chat, _port, events = self._run(
