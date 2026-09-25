@@ -16,6 +16,18 @@ The handoff oracle requires the final page, the named live control's outline, an
 unchanged database fingerprint. Select it with `--version v4` when running
 `python -m evals.odoo.goals.run_goals`. The holdout has not been model-run.
 
+The second holdout is `tasksets/odoo-goals-zh-v5-holdout.json`, selected with
+`--version v5`: 84 normal goals (18 record lists, 16 detail-line answers, 16 field
+answers, 16 handoffs, 10 page goals, and 8 aggregates) plus 10 honest limitations.
+Its adjacent seal pins the task bytes, input-data digest, vocabulary revision,
+coverage, and offline validation. Both holdouts remain unchanged after sealing.
+The reference dump has 42 accounting lines, of which 20 have a product; v5 detail
+truth uses those product lines, not all 42. No model calls or full browser oracle
+walk were performed for v5. The inherited impossible-goal judge does not establish
+that an explanation is adequate, so limitation answers need separate review.
+Detail oracles expect each product and its values on one text or table row; list
+exclusions cover records in the supplied reference data.
+
 ## Arms and capabilities
 
 | Arm | Capability | Used for |

@@ -1,0 +1,445 @@
+{
+  "kind": "odoo_goal_holdout_seal",
+  "suite_id": "odoo-goals-zh-v5-holdout",
+  "task_set_sha256": "sha256:01f20f8e91dbb215e397d667a2729debd20df95528a54d924373e1ca465ae1f5",
+  "normal_tasks": 84,
+  "impossible_tasks": 10,
+  "frozen_at": "2026-09-24",
+  "reference_date": "2026-09-24",
+  "timezone": "Asia/Shanghai",
+  "reference_data_sha256": "sha256:322b1040d0c654ea5883274d29e320fced7d1249f9b4dccb751023590ee08841",
+  "previous_task_set_sha256": "sha256:5fe83d925961164375d49ee7f9fe72d696f4370dae2b58be8c1a3dd7161e32e9",
+  "vocabulary_source": "98b9066^:evals/odoo/goals/resolver_matrix.py",
+  "delivery_counts": {
+    "answer/list": 18,
+    "answer/lines": 16,
+    "answer/field": 16,
+    "handoff/button": 10,
+    "handoff/field": 6,
+    "open/tab": 4,
+    "open/related": 1,
+    "open/record": 1,
+    "open/list_state": 4,
+    "answer/aggregate": 8
+  },
+  "condition_counts": {
+    "related": 19,
+    "status": 11,
+    "numeric": 13,
+    "absolute_date": 8,
+    "relative_time": 6,
+    "text": 13,
+    "none": 14
+  },
+  "cells": [
+    {
+      "entity": "account.move",
+      "delivery": "answer/aggregate",
+      "condition": "absolute_date",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "answer/aggregate",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "answer/field",
+      "condition": "none",
+      "tasks": 4
+    },
+    {
+      "entity": "account.move",
+      "delivery": "answer/list",
+      "condition": "absolute_date",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "answer/list",
+      "condition": "none",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "answer/list",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "answer/list",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "answer/list",
+      "condition": "relative_time",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "absolute_date",
+      "tasks": 2
+    },
+    {
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "none",
+      "tasks": 3
+    },
+    {
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "relative_time",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "handoff/field",
+      "condition": "absolute_date",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move",
+      "delivery": "handoff/field",
+      "condition": "related",
+      "tasks": 2
+    },
+    {
+      "entity": "account.move",
+      "delivery": "open/tab",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move.line",
+      "delivery": "answer/aggregate",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move.line",
+      "delivery": "answer/lines",
+      "condition": "absolute_date",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move.line",
+      "delivery": "answer/lines",
+      "condition": "numeric",
+      "tasks": 2
+    },
+    {
+      "entity": "account.move.line",
+      "delivery": "answer/lines",
+      "condition": "related",
+      "tasks": 3
+    },
+    {
+      "entity": "account.move.line",
+      "delivery": "answer/lines",
+      "condition": "relative_time",
+      "tasks": 1
+    },
+    {
+      "entity": "account.move.line",
+      "delivery": "answer/lines",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "product.tag",
+      "delivery": "open/list_state",
+      "condition": "none",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/aggregate",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/aggregate",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/field",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/field",
+      "condition": "text",
+      "tasks": 3
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/list",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/list",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/list",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "answer/list",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "open/record",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "product.template",
+      "delivery": "open/tab",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "res.partner",
+      "delivery": "answer/field",
+      "condition": "related",
+      "tasks": 2
+    },
+    {
+      "entity": "res.partner",
+      "delivery": "answer/field",
+      "condition": "text",
+      "tasks": 2
+    },
+    {
+      "entity": "res.partner",
+      "delivery": "answer/list",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "res.partner",
+      "delivery": "answer/list",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "res.partner",
+      "delivery": "answer/list",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "res.partner",
+      "delivery": "open/related",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "res.partner",
+      "delivery": "open/tab",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/aggregate",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/aggregate",
+      "condition": "relative_time",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "none",
+      "tasks": 3
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "absolute_date",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "relative_time",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "handoff/button",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "handoff/button",
+      "condition": "status",
+      "tasks": 2
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "handoff/field",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "handoff/field",
+      "condition": "related",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "handoff/field",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "open/list_state",
+      "condition": "none",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "open/list_state",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order",
+      "delivery": "open/tab",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order.line",
+      "delivery": "answer/aggregate",
+      "condition": "numeric",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order.line",
+      "delivery": "answer/lines",
+      "condition": "absolute_date",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order.line",
+      "delivery": "answer/lines",
+      "condition": "numeric",
+      "tasks": 2
+    },
+    {
+      "entity": "sale.order.line",
+      "delivery": "answer/lines",
+      "condition": "related",
+      "tasks": 2
+    },
+    {
+      "entity": "sale.order.line",
+      "delivery": "answer/lines",
+      "condition": "relative_time",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order.line",
+      "delivery": "answer/lines",
+      "condition": "status",
+      "tasks": 1
+    },
+    {
+      "entity": "sale.order.line",
+      "delivery": "answer/lines",
+      "condition": "text",
+      "tasks": 1
+    },
+    {
+      "entity": "uom.category",
+      "delivery": "open/list_state",
+      "condition": "none",
+      "tasks": 1
+    }
+  ],
+  "source_row_counts": {
+    "so": 20,
+    "sol": 44,
+    "am": 14,
+    "aml": 42,
+    "prod": 36,
+    "partner": 9
+  },
+  "product_invoice_lines": 20,
+  "validation": {
+    "offline_assertions": 639,
+    "duplicate_prompts_with_v4": 0,
+    "semantic_review": "Reviewed entity, target record/field, delivery and predicate; no identical goal or paraphrase of a v4 prompt retained. Shared operation families remain intentionally covered.",
+    "page_metadata": "Vendor refunds route action-266 verified with SELECT on isolated reference database; other routes/controls from matrix, v4 and reviewed page policy.",
+    "live_browser_oracle_walk": false,
+    "model_calls": 0,
+    "known_judge_limit": "Impossible scoring requires non-claim/no-write; u04 also requires an explicit bank-data gap. Detail answers require one product row per text/table line. Regex exclusions cover the supplied entity universe, not arbitrary hallucinated names.",
+    "targeted_oracle_corrections": "h11 accepts Payment Terms or Due Date; u04 requires bank-data explanation; l16 uses the Customers page scope."
+  }
+}

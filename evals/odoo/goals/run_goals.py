@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
     "v4": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v4-holdout.json", "5fe83d925961164375d49ee7f9fe72d696f4370dae2b58be8c1a3dd7161e32e9"),
+    "v5": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v5-holdout.json", "01f20f8e91dbb215e397d667a2729debd20df95528a54d924373e1ca465ae1f5"),
 }
 
 
