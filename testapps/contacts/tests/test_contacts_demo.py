@@ -660,9 +660,12 @@ class TheWriteChainAnAuthorCopies(unittest.TestCase):
     def test_a_read_only_composition_never_offers_the_write(self):
         with MinimalContactsApplication() as application:
             adapter, bound = self._composed(application, allow_mutations=False)
+            # The lookups are reads under the actor's own context: a record reference, the
+            # page entries it may open, and the goal candidates composed from those two and
+            # the entity reads, with no authority of its own.
             self.assertEqual(sorted(bound.business_tools.tool_names), [
                 "describe_entity", "discover_entities", "find_page_entries", "list_contacts",
-                "query_entity_records", "resolve_record_reference",
+                "query_entity_records", "resolve_goal_candidates", "resolve_record_reference",
             ])
             self.assertEqual(bound.business_tools.mutation_tool_names, frozenset())
             self.assertEqual(bound.ports.postconditions.supported_tools, frozenset())
