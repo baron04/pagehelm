@@ -220,6 +220,9 @@ class TrayRules(models.Model):
             'target': 'new',
         }
 
+    def action_compose_all(self):
+        return self.seedling_ids.action_compose_seedlings()
+
     def action_move_wizard(self):
         action = self.env["ir.actions.actions"]._for_xml_id("greenhouse.action_move_trays_wizard")
         action['context'] = dict(self.env.context)
@@ -521,6 +524,12 @@ class Rules(unittest.TestCase):
         self.assertIn("def action_move_wizard", cited[0])
         self.assertTrue(any("_for_xml_id" in line for line in cited))
         self.assertNotIn("greenhouse.tray.action_move", windows)
+
+    def test_a_method_returning_another_methods_action_names_that_method(self):
+        chained = next(r for r in self.map.by_kind("service_parameter")
+                       if r.subject == "greenhouse.tray.action_compose_all" and r.object == "->window")
+        self.assertEqual(chained.attrs["opens_via"], "action_compose_seedlings")
+        self.assertEqual(chained.attrs["opens"], "")
 
     def test_a_smart_button_is_named_by_its_count_and_nested_fields_by_their_list(self):
         smart = next(r for r in self.map.by_kind("form_target")

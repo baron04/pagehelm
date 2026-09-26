@@ -860,8 +860,11 @@ class GoalTurnExecutor:
                 if item.id in shown:
                     continue
                 shown.add(item.id)
-                facts.append(Fact(subject=f"{entity.label} · {item.about}", label=item.kind,
-                                  value=item.text))
+                fact = Fact(subject=f"{entity.label} · {item.about}", label=item.kind,
+                            value=item.text)
+                # The same rule written in two views is said once and cited twice.
+                if fact not in facts:
+                    facts.append(fact)
                 if item.citation:
                     citations.append(item.citation)
         if not facts:

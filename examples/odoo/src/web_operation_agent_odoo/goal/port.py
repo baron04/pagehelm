@@ -1056,6 +1056,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
                        if isinstance(c, list) and len(c) == 3 else c for c in clause]
             return negated, text.replace(" = ", " != ", 1)
         if kind == "many2one":
+            # A name as the application displays it may carry its code in brackets
+            # ("[FURN_0269] Office Chair Black"); the record's name is what follows.
+            values = [_strip_code(v) or v for v in values]
             ids = []
             for value in values:
                 found = self._find_record(str(info["relation"]), value)
@@ -1067,6 +1070,13 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
                         # The words in any order, a plural as its singular ("acoustic
                         # screens" for "Acoustic Bloc Screens", "black office chair" for
                         # "Office Chair Black"): every word of each value in the name.
+                        # A variant is displayed with its attributes in parentheses
+                        # ("Acoustic Bloc Screens (White)"); its name is what precedes.
+                        bare = [re.sub(r"\s*\([^()]*\)$", "", v) for v in values]
+                        if bare != values:
+                            plain = ["|"] * (len(bare) - 1) + [[field, "ilike", v] for v in bare]
+                            if self._call(meta.model, "search_count", [plain], {}):
+                                return plain, f"{info.get('string') or field} ~ {' / '.join(values)}"
                         worded = _worded(field, values)
                         if worded and self._call(meta.model, "search_count", [worded], {}):
                             return worded, f"{info.get('string') or field} ~ {' / '.join(values)}"

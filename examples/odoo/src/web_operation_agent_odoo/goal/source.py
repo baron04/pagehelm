@@ -62,12 +62,17 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
     strings: dict[str, dict[str, str]] = {}
     guards: dict[str, list[SourceRelation]] = {}
     helps: dict[str, list[SourceRelation]] = {}
+    #: model.method -> the method name whose window it returns, and its relation
+    via: list[tuple[str, str, SourceRelation]] = []
     for relation in source_map.relations:
         attrs = relation.attrs or {}
         if relation.kind == "request_handler" and attrs.get("action_id"):
             windows[str(attrs["action_id"])] = (relation.object, str(attrs.get("name") or ""),
                                                 relation)
         elif relation.kind == "service_parameter" and attrs.get("direction") == "out":
+            if attrs.get("opens_via"):
+                via.append((relation.subject, str(attrs["opens_via"]), relation))
+                continue
             opens[relation.subject] = (str(attrs.get("opens") or ""),
                                        str(attrs.get("opens_action") or ""),
                                        str(attrs.get("opens_name") or ""), relation)
@@ -80,6 +85,14 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
                 helps.setdefault(relation.subject, []).append(relation)
         elif relation.kind == "service_guard":
             guards.setdefault(relation.subject.rpartition(".")[0], []).append(relation)
+
+    # A method returning another method's action opens what that one opens, when
+    # exactly one model's method of that name opens a window.
+    for subject, method, relation in via:
+        targets = [value for key, value in opens.items() if key.rpartition(".")[2] == method]
+        if len(targets) == 1 and subject not in opens:
+            shown, action_id, name, _target_relation = targets[0]
+            opens[subject] = (shown, action_id, name, relation)
 
     def add(model: str, kind: str, about: str, text: str, relation: SourceRelation,
             subject: str = "") -> None:
@@ -177,7 +190,8 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
             style = str(attrs.get("class") or "")
             look = (" (btn-primary, highlighted)" if "btn-primary" in style
                     else " (btn-secondary)" if "btn-secondary" in style else "")
-            key = (model, "button", label, tuple(conditions), what, look)
+            key = (model, "button", label, tuple(conditions), what, look,
+                   relation.evidence[0].path, relation.evidence[0].start_line)
             if key in seen:
                 continue
             seen.add(key)
@@ -227,7 +241,10 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
                               ("invisible", "hidden when")):
                 if attrs.get(key):
                     parts.append(f"{word} {_short(attrs[key], _MAX_CONDITION)}")
-            sig = (model, "field", name, tuple(parts))
+            # The same condition in another view of the form (its embedded list and its
+            # embedded form) is kept with its own lines: the reply cites both.
+            sig = (model, "field", name, tuple(parts), relation.evidence[0].path,
+                   relation.evidence[0].start_line)
             if sig in seen:
                 continue
             seen.add(sig)

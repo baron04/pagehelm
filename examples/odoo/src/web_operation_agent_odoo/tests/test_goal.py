@@ -425,6 +425,25 @@ class OdooGoalPortTests(unittest.TestCase):
             SourceRelation(kind="request_handler", subject="odoo/action-331", object="account.move.reversal",
                            attrs={"action_id": "331", "name": "Reverse", "target": "new", "event_type": "dialog"},
                            evidence=(ref("addons/account/wizard/account_move_reversal_view.xml", 28, 37),)),
+            # A button whose method returns another model's method's action, and the
+            # same field condition written in two views of the form.
+            SourceRelation(kind="form_target", subject="sale.view_order_form", object="action_pay",
+                           attrs={"model": "sale.order", "label": "Pay", "target_type": "object"},
+                           evidence=(ref("addons/sale/views/sale_order_views.xml", 700, 701),)),
+            SourceRelation(kind="service_parameter", subject="sale.order.action_pay", object="->window",
+                           attrs={"direction": "out", "opens_via": "action_open_register"},
+                           evidence=(ref("addons/sale/models/sale_order.py", 900, 901),)),
+            SourceRelation(kind="service_parameter", subject="sale.order.line.action_open_register",
+                           object="->window",
+                           attrs={"direction": "out", "opens": "account.payment.register",
+                                  "opens_action": "", "opens_name": ""},
+                           evidence=(ref("addons/sale/models/sale_order_line.py", 50, 60),)),
+            SourceRelation(kind="form_field", subject="sale.view_order_form", object="note",
+                           attrs={"model": "sale.order", "readonly": "locked"},
+                           evidence=(ref("addons/sale/views/sale_order_views.xml", 420, 420),)),
+            SourceRelation(kind="form_field", subject="sale.view_order_form", object="note",
+                           attrs={"model": "sale.order", "readonly": "locked"},
+                           evidence=(ref("addons/sale/views/sale_order_views.xml", 527, 530),)),
             SourceRelation(kind="service_guard", subject="sale.order.action_confirm",
                            object="the message of _confirmation_error_message",
                            attrs={"condition": "error_msg", "via": "_confirmation_error_message"},
@@ -476,6 +495,12 @@ class OdooGoalPortTests(unittest.TestCase):
         via = next(r for r in entity.rules if "the message of" in r.text)
         self.assertEqual(via.text, "action_confirm refuses with the message of _confirmation_error_message when error_msg")
         self.assertEqual(via.subject, "_confirmation_error_message")
+        pay = next(r for r in entity.rules if r.about == "Pay" and r.kind == "target")
+        self.assertIn("calls action_pay, which opens the window of account.payment.register", pay.text)
+        notes = [r for r in entity.rules if r.kind == "editability" and "(note)" in r.text]
+        self.assertEqual([r.citation.split("@")[0] for r in notes],
+                         ["addons/sale/views/sale_order_views.xml:420-420",
+                          "addons/sale/views/sale_order_views.xml:527-530"])
         refusals = [r for r in entity.rules if r.about == "action_confirm"]
         self.assertIn('action_confirm refuses with "It is not allowed', refusals[0].text)
         self.assertEqual(refusals[0].subject, "action_confirm")

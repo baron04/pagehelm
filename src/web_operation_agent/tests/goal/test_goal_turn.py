@@ -502,6 +502,29 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
         self.assertIn("hidden when state != sale", execution.user_answer)
 
+    def test_a_rule_written_in_two_views_is_said_once_and_cited_twice(self):
+        twin = IndexRule(id="r4", kind="visibility", about="Create Invoice", text=_RULE.text,
+                         citation="addons/sale/views/sale_order_views.xml:527-530@18.0 sha256:" + "f" * 64)
+        index = _index()
+        index = ApplicationIndex(entities=(replace(index.entities[0], rules=index.entities[0].rules + (twin,)),),
+                                 pages=index.pages, source_digest="abc")
+
+        class _TwinPort(_Port):
+            def index(self, *, context=None):
+                return index
+
+        scripts = [_declaration(kind="fact", entity="order", rules=["r1"])]
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=_AgreeingChat(scripts), application=bind_application(_Adapter()), goal_port=_TwinPort([]),
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=False)
+        answer = executor.execute({"message_id": "m1", "text": "开票按钮何时出现？",
+                                   "page_url": "http://127.0.0.1:8080/home"}).user_answer
+        self.assertEqual(answer.count("hidden when state != sale"), 1)
+        self.assertIn("sale_order_views.xml:266-271@18.0", answer)
+        self.assertIn("sale_order_views.xml:527-530@18.0", answer)
+
     def test_an_unknown_rule_id_is_a_repairable_problem(self):
         scripts = [_declaration(kind="fact", entity="order", record="S00001", rules=["r9"]),
                    _declaration(kind="fact", entity="order", record="S00001", rules=["r9"]),

@@ -547,6 +547,17 @@ class OdooCompiler:
         up. Recorded as the method's OUT parameter, cited at the lines that say so."""
         found = _opened_window(item)
         if found is None:
+            chained = _returned_call(item)
+            if chained is None:
+                return
+            node, method = chained
+            # `return self.line_ids.action_register_payment()`: the window is whatever
+            # that method opens; the map says which method, the rules follow it.
+            self._add("service_parameter", f"{model}.{item.name}", "->window",
+                      {"module": module, "direction": "out", "opens": "", "opens_action": "",
+                       "opens_via": method, "conditional": False, "opens_name": ""},
+                      self.tree.cite(rel, node.lineno, node.end_lineno or node.lineno,
+                                     excerpt_chars=_ACTION_EXCERPT_CHARS))
             return
         node, res_model, action_id, conditional = found
         if action_id and not res_model:
@@ -717,6 +728,17 @@ def _opened_window(item):
             continue
         model, action_id = found
         return statement, model, action_id, id(node) not in direct
+    return None
+
+
+def _returned_call(item):
+    """(return statement, method name) when a method's last statement returns a call to
+    a method on some recordset (`return self.line_ids.action_register_payment()`)."""
+    last = item.body[-1] if item.body else None
+    if (isinstance(last, ast.Return) and isinstance(last.value, ast.Call)
+            and isinstance(last.value.func, ast.Attribute)
+            and last.value.func.attr.startswith("action_")):
+        return last, last.value.func.attr
     return None
 
 
