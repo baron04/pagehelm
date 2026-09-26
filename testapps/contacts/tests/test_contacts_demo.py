@@ -297,6 +297,43 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertTrue(any(e["event"] == "goal_page_settled" and e["reached"] for e in events))
         self.assertFalse(any(e["event"] == "business_tool_result" for e in events))
 
+    def test_a_delete_handoff_opens_the_record_menu_and_marks_delete_in_the_real_browser(self):
+        # "Delete" is an item of the record's collapsed "More" menu, as many applications
+        # keep a record's operations. The turn opens the record, opens the one menu the page
+        # declares collapsed, marks Delete and presses nothing; the person deletes.
+        script = (("declare_goal", {"deliverables": [
+            {"kind": "handoff", "entity": "contacts", "record": "Grace Hopper",
+             "action": "Delete"}], "write_intent": True}),)
+
+        def probe(page) -> dict[str, bool]:
+            return page.evaluate("""() => {
+                const item = document.querySelector('[data-delete-contact]');
+                const toggle = document.querySelector('[data-record-menu]');
+                return {menu_open: toggle?.getAttribute('aria-expanded') === 'true',
+                        delete_marked: item?.style.getPropertyPriority('outline') === 'important'};
+            }""")
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(
+                tasks=("Delete Grace Hopper.",), headless=True, goal_turns=True,
+                scripted=False, output_dir=Path(directory), keep_open_seconds=0,
+                turn_timeout_s=30, final_page_probe=probe))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        turn = summary["turns"][0]
+        self.assertEqual(turn["status"], "finished", turn["answer"])
+        self.assertIn("opened the “More” menu and highlighted “Delete”", turn["answer"])
+        self.assertEqual(summary["panel"]["final_page_probe"],
+                         {"menu_open": True, "delete_marked": True})
+        self.assertTrue(summary["last_url"].endswith("/contacts/grace-hopper"))
+        self.assertEqual(summary["application_state"]["records_deleted"], 0)
+        self.assertEqual(summary["application_state"]["write_requests"], 0)
+        tools = [e["tool"] for e in events if e["event"] == "tool_call"]
+        self.assertEqual([t for t in tools if t in ("reveal", "highlight", "click")],
+                         ["reveal", "highlight"])
+        self.assertEqual([e["menu"] for e in events if e["event"] == "goal_menu_revealed"],
+                         ["More"])
+
     def test_page_answer_uses_a_real_observation_without_calling_the_contacts_api(self):
         script = (("observe", {"answer_evidence": True}),
                   ("finish", {"outcome": "answered", "answer": {

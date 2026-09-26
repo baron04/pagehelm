@@ -144,6 +144,16 @@ class ContactsGoalPort:
             return Resolved(kind=d.kind, page=PagePlan(
                 url="/contacts/new", expected_path="/contacts/new", label="New contact",
                 highlight="Name", highlight_effect="create"))
+        if d.kind == "handoff" and d.record and d.action:
+            # A change to one record is the person's: its page is opened and the control
+            # named is marked, wherever the page keeps it. Whether this account is offered
+            # the control at all is the page's to show, not this port's to decide.
+            record, problem = self._record(d.record, rows)
+            if record is None:
+                return Resolved(kind=d.kind, problem=problem)
+            path = f"/contacts/{record['id']}"
+            return Resolved(kind=d.kind, page=PagePlan(
+                url=path, expected_path=path, label=record["name"], highlight=d.action))
         if d.kind == "fact":
             record, problem = self._record(d.record, rows) if d.record else (None, "no record was named")
             if record is None:

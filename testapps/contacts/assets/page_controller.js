@@ -15,8 +15,8 @@ function escaped(value) {
 function attributes(element) {
   const names = [
     'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
-    'type', 'name', 'id', 'aria-label', 'aria-selected', 'aria-checked',
-    'aria-expanded', 'placeholder', 'autocomplete',
+    'type', 'name', 'id', 'role', 'aria-label', 'aria-selected', 'aria-checked',
+    'aria-expanded', 'aria-haspopup', 'placeholder', 'autocomplete',
   ]
   const found = []
   for (const name of names) {
@@ -43,6 +43,12 @@ export function getElementByIndex(selectorMap, index) {
 // This deliberately shares no Odoo selector or route inference with the product core.
 export function readActiveView() {
   return document.querySelector('main#app')?.getAttribute('data-active-view') || undefined
+}
+
+// The record the app has rendered, once it has: its own route while it shows a record.
+export function readPageRecordRoute() {
+  const view = document.querySelector('main#app')?.getAttribute('data-active-view')
+  return view === 'Detail' ? location.pathname : undefined
 }
 
 export class PageController {

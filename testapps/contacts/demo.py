@@ -643,6 +643,7 @@ def run_demo(config: DemoConfig) -> dict:
             "refused_writes": application.refused_writes,
             "post_requests": application.post_requests,
             "records_created": application.records_created,
+            "records_deleted": application.records_deleted,
             "contact_count": len(application.contacts),
             # Counts and fingerprints only. The summary sits next to the actor's audit
             # trail, and another workspace's records have no business being in either.

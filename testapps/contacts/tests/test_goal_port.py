@@ -128,6 +128,21 @@ class ContactsGoalPortTests(unittest.TestCase):
             denied = reader_port.resolve(spec, context=reader_context).deliverables[0]
             self.assertIn("not available", denied.problem)
 
+    def test_a_change_to_one_record_opens_it_and_names_the_control(self):
+        with MinimalContactsApplication() as application:
+            writer, _principal, context = self._bound(application, "ada-lovelace")
+            spec = GoalSpec.from_json({"deliverables": [{
+                "kind": "handoff", "entity": "contacts", "record": "Grace Hopper",
+                "action": "Delete"}], "write_intent": True})
+            resolved = ContactsGoalPort(writer).resolve(spec, context=context).deliverables[0]
+            self.assertEqual((resolved.page.url, resolved.page.label, resolved.page.highlight),
+                             ("/contacts/grace-hopper", "Grace Hopper", "Delete"))
+            missing = GoalSpec.from_json({"deliverables": [{
+                "kind": "handoff", "entity": "contacts", "record": "Nobody Here",
+                "action": "Delete"}], "write_intent": True})
+            self.assertTrue(ContactsGoalPort(writer).resolve(
+                missing, context=context).deliverables[0].problem)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ from pathlib import Path
 
 import html
 import json
+import re
 import socket
 import threading
 import urllib.parse
@@ -257,9 +258,17 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         const contact = contacts.find(item => item.id === match[1]);
         if (!contact) {{ app.innerHTML = '<h1>Contact not found</h1>'; return; }}
         app.dataset.activeView = 'Detail';
+        // A record's own operations sit in a collapsed menu, as many applications keep
+        // them; only an account that may write is shown the menu at all.
+        const menu = canWrite ? `<div class="record-menu">
+          <button type="button" aria-haspopup="menu" aria-expanded="false"
+            data-record-menu>More</button>
+          <div role="menu" hidden data-record-menu-items>
+            <button type="button" role="menuitem"
+              data-delete-contact="${{contact.id}}">Delete</button></div></div>` : '';
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
           <section class="record"><div class="eyebrow">Contact record</div>
-          <h1>${{contact.name}}</h1><dl><dt>Email</dt><dd>${{contact.email}}</dd>
+          <h1>${{contact.name}}</h1>${{menu}}<dl><dt>Email</dt><dd>${{contact.email}}</dd>
           <dt>Record ID</dt><dd>${{contact.id}}</dd></dl></section>`;
         document.title = `${{contact.name}} · Minimal Contacts`;
         return;
@@ -280,6 +289,24 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       const link = event.target.closest('a[data-route]');
       if (!link) return;
       event.preventDefault(); history.pushState({{}}, '', link.href); refresh();
+    }});
+    addEventListener('click', async event => {{
+      const toggle = event.target.closest('[data-record-menu]');
+      if (toggle) {{
+        const items = toggle.parentElement.querySelector('[data-record-menu-items]');
+        const open = toggle.getAttribute('aria-expanded') !== 'true';
+        toggle.setAttribute('aria-expanded', String(open));
+        items.hidden = !open;
+        return;
+      }}
+      const remove = event.target.closest('[data-delete-contact]');
+      if (!remove) return;
+      // The person deletes, after the page's own confirmation, with the browser session.
+      if (!confirm('Delete this contact?')) return;
+      const response = await fetch(
+        `/api/browser/contacts/${{encodeURIComponent(remove.dataset.deleteContact)}}/delete`,
+        {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: '{{}}'}});
+      if (response.ok) {{ history.replaceState({{}}, '', '/contacts'); await refresh(); }}
     }});
     addEventListener('submit', async event => {{
       if (event.target.id !== 'contact-create') return;
@@ -359,6 +386,7 @@ class MinimalContactsApplication:
         #: POSTs from a permitted actor that reached the store.
         self.post_requests = 0
         self.records_created = 0
+        self.records_deleted = 0
         #: Requests emitted by the hostile current-form fixture. They model effects an
         #: adapter cannot infer from an ordinary-looking DOM input.
         self.side_effect_requests = {"database": 0, "external-http": 0}
@@ -541,6 +569,30 @@ class MinimalContactsApplication:
                 with owner._lock:
                     owner.write_requests += 1
                 resolved = self._actor()
+                deleted = re.fullmatch(r"/api/browser/contacts/([^/]+)/delete", path)
+                if deleted:
+                    # Human-owned, like the create form below: the person's own page
+                    # session, same origin, and the application's own write authority.
+                    if (self.headers.get("Origin") != owner.origin or resolved is None
+                            or resolved[1] != "page_session"):
+                        self._refuse_write(403, "origin_refused")
+                        return
+                    actor = resolved[0]
+                    if "contacts:write" not in actor.permissions:
+                        self._refuse_write(403, "forbidden")
+                        return
+                    identifier = urllib.parse.unquote(deleted.group(1))
+                    with owner._lock:
+                        store = owner.workspaces[actor.workspace]
+                        kept = [item for item in store if item["id"] != identifier]
+                        if len(kept) == len(store):
+                            self._reply(404, _json_bytes({"error": "not_found"}),
+                                        "application/json")
+                            return
+                        store[:] = kept
+                        owner.records_deleted += 1
+                    self._reply(200, _json_bytes({"deleted": identifier}), "application/json")
+                    return
                 if path == "/api/browser/contacts":
                     # This is the human-owned form endpoint, separate from the delegated
                     # Agent API below. Same-origin JSON plus SameSite cookie prevents a
