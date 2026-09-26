@@ -84,6 +84,9 @@ class Resolved:
     problem: str = ""
     #: Candidate names when a reference was ambiguous, so the reply can ask.
     candidates: tuple[str, ...] = ()
+    #: The reference the person gave that names no record here ("S00998"), so the
+    #: reply can say plainly that it was not found, in the person's language.
+    missing: str = ""
     #: What the adapter would tell the declarer so that a second declaration could
     #: succeed: the fields an entity does have, the records a description matched.
     #: Empty when the problem is not one a different declaration would fix.

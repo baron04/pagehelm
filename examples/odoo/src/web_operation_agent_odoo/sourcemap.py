@@ -373,6 +373,7 @@ class OdooCompiler:
             self._pending_view_relations.append((
                 self._add("form_field", xml_id, name_attr,
                           {**base, "widget": field.attrs.get("widget", ""),
+                           "within": _enclosing_field(field),
                            **_conditions(field.attrs)},
                           self._cite(rel, field, excerpt=200)),
                 xml_id))
@@ -385,7 +386,8 @@ class OdooCompiler:
             self._pending_view_relations.append((
                 self._add("form_target", xml_id, resolved,
                           {**base, "target_type": button.attrs.get("type", "object"),
-                           "label": button.attrs.get("string", ""),
+                           "label": button.attrs.get("string", "") or _inner_label(button),
+                           "within": _enclosing_field(button),
                            "button_id": button.attrs.get("id", ""),
                            "class": button.attrs.get("class", "")[:_MAX_ATTR_CHARS],
                            "confirm": button.attrs.get("confirm", "")[:_MAX_ATTR_CHARS],
@@ -619,6 +621,34 @@ class OdooCompiler:
                        "decorators": decorators},
                       self.tree.cite(rel, start, end,
                                      excerpt_chars=_GUARD_EXCERPT_CHARS))
+
+
+def _enclosing_field(node) -> str:
+    """The x2many field whose embedded view holds `node` (an order form's lines), or
+    empty when the node belongs to the view's own model."""
+    current = node.parent
+    while current is not None:
+        if current.tag == "field" and current.parent is not None \
+                and current.parent.tag == "record":
+            # The record's own `arch` field: the view's top, not an embedded list.
+            return ""
+        if current.tag == "field" and current.attrs.get("name"):
+            return current.attrs["name"]
+        current = current.parent
+    return ""
+
+
+def _inner_label(button) -> str:
+    """A button written without `string` shows what it holds: a smart button's count
+    field names it (`string="Invoices"`), else its title."""
+    for child in button.find_all("field"):
+        if child.attrs.get("string"):
+            return child.attrs["string"][:_MAX_ATTR_CHARS]
+    for child in button.find_all("span"):
+        text = " ".join(str(getattr(child, "text", "") or "").split())
+        if text:
+            return text[:_MAX_ATTR_CHARS]
+    return str(button.attrs.get("title", ""))[:_MAX_ATTR_CHARS]
 
 
 def _module_constants(tree: ast.Module) -> dict:

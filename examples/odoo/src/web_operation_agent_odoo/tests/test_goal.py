@@ -480,6 +480,17 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertIn('action_confirm refuses with "It is not allowed', refusals[0].text)
         self.assertEqual(refusals[0].subject, "action_confirm")
 
+    def test_a_link_name_matches_by_its_words_in_any_order(self):
+        from web_operation_agent_odoo.goal.port import _worded
+        self.assertEqual(_worded("product_id", ["acoustic screens"]),
+                         ["&", ["product_id", "ilike", "acoustic"], ["product_id", "ilike", "screen"]])
+        self.assertEqual(_worded("product_id", ["Black Office Chair", "Desk"]),
+                         ["|", "&", "&", ["product_id", "ilike", "Black"],
+                          ["product_id", "ilike", "Office"], ["product_id", "ilike", "Chair"],
+                          ["product_id", "ilike", "Desk"]])
+        # Words only a person would type in another script have nothing to match.
+        self.assertEqual(_worded("product_id", ["白色隔音屏"]), [])
+
     def test_field_labels_match_by_whole_words_and_field_names(self):
         meta = self.port._models["sale.order"]
         self.assertEqual(meta.field_by_label("Order Date"), "date_order")

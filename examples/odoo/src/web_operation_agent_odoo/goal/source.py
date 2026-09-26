@@ -141,9 +141,21 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
 
     seen: set[tuple] = set()
     brought: set[tuple] = set()
+    def owner_of(attrs: dict) -> str:
+        """The model a view element is about: the view's own, or, inside an embedded
+        x2many view, the model of those lines."""
+        model = str(attrs.get("model") or "")
+        within = str(attrs.get("within") or "")
+        if within and model in metas:
+            relation = str((metas[model].fields.get(within) or {}).get("relation") or "")
+            if relation:
+                return relation
+        return model
+
     for relation in source_map.relations:
         attrs = relation.attrs or {}
-        model = str(attrs.get("model") or "")
+        model = owner_of(attrs) if relation.kind in ("form_target", "form_field") \
+            else str(attrs.get("model") or "")
         if relation.kind == "form_target" and attrs.get("label"):
             label = str(attrs["label"])
             conditions = []
@@ -204,6 +216,10 @@ def rules_for(source_map: SourceMap, *, release: str, metas: dict[str, _ModelMet
                             where=where)
                     count += 1
         elif relation.kind == "form_field" and any(attrs.get(k) for k in ("readonly", "required", "invisible")):
+            if (not attrs.get("readonly") and not attrs.get("required")
+                    and str(attrs.get("invisible")).strip() in ("1", "True", "true")):
+                # A field the form always hides is bookkeeping, not a rule a person meets.
+                continue
             name = relation.object
             label = _field_label(metas.get(model), name, strings.get(model, {}))
             parts = []

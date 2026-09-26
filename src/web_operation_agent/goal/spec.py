@@ -397,7 +397,7 @@ DECLARE_SCOPE_TOOL = {
                         "required": ["kind", "entity"]}},
                 "write_intent": {"type": "boolean"},
                 "unsupported": {"type": "string",
-                                "description": "why nothing can be declared, when parts is empty: the request needs data the index does not hold, which no related entity may stand in for"}},
+                                "description": "why nothing can be declared, when parts is empty: the request needs data the index does not hold, which no related entity may stand in for; written in the person's language, naming what is missing"}},
             "required": ["parts"]}}}
 
 

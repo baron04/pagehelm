@@ -28,6 +28,10 @@ from .lines import _LinesResolver
 from .text import (ALIASES, Ambiguous, _EMPTY, _GROUP_LIMIT, _ModelMeta, _NOT_EMPTY, _RECORD_LIMIT, _Scope, _SearchFilter, _describes_record, _fields_of, _literal_dict, _literal_domain, _money, _norm, _period, _plain_text, _strip_code, _tab_of, _tokens)
 
 
+#: Deliverable kinds answered by reading records; one may be answered as another.
+_READS = frozenset({"fact", "list", "aggregate"})
+
+
 class OdooGoalPort(_IndexCompiler, _LinesResolver):
     """Index compilation and goal resolution over the delegated JSON-RPC client."""
 
@@ -90,7 +94,13 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
         resolved = []
         for deliverable in spec.deliverables:
             try:
-                resolved.append(self._resolve_one(deliverable, index))
+                result = self._resolve_one(deliverable, index)
+                if (result.kind != deliverable.kind and result.kind in _READS
+                        and deliverable.kind in _READS):
+                    # A fact about some lines is answered by listing them; it is still the
+                    # fact that was asked, and its problems go to the same repair.
+                    result = replace(result, kind=deliverable.kind)
+                resolved.append(result)
             except BusinessToolError as exc:
                 resolved.append(Resolved(kind=deliverable.kind,
                                          problem=f"the application refused a read: {exc}"[:200]))
@@ -227,6 +237,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
             rehomed = self._rehome(entity.key, d.record, index)
             if rehomed is None:
                 return Resolved(kind=d.kind, problem=f"no {entity.label} matches {d.record!r}",
+                                missing=d.record,
                                 repair=(f"no {entity.label} is named {d.record!r}; if the person "
                                         "described the record rather than naming it, leave "
                                         "record empty and put the description in "
@@ -343,6 +354,19 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
             if isinstance(found, tuple) and not isinstance(found, Ambiguous):
                 hits.append((found, str(meta.fields[links[0]].get("string") or links[0])))
         return hits[0] if len(hits) == 1 else None
+
+    def _names_of(self, model: str, field: str, domain: list) -> list[str]:
+        """The distinct names a link field has among the records `domain` describes."""
+        try:
+            rows = self._call(model, "search_read", [domain], {"fields": [field], "limit": 200})
+        except BusinessToolError:
+            return []
+        names = []
+        for row in rows:
+            value = row.get(field)
+            if isinstance(value, (list, tuple)) and len(value) == 2 and value[1] not in names:
+                names.append(str(value[1]))
+        return names[:20]
 
     def _find_record(self, model: str, reference: str):
         rows = self._call(model, "name_search", [reference], {"limit": 8})
@@ -749,6 +773,26 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
             clause, text = self._condition(meta, condition.field, condition.values,
                                            op=condition.op, today=today)
             if clause is None:
+                named_field = meta.field_by_label(condition.field)
+                if (named_field is not None and text.startswith("no ")
+                        and meta.fields[named_field].get("type") == "many2one"):
+                    # No record by that name: the names this field actually has among the
+                    # records the other conditions describe (the products on S00010's
+                    # lines), for the person's words to be matched against.
+                    scope = list(domain)
+                    for other in metric.filters:
+                        if other is condition or not other.values:
+                            continue
+                        other_clause, _ = self._condition(meta, other.field, other.values,
+                                                          op=other.op, today=today)
+                        if other_clause:
+                            scope += other_clause
+                    names = self._names_of(meta.model, named_field, scope)
+                    if names:
+                        return Resolved(kind=d.kind, problem=text, repair=(
+                            f"{text}; the {condition.field} values here are: "
+                            + ", ".join(names) + "; use the one the person means, written "
+                            "exactly as it is here"))
                 if meta.field_by_label(condition.field) is None:
                     repair = (f"{condition.field!r} is not a field of {meta.label}; its fields "
                               "are: " + (_fields_of(index, model) or ", ".join(
@@ -1020,6 +1064,12 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
                     # ("Office" among products), which the search box would also find.
                     clause = ["|"] * (len(values) - 1) + [[field, "ilike", v] for v in values]
                     if found is None and not self._call(meta.model, "search_count", [clause], {}):
+                        # The words in any order, a plural as its singular ("acoustic
+                        # screens" for "Acoustic Bloc Screens", "black office chair" for
+                        # "Office Chair Black"): every word of each value in the name.
+                        worded = _worded(field, values)
+                        if worded and self._call(meta.model, "search_count", [worded], {}):
+                            return worded, f"{info.get('string') or field} ~ {' / '.join(values)}"
                         return None, f"no {info.get('string')} matches {value!r}"
                     return clause, f"{info.get('string') or field} ~ {' / '.join(values)}"
                 ids.append(found[1])
@@ -1099,3 +1149,22 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
         if end is not None:
             clauses.append([field, "<", bound(end)])
         return clauses, text
+
+
+def _worded(field: str, values) -> list:
+    """A condition matching a link whose name holds every word of a value, in any
+    order, a plural matched as its singular; values are alternatives. Empty when a
+    value has no word to match."""
+    alternatives = []
+    for value in values:
+        words = [w for w in re.split(r"[^0-9A-Za-z]+", str(value)) if len(w) > 1]
+        if not words:
+            return []
+        stems = [w[:-1] if w.lower().endswith("s") and len(w) > 3 else w for w in words]
+        clause = ["&"] * (len(stems) - 1) + [[field, "ilike", w] for w in stems]
+        alternatives.append(clause)
+    out = ["|"] * (len(alternatives) - 1)
+    for clause in alternatives:
+        out += clause
+    return out
+

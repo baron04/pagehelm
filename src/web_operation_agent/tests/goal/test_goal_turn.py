@@ -618,6 +618,14 @@ class GoalTurnTests(unittest.TestCase):
                 text="打开订单")
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
 
+    def test_a_record_that_does_not_exist_is_said_to_be_missing(self):
+        execution, *_ = self._run(
+            [_declaration(kind="fact", entity="order", record="S00998", fields=["Customer"])],
+            [Resolved(kind="fact", problem="no Sales Order matches 'S00998'", missing="S00998")],
+            text="S00998 的客户是谁？")
+        self.assertIn("没有找到「S00998」", execution.user_answer)
+        self.assertNotIn("no Sales Order matches", execution.user_answer)
+
     def test_an_aggregate_is_rendered_with_its_scope(self):
         execution, *_ = self._run(
             [_declaration(kind="aggregate", entity="order", page={"key": "p1"},

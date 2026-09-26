@@ -47,8 +47,19 @@ FIXTURES = {
                     <button name="%(greenhouse.action_cultivars)d" type="action"
                             string="Pick Cultivar" confirm="Replace the current cultivar?"/>
                 </header>
+                <div class="oe_button_box" name="button_box">
+                    <button name="action_view_harvests" type="object" class="oe_stat_button"
+                            invisible="harvest_count == 0">
+                        <field name="harvest_count" widget="statinfo" string="Harvests"/>
+                    </button>
+                </div>
                 <field name="name" readonly="state == 'done'"/>
                 <field name="cultivar_id" domain="[('sale_ok', '=', True)]" required="1"/>
+                <field name="seedling_ids">
+                    <list>
+                        <field name="depth" readonly="planted"/>
+                    </list>
+                </field>
                 <field name="state" invisible="1"/>
             </form>
         </field>
@@ -392,7 +403,8 @@ class Extraction(unittest.TestCase):
         self.assertEqual(primary.attrs["root_view"], "greenhouse.view_tray_form")
         family = {relation.object for relation in self._by("form_field")
                   if relation.attrs.get("root_view") == "greenhouse.view_tray_form"}
-        self.assertEqual(family, {"name", "cultivar_id", "state", "nursery_note"})
+        self.assertEqual(family, {"name", "cultivar_id", "state", "nursery_note",
+                                  "harvest_count", "seedling_ids", "depth"})
 
     def test_model_fields_carry_the_selection_a_page_never_shows(self):
         fields = {relation.object: relation.attrs for relation in self._by("service_entity")
@@ -509,6 +521,19 @@ class Rules(unittest.TestCase):
         self.assertIn("def action_move_wizard", cited[0])
         self.assertTrue(any("_for_xml_id" in line for line in cited))
         self.assertNotIn("greenhouse.tray.action_move", windows)
+
+    def test_a_smart_button_is_named_by_its_count_and_nested_fields_by_their_list(self):
+        smart = next(r for r in self.map.by_kind("form_target")
+                     if r.object == "action_view_harvests")
+        self.assertEqual(smart.attrs["label"], "Harvests")
+        self.assertEqual(smart.attrs["invisible"], "harvest_count == 0")
+        self.assertEqual(smart.attrs["within"], "")
+        depth = next(r for r in self.map.by_kind("form_field") if r.object == "depth")
+        self.assertEqual(depth.attrs["within"], "seedling_ids")
+        self.assertEqual(depth.attrs["readonly"], "planted")
+        name = next(r for r in self.map.by_kind("form_field")
+                    if r.object == "name" and r.attrs.get("view_type") == "form")
+        self.assertEqual(name.attrs["within"], "")
 
     def test_a_selection_named_by_a_module_constant_carries_its_values(self):
         stage = next(relation for relation in self.map.by_kind("service_entity")

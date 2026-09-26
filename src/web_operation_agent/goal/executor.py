@@ -1077,7 +1077,9 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
                          + "\n" + "\n".join(resolved.citations))
     agg = resolved.aggregate
     if agg is not None:
-        if resolved.kind == "list":
+        # Records listed are shown as a list, whichever kind asked for them (a fact
+        # about some lines is answered with those lines).
+        if resolved.kind == "list" or agg.records:
             # A record's name may carry a line break (a product's description under its
             # name); one record reads as one line.
             records = [" ".join(str(r).split()) for r in agg.records]
@@ -1166,7 +1168,10 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             unmet = "、".join(outcome.unmet) if zh else ", ".join(outcome.unmet)
             lines.append((f"打开 {plan.label} 未完成：{unmet or '页面未到达'}。") if zh
                          else f"Opening {plan.label} was not completed: {unmet or 'page not reached'}.")
-    if resolved.problem and not (resolved.facts or resolved.aggregate or resolved.page):
+    if resolved.missing and not (resolved.facts or resolved.aggregate or resolved.page):
+        lines.append((f"没有找到「{resolved.missing}」，系统里不存在这条记录。") if zh
+                     else f"Nothing named \"{resolved.missing}\" was found; no such record exists.")
+    elif resolved.problem and not (resolved.facts or resolved.aggregate or resolved.page):
         text = resolved.problem
         if resolved.candidates:
             text += (" 候选：" if zh else " candidates: ") + ", ".join(resolved.candidates)
