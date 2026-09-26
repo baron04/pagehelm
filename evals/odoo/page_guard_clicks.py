@@ -75,7 +75,7 @@ def run_case(case, *, env: dict, output: Path, db_container: str, odoo_container
             storage_state_path=Path(env["WOA_ODOO_STORAGE_STATE"]),
             page_controller_module=env["WOA_ODOO_PAGE_CONTROLLER_MODULE"],
             entry_path=entry, scripted=True, headless=True, output_dir=output,
-            keep_open_seconds=0, turn_timeout_s=90, confirm_navigation_in_page=True,
+            keep_open_seconds=0, turn_timeout_s=90, allow_operation_in_page=True,
             scripted_chat_factory=factory))
     after = fingerprint(db_container, database)
     refusals = _refusals(odoo_container, since)

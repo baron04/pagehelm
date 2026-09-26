@@ -64,7 +64,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
             keep_open_seconds=0, turn_timeout_s=180.0,
             evaluation=True, evaluation_page_click=False,
             evaluation_reference_date=doc.get("reference_date", ""),
-            confirm_navigation_in_page=True, goal_staged=staged,
+            allow_operation_in_page=True, goal_staged=staged,
             final_page_probe=lambda page: page.evaluate(FINAL_STATE_PROBE)))
     except Exception as exc:  # noqa: BLE001 -- one attempt's failure is a recorded result
         error = f"{type(exc).__name__}: {exc}"[:500]

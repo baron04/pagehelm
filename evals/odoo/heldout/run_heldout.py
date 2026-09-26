@@ -44,7 +44,7 @@ def run_task(task: dict, *, env: dict, credentials: Path, output: Path, model_en
             # The production surface: the reviewed click list decides clicks, the addon's
             # window makes the session read-only, and generic forms stay opt-in (off).
             evaluation=True, evaluation_page_click=False,
-            confirm_navigation_in_page=True))
+            allow_operation_in_page=True))
     except Exception as exc:  # noqa: BLE001 -- one task's failure is a recorded result
         error = f"{type(exc).__name__}: {exc}"[:500]
     wall = round(time.monotonic() - started, 3)
