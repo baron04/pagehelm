@@ -146,6 +146,14 @@ class RankingTests(unittest.TestCase):
         two = known + (KnownReference(text="S00010", entity="order", name="S00010"),)
         spec = GoalSpec.from_json({"deliverables": [{"kind": "fact", "entity": "order", "record": "S00096"}]})
         self.assertEqual(correct_records(spec, "S00009 和 S00010", two)[1], ())
+        # A code copied from the values offered this turn was not composed: it stands,
+        # even where the request names only the customer.
+        partner = (KnownReference(text="Azure", entity="partner", name="Azure Interior"),)
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "handoff", "entity": "invoice",
+                                                     "record": "RINV/2026/00002"}]})
+        self.assertEqual(correct_records(spec, "Azure 那张两万的退款", partner,
+                                         ("RINV/2026/00002",))[1], ())
+        self.assertEqual(correct_records(spec, "Azure 那张两万的退款", partner)[1], ())
 
     def test_a_data_question_carries_no_rules(self):
         rules = (IndexRule(id="r1", kind="visibility", about="Request Cancel", text="t"),)

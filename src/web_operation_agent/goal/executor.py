@@ -420,7 +420,8 @@ class GoalTurnExecutor:
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
         if second_reading is not None and spec.deliverables:
             spec = self._agree(s, chat, index, spec, today, second_reading)
-        spec, corrections = correct_records(spec, s.message.text, known)
+        spec, corrections = correct_records(spec, s.message.text, known,
+                                            tuple(c.display for c in s.candidates))
         if corrections:
             s.ledger.append("goal_records_corrected", step=s.step,
                             corrections=[{"declared": a, "located": b} for a, b in corrections])

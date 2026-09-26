@@ -61,21 +61,25 @@ def references(text: str) -> tuple[str, ...]:
     return tuple(found[:_MAX_REFERENCES])
 
 
-def correct_records(spec, request: str, known: tuple[KnownReference, ...]):
+def correct_records(spec, request: str, known: tuple[KnownReference, ...],
+                    offered: tuple[str, ...] = ()):
     """A declared record written like a code that is not in the request, where the
     request's located references leave exactly one record it can be, is that record:
     record numbers are copied, not composed, and a small model now and then composes
-    one (S00096 for S00009). Returns (spec, corrections as (declared, located))."""
+    one (S00096 for S00009). A code copied from the values offered this turn was not
+    composed and stands. Returns (spec, corrections as (declared, located))."""
     from dataclasses import replace as _replace
     if not known:
         return spec, ()
-    asked = {_norm_ref(r) for r in references(request)}
+    asked = {_norm_ref(r) for r in references(request)} | {_norm_ref(r) for r in offered}
     corrections = []
     out = []
     for d in spec.deliverables:
         record = (d.record or "").strip()
         if record and _CODE.fullmatch(record) and _norm_ref(record) not in asked:
-            same = {k.name for k in known if k.entity == d.entity} or {k.name for k in known}
+            # A code stands for a code: a located customer's name never replaces one.
+            same = ({k.name for k in known if k.entity == d.entity}
+                    or {k.name for k in known if _CODE.fullmatch(k.name.strip())})
             if len(same) == 1:
                 located = next(iter(same))
                 corrections.append((record, located))
