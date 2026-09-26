@@ -540,6 +540,14 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIsNone(executor._continued(AgentTurnMessage(message_id="m2", text="换个问题：S00001 呢",
                                                                page_url="http://127.0.0.1:8080/home")))
 
+    def test_scope_terms_in_the_applications_language_are_kept_per_part(self):
+        from web_operation_agent.goal.spec import scope_from_json
+        parts, _write, _why = scope_from_json({"parts": [
+            {"kind": "fact", "entity": "order", "rules": True,
+             "terms": ["archived analytic account", " post ", "", 7, "x", "y"]}]})
+        self.assertEqual(parts[0]["terms"], ["archived analytic account", "post", "x"])
+        self.assertNotIn("terms", scope_from_json({"parts": [{"kind": "fact", "entity": "order"}]})[0][0])
+
     def test_a_data_question_is_declared_without_the_rules_catalogue(self):
         scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
                    _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]

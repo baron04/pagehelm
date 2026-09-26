@@ -333,8 +333,11 @@ class GoalTurnExecutor:
             # The rules of the source are shown only when the first step says a part
             # asks how the application behaves: a long catalogue of rule ids in front of
             # a question about data disturbs how a small model reads the question.
+            # The words the first step wrote in the application's language rank the
+            # rules alongside the request's own, which may be in another language.
+            terms = " ".join(t for p in parts for t in p.get("terms", ()))
             index = neighbourhood(index, tuple(p["entity"] for p in parts),
-                                  request=s.message.text,
+                                  request=(s.message.text + " " + terms).strip(),
                                   rules=any(p.get("rules") for p in parts))
             s.index = index
             s.ledger.append("goal_neighbourhood", step=s.step,

@@ -392,6 +392,8 @@ DECLARE_SCOPE_TOOL = {
                                        "description": "entity key from the list. A question about a record's lines, items or products is about the line entity (marked 'lines of X'), not X"},
                             "about": {"type": "string",
                                       "description": "the record or records meant, in the person's words (a number, a name, a description), or empty"},
+                            "terms": {"type": "array", "maxItems": 3, "items": {"type": "string"},
+                                      "description": "one to three words in the application's language (the index's) naming what this part is about -- a control, a field, an action, a product -- as the application would write them"},
                             "rules": {"type": "boolean",
                                       "description": "true when this part asks how the application itself behaves -- why a control is shown or hidden, what it opens, when a field can be changed, what an action refuses or requires, what a field means -- rather than about the data in its records"}},
                         "required": ["kind", "entity"]}},
@@ -428,6 +430,11 @@ def scope_from_json(payload: object) -> tuple[list[dict], bool, str]:
                 "about": _text(item.get("about"), "about")}
         if item.get("rules") is True:
             part["rules"] = True
+        terms = item.get("terms")
+        if isinstance(terms, list):
+            words = [" ".join(str(t).split())[:40] for t in terms if isinstance(t, str) and t.strip()][:3]
+            if words:
+                part["terms"] = words
         parts.append(part)
     return parts, bool(payload.get("write_intent", False)), _reason(payload.get("unsupported"))
 
