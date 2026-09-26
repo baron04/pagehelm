@@ -115,7 +115,7 @@ class _IndexCompiler:
                 key=f"p{action['action_id']}", label=action["name"], breadcrumb=breadcrumb,
                 entity=action["model"], views=tuple(action.get("view_modes") or ()),
                 filters=tuple(dict.fromkeys(filters)), groups=tuple(dict.fromkeys(groups)),
-                aliases=self._aliases.get(action["name"], ()), filters_as=same_as,
+                aliases=self._translations.of(action["name"]), filters_as=same_as,
                 scope=tuple(dict.fromkeys(scope)),
                 operations=(("create",) if "create" in model_operations.get(action["model"], ())
                             and "form" in (action.get("view_modes") or ()) else ())))
@@ -127,7 +127,7 @@ class _IndexCompiler:
             meta = self._models[model]
             owner = self._models.get(meta.parent) if meta.parent else None
             entities.append(IndexEntity(
-                key=model, label=meta.label, aliases=self._aliases.get(meta.label, ()),
+                key=model, label=meta.label, aliases=self._translations.of(meta.label),
                 fields=tuple(self._index_fields(meta)) if model in detailed else (),
                 sections=meta.sections if model in detailed else (),
                 actions=meta.actions if model in detailed else (),
@@ -151,7 +151,8 @@ class _IndexCompiler:
         fields = self._client.call(model, "fields_get", [], {
             "attributes": ["string", "type", "relation", "selection", "searchable", "domain"]})
         if not detailed:
-            return _ModelMeta(model, label, fields, [], [], (), (), [])
+            return _ModelMeta(model, label, fields, [], [], (), (), [],
+                              english=self._translations.back)
         try:
             views = self._client.call(model, "get_views", [[[False, "list"], [False, "form"],
                                                              [False, "search"]]], {})
@@ -171,7 +172,7 @@ class _IndexCompiler:
             + re.findall(r'<button[^>]*?\bstring="([^"]+)"[^>]*?\btype="(?:object|action)"', arch["form"])))
         return _ModelMeta(model, label, fields, list_fields, form_fields, sections, actions,
                           _parse_filters(arch["search"]), form_arch=arch["form"],
-                          list_arch=arch["list"])
+                          list_arch=arch["list"], english=self._translations.back)
 
     def _line_metas(self, meta: _ModelMeta) -> list[_ModelMeta]:
         """The line entities a record's form embeds, with the fields that form shows."""
@@ -206,7 +207,7 @@ class _IndexCompiler:
                 filters = []
             out.append(_ModelMeta(comodel, self._model_labels.get(comodel, comodel), fields,
                                   shown[:_MAX_LINE_FIELDS + 1], [], (), (), filters,
-                                  parent=meta.model))
+                                  parent=meta.model, english=self._translations.back))
         return out
 
     def _index_fields(self, meta: _ModelMeta) -> list[IndexField]:
@@ -241,7 +242,9 @@ class _IndexCompiler:
             choices = ()
             if kind == "choice":
                 choices = tuple(str(label) for _key, label in (info.get("selection") or ()))
-            out.append(IndexField(key=name, label=str(info.get("string") or name), kind=kind,
+            label = str(info.get("string") or name)
+            out.append(IndexField(key=name, label=label, aliases=self._translations.of(label),
+                                  kind=kind,
                                   relation=relation, choices=choices))
         return out
 

@@ -5,6 +5,7 @@ import unittest
 
 from web_operation_agent.goal.spec import GoalSpec
 from web_operation_agent_odoo.goal import OdooGoalPort
+from web_operation_agent_odoo.translations import OdooTranslations, parse_po
 
 _CATALOG = {
     "descriptor_digest": "d1",
@@ -170,10 +171,18 @@ class _Client:
         raise AssertionError(f"unexpected {model}.{method}")
 
 
+#: What the application's own zh_CN catalogue says for a few of the fixture's labels.
+_TRANSLATIONS = OdooTranslations(
+    labels={"Sales Orders": ("销售订单",), "Sales Order Line": ("订单行",),
+            "Customer": ("客户",), "Quotation Sent": ("报价已发送",)},
+    english={"销售订单": ("Sales Orders",), "订单行": ("Sales Order Line",),
+             "客户": ("Customer",), "报价已发送": ("Quotation Sent",)})
+
+
 class OdooGoalPortTests(unittest.TestCase):
     def setUp(self):
         self.client = _Client()
-        self.port = OdooGoalPort(self.client)
+        self.port = OdooGoalPort(self.client, translations=_TRANSLATIONS)
         self.index = self.port.index()
 
     def test_the_index_keeps_business_pages_and_drops_technical_and_bound_ones(self):
@@ -568,7 +577,7 @@ class OdooGoalPortTests(unittest.TestCase):
 class OdooGoalPortConditionTests(unittest.TestCase):
     def setUp(self):
         self.client = _Client()
-        self.port = OdooGoalPort(self.client)
+        self.port = OdooGoalPort(self.client, translations=_TRANSLATIONS)
         self.index = self.port.index()
 
     def _resolve(self, deliverable):
@@ -584,6 +593,25 @@ class OdooGoalPortConditionTests(unittest.TestCase):
         self.assertEqual([f.label for f in line.fields],
                          ["Order Reference", "Product", "Subtotal", "Quantity"])
         self.assertIn("订单行", line.aliases)
+
+    def test_the_applications_own_chinese_names_label_and_resolve_fields_and_choices(self):
+        order = self.index.entity("sale.order")
+        customer = next(f for f in order.fields if f.label == "Customer")
+        self.assertEqual(customer.aliases, ("客户",))
+        self.assertIn("Customer[客户]", self.index.render())
+        # A condition written with the Chinese names reaches the same field and choice.
+        resolved = self._resolve({"kind": "aggregate", "entity": "sale.order",
+                                  "page": {"key": "p331"}, "metric": {"op": "count", "filters": [
+                                      {"field": "状态", "values": ["报价已发送"]}]}})
+        self.assertTrue(resolved.deliverables[0].problem)  # 状态 is not in this catalogue
+        resolved = self._resolve({"kind": "aggregate", "entity": "sale.order",
+                                  "page": {"key": "p331"}, "metric": {"op": "count", "filters": [
+                                      {"field": "Status", "values": ["报价已发送"]}]}})
+        self.assertEqual(resolved.deliverables[0].problem, "")
+        self.assertIn(["state", "in", ["sent"]], self._last_domain())
+        # Without a catalogue there are no Chinese names at all: nothing hand-written.
+        bare = OdooGoalPort(_Client()).index()
+        self.assertEqual(bare.page("p331").aliases, ())
 
     def test_a_date_period_becomes_utc_bounds_in_the_users_zone(self):
         self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},

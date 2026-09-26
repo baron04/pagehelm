@@ -26,7 +26,8 @@ from .index import _IndexCompiler
 from .lines import _LinesResolver
 from .values import _ValueCandidates
 
-from .text import (ALIASES, Ambiguous, _EMPTY, _GROUP_LIMIT, _ModelMeta, _NOT_EMPTY, _RECORD_LIMIT, _Scope, _SearchFilter, _describes_record, _fields_of, _literal_dict, _literal_domain, _money, _norm, _period, _plain_text, _strip_code, _tab_of, _tokens)
+from ..translations import OdooTranslations
+from .text import (Ambiguous, _EMPTY, _GROUP_LIMIT, _ModelMeta, _NOT_EMPTY, _RECORD_LIMIT, _Scope, _SearchFilter, _describes_record, _fields_of, _literal_dict, _literal_domain, _money, _norm, _period, _plain_text, _strip_code, _tab_of, _tokens)
 
 
 #: Deliverable kinds answered by reading records; one may be answered as another.
@@ -36,9 +37,11 @@ _READS = frozenset({"fact", "list", "aggregate"})
 class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
     """Index compilation and goal resolution over the delegated JSON-RPC client."""
 
-    def __init__(self, client, *, aliases: dict | None = None):
+    def __init__(self, client, *, translations: OdooTranslations | None = None):
         self._client = client
-        self._aliases = ALIASES if aliases is None else aliases
+        #: What the application calls its labels in Chinese, from its own translation
+        #: files; none until a deployment attaches them.
+        self._translations = translations or OdooTranslations.none()
         self._lock = threading.Lock()
         self._index: ApplicationIndex | None = None
         self._actions: list[dict] = []
@@ -75,6 +78,14 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                         or own == wanted or own.startswith(wanted)):
                     hits.append((model, found[2]))
         return tuple(hits[:3])
+
+    def attach_translations(self, translations: OdooTranslations) -> None:
+        """Give the index the application's own Chinese names for its labels. The index
+        is recompiled on its next use."""
+        with self._lock:
+            self._translations = translations
+            self._index = None
+            self._models = {}
 
     def attach_source(self, source_map, *, release: str) -> None:
         """Give the index the rules compiled from the deployment's source, cited under
@@ -1099,6 +1110,12 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                 wanted = _norm(value)
                 match = next((k for k, lab in info.get("selection") or ()
                               if _norm(str(lab)) == wanted or k == value), None)
+                if match is None:
+                    # A choice named in the person's language, as the application
+                    # translates it (已过账 for Posted).
+                    forms = {_norm(e) for e in self._translations.back(value)}
+                    match = next((k for k, lab in info.get("selection") or ()
+                                  if _norm(str(lab)) in forms), None)
                 if match is None:
                     match = next((k for k, lab in info.get("selection") or ()
                                   if wanted in _norm(str(lab))), None)

@@ -620,7 +620,7 @@ def extract_source_tree(*, source_root: Path) -> dict:
     # is written against Odoo's upstream layout and the image ships the Debian one.
     destinations = {f"addons/{module}": f"addons/{module}" for module in SOURCE_MODULES}
     destinations["addons/base"] = "odoo/addons/base"
-    keep_suffixes = (".py", ".xml", ".js", ".csv")
+    keep_suffixes = (".py", ".xml", ".js", ".csv", ".po")
 
     def destination_of(name: str) -> str:
         parts = Path(name).parts
@@ -641,7 +641,10 @@ def extract_source_tree(*, source_root: Path) -> dict:
         frontend_source = (parts[2:4] == ("static", "src")
                            and name.endswith((".js", ".xml"))
                            and "tests" not in parts[4:])
-        if not (compiler_source or security_source or frontend_source):
+        # The module's own Chinese names for its labels; read through their own
+        # allowlist (`translations.py`), never by source retrieval.
+        translation_source = parts[2:] == ("i18n", "zh_CN.po")
+        if not (compiler_source or security_source or frontend_source or translation_source):
             return ""
         return "/".join((target, *parts[2:]))
 

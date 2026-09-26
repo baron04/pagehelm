@@ -48,6 +48,7 @@ from web_operation_agent.execution.product import (AgentTurnExecution,
 from web_operation_agent.goal.executor import GoalTurnExecutor
 
 from ..adapter import OdooApplicationAdapter
+from ..translations import odoo_translations
 from ..turn import odoo_turn_config
 
 #: How much longer than the turn's own wall budget the host waits for its outcome. The
@@ -748,6 +749,10 @@ def run_demo(config: OdooDemoConfig, *,
         # The goal index carries the rules of the deployment's source, cited under the
         # deployment's release name; the same compile the tool loop uses.
         adapter.goal_port.attach_source(capability.source_map, release=config.source_release)
+    if config.source_root is not None and config.source_release:
+        # The application's own Chinese names for its labels, from its zh_CN catalogues.
+        adapter.goal_port.attach_translations(
+            odoo_translations(config.source_root, release=config.source_release))
     chat, meter = _chat(config, run_dir, adapter)
     holder: dict[str, LiveConversationRunner] = {}
 

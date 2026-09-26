@@ -33,11 +33,15 @@ class IndexField:
     #: The entity a `link` points to, or the choice labels of a `choice`.
     relation: str = ""
     choices: tuple[str, ...] = ()
+    #: What the application itself calls the field in the person's language, when it
+    #: says (its own translation of the label); the first is shown beside the label.
+    aliases: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "field key"))
         object.__setattr__(self, "label", _label(self.label, "field label"))
         object.__setattr__(self, "choices", tuple(_label(c, "choice") for c in self.choices)[:8])
+        object.__setattr__(self, "aliases", tuple(_label(a, "alias") for a in self.aliases)[:3])
 
 
 @dataclass(frozen=True)
@@ -242,16 +246,17 @@ class ApplicationIndex:
 
 
 def _render_field(item: IndexField) -> str:
+    label = f"{item.label}[{item.aliases[0]}]" if item.aliases else item.label
     if item.kind == "link" and item.relation:
-        return f"{item.label}->{item.relation}"
+        return f"{label}->{item.relation}"
     if item.kind == "choice" and item.choices:
-        return f"{item.label}({'/'.join(item.choices)})"
+        return f"{label}({'/'.join(item.choices)})"
     if item.kind in ("money", "number", "date", "html"):
-        return f"{item.label}({item.kind})"
+        return f"{label}({item.kind})"
     if item.kind == "bool":
         # A flag reads as a yes/no question ("Sales" is whether it can be sold).
-        return f"{item.label}(yes/no)"
-    return item.label
+        return f"{label}(yes/no)"
+    return label
 
 
 def _norm(text: str) -> str:

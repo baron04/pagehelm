@@ -56,26 +56,6 @@ _RECORD_LIMIT = 40
 
 _GROUP_LIMIT = 20
 
-#: Chinese aliases for the labels this index is expected to carry. Odoo's own zh_CN pack
-#: is not installed on every deployment; these are the words the reference tasks use.
-ALIASES = {
-    "Quotations": ("报价单",), "Sales Orders": ("销售订单", "订单"),
-    "Invoices": ("客户发票", "发票"), "Bills": ("供应商账单", "账单"),
-    "Credit Notes": ("贷项通知单", "退款单"), "Refunds": ("供应商退款",),
-    "Customer Payments": ("客户付款",), "Vendor Payments": ("供应商付款",),
-    "Customers": ("客户",), "Vendors": ("供应商",), "Products": ("产品",),
-    "Product Variants": ("产品变体", "变体"), "Product Tags": ("产品标签",),
-    "Tags": ("标签",), "Units of Measure Categories": ("计量单位分类", "计量单位的分类"),
-    "Units of Measure": ("计量单位",), "Sales Analysis": ("销售分析",),
-    "Invoice Analysis": ("发票分析",), "Payment Terms": ("付款条件", "付款条款"),
-    "Product Categories": ("产品分类", "产品类别"), "Sales Teams": ("销售团队",),
-    "Contact": ("联系人", "客户", "供应商"), "Sales Order": ("销售订单", "报价单"),
-    "Journal Entry": ("发票", "账单", "凭证"), "Product": ("产品",),
-    "Product Variant": ("产品变体",), "Payments": ("付款",),
-    "Sales Order Line": ("订单行", "订单明细", "报价单明细"),
-    "Journal Item": ("发票行", "账单明细", "凭证行"),
-}
-
 #: Values that ask whether a field is set at all, in the index's language and in Chinese.
 _EMPTY = frozenset({"empty", "notset", "none", "unset", "空", "为空", "没有"})
 
@@ -258,9 +238,13 @@ class _ModelMeta:
     def __init__(self, model: str, label: str, fields: dict, list_fields: list[str],
                  form_fields: list[str], sections: tuple[str, ...],
                  actions: tuple[str, ...], filters: list[_SearchFilter],
-                 form_arch: str = "", parent: str = "", list_arch: str = ""):
+                 form_arch: str = "", parent: str = "", list_arch: str = "",
+                 english=None):
         self.model, self.label, self.fields = model, label, fields
         self.list_arch = list_arch
+        #: The English labels a name in the person's language translates, from the
+        #: application's own translations (`OdooTranslations.back`); none by default.
+        self.english = english or (lambda _text: ())
         self.list_fields, self.form_fields = list_fields, form_fields
         self.sections, self.actions, self.filters = sections, actions, filters
         self.form_arch = form_arch
@@ -268,6 +252,16 @@ class _ModelMeta:
         self.parent = parent
 
     def field_by_label(self, label: str) -> str | None:
+        found = self._field_by_label(label)
+        if found is None:
+            # A label in the person's language: the field the application translates so.
+            for english in self.english(label):
+                found = self._field_by_label(english)
+                if found is not None:
+                    break
+        return found
+
+    def _field_by_label(self, label: str) -> str | None:
         wanted = _norm(label)
         if not wanted:
             return None
@@ -350,4 +344,4 @@ def _kind_of(info: dict) -> str | None:
             "char": "text", "text": "text", "boolean": "bool", "many2many": None,
             "one2many": None}.get(kind, None)
 
-__all__ = ["ALIASES", "OdooGoalPort"]
+__all__ = ["OdooGoalPort"]
