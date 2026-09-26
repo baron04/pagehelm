@@ -73,8 +73,7 @@ class _ValueCandidates:
                 if line_entity is None:
                     continue
                 for line in self._lines_of(doc_model, doc_id, line_entity):
-                    add(Candidate(kind="line", entity=line_entity, display=line[0],
-                                  detail=f"{doc_name}: {line[1]}"))
+                    add(self._line_candidate(line_entity, doc_name, line))
         # Days the request names: the documents of the entities asked about dated that
         # day, and their lines when lines are asked about.
         for day in dates:
@@ -85,9 +84,19 @@ class _ValueCandidates:
                     if line_entity is None:
                         continue
                     for line in self._lines_of(target, doc[1], line_entity):
-                        add(Candidate(kind="line", entity=line_entity, display=line[0],
-                                      detail=f"{doc[2]}: {line[1]}"))
+                        add(self._line_candidate(line_entity, doc[2], line))
         return tuple(out)
+
+    def _line_candidate(self, line_entity: str, doc_name: str, line) -> Candidate:
+        """One line of one record: shown by its item, standing for the record it is on
+        and its item, since the same item is on many records' lines."""
+        item_name, detail, item_label = line
+        parent = self._parent_link(line_entity)
+        meta = self._models[line_entity]
+        owner_label = str(meta.fields[parent[1]].get("string") or parent[1]) if parent else ""
+        binds = (((owner_label, doc_name),) if owner_label else ()) + ((item_label, item_name),)
+        return Candidate(kind="line", entity=line_entity, display=item_name,
+                         detail=f"{doc_name}: {detail}", binds=binds)
 
     def _dated(self, target: str, day: str):
         """(model, id, name, summary) of `target` records whose main date is `day`."""
@@ -172,7 +181,7 @@ class _ValueCandidates:
                 continue
             detail = "; ".join(f"{meta.fields[c].get('string') or c} {row.get(c)}"
                                for c in columns if row.get(c) not in (None, False))
-            out.append((str(value[1]), detail))
+            out.append((str(value[1]), detail, str(meta.fields[item].get("string") or item)))
         return out
 
     @staticmethod

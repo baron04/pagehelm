@@ -34,6 +34,10 @@ class Candidate:
     #: What tells it apart from its neighbours: a date, an amount, a quantity.
     detail: str = ""
     id: str = ""
+    #: The conditions this value stands for as (field label, exact value) pairs, when a
+    #: name alone does not pick it out: one line of one record is its record and its
+    #: item, since the same item is on many records' lines.
+    binds: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

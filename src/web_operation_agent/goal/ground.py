@@ -13,7 +13,7 @@ from dataclasses import replace
 import re
 
 from .ports import Candidate
-from .spec import GoalSpec
+from .spec import Filter, GoalSpec, Metric
 
 #: Values shown to the model in one turn; a short list is what a small model reads well.
 _MAX_CANDIDATES = 40
@@ -75,48 +75,79 @@ def render(candidates: tuple[Candidate, ...]) -> str:
 
 
 def bind(spec: GoalSpec, candidates: tuple[Candidate, ...]) -> tuple[GoalSpec, int, tuple[str, ...]]:
-    """The declaration with value ids replaced by the exact names they stand for.
+    """The declaration with value ids replaced by what they stand for.
 
-    Returns (spec, how many ids were bound, ids that name no candidate). An id is only
-    ever a whole value (`v12`); words the model wrote itself are left as they are.
+    A value that is a name binds to that name. A value that stands for several
+    conditions (one line: its record and its item) binds, wherever its id is written, to
+    all of them as conditions, so the record it belongs to is never lost. Returns (spec,
+    how many ids were bound, ids that name no candidate). An id is only ever a whole value
+    (`v12`); words the model wrote itself are left as they are.
     """
     by_id = {c.id: c for c in candidates}
     bound = 0
     unknown: list[str] = []
 
-    def one(value: str) -> str:
+    def lookup(value: str):
         nonlocal bound
         match = _ID.match(value or "")
         if not match:
-            return value
+            return None
         candidate = by_id.get(match.group(1))
         if candidate is None:
             unknown.append(match.group(1))
-            return value
+            return None
         bound += 1
-        return candidate.display
+        return candidate
 
     out = []
     for d in spec.deliverables:
         changes = {}
+        conditions: list = []
         for name in ("record", "value", "action"):
             current = getattr(d, name)
-            new = one(current) if current else current
-            if new != current:
-                changes[name] = new
+            candidate = lookup(current) if current else None
+            if candidate is None:
+                continue
+            if name == "record" and candidate.binds:
+                changes["record"] = ""
+                conditions.extend(candidate.binds)
+            else:
+                changes[name] = candidate.display
         if d.page.search:
-            search = one(d.page.search)
-            if search != d.page.search:
-                changes["page"] = replace(d.page, search=search)
-        if d.metric is not None and d.metric.filters:
-            filters = tuple(replace(f, values=tuple(one(v) for v in f.values))
-                            for f in d.metric.filters)
-            if filters != d.metric.filters:
-                changes["metric"] = replace(d.metric, filters=filters)
+            candidate = lookup(d.page.search)
+            if candidate is not None:
+                changes["page"] = replace(d.page, search=candidate.display)
+        filters = list(d.metric.filters) if d.metric is not None else []
+        for i, f in enumerate(filters):
+            values = []
+            for v in f.values:
+                candidate = lookup(v)
+                if candidate is None:
+                    values.append(v)
+                    continue
+                values.append(candidate.display)
+                conditions.extend(pair for pair in candidate.binds if pair[1] != candidate.display)
+            filters[i] = replace(f, values=tuple(values))
+        present = {_norm_label(f.field) for f in filters}
+        for label, value in conditions:
+            if _norm_label(label) in present:
+                filters = [replace(f, values=(value,)) if _norm_label(f.field) == _norm_label(label)
+                           else f for f in filters]
+            else:
+                filters.append(Filter(field=label, values=(value,)))
+                present.add(_norm_label(label))
+        if d.metric is not None or filters:
+            metric = d.metric or Metric(op="count")
+            if tuple(filters) != metric.filters:
+                changes["metric"] = replace(metric, filters=tuple(filters))
         out.append(replace(d, **changes) if changes else d)
     if not bound and not unknown:
         return spec, 0, ()
     return replace(spec, deliverables=tuple(out)), bound, tuple(dict.fromkeys(unknown))
+
+
+def _norm_label(label: str) -> str:
+    return "".join(str(label).casefold().split())
 
 
 __all__ = ["bind", "days", "ground", "render", "without_days"]

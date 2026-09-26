@@ -523,6 +523,7 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual([(c.kind, c.entity, c.display) for c in named],
                          [("record", "sale.order", "S00006"), ("line", "sale.order.line", "Desk")])
         self.assertIn("Quantity 1.0", named[1].detail)
+        self.assertEqual(named[1].binds, (("Order Reference", "S00006"), ("Product", "Desk")))
         self.assertTrue(named[1].detail.startswith("S00006: "))
         # A named customer: their documents on the entity asked about, and those lines.
         partner = self.port.candidates(entities=("sale.order.line",),
