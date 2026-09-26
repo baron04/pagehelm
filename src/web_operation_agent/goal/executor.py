@@ -1012,6 +1012,9 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
         return False
     if resolved.kind in ("fact",) and resolved.facts:
         return True
+    if resolved.kind == "fact" and resolved.aggregate is not None and resolved.aggregate.records:
+        # A fact about some lines answered by listing the lines it is about.
+        return True
     if resolved.kind in ("aggregate", "list") and resolved.aggregate is not None:
         return True
     if outcome is not None:

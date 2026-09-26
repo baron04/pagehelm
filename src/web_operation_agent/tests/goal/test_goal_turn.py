@@ -641,6 +641,17 @@ class GoalTurnTests(unittest.TestCase):
                 text="打开订单")
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
 
+    def test_a_fact_answered_by_listing_its_lines_finishes_the_turn(self):
+        execution, *_ = self._run(
+            [_declaration(kind="fact", entity="order", fields=["Total"],
+                          metric={"op": "count", "filters": [{"field": "Customer", "values": ["Acme"]}]})],
+            [Resolved(kind="fact", aggregate=Aggregate(
+                subject="Lines · Product ~ Desk", count=1,
+                records=("S00016 - Desk — Unit Price: 275.00",)))],
+            text="S00016 的书桌单价？")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("Unit Price: 275.00", execution.user_answer)
+
     def test_a_record_that_does_not_exist_is_said_to_be_missing(self):
         execution, *_ = self._run(
             [_declaration(kind="fact", entity="order", record="S00998", fields=["Customer"])],
