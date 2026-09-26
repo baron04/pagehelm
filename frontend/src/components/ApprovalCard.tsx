@@ -98,12 +98,14 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
 
   const titleId = `woa-approval-${approval.approval_id.replace(/[^A-Za-z0-9_-]/g, '')}`
   const effectId = `${titleId}-effect`
+  const targetsId = `${titleId}-targets`
   const hintId = `${titleId}-hint`
 
   return (
     <section className="woa-approval" ref={card} role="alertdialog" aria-modal="false"
              data-kind={approval.kind ?? 'write'}
-             aria-labelledby={titleId} aria-describedby={`${effectId} ${hintId}`}
+             aria-labelledby={titleId}
+             aria-describedby={`${effectId} ${targetsId} ${hintId}`}
              onKeyDown={onKeyDown}>
       {/* Three things and two answers: what will happen, to what, and until when. The card
           keeps a frame model output cannot draw -- the header, the monospaced record, the
@@ -128,7 +130,9 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
         <p className="woa-approval__effect" id={effectId}>
           {approval.effect.slice(0, limits.effect_max_chars)}
         </p>
-        <ul className="woa-approval__targets">
+        {/* Read out with the effect: an effect names what kind of change, the targets which
+            record it falls on, and an answer given without hearing them is not informed. */}
+        <ul className="woa-approval__targets" id={targetsId}>
           {approval.targets.slice(0, limits.max_targets).map((target, index) => (
             <li key={`${index}-${target}`}>{target.slice(0, limits.target_max_chars)}</li>
           ))}

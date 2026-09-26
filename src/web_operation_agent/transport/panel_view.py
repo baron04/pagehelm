@@ -15,6 +15,7 @@ import json
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..schemas import TaskEvent
@@ -135,7 +136,7 @@ def describe_step(facts: dict) -> str:
 
     A turn that reads business data spends most of its wall clock inside model calls and
     typed reads, neither of which dispatches a page command.  The panel therefore stood on
-    `正在理解目标` for as long as that took -- the product was working and said nothing.
+    `正在理解你的需求` for as long as that took -- the product was working and said nothing.
     The session reports *facts* (a stage, a tool name, a count); the sentence is written
     here, with the rest of the panel's prose.
     """
@@ -167,37 +168,93 @@ def describe_step(facts: dict) -> str:
     return ""
 
 
-def describe_action(command: dict | None) -> str:
+#: How a control is called when the page gives it a name. A role with no word here is named
+#: by its name alone.
+_ROLE_WORDS = {
+    "button": "按钮", "link": "链接", "menuitem": "菜单项", "tab": "标签页",
+    "checkbox": "复选框", "radio": "单选项", "switch": "开关", "option": "选项",
+    "textbox": "输入框", "searchbox": "搜索框", "combobox": "下拉框", "select": "下拉框",
+    "listbox": "列表", "article": "卡片",
+}
+#: Controls that are a row of a list or a cell of one.
+_ROW_ROLES = frozenset({"row", "tr", "td", "cell", "gridcell"})
+
+#: A control's name is the page's text for it, which for a list row is the whole row.
+_TARGET_NAME_CHARS = 24
+
+
+def _path(url: str) -> str:
+    parts = urlsplit(url)
+    return parts.path.rstrip("/") + (f"?{parts.query}" if parts.query else "")
+
+
+def action_target(command: dict | None, observation: dict | None) -> dict:
+    """What the person would call the control one command acts on, from the page it acts on.
+
+    The command names a control by the observation's ref (`e12`), which means nothing to
+    the person reading along. The observation the command was based on knows the control's
+    role and visible name; for a page opened by path, the link on that page that leads
+    there names it. Nothing here comes back from the browser after the fact.
+    """
+    args = (command or {}).get("args") or {}
+    elements = [element for element in ((observation or {}).get("elements") or [])
+                if isinstance(element, dict)]
+    found: dict | None = None
+    if (command or {}).get("action") == "goto":
+        wanted = _path(str(args.get("url") or ""))
+        found = next((element for element in elements
+                      if wanted and _path(str((element.get("attrs") or {}).get("href") or ""))
+                      == wanted and str(element.get("name") or "").strip()), None)
+    elif args.get("ref"):
+        found = next((element for element in elements
+                      if element.get("ref") == args.get("ref")), None)
+    if found is None:
+        return {}
+    name = " ".join(_clip(found.get("name"), 200).split())
+    if len(name) > _TARGET_NAME_CHARS:
+        name = name[:_TARGET_NAME_CHARS - 1] + "…"
+    return {"name": name, "role": _clip(found.get("role"), 20)}
+
+
+def describe_action(command: dict | None, target: dict | None = None) -> str:
     """User-visible prose for one dispatched browser command.
 
     This is deliberately server-side.  The Runtime used to author it, which meant the
-    timeline could not survive the document that produced it.
+    timeline could not survive the document that produced it.  A control is named as the
+    page names it (`target`, from `action_target`), never by its ref or a path.
     """
     action = str((command or {}).get("action") or "")
     args = (command or {}).get("args") or {}
-    limits = panel_limits()
-    ref = _clip(args.get("ref"), 40)
+    name = str((target or {}).get("name") or "")
+    raw_role = str((target or {}).get("role") or "")
+    role = _ROLE_WORDS.get(raw_role, "")
+    quoted = f"“{name}”" if name else ""
     if action == "goto":
-        return f"打开页面：{_clip(args.get('url'), limits['result_max_chars'])}"
+        return f"打开“{name}”" if name else "打开页面"
     if action == "back":
         return "返回上一页"
     if action == "click":
-        return f"点击页面控件：{ref}"
+        if quoted and raw_role in _ROW_ROLES:
+            # A row is named by its first cell; what the click does with it is the page's.
+            return f"点击{quoted}所在行"
+        if quoted:
+            return f"点击{quoted}{role}"
+        return f"点击页面上的{role}" if role else "点击页面上的控件"
     if action == "fill":
-        return f"填写页面字段：{ref}"
+        return f"填写{quoted}" if quoted else "填写页面上的输入框"
     if action == "select":
-        return f"选择页面选项：{ref}"
+        return f"在{quoted}中选择" if quoted else "在页面上选择选项"
     if action == "apply_facet":
         return "切换页面筛选或分组"
     if action == "submit":
-        return f"提交页面表单：{ref}"
+        return f"提交{quoted}" if quoted else "提交页面表单"
     if action == "wait_for":
         return "等待页面状态更新"
     if action == "scroll":
         return "向下滚动页面" if args.get("direction") == "down" else "向上滚动页面"
     if action == "observe":
         return "重新检查当前页面"
-    return f"执行页面动作：{_clip(action, 40)}" if action else "执行页面动作"
+    return "执行页面动作"
 
 
 #: Why the assistant's session ended, as the person at the panel is told. The reason codes
@@ -234,7 +291,13 @@ def _unspoken(payload: dict) -> bool:
     return str(payload.get("terminal_reason") or "") in _UNSPOKEN_ENDINGS
 
 
-def project_event(event: TaskEvent, *, at: int) -> dict | None:
+#: Steps that say only that something is under way. Between two things the assistant did,
+#: "正在思考" is what it was doing while nothing happened; once the next thing has happened,
+#: or the turn has ended, it says nothing more and the panel stops showing it.
+_TRANSIENT_STAGES = frozenset({"thinking"})
+
+
+def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> dict | None:
     """Project one session event onto a panel timeline entry, or ``None`` if invisible.
 
     An ``approval_required`` event projects only its *presence*.  The card's content and the
@@ -250,7 +313,7 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
         return None
     if event.kind == "action":
         return {**base, "kind": "action", "tone": "active",
-                "text": describe_action(payload.get("command"))}
+                "text": describe_action(payload.get("command"), target)}
     if event.kind == "approval_required":
         text = ("需要确认后才能操作页面" if payload.get("kind") == "operate"
                 else "需要确认后才能继续")
@@ -283,10 +346,12 @@ def project_event(event: TaskEvent, *, at: int) -> dict | None:
     if not text:
         text = "正在执行" if not mapping["terminal"] else "任务结束"
     node = payload.get("step")
+    node = node if state == "step" and isinstance(node, dict) and node else None
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text,
             "panel_state": mapping["panel_state"],
-            **({"step": node} if state == "step" and isinstance(node, dict) and node else {}),
+            **({"step": node} if node else {}),
+            **({"transient": True} if node and node.get("stage") in _TRANSIENT_STAGES else {}),
             **_source_details(payload, state, limits)}
 
 

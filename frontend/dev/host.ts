@@ -120,7 +120,8 @@ export function createDevHost(): DevHost {
     for (const [pause, kind, text, step] of steps) {
       await wait(pause)
       if (mine !== live) return false
-      push(entry(kind, text, {tone: 'active', ...(step ? {step} : {})}))
+      push(entry(kind, text, {tone: 'active', ...(step ? {step} : {}),
+                              ...(step?.stage === 'thinking' ? {transient: true} : {})}))
     }
     return true
   }
@@ -131,7 +132,7 @@ export function createDevHost(): DevHost {
     push(entry('goal', goal))
     commit({optimistic: null})
     if (!await play(mine, [
-      [300, 'progress', '正在理解目标'],
+      [300, 'progress', '正在理解你的需求'],
       [500, 'progress', '正在思考', {stage: 'thinking'}],
       [700, 'progress', '正在选择操作方式',
        {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=odoo.sales.query'}],
@@ -144,7 +145,7 @@ export function createDevHost(): DevHost {
        {stage: 'read_done', tool: 'query_sale_orders', result: '12 条 · 待开票的销售订单'}],
       [500, 'progress', '正在计算',
        {stage: 'tool', tool: 'compute', arguments: 'sum(amount_total) · 3 条'}],
-      [600, 'action', '打开页面：/odoo/sales'],
+      [600, 'action', '点击“销售”菜单项'],
       [500, 'action', '等待页面状态更新'],
     ])) return
     await wait(500)
@@ -161,7 +162,7 @@ export function createDevHost(): DevHost {
     push(entry('goal', goal))
     commit({optimistic: null})
     if (!await play(mine, [
-      [300, 'progress', '正在理解目标'],
+      [300, 'progress', '正在理解你的需求'],
       [500, 'progress', '正在思考', {stage: 'thinking'}],
       [600, 'progress', '正在选择操作方式',
        {stage: 'tool', tool: 'load_skill', arguments: 'skill_id=odoo.sales.confirm'}],
@@ -180,8 +181,8 @@ export function createDevHost(): DevHost {
     ask({
       schema_version: 1,
       approval_id: `approval-${sequence}`,
-      effect: '确认报价单 S00002，使其成为销售订单',
-      targets: ['sale.order · S00002 · Acme Corporation', 'state · draft → sale'],
+      effect: '在 Odoo 中确认 1 张报价单',
+      targets: ['报价单：S00002', '客户：Acme Corporation', '金额：1,231.00'],
       // Two minutes, like the real one, so the countdown is worth looking at.
       expires_at: Date.now() + 120_000,
       principal_digest: '',
@@ -196,7 +197,7 @@ export function createDevHost(): DevHost {
     push(entry('goal', goal))
     commit({optimistic: null})
     if (!await play(mine, [
-      [300, 'progress', '正在理解目标'],
+      [300, 'progress', '正在理解你的需求'],
       [500, 'progress', '正在思考', {stage: 'thinking'}],
       [700, 'progress', '已读取 1 条：客户 Azure Interior',
        {stage: 'read_done', tool: 'query_partners', result: '1 条 · Azure Interior'}],
@@ -209,7 +210,7 @@ export function createDevHost(): DevHost {
       schema_version: 1,
       approval_id: `approval-${sequence}`,
       effect: '在页面上帮你完成这件事',
-      targets: [`你的请求：${goal}`, '会打开页面、点击、填写和选择'],
+      targets: ['会打开页面、点击、填写和选择'],
       // Five minutes, like the real one (`operation_approval_ttl_s`).
       expires_at: Date.now() + 300_000,
       principal_digest: '',
@@ -232,8 +233,8 @@ export function createDevHost(): DevHost {
     commit({pendingApproval: null, connection: {...state.connection, state: 'acting'}})
     if (!await play(mine, [
       [300, 'progress', '已收到你的确认'],
-      [700, 'action', '打开页面：/odoo/customers/13'],
-      [600, 'action', '点击“联系人”标签'],
+      [700, 'action', '打开“Azure Interior”'],
+      [600, 'action', '点击“联系人”标签页'],
       [500, 'action', '等待页面状态更新'],
     ])) return
     await wait(400)
@@ -260,10 +261,10 @@ export function createDevHost(): DevHost {
     if (!await play(mine, [
       [300, 'progress', '已收到你的确认'],
       [900, 'progress', '更改已执行，正在核对结果',
-       {stage: 'write_done', tool: 'confirm_quotation', result: 'S00002 · draft → sale'}],
+       {stage: 'write_done', tool: 'confirm_quotation', result: '已执行，正在核对'}],
       [700, 'progress', '已读取 1 条：销售订单 S00002',
        {stage: 'read_done', tool: 'query_sale_orders', result: '1 条 · 状态：销售订单'}],
-      [500, 'action', '打开页面：/odoo/sales/2'],
+      [500, 'action', '打开“S00002”'],
     ])) return
     await wait(500)
     if (mine !== live) return
@@ -417,13 +418,14 @@ export function createDevHost(): DevHost {
           for (let index = 0; index < 6; index += 1) {
             nextTurn()
             push(entry('goal', `第 ${index + 1} 轮：列出第 ${index + 1} 页销售订单`))
-            push(entry('progress', '正在思考', {tone: 'active', step: {stage: 'thinking'}}))
+            push(entry('progress', '正在思考', {tone: 'active', step: {stage: 'thinking'},
+                                                 transient: true}))
             push(entry('action', '重新检查当前页面', {tone: 'active'}))
             push(entry('progress', '正在读取业务数据', {tone: 'active', step: {
               stage: 'tool', tool: 'query_sale_orders', arguments: `page=${index + 1} · limit=12`}}))
             push(entry('progress', '已读取 12 条：销售订单', {tone: 'active', step: {
               stage: 'read_done', tool: 'query_sale_orders', result: '12 条 · 其中 3 张待开票'}}))
-            push(entry('action', `打开页面：/odoo/sales?page=${index + 1}`, {tone: 'active'}))
+            push(entry('action', `打开“第 ${index + 1} 页”`, {tone: 'active'}))
             push(entry('result', `第 ${index + 1} 页共 12 张，其中 3 张待开票。`, {
               tone: 'success', panel_state: 'success', authored: 'server',
             }))

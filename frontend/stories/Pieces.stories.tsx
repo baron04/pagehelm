@@ -44,7 +44,7 @@ export const ConfirmationNarrow = {
   render: () => frame(
     <ApprovalCard approval={{...APPROVAL,
       effect: '新建客户 Nordwind Handelsgesellschaft mbH & Co. KG',
-      targets: ['res.partner · 新建一条客户记录'],
+      targets: ['客户：Nordwind Handelsgesellschaft mbH & Co. KG'],
       expires_at: Date.now() + 41_000}}
       labels={labels} limits={limits}
       visibility={presentation.approval_visibility} busy={false}

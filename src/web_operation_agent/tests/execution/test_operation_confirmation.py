@@ -605,7 +605,7 @@ class TheCardIsItsOwnKind(unittest.TestCase):
     def test_an_operate_request_round_trips_and_an_unknown_kind_is_refused(self):
         request = S.ApprovalRequest(
             schema_version=1, approval_id="approval-operate", effect="在页面上帮你完成这件事",
-            targets=("你的请求：打开 azur",), expires_at=2_000_000_000_000, kind="operate")
+            targets=("会打开页面、点击、填写和选择",), expires_at=2_000_000_000_000, kind="operate")
         self.assertEqual(S.ApprovalRequest.from_json(request.to_json()), request)
         legacy = request.to_json()
         del legacy["kind"]

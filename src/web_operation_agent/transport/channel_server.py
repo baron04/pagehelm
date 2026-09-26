@@ -5,6 +5,7 @@ import time
 
 from ..schemas import (ActionEnvelope, ActionResultEnvelope, ApprovalDecision,
                        ApprovalRequest, ClientHello, ObservationEnvelope, TaskEvent)
+from .panel_view import action_target
 from .protocol import (RemoteProtocolError, _copy_json, _copy_wire, _event_sequence,
                        _safe_payload)
 
@@ -63,6 +64,9 @@ class ChannelServer:
             event = self._append_event("action", action.to_json(), turn_id=action.turn_id)
             self._actions[action.action_id] = action
             self._action_observations[action.action_id] = _copy_wire(observation)
+            self._action_targets[action.action_id] = action_target(
+                action.command.to_json(),
+                {"elements": [element.to_json() for element in observation.observation.elements]})
             self._pending_action_id = action.action_id
             return event
 

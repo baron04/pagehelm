@@ -381,7 +381,7 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
                 "was not carried out. Ask an administrator for access if you need it.")
     if context.agent.terminal_reason == "approval_failed":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
-            return "本次确认已失效或与当前操作不再匹配，因此没有执行写入。请核对当前目标后重新提交。"
+            return "本次确认已失效或与当前操作不再匹配，因此没有执行写入。请核对后重新发送。"
         return ("This confirmation expired or no longer matched the current action, so no "
                 "write was performed. Review the target and submit it again.")
     if context.agent.terminal_reason == "approval_expired":
@@ -394,7 +394,7 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         return "Cancelled. The assistant left the page as it was."
     if context.agent.terminal_reason == "no_progress":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
-            return "最近几步没有找到新信息或可确认的页面变化，我已停止重复操作。可以补充目标或缩小查询范围。"
+            return "最近几步没有找到新信息或可确认的页面变化，我已停止重复操作。可以说得更具体些，或缩小查询范围。"
         return ("The recent steps produced no new information or confirmed page change, "
                 "so I stopped repeating them. You can clarify the goal or narrow the search.")
     if status is AgentTurnStatus.FINISHED and context.agent.verified_answer is not None:

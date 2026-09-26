@@ -485,19 +485,22 @@ class OdooReadTools:
             raise BusinessMutationRefusedError(
                 "the customer already holds these values", reason="unchanged")
         route = f"/odoo/customers/{record_id}"
-        label = self._label(row, "name") or f"res.partner/{record_id}"
+        label = self._label(row, "name") or f"ID {record_id}"
         fields = tuple(
             FormDraftField(field, EDITABLE_CUSTOMER_FIELDS[field][0], value,
                            EDITABLE_CUSTOMER_FIELDS[field][1])
             for field, value in changes.items())
-        targets = tuple(
-            f"res.partner · {label} · {EDITABLE_CUSTOMER_FIELDS[field][0]}："
+        # One line for the record and one per field, as every other card is laid out.
+        targets = (f"客户：{label}",) + tuple(
+            f"{EDITABLE_CUSTOMER_FIELDS[field][0]}："
             f"{self._label(row, field) or '（空）'} → {value}"
-            for field, value in changes.items())
+            for field, value in changes.items()) + (
+            "保存：由你保存；离开该页面时 Odoo 会自动保存",)
         draft = FormDraft(
             route=route, fields=fields, persistence=APPLICATION_SAVES_ON_LEAVE,
-            effect=(f"在 Odoo 中为客户 {label} 填好 {len(changes)} 个字段的新值（由你保存；"
-                    "离开该页面时 Odoo 会保存）")[:300],
+            # What changes, in a line; which customer and how it is saved are the targets.
+            effect="修改客户的" + "、".join(
+                EDITABLE_CUSTOMER_FIELDS[field][0] for field in changes),
             targets=targets)
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return BusinessToolResult(

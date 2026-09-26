@@ -88,6 +88,22 @@ class ChannelTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteProtocolError, "conflicting result"):
             self.channel.accept_result(conflict, lease_id=self.lease)
 
+    def test_the_panel_names_a_control_from_the_page_the_action_was_based_on(self):
+        action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(action)
+
+        def step() -> str:
+            entries = self.channel.panel_timeline(lease_id=self.lease)["entries"]
+            return next(entry["text"] for entry in entries if entry["kind"] == "action")
+
+        self.assertEqual(step(), "点击“Next”链接")
+        # The result replaces the page; the step still reads as it did when it was taken.
+        after = observation(self.grant.session_id, 2, caused_by=action.action_id,
+                            url=ORIGIN + "/next")
+        self.channel.claim_action({"action_id": action.action_id}, lease_id=self.lease)
+        self.channel.accept_result(completed(action, after), lease_id=self.lease)
+        self.assertEqual(step(), "点击“Next”链接")
+
     def test_page_facet_action_requires_an_advertised_runtime_capability(self):
         def facet_action(session_id, current):
             command = ActionCommand("a-facet", "apply_facet",

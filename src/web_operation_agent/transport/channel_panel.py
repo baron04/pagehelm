@@ -66,7 +66,9 @@ class ChannelPanel:
             if projected is not None:
                 replayed.append(projected)
         live = [projected for projected in
-                (project_event(event, at=self._event_times.get(event.sequence, 0))
+                (project_event(event, at=self._event_times.get(event.sequence, 0),
+                               target=self._action_targets.get(
+                                   str(event.payload.get("action_id") or "")))
                  for event in self._events) if projected is not None]
         whole = collapse_timeline(replayed + live)
 

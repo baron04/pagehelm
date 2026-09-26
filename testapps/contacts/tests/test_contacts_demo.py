@@ -362,7 +362,7 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
             operations = summary["operation_confirmations"]
             self.assertEqual(len(operations), 1)
             self.assertEqual(operations[0]["decline_controls"], 1)
-            self.assertIn("Your request:", operations[0]["text"])
+            self.assertIn("Opens pages, clicks, fills and chooses", operations[0]["text"])
             self.assertEqual(kinds.count("approval_requested"), 1)
             self.assertEqual(kinds.count("operation_confirmation_requested"), 1)
             self.assertEqual(turn["status"], "finished")

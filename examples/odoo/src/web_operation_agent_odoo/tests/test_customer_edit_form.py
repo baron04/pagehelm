@@ -54,9 +54,9 @@ class PreparingAnEditToAnExistingCustomer(unittest.TestCase):
             # them to approve a change they cannot see.
             self.assertEqual(
                 draft.targets,
-                ("res.partner · P75 Harbor Foods · 电话：+1 503 555 0142 → +1 512 555 0199",))
-            self.assertIn("P75 Harbor Foods", draft.effect)
-            self.assertIn("由你保存", draft.effect)
+                ("客户：P75 Harbor Foods", "电话：+1 503 555 0142 → +1 512 555 0199",
+                 "保存：由你保存；离开该页面时 Odoo 会自动保存"))
+            self.assertEqual(draft.effect, "修改客户的电话")
             self.assertEqual(result.content["current_values"], {"phone": "+1 503 555 0142"})
 
     def test_an_empty_field_today_is_shown_as_empty_rather_than_omitted(self):
@@ -64,7 +64,7 @@ class PreparingAnEditToAnExistingCustomer(unittest.TestCase):
             adapter = _adapter(Path(tmp))
             result = adapter.business_tools._executor.execute(
                 PREPARE_CUSTOMER_EDIT_TOOL, {"record_id": 20, "email": "new@example.test"})
-            self.assertIn("harbor@example.test → new@example.test", result.form_draft.targets[0])
+            self.assertIn("harbor@example.test → new@example.test", result.form_draft.targets[1])
 
     def test_only_the_fields_this_deployment_declares_can_be_prepared(self):
         with tempfile.TemporaryDirectory() as tmp:

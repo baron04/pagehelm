@@ -112,6 +112,9 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._observation_digests: dict[str, str] = {}
         self._actions: dict[str, ActionEnvelope] = {}
         self._action_observations: dict[str, ObservationEnvelope] = {}
+        # What each action's control is called on its page, for the panel's step line; kept
+        # after the result, since the timeline is re-projected on every read.
+        self._action_targets: dict[str, dict] = {}
         self._results: dict[str, ActionResultEnvelope] = {}
         self._result_digests: dict[str, str] = {}
         self._action_claims: dict[str, str] = {}

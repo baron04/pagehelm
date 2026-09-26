@@ -13,9 +13,10 @@ import re
 import unittest
 from pathlib import Path
 
-from web_operation_agent.transport.panel_view import (collapse_timeline, describe_action,
-                                            label_keys, panel_contract, panel_limits,
-                                            project_event, project_history_record)
+from web_operation_agent.transport.panel_view import (action_target, collapse_timeline,
+                                                       describe_action, label_keys,
+                                                       panel_contract, panel_limits,
+                                                       project_event, project_history_record)
 from web_operation_agent.execution.product import AgentTurnStatus
 from web_operation_agent.transport import RemoteSessionChannel
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionCommand,
@@ -141,7 +142,7 @@ class PanelContractTests(unittest.TestCase):
         action = project_event(
             _action({"action": "fill", "args": {"ref": "e12", "value": "private-value"}}), at=7)
         assert action is not None
-        self.assertEqual(action["text"], "填写页面字段：e12")
+        self.assertEqual(action["text"], "填写页面上的输入框")
         self.assertNotIn("private-value", json.dumps(action, ensure_ascii=False))
 
         approval = project_event(_event("approval_required", {
@@ -157,12 +158,59 @@ class PanelContractTests(unittest.TestCase):
 
     def test_action_prose_is_readable_and_never_echoes_a_filled_value(self):
         self.assertEqual(describe_action({"action": "goto", "args": {"url": "/orders"}}),
-                         "打开页面：/orders")
+                         "打开页面")
         self.assertEqual(describe_action({"action": "submit", "args": {"ref": "e15"}}),
-                         "提交页面表单：e15")
+                         "提交页面表单")
         self.assertEqual(describe_action({"action": "observe"}), "重新检查当前页面")
         self.assertNotIn("secret", describe_action(
             {"action": "fill", "args": {"ref": "e1", "value": "secret"}}))
+
+    def test_a_control_is_named_as_its_page_names_it_never_by_ref_or_path(self):
+        page = {"elements": [
+            {"ref": "e3", "role": "button", "name": "确认", "tag": "button", "epoch": 1},
+            {"ref": "e4", "role": "link", "name": "客户", "tag": "a", "epoch": 1,
+             "attrs": {"href": "/odoo/customers"}},
+            {"ref": "e5", "role": "textbox", "name": "邮箱", "tag": "input", "epoch": 1},
+            {"ref": "e6", "role": "select", "name": "状态", "tag": "select", "epoch": 1},
+            {"ref": "e7", "role": "row", "name": "S00002  Acme Corporation  2026-09-03  "
+             "Mitchell Admin  1,231.00", "tag": "tr", "epoch": 1},
+            {"ref": "e8", "role": "button", "name": "", "tag": "button", "epoch": 1},
+            {"ref": "e9", "role": "td", "name": "S00007", "tag": "td", "epoch": 1},
+            {"ref": "e10", "role": "article", "name": "Acme Corporation", "tag": "article",
+             "epoch": 1},
+        ]}
+
+        def said(action: str, **args) -> str:
+            command = {"action": action, "args": args}
+            return describe_action(command, action_target(command, page))
+
+        self.assertEqual(said("click", ref="e3"), "点击“确认”按钮")
+        self.assertEqual(said("click", ref="e4"), "点击“客户”链接")
+        self.assertEqual(said("fill", ref="e5", value="a@example.com"), "填写“邮箱”")
+        self.assertEqual(said("select", ref="e6", value="sale"), "在“状态”中选择")
+        self.assertEqual(said("submit", ref="e3"), "提交“确认”")
+        self.assertEqual(said("goto", url="/odoo/customers/"), "打开“客户”")
+        self.assertEqual(said("goto", url="/odoo/customers/13"), "打开页面")
+        # A row is named by its first words, not the whole line of cells.
+        self.assertEqual(said("click", ref="e7"), "点击“S00002 Acme Corporation…”所在行")
+        self.assertEqual(said("click", ref="e9"), "点击“S00007”所在行")
+        self.assertEqual(said("click", ref="e10"), "点击“Acme Corporation”卡片")
+        self.assertEqual(said("click", ref="e8"), "点击页面上的按钮")
+        self.assertEqual(said("click", ref="e99"), "点击页面上的控件")
+        for text in (said("click", ref="e3"), said("fill", ref="e5", value="x")):
+            self.assertNotRegex(text, r"\be\d+\b")
+
+    def test_only_a_line_that_says_it_is_working_is_marked_transient(self):
+        def step(facts: dict) -> dict:
+            entry = project_event(_event("progress", {
+                "state": "step", "message": "x", "step": facts}), at=0)
+            assert entry is not None
+            return entry
+        self.assertTrue(step({"stage": "thinking"})["transient"])
+        for facts in ({"stage": "read_done", "tool": "query_customers"},
+                      {"stage": "tool", "tool": "query_customers"},
+                      {"stage": "write_done"}):
+            self.assertNotIn("transient", step(facts))
 
     def test_repeats_collapse_without_anything_being_discarded(self):
         entries = [
@@ -178,7 +226,7 @@ class PanelContractTests(unittest.TestCase):
         collapsed = collapse_timeline([entry for entry in entries if entry is not None])
         texts = [entry["text"] for entry in collapsed]
         # Once per turn for the re-check line, and the goal and the goto both survive.
-        self.assertEqual(texts, ["列出订单", "重新检查当前页面", "打开页面：/a", "重新检查当前页面"])
+        self.assertEqual(texts, ["列出订单", "重新检查当前页面", "打开页面", "重新检查当前页面"])
         self.assertEqual(len([entry for entry in collapsed if entry["turn_id"] == "turn-2"]), 1)
 
     def test_the_timeline_no_longer_truncates_by_turn_or_by_entry(self):
@@ -190,7 +238,8 @@ class PanelContractTests(unittest.TestCase):
             for step in range(40):
                 entry = project_event(_action(
                     {"action": "goto", "args": {"url": f"/{turn}/{step}"}},
-                    sequence=turn * 40 + step + 1, turn_id=f"turn-{turn}"), at=0)
+                    sequence=turn * 40 + step + 1, turn_id=f"turn-{turn}"), at=0,
+                    target={"name": f"{turn}-{step}", "role": "link"})
                 assert entry is not None
                 wide.append(entry)
         self.assertEqual(len(collapse_timeline(wide)), 800)

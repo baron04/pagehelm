@@ -241,7 +241,7 @@ test.describe('a confirmation', () => {
     // With no earlier draft, the card waits for an answer: 帮我操作, or 取消.
     const panel = await open(snapshot())
     await panel.raiseApproval({kind: 'operate', effect: '在页面上帮你完成这件事',
-                               targets: ['你的请求：打开 azur', '会打开页面、点击、填写和选择']})
+                               targets: ['会打开页面、点击、填写和选择']})
     const card = panel.page.locator('.woa-approval')
     await expect(card).toHaveAttribute('data-kind', 'operate')
     await expect(card).toContainText(labels.operateTitle)
@@ -250,7 +250,7 @@ test.describe('a confirmation', () => {
     await expect(card.locator('h2 svg.lucide-shield-alert')).toHaveCount(0)
     // Its terms show: it can be stopped, a change is still asked about, unsaved work may go.
     await expect(card).toContainText(labels.operateHint)
-    await expect(card).toContainText('你的请求：打开 azur')
+    await expect(card).toContainText('会打开页面、点击、填写和选择')
     await expect(panel.page.getByTestId('woa-deny')).toHaveText(labels.deny)
     await expect(panel.page.getByTestId('woa-approve')).toHaveText(labels.operateConfirm)
     await expect(panel.page.locator('#woa-composer-input')).toBeDisabled()
@@ -271,7 +271,7 @@ test.describe('a confirmation', () => {
     await composer.fill('改问：Azure Interior 的电话是多少？')
     await panel.set({connection: {state: 'acting', busy: true, stopping: false, online: true}})
     await panel.raiseApproval({kind: 'operate', effect: '在页面上帮你完成这件事',
-                               targets: ['你的请求：打开 azur', '会打开页面、点击、填写和选择']})
+                               targets: ['会打开页面、点击、填写和选择']})
 
     await expect(composer).toBeEnabled()
     await composer.press('Enter')
@@ -282,7 +282,7 @@ test.describe('a confirmation', () => {
   test('stays usable at 320 by 480', async ({open}) => {
     const panel = await open(snapshot(), {width: 320, height: 480})
     await panel.raiseApproval({effect: '新建客户 Nordwind Handelsgesellschaft mbH & Co. KG',
-                               targets: ['res.partner · 新建一条客户记录']})
+                               targets: ['客户：Nordwind Handelsgesellschaft mbH & Co. KG']})
     const window = await panel.page.locator('.woa-window').boundingBox()
     expect(window).not.toBeNull()
     // The window never leaves the viewport, however small the viewport is.
@@ -354,7 +354,7 @@ test.describe('a confirmation', () => {
 
   test('one that is not visible refuses and says why', async ({open}) => {
     const panel = await open(snapshot())
-    await panel.raiseApproval({effect: '为 S00007 开票', targets: ['sale.order · S00007']})
+    await panel.raiseApproval({effect: '为 S00007 开票', targets: ['销售订单：S00007']})
     // Clicking before the card has been visible for its dwell is refused; the reason is
     // shown rather than the press silently doing nothing.
     await panel.page.getByTestId('woa-approve').dispatchEvent('click')
@@ -553,7 +553,7 @@ test.describe('the keyboard', () => {
 
     // In a confirmation Escape is the card's own answer, and the window stays.
     await panel.raiseApproval({kind: 'operate', effect: '在页面上帮你完成这件事',
-                               targets: ['你的请求：打开 azur']})
+                               targets: ['会打开页面、点击、填写和选择']})
     await page.keyboard.press('Escape')
     await expect(page.locator('.woa-window')).toHaveCount(1)
     expect(panel.errors).toEqual([])
@@ -680,7 +680,7 @@ test.describe('the work process', () => {
   test('a turn that only ran shows its time, and one that acted folds its steps into a line', async ({open}) => {
     const panel = await open(snapshot({entries: [
       entry('e1', 'goal', '列出所有待开票的销售订单'),
-      entry('e2', 'progress', '正在理解目标'),
+      entry('e2', 'progress', '正在理解你的需求'),
       entry('e3', 'result', '十六张。', {panel_state: 'success'}),
     ]}))
     await panel.page.locator('.woa-launcher').click()
@@ -694,9 +694,9 @@ test.describe('the work process', () => {
       {id: 'f1', sequence: 1, turn_id: 't2', at: 1757000000000, kind: 'goal', tone: 'neutral',
        text: '打开 Acme 的客户记录'},
       {id: 'f2', sequence: 2, turn_id: 't2', at: 1757000000000, kind: 'progress', tone: 'active',
-       text: '正在理解目标'},
+       text: '正在理解你的需求'},
       {id: 'f3', sequence: 3, turn_id: 't2', at: 1757000002000, kind: 'action', tone: 'active',
-       text: '打开页面：/odoo/customers/10'},
+       text: '打开“Acme Corporation”'},
       {id: 'f4', sequence: 4, turn_id: 't2', at: 1757000003000, kind: 'result', tone: 'neutral',
        text: '已打开。', panel_state: 'success'}]})
     // A landed turn that did something says how much, in one line, and the answer leads.
@@ -738,6 +738,39 @@ test.describe('the work process', () => {
     expect(panel.errors).toEqual([])
   })
 
+  test('a line that only says it is working shows while it is the newest step of a running turn', async ({open}) => {
+    // Between every two things the assistant did, "正在思考" filled half the list; once
+    // something newer has happened, it says nothing any more.
+    const running = {state: 'acting', busy: true, stopping: false, online: true}
+    const thinking = (id: string, text: string) =>
+      entry(id, 'progress', text, {tone: 'active', transient: true, step: {stage: 'thinking'}})
+    const steps = [
+      entry('e1', 'goal', '打开 S00007'),
+      thinking('e2', '正在思考'),
+      entry('e3', 'action', '点击“Sales”菜单项', {tone: 'active'}),
+      thinking('e4', '正在思考（第 2 步）'),
+    ]
+    const panel = await open(snapshot({connection: running, entries: steps}))
+    const page = panel.page
+    await page.locator('.woa-launcher').click()
+    const live = page.locator('.woa-work__live')
+    await expect(live.locator('.woa-work__now')).toHaveText('正在思考（第 2 步）')
+    await live.click()
+    expect((await page.locator('.woa-step__text').allInnerTexts()).map(line => line.trim()))
+      .toEqual(['点击“Sales”菜单项', '正在思考（第 2 步）'])
+    // Ended, none of them is left, and the count is of what was done.
+    await panel.set({connection: {...running, busy: false, state: 'success'}, entries: [
+      ...steps, entry('e5', 'action', '点击“S00007”', {tone: 'active'}),
+      thinking('e6', '正在思考（第 3 步）'),
+      entry('e7', 'result', '已打开。', {panel_state: 'success'})]})
+    const summary = page.locator('.woa-work__summary')
+    await expect(summary).toContainText(labels.workSteps.replace('{count}', '2'))
+    if (await summary.getAttribute('aria-expanded') === 'false') await summary.click()
+    expect((await page.locator('.woa-step__text').allInnerTexts()).map(line => line.trim()))
+      .toEqual(['点击“Sales”菜单项', '点击“S00007”'])
+    expect(panel.errors).toEqual([])
+  })
+
   test('a running turn folds its steps into one live line, one press from the whole run', async ({open}) => {
     // While it runs, the person needs to tell working from stuck: what it is doing now, and
     // for how long. Every step in the flow grew a list that pushed the question off screen.
@@ -776,6 +809,24 @@ test.describe('the work process', () => {
       return Math.abs((mark.top + mark.height / 2) - (top + line / 2))
     }))
     for (const offset of offsets) expect(offset).toBeLessThanOrEqual(0.5)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('while the card is up it is the only thing saying a confirmation is needed', async ({open}) => {
+    const running = {state: 'acting', busy: true, stopping: false, online: true}
+    const entries = [
+      entry('e1', 'goal', '把报价单 S00002 确认成销售订单'),
+      entry('e2', 'progress', '正在准备这次更改', {tone: 'active'}),
+      entry('e3', 'approval', '需要确认后才能继续', {tone: 'warning'}),
+    ]
+    const panel = await open(snapshot({connection: running, entries}))
+    await panel.page.locator('.woa-launcher').click()
+    await panel.raiseApproval()
+    await expect(panel.page.locator('.woa-work')).toHaveCount(0)
+    // Answered, the turn goes on, and its line comes back with the steps behind it.
+    await panel.set({connection: running, pendingApproval: null, entries: [
+      ...entries, entry('e4', 'progress', '已收到你的确认', {tone: 'active'})]})
+    await expect(panel.page.locator('.woa-work__now')).toHaveText('已收到你的确认')
     expect(panel.errors).toEqual([])
   })
 
@@ -1742,8 +1793,8 @@ test.describe('U07', () => {
         await shot(page, `u07-${name}-${scheme}-composer`)
 
         await panel.raiseApproval({effect: '新建客户 Nordwind Handelsgesellschaft mbH & Co. KG',
-                                   targets: ['res.partner · 新建一条客户记录',
-                                             '邮箱 · buchhaltung@nordwind.example']})
+                                   targets: ['客户：Nordwind Handelsgesellschaft mbH & Co. KG',
+                                             '邮箱：buchhaltung@nordwind.example']})
         await panel.settle()
         await expectLaidOut(page, `${where} with a confirmation`)
         for (const selector of ['[data-testid="woa-deny"]', '[data-testid="woa-approve"]']) {
@@ -1999,7 +2050,7 @@ test.describe('under a strict CSP', () => {
     panel.page.on('console', message => {
       if (message.text().includes('Content Security Policy')) violations.push(message.text())
     })
-    await panel.raiseApproval({effect: '确认报价单 S00002', targets: ['sale.order · S00002']})
+    await panel.raiseApproval({effect: '确认报价单 S00002', targets: ['报价单：S00002']})
     await expect(panel.page.locator('.woa-approval')).toContainText('S00002')
     // The stylesheet arrived: `adoptedStyleSheets` is not governed by style-src, and no
     // <style> element was injected for the policy to refuse.

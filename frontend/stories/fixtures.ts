@@ -80,8 +80,8 @@ export function host(initial: PanelSnapshot): PanelHost {
 export const APPROVAL = {
   schema_version: 1,
   approval_id: 'approval-1',
-  effect: '确认报价单 S00002，使其成为销售订单',
-  targets: ['sale.order · S00002 · Acme Corporation', 'state · draft → sale'],
+  effect: '在 Odoo 中确认 1 张报价单',
+  targets: ['报价单：S00002', '客户：Acme Corporation', '金额：1,231.00'],
   expires_at: Date.now() + 107_000,
   principal_digest: '',
   turn_id: 'turn-1',
@@ -96,7 +96,7 @@ export const WORKED_TURN: TimelineEntry[] = [
     tone: 'active', at: 1_757_000_002_000,
     step: {stage: 'tool', tool: 'load_skill',
            arguments: 'skill_id=odoo.sales.sale-orders-confirm'}}),
-  entry('e4', 'action', '打开页面：/odoo/sales', {tone: 'active', at: 1_757_000_004_000}),
+  entry('e4', 'action', '点击“销售”菜单项', {tone: 'active', at: 1_757_000_004_000}),
   entry('e5', 'progress', '正在读取业务数据', {
     tone: 'active', at: 1_757_000_005_000,
     step: {stage: 'tool', tool: 'query_quotations', arguments: 'limit=50'}}),

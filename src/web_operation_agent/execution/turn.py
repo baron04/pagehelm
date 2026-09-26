@@ -286,13 +286,10 @@ class AgentTurnExecutor:
             chinese = bool(re.search(r"[\u3400-\u9fff]", turn_message.text))
             effect = ("在页面上帮你完成这件事" if chinese
                       else "Work the page to do this for you")
-            # The card goes to the browser, which refuses a credential-looking value; the
-            # request is shown as the person would recognise it, with any such value masked.
-            request = redact_sensitive_assignments(
-                redact_session_handoffs(turn_message.text))[:120]
-            targets = ((f"你的请求：{request}", "会打开页面、点击、填写和选择")
-                       if chinese else
-                       (f"Your request: {request}", "Opens pages, clicks, fills and chooses"))
+            # The request is the message right above the card; the card says only what
+            # leave to work the page lets the assistant do.
+            targets = (("会打开页面、点击、填写和选择",) if chinese
+                       else ("Opens pages, clicks, fills and chooses",))
             try:
                 return approval_gate.decide_plan(
                     plan, effect=effect, targets=targets,
@@ -371,7 +368,7 @@ class AgentTurnExecutor:
             conversation_context=self.conversation_state.model_context(),
             # What the turn is doing, as it does it. Between two page actions the product
             # can spend half a minute inside model calls and typed reads, and the panel
-            # used to stand on `正在理解目标` for all of it.
+            # used to stand on `正在理解你的需求` for all of it.
             progress=lambda facts: self._publish_step(facts, turn_message.message_id),
         )
         session.adopt_entry(current.observation)

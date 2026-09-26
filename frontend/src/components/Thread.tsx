@@ -103,6 +103,11 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   // Only the newest turn can still be running, and only the Runtime knows whether it is.
   const last = turns.at(-1)
   if (last && busy && last.outcome === null) last.running = true
+  // A line that only says the assistant is working is true while nothing newer has happened.
+  for (const turn of turns) {
+    turn.steps = turn.steps.filter((step, index) => !step.transient
+      || (turn.running && index === turn.steps.length - 1))
+  }
   return turns
 }
 
@@ -452,7 +457,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 data-settled={turn.running ? undefined : 'true'}>
               {turn.goal && <p className="woa-user">{turn.goal.text}</p>}
               <div className="woa-agent">
-                {turn.steps.length > 0 && (
+                {/* While the card is up, the card is what the turn is doing: a line above it
+                    saying that a confirmation is needed said it twice. */}
+                {turn.steps.length > 0 && !(props.footer && turn.running
+                    && turn.steps.at(-1)?.kind === 'approval') && (
                   <WorkProcess turn={turn} labels={labels}
                                stopping={turn.running && snapshot.connection.stopping} />
                 )}
