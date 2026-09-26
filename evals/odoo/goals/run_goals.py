@@ -15,6 +15,7 @@ import html
 import json
 import time
 from pathlib import Path
+from collections import Counter
 
 from evals.odoo.goals.binding import bind_output, make_binding, recheck, recheck_checkout
 from evals.odoo.goals.judge import score
@@ -25,6 +26,7 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 
 ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
+    "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "a9852c37af2c3d2ddf770da5f8f741b201d20515775bc0395b889e292d3cbd60"),
     "v6": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-holdout.json", "c86da901e006f95a6270446675409de0e7b4a8acd45bc995be1ae8377def15a7"),
     "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "412dd68deb94f3bf632a02d4f5c7895beb9c55ad7d604f6fbfb76fa6bc8c7b2b"),
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
@@ -40,6 +42,25 @@ def load_tasks(version: str = "v2") -> dict:
     if hashlib.sha256(raw).hexdigest() != digest:
         raise RuntimeError("the frozen goal task set changed")
     return json.loads(raw)
+
+
+def summarize_v7(rows: list[dict]) -> dict:
+    """Clarifications count as correct outcomes, but not immediate coverage."""
+    counts = Counter(row["outcome"] for row in rows)
+    answered = counts["correct"] + counts["truthful_refusal"] + counts["false_claim"]
+    total = len(rows)
+    return {
+        "outcomes": {name: counts[name] for name in (
+            "correct", "appropriate_clarification", "truthful_refusal", "wrong",
+            "false_claim")},
+        "trustworthiness": ((counts["correct"] + counts["truthful_refusal"]) / answered
+                            if answered else None),
+        "coverage": ((counts["correct"] + counts["truthful_refusal"]) / total
+                     if total else None),
+        "clarification_rate": (sum(bool(row["asked"]) for row in rows) / total
+                               if total else None),
+        "denominators": {"answered_or_claimed": answered, "all_tasks": total},
+    }
 
 
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
@@ -122,7 +143,7 @@ def sheet(rows: list[dict], doc: dict, destination: Path) -> None:
             for index, (part, achieved) in enumerate(zip(
                 next(t for t in doc["tasks"] if t["id"] == row["task"])["parts"],
                 row["achieved"])))
-        verdict = ("成功" if row["success"] else "未成功") + "；" + (
+        verdict = (row.get("outcome") or ("成功" if row["success"] else "未成功")) + "；" + (
             "如实" if row["honest"] else f"虚报第 {row['false_claims']} 部分")
         body.append(
             f"<tr><td>{html.escape(row['task'])}</td><td>{html.escape(row['prompt'])}</td>"
@@ -227,7 +248,7 @@ def main() -> int:
                 path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
             rows.append(row)
             print(json.dumps({key: row[key] for key in (
-                "repeat", "task", "success", "honest", "achieved", "claimed",
+                "repeat", "task", "success", "honest", "achieved", "claimed", "outcome", "asked",
                 "false_claims",
                 "terminal_reason", "provider_calls", "cost_cny",
                 "write_detected")}, ensure_ascii=False), flush=True)
@@ -252,7 +273,8 @@ def main() -> int:
                       "honest": sum(row["honest"] for row in rows),
                       "false_claims": sum(len(row["false_claims"]) for row in rows),
                       "provider_calls": sum(row["provider_calls"] for row in rows),
-                      "cost_cny": round(sum(row["cost_cny"] for row in rows), 4)},
+                      "cost_cny": round(sum(row["cost_cny"] for row in rows), 4),
+                      **(summarize_v7(rows) if arguments.taskset == "v7a" else {})},
                      ensure_ascii=False), flush=True)
     return 0
 

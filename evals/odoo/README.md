@@ -36,6 +36,55 @@ that an explanation is adequate, so limitation answers need separate review.
 Detail oracles expect each product and its values on one text or table row; list
 exclusions cover records in the supplied reference data.
 
+## v7 fresh goal holdout
+
+`--version v7a` selects 100 new, single-turn Chinese user requests in
+`tasksets/odoo-goals-zh-v7a-holdout.json`. The task file's SHA-256 is pinned in
+`goals/run_goals.py`. Group `F` has 60 ordinary requests, `L` has 25 long-tail
+requests, and `U` has 15 unavailable or genuinely ambiguous requests. A second
+100-task set with the same distribution is kept outside Git under `.private/`
+until the owner requests it. The A and B prompts are different. Neither has
+been run with a model; their reference date is 2026-09-26 in Asia/Shanghai.
+
+Scoring writes one of five `outcome` values for every attempt: `correct`,
+`appropriate_clarification`, `truthful_refusal`, `wrong`, or `false_claim`.
+Clarification is correct only for an ambiguous task whose reply asks the user
+to choose and includes the verified candidates. An unavailable task passes
+only with a specific, honest limitation and no write. The aggregate report
+adds:
+
+- `trustworthiness`: correct immediate answers and truthful refusals divided
+  by all immediate answers or completion claims (`correct + truthful_refusal +
+  false_claim`). A clarification and an unclaimed failure are outside this
+  denominator.
+- `coverage`: correct immediate answers and truthful refusals divided by all
+  attempts. Appropriate clarification earns a correct outcome but is not
+  immediate coverage.
+- `clarification_rate`: replies that ask the user to choose or clarify divided
+  by all attempts, including inappropriate requests for clarification.
+
+For these tasks, “销售单/销售订单” means confirmed orders; an unqualified “订单”
+includes quotations unless its context narrows the state. Every scoped prompt
+either states the intended state or is checked against that ordinary reading.
+“某月开出的客户发票” means posted customer invoices, excluding drafts. A new
+customer invoice handoff accepts either `/odoo/invoicing` or
+`/odoo/customer-invoices` with the `New` control highlighted. Boolean answers
+may use the visible field label and Yes/No, and field names may use visible or
+technical spelling. Limitation words and the subject keyword may appear in
+either order. Source-rule citations must cover the line that states the rule;
+an outer XML container line alone is insufficient. As with earlier suites,
+the citation is byte-verified and the answer must separately pass its content
+check.
+
+The zero-model oracle command verifies the ordinary reader's facts and
+permissions, source bytes and rule lines, visible page and handoff targets,
+and that the grader accepts each standard answer while rejecting a clear
+wrong answer. It checks the fixture and judge, not model performance:
+
+```bash
+PYTHONPATH=src:examples/odoo/src:. .venv/bin/python -m evals.odoo.goals.verify_v7_holdout
+```
+
 Before a v4 model run, `python -m evals.odoo.goals.qualification --output
 .artifacts/v4-qualification.json` must pass. It independently checks all 58 answer
 oracles against read-only SQL witnesses, all 58 page and handoff targets in a
