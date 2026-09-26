@@ -76,7 +76,8 @@ def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
 def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
                timeout_s: float | None = None, cancelled=None, today: str = "",
                previous: GoalSpec | None = None,
-               problems: tuple[str, ...] = (), scope: str = "") -> tuple[GoalSpec, dict]:
+               problems: tuple[str, ...] = (), scope: str = "",
+               values: str = "") -> tuple[GoalSpec, dict]:
     """Ask once. Returns the parsed declaration and a bounded audit projection.
 
     `today` is the application's current date, so that a month or day the person says
@@ -91,6 +92,11 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
         # The staged path: what the first step settled, and the known references, so
         # that the second step fills in details rather than choosing again.
         before += "\n\nSCOPE\n" + scope
+    if values:
+        # Real values of the application around the records the request names; the
+        # model declares their ids and the core binds them to the exact names.
+        before += ("\n\nVALUES (id kind entity: exact name — detail); write the id "
+                   "(v3) where one of these is meant\n" + values)
     if previous is not None and problems:
         before += ("\n\nYOUR DECLARATION\n" + json.dumps(previous.to_json(), ensure_ascii=False)
                    + "\n\nPROBLEMS\n" + "\n".join(f"- {p}" for p in problems[:4])

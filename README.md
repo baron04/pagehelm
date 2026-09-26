@@ -80,7 +80,17 @@ agent.
   single declaration. Words the request shares with an entity's label only order that
   list; nothing is dropped. `staged=False` on the executor (`--single` on the goal runner)
   declares once against the whole index, for comparison; the Contacts demo's scripted
-  walkthrough does so. On the development set of 94 Chinese requests the staged path
+  walkthrough does so. A port that declares candidate values (`values`) is asked, after
+  the entities are chosen, for real values near what the request names: a named record
+  and its lines, a named customer's recent documents on those entities (and their lines
+  when lines are asked about), documents dated on a day the request names by shape
+  (2026-08-29, 8 月 29 日, 8/29, Aug 29). They are shown numbered; the model writes an id
+  where one is meant and the core binds it back to the exact name before comparing
+  readings or resolving, so a description in another language is matched by choice
+  rather than guessed. Nothing is searched across the whole database by a guessed name.
+  The neighbourhood shows every field a chosen entity's list and form show (fields a form
+  always hides are left out); the full index still shows twenty per entity. `values=False`
+  (`--no-values` on the goal runner) measures what the candidates change. On the development set of 94 Chinese requests the staged path
   answered 89 and the single declaration 87 (one full pass each). A zero-model replay of recorded runs
   (`evals/odoo/goals/reference_recall.py`) reports how many declared records the reference
   cut recovers. With a compiled source map attached to the Odoo port (the demo attaches

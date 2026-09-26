@@ -448,6 +448,33 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("the request asks for: fact on order (S00006)", chat.messages[2][1]["content"])
         self.assertTrue(any(e.get("redeclared") for e in events if e["event"] == "goal_declared"))
 
+    def test_candidate_values_are_shown_and_their_ids_bound_before_resolving(self):
+        from web_operation_agent.goal.ports import Candidate
+
+        class _ValuesPort(_Port):
+            def candidates(self, *, entities, known, dates, context=None):
+                return (Candidate(kind="record", entity="order", display="S00006",
+                                  detail="Customer Lumber Inc"),)
+
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "Lumber"}]}),
+                   _declaration(kind="fact", entity="order", record="v1", fields=["Customer"])]
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        chat = _AgreeingChat(scripts)
+        port = _ValuesPort([Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))])
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=chat, application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True)
+        execution = executor.execute({"message_id": "m1", "text": "Lumber 那张订单的客户？",
+                                      "page_url": "http://127.0.0.1:8080/home"})
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("v1 record order: S00006 — Customer Lumber Inc", chat.messages[1][1]["content"])
+        # Both readings wrote the id; the port was asked for the exact name.
+        self.assertEqual(port.specs[0].deliverables[0].record, "S00006")
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        self.assertEqual(next(e for e in events if e["event"] == "goal_values")["count"], 1)
+        self.assertTrue(any(e.get("values_bound") == 1 for e in events if e["event"] == "goal_declared"))
+
     def test_a_data_question_is_declared_without_the_rules_catalogue(self):
         scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
                    _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]

@@ -75,6 +75,26 @@ class ContactsGoalPortTests(unittest.TestCase):
             with self.assertRaises(PrincipalError):
                 port.resolve(spec, context=south_context)
 
+    def test_candidate_values_are_the_actors_own_contacts(self):
+        with MinimalContactsApplication() as application:
+            north, _principal, north_context = self._bound(application, "ada-lovelace")
+            south, _south_principal, south_context = self._bound(application, "mary-jackson")
+            port = ContactsGoalPort(north)
+            self.assertIn("values", port.capabilities())
+            offered = port.candidates(entities=("contacts",), context=north_context)
+            self.assertIn(("Grace Hopper", "grace@example.test"),
+                          [(c.display, c.detail) for c in offered])
+            self.assertTrue(all(c.kind == "record" and c.entity == "contacts" for c in offered))
+            # Another actor is offered their own records, never these.
+            other = ContactsGoalPort(south).candidates(entities=("contacts",), context=south_context)
+            self.assertIn(("Grace Hopper", "grace.hopper@southwind.test"),
+                          [(c.display, c.detail) for c in other])
+            self.assertNotIn("grace@example.test", [c.detail for c in other])
+            # Not about contacts: nothing offered; no actor: refused.
+            self.assertEqual(port.candidates(entities=("orders",), context=north_context), ())
+            with self.assertRaises(PrincipalError):
+                port.candidates(entities=("contacts",), context=None)
+
     def test_rest_page_and_counts_require_supported_scope(self):
         with MinimalContactsApplication() as application:
             adapter, _principal, context = self._bound(application, "ada-lovelace")

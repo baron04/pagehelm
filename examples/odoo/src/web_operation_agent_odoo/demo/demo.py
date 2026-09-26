@@ -223,6 +223,9 @@ class OdooDemoConfig:
     #: second against their neighbourhood, where the source rules are); off, one
     #: declaration against the whole index.
     goal_staged: bool = True
+    #: Candidate values (a named record's lines, a named customer's documents) offered
+    #: before the details are declared; off only to measure them.
+    goal_values: bool = True
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -773,7 +776,7 @@ def run_demo(config: OdooDemoConfig, *,
                 goal_port=adapter.goal_port,
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
-                staged=config.goal_staged,
+                staged=config.goal_staged, values=config.goal_values,
             )
         else:
             executor = AgentTurnExecutor(

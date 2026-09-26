@@ -24,6 +24,7 @@ from web_operation_agent.state.identity import OperationContext
 
 from .index import _IndexCompiler
 from .lines import _LinesResolver
+from .values import _ValueCandidates
 
 from .text import (ALIASES, Ambiguous, _EMPTY, _GROUP_LIMIT, _ModelMeta, _NOT_EMPTY, _RECORD_LIMIT, _Scope, _SearchFilter, _describes_record, _fields_of, _literal_dict, _literal_domain, _money, _norm, _period, _plain_text, _strip_code, _tab_of, _tokens)
 
@@ -32,7 +33,7 @@ from .text import (ALIASES, Ambiguous, _EMPTY, _GROUP_LIMIT, _ModelMeta, _NOT_EM
 _READS = frozenset({"fact", "list", "aggregate"})
 
 
-class OdooGoalPort(_IndexCompiler, _LinesResolver):
+class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
     """Index compilation and goal resolution over the delegated JSON-RPC client."""
 
     def __init__(self, client, *, aliases: dict | None = None):
@@ -67,7 +68,11 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
                 shown = _norm(_strip_code(found[2]))
                 # Exact, or the record's name begins with the words; a mere substring
                 # somewhere inside a name is not a reference to that record.
-                if shown == wanted or shown.startswith(wanted) or _norm(found[2]).startswith(wanted):
+                # A contact of a company is displayed "Company, Person": the person's
+                # own name is the last part.
+                own = _norm(str(found[2]).rsplit(",", 1)[-1])
+                if (shown == wanted or shown.startswith(wanted) or _norm(found[2]).startswith(wanted)
+                        or own == wanted or own.startswith(wanted)):
                     hits.append((model, found[2]))
         return tuple(hits[:3])
 
@@ -81,7 +86,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver):
 
     def capabilities(self) -> frozenset[str]:
         """Everything optional; source rules only once a compiled map is attached."""
-        base = {"facets", "sections", "lines", "handoffs", "fill", "search"}
+        base = {"facets", "sections", "lines", "handoffs", "fill", "search", "values"}
         if getattr(self, "_source_map", None) is not None:
             base.add("source")
         return frozenset(base)

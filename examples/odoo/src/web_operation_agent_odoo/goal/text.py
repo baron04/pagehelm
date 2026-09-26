@@ -39,7 +39,10 @@ _SKIP_FIELDS = frozenset({"company_id", "currency_id", "id", "__last_update", "s
                           "create_uid", "write_uid", "country_code", "locked",
                           "authorized_transaction_ids", "tax_country_id"})
 
-_MAX_FIELDS = 20
+#: Fields compiled per entity. The full index renders the first `_SHOWN_FIELDS` of them
+#: (what one declaration against the whole index can read); a focused neighbourhood
+#: renders all of them for the entities chosen.
+_MAX_FIELDS = 70
 
 _FIELD_TAG = re.compile(r'<field\b[^>]*?\bname="([^"]+)"')
 

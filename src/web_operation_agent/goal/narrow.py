@@ -173,6 +173,7 @@ _MIN_PER_KIND = 8
 _MAX_NEIGHBOUR_RULES = 24
 _MAX_NAMED_RULES = 24
 _MAX_NEIGHBOUR_PAGES = 3
+_NEIGHBOUR_FIELDS = 20
 
 
 def _ranked_rules(entity: IndexEntity, request: str):
@@ -282,7 +283,11 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
                     count += 1
         return tuple(out)
 
-    entities = tuple(replace(e, rules=kept(e)) for e in index.entities if e.key in wanted)
+    # The chosen entities with every field they have; a neighbour with the few a full
+    # index shows, since a declaration names its fields only through a link.
+    entities = tuple(replace(e, rules=kept(e),
+                             fields=e.fields if e.key in chosen else e.fields[:_NEIGHBOUR_FIELDS])
+                     for e in index.entities if e.key in wanted)
     # Every page of a chosen entity; of a neighbour, the first few (its main pages).
     per_neighbour: dict[str, int] = {}
     pages = []

@@ -37,6 +37,7 @@ from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
 from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
+from .ground import bind, days, ground, render as render_values
 from .narrow import correct_records, locate, neighbourhood, summaries
 from .understand import understand, understand_scope
 
@@ -104,6 +105,9 @@ class _TurnState:
     cancelled: Callable[[], bool] = lambda: False
     #: The index the declaration was read against (the neighbourhood, when staged).
     index: object = None
+    #: How this turn reads the request: understand() with the turn's scope and values,
+    #: value ids bound; the deciding reading and the repair go through it too.
+    read: object = None
     #: The whole index, which the neighbourhood was cut from; rules are answered from
     #: it, so that a rule the catalogue left out still comes with the ones it names.
     full_index: object = None
@@ -117,13 +121,16 @@ class GoalTurnExecutor:
                  goal_port: GoalPort, control, run_id_factory,
                  ledger_factory=SessionLedger,
                  conversation_state: ConversationState | None = None,
-                 readings: int = 2, staged: bool = True):
+                 readings: int = 2, staged: bool = True, values: bool = True):
         #: The staged path (the default): the request's hard references are located by
         #: the adapter, the model first picks entities and kinds from one-line summaries,
         #: then declares the details against those entities' neighbourhood of the index,
         #: where the rules of the deployment's source are. Off, the model declares once
         #: against the whole index, as a comparison or for a scripted apparatus.
         self.staged = bool(staged)
+        #: Candidate values offered before the details are declared, when the port has
+        #: them; off only to measure what they change.
+        self.values = bool(values)
         #: How many independent readings of the request are declared before acting.
         #: With two, a request the model reads differently each time is caught: the two
         #: readings are shown to it side by side and it declares once more, deciding.
@@ -331,10 +338,34 @@ class GoalTurnExecutor:
                                          for k in known]}, ensure_ascii=False)
             s.step += 1
             elapsed = time.time() - s.started_at
-        read = functools.partial(
+        candidates = ()
+        if self.staged and self.values and "values" in capabilities_of(self.goal_port):
+            try:
+                candidates = ground(self.goal_port,
+                                    entities=tuple(dict.fromkeys(p["entity"] for p in scope_parts)),
+                                    known=known, dates=days(s.message.text, today_text),
+                                    context=s.approvals.context(s.step, "candidates"))
+            except Exception as exc:  # noqa: BLE001 -- grounding helps; its absence is not a failure
+                s.ledger.append("goal_values_failed", step=s.step,
+                                detail=f"{type(exc).__name__}: {exc}"[:200])
+            s.ledger.append("goal_values", step=s.step, count=len(candidates),
+                            kinds=sorted({c.kind for c in candidates}))
+        unbound = functools.partial(
             understand, chat, prompt=s.message.text, index=index, run_id=s.run_id,
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
-            today=today_text, scope=scope_text)
+            today=today_text, scope=scope_text, values=render_values(candidates))
+
+        def read(**kwargs):
+            # Every reading -- the first, the second, the deciding one, the repair --
+            # sees the same scope and values, and has its value ids bound to the exact
+            # names before it is compared or resolved.
+            spec, projection = unbound(**kwargs)
+            if candidates:
+                spec, bound, unknown = bind(spec, candidates)
+                projection = {**projection, "values_bound": bound,
+                              **({"values_unknown": list(unknown)} if unknown else {})}
+            return spec, projection
+        s.read = read
         # The readings are independent, so they are asked for at the same time: the
         # second costs a call, not a wait. The staged path's second step is read twice
         # too: a settled scope still leaves the values and record numbers to misread.
@@ -415,11 +446,7 @@ class GoalTurnExecutor:
             s.step += 1
             elapsed = time.time() - s.started_at
             try:
-                repaired, projection = understand(
-                    chat, prompt=s.message.text, index=index, run_id=s.run_id,
-                    timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
-                    cancelled=s.cancelled, today=str(today() or "") if callable(today) else "",
-                    previous=spec, problems=problems, scope=scope_text)
+                repaired, projection = s.read(previous=spec, problems=problems)
             except (ValueError, ProviderError) as exc:
                 s.ledger.append("goal_repair_failed", step=s.step, detail=str(exc)[:200])
                 repaired = None
@@ -502,11 +529,7 @@ class GoalTurnExecutor:
         s.step += 1
         elapsed = time.time() - s.started_at
         try:
-            third, projection = understand(
-                chat, prompt=s.message.text, index=index, run_id=s.run_id,
-                timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
-                today=str(today() or "") if callable(today) else "",
-                previous=first, problems=problems)
+            third, projection = s.read(previous=first, problems=problems)
         except (ValueError, ProviderError) as exc:
             s.ledger.append("goal_readings_unreconciled", step=s.step, detail=str(exc)[:200])
             return first

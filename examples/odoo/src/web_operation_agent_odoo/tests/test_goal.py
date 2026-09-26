@@ -516,6 +516,28 @@ class OdooGoalPortTests(unittest.TestCase):
         # Words only a person would type in another script have nothing to match.
         self.assertEqual(_worded("product_id", ["白色隔音屏"]), [])
 
+    def test_candidate_values_are_the_lines_and_documents_near_what_the_request_names(self):
+        self.assertIn("values", self.port.capabilities())
+        # A named order: itself and its lines, the line's item by its exact name.
+        named = self.port.candidates(entities=("sale.order.line",), known=(("sale.order", "S00006"),))
+        self.assertEqual([(c.kind, c.entity, c.display) for c in named],
+                         [("record", "sale.order", "S00006"), ("line", "sale.order.line", "Desk")])
+        self.assertIn("Quantity 1.0", named[1].detail)
+        self.assertTrue(named[1].detail.startswith("S00006: "))
+        # A named customer: their documents on the entity asked about, and those lines.
+        partner = self.port.candidates(entities=("sale.order.line",),
+                                       known=(("res.partner", "Gemini Furniture"),))
+        self.assertEqual([(c.kind, c.display) for c in partner], [("record", "S00006"), ("line", "Desk")])
+        self.assertIn(["partner_id", "child_of", 11], self.client.domains[-2])
+        # A day the request names: the documents dated that day.
+        dated = self.port.candidates(entities=("sale.order",), dates=("2026-08-12",))
+        self.assertEqual([c.display for c in dated], ["S00006"])
+        # Nothing named, nothing listed: no search across the database by a guess.
+        self.assertEqual(self.port.candidates(entities=("sale.order.line",)), ())
+
+    def test_a_contact_of_a_company_is_located_by_its_own_name(self):
+        self.assertIn(("res.partner", "Gemini Furniture, Ed"), self.port.locate_reference("Ed"))
+
     def test_field_labels_match_by_whole_words_and_field_names(self):
         meta = self.port._models["sale.order"]
         self.assertEqual(meta.field_by_label("Order Date"), "date_order")

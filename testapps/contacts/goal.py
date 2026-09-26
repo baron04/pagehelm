@@ -10,7 +10,8 @@ import hashlib
 
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
                                              IndexPage)
-from web_operation_agent.goal.ports import Aggregate, Fact, PagePlan, Resolution, Resolved
+from web_operation_agent.goal.ports import (Aggregate, Candidate, Fact, PagePlan, Resolution,
+                                            Resolved)
 from web_operation_agent.goal.spec import Deliverable, GoalSpec
 from web_operation_agent.state.identity import OperationContext, PrincipalError
 
@@ -73,9 +74,22 @@ class ContactsGoalPort:
             source_digest=digest)
 
     def capabilities(self) -> frozenset[str]:
-        """Beyond the required level this application offers tabs on its vendor desks
-        and the creation handoff; it has no page filters, search box, lines or values."""
-        return frozenset({"sections", "handoffs"})
+        """Beyond the required level this application offers tabs on its vendor desks,
+        the creation handoff and candidate values (its contacts); it has no page filters,
+        search box or lines."""
+        return frozenset({"sections", "handoffs", "values"})
+
+    def candidates(self, *, entities: tuple[str, ...] = (), known: tuple = (),
+                   dates: tuple[str, ...] = (), context: OperationContext | None = None):
+        """The contacts this actor sees, when the request is about contacts: a small
+        application offers its records outright, each with the email that tells two
+        similar names apart."""
+        self._require_actor(context)
+        if not any(_norm(e) in {"contacts", "contact"} for e in entities):
+            return ()
+        return tuple(Candidate(kind="record", entity="contacts", display=row["name"],
+                               detail=row.get("email") or "")
+                     for row in self._executor._contact_rows()[:20])
 
     def resolve(self, spec: GoalSpec, *, context: OperationContext | None = None,
                 current_path: str = "") -> Resolution:

@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 
 _MAX_ENTITIES = 80
 _MAX_PAGES = 160
-_MAX_FIELDS = 40
+_MAX_FIELDS = 80
+#: Fields rendered per entity in the full index; a focused index renders what it holds.
+_SHOWN_FIELDS = 20
 _MAX_LABEL = 80
 _MAX_RULE = 640
 _MAX_RULES_PER_ENTITY = 160
@@ -189,7 +191,8 @@ class ApplicationIndex:
         """The compact text the model reads. One line per entity and per page."""
         lines = ["ENTITIES (key: label [aliases] | fields | sections | actions)"]
         for entity in self.entities:
-            fields = ", ".join(_render_field(f) for f in entity.fields)
+            shown = entity.fields if self.focused else entity.fields[:_SHOWN_FIELDS]
+            fields = ", ".join(_render_field(f) for f in shown)
             parts = [f"{entity.key}: {entity.label}"
                      + (f" [{', '.join(entity.aliases)}]" if entity.aliases else "")
                      + (f" (lines of {entity.lines_of})" if entity.lines_of else "")]
@@ -245,6 +248,9 @@ def _render_field(item: IndexField) -> str:
         return f"{item.label}({'/'.join(item.choices)})"
     if item.kind in ("money", "number", "date", "html"):
         return f"{item.label}({item.kind})"
+    if item.kind == "bool":
+        # A flag reads as a yes/no question ("Sales" is whether it can be sold).
+        return f"{item.label}(yes/no)"
     return item.label
 
 

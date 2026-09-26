@@ -219,7 +219,8 @@ class _IndexCompiler:
                 break
             info = meta.fields.get(name)
             if (info is None or name in seen or name in _SKIP_FIELDS
-                    or name.startswith(_SKIP_FIELD_PREFIXES)):
+                    or name.startswith(_SKIP_FIELD_PREFIXES)
+                    or _always_hidden(meta.form_arch, name)):
                 continue
             kind = _kind_of(info)
             if kind is None:
@@ -234,3 +235,14 @@ class _IndexCompiler:
             out.append(IndexField(key=name, label=str(info.get("string") or name), kind=kind,
                                   relation=relation, choices=choices))
         return out
+
+
+_HIDDEN = re.compile(r'\b(?:column_)?invisible="(?:1|True|true)"')
+
+
+def _always_hidden(arch: str, name: str) -> bool:
+    """A field every occurrence of which the form hides unconditionally: bookkeeping
+    the form needs, not something a person sees or asks about."""
+    tags = re.findall(rf'<field\b[^>]*\bname="{re.escape(name)}"[^>]*>', arch or "")
+    return bool(tags) and all(_HIDDEN.search(tag) for tag in tags)
+

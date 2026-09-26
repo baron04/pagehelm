@@ -23,6 +23,20 @@ class Fact:
 
 
 @dataclass(frozen=True)
+class Candidate:
+    """A real value of the application offered to the model before it declares ("values"):
+    a record, one of a record's lines, a linked record, a field. The core numbers them;
+    `display` is the exact name a declaration is bound to."""
+    #: record | line | link | field | choice | filter
+    kind: str
+    entity: str
+    display: str
+    #: What tells it apart from its neighbours: a date, an amount, a quantity.
+    detail: str = ""
+    id: str = ""
+
+
+@dataclass(frozen=True)
 class Aggregate:
     subject: str
     count: int
@@ -112,9 +126,12 @@ REQUIRED = ("index", "records", "facts", "aggregates", "pages")
 #: application does not offer rather than fail: page filters and groups ("facets"),
 #: tabs on a record's page ("sections"), the lines a record's form embeds ("lines"),
 #: business controls to point at ("handoffs"), entering a value before handing over
-#: ("fill"), free text searched on a page ("search"), and rules compiled from the
-#: deployment's source ("source").
-OPTIONAL = frozenset({"facets", "sections", "lines", "handoffs", "fill", "search", "source"})
+#: ("fill"), free text searched on a page ("search"), rules compiled from the
+#: deployment's source ("source"), and real values offered before the declaration --
+#: a named record's lines, a named partner's documents -- through
+#: `candidates(entities=, known=, context=)` ("values").
+OPTIONAL = frozenset({"facets", "sections", "lines", "handoffs", "fill", "search", "source",
+                      "values"})
 
 
 class GoalPort(Protocol):
@@ -141,5 +158,5 @@ def capabilities_of(port) -> frozenset[str]:
     return frozenset(str(name) for name in method()) & OPTIONAL
 
 
-__all__ = ["Aggregate", "Fact", "GoalPort", "OPTIONAL", "PagePlan", "REQUIRED", "Resolution",
+__all__ = ["Aggregate", "Candidate", "Fact", "GoalPort", "OPTIONAL", "PagePlan", "REQUIRED", "Resolution",
            "Resolved", "capabilities_of"]

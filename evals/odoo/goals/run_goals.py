@@ -43,7 +43,8 @@ def load_tasks(version: str = "v2") -> dict:
 
 
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
-                model_env: Path, container: str, database: str, staged: bool = True) -> dict:
+                model_env: Path, container: str, database: str, staged: bool = True,
+                values: bool = True) -> dict:
     source = (bound_source(doc, Path(env["WOA_ODOO_SOURCE_ROOT"]),
                            env["WOA_ODOO_SOURCE_RELEASE"])
               if "source_binding" in doc else None)
@@ -64,7 +65,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
             keep_open_seconds=0, turn_timeout_s=180.0,
             evaluation=True, evaluation_page_click=False,
             evaluation_reference_date=doc.get("reference_date", ""),
-            allow_operation_in_page=True, goal_staged=staged,
+            allow_operation_in_page=True, goal_staged=staged, goal_values=values,
             final_page_probe=lambda page: page.evaluate(FINAL_STATE_PROBE)))
     except Exception as exc:  # noqa: BLE001 -- one attempt's failure is a recorded result
         error = f"{type(exc).__name__}: {exc}"[:500]
@@ -149,6 +150,8 @@ def main() -> int:
     parser.add_argument("--single", action="store_true",
                         help="declare once against the whole index instead of the staged "
                              "default (references, scope, details), for comparison")
+    parser.add_argument("--no-values", action="store_true",
+                        help="do not offer candidate values before the declaration (control arm)")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--qualification", type=Path)
     arguments = parser.parse_args()
@@ -211,7 +214,8 @@ def main() -> int:
                                   output=arguments.output / "runs",
                                   model_env=arguments.model_env,
                                   container=arguments.container, database=arguments.database,
-                                  staged=not arguments.single)
+                                  staged=not arguments.single,
+                                  values=not arguments.no_values)
                 row["repeat"] = repeat
                 path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
             rows.append(row)
