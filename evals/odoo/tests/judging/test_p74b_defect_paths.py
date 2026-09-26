@@ -160,8 +160,7 @@ class CapabilityGapThroughTheRealSession(unittest.TestCase):
                        script=[("check_capability", {}), GAP_FINISH,
                                ("finish", {"outcome": "unable"})]).run()
             [check] = run.events("capability_check")
-            self.assertIn("odoo.sales.customers-create", check["matches"])
-            self.assertNotIn("form_handoff", check["matches"])
+            self.assertEqual(check["matches"], ["create_customer"])
             refused = run.events("answer_contract_refused")
             self.assertTrue(refused and "can perform it" in refused[0]["detail"], refused)
             self.assertEqual(run.events("capability_gap"), [])
@@ -195,7 +194,9 @@ class CountThroughTheRealSession(unittest.TestCase):
             run = _Run(Path(tmp), prompt="当前一共有多少个客户？", writer=True,
                        tables={"res.partner": _customers(customers)},
                        script=[("load_skill", {"skill_id": "odoo.sales.customers-query"}),
-                               ("query_customers", {}),
+                               ("query_customers", {"answer_goals": [
+                                   {"target_read_tool": "query_customers",
+                                    "measures": ["count"]}]}),
                                ("compute", {"operation": "count", "dataset_ref": "call2-query#1"}),
                                ("finish", {"outcome": "answered", "answer": {
                                    "version": 1, "coverage": "complete",
@@ -237,7 +238,8 @@ class ConfirmedOrdersAreNotARequestToConfirm(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp), "客户 Corvane Supply PR6 的已确认销售订单合计金额是多少？", [
                 ("load_skill", {"skill_id": "odoo.sales.sale-orders-query"}),
-                ("query_sale_orders", {"customer_id": 19}),
+                ("query_sale_orders", {"customer_id": 19, "answer_goals": [
+                    {"target_read_tool": "query_sale_orders", "measures": ["sum"]}]}),
                 ("compute", {"operation": "filter", "dataset_ref": "call2-query#1",
                              "field": "currency_id", "comparison": "eq", "threshold": "USD"}),
                 ("compute", {"operation": "sum", "dataset_ref": "calc#3",
@@ -282,9 +284,9 @@ class _RepairingChat(_RecordingChat):
             elif "REFUSED" in last and "remove " in last:
                 for key in [k for k in self.conclusion if f"'{k}'" in last]:
                     self.conclusion.pop(key)
-            if "call compute first" in last and not computed:
-                self.script.append(("compute", {
-                    "operation": "count", "dataset_ref": self.conclusion["evidence_ref"]}))
+            repair = re.search(r"call compute with (\{[^}]*\})", last)
+            if repair and not computed:
+                self.script.append(("compute", json.loads(repair.group(1))))
             else:
                 self.script.append(("finish", {"outcome": "answered", "answer": {
                     "version": 1, "coverage": "complete", "presentation": "brief",
@@ -306,7 +308,9 @@ class CountAnswerRepairThroughTheRealSession(unittest.TestCase):
         chat = _RepairingChat(
             [("load_skill", {"skill_id": "odoo.sales.sale-orders-query"}),
              ("query_sale_orders", {"date_from": "2026-03-01", "date_until": "2026-04-01",
-                                    "limit": 50})],
+                                    "limit": 50, "answer_goals": [
+                                        {"target_read_tool": "query_sale_orders",
+                                         "measures": ["count"]}]})],
             {"kind": "aggregate", "evidence_ref": "call2-query#1", "computation": "count",
              "operand_ref": "call2-query#1", "result": "10", "value": "10"})
         with tempfile.TemporaryDirectory() as tmp:
