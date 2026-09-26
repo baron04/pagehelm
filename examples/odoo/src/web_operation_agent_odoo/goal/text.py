@@ -258,8 +258,9 @@ class _ModelMeta:
     def __init__(self, model: str, label: str, fields: dict, list_fields: list[str],
                  form_fields: list[str], sections: tuple[str, ...],
                  actions: tuple[str, ...], filters: list[_SearchFilter],
-                 form_arch: str = "", parent: str = ""):
+                 form_arch: str = "", parent: str = "", list_arch: str = ""):
         self.model, self.label, self.fields = model, label, fields
+        self.list_arch = list_arch
         self.list_fields, self.form_fields = list_fields, form_fields
         self.sections, self.actions, self.filters = sections, actions, filters
         self.form_arch = form_arch

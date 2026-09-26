@@ -197,6 +197,16 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(self.index.page("p331").operations, ())
         self.assertIs(self.port.index(), self.index)
 
+    def test_a_column_labelled_as_another_field_indexes_that_field_too(self):
+        from web_operation_agent_odoo.goal.text import _ModelMeta
+        fields = {"amount_signed": {"string": "Total Signed", "type": "monetary"},
+                  "amount_total": {"string": "Total", "type": "monetary"},
+                  "helper": {"string": "Total (Tax inc.)", "type": "monetary"}}
+        meta = _ModelMeta("m", "Entries", fields, ["amount_signed"], ["helper"], (), (), [],
+                          list_arch='<list><field name="amount_signed" string="Total"/></list>')
+        labels = [f.label for f in self.port._index_fields(meta)]
+        self.assertEqual(labels, ["Total Signed", "Total", "Total (Tax inc.)"])
+
     def test_create_handoff_uses_actor_allowed_page_not_proposed_record_lookup(self):
         self.client.calls.clear()
         result = self._resolve({"kind": "handoff", "entity": "res.partner",

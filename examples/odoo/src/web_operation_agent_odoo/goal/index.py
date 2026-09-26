@@ -170,7 +170,8 @@ class _IndexCompiler:
                 r'<button[^>]*?\btype="(?:object|action)"[^>]*?\bstring="([^"]+)"', arch["form"])
             + re.findall(r'<button[^>]*?\bstring="([^"]+)"[^>]*?\btype="(?:object|action)"', arch["form"])))
         return _ModelMeta(model, label, fields, list_fields, form_fields, sections, actions,
-                          _parse_filters(arch["search"]), form_arch=arch["form"])
+                          _parse_filters(arch["search"]), form_arch=arch["form"],
+                          list_arch=arch["list"])
 
     def _line_metas(self, meta: _ModelMeta) -> list[_ModelMeta]:
         """The line entities a record's form embeds, with the fields that form shows."""
@@ -212,6 +213,14 @@ class _IndexCompiler:
         out: list[IndexField] = []
         seen: set[str] = set()
         shown = list(dict.fromkeys(meta.list_fields + meta.form_fields))
+        # A list column the view labels with another field's own label ("Total" over a
+        # signed total): the field that goes by that label is what the person means by
+        # it, so it is indexed beside the column.
+        own = {str(info.get("string") or "").casefold(): name for name, info in meta.fields.items()}
+        for label in re.findall(r'<field\b[^>]*?\bstring="([^"]+)"', meta.list_arch or ""):
+            named = own.get(html.unescape(label).casefold())
+            if named and named not in shown:
+                shown.insert(len(meta.list_fields), named)
         ordered = sorted(shown, key=lambda n: (_KIND_RANK.get(_kind_of(meta.fields.get(n, {})) or "", 9),
                                                shown.index(n)))
         for name in ordered:
