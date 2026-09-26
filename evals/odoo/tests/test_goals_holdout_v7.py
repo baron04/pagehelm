@@ -25,6 +25,18 @@ class V7Holdout(unittest.TestCase):
         self.assertFalse(prior & {t['prompt'] for t in tasks})
         self.assertTrue(all(t['rubric_version']==7 for t in tasks))
 
+    def test_second_set_has_same_distribution_and_different_questions(self):
+        second=load_tasks('v7b')['tasks']
+        self.assertEqual(len(second),100)
+        self.assertEqual(Counter(t['group'] for t in second),{'F':60,'L':25,'U':15})
+        self.assertEqual(Counter(t['delivery'] for t in second),
+                         Counter(t['delivery'] for t in self.doc['tasks']))
+        first_prompts={t['prompt'] for t in self.doc['tasks']}
+        second_prompts={t['prompt'] for t in second}
+        self.assertEqual(len(second_prompts),100)
+        self.assertFalse(first_prompts & second_prompts)
+        self.assertTrue(all(t['rubric_version']==7 for t in second))
+
     def test_boolean_field_label_and_technical_name(self):
         task=self.tasks['af12']
         for answer in ('Sales: No','sale_ok: False','Sales：否'):

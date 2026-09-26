@@ -38,13 +38,13 @@ exclusions cover records in the supplied reference data.
 
 ## v7 fresh goal holdout
 
-`--version v7a` selects 100 new, single-turn Chinese user requests in
-`tasksets/odoo-goals-zh-v7a-holdout.json`. The task file's SHA-256 is pinned in
-`goals/run_goals.py`. Group `F` has 60 ordinary requests, `L` has 25 long-tail
-requests, and `U` has 15 unavailable or genuinely ambiguous requests. A second
-100-task set with the same distribution is kept outside Git under `.private/`
-until the owner requests it. The A and B prompts are different. Neither has
-been run with a model; their reference date is 2026-09-26 in Asia/Shanghai.
+`--version v7a` and `--version v7b` select two 100-task, single-turn Chinese
+request sets in `tasksets/odoo-goals-zh-v7a-holdout.json` and
+`tasksets/odoo-goals-zh-v7b-holdout.json`. Both SHA-256 digests are pinned in
+`goals/run_goals.py`. Each set has 60 ordinary requests (`F`), 25 long-tail
+requests (`L`), and 15 unavailable or genuinely ambiguous requests (`U`).
+The A and B prompts are different. Neither has been run with a model; their
+reference date is 2026-09-26 in Asia/Shanghai.
 
 Scoring writes one of five `outcome` values for every attempt: `correct`,
 `appropriate_clarification`, `truthful_refusal`, `wrong`, or `false_claim`.
@@ -83,6 +83,8 @@ wrong answer. It checks the fixture and judge, not model performance:
 
 ```bash
 PYTHONPATH=src:examples/odoo/src:. .venv/bin/python -m evals.odoo.goals.verify_v7_holdout
+PYTHONPATH=src:examples/odoo/src:. .venv/bin/python -m evals.odoo.goals.verify_v7_holdout \
+  --task-file evals/odoo/tasksets/odoo-goals-zh-v7b-holdout.json
 ```
 
 Before a v4 model run, `python -m evals.odoo.goals.qualification --output

@@ -27,6 +27,7 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
     "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "a9852c37af2c3d2ddf770da5f8f741b201d20515775bc0395b889e292d3cbd60"),
+    "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "34d8f25fb41843528149c1cf75803c97afb728c5f2c7c7bff90d86422fa37355"),
     "v6": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-holdout.json", "c86da901e006f95a6270446675409de0e7b4a8acd45bc995be1ae8377def15a7"),
     "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "412dd68deb94f3bf632a02d4f5c7895beb9c55ad7d604f6fbfb76fa6bc8c7b2b"),
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
@@ -274,7 +275,7 @@ def main() -> int:
                       "false_claims": sum(len(row["false_claims"]) for row in rows),
                       "provider_calls": sum(row["provider_calls"] for row in rows),
                       "cost_cny": round(sum(row["cost_cny"] for row in rows), 4),
-                      **(summarize_v7(rows) if arguments.taskset == "v7a" else {})},
+                      **(summarize_v7(rows) if arguments.taskset in ("v7a", "v7b") else {})},
                      ensure_ascii=False), flush=True)
     return 0
 
