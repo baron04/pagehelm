@@ -29,12 +29,22 @@ from web_operation_agent.tests.support.business import (
 
 
 class BusinessReActTransition(unittest.TestCase):
-    def test_skill_free_paraphrase_cannot_become_a_false_capability_gap(self):
+    def test_a_request_that_words_no_installed_write_is_a_gap_for_this_turn(self):
+        """Only the writes a request words can be offered or proposed, so a request that
+        words none -- "创建一个公司" beside a write registered only as create_company -- is a
+        change this turn cannot make, and the check says so rather than staying silent.
+        A request that does word one ("Create Acme.") while the search misses stays
+        inconclusive: the readings disagree, and no gap is claimed."""
+        for prompt, gap in (("创建一个公司。", True), ("Create Acme.", False)):
+            with self.subTest(prompt):
+                self._check_gap(prompt, gap)
+
+    def _check_gap(self, prompt, gap):
         with tempfile.TemporaryDirectory() as tmp:
             context = _operation_context()
             ledger = SessionLedger(Path(tmp) / "session.jsonl", "lexical-gap")
             session = ServerAgentSession(
-                task=TaskSpec(task_ref="T", prompt="创建一个公司。",
+                task=TaskSpec(task_ref="T", prompt=prompt,
                               supported_scope="Create one company."),
                 chat=_Chat([]), browser=_Browser(), control=ReadOnlyControl(),
                 ledger=ledger, business_tools=BusinessToolRuntime(
@@ -44,9 +54,17 @@ class BusinessReActTransition(unittest.TestCase):
                 turn_id=context.turn_id,
                 disabled_actions=frozenset({"click", "fill", "select", "submit", "back"}))
 
-            self.assertEqual(register_capability_evidence(session), "")
-            self.assertEqual(len(ledger.of_kind("capability_check_inconclusive")), 1)
-            self.assertFalse(session.evidence.ids())
+            if not gap:
+                self.assertEqual(session._requested_writes, frozenset({"create_company"}))
+                self.assertEqual(register_capability_evidence(session), "")
+                self.assertEqual(len(ledger.of_kind("capability_check_inconclusive")), 1)
+                self.assertFalse(session.evidence.ids())
+                return
+            self.assertEqual(session._requested_writes, frozenset())
+            self.assertEqual(register_capability_evidence(session), "capability#1")
+            self.assertEqual(ledger.of_kind("capability_check_inconclusive"), [])
+            [check] = ledger.of_kind("capability_check")
+            self.assertEqual((check["matches"], check["withheld"]), ([], []))
 
     def test_a_capability_question_cannot_turn_into_a_business_query(self):
         with tempfile.TemporaryDirectory() as tmp:

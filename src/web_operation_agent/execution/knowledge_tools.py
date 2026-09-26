@@ -297,10 +297,12 @@ def register_capability_evidence(session) -> str:
         # work rather than declining on a search that never happened.
         session.ledger.append("capability_check_unavailable", reason=str(exc)[:200])
         return ""
-    if not matches and not withheld and session.business_tools.has_mutations:
-        # Literal/trigger lookup cannot establish that a paraphrase in another
-        # language has no matching registered write. Do not mint negative
-        # evidence from a lexical miss while write tools are installed.
+    if not matches and not withheld and session._requested_writes:
+        # The request words an installed write and the search still missed: the two
+        # readings disagree, so no negative evidence is minted from the miss. Otherwise a
+        # miss is a gap for this turn -- only the writes the request asks for can be
+        # offered or proposed, so a paraphrase of an installed write could not run here
+        # either (owner ruling, 2026-09-26).
         session.ledger.append(
             "capability_check_inconclusive", goal_chars=len(session.task.prompt),
             catalog_digest=session.business_tools.catalog_sha256)
