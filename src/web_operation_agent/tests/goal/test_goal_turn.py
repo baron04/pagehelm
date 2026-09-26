@@ -488,6 +488,12 @@ class GoalTurnTests(unittest.TestCase):
         gaps = _coverage_gaps(dropped, [], "Gemini 那笔 1582 美元、8 月 29 日的订单", "2026-09-26")
         self.assertEqual([g.split(" but ")[0] for g in gaps],
                          ["the request says '1582'", "the request names the day 2026-08-29"])
+        reads_only = GoalSpec.from_json({"deliverables": [
+            {"kind": "list", "entity": "product", "metric": {"op": "count", "filters": [
+                {"field": "Sales Price", "values": ["2100"]}]}}]})
+        gaps = _coverage_gaps(reads_only, [{"kind": "page", "entity": "product"}],
+                              "I want the details for the product priced at $2,100.", "2026-09-26")
+        self.assertIn("asks to open a page (page on product)", gaps[0])
         kept = GoalSpec.from_json({"deliverables": [
             {"kind": "fact", "entity": "order", "fields": ["Total"],
              "metric": {"op": "count", "filters": [{"field": "Total", "values": ["1,582.00"]},

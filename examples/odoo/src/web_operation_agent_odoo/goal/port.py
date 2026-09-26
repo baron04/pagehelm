@@ -438,6 +438,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
 
     def _display(self, value, info: dict, row: dict) -> str:
         kind = info.get("type")
+        if kind == "boolean":
+            # A flag that is off is a "no", not a missing value.
+            return "Yes" if value else "No"
         if value is False or value is None or value == "":
             return "(empty)"
         if kind == "many2one":

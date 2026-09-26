@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from web_operation_agent.goal.ground import bind, days, ground, render
+from web_operation_agent.goal.ground import bind, days, ground, numbers_in, pick, render
 from web_operation_agent.goal.narrow import KnownReference
 from web_operation_agent.goal.ports import Candidate
 from web_operation_agent.goal.spec import GoalSpec
@@ -72,6 +72,39 @@ class GroundingTests(unittest.TestCase):
         d = bind(with_owner, line)[0].deliverables[0]
         self.assertEqual([(f.field, f.values) for f in d.metric.filters],
                          [("Order Reference", ("S00016",)), ("Product", ("Acoustic Bloc Screens (White)",))])
+
+    def test_amounts_are_read_in_digits_and_cjk_numerals(self):
+        self.assertEqual(numbers_in("Azure 那张两万美元的客户退款"), {"20000"})
+        self.assertEqual(numbers_in("Gemini 那笔 1,582.00 美元订单，8 月 29 日"), {"1582"})
+        self.assertEqual(numbers_in("一万一千七百五十 的那张"), {"11750"})
+        self.assertEqual(numbers_in("第 3 行"), set())
+
+    def test_one_described_record_is_picked_by_its_amount(self):
+        found = (Candidate(kind="record", entity="move", display="RINV/2026/00002",
+                           detail="Date 2026-08-03; Total -20000.0", id="v1",
+                           binds=(("Journal Entry", "RINV/2026/00002"),)),
+                 Candidate(kind="record", entity="move", display="RINV/2026/00001",
+                           detail="Date 2026-08-02; Total -11750.0", id="v2",
+                           binds=(("Journal Entry", "RINV/2026/00001"),)),
+                 Candidate(kind="line", entity="line", display="Large Meeting Table", id="v3"))
+        lines = GoalSpec.from_json({"deliverables": [
+            {"kind": "fact", "entity": "line", "fields": ["Quantity"],
+             "metric": {"op": "count", "filters": [{"field": "Journal Entry", "values": ["RINV"], "op": "contains"},
+                                                    {"field": "Total", "values": ["20000"]},
+                                                    {"field": "Product", "values": ["Large Meeting Table"]}]}}]})
+        picked, names = pick(lines, "Azure 那张两万美元的退款，会议桌退了几件？", "2026-09-26", found)
+        self.assertEqual(names, ("RINV/2026/00002",))
+        self.assertEqual([(f.field, f.values) for f in picked.deliverables[0].metric.filters],
+                         [("Product", ("Large Meeting Table",)), ("Journal Entry", ("RINV/2026/00002",))])
+        same_entity = GoalSpec.from_json({"deliverables": [{"kind": "page", "entity": "move"}]})
+        self.assertEqual(pick(same_entity, "11750 的那张退款", "2026-09-26", found)[0].deliverables[0].record,
+                         "RINV/2026/00001")
+        # A list is a condition, not one record; an amount no candidate has picks nothing.
+        a_list = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "move"}]})
+        self.assertEqual(pick(a_list, "不低于 20000 的退款", "2026-09-26", found)[1], ())
+        self.assertEqual(pick(same_entity, "30000 的那张", "2026-09-26", found)[1], ())
+        named = GoalSpec.from_json({"deliverables": [{"kind": "page", "entity": "move", "record": "RINV/2026/00001"}]})
+        self.assertEqual(pick(named, "两万的那张", "2026-09-26", found)[1], ())
 
     def test_days_are_read_by_shape_in_the_current_year(self):
         self.assertEqual(days("8 月 29 日的订单", "2026-09-26"), ("2026-08-29",))

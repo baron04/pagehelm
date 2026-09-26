@@ -533,8 +533,15 @@ class OdooGoalPortTests(unittest.TestCase):
         # A day the request names: the documents dated that day.
         dated = self.port.candidates(entities=("sale.order",), dates=("2026-08-12",))
         self.assertEqual([c.display for c in dated], ["S00006"])
+        self.assertIn("Total 2947.5", partner[0].detail)
+        self.assertEqual(partner[0].binds, (("Order Reference", "S00006"),))
         # Nothing named, nothing listed: no search across the database by a guess.
         self.assertEqual(self.port.candidates(entities=("sale.order.line",)), ())
+
+    def test_a_flag_that_is_off_reads_as_no(self):
+        self.assertEqual(self.port._display(False, {"type": "boolean"}, {}), "No")
+        self.assertEqual(self.port._display(True, {"type": "boolean"}, {}), "Yes")
+        self.assertEqual(self.port._display(False, {"type": "char"}, {}), "(empty)")
 
     def test_a_contact_of_a_company_is_located_by_its_own_name(self):
         self.assertIn(("res.partner", "Gemini Furniture, Ed"), self.port.locate_reference("Ed"))

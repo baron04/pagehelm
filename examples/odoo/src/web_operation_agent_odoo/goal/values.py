@@ -19,8 +19,6 @@ from .text import _ModelMeta
 #: Per source, what is listed: a customer's documents, a record's lines.
 _DOCUMENTS = 8
 _LINES = 20
-#: Field types that tell records apart in one short line.
-_DISTINGUISHING = ("date", "datetime", "monetary", "selection", "many2one")
 
 
 class _ValueCandidates:
@@ -55,15 +53,20 @@ class _ValueCandidates:
             documents = []
             if model in wanted or model in owners:
                 add(Candidate(kind="record", entity=model, display=display,
-                              detail=self._summary(model, rid)))
+                              detail=self._summary(model, rid),
+                              binds=self._owner_binds(owners.get(model), display)))
                 documents = [(model, rid, display)]
             else:
                 # A partner (or any linked record) named: its documents on the
                 # entities the request is about, newest first.
-                for target in list(dict.fromkeys(list(owners) + wanted)):
+                # Lines appear through the records they are on, never as documents.
+                targets = [t for t in dict.fromkeys(list(owners) + wanted)
+                           if self._parent_link(t) is None]
+                for target in targets:
                     for doc in self._documents(target, model, rid):
                         add(Candidate(kind="record", entity=target, display=doc[2],
-                                      detail=doc[3]))
+                                      detail=doc[3],
+                                      binds=self._owner_binds(owners.get(target), doc[2])))
                         documents.append(doc[:3])
             for doc_model, doc_id, doc_name in documents[:_DOCUMENTS]:
                 line_entity = owners.get(doc_model)
@@ -77,15 +80,28 @@ class _ValueCandidates:
         # Days the request names: the documents of the entities asked about dated that
         # day, and their lines when lines are asked about.
         for day in dates:
-            for target in list(dict.fromkeys(list(owners) + wanted)):
+            for target in [t for t in dict.fromkeys(list(owners) + wanted)
+                           if self._parent_link(t) is None]:
                 for doc in self._dated(target, day):
-                    add(Candidate(kind="record", entity=target, display=doc[2], detail=doc[3]))
+                    add(Candidate(kind="record", entity=target, display=doc[2], detail=doc[3],
+                                  binds=self._owner_binds(owners.get(target), doc[2])))
                     line_entity = owners.get(target)
                     if line_entity is None:
                         continue
                     for line in self._lines_of(target, doc[1], line_entity):
                         add(self._line_candidate(line_entity, doc[2], line))
         return tuple(out)
+
+    def _owner_binds(self, line_entity: str | None, doc_name: str) -> tuple:
+        """For a document whose lines are asked about: the condition on the lines that
+        names it (Order Reference = S00016)."""
+        if not line_entity:
+            return ()
+        parent = self._parent_link(line_entity)
+        meta = self._models.get(line_entity)
+        if parent is None or meta is None:
+            return ()
+        return ((str(meta.fields[parent[1]].get("string") or parent[1]), doc_name),)
 
     def _line_candidate(self, line_entity: str, doc_name: str, line) -> Candidate:
         """One line of one record: shown by its item, standing for the record it is on
@@ -186,10 +202,16 @@ class _ValueCandidates:
 
     @staticmethod
     def _distinguishing(meta: _ModelMeta | None) -> list[str]:
+        """What tells one record from another in a list: its date, its amounts (a total
+        before a subtotal) and its states, in that order, from the fields its list shows."""
         if meta is None:
             return []
-        return [f for f in meta.list_fields
-                if (meta.fields.get(f) or {}).get("type") in _DISTINGUISHING][:4]
+        of = {kind: [f for f in meta.list_fields if (meta.fields.get(f) or {}).get("type") in kinds]
+              for kind, kinds in (("date", ("date", "datetime")), ("money", ("monetary",)),
+                                  ("state", ("selection",)))}
+        money = sorted(of["money"], key=lambda f: (0 if "total" in f else 1 if "untaxed" in f else 2,
+                                                   meta.list_fields.index(f)))
+        return of["date"][:1] + money[:2] + of["state"][:2]
 
 
 def _describe(meta: _ModelMeta, row: dict, fields: list[str]) -> str:

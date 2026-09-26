@@ -146,8 +146,108 @@ def bind(spec: GoalSpec, candidates: tuple[Candidate, ...]) -> tuple[GoalSpec, i
     return replace(spec, deliverables=tuple(out)), bound, tuple(dict.fromkeys(unknown))
 
 
+_CJK_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+               "七": 7, "八": 8, "九": 9}
+_CJK_UNITS = {"十": 10, "百": 100, "千": 1000}
+_CJK_NUMBER = re.compile(r"[零〇一二两三四五六七八九十百千万]+")
+
+
+def _cjk_value(word: str) -> int | None:
+    """A number written in CJK numerals (两万, 一万一千七百五十), or None."""
+    total, section, digit = 0, 0, 0
+    for char in word:
+        if char in _CJK_DIGITS:
+            digit = _CJK_DIGITS[char]
+        elif char in _CJK_UNITS:
+            section += (digit or 1) * _CJK_UNITS[char]
+            digit = 0
+        elif char == "万":
+            total += (section + digit) * 10_000
+            section, digit = 0, 0
+    value = total + section + digit
+    return value if value >= 10 else None
+
+
+def numbers_in(text: str) -> set[str]:
+    """The amounts a request writes -- in digits or in CJK numerals -- as plain numbers
+    (no separators, no trailing zero decimals); days are left to `days`."""
+    text = without_days(text)
+    out = set()
+    for raw in re.findall(r"(?<![\w.])\d[\d,]*(?:\.\d+)?", text):
+        value = raw.replace(",", "")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
+        if len(value.replace(".", "")) >= 2:
+            out.add(value)
+    for word in _CJK_NUMBER.findall(text):
+        value = _cjk_value(word)
+        if value is not None:
+            out.add(str(value))
+    return out
+
+
+def _detail_numbers(text: str) -> set[str]:
+    out = set()
+    for raw in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        value = raw.replace(",", "")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
+        out.add(value)
+    return out
+
+
+def pick(spec: GoalSpec, text: str, today: str,
+         candidates: tuple[Candidate, ...]) -> tuple[GoalSpec, tuple[str, ...]]:
+    """A declaration that describes one record without naming it, where the request's
+    amounts and days fit exactly one candidate record, is pointed at that record: the
+    description is what the candidates were looked up by, and a small model often writes
+    the amount under a wrong field instead of choosing. Only for one record's facts,
+    page or change, or for the lines of one record. Returns (spec, names picked)."""
+    wanted_numbers = numbers_in(text)
+    wanted_days = set(days(text, today))
+    if not (wanted_numbers or wanted_days):
+        return spec, ()
+    line_entities = {c.entity for c in candidates if c.kind == "line"}
+    picked: list[str] = []
+    out = []
+    for d in spec.deliverables:
+        single = d.kind in ("fact", "page", "handoff") or d.entity in line_entities
+        if d.record or not single:
+            out.append(d)
+            continue
+        fits = []
+        for c in candidates:
+            if c.kind != "record" or not (c.entity == d.entity or c.binds):
+                continue
+            found = _detail_numbers(c.detail)
+            if wanted_numbers <= found and all(day in c.detail for day in wanted_days):
+                fits.append(c)
+        if len(fits) != 1:
+            out.append(d)
+            continue
+        chosen = fits[0]
+        picked.append(chosen.display)
+        # The conditions that only described the record give way to the record itself.
+        kept = tuple(f for f in (d.metric.filters if d.metric else ())
+                     if not (_detail_numbers(" ".join(f.values)) & wanted_numbers
+                             or any(day[:7] in v for v in f.values for day in wanted_days)))
+        if chosen.entity == d.entity:
+            d = replace(d, record=chosen.display,
+                        metric=replace(d.metric, filters=kept) if d.metric else None)
+        else:
+            # The record's own condition on the lines replaces whatever described it.
+            labels = {_norm_label(label) for label, _value in chosen.binds}
+            kept = tuple(f for f in kept if _norm_label(f.field) not in labels)
+            extra = tuple(Filter(field=label, values=(value,)) for label, value in chosen.binds)
+            d = replace(d, metric=replace(d.metric or Metric(op="count"), filters=kept + extra))
+        out.append(d)
+    if not picked:
+        return spec, ()
+    return replace(spec, deliverables=tuple(out)), tuple(picked)
+
+
 def _norm_label(label: str) -> str:
     return "".join(str(label).casefold().split())
 
 
-__all__ = ["bind", "days", "ground", "render", "without_days"]
+__all__ = ["bind", "days", "ground", "numbers_in", "pick", "render", "without_days"]

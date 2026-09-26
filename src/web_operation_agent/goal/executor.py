@@ -37,7 +37,7 @@ from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
 from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
-from .ground import bind, days, ground, render as render_values, without_days
+from .ground import bind, days, ground, pick, render as render_values, without_days
 from .narrow import correct_records, locate, neighbourhood, references, summaries
 from .understand import understand, understand_scope
 
@@ -421,6 +421,10 @@ class GoalTurnExecutor:
         if corrections:
             s.ledger.append("goal_records_corrected", step=s.step,
                             corrections=[{"declared": a, "located": b} for a, b in corrections])
+        if s.candidates and spec.deliverables:
+            spec, picked = pick(spec, s.message.text, today_text, s.candidates)
+            if picked:
+                s.ledger.append("goal_record_picked", step=s.step, count=len(picked))
         if self.staged and spec.deliverables:
             # A declaration can be well formed and still leave out what the request
             # asked: values asked for but only a page declared, a number, code or day the
@@ -1108,6 +1112,11 @@ def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
         gaps.append("the request asks for values (" + "; ".join(
             f"{p['kind']} on {p['entity']}" for p in asked) + ") but the declaration only "
             "opens a page or hands over; declare the values asked for")
+    opened = [p for p in parts if p.get("kind") == "page"]
+    if opened and not asked and not any(d.kind in ("page", "handoff") for d in spec.deliverables):
+        gaps.append("the request asks to open a page (" + "; ".join(
+            f"page on {p['entity']}" for p in opened) + ") but the declaration only reads "
+            "values; declare the page to open")
     declared = json.dumps(spec.to_json(), ensure_ascii=False).casefold()
     chosen = " ".join(f"{c.display} {c.detail}" for c in candidates
                       if c.display.casefold() in declared).casefold()
