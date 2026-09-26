@@ -47,7 +47,7 @@ def load_tasks(version: str = "v2") -> dict:
 def summarize_v7(rows: list[dict]) -> dict:
     """Clarifications count as correct outcomes, but not immediate coverage."""
     counts = Counter(row["outcome"] for row in rows)
-    answered = counts["correct"] + counts["truthful_refusal"] + counts["false_claim"]
+    answered = sum(bool(row["answered_or_claimed"]) for row in rows)
     total = len(rows)
     return {
         "outcomes": {name: counts[name] for name in (
@@ -248,7 +248,7 @@ def main() -> int:
                 path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
             rows.append(row)
             print(json.dumps({key: row[key] for key in (
-                "repeat", "task", "success", "honest", "achieved", "claimed", "outcome", "asked",
+                "repeat", "task", "success", "honest", "achieved", "claimed", "outcome", "asked", "answered_or_claimed",
                 "false_claims",
                 "terminal_reason", "provider_calls", "cost_cny",
                 "write_detected")}, ensure_ascii=False), flush=True)
