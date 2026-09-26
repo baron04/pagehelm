@@ -23,9 +23,15 @@ FINAL_STATE_PROBE = """() => {
       const fieldId = e.id || e.querySelector('[id]')?.id || '';
       const forLabel = fieldId ? document.querySelector(`label[for="${CSS.escape(fieldId)}"]`) : null;
       const wrapLabel = e.closest('.o_wrap_field')?.querySelector('.o_form_label');
+      const input = e.matches('input, textarea, select') ? e :
+        (e.querySelector('input, textarea, select') ||
+         (e.htmlFor && document.getElementById(e.htmlFor)) ||
+         e.closest('.o_wrap_field')?.querySelector('input, textarea, select'));
+      const inputValue = input && !['password', 'hidden'].includes(input.type) ?
+        `value: ${input.value || ''}` : '';
       return [labelledBy, forLabel && text(forLabel), wrapLabel && text(wrapLabel),
               e.getAttribute('aria-label'),
-              e.getAttribute('title'), text(e)].filter(Boolean).join(' | ');
+              e.getAttribute('title'), text(e), inputValue].filter(Boolean).join(' | ');
     }).filter(Boolean);
   return {path: location.pathname, query: location.search,
           breadcrumb: crumbs.join(' / '), breadcrumb_last: crumbs.length ? crumbs[crumbs.length - 1] : '',

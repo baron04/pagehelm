@@ -1,7 +1,7 @@
 {
   "kind": "odoo_goal_rules_seal",
   "suite_id": "odoo-goals-zh-v6-rules",
-  "task_set_sha256": "sha256:7f2616cb8c34daa5b4bb0d2f29430454c7ce03021cb618243f48733b313fcfa2",
+  "task_set_sha256": "sha256:412dd68deb94f3bf632a02d4f5c7895beb9c55ad7d604f6fbfb76fa6bc8c7b2b",
   "status": "FROZEN",
   "frozen_at": "2026-09-25T16:47:00+08:00",
   "reference_date": "2026-09-25",

@@ -1,0 +1,25 @@
+{
+  "absence_verified": 9,
+  "actor_data_verified": 44,
+  "actor_pages_verified": 18,
+  "categories": {
+    "answer": 73,
+    "handoff": 11,
+    "impossible": 9,
+    "open": 7
+  },
+  "compiled_source_covered": 39,
+  "fixture_signature": "661cafc7ffe8b95196ccd1548f4959a9ecc1cac27ef26ff57c68e77dbec0e53b",
+  "groups": {
+    "A": 56,
+    "B": 28,
+    "C": 6,
+    "D": 10
+  },
+  "model_calls": 0,
+  "regexes_verified": 152,
+  "source_locations_verified": 42,
+  "source_release": "18.0-20260909+image:sha256:c01e5bc381f087a3be2800d65cff8ad51ab0709dc54c3b81cd9b0d6c9b3a4d77",
+  "task_set_sha256": "c86da901e006f95a6270446675409de0e7b4a8acd45bc995be1ae8377def15a7",
+  "tasks": 100
+}

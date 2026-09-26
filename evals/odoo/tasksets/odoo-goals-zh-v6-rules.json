@@ -105,7 +105,7 @@
         {
           "quote": "销售单的 Cancel 按钮是不是锁定以后就不显示了，除此之外还有哪些限制",
           "check": {
-            "answer_regex": "(?is)(?=.*(?:locked|锁定))(?=.*(?:draft|草稿))(?=.*(?:sent|已发送))(?=.*(?:sale|已确认))(?=.*(?:\bid\b|已保存|记录.*存在))",
+            "answer_regex": "(?is)(?=.*(?:locked|锁定))(?=.*(?:draft|草稿))(?=.*(?:sent|已发送))(?=.*(?:sale|已确认))(?=.*(?:\\bid\\b|已保存|记录.*存在))",
             "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:291@18\\.0-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
           }
         }

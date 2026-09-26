@@ -25,7 +25,8 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 
 ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
-    "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "7f2616cb8c34daa5b4bb0d2f29430454c7ce03021cb618243f48733b313fcfa2"),
+    "v6": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-holdout.json", "c86da901e006f95a6270446675409de0e7b4a8acd45bc995be1ae8377def15a7"),
+    "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "412dd68deb94f3bf632a02d4f5c7895beb9c55ad7d604f6fbfb76fa6bc8c7b2b"),
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
     "v4": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v4-holdout.json", "5fe83d925961164375d49ee7f9fe72d696f4370dae2b58be8c1a3dd7161e32e9"),
     "v3": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v3.json", "63ad3017827fce2dd055b4f0248672c3180e783eb8ba1b94a7fd979237b0c15b"),

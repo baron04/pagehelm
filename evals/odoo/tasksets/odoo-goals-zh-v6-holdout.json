@@ -1,0 +1,3674 @@
+{
+  "schema_version": 1,
+  "suite_id": "odoo-goals-zh-v6-holdout",
+  "status": "FROZEN",
+  "entry_path": "/odoo",
+  "reference_date": "2026-09-26",
+  "timezone": "Asia/Shanghai",
+  "note": "100 one-sentence staged-goal holdout tasks; ordinary woa.reader; isolated reference deployment; release-bound byte-verified citations; no model calls before freeze. All attempts require unchanged database. A=56, B=28, C=6, D=10. After one full run per arm this set becomes development data.",
+  "categories": {
+    "answer": "回答",
+    "open": "打开页面",
+    "handoff": "引导操作",
+    "impossible": "如实说明做不到"
+  },
+  "source_binding": {
+    "release": "18.0-20260909",
+    "deployment_release": "18.0-20260909+image:sha256:c01e5bc381f087a3be2800d65cff8ad51ab0709dc54c3b81cd9b0d6c9b3a4d77",
+    "citation_releases": [
+      "18.0-20260909",
+      "18.0-20260909+image:sha256:c01e5bc381f087a3be2800d65cff8ad51ab0709dc54c3b81cd9b0d6c9b3a4d77"
+    ],
+    "files": {
+      "addons/account/models/account_move.py": "b0a83a4667dd1532f18198b53f19f3eb5fbef1bfc48a7b9214c87785003b8bb9",
+      "addons/account/views/account_move_views.xml": "6ced689100c6031fc0125ecc263b86fd44e5c773c4fe1775c0ac874b0036225e",
+      "addons/account/wizard/account_payment_register.py": "0aba69d0acba5e860d1db2c0d1d8353b5ad5114de2e7a0eddb51ebdd90701f8f",
+      "addons/sale/models/sale_order.py": "b2607b08b1b095264d683dcfe4ef316de8becd68c39d7c5e286372fd782dcc61",
+      "addons/sale/views/sale_order_views.xml": "4883c9dfef071e9fa909b76eac0151f3a2c78449e944c6f7fac6054316c497e4"
+    }
+  },
+  "tasks": [
+    {
+      "id": "afield01",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "status",
+      "prompt": "Lumber Inc 那张订单现在处于什么状态？",
+      "parts": [
+        {
+          "quote": "Lumber Inc 那张订单现在处于什么状态",
+          "check": {
+            "answer_regex": "(?is)(?:\\bsale\\b|销售订单|已确认|Sales Order)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              6
+            ]
+          ],
+          "field": "state",
+          "expected": "sale",
+          "positive": "sale",
+          "wrong": "draft"
+        }
+      }
+    },
+    {
+      "id": "afield02",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "numeric",
+      "prompt": "上月二十九号 Gemini 的订单总额是多少？",
+      "parts": [
+        {
+          "quote": "上月二十九号 Gemini 的订单总额是多少",
+          "check": {
+            "answer_regex": "(?is)(?<![0-9.,])(?:1541|1,541)(?:[.,]50?)(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              15
+            ]
+          ],
+          "field": "amount_total",
+          "expected": 1541.5,
+          "positive": "1541.5",
+          "wrong": "541.5"
+        }
+      }
+    },
+    {
+      "id": "afield03",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "related",
+      "prompt": "Joel Willis 那张已确认订单由谁负责？",
+      "parts": [
+        {
+          "quote": "Joel Willis 那张已确认订单由谁负责",
+          "check": {
+            "answer_regex": "(?is)Mitchell Admin"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              20
+            ]
+          ],
+          "field": "user_id",
+          "expected": [
+            2,
+            "Mitchell Admin"
+          ],
+          "positive": "[2, 'Mitchell Admin']",
+          "wrong": "[6, 'Marc Demo']"
+        }
+      }
+    },
+    {
+      "id": "afield04",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "absolute_date",
+      "prompt": "S00017 是在哪一天确认的？",
+      "parts": [
+        {
+          "quote": "S00017 是在哪一天确认的",
+          "check": {
+            "answer_regex": "(?is)(?:2026[-/年 ]+0?8[-/月 ]+15|8月15日)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              17
+            ]
+          ],
+          "field": "date_order",
+          "expected": "2026-08-15 13:50:57",
+          "positive": "2026-08-15 13:50:57",
+          "wrong": "2026-08-29"
+        }
+      }
+    },
+    {
+      "id": "afield05",
+      "group": "A",
+      "category": "answer",
+      "entity": "product.template",
+      "delivery": "answer/field",
+      "condition": "none",
+      "prompt": "Flipover 每件标价几美元？",
+      "parts": [
+        {
+          "quote": "Flipover 每件标价几美元",
+          "check": {
+            "answer_regex": "(?is)(?<![0-9.,])(?:1950|1,950)(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "product.template",
+          "domain": [
+            [
+              "id",
+              "=",
+              20
+            ]
+          ],
+          "field": "list_price",
+          "expected": 1950.0,
+          "positive": "1950.0",
+          "wrong": "295.0"
+        }
+      }
+    },
+    {
+      "id": "afield06",
+      "group": "A",
+      "category": "answer",
+      "entity": "product.template",
+      "delivery": "answer/field",
+      "condition": "none",
+      "prompt": "Four Person Desk 的内部货号是什么？",
+      "parts": [
+        {
+          "quote": "Four Person Desk 的内部货号是什么",
+          "check": {
+            "answer_regex": "(?is)FURN_8220"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "product.template",
+          "domain": [
+            [
+              "id",
+              "=",
+              25
+            ]
+          ],
+          "field": "default_code",
+          "expected": "FURN_8220",
+          "positive": "FURN_8220",
+          "wrong": "FURN_8999"
+        }
+      }
+    },
+    {
+      "id": "afield07",
+      "group": "A",
+      "category": "answer",
+      "entity": "product.template",
+      "delivery": "answer/field",
+      "condition": "status",
+      "prompt": "Local Delivery 在产品资料里允许销售吗？",
+      "parts": [
+        {
+          "quote": "Local Delivery 在产品资料里允许销售吗",
+          "check": {
+            "answer_regex": "(?is)(?:不(?:可|能|允许).*售|不可销售|not for sale|sale_ok.{0,10}(?:False|否))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "product.template",
+          "domain": [
+            [
+              "id",
+              "=",
+              28
+            ]
+          ],
+          "field": "sale_ok",
+          "expected": false,
+          "positive": "不可销售",
+          "wrong": "允许销售"
+        }
+      }
+    },
+    {
+      "id": "afield08",
+      "group": "A",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/field",
+      "condition": "absolute_date",
+      "prompt": "Azure 八月初那笔 11750 的客户退款记在哪一天？",
+      "parts": [
+        {
+          "quote": "Azure 八月初那笔 11750 的客户退款记在哪一天",
+          "check": {
+            "answer_regex": "(?is)(?:2026[-/年 ]+0?8[-/月 ]+0?2|8月2日)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move",
+          "domain": [
+            [
+              "id",
+              "=",
+              8
+            ]
+          ],
+          "field": "invoice_date",
+          "expected": "2026-08-02",
+          "positive": "2026-08-02",
+          "wrong": "2026-08-03"
+        }
+      }
+    },
+    {
+      "id": "afield09",
+      "group": "A",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/field",
+      "condition": "numeric",
+      "prompt": "九月初 Azure 那张客户发票的未税总额是多少？",
+      "parts": [
+        {
+          "quote": "九月初 Azure 那张客户发票的未税总额是多少",
+          "check": {
+            "answer_regex": "(?is)(?<![0-9.,])(?:31750|31,750)(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move",
+          "domain": [
+            [
+              "id",
+              "=",
+              1
+            ]
+          ],
+          "field": "amount_untaxed",
+          "expected": 31750.0,
+          "positive": "31750.0",
+          "wrong": "41750.0"
+        }
+      }
+    },
+    {
+      "id": "afield10",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "related",
+      "prompt": "S00014 卖给了哪家公司？",
+      "parts": [
+        {
+          "quote": "S00014 卖给了哪家公司",
+          "check": {
+            "answer_regex": "(?is)Gemini Furniture"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              14
+            ]
+          ],
+          "field": "partner_id",
+          "expected": [
+            11,
+            "Gemini Furniture"
+          ],
+          "positive": "[11, 'Gemini Furniture']",
+          "wrong": "[10, 'Acme Corporation']"
+        }
+      }
+    },
+    {
+      "id": "alist01",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "related",
+      "prompt": "Joel Willis 名下已确认的销售单有哪些？",
+      "parts": [
+        {
+          "quote": "Joel Willis 名下已确认的销售单有哪些",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00020(?![\\w/-]))(?!.*(?<![\\w/-])S00001(?![\\w/-]))(?!.*(?<![\\w/-])S00002(?![\\w/-]))(?!.*(?<![\\w/-])S00003(?![\\w/-]))(?!.*(?<![\\w/-])S00004(?![\\w/-]))(?!.*(?<![\\w/-])S00005(?![\\w/-]))(?!.*(?<![\\w/-])S00006(?![\\w/-]))(?!.*(?<![\\w/-])S00007(?![\\w/-]))(?!.*(?<![\\w/-])S00008(?![\\w/-]))(?!.*(?<![\\w/-])S00009(?![\\w/-]))(?!.*(?<![\\w/-])S00010(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))(?!.*(?<![\\w/-])S00012(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))(?!.*(?<![\\w/-])S00014(?![\\w/-]))(?!.*(?<![\\w/-])S00015(?![\\w/-]))(?!.*(?<![\\w/-])S00016(?![\\w/-]))(?!.*(?<![\\w/-])S00017(?![\\w/-]))(?!.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00019(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "partner_id",
+              "=",
+              8
+            ],
+            [
+              "state",
+              "=",
+              "sale"
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "S00020"
+          ],
+          "positive": "S00020",
+          "wrong": "S00020、S00001"
+        }
+      }
+    },
+    {
+      "id": "alist02",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "numeric",
+      "prompt": "订单总额在 1200 到 1800 美元之间的销售单列一下。",
+      "parts": [
+        {
+          "quote": "订单总额在 1200 到 1800 美元之间的销售单列一下",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00001(?![\\w/-]))(?=.*(?<![\\w/-])S00007(?![\\w/-]))(?=.*(?<![\\w/-])S00014(?![\\w/-]))(?=.*(?<![\\w/-])S00015(?![\\w/-]))(?=.*(?<![\\w/-])S00019(?![\\w/-]))(?!.*(?<![\\w/-])S00002(?![\\w/-]))(?!.*(?<![\\w/-])S00003(?![\\w/-]))(?!.*(?<![\\w/-])S00004(?![\\w/-]))(?!.*(?<![\\w/-])S00005(?![\\w/-]))(?!.*(?<![\\w/-])S00006(?![\\w/-]))(?!.*(?<![\\w/-])S00008(?![\\w/-]))(?!.*(?<![\\w/-])S00009(?![\\w/-]))(?!.*(?<![\\w/-])S00010(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))(?!.*(?<![\\w/-])S00012(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))(?!.*(?<![\\w/-])S00016(?![\\w/-]))(?!.*(?<![\\w/-])S00017(?![\\w/-]))(?!.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00020(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "amount_total",
+              ">=",
+              1200
+            ],
+            [
+              "amount_total",
+              "<=",
+              1800
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "S00001",
+            "S00007",
+            "S00014",
+            "S00015",
+            "S00019"
+          ],
+          "positive": "S00001、S00007、S00014、S00015、S00019",
+          "wrong": "S00001、S00007、S00014、S00015、S00019、S00002"
+        }
+      }
+    },
+    {
+      "id": "alist03",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "absolute_date",
+      "prompt": "8 月 15 日下的销售单有哪些？",
+      "parts": [
+        {
+          "quote": "8 月 15 日下的销售单有哪些",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00017(?![\\w/-]))(?!.*(?<![\\w/-])S00001(?![\\w/-]))(?!.*(?<![\\w/-])S00002(?![\\w/-]))(?!.*(?<![\\w/-])S00003(?![\\w/-]))(?!.*(?<![\\w/-])S00004(?![\\w/-]))(?!.*(?<![\\w/-])S00005(?![\\w/-]))(?!.*(?<![\\w/-])S00006(?![\\w/-]))(?!.*(?<![\\w/-])S00007(?![\\w/-]))(?!.*(?<![\\w/-])S00008(?![\\w/-]))(?!.*(?<![\\w/-])S00009(?![\\w/-]))(?!.*(?<![\\w/-])S00010(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))(?!.*(?<![\\w/-])S00012(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))(?!.*(?<![\\w/-])S00014(?![\\w/-]))(?!.*(?<![\\w/-])S00015(?![\\w/-]))(?!.*(?<![\\w/-])S00016(?![\\w/-]))(?!.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00019(?![\\w/-]))(?!.*(?<![\\w/-])S00020(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "date_order",
+              ">=",
+              "2026-08-15 00:00:00"
+            ],
+            [
+              "date_order",
+              "<",
+              "2026-08-16 00:00:00"
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "S00017"
+          ],
+          "positive": "S00017",
+          "wrong": "S00017、S00001"
+        }
+      }
+    },
+    {
+      "id": "alist04",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "relative_time",
+      "prompt": "这个月成交且金额过千的订单是哪几笔？",
+      "parts": [
+        {
+          "quote": "这个月成交且金额过千的订单是哪几笔",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00004(?![\\w/-]))(?=.*(?<![\\w/-])S00007(?![\\w/-]))(?=.*(?<![\\w/-])S00014(?![\\w/-]))(?=.*(?<![\\w/-])S00016(?![\\w/-]))(?!.*(?<![\\w/-])S00001(?![\\w/-]))(?!.*(?<![\\w/-])S00002(?![\\w/-]))(?!.*(?<![\\w/-])S00003(?![\\w/-]))(?!.*(?<![\\w/-])S00005(?![\\w/-]))(?!.*(?<![\\w/-])S00006(?![\\w/-]))(?!.*(?<![\\w/-])S00008(?![\\w/-]))(?!.*(?<![\\w/-])S00009(?![\\w/-]))(?!.*(?<![\\w/-])S00010(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))(?!.*(?<![\\w/-])S00012(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))(?!.*(?<![\\w/-])S00015(?![\\w/-]))(?!.*(?<![\\w/-])S00017(?![\\w/-]))(?!.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00019(?![\\w/-]))(?!.*(?<![\\w/-])S00020(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "state",
+              "=",
+              "sale"
+            ],
+            [
+              "date_order",
+              ">=",
+              "2026-09-01"
+            ],
+            [
+              "date_order",
+              "<",
+              "2026-10-01"
+            ],
+            [
+              "amount_total",
+              ">",
+              1000
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "S00004",
+            "S00007",
+            "S00014",
+            "S00016"
+          ],
+          "positive": "S00004、S00007、S00014、S00016",
+          "wrong": "S00004、S00007、S00014、S00016、S00001"
+        }
+      }
+    },
+    {
+      "id": "alist05",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "text_prefix",
+      "prompt": "单号以 S0000 开头、客户是 Ready Mat 的报价有哪些？",
+      "parts": [
+        {
+          "quote": "单号以 S0000 开头、客户是 Ready Mat 的报价有哪些",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00002(?![\\w/-]))(?=.*(?<![\\w/-])S00003(?![\\w/-]))(?!.*(?<![\\w/-])S00001(?![\\w/-]))(?!.*(?<![\\w/-])S00004(?![\\w/-]))(?!.*(?<![\\w/-])S00005(?![\\w/-]))(?!.*(?<![\\w/-])S00006(?![\\w/-]))(?!.*(?<![\\w/-])S00007(?![\\w/-]))(?!.*(?<![\\w/-])S00008(?![\\w/-]))(?!.*(?<![\\w/-])S00009(?![\\w/-]))(?!.*(?<![\\w/-])S00010(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))(?!.*(?<![\\w/-])S00012(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))(?!.*(?<![\\w/-])S00014(?![\\w/-]))(?!.*(?<![\\w/-])S00015(?![\\w/-]))(?!.*(?<![\\w/-])S00016(?![\\w/-]))(?!.*(?<![\\w/-])S00017(?![\\w/-]))(?!.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00019(?![\\w/-]))(?!.*(?<![\\w/-])S00020(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "name",
+              "=like",
+              "S0000%"
+            ],
+            [
+              "partner_id",
+              "=",
+              12
+            ],
+            [
+              "state",
+              "=",
+              "draft"
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "S00002",
+            "S00003"
+          ],
+          "positive": "S00002、S00003",
+          "wrong": "S00002、S00003、S00001"
+        }
+      }
+    },
+    {
+      "id": "alist06",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "status",
+      "prompt": "还停在草稿阶段、总额不到 500 的报价报给我。",
+      "parts": [
+        {
+          "quote": "还停在草稿阶段、总额不到 500 的报价报给我",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00003(?![\\w/-]))(?=.*(?<![\\w/-])S00005(?![\\w/-]))(?!.*(?<![\\w/-])S00001(?![\\w/-]))(?!.*(?<![\\w/-])S00002(?![\\w/-]))(?!.*(?<![\\w/-])S00004(?![\\w/-]))(?!.*(?<![\\w/-])S00006(?![\\w/-]))(?!.*(?<![\\w/-])S00007(?![\\w/-]))(?!.*(?<![\\w/-])S00008(?![\\w/-]))(?!.*(?<![\\w/-])S00009(?![\\w/-]))(?!.*(?<![\\w/-])S00010(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))(?!.*(?<![\\w/-])S00012(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))(?!.*(?<![\\w/-])S00014(?![\\w/-]))(?!.*(?<![\\w/-])S00015(?![\\w/-]))(?!.*(?<![\\w/-])S00016(?![\\w/-]))(?!.*(?<![\\w/-])S00017(?![\\w/-]))(?!.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00019(?![\\w/-]))(?!.*(?<![\\w/-])S00020(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "state",
+              "=",
+              "draft"
+            ],
+            [
+              "amount_total",
+              "<",
+              500
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "S00003",
+            "S00005"
+          ],
+          "positive": "S00003、S00005",
+          "wrong": "S00003、S00005、S00001"
+        }
+      }
+    },
+    {
+      "id": "alist07",
+      "group": "A",
+      "category": "answer",
+      "entity": "product.template",
+      "delivery": "answer/list",
+      "condition": "text_contains",
+      "prompt": "产品名称里带 Desk、标价超过 800 的有哪些？",
+      "parts": [
+        {
+          "quote": "产品名称里带 Desk、标价超过 800 的有哪些",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])Large\\ Desk(?![\\w/-]))(?=.*(?<![\\w/-])Desk\\ Stand\\ with\\ Screen(?![\\w/-]))(?=.*(?<![\\w/-])Four\\ Person\\ Desk(?![\\w/-]))(?!.*(?<![\\w/-])Restaurant\\ Expenses(?![\\w/-]))(?!.*(?<![\\w/-])Hotel\\ Accommodation(?![\\w/-]))(?!.*(?<![\\w/-])Virtual\\ Interior\\ Design(?![\\w/-]))(?!.*(?<![\\w/-])Virtual\\ Home\\ Staging(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Chair(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Lamp(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Design\\ Software(?![\\w/-]))(?!.*(?<![\\w/-])Desk\\ Combination(?![\\w/-]))(?!.*(?<![\\w/-])Customizable\\ Desk(?![\\w/-]))(?!.*(?<![\\w/-])Corner\\ Desk\\ Right\\ Sit(?![\\w/-]))(?!.*(?<![\\w/-])Large\\ Cabinet(?![\\w/-]))(?!.*(?<![\\w/-])Storage\\ Box(?![\\w/-]))(?!.*(?<![\\w/-])Pedal\\ Bin(?![\\w/-]))(?!.*(?<![\\w/-])Cabinet\\ with\\ Doors(?![\\w/-]))(?!.*(?<![\\w/-])Conference\\ Chair(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Chair\\ Black(?![\\w/-]))(?!.*(?<![\\w/-])Corner\\ Desk\\ Left\\ Sit(?![\\w/-]))(?!.*(?<![\\w/-])Drawer\\ Black(?![\\w/-]))(?!.*(?<![\\w/-])Flipover(?![\\w/-]))(?!.*(?<![\\w/-])Individual\\ Workplace(?![\\w/-]))(?!.*(?<![\\w/-])Acoustic\\ Bloc\\ Screens(?![\\w/-]))(?!.*(?<![\\w/-])Drawer(?![\\w/-]))(?!.*(?<![\\w/-])Large\\ Meeting\\ Table(?![\\w/-]))(?!.*(?<![\\w/-])Three\\-Seat\\ Sofa(?![\\w/-]))(?!.*(?<![\\w/-])Local\\ Delivery(?![\\w/-]))(?!.*(?<![\\w/-])Furniture\\ Assembly(?![\\w/-]))(?!.*(?<![\\w/-])Outdoor\\ dining\\ table(?![\\w/-]))(?!.*(?<![\\w/-])Desk\\ Organizer(?![\\w/-]))(?!.*(?<![\\w/-])Desk\\ Pad(?![\\w/-]))(?!.*(?<![\\w/-])Monitor\\ Stand(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Combo(?![\\w/-]))(?!.*(?<![\\w/-])Deposit(?![\\w/-]))(?!.*(?<![\\w/-])Chair\\ floor\\ protection(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "product.template",
+          "domain": [
+            [
+              "name",
+              "ilike",
+              "Desk"
+            ],
+            [
+              "list_price",
+              ">",
+              800
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "Large Desk",
+            "Desk Stand with Screen",
+            "Four Person Desk"
+          ],
+          "positive": "Large Desk、Desk Stand with Screen、Four Person Desk",
+          "wrong": "Large Desk、Desk Stand with Screen、Four Person Desk、Restaurant Expenses"
+        }
+      }
+    },
+    {
+      "id": "alist08",
+      "group": "A",
+      "category": "answer",
+      "entity": "product.template",
+      "delivery": "answer/list",
+      "condition": "text_prefix",
+      "prompt": "名称以 Office 开头且标价不足 100 的产品是哪些？",
+      "parts": [
+        {
+          "quote": "名称以 Office 开头且标价不足 100 的产品是哪些",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])Office\\ Chair(?![\\w/-]))(?=.*(?<![\\w/-])Office\\ Lamp(?![\\w/-]))(?!.*(?<![\\w/-])Restaurant\\ Expenses(?![\\w/-]))(?!.*(?<![\\w/-])Hotel\\ Accommodation(?![\\w/-]))(?!.*(?<![\\w/-])Virtual\\ Interior\\ Design(?![\\w/-]))(?!.*(?<![\\w/-])Virtual\\ Home\\ Staging(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Design\\ Software(?![\\w/-]))(?!.*(?<![\\w/-])Desk\\ Combination(?![\\w/-]))(?!.*(?<![\\w/-])Customizable\\ Desk(?![\\w/-]))(?!.*(?<![\\w/-])Corner\\ Desk\\ Right\\ Sit(?![\\w/-]))(?!.*(?<![\\w/-])Large\\ Cabinet(?![\\w/-]))(?!.*(?<![\\w/-])Storage\\ Box(?![\\w/-]))(?!.*(?<![\\w/-])Large\\ Desk(?![\\w/-]))(?!.*(?<![\\w/-])Pedal\\ Bin(?![\\w/-]))(?!.*(?<![\\w/-])Cabinet\\ with\\ Doors(?![\\w/-]))(?!.*(?<![\\w/-])Conference\\ Chair(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Chair\\ Black(?![\\w/-]))(?!.*(?<![\\w/-])Corner\\ Desk\\ Left\\ Sit(?![\\w/-]))(?!.*(?<![\\w/-])Drawer\\ Black(?![\\w/-]))(?!.*(?<![\\w/-])Flipover(?![\\w/-]))(?!.*(?<![\\w/-])Desk\\ Stand\\ with\\ Screen(?![\\w/-]))(?!.*(?<![\\w/-])Individual\\ Workplace(?![\\w/-]))(?!.*(?<![\\w/-])Acoustic\\ Bloc\\ Screens(?![\\w/-]))(?!.*(?<![\\w/-])Drawer(?![\\w/-]))(?!.*(?<![\\w/-])Four\\ Person\\ Desk(?![\\w/-]))(?!.*(?<![\\w/-])Large\\ Meeting\\ Table(?![\\w/-]))(?!.*(?<![\\w/-])Three\\-Seat\\ Sofa(?![\\w/-]))(?!.*(?<![\\w/-])Local\\ Delivery(?![\\w/-]))(?!.*(?<![\\w/-])Furniture\\ Assembly(?![\\w/-]))(?!.*(?<![\\w/-])Outdoor\\ dining\\ table(?![\\w/-]))(?!.*(?<![\\w/-])Desk\\ Organizer(?![\\w/-]))(?!.*(?<![\\w/-])Desk\\ Pad(?![\\w/-]))(?!.*(?<![\\w/-])Monitor\\ Stand(?![\\w/-]))(?!.*(?<![\\w/-])Office\\ Combo(?![\\w/-]))(?!.*(?<![\\w/-])Deposit(?![\\w/-]))(?!.*(?<![\\w/-])Chair\\ floor\\ protection(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "product.template",
+          "domain": [
+            [
+              "name",
+              "=ilike",
+              "Office%"
+            ],
+            [
+              "list_price",
+              "<",
+              100
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "Office Chair",
+            "Office Lamp"
+          ],
+          "positive": "Office Chair、Office Lamp",
+          "wrong": "Office Chair、Office Lamp、Restaurant Expenses"
+        }
+      }
+    },
+    {
+      "id": "alist09",
+      "group": "A",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/list",
+      "condition": "relative_time",
+      "prompt": "八月发生的客户退款，编号给我汇总一下。",
+      "parts": [
+        {
+          "quote": "八月发生的客户退款，编号给我汇总一下",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])RINV/2026/00001(?![\\w/-]))(?=.*(?<![\\w/-])RINV/2026/00002(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00001(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00002(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00003(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00004(?![\\w/-]))(?!.*(?<![\\w/-])BILL/2026/09/0001(?![\\w/-]))(?!.*(?<![\\w/-])BILL/2025/06/0001(?![\\w/-]))(?!.*(?<![\\w/-])RBILL/2026/09/0001(?![\\w/-]))(?!.*(?<![\\w/-])RBILL/2025/06/0001(?![\\w/-]))(?!.*(?<![\\w/-])RINV/2026/00003(?![\\w/-]))(?!.*(?<![\\w/-])RINV/2026/00004(?![\\w/-]))(?!.*(?<![\\w/-])RINV/2026/00005(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move",
+          "domain": [
+            [
+              "id",
+              "<=",
+              14
+            ],
+            [
+              "move_type",
+              "=",
+              "out_refund"
+            ],
+            [
+              "invoice_date",
+              ">=",
+              "2026-08-01"
+            ],
+            [
+              "invoice_date",
+              "<=",
+              "2026-08-31"
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "RINV/2026/00001",
+            "RINV/2026/00002"
+          ],
+          "positive": "RINV/2026/00001、RINV/2026/00002",
+          "wrong": "RINV/2026/00001、RINV/2026/00002、INV/2026/00001"
+        }
+      }
+    },
+    {
+      "id": "alist10",
+      "group": "A",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/list",
+      "condition": "numeric",
+      "prompt": "Azure 的客户贷项通知单中，金额不低于 20000 的有哪些？",
+      "parts": [
+        {
+          "quote": "Azure 的客户贷项通知单中，金额不低于 20000 的有哪些",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])RINV/2026/00002(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00001(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00002(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00003(?![\\w/-]))(?!.*(?<![\\w/-])INV/2026/00004(?![\\w/-]))(?!.*(?<![\\w/-])BILL/2026/09/0001(?![\\w/-]))(?!.*(?<![\\w/-])BILL/2025/06/0001(?![\\w/-]))(?!.*(?<![\\w/-])RINV/2026/00001(?![\\w/-]))(?!.*(?<![\\w/-])RBILL/2026/09/0001(?![\\w/-]))(?!.*(?<![\\w/-])RBILL/2025/06/0001(?![\\w/-]))(?!.*(?<![\\w/-])RINV/2026/00003(?![\\w/-]))(?!.*(?<![\\w/-])RINV/2026/00004(?![\\w/-]))(?!.*(?<![\\w/-])RINV/2026/00005(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move",
+          "domain": [
+            [
+              "id",
+              "<=",
+              14
+            ],
+            [
+              "partner_id",
+              "=",
+              15
+            ],
+            [
+              "move_type",
+              "=",
+              "out_refund"
+            ],
+            [
+              "amount_total",
+              ">=",
+              20000
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "RINV/2026/00002"
+          ],
+          "positive": "RINV/2026/00002",
+          "wrong": "RINV/2026/00002、INV/2026/00001"
+        }
+      }
+    },
+    {
+      "id": "aline01",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "related",
+      "prompt": "Lumber Inc 那笔订单中的可定制书桌，单价是多少？",
+      "parts": [
+        {
+          "quote": "Lumber Inc 那笔订单中的可定制书桌，单价是多少",
+          "check": {
+            "answer_regex": "(?is)Customizable\\ Desk.{0,180}(?<![0-9.,])750(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              13
+            ]
+          ],
+          "field": "price_unit",
+          "expected": 750.0,
+          "positive": "Customizable Desk 750.00",
+          "wrong": "Customizable Desk 75.00"
+        },
+        "parent_id": 6
+      }
+    },
+    {
+      "id": "aline02",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "none",
+      "prompt": "S00010 里的白色隔音屏订了几件？",
+      "parts": [
+        {
+          "quote": "S00010 里的白色隔音屏订了几件",
+          "check": {
+            "answer_regex": "(?is)Acoustic\\ Bloc\\ Screens.{0,180}(?<![0-9.,])2(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              22
+            ]
+          ],
+          "field": "product_uom_qty",
+          "expected": 2.0,
+          "positive": "Acoustic Bloc Screens 2.00",
+          "wrong": "Acoustic Bloc Screens 3.00"
+        },
+        "parent_id": 10
+      }
+    },
+    {
+      "id": "aline03",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "absolute_date",
+      "prompt": "八月二十二日那张 Gemini 订单，隔音屏这一行的小计是多少？",
+      "parts": [
+        {
+          "quote": "八月二十二日那张 Gemini 订单，隔音屏这一行的小计是多少",
+          "check": {
+            "answer_regex": "(?is)Acoustic\\ Bloc\\ Screens.{0,180}(?<![0-9.,])735(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              24
+            ]
+          ],
+          "field": "price_subtotal",
+          "expected": 735.0,
+          "positive": "Acoustic Bloc Screens 735.00",
+          "wrong": "Acoustic Bloc Screens 7350.00"
+        },
+        "parent_id": 11
+      }
+    },
+    {
+      "id": "aline04",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "none",
+      "prompt": "S00013 的黑色办公椅按什么单价算的？",
+      "parts": [
+        {
+          "quote": "S00013 的黑色办公椅按什么单价算的",
+          "check": {
+            "answer_regex": "(?is)Office\\ Chair\\ Black.{0,180}(?<![0-9.,])120(?:[.,]50?)(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              29
+            ]
+          ],
+          "field": "price_unit",
+          "expected": 120.5,
+          "positive": "Office Chair Black 120.50",
+          "wrong": "Office Chair Black 1205.00"
+        },
+        "parent_id": 13
+      }
+    },
+    {
+      "id": "aline05",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "related",
+      "prompt": "Gemini 那笔 1582 美元订单买了多少块隔音屏？",
+      "parts": [
+        {
+          "quote": "Gemini 那笔 1582 美元订单买了多少块隔音屏",
+          "check": {
+            "answer_regex": "(?is)Acoustic\\ Bloc\\ Screens.{0,180}(?<![0-9.,])4(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              30
+            ]
+          ],
+          "field": "product_uom_qty",
+          "expected": 4.0,
+          "positive": "Acoustic Bloc Screens 4.00",
+          "wrong": "Acoustic Bloc Screens 2.00"
+        },
+        "parent_id": 14
+      }
+    },
+    {
+      "id": "aline06",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "absolute_date",
+      "prompt": "8 月 29 日的订单里，黑色办公椅那行合计几美元？",
+      "parts": [
+        {
+          "quote": "8 月 29 日的订单里，黑色办公椅那行合计几美元",
+          "check": {
+            "answer_regex": "(?is)Office\\ Chair\\ Black.{0,180}(?<![0-9.,])361(?:[.,]50?)(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              33
+            ]
+          ],
+          "field": "price_subtotal",
+          "expected": 361.5,
+          "positive": "Office Chair Black 361.50",
+          "wrong": "Office Chair Black 36.15"
+        },
+        "parent_id": 15
+      }
+    },
+    {
+      "id": "aline07",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "none",
+      "prompt": "S00017 的隔音屏每件卖多少钱？",
+      "parts": [
+        {
+          "quote": "S00017 的隔音屏每件卖多少钱",
+          "check": {
+            "answer_regex": "(?is)Acoustic\\ Bloc\\ Screens.{0,180}(?<![0-9.,])355(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              36
+            ]
+          ],
+          "field": "price_unit",
+          "expected": 355.0,
+          "positive": "Acoustic Bloc Screens 355.00",
+          "wrong": "Acoustic Bloc Screens 295.00"
+        },
+        "parent_id": 17
+      }
+    },
+    {
+      "id": "aline08",
+      "group": "A",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/lines",
+      "condition": "numeric",
+      "prompt": "Azure 那张两万美元的客户退款，会议桌退回了几件？",
+      "parts": [
+        {
+          "quote": "Azure 那张两万美元的客户退款，会议桌退回了几件",
+          "check": {
+            "answer_regex": "(?is)Large\\ Meeting\\ Table.{0,180}(?<![0-9.,])5(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              17
+            ]
+          ],
+          "field": "quantity",
+          "expected": 5.0,
+          "positive": "Large Meeting Table 5.00",
+          "wrong": "Large Meeting Table 20.00"
+        },
+        "parent_id": 9
+      }
+    },
+    {
+      "id": "aagg01",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/aggregate",
+      "condition": "status",
+      "prompt": "已确认且归 Mitchell 负责的订单共有几张？",
+      "parts": [
+        {
+          "quote": "已确认且归 Mitchell 负责的订单共有几张",
+          "check": {
+            "answer_regex": "(?<![0-9.,])4(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "state",
+              "=",
+              "sale"
+            ],
+            [
+              "user_id",
+              "=",
+              2
+            ]
+          ],
+          "operation": "count",
+          "field": "id",
+          "expected": 4,
+          "positive": "4.00",
+          "wrong": "1.00"
+        }
+      }
+    },
+    {
+      "id": "aagg02",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/aggregate",
+      "condition": "relative_time",
+      "prompt": "上个月 Gemini 的已确认销售额合计多少？",
+      "parts": [
+        {
+          "quote": "上个月 Gemini 的已确认销售额合计多少",
+          "check": {
+            "answer_regex": "(?<![0-9.,])(?:4420|4,420)(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "partner_id",
+              "=",
+              11
+            ],
+            [
+              "state",
+              "=",
+              "sale"
+            ],
+            [
+              "date_order",
+              ">=",
+              "2026-08-01"
+            ],
+            [
+              "date_order",
+              "<",
+              "2026-09-01"
+            ]
+          ],
+          "operation": "sum",
+          "field": "amount_total",
+          "expected": 4420.0,
+          "positive": "4420.00",
+          "wrong": "100.00"
+        }
+      }
+    },
+    {
+      "id": "aagg03",
+      "group": "A",
+      "category": "answer",
+      "entity": "product.template",
+      "delivery": "answer/aggregate",
+      "condition": "numeric",
+      "prompt": "价格跨过千元门槛的产品有几款？",
+      "parts": [
+        {
+          "quote": "价格跨过千元门槛的产品有几款",
+          "check": {
+            "answer_regex": "(?<![0-9.,])7(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "product.template",
+          "domain": [
+            [
+              "list_price",
+              ">",
+              1000
+            ]
+          ],
+          "operation": "count",
+          "field": "id",
+          "expected": 7,
+          "positive": "7.00",
+          "wrong": "1.00"
+        }
+      }
+    },
+    {
+      "id": "aagg04",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/aggregate",
+      "condition": "text_prefix",
+      "prompt": "以 S0001 起头的那些单，合计总额报一下。",
+      "parts": [
+        {
+          "quote": "以 S0001 起头的那些单，合计总额报一下",
+          "check": {
+            "answer_regex": "(?<![0-9.,])(?:10651|10,651)(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "name",
+              "=like",
+              "S0001%"
+            ]
+          ],
+          "operation": "sum",
+          "field": "amount_total",
+          "expected": 10651.0,
+          "positive": "10651.00",
+          "wrong": "100.00"
+        }
+      }
+    },
+    {
+      "id": "aagg05",
+      "group": "A",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/aggregate",
+      "condition": "absolute_date",
+      "prompt": "9 月开出的客户发票总额是多少？",
+      "parts": [
+        {
+          "quote": "9 月开出的客户发票总额是多少",
+          "check": {
+            "answer_regex": "(?<![0-9.,])(?:92750|92,750)(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move",
+          "domain": [
+            [
+              "id",
+              "<=",
+              14
+            ],
+            [
+              "move_type",
+              "=",
+              "out_invoice"
+            ],
+            [
+              "invoice_date",
+              ">=",
+              "2026-09-01"
+            ],
+            [
+              "invoice_date",
+              "<",
+              "2026-10-01"
+            ]
+          ],
+          "operation": "sum",
+          "field": "amount_total",
+          "expected": 92750.0,
+          "positive": "92750.00",
+          "wrong": "100.00"
+        }
+      }
+    },
+    {
+      "id": "aagg06",
+      "group": "A",
+      "category": "answer",
+      "entity": "sale.order.line",
+      "delivery": "answer/aggregate",
+      "condition": "numeric",
+      "prompt": "单价高于 300 的销售明细共有几行？",
+      "parts": [
+        {
+          "quote": "单价高于 300 的销售明细共有几行",
+          "check": {
+            "answer_regex": "(?<![0-9.,])4(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "<=",
+              44
+            ],
+            [
+              "price_unit",
+              ">",
+              300
+            ]
+          ],
+          "operation": "count",
+          "field": "id",
+          "expected": 4,
+          "positive": "4.00",
+          "wrong": "1.00"
+        }
+      }
+    },
+    {
+      "id": "aopen01",
+      "group": "A",
+      "category": "open",
+      "entity": "sale.order",
+      "delivery": "open/page",
+      "condition": "related",
+      "prompt": "Lumber Inc 买可定制书桌的那笔销售单我想看看。",
+      "parts": [
+        {
+          "quote": "Lumber Inc 买可定制书桌的那笔销售单我想看看",
+          "check": {
+            "path_regex": "^/odoo/(?:sales|orders|sale\\.order)/6$",
+            "breadcrumb_last_contains": "S00006"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:sales|orders|sale\\.order)/6$",
+          "breadcrumb": "S00006",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "aopen02",
+      "group": "A",
+      "category": "open",
+      "entity": "product.template",
+      "delivery": "open/page",
+      "condition": "numeric",
+      "prompt": "标价 1950 美元的 Flipover 资料在哪儿？",
+      "parts": [
+        {
+          "quote": "标价 1950 美元的 Flipover 资料在哪儿",
+          "check": {
+            "path_regex": "^/odoo/(?:products|product\\.template)/20$",
+            "breadcrumb_last_contains": "Flipover"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:products|product\\.template)/20$",
+          "breadcrumb": "Flipover",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "aopen03",
+      "group": "A",
+      "category": "open",
+      "entity": "res.partner",
+      "delivery": "open/page",
+      "condition": "related",
+      "prompt": "Lumber Inc 的订单对应公司资料，我想看它的销售与采购信息。",
+      "parts": [
+        {
+          "quote": "Lumber Inc 的订单对应公司资料，我想看它的销售与采购信息",
+          "check": {
+            "path_regex": "^/odoo/(?:customers|vendors|res\\.partner)/16$",
+            "breadcrumb_last_contains": "Lumber Inc",
+            "active_tab": "Sales & Purchase"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:customers|vendors|res\\.partner)/16$",
+          "breadcrumb": "Lumber Inc",
+          "tab": "Sales & Purchase",
+          "facet": "",
+          "view": "",
+          "highlight": "",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "aopen04",
+      "group": "A",
+      "category": "open",
+      "entity": "sale.order",
+      "delivery": "open/page",
+      "condition": "none",
+      "prompt": "我想看报价单列表按客户归类的样子。",
+      "parts": [
+        {
+          "quote": "我想看报价单列表按客户归类的样子",
+          "check": {
+            "path_regex": "^/odoo/sales$",
+            "breadcrumb_last_contains": "Quotations",
+            "facet_contains": "Customer"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/sales$",
+          "breadcrumb": "Quotations",
+          "tab": "",
+          "facet": "Customer",
+          "view": "",
+          "highlight": "",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "aopen05",
+      "group": "A",
+      "category": "open",
+      "entity": "sale.order",
+      "delivery": "open/page",
+      "condition": "status",
+      "prompt": "公司的未成交报价，在列表里单独筛出来。",
+      "parts": [
+        {
+          "quote": "公司的未成交报价，在列表里单独筛出来",
+          "check": {
+            "path_regex": "^/odoo/sales$",
+            "breadcrumb_last_contains": "Quotations",
+            "facet_contains": "Quotations",
+            "facet_absent": "My Quotations"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/sales$",
+          "breadcrumb": "Quotations",
+          "tab": "",
+          "facet": "Quotations",
+          "view": "",
+          "highlight": "",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "aopen06",
+      "group": "A",
+      "category": "open",
+      "entity": "account.move",
+      "delivery": "open/page",
+      "condition": "related",
+      "prompt": "Azure 八月初那张 11750 的客户退款关联的公司档案给我看看。",
+      "parts": [
+        {
+          "quote": "Azure 八月初那张 11750 的客户退款关联的公司档案给我看看",
+          "check": {
+            "path_regex": "^/odoo/(?:customers|vendors|res\\.partner)/15$",
+            "breadcrumb_last_contains": "Azure Interior"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:customers|vendors|res\\.partner)/15$",
+          "breadcrumb": "Azure Interior",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "ahandoff01",
+      "group": "A",
+      "category": "handoff",
+      "entity": "sale.order",
+      "delivery": "handoff/button",
+      "condition": "none",
+      "prompt": "我准备起一张新的销售报价。",
+      "parts": [
+        {
+          "quote": "我准备起一张新的销售报价",
+          "check": {
+            "path_regex": "^/odoo/sales$",
+            "breadcrumb_last_contains": "Quotations",
+            "highlight_regex": "(?is)(?=.*^New$)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/sales$",
+          "breadcrumb": "Quotations",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "^New$",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "ahandoff02",
+      "group": "A",
+      "category": "handoff",
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "none",
+      "prompt": "我得新录一张客户发票。",
+      "parts": [
+        {
+          "quote": "我得新录一张客户发票",
+          "check": {
+            "path_regex": "^/odoo/invoicing$",
+            "breadcrumb_last_contains": "Invoices",
+            "highlight_regex": "(?is)(?=.*^New$)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/invoicing$",
+          "breadcrumb": "Invoices",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "^New$",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "ahandoff03",
+      "group": "A",
+      "category": "handoff",
+      "entity": "sale.order",
+      "delivery": "handoff/button",
+      "condition": "related",
+      "prompt": "Lumber Inc 的那张订单先预览一下。",
+      "parts": [
+        {
+          "quote": "Lumber Inc 的那张订单先预览一下",
+          "check": {
+            "path_regex": "^/odoo/(?:sales|orders|sale\\.order)/6$",
+            "breadcrumb_last_contains": "S00006",
+            "highlight_regex": "(?is)(?=.*^Preview$)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:sales|orders|sale\\.order)/6$",
+          "breadcrumb": "S00006",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "^Preview$",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "ahandoff04",
+      "group": "A",
+      "category": "handoff",
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "absolute_date",
+      "prompt": "Azure 八月二日那张退款我准备打印。",
+      "parts": [
+        {
+          "quote": "Azure 八月二日那张退款我准备打印",
+          "check": {
+            "path_regex": "^/odoo/(?:invoicing|customer-invoices|bills|vendor-bills|credit-notes|vendor-refunds|account\\.move)/8$",
+            "breadcrumb_last_contains": "RINV/2026/00001",
+            "highlight_regex": "(?is)(?=.*^Print$)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:invoicing|customer-invoices|bills|vendor-bills|credit-notes|vendor-refunds|account\\.move)/8$",
+          "breadcrumb": "RINV/2026/00001",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "^Print$",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "ahandoff05",
+      "group": "A",
+      "category": "handoff",
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "numeric",
+      "prompt": "Azure 那张两万美元的客户退款要发出去。",
+      "parts": [
+        {
+          "quote": "Azure 那张两万美元的客户退款要发出去",
+          "check": {
+            "path_regex": "^/odoo/(?:invoicing|customer-invoices|bills|vendor-bills|credit-notes|vendor-refunds|account\\.move)/9$",
+            "breadcrumb_last_contains": "RINV/2026/00002",
+            "highlight_regex": "(?is)(?=.*^Send$)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:invoicing|customer-invoices|bills|vendor-bills|credit-notes|vendor-refunds|account\\.move)/9$",
+          "breadcrumb": "RINV/2026/00002",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "^Send$",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "ahandoff06",
+      "group": "A",
+      "category": "handoff",
+      "entity": "product.template",
+      "delivery": "handoff/button",
+      "condition": "none",
+      "prompt": "Flipover 的商品标签我准备打印。",
+      "parts": [
+        {
+          "quote": "Flipover 的商品标签我准备打印",
+          "check": {
+            "path_regex": "^/odoo/(?:products|product\\.template)/20$",
+            "breadcrumb_last_contains": "Flipover",
+            "highlight_regex": "(?is)(?=.*^Print Labels$)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:products|product\\.template)/20$",
+          "breadcrumb": "Flipover",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "^Print Labels$",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "ahandoff07",
+      "group": "A",
+      "category": "handoff",
+      "entity": "sale.order",
+      "delivery": "handoff/field",
+      "condition": "none",
+      "prompt": "S00006 的客户参考写成 LI-SEP-26，我再检查保存。",
+      "parts": [
+        {
+          "quote": "S00006 的客户参考写成 LI-SEP-26，我再检查保存",
+          "check": {
+            "path_regex": "^/odoo/(?:sales|orders|sale\\.order)/6$",
+            "breadcrumb_last_contains": "S00006",
+            "active_tab": "Other Info",
+            "highlight_regex": "(?is)(?=.*Customer Reference)(?=.*value: LI\\-SEP\\-26)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:sales|orders|sale\\.order)/6$",
+          "breadcrumb": "S00006",
+          "tab": "Other Info",
+          "facet": "",
+          "view": "",
+          "highlight": "Customer Reference",
+          "fill": "LI-SEP-26"
+        }
+      }
+    },
+    {
+      "id": "ahandoff08",
+      "group": "A",
+      "category": "handoff",
+      "entity": "sale.order",
+      "delivery": "handoff/field",
+      "condition": "none",
+      "prompt": "S00010 的来源单据先填 GF-ORIGIN-26，我自己核对。",
+      "parts": [
+        {
+          "quote": "S00010 的来源单据先填 GF-ORIGIN-26，我自己核对",
+          "check": {
+            "path_regex": "^/odoo/(?:sales|orders|sale\\.order)/10$",
+            "breadcrumb_last_contains": "S00010",
+            "active_tab": "Other Info",
+            "highlight_regex": "(?is)(?=.*Source Document)(?=.*value: GF\\-ORIGIN\\-26)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:sales|orders|sale\\.order)/10$",
+          "breadcrumb": "S00010",
+          "tab": "Other Info",
+          "facet": "",
+          "view": "",
+          "highlight": "Source Document",
+          "fill": "GF-ORIGIN-26"
+        }
+      }
+    },
+    {
+      "id": "ahandoff09",
+      "group": "A",
+      "category": "handoff",
+      "entity": "sale.order",
+      "delivery": "handoff/field",
+      "condition": "none",
+      "prompt": "S00011 的销售团队先选 Pre-Sales，保存我自己来。",
+      "parts": [
+        {
+          "quote": "S00011 的销售团队先选 Pre-Sales，保存我自己来",
+          "check": {
+            "path_regex": "^/odoo/(?:sales|orders|sale\\.order)/11$",
+            "breadcrumb_last_contains": "S00011",
+            "active_tab": "Other Info",
+            "highlight_regex": "(?is)(?=.*Sales Team)(?=.*value: Pre\\-Sales)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:sales|orders|sale\\.order)/11$",
+          "breadcrumb": "S00011",
+          "tab": "Other Info",
+          "facet": "",
+          "view": "",
+          "highlight": "Sales Team",
+          "fill": "Pre-Sales"
+        }
+      }
+    },
+    {
+      "id": "ahandoff10",
+      "group": "A",
+      "category": "handoff",
+      "entity": "sale.order",
+      "delivery": "handoff/field",
+      "condition": "none",
+      "prompt": "S00016 的负责人先填 Joel Willis，我看过再保存。",
+      "parts": [
+        {
+          "quote": "S00016 的负责人先填 Joel Willis，我看过再保存",
+          "check": {
+            "path_regex": "^/odoo/(?:sales|orders|sale\\.order)/16$",
+            "breadcrumb_last_contains": "S00016",
+            "active_tab": "Other Info",
+            "highlight_regex": "(?is)(?=.*Salesperson)(?=.*value: Joel\\ Willis)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:sales|orders|sale\\.order)/16$",
+          "breadcrumb": "S00016",
+          "tab": "Other Info",
+          "facet": "",
+          "view": "",
+          "highlight": "Salesperson",
+          "fill": "Joel Willis"
+        }
+      }
+    },
+    {
+      "id": "aimp01",
+      "group": "A",
+      "category": "impossible",
+      "entity": "sale.order",
+      "delivery": "impossible",
+      "condition": "external",
+      "prompt": "S00020 的快递签收照片发我一份。",
+      "parts": [
+        {
+          "quote": "S00020 的快递签收照片发我一份",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?:没有|无法|未接入|not connected).*(?:快递|签收|物流|carrier|delivery)"
+          }
+        }
+      ],
+      "truth": {
+        "absence": {
+          "kind": "external_integration",
+          "needle": "shipping carrier photo"
+        }
+      }
+    },
+    {
+      "id": "aimp02",
+      "group": "A",
+      "category": "impossible",
+      "entity": "sale.order",
+      "delivery": "impossible",
+      "condition": "missing_record",
+      "prompt": "把 S00998 的客户名称告诉我。",
+      "parts": [
+        {
+          "quote": "把 S00998 的客户名称告诉我",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?:S00998).*(?:未找到|不存在|没有|not found)"
+          }
+        }
+      ],
+      "truth": {
+        "absence": {
+          "kind": "missing_record",
+          "model": "sale.order",
+          "domain": [
+            [
+              "name",
+              "=",
+              "S00998"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": "aimp03",
+      "group": "A",
+      "category": "impossible",
+      "entity": "account.move",
+      "delivery": "impossible",
+      "condition": "missing_data",
+      "prompt": "两万美元那张客户退款的对方银行交易编号有记录吗？",
+      "parts": [
+        {
+          "quote": "两万美元那张客户退款的对方银行交易编号有记录吗",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?:没有|未接入|无法).*(?:银行流水|交易流水|银行交易|bank)"
+          }
+        }
+      ],
+      "truth": {
+        "absence": {
+          "kind": "missing_field",
+          "model": "account.move",
+          "field": "bank_transaction_number"
+        }
+      }
+    },
+    {
+      "id": "aimp04",
+      "group": "A",
+      "category": "impossible",
+      "entity": "product.template",
+      "delivery": "impossible",
+      "condition": "unsupported_view",
+      "prompt": "产品清单能按地图看每个货品的位置吗？",
+      "parts": [
+        {
+          "quote": "产品清单能按地图看每个货品的位置吗",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?:不支持|没有|无法).*(?:地图|map)"
+          }
+        }
+      ],
+      "truth": {
+        "absence": {
+          "kind": "unsupported_view",
+          "model": "product.template",
+          "view": "map"
+        }
+      }
+    },
+    {
+      "id": "aimp05",
+      "group": "A",
+      "category": "impossible",
+      "entity": "sale.order",
+      "delivery": "impossible",
+      "condition": "external",
+      "prompt": "S00006 的物流公司实时追踪链接给我。",
+      "parts": [
+        {
+          "quote": "S00006 的物流公司实时追踪链接给我",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?:没有|未接入|无法).*(?:物流|追踪|tracking)"
+          }
+        }
+      ],
+      "truth": {
+        "absence": {
+          "kind": "external_integration",
+          "needle": "carrier tracking"
+        }
+      }
+    },
+    {
+      "id": "aimp06",
+      "group": "A",
+      "category": "impossible",
+      "entity": "account.move",
+      "delivery": "impossible",
+      "condition": "missing_data",
+      "prompt": "Azure 那张八月退款的对方银行到账时间是几点？",
+      "parts": [
+        {
+          "quote": "Azure 那张八月退款的对方银行到账时间是几点",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?:没有|未接入|无法).*(?:银行|到账时间|bank)"
+          }
+        }
+      ],
+      "truth": {
+        "absence": {
+          "kind": "missing_field",
+          "model": "account.move",
+          "field": "bank_arrival_timestamp"
+        }
+      }
+    },
+    {
+      "id": "bvis01",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "销售单上方的发票入口，为什么有时整块都不出现？",
+      "parts": [
+        {
+          "quote": "销售单上方的发票入口，为什么有时整块都不出现",
+          "check": {
+            "answer_regex": "(?is)(?:invoice_count|发票数量).*(?:0|零|没有)",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:324@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:329@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 324,
+            "end_line": 329,
+            "symbol": "view_order_form/button@action_view_invoice",
+            "clauses": [
+              "invisible=\"invoice_count == 0\""
+            ],
+            "sha256": "4e98d07ecb648a5d567cbc5d0b987dd4eeca1805fd9017e0d891ead8e2d835a6"
+          }
+        ],
+        "positive": "销售单上方的发票入口，为什么有时整块都不出现？ invisible=\"invoice_count == 0\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bvis02",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "发票上的发送按钮什么时候才会亮出来？",
+      "parts": [
+        {
+          "quote": "发票上的发送按钮什么时候才会亮出来",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:posted|已过账))(?=.*(?:out_invoice|out_refund|客户发票|客户退款))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:717@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:722@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 717,
+            "end_line": 722,
+            "symbol": "view_move_form/button@action_invoice_sent_primary",
+            "clauses": [
+              "state != 'posted' or is_being_sent or invoice_pdf_report_id",
+              "move_type not in ('out_invoice', 'out_refund')"
+            ],
+            "sha256": "bf8e693465cdf89dffa8a2dcb08db9f904269bc8e39b514061aa1693ae6e7dd9"
+          }
+        ],
+        "positive": "发票上的发送按钮什么时候才会亮出来？ state != 'posted' or is_being_sent or invoice_pdf_report_id",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bvis03",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "已入账的单据为什么有时看不到打印入口？",
+      "parts": [
+        {
+          "quote": "已入账的单据为什么有时看不到打印入口",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:posted|已过账))(?=.*(?:is_being_sent|发送中|PDF|invoice_pdf_report_id|凭证))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:728@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:732@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 728,
+            "end_line": 732,
+            "symbol": "view_move_form/button@action_print_pdf_primary",
+            "clauses": [
+              "state != 'posted' or is_being_sent or invoice_pdf_report_id or move_type == 'entry'"
+            ],
+            "sha256": "242579f84b2f3e1eb1472d0c41e98597c8a4783b6531a0f303e08fca5afd5cdc"
+          }
+        ],
+        "positive": "已入账的单据为什么有时看不到打印入口？ state != 'posted' or is_being_sent or invoice_pdf_report_id or move_type == 'entry'",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bvis04",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "重新算税额和科目的入口在什么情况下才给点？",
+      "parts": [
+        {
+          "quote": "重新算税额和科目的入口在什么情况下才给点",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:show_update_fpos|税务位置|财税规则))(?=.*(?:draft|草稿|posted|过账|cancel|取消))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:986@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:991@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 986,
+            "end_line": 991,
+            "symbol": "view_move_form/button@action_update_fpos_values",
+            "clauses": [
+              "not show_update_fpos or state in ['cancel', 'posted']"
+            ],
+            "sha256": "563d9cb80f8b432c035d3b485dc98a982126f65a4d371f835877d853495a13e4"
+          }
+        ],
+        "positive": "重新算税额和科目的入口在什么情况下才给点？ not show_update_fpos or state in ['cancel', 'posted']",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bvis05",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "为什么草稿单据上没有标记已核对的按钮？",
+      "parts": [
+        {
+          "quote": "为什么草稿单据上没有标记已核对的按钮",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:checked|已核对))(?=.*(?:draft|草稿))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:790@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:791@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 790,
+            "end_line": 791,
+            "symbol": "view_move_form/button@button_set_checked",
+            "clauses": [
+              "checked or state == 'draft'"
+            ],
+            "sha256": "d9528ce901ef7e1293b0af2327d28930d8cd3ad4ff15dc74b0c3183b274a561e"
+          }
+        ],
+        "positive": "为什么草稿单据上没有标记已核对的按钮？ checked or state == 'draft'",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bvis06",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "我在确认过的订单上看不到锁定入口，什么人和什么状态才有？",
+      "parts": [
+        {
+          "quote": "我在确认过的订单上看不到锁定入口，什么人和什么状态才有",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:sale|已确认))(?=.*(?:locked|已锁定))(?=.*(?:manager|经理))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:294@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:297@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 294,
+            "end_line": 297,
+            "symbol": "view_order_form/button@action_lock",
+            "clauses": [
+              "locked or state != 'sale'",
+              "groups=\"sales_team.group_sale_manager\""
+            ],
+            "sha256": "669c1d1de33bdd5f1a3db64ec2aa98b82d3d38cbe13dcd7232968fb589a17faa"
+          }
+        ],
+        "positive": "我在确认过的订单上看不到锁定入口，什么人和什么状态才有？ locked or state != 'sale'",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bedit01",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order.line",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "报价明细里的产品什么时候必选、又什么时候不能换？",
+      "parts": [
+        {
+          "quote": "报价明细里的产品什么时候必选、又什么时候不能换",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:product_updatable|可更新产品|允许更新))(?=.*(?:display_type|章节|备注))(?=.*(?:is_downpayment|预付款))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:527@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:532@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 527,
+            "end_line": 532,
+            "symbol": "view_order_form/order_line@product_id",
+            "clauses": [
+              "readonly=\"not product_updatable\"",
+              "required=\"not display_type and not is_downpayment\""
+            ],
+            "sha256": "a0a7fcb90e10f60b3ea22d3270e929f305ae669524198216876a96d61ed27007"
+          }
+        ],
+        "positive": "报价明细里的产品什么时候必选、又什么时候不能换？ readonly=\"not product_updatable\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bedit02",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order.line",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "销售明细的计量单位为什么灰着，什么行必须填？",
+      "parts": [
+        {
+          "quote": "销售明细的计量单位为什么灰着，什么行必须填",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:product_uom_readonly|单位只读))(?=.*(?:display_type|章节|备注))(?=.*(?:is_downpayment|预付款))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:450@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:456@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 450,
+            "end_line": 456,
+            "symbol": "view_order_form/order_line@product_uom",
+            "clauses": [
+              "readonly=\"product_uom_readonly\"",
+              "required=\"not display_type and not is_downpayment\""
+            ],
+            "sha256": "af84db4d354fe84efa4715c9627859dcc69edd277b205119181fa7d8d82751c1"
+          }
+        ],
+        "positive": "销售明细的计量单位为什么灰着，什么行必须填？ readonly=\"product_uom_readonly\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bedit03",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order.line",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "交付数量那格能否手改，是由什么决定的？",
+      "parts": [
+        {
+          "quote": "交付数量那格能否手改，是由什么决定的",
+          "check": {
+            "answer_regex": "(?is)(?:qty_delivered_method|manual|手工.*交付)",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:458@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:460@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 458,
+            "end_line": 460,
+            "symbol": "view_order_form/order_line@qty_delivered",
+            "clauses": [
+              "readonly=\"qty_delivered_method != 'manual'\""
+            ],
+            "sha256": "5829fff676b997ef6de93afc7bd80ae3b066ace28baa40b8f0a893ecdf08b16b"
+          }
+        ],
+        "positive": "交付数量那格能否手改，是由什么决定的？ readonly=\"qty_delivered_method != 'manual'\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bedit04",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order.line",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "首付款那一行的订购数量为什么不能改？",
+      "parts": [
+        {
+          "quote": "首付款那一行的订购数量为什么不能改",
+          "check": {
+            "answer_regex": "(?is)(?:is_downpayment|首付款|预付款)",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:591@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:601@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 591,
+            "end_line": 601,
+            "symbol": "view_order_form/order_line@product_uom_qty",
+            "clauses": [
+              "readonly=\"is_downpayment\""
+            ],
+            "sha256": "0b001638d614b9f770cff72b48b83d2ebe1e95fa913877f96f5b1defcffaa7c7"
+          }
+        ],
+        "positive": "首付款那一行的订购数量为什么不能改？ readonly=\"is_downpayment\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bedit05",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "发票的会计日期在什么时候锁住？",
+      "parts": [
+        {
+          "quote": "发票的会计日期在什么时候锁住",
+          "check": {
+            "answer_regex": "(?is)(?:state.{0,30}draft|非草稿|不是草稿|posted|已过账)",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1027@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1029@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1027,
+            "end_line": 1029,
+            "symbol": "view_move_form/field@date",
+            "clauses": [
+              "readonly=\"state != 'draft'\""
+            ],
+            "sha256": "eef09d188107e3c29bde42169fc0125b89fa67c719bd0aadc087002fe0e63c7b"
+          }
+        ],
+        "positive": "发票的会计日期在什么时候锁住？ readonly=\"state != 'draft'\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bedit06",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "外币发票的换算汇率为何无法直接改？",
+      "parts": [
+        {
+          "quote": "外币发票的换算汇率为何无法直接改",
+          "check": {
+            "answer_regex": "(?is)(?:state.{0,30}draft|非草稿|不是草稿|posted|已过账)",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1101@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1101,
+            "end_line": 1101,
+            "symbol": "view_move_form/field@invoice_currency_rate",
+            "clauses": [
+              "readonly=\"state != 'draft'\""
+            ],
+            "sha256": "328a2754489b0dd2ba16854ac49e26042868e30ed8c6e6c478d66271751e6bd2"
+          }
+        ],
+        "positive": "外币发票的换算汇率为何无法直接改？ readonly=\"state != 'draft'\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "breject01",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "客户线上预付款比例写成零，系统会怎样拦？",
+      "parts": [
+        {
+          "quote": "客户线上预付款比例写成零，系统会怎样拦",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:require_payment|线上付款|要求付款))(?=.*(?:0|零|valid percentage|有效百分比))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:833@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:837@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 833,
+            "end_line": 837,
+            "symbol": "_check_prepayment_percent",
+            "clauses": [
+              "order.require_payment and not (0 < order.prepayment_percent <= 1.0)",
+              "Prepayment percentage must be a valid percentage."
+            ],
+            "sha256": "238a5b8370a734092e20de0c5e201e4f1a6d3300fb6733c5d76293ea6cd7493c"
+          }
+        ],
+        "positive": "客户线上预付款比例写成零，系统会怎样拦？ order.require_payment and not (0 < order.prepayment_percent <= 1.0)",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "breject02",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "供应商账单设成自动过账却没填账单日期，会报什么？",
+      "parts": [
+        {
+          "quote": "供应商账单设成自动过账却没填账单日期，会报什么",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:auto_post|自动过账))(?=.*(?:bill date|账单日期))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:2559@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:2564@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 2559,
+            "end_line": 2564,
+            "symbol": "_require_bill_date_for_autopost",
+            "clauses": [
+              "record.auto_post != 'no' and record.is_purchase_document() and not record.invoice_date",
+              "it required a bill date"
+            ],
+            "sha256": "365158921ea401efa721568c685651df444789adce261b29a73d42eb320cb8ce"
+          }
+        ],
+        "positive": "供应商账单设成自动过账却没填账单日期，会报什么？ record.auto_post != 'no' and record.is_purchase_document() and not record.invoice_date",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "breject03",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "采购账单放进销售日记账会被怎么拒绝？",
+      "parts": [
+        {
+          "quote": "采购账单放进销售日记账会被怎么拒绝",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:purchase|采购))(?=.*(?:journal|日记账))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:2566@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:2570@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 2566,
+            "end_line": 2570,
+            "symbol": "_check_journal_move_type",
+            "clauses": [
+              "move.is_purchase_document(include_receipts=True) and move.journal_id.type != 'purchase'",
+              "Cannot create a purchase document in a non purchase journal"
+            ],
+            "sha256": "3c8e77bda99f6c582bc46713d2b99498377a07b06476a0b4d0781244deb76f6b"
+          }
+        ],
+        "positive": "采购账单放进销售日记账会被怎么拒绝？ move.is_purchase_document(include_receipts=True) and move.journal_id.type != 'purchase'",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "breject04",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "外币发票的汇率写成零可以保存吗？",
+      "parts": [
+        {
+          "quote": "外币发票的汇率写成零可以保存吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:0|零|positive|正数))(?=.*(?:currency|外币|汇率))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:2589@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:2600@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 2589,
+            "end_line": 2600,
+            "symbol": "_check_invoice_currency_rate",
+            "clauses": [
+              "move.invoice_currency_rate <= 0",
+              "The currency rate must be strictly positive."
+            ],
+            "sha256": "da0114414e2848c383da4283f0dc4ccb7ff59c028f352800ec70acb850d21130"
+          }
+        ],
+        "positive": "外币发票的汇率写成零可以保存吗？ move.invoice_currency_rate <= 0",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "breject05",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "凭证里用了已归档的分析账户，还能过账吗？",
+      "parts": [
+        {
+          "quote": "凭证里用了已归档的分析账户，还能过账吗",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:archived|归档))(?=.*(?:analytic account|分析账户))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5218@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5222@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5218,
+            "end_line": 5222,
+            "symbol": "_post",
+            "clauses": [
+              "inactive_analytic_ids :=",
+              "You cannot post an entry with an archived analytic account"
+            ],
+            "sha256": "85c1e65af1acd2a30a98ea063aec8fbf25b23ff8d1f97cf5b54a808cf413b199"
+          }
+        ],
+        "positive": "凭证里用了已归档的分析账户，还能过账吗？ inactive_analytic_ids :=",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "breject06",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.payment.register",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "付款向导里的收款人银行账户没验证，点确认会发生什么？",
+      "parts": [
+        {
+          "quote": "付款向导里的收款人银行账户没验证，点确认会发生什么",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:bank account|银行账户))(?=.*(?:manually validated|人工验证|手动验证))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/wizard/account_payment_register\\.py:1214@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/wizard/account_payment_register\\.py:1228@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/wizard/account_payment_register.py",
+            "start_line": 1214,
+            "end_line": 1228,
+            "symbol": "_create_payments",
+            "clauses": [
+              "self.require_partner_bank_account and (not batch_account or not batch_account.allow_out_payment)",
+              "recipient bank account must be manually validated"
+            ],
+            "sha256": "be47075e26ecac581c50f6b46aaf091b014944ce82f0dc6464510bb2cbfb44c9"
+          }
+        ],
+        "positive": "付款向导里的收款人银行账户没验证，点确认会发生什么？ self.require_partner_bank_account and (not batch_account or not batch_account.allow_out_payment)",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bpair01",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "发票页有两种“发送”，普通那颗和备选那颗何时切换？",
+      "parts": [
+        {
+          "quote": "发票页有两种“发送”，普通那颗和备选那颗何时切换",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:is_being_sent|发送中))(?=.*(?:invoice_pdf_report_id|PDF))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:717@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:722@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:723@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:727@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 717,
+            "end_line": 722,
+            "symbol": "view_move_form/button@action_invoice_sent_primary",
+            "clauses": [
+              "is_being_sent or invoice_pdf_report_id"
+            ],
+            "sha256": "bf8e693465cdf89dffa8a2dcb08db9f904269bc8e39b514061aa1693ae6e7dd9"
+          },
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 723,
+            "end_line": 727,
+            "symbol": "view_move_form/button@action_invoice_sent_secondary",
+            "clauses": [
+              "not is_being_sent and not invoice_pdf_report_id"
+            ],
+            "sha256": "42283546d143c8b8fcc29e3d30995a9b18a027af772fd8c6a1a2e6806c5cfd90"
+          }
+        ],
+        "positive": "发票页有两种“发送”，普通那颗和备选那颗何时切换？ is_being_sent or invoice_pdf_report_id not is_being_sent and not invoice_pdf_report_id",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bpair02",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "同一张凭证的两处打印入口，哪个会被设成醒目的按钮？",
+      "parts": [
+        {
+          "quote": "同一张凭证的两处打印入口，哪个会被设成醒目的按钮",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:is_being_sent|发送中))(?=.*(?:invoice_pdf_report_id|PDF))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:728@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:732@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:733@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:736@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 728,
+            "end_line": 732,
+            "symbol": "view_move_form/button@action_print_pdf_primary",
+            "clauses": [
+              "state != 'posted' or is_being_sent or invoice_pdf_report_id"
+            ],
+            "sha256": "242579f84b2f3e1eb1472d0c41e98597c8a4783b6531a0f303e08fca5afd5cdc"
+          },
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 733,
+            "end_line": 736,
+            "symbol": "view_move_form/button@action_print_pdf_secondary",
+            "clauses": [
+              "not is_being_sent and not invoice_pdf_report_id"
+            ],
+            "sha256": "ecd38b46f3ab9c761f69b6c1e964e70f0effae3f2cf4504c1f8cccc052abe700"
+          }
+        ],
+        "positive": "同一张凭证的两处打印入口，哪个会被设成醒目的按钮？ state != 'posted' or is_being_sent or invoice_pdf_report_id not is_being_sent and not invoice_pdf_report_id",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bpair03",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "“取消凭证”和“取消”长得很像，系统按什么分给不同单据？",
+      "parts": [
+        {
+          "quote": "“取消凭证”和“取消”长得很像，系统按什么分给不同单据",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:entry|记账凭证|杂项))(?=.*(?:draft|草稿))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:774@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:775@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:776@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:777@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 774,
+            "end_line": 775,
+            "symbol": "view_move_form/button@button_cancel_entry",
+            "clauses": [
+              "move_type != 'entry'"
+            ],
+            "sha256": "f4a3a9548622db734ab9949fdd2cd5615d2b00fed36f3546cf96dc6913b9d43c"
+          },
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 776,
+            "end_line": 777,
+            "symbol": "view_move_form/button@button_cancel_invoice",
+            "clauses": [
+              "move_type == 'entry'"
+            ],
+            "sha256": "c5d767bbd92d5de854cff763184a88c5a31667c66402800a0916b10e8b9a1333"
+          }
+        ],
+        "positive": "“取消凭证”和“取消”长得很像，系统按什么分给不同单据？ move_type != 'entry' move_type == 'entry'",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bpair04",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "controls",
+      "prompt": "销售订单的锁上和解锁入口，分别要什么状态和身份？",
+      "parts": [
+        {
+          "quote": "销售订单的锁上和解锁入口，分别要什么状态和身份",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:locked|锁定))(?=.*(?:sale|已确认))(?=.*(?:manager|经理))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:288@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:289@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:294@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:297@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 288,
+            "end_line": 289,
+            "symbol": "view_order_form/button@action_unlock",
+            "clauses": [
+              "invisible=\"not locked\"",
+              "groups=\"sales_team.group_sale_manager\""
+            ],
+            "sha256": "546b2ddd1381837c778383cc093652b84da6d2110fca0a172591feb79ac5462b"
+          },
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 294,
+            "end_line": 297,
+            "symbol": "view_order_form/button@action_lock",
+            "clauses": [
+              "locked or state != 'sale'",
+              "groups=\"sales_team.group_sale_manager\""
+            ],
+            "sha256": "669c1d1de33bdd5f1a3db64ec2aa98b82d3d38cbe13dcd7232968fb589a17faa"
+          }
+        ],
+        "positive": "销售订单的锁上和解锁入口，分别要什么状态和身份？ invisible=\"not locked\" locked or state != 'sale'",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bmeaning01",
+      "group": "B",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "销售单没指定开票日记账时，系统按什么顺序选？",
+      "parts": [
+        {
+          "quote": "销售单没指定开票日记账时，系统按什么顺序选",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:sales journal|销售日记账))(?=.*(?:lowest sequence|最小序号|最低顺序))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:150@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:155@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 150,
+            "end_line": 155,
+            "symbol": "SaleOrder.journal_id/help",
+            "clauses": [
+              "otherwise the sales journal with the lowest sequence is used."
+            ],
+            "sha256": "dc63dabd6de7b49cc60fbd03abac9bcadd6a923262cbb04134c87709bef34403"
+          }
+        ],
+        "positive": "销售单没指定开票日记账时，系统按什么顺序选？ otherwise the sales journal with the lowest sequence is used.",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bmeaning02",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "凭证里的自动过账选项究竟管什么？",
+      "parts": [
+        {
+          "quote": "凭证里的自动过账选项究竟管什么",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:accounting date|会计日期))(?=.*(?:recurring|周期|重复))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:274@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:284@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 274,
+            "end_line": 284,
+            "symbol": "AccountMove.auto_post/help",
+            "clauses": [
+              "posted automatically on its accounting date",
+              "similar recurring invoices"
+            ],
+            "sha256": "07bfa28dea4cab362585bd33c57a6e78cbc6b4efdb074fa8ed709a5b80c23b9a"
+          }
+        ],
+        "positive": "凭证里的自动过账选项究竟管什么？ posted automatically on its accounting date",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "bmeaning03",
+      "group": "B",
+      "category": "answer",
+      "entity": "account.payment.register",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "付款窗口里的合并付款勾选后会怎么归并？",
+      "parts": [
+        {
+          "quote": "付款窗口里的合并付款勾选后会怎么归并",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:partner|往来方|客户|供应商))(?=.*(?:bank|银行))(?=.*(?:one payment|一笔))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/wizard/account_payment_register\\.py:25@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/wizard/account_payment_register\\.py:27@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/wizard/account_payment_register.py",
+            "start_line": 25,
+            "end_line": 27,
+            "symbol": "AccountPaymentRegister.group_payment/help",
+            "clauses": [
+              "Only one payment will be created by partner (bank), instead of one per bill."
+            ],
+            "sha256": "2e25db262e41a26b52363c925112d87b00f6453ff4ae7dfb6ffec04f5d4074be"
+          }
+        ],
+        "positive": "付款窗口里的合并付款勾选后会怎么归并？ Only one payment will be created by partner (bank), instead of one per bill.",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "babsent01",
+      "group": "B",
+      "category": "impossible",
+      "entity": "sale.order",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "销售报价是不是每张最多只能放三条明细？",
+      "parts": [
+        {
+          "quote": "销售报价是不是每张最多只能放三条明细",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:三条|3条|three))(?=.*(?:明细|行|line))(?=.*(?:未找到|没有|不存在|无法))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1145,
+            "end_line": 1181,
+            "symbol": "action_confirm",
+            "clauses": [
+              "def action_confirm("
+            ],
+            "sha256": "0b3d05fd0a89182e771ff2e52c7a0c97ce40743f6210afb2770b6e221ee1dc73"
+          }
+        ],
+        "absence_scope": "installed sale/account modules and relevant entrypoint inspected; no such built-in rule asserted",
+        "searched_terms": [
+          "max_three_order_lines",
+          "three line limit",
+          "每张最多三条明细"
+        ]
+      }
+    },
+    {
+      "id": "babsent02",
+      "group": "B",
+      "category": "impossible",
+      "entity": "account.move",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "客户发票备注是不是强制只能填中文？",
+      "parts": [
+        {
+          "quote": "客户发票备注是不是强制只能填中文",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:中文|Chinese))(?=.*(?:备注|note))(?=.*(?:未找到|没有|不存在|无法))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 3420,
+            "end_line": 3472,
+            "symbol": "write",
+            "clauses": [
+              "def write(self, vals):"
+            ],
+            "sha256": "21a92a1ab54481fbaf47deebb08603727b4096fc2eeec1db8c37740ae6e1d746"
+          }
+        ],
+        "absence_scope": "installed sale/account modules and relevant entrypoint inspected; no such built-in rule asserted",
+        "searched_terms": [
+          "chinese_only_note",
+          "notes must be Chinese",
+          "备注必须中文"
+        ]
+      }
+    },
+    {
+      "id": "babsent03",
+      "group": "B",
+      "category": "impossible",
+      "entity": "sale.order",
+      "delivery": "impossible",
+      "condition": "absent_rule",
+      "prompt": "订单满一千美元系统就自动打九折吗？",
+      "parts": [
+        {
+          "quote": "订单满一千美元系统就自动打九折吗",
+          "check": {
+            "impossible": true,
+            "explains_regex": "(?is)(?=.*(?:1000|一千))(?=.*(?:九折|10%|ten percent))(?=.*(?:未找到|没有|不存在|无法))"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 1145,
+            "end_line": 1181,
+            "symbol": "action_confirm",
+            "clauses": [
+              "def action_confirm("
+            ],
+            "sha256": "0b3d05fd0a89182e771ff2e52c7a0c97ce40743f6210afb2770b6e221ee1dc73"
+          }
+        ],
+        "absence_scope": "installed sale/account modules and relevant entrypoint inspected; no such built-in rule asserted",
+        "searched_terms": [
+          "automatic_ten_percent_discount",
+          "over 1000 automatic discount",
+          "超过一千自动打折"
+        ]
+      }
+    },
+    {
+      "id": "cmix01",
+      "group": "C",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/mixed",
+      "condition": "data_and_rule",
+      "prompt": "S00006 现在成交了吗，锁定这单的入口又有什么限制？",
+      "parts": [
+        {
+          "quote": "S00006 现在成交了吗，锁定这单的入口又有什么限制",
+          "check": {
+            "answer_regex": "(?:\\bsale\\b|已确认|销售订单)"
+          }
+        },
+        {
+          "quote": "S00006 现在成交了吗，锁定这单的入口又有什么限制",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:locked|锁定))(?=.*(?:manager|经理))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:294@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:297@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              6
+            ]
+          ],
+          "field": "state",
+          "expected": "sale",
+          "positive": "sale",
+          "wrong": "draft"
+        },
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 294,
+            "end_line": 297,
+            "symbol": "view_order_form/button@action_lock",
+            "clauses": [
+              "locked or state != 'sale'",
+              "groups=\"sales_team.group_sale_manager\""
+            ],
+            "sha256": "669c1d1de33bdd5f1a3db64ec2aa98b82d3d38cbe13dcd7232968fb589a17faa"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cmix02",
+      "group": "C",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/mixed",
+      "condition": "data_and_rule",
+      "prompt": "S00020 的发票数是多少，订单上的发票入口何时才出现？",
+      "parts": [
+        {
+          "quote": "S00020 的发票数是多少，订单上的发票入口何时才出现",
+          "check": {
+            "answer_regex": "(?<![0-9.,])0(?:[.,]00?)?(?![0-9.,])"
+          }
+        },
+        {
+          "quote": "S00020 的发票数是多少，订单上的发票入口何时才出现",
+          "check": {
+            "answer_regex": "(?is)(?:invoice_count|发票数量).*(?:0|零|没有)",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:324@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/views/sale_order_views\\.xml:329@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              20
+            ]
+          ],
+          "field": "invoice_count",
+          "expected": 0,
+          "positive": "0",
+          "wrong": "1"
+        },
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/views/sale_order_views.xml",
+            "start_line": 324,
+            "end_line": 329,
+            "symbol": "view_order_form/button@action_view_invoice",
+            "clauses": [
+              "invisible=\"invoice_count == 0\""
+            ],
+            "sha256": "4e98d07ecb648a5d567cbc5d0b987dd4eeca1805fd9017e0d891ead8e2d835a6"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cmix03",
+      "group": "C",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/mixed",
+      "condition": "data_and_rule",
+      "prompt": "Azure 八月二日的退款已经过账了吗，发送按钮还受哪些限制？",
+      "parts": [
+        {
+          "quote": "Azure 八月二日的退款已经过账了吗，发送按钮还受哪些限制",
+          "check": {
+            "answer_regex": "(?:posted|已过账)"
+          }
+        },
+        {
+          "quote": "Azure 八月二日的退款已经过账了吗，发送按钮还受哪些限制",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:is_being_sent|发送中|PDF))(?=.*(?:out_refund|客户退款))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:717@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:722@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move",
+          "domain": [
+            [
+              "id",
+              "=",
+              8
+            ]
+          ],
+          "field": "state",
+          "expected": "posted",
+          "positive": "posted",
+          "wrong": "draft"
+        },
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 717,
+            "end_line": 722,
+            "symbol": "view_move_form/button@action_invoice_sent_primary",
+            "clauses": [
+              "state != 'posted' or is_being_sent or invoice_pdf_report_id",
+              "move_type not in ('out_invoice', 'out_refund')"
+            ],
+            "sha256": "bf8e693465cdf89dffa8a2dcb08db9f904269bc8e39b514061aa1693ae6e7dd9"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cmix04",
+      "group": "C",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/mixed",
+      "condition": "data_and_rule",
+      "prompt": "S00003 总额多少，线上预付款比例填零会不会被拦？",
+      "parts": [
+        {
+          "quote": "S00003 总额多少，线上预付款比例填零会不会被拦",
+          "check": {
+            "answer_regex": "(?<![0-9.,])377(?:[.,]50?)(?![0-9.,])"
+          }
+        },
+        {
+          "quote": "S00003 总额多少，线上预付款比例填零会不会被拦",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:require_payment|线上付款))(?=.*(?:0|零|valid percentage|有效百分比))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:833@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:837@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              3
+            ]
+          ],
+          "field": "amount_total",
+          "expected": 377.5,
+          "positive": "377.5",
+          "wrong": "750.0"
+        },
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 833,
+            "end_line": 837,
+            "symbol": "_check_prepayment_percent",
+            "clauses": [
+              "order.require_payment and not (0 < order.prepayment_percent <= 1.0)",
+              "Prepayment percentage must be a valid percentage."
+            ],
+            "sha256": "238a5b8370a734092e20de0c5e201e4f1a6d3300fb6733c5d76293ea6cd7493c"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cmix05",
+      "group": "C",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/mixed",
+      "condition": "data_and_rule",
+      "prompt": "Azure 两万美元的退款日期是哪天，发票会计日期什么时候不能改？",
+      "parts": [
+        {
+          "quote": "Azure 两万美元的退款日期是哪天，发票会计日期什么时候不能改",
+          "check": {
+            "answer_regex": "(?:2026[-/年 ]+0?8[-/月 ]+0?3|8月3日)"
+          }
+        },
+        {
+          "quote": "Azure 两万美元的退款日期是哪天，发票会计日期什么时候不能改",
+          "check": {
+            "answer_regex": "(?is)(?:state.{0,30}draft|非草稿|不是草稿|posted|已过账)",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1027@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1029@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "account.move",
+          "domain": [
+            [
+              "id",
+              "=",
+              9
+            ]
+          ],
+          "field": "invoice_date",
+          "expected": "2026-08-03",
+          "positive": "2026-08-03",
+          "wrong": "2026-08-02"
+        },
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1027,
+            "end_line": 1029,
+            "symbol": "view_move_form/field@date",
+            "clauses": [
+              "readonly=\"state != 'draft'\""
+            ],
+            "sha256": "eef09d188107e3c29bde42169fc0125b89fa67c719bd0aadc087002fe0e63c7b"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cmix06",
+      "group": "C",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/mixed",
+      "condition": "data_and_rule",
+      "prompt": "S00011 是上个月哪天下的，没设开票日记账时会怎么选？",
+      "parts": [
+        {
+          "quote": "S00011 是上个月哪天下的，没设开票日记账时会怎么选",
+          "check": {
+            "answer_regex": "(?:2026[-/年 ]+0?8[-/月 ]+22|8月22日)"
+          }
+        },
+        {
+          "quote": "S00011 是上个月哪天下的，没设开票日记账时会怎么选",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:sales journal|销售日记账))(?=.*(?:lowest sequence|最小序号|最低顺序))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:150@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/sale/models/sale_order\\.py:155@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              11
+            ]
+          ],
+          "field": "date_order",
+          "expected": "2026-08-22 13:50:57",
+          "positive": "2026-08-22 13:50:57",
+          "wrong": "2026-08-29"
+        },
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/sale/models/sale_order.py",
+            "start_line": 150,
+            "end_line": 155,
+            "symbol": "SaleOrder.journal_id/help",
+            "clauses": [
+              "otherwise the sales journal with the lowest sequence is used."
+            ],
+            "sha256": "dc63dabd6de7b49cc60fbd03abac9bcadd6a923262cbb04134c87709bef34403"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dfield01",
+      "group": "D",
+      "category": "answer",
+      "entity": "product.template",
+      "delivery": "answer/field",
+      "condition": "none",
+      "prompt": "What is the list price on the Large Meeting Table product card?",
+      "parts": [
+        {
+          "quote": "What is the list price on the Large Meeting Table product card",
+          "check": {
+            "answer_regex": "(?is)(?<![0-9.,])(?:4000|4,000)(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "product.template",
+          "domain": [
+            [
+              "id",
+              "=",
+              26
+            ]
+          ],
+          "field": "list_price",
+          "expected": 4000.0,
+          "positive": "4000.0",
+          "wrong": "400.0"
+        }
+      }
+    },
+    {
+      "id": "dfield02",
+      "group": "D",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/field",
+      "condition": "numeric",
+      "prompt": "How much is the Gemini order placed on August 8 worth?",
+      "parts": [
+        {
+          "quote": "How much is the Gemini order placed on August 8 worth",
+          "check": {
+            "answer_regex": "(?is)(?<![0-9.,])831(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "id",
+              "=",
+              18
+            ]
+          ],
+          "field": "amount_total",
+          "expected": 831.0,
+          "positive": "831.0",
+          "wrong": "951.0"
+        }
+      }
+    },
+    {
+      "id": "dlist01",
+      "group": "D",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/list",
+      "condition": "related",
+      "prompt": "Which confirmed sales orders belong to Lumber Inc?",
+      "parts": [
+        {
+          "quote": "Which confirmed sales orders belong to Lumber Inc",
+          "check": {
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00006(?![\\w/-]))(?!.*(?<![\\w/-])S00001(?![\\w/-]))(?!.*(?<![\\w/-])S00002(?![\\w/-]))(?!.*(?<![\\w/-])S00003(?![\\w/-]))(?!.*(?<![\\w/-])S00004(?![\\w/-]))(?!.*(?<![\\w/-])S00005(?![\\w/-]))(?!.*(?<![\\w/-])S00007(?![\\w/-]))(?!.*(?<![\\w/-])S00008(?![\\w/-]))(?!.*(?<![\\w/-])S00009(?![\\w/-]))(?!.*(?<![\\w/-])S00010(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))(?!.*(?<![\\w/-])S00012(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))(?!.*(?<![\\w/-])S00014(?![\\w/-]))(?!.*(?<![\\w/-])S00015(?![\\w/-]))(?!.*(?<![\\w/-])S00016(?![\\w/-]))(?!.*(?<![\\w/-])S00017(?![\\w/-]))(?!.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00019(?![\\w/-]))(?!.*(?<![\\w/-])S00020(?![\\w/-]))"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order",
+          "domain": [
+            [
+              "partner_id",
+              "=",
+              16
+            ],
+            [
+              "state",
+              "=",
+              "sale"
+            ]
+          ],
+          "field": "name",
+          "expected": [
+            "S00006"
+          ],
+          "positive": "S00006",
+          "wrong": "S00006、S00001"
+        }
+      }
+    },
+    {
+      "id": "dline01",
+      "group": "D",
+      "category": "answer",
+      "entity": "sale.order",
+      "delivery": "answer/lines",
+      "condition": "none",
+      "prompt": "On S00016, what unit price was charged for the acoustic screens?",
+      "parts": [
+        {
+          "quote": "On S00016, what unit price was charged for the acoustic screens",
+          "check": {
+            "answer_regex": "(?is)Acoustic\\ Bloc\\ Screens.{0,180}(?<![0-9.,])275(?:[.,]00?)?(?![0-9.,])"
+          }
+        }
+      ],
+      "truth": {
+        "oracle": {
+          "model": "sale.order.line",
+          "domain": [
+            [
+              "id",
+              "=",
+              34
+            ]
+          ],
+          "field": "price_unit",
+          "expected": 275.0,
+          "positive": "Acoustic Bloc Screens 275.00",
+          "wrong": "Acoustic Bloc Screens 295.00"
+        },
+        "parent_id": 16
+      }
+    },
+    {
+      "id": "dopen01",
+      "group": "D",
+      "category": "open",
+      "entity": "product.template",
+      "delivery": "open/page",
+      "condition": "none",
+      "prompt": "I want the details for the product priced at $2,100.",
+      "parts": [
+        {
+          "quote": "I want the details for the product priced at $2,100.",
+          "check": {
+            "path_regex": "^/odoo/(?:products|product\\.template)/21$",
+            "breadcrumb_last_contains": "Desk Stand with Screen"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:products|product\\.template)/21$",
+          "breadcrumb": "Desk Stand with Screen",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "dhandoff01",
+      "group": "D",
+      "category": "handoff",
+      "entity": "account.move",
+      "delivery": "handoff/button",
+      "condition": "absolute_date",
+      "prompt": "I need to print the August 3 customer credit.",
+      "parts": [
+        {
+          "quote": "I need to print the August 3 customer credit.",
+          "check": {
+            "path_regex": "^/odoo/(?:invoicing|customer-invoices|bills|vendor-bills|credit-notes|vendor-refunds|account\\.move)/9$",
+            "breadcrumb_last_contains": "RINV/2026/00002",
+            "highlight_regex": "(?is)(?=.*^Print$)"
+          }
+        }
+      ],
+      "truth": {
+        "page": {
+          "path": "^/odoo/(?:invoicing|customer-invoices|bills|vendor-bills|credit-notes|vendor-refunds|account\\.move)/9$",
+          "breadcrumb": "RINV/2026/00002",
+          "tab": "",
+          "facet": "",
+          "view": "",
+          "highlight": "^Print$",
+          "fill": ""
+        }
+      }
+    },
+    {
+      "id": "dvis01",
+      "group": "D",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "visibility",
+      "prompt": "When would a posted entry offer the Lock action?",
+      "parts": [
+        {
+          "quote": "When would a posted entry offer the Lock action",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:restrict_mode_hash_table|hash mode))(?=.*(?:posted))(?=.*(?:inalterable_hash|already locked))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:780@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:781@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 780,
+            "end_line": 781,
+            "symbol": "view_move_form/button@button_hash",
+            "clauses": [
+              "not restrict_mode_hash_table or inalterable_hash or state != 'posted'"
+            ],
+            "sha256": "cb233e61c39cb4fef7f8364b128859fe5ee92d5dc3140b78227425a26b9fb6ca"
+          }
+        ],
+        "positive": "When would a posted entry offer the Lock action? not restrict_mode_hash_table or inalterable_hash or state != 'posted'",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "dedit01",
+      "group": "D",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "readonly",
+      "prompt": "At what point does the delivery date on an invoice stop being editable?",
+      "parts": [
+        {
+          "quote": "At what point does the delivery date on an invoice stop being editable",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:delivery_date|delivery date))(?=.*(?:draft))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/views/account_move_views\\.xml:1058@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/views/account_move_views.xml",
+            "start_line": 1058,
+            "end_line": 1058,
+            "symbol": "view_move_form/field@delivery_date",
+            "clauses": [
+              "invisible=\"not show_delivery_date\" readonly=\"state != 'draft'\""
+            ],
+            "sha256": "771d819a5962087376f5979ba8bef231c2e93b56f9066cd7fc299f008922bb47"
+          }
+        ],
+        "positive": "At what point does the delivery date on an invoice stop being editable? invisible=\"not show_delivery_date\" readonly=\"state != 'draft'\"",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "dreject01",
+      "group": "D",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "refusal",
+      "prompt": "Why can’t I change the document type after it has a sequence number?",
+      "parts": [
+        {
+          "quote": "Why can’t I change the document type after it has a sequence number",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:posted_before|posted previously|posted once))(?=.*(?:sequence number))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5448@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:5452@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 5448,
+            "end_line": 5452,
+            "symbol": "action_switch_move_type",
+            "clauses": [
+              "move.posted_before and move.name",
+              "You cannot switch the type of a document with an existing sequence number."
+            ],
+            "sha256": "27ed23a276b2d3759cefdd5514df314a655fc65d024e52c90d7621e304d476bb"
+          }
+        ],
+        "positive": "Why can’t I change the document type after it has a sequence number? move.posted_before and move.name",
+        "wrong": "这条规则总是允许。"
+      }
+    },
+    {
+      "id": "dmeaning01",
+      "group": "D",
+      "category": "answer",
+      "entity": "account.move",
+      "delivery": "answer/rule",
+      "condition": "meaning",
+      "prompt": "What does the “Auto-post until” date include?",
+      "parts": [
+        {
+          "quote": "What does the “Auto-post until” date include",
+          "check": {
+            "answer_regex": "(?is)(?=.*(?:recurring move|recurring entry))(?=.*(?:including this date|through that date))",
+            "source_regex": "(?m)(?=[\\s\\S]*^addons/account/models/account_move\\.py:285@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)(?=[\\s\\S]*^addons/account/models/account_move\\.py:289@18\\.0\\-20260909(?:\\+image:sha256:[0-9a-f]{64})?$)"
+          }
+        }
+      ],
+      "truth": {
+        "release": "18.0-20260909",
+        "sources": [
+          {
+            "file": "addons/account/models/account_move.py",
+            "start_line": 285,
+            "end_line": 289,
+            "symbol": "AccountMove.auto_post_until/help",
+            "clauses": [
+              "This recurring move will be posted up to and including this date."
+            ],
+            "sha256": "6a5511491eb24b5a82d9881cfc9e2bdc263ae93fabfedee462c9e1821000407f"
+          }
+        ],
+        "positive": "What does the “Auto-post until” date include? This recurring move will be posted up to and including this date.",
+        "wrong": "这条规则总是允许。"
+      }
+    }
+  ]
+}
