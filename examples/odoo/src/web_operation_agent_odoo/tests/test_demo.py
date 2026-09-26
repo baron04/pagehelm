@@ -198,3 +198,21 @@ class QualificationOnlyDemoSeamsFailClosed(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheEvaluationClockNeverRunsAheadOfTheCredentials(unittest.TestCase):
+    def test_noon_of_a_past_reference_day_and_the_present_on_the_day_itself(self):
+        from datetime import datetime
+        from web_operation_agent_odoo.demo.demo import evaluation_clock
+        morning = datetime.fromisoformat("2026-09-26T09:40:00+08:00")
+        # A past reference day: its noon, whatever the time now.
+        self.assertEqual(evaluation_clock("2026-09-24", morning).isoformat(),
+                         "2026-09-24T12:00:00+08:00")
+        # The reference day is today and noon is still ahead: the present moment, so
+        # the hour-long session is not expired on the page before it is used.
+        self.assertEqual(evaluation_clock("2026-09-26", morning), morning)
+        afternoon = datetime.fromisoformat("2026-09-26T15:00:00+08:00")
+        self.assertEqual(evaluation_clock("2026-09-26", afternoon).isoformat(),
+                         "2026-09-26T12:00:00+08:00")
+        with self.assertRaises(ValueError):
+            evaluation_clock("2026-09-27", morning)

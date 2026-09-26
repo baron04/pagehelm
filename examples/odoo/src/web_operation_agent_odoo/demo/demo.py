@@ -27,6 +27,7 @@ import os
 import sys
 import tempfile
 import time
+from datetime import datetime, timedelta, timezone
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -68,6 +69,21 @@ _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY",
 # own browser login and the Runtime's default session remained valid. Production renewal is a
 # deployment concern (P7.3); the bounded demo uses the registry's one-hour session ceiling.
 _PRINCIPAL_LIFETIME_S = 60 * 60
+_EVALUATION_ZONE = timezone(timedelta(hours=8))
+
+
+def evaluation_clock(reference_date: str, now: datetime | None = None) -> datetime:
+    """The instant an evaluation page's clock is frozen at: noon of the reference day,
+    or the present moment when that noon is still ahead. The embedded runtime checks
+    the server's session and principal expiries against the page clock, and both last
+    an hour; a clock frozen hours ahead of the real time finds them already expired and
+    stops the runtime. The day -- all a relative-time question depends on -- is the
+    reference day either way; a reference day still to come is refused."""
+    now = (now or datetime.now(_EVALUATION_ZONE)).astimezone(_EVALUATION_ZONE)
+    noon = datetime.fromisoformat(f"{reference_date}T12:00:00+08:00")
+    if noon.date() > now.date():
+        raise ValueError("an evaluation reference date cannot be in the future")
+    return min(noon, now)
 #: The walkthrough the scripted mode performs: read the typed API, then open exactly the
 #: route that result authorised. Nothing here is Odoo trivia -- it is the product's contract.
 _SCRIPTED_TASK = "Open the customer record for Acme Corporation."
@@ -577,7 +593,7 @@ def _run_browser(config: OdooDemoConfig, live: LiveProductSession,
                     if not config.evaluation:
                         raise ValueError("evaluation_reference_date requires evaluation mode")
                     page.clock.set_fixed_time(
-                        f"{config.evaluation_reference_date}T12:00:00+08:00")
+                        evaluation_clock(config.evaluation_reference_date))
                 def count_document_load(*_event: object) -> None:
                     nonlocal document_loads
                     document_loads += 1
