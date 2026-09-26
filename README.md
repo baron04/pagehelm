@@ -90,7 +90,14 @@ agent.
   rather than guessed. Nothing is searched across the whole database by a guessed name.
   The neighbourhood shows every field a chosen entity's list and form show (fields a form
   always hides are left out); the full index still shows twenty per entity. `values=False`
-  (`--no-values` on the goal runner) measures what the candidates change. On the development set of 94 Chinese requests the staged path
+  (`--no-values` on the goal runner) measures what the candidates change.
+  Before resolving, a staged declaration is checked by shape for what it leaves out: values
+  the first step said were asked for while only a page or handoff is declared, or a code,
+  amount or day the request wrote that appears nowhere in the declaration or the values it
+  chose; such gaps go back to the model once. When several records fit and nothing tells
+  them apart, the turn ends needing input: it asks which one, listing each with what
+  distinguishes it, and a reply naming one by number or name continues the earlier
+  request with that record. On the development set of 94 Chinese requests the staged path
   answered 89 and the single declaration 87 (one full pass each). A zero-model replay of recorded runs
   (`evals/odoo/goals/reference_recall.py`) reports how many declared records the reference
   cut recovers. With a compiled source map attached to the Odoo port (the demo attaches

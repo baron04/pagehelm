@@ -86,6 +86,11 @@ class ConversationState:
             self._pending_clarification = None
             return dropped
 
+    def last_user_text(self) -> str:
+        """The person's words in the latest retained turn (redacted as stored)."""
+        with self._lock:
+            return str(self._turns[-1]["user"]) if self._turns else ""
+
     @property
     def pending_clarification(self) -> dict | None:
         with self._lock:

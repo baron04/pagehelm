@@ -48,6 +48,14 @@ def days(text: str, today: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(out))[:4]
 
 
+def without_days(text: str) -> str:
+    """The text with the days `days` reads taken out, so their numbers are not taken
+    for amounts or codes."""
+    for pattern in (_ISO, _MONTH_DAY, _SLASH, _NAMED):
+        text = pattern.sub(" ", text or "")
+    return text
+
+
 def ground(port, *, entities: tuple[str, ...], known, dates: tuple[str, ...] = (),
            context=None) -> tuple[Candidate, ...]:
     """The candidate values for this request from a port that offers them, numbered."""
@@ -111,4 +119,4 @@ def bind(spec: GoalSpec, candidates: tuple[Candidate, ...]) -> tuple[GoalSpec, i
     return replace(spec, deliverables=tuple(out)), bound, tuple(dict.fromkeys(unknown))
 
 
-__all__ = ["bind", "days", "ground", "render"]
+__all__ = ["bind", "days", "ground", "render", "without_days"]

@@ -37,8 +37,8 @@ from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
 from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
-from .ground import bind, days, ground, render as render_values
-from .narrow import correct_records, locate, neighbourhood, summaries
+from .ground import bind, days, ground, render as render_values, without_days
+from .narrow import correct_records, locate, neighbourhood, references, summaries
 from .understand import understand, understand_scope
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -108,6 +108,10 @@ class _TurnState:
     #: How this turn reads the request: understand() with the turn's scope and values,
     #: value ids bound; the deciding reading and the repair go through it too.
     read: object = None
+    #: The candidate values this turn offered, for the question a clarification asks.
+    candidates: tuple = ()
+    #: The clarification this turn ends with, when it asks the person to choose.
+    clarification: dict | None = None
     #: The whole index, which the neighbourhood was cut from; rules are answered from
     #: it, so that a rule the catalogue left out still comes with the ones it names.
     full_index: object = None
@@ -246,6 +250,10 @@ class GoalTurnExecutor:
             operation_hold_s=self.config.operation_approval_ttl_s)
         writes = WriteWatch(control=self.control, ledger=ledger, run_id=run_id,
                             write_guard_declared=bool(self.application.descriptor.page_write_guard))
+        continued = self._continued(turn_message)
+        if continued is not None:
+            ledger.append("goal_clarification_answered", message_id=turn_message.message_id)
+            turn_message = replace(turn_message, text=continued)
         state = _TurnState(message=turn_message, run_id=run_id, ledger=ledger,
                            browser=browser, writes=writes, approvals=approvals,
                            obs=current.observation, started_at=started_at,
@@ -350,6 +358,7 @@ class GoalTurnExecutor:
                                 detail=f"{type(exc).__name__}: {exc}"[:200])
             s.ledger.append("goal_values", step=s.step, count=len(candidates),
                             kinds=sorted({c.kind for c in candidates}))
+            s.candidates = candidates
         unbound = functools.partial(
             understand, chat, prompt=s.message.text, index=index, run_id=s.run_id,
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
@@ -412,6 +421,26 @@ class GoalTurnExecutor:
         if corrections:
             s.ledger.append("goal_records_corrected", step=s.step,
                             corrections=[{"declared": a, "located": b} for a, b in corrections])
+        if self.staged and spec.deliverables:
+            # A declaration can be well formed and still leave out what the request
+            # asked: values asked for but only a page declared, a number, code or day the
+            # request wrote that the declaration never uses. The resolver would answer it
+            # anyway, so the gaps go back to the model once, before resolving.
+            gaps = _coverage_gaps(spec, scope_parts, s.message.text, today_text, s.candidates)
+            if gaps:
+                s.ledger.append("goal_coverage_gaps", step=s.step, gaps=list(gaps))
+                s.step += 1
+                try:
+                    again, projection = s.read(previous=spec, problems=gaps)
+                    s.ledger.append("goal_declared", step=s.step, spec=again.to_json(),
+                                    attempt="coverage", **projection)
+                    remaining = _coverage_gaps(again, scope_parts, s.message.text, today_text,
+                                               s.candidates) if again.deliverables else gaps
+                    if again.deliverables and len(remaining) < len(gaps):
+                        spec = again
+                except (ValueError, ProviderError) as exc:
+                    s.ledger.append("goal_coverage_repair_failed", step=s.step,
+                                    detail=str(exc)[:200])
         s.write_intent = spec.write_intent or any(
             d.kind == "handoff" for d in spec.deliverables)
         if not spec.deliverables:
@@ -482,6 +511,18 @@ class GoalTurnExecutor:
             achieved = all(_achieved(r, o) for r, o in
                            zip(resolution.deliverables, outcomes, strict=True))
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
+            unsure = next((r for r in resolution.deliverables
+                           if len(r.candidates) >= 2 and not (r.facts or r.aggregate or r.page)),
+                          None)
+            if not achieved and unsure is not None:
+                # Several records fit and nothing here tells them apart: the person
+                # is asked which one, with what distinguishes them, instead of being
+                # told the request cannot be done.
+                s.terminal_reason = "needs_clarification"
+                s.clarification = _clarification(s, unsure.candidates)
+                s.ledger.append("goal_clarification_asked", step=s.step,
+                                choices=len(s.clarification["choices"]))
+                return s.clarification["question"]
         # Reaching a read-only page cannot settle a request to mutate the application.
         # A declared handoff has its own explicit "you must act" reply; a page/fact-only
         # declaration for a write must also state that the requested change did not happen.
@@ -861,6 +902,25 @@ class GoalTurnExecutor:
                         kind=plan.fill_kind, verified=verified, shown=bool(value))
         return shown, verified
 
+    def _continued(self, message: AgentTurnMessage) -> str | None:
+        """The request a reply to this conversation's pending question continues: the
+        earlier request with the record the person chose. None when the message does not
+        answer a pending choice, which then stands on its own."""
+        pending = self.conversation_state.pending_clarification
+        asked = self.conversation_state.last_user_text()
+        if not pending or not asked or pending.get("response_kind") != "single_choice":
+            return None
+        reply = " ".join(message.text.split()).casefold()
+        chosen = next((c for c in pending["choices"]
+                       if reply.strip("。.!！ ") == c["choice_id"].casefold()), None)
+        if chosen is None:
+            chosen = next((c for c in pending["choices"]
+                           if c["record_ref"].casefold() in reply), None)
+        if chosen is None:
+            return None
+        return (f"{asked}（指的是 {chosen['record_ref']}）" if _CJK.search(asked)
+                else f"{asked} (meaning {chosen['record_ref']})")
+
     def _rules_answer(self, s: _TurnState, d) -> Resolved:
         """The rules a deliverable names, as facts with their citations. A rule id the
         index does not have is a problem the model can repair, since the ids it may
@@ -1007,7 +1067,7 @@ class GoalTurnExecutor:
         self.conversation_state.record(
             message_id=s.message.message_id, user_text=s.message.text,
             assistant_text=user_answer, status=status.value, business_result=None,
-            clarification=None)
+            clarification=s.clarification if status == AgentTurnStatus.NEEDS_INPUT else None)
         s.ledger.append("conversation_state_updated",
                         retained_turns=self.conversation_state.turn_count,
                         context_digest=self.conversation_state.content_digest)
@@ -1024,11 +1084,78 @@ class GoalTurnExecutor:
         return execution
 
 
+def _numbers(text: str) -> set[str]:
+    """Numbers as written, without separators or trailing zero decimals."""
+    out = set()
+    for raw in re.findall(r"\d[\d,]*(?:\.\d+)?", text or ""):
+        value = raw.replace(",", "")
+        if "." in value:
+            value = value.rstrip("0").rstrip(".")
+        out.add(value)
+    return out
+
+
+def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
+                   candidates: tuple = ()) -> tuple[str, ...]:
+    """What the request asked that the declaration leaves out, judged by shape only:
+    values asked for (the first step said so) with only pages or handoffs declared; a
+    code, amount or day the request wrote that appears nowhere in the declaration nor in
+    the candidate values it chose."""
+    gaps = []
+    reads = ("fact", "list", "aggregate")
+    asked = [p for p in parts if p.get("kind") in reads]
+    if asked and not any(d.kind in reads for d in spec.deliverables):
+        gaps.append("the request asks for values (" + "; ".join(
+            f"{p['kind']} on {p['entity']}" for p in asked) + ") but the declaration only "
+            "opens a page or hands over; declare the values asked for")
+    declared = json.dumps(spec.to_json(), ensure_ascii=False).casefold()
+    chosen = " ".join(f"{c.display} {c.detail}" for c in candidates
+                      if c.display.casefold() in declared).casefold()
+    covered = declared + " " + chosen
+    numbers = _numbers(covered)
+    for ref in references(without_days(text)):
+        if not re.search(r"\d", ref) or ref.casefold() in covered:
+            continue
+        if _numbers(ref) and _numbers(ref) <= numbers:
+            continue
+        gaps.append(f"the request says {ref!r} but the declaration does not use it; put it "
+                    "where it belongs (a record, a condition's value, a search)")
+    for day in days(text, today):
+        if day not in covered and day[5:] not in covered:
+            gaps.append(f"the request names the day {day} but the declaration has no "
+                        "condition on it")
+    return tuple(gaps[:4])
+
+
+def _clarification(s: _TurnState, names: tuple[str, ...]) -> dict:
+    """The question asking which of several records the person means, each with what
+    tells it apart (from the values this turn looked up), and the choices a reply may
+    name by number or by name."""
+    details = {c.display: c.detail for c in s.candidates}
+    choices = []
+    for number, name in enumerate(dict.fromkeys(names), start=1):
+        if number > 6:
+            break
+        detail = details.get(name, "")
+        label = f"{name}（{detail}）" if detail and s.chinese else (
+            f"{name} ({detail})" if detail else name)
+        choices.append({"choice_id": str(number), "label": label[:200], "record_ref": name[:500]})
+    lines = [f"{c['choice_id']}. {c['label']}" for c in choices]
+    question = (("你指的是哪一个？\n" + "\n".join(lines) + "\n回复编号或名称即可。") if s.chinese
+                else ("Which one do you mean?\n" + "\n".join(lines)
+                      + "\nReply with the number or the name."))
+    return {"schema_version": 1, "clarification_id": f"{s.run_id}-choice"[:100],
+            "task_id": s.run_id[:100], "question": question[:500],
+            "response_kind": "single_choice", "choices": choices}
+
+
 def _status_for(terminal_reason: str) -> AgentTurnStatus:
     if terminal_reason == "agent_finished":
         return AgentTurnStatus.FINISHED
     if terminal_reason == "agent_refused":
         return AgentTurnStatus.REFUSED
+    if terminal_reason == "needs_clarification":
+        return AgentTurnStatus.NEEDS_INPUT
     if terminal_reason in {"user_cancelled", "operation_not_confirmed", "approval_expired"}:
         return AgentTurnStatus.CANCELLED
     return AgentTurnStatus.FAILED

@@ -13,7 +13,7 @@ from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.descriptor import (APPLICATION_ADAPTER_VERSION,
                                                         ApplicationDescriptor)
-from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStatus
+from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnMessage, AgentTurnStatus
 from web_operation_agent.goal import executor as executor_module
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField, IndexPage,
@@ -474,6 +474,65 @@ class GoalTurnTests(unittest.TestCase):
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
         self.assertEqual(next(e for e in events if e["event"] == "goal_values")["count"], 1)
         self.assertTrue(any(e.get("values_bound") == 1 for e in events if e["event"] == "goal_declared"))
+
+    def test_a_declaration_that_leaves_out_what_was_asked_is_sent_back_once(self):
+        from web_operation_agent.goal.executor import _coverage_gaps
+        page_only = GoalSpec.from_json({"deliverables": [
+            {"kind": "page", "entity": "order", "record": "S00006", "section": "Order Lines"}]})
+        gaps = _coverage_gaps(page_only, [{"kind": "list", "entity": "line"}], "S00006 的明细列一下", "2026-09-26")
+        self.assertEqual(len(gaps), 1)
+        self.assertIn("asks for values (list on line)", gaps[0])
+        dropped = GoalSpec.from_json({"deliverables": [
+            {"kind": "fact", "entity": "order", "fields": ["Total"],
+             "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Gemini"]}]}}]})
+        gaps = _coverage_gaps(dropped, [], "Gemini 那笔 1582 美元、8 月 29 日的订单", "2026-09-26")
+        self.assertEqual([g.split(" but ")[0] for g in gaps],
+                         ["the request says '1582'", "the request names the day 2026-08-29"])
+        kept = GoalSpec.from_json({"deliverables": [
+            {"kind": "fact", "entity": "order", "fields": ["Total"],
+             "metric": {"op": "count", "filters": [{"field": "Total", "values": ["1,582.00"]},
+                                                    {"field": "Order Date", "values": ["2026-08-29"]}]}}]})
+        self.assertEqual(_coverage_gaps(kept, [], "Gemini 那笔 1582 美元、8 月 29 日的订单", "2026-09-26"), ())
+        # Through a turn: the page-only reading is sent back and the list replaces it.
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
+                   _declaration(kind="page", entity="order", record="S00006", section="Order Lines"),
+                   _declaration(kind="page", entity="order", record="S00006", section="Order Lines"),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]
+        execution, _channel, chat, port, events = self._run(
+            scripts, [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？", staged=True)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertTrue(any(e["event"] == "goal_coverage_gaps" for e in events))
+        self.assertEqual(port.specs[0].deliverables[0].kind, "fact")
+
+    def test_several_matching_records_are_asked_about_and_the_reply_continues(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "Ready Mat"}]}),
+                   _declaration(kind="fact", entity="order", fields=["Total"],
+                                metric={"op": "count", "filters": [{"field": "Customer", "values": ["Ready Mat"]}]})]
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        chat = _AgreeingChat(scripts)
+        port = _Port([Resolved(kind="fact", problem="several records match",
+                               candidates=("S00002", "S00003"))])
+        from web_operation_agent.state.conversation import ConversationState
+        state = ConversationState()
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=chat, application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True,
+            conversation_state=state)
+        first = executor.execute({"message_id": "m1", "text": "Ready Mat 那份报价的总额？",
+                                  "page_url": "http://127.0.0.1:8080/home"})
+        self.assertEqual(first.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("你指的是哪一个？", first.user_answer)
+        self.assertIn("1. S00002", first.user_answer)
+        self.assertIn("2. S00003", first.user_answer)
+        self.assertEqual([c["record_ref"] for c in state.pending_clarification["choices"]],
+                         ["S00002", "S00003"])
+        self.assertEqual(executor._continued(AgentTurnMessage(message_id="m2", text="2",
+                                                              page_url="http://127.0.0.1:8080/home")),
+                         "Ready Mat 那份报价的总额？（指的是 S00003）")
+        self.assertIsNone(executor._continued(AgentTurnMessage(message_id="m2", text="换个问题：S00001 呢",
+                                                               page_url="http://127.0.0.1:8080/home")))
 
     def test_a_data_question_is_declared_without_the_rules_catalogue(self):
         scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),

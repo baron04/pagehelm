@@ -155,11 +155,18 @@ def main() -> int:
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--qualification", type=Path)
     arguments = parser.parse_args()
+    # The deployment's settings come from the checkout's .env; --model-env names the
+    # model provider's file (a diagnostic may point it at another model), which the
+    # demo reads for the provider alone.
     env = {}
-    for line in arguments.model_env.read_text().splitlines():
-        if "=" in line and not line.lstrip().startswith("#"):
-            key, value = line.split("=", 1)
-            env[key.strip()] = value.strip()
+    for path in dict.fromkeys((ROOT / ".env", arguments.model_env)):
+        if not path.is_file():
+            continue
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, value = line.split("=", 1)
+                if key.strip().startswith("WOA_") and (path == ROOT / ".env" or key.strip() not in env):
+                    env[key.strip()] = value.strip()
     if arguments.base_url:
         env["WOA_ODOO_BASE_URL"] = arguments.base_url
     if arguments.page_controller_module:
