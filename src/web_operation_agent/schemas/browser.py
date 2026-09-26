@@ -16,7 +16,7 @@ from .common import (SCHEMA_VERSIONS, _bool, _dict_copy, _non_negative_int,
 #: no task-specific or application-specific action ever appears here.
 BROWSER_ACTIONS = frozenset({
     "observe", "goto", "click", "fill", "select", "submit", "back", "scroll", "wait_for",
-    "apply_facet", "highlight", "handoff_form",
+    "apply_facet", "highlight", "handoff_form", "reveal",
 })
 
 # Only these actions are intrinsically unable to initiate a business-data write. The
@@ -27,8 +27,10 @@ BROWSER_ACTIONS = frozenset({
 INTRINSICALLY_READ_ONLY_ACTIONS = frozenset({
     "observe", "scroll", "wait_for", "highlight", "handoff_form",
 })
-# A server-issued form handoff is not a tool the model may choose or parameterize.
-INTERNAL_BROWSER_ACTIONS = frozenset({"handoff_form"})
+# A server-issued form handoff is not a tool the model may choose or parameterize. Nor is
+# opening a menu a control declares collapsed (`reveal`): the server does it, a bounded
+# number of times, to find a control it is about to hand to the person.
+INTERNAL_BROWSER_ACTIONS = frozenset({"handoff_form", "reveal"})
 
 _BROWSER_CONTRACT = json.loads(
     files("web_operation_agent").joinpath(

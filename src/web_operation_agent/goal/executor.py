@@ -8,6 +8,7 @@ question and the rest of the turn is server code the audit can replay.
 """
 from __future__ import annotations
 
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import functools
@@ -47,8 +48,13 @@ _CJK = re.compile(r"[㐀-鿿]")
 _READY_WAITS = 12
 #: Attribute values a runtime uses to mark the current tab of a set.
 _SELECTED_ATTRS = ("aria-selected", "selected", "aria-pressed", "aria-checked")
-#: Element roles a handoff never highlights: navigation, not the control asked for.
-_NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist", "navigation"})
+#: Element roles a handoff never highlights: navigation, not the control asked for. A link
+#: leads somewhere else; a tag's "Delete" link is not the record's Delete. An item of a menu
+#: the turn itself opened is the one exception (see `_reveal_control`).
+_NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist", "navigation",
+                                 "link"})
+#: At most this many collapsed menus are opened looking for a control to hand over.
+_MAX_REVEALS = 3
 #: Rules about the same control or field, and rules of the same operation, answered
 #: along with the one named.
 _SAME_ABOUT_RULES = 10
@@ -72,12 +78,36 @@ def _path_of(url: str) -> str:
     return urlsplit(url).path or "/"
 
 
+def _appeared(before: Counter, elements) -> list:
+    """The elements a menu added: for each role and name, the occurrences beyond what the
+    page showed before, taken last in page order, since a menu's items render after the
+    control that opened it (a navigation item of the same name stays out)."""
+    now = Counter((e.role, _norm(e.name)) for e in elements)
+    extra = {key: count - before.get(key, 0) for key, count in now.items()
+             if count > before.get(key, 0)}
+    shown = []
+    for e in reversed(list(elements)):
+        key = (e.role, _norm(e.name))
+        if extra.get(key, 0) > 0:
+            extra[key] -= 1
+            shown.append(e)
+    return list(reversed(shown))
+
+
+def _first_line(name: str) -> str:
+    """A control's name as the reply quotes it: a label's first line; a help marker on a
+    later line is not part of it."""
+    return ((name or "").strip().splitlines() or [""])[0].strip()
+
+
 @dataclass
 class _PageOutcome:
     reached: bool = True
     unmet: list[str] = field(default_factory=list)
     url: str = ""
     highlighted: str = ""
+    #: The menu the highlighted control is in, when the turn opened it to find it.
+    menu: str = ""
     #: The value put into the highlighted field, as the page labels it; whether the
     #: page showed it afterwards; and a value that was meant but could not be entered.
     filled: str = ""
@@ -759,9 +789,9 @@ class GoalTurnExecutor:
             if not out.filled:
                 out.fill_failed = plan.fill_label or plan.fill
         if plan.highlight:
-            control = self._highlight(s, plan.highlight)
+            control, menu = self._highlight(s, plan.highlight)
             if control:
-                out.highlighted = control
+                out.highlighted, out.menu = control, menu
             else:
                 out.unmet.append(f"control {plan.highlight}")
         if plan.view and not self._view_shown(s.obs, plan.view):
@@ -978,20 +1008,26 @@ class GoalTurnExecutor:
                 return inputs[0]
         return self._find_control(s, plan.highlight, input=True)
 
-    def _find_control(self, s: _TurnState, control: str, *, input: bool = False):
+    def _find_control(self, s: _TurnState, control: str, *, input: bool = False,
+                      among=None, in_menu: bool = False, exact: bool = False):
         """The page element a control name means: for a highlight, any non-navigation
         element (a field's label marks the field well); for a value to enter, only the
-        input itself, since a label is not something that can be typed into."""
+        input itself, since a label is not something that can be typed into. `among`
+        narrows the search to some elements; `in_menu` admits the items of a menu the
+        turn opened; `exact` accepts only an exact name."""
         # The declaration may carry the index's type annotation ("Due Date(date)").
         wanted = _norm(re.sub(r"\((?:date|money|number|html|bool|text)\)$", "", control.strip()))
-        candidates = [e for e in s.obs.elements
-                      if (e.role in _INPUT_ROLES if input else e.role not in _NO_HIGHLIGHT_ROLES)]
+        excluded = _NO_HIGHLIGHT_ROLES - {"menuitem"} if in_menu else _NO_HIGHLIGHT_ROLES
+        candidates = [e for e in (s.obs.elements if among is None else among)
+                      if (e.role in _INPUT_ROLES if input else e.role not in excluded)]
         # A button by its exact name first, then any control (a field's input is named by
         # its label) by exact name, then by prefix.
         element = next((e for e in candidates if e.role == "button" and _norm(e.name) == wanted),
                        None)
         if element is None:
             element = next((e for e in candidates if _norm(e.name) == wanted), None)
+        if element is None and exact:
+            return None
         if element is None:
             element = next((e for e in candidates
                             if wanted and _norm(e.name).startswith(wanted)), None)
@@ -1003,17 +1039,55 @@ class GoalTurnExecutor:
                             if e.name and _tokens(e.name) and _tokens(e.name) <= asked), None)
         return element
 
-    def _highlight(self, s: _TurnState, control: str) -> str:
-        element = self._find_control(s, control)
+    def _highlight(self, s: _TurnState, control: str) -> tuple[str, str]:
+        """Mark the control for the person; returns (its name, the menu it is in).
+
+        A control of that exact name on the page comes first; then the collapsed menus;
+        only then a looser match (a prefix, or fewer words)."""
+        element, menu = self._find_control(s, control, exact=True), ""
         if element is None:
-            return ""
+            element, menu = self._reveal_control(s, control)
+        if element is None:
+            element = self._find_control(s, control)
+        if element is None:
+            return "", ""
         receipt = self._dispatch(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})
         if receipt is None or not receipt.ok:
-            return ""
+            return "", ""
         s.ledger.append("page_handoff_ready", step=s.step, command_id=receipt.command_id,
                         observation_epoch=s.obs.epoch, submitted=False, persisted=False)
         # A label's first line is its name; a help marker on a later line is not.
-        return (element.name.strip().splitlines() or [""])[0].strip()
+        return _first_line(element.name), menu
+
+    def _reveal_control(self, s: _TurnState, control: str):
+        """A control that sits in a collapsed menu ("Delete" under a record's actions):
+        open the menus the page marks as openable, in page order and at most
+        `_MAX_REVEALS`, and look for it among what each one shows. Nothing in a menu is
+        chosen; the Runtime opens only a control that declares itself collapsed. Returns
+        (element, menu name) or (None, "")."""
+        opened: set[str] = set()
+        for _ in range(_MAX_REVEALS):
+            toggle = next((e for e in s.obs.elements if e.attrs.get("revealable") == "true"
+                           and _norm(e.name) not in opened), None)
+            if toggle is None or s.terminal_reason:
+                break
+            opened.add(_norm(toggle.name))
+            before = Counter((e.role, _norm(e.name)) for e in s.obs.elements)
+            path = _path_of(s.obs.url)
+            receipt = self._dispatch(s, "reveal", {"ref": toggle.ref, "epoch": s.obs.epoch})
+            if receipt is None or not receipt.ok or _path_of(s.obs.url) != path:
+                break
+            shown = _appeared(before, s.obs.elements)
+            if not shown:
+                # The menu renders after the click: look once more before moving on.
+                self._dispatch(s, "wait_for", {"ms": 300})
+                shown = _appeared(before, s.obs.elements)
+            s.ledger.append("goal_menu_revealed", step=s.step, menu=_first_line(toggle.name),
+                            shown=len(shown))
+            element = self._find_control(s, control, among=shown, in_menu=True)
+            if element is not None:
+                return element, _first_line(toggle.name)
+        return None, ""
 
     @staticmethod
     def _view_shown(obs: PageObservation, view: str) -> bool:
@@ -1298,6 +1372,17 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
                              (f"Opened {plan.label} and highlighted “{outcome.highlighted}”, "
                               f"but could not enter “{outcome.fill_failed}”; please enter and "
                               "save it yourself. The assistant prepares, you submit."))
+            elif outcome.highlighted and outcome.menu:
+                # The control is an item of a menu the turn opened; the page may close the
+                # menu when the person clicks elsewhere, so the reply says where it is.
+                lines.append((f"已打开 {plan.label}，展开「{outcome.menu}」菜单并标出"
+                              f"「{outcome.highlighted}」，请你核对后自行点击；菜单若已收起，"
+                              f"点「{outcome.menu}」即可再找到它。助手只做准备，操作由你完成。")
+                             if zh else
+                             (f"Opened {plan.label}, opened the “{outcome.menu}” menu and "
+                              f"highlighted “{outcome.highlighted}”; please check it and press "
+                              f"it yourself. If the menu has closed, it is under "
+                              f"“{outcome.menu}”. The assistant prepares, you act."))
             elif outcome.highlighted:
                 # A handoff is a completed preparation, not a refusal: the reply says what
                 # is ready and who acts next, without the words a refusal uses.

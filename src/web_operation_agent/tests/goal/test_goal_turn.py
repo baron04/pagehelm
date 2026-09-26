@@ -651,6 +651,77 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("highlight", [a for a, _ in browser.actions])
         self.assertIn("page_handoff_ready", [e["event"] for e in events])
 
+    class _MenuBrowser(_Browser):
+        """A record page with two collapsed menus, and a navigation item that happens to
+        be called what the handoff asks for."""
+        MENUS = (("Filters", ("Last week",)), ("Actions", ("Archive", "Delete")))
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.opened: set[int] = set()
+
+        def _observation(self):
+            obs = super()._observation()
+            # A navigation item and a tag's remove link that share the name.
+            extra = [ElementRef(ref="n0", role="menuitem", name="Delete", tag="a",
+                                epoch=self.epoch),
+                     ElementRef(ref="k0", role="link", name="Delete", tag="a",
+                                epoch=self.epoch, attrs={"href": "#"})]
+            for i, (name, items) in enumerate(self.MENUS):
+                open_ = i in self.opened
+                extra.append(ElementRef(
+                    ref=f"m{i}", role="button", name=name, tag="button", epoch=self.epoch,
+                    attrs={"aria-expanded": "true"} if open_ else {"revealable": "true"}))
+                if open_:
+                    extra += [ElementRef(ref=f"i{i}_{j}", role="menuitem", name=item,
+                                         tag="span", epoch=self.epoch)
+                              for j, item in enumerate(items)]
+            return replace(obs, elements=list(obs.elements) + extra)
+
+        def execute(self, action, args=None, expect_navigation=False):
+            if action == "reveal":
+                self.opened.add(int(args["ref"][1:]))
+            return super().execute(action, args, expect_navigation)
+
+    def test_a_control_in_a_collapsed_menu_is_found_by_opening_it(self):
+        with patch.object(executor_module, "RemoteBrowserClient", self._MenuBrowser):
+            execution, _channel, _chat, _port, events = self._run(
+                [_declaration(kind="handoff", entity="order", record="S00005",
+                              action="Delete")],
+                [Resolved(kind="handoff", page=PagePlan(url="/orders/5", label="S00005",
+                                                        expected_path="/orders/5",
+                                                        highlight="Delete"))],
+                text="删除 S00005")
+        browser = self._MenuBrowser.instances[-1]
+        acted = [(a, args.get("ref")) for a, args in browser.actions
+                 if a in ("reveal", "highlight", "click")]
+        # The navigation item is never marked; the menus open in page order; the item that
+        # appeared is marked and nothing is pressed.
+        self.assertEqual(acted, [("reveal", "m0"), ("reveal", "m1"), ("highlight", "i1_1")])
+        self.assertIn("展开「Actions」菜单并标出「Delete」", execution.user_answer)
+        self.assertIn("请你核对后自行点击", execution.user_answer)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertEqual([e["menu"] for e in events if e["event"] == "goal_menu_revealed"],
+                         ["Filters", "Actions"])
+
+    def test_a_control_in_no_menu_is_reported_missing_after_a_bounded_search(self):
+        class _ManyMenus(self._MenuBrowser):
+            MENUS = tuple((f"Menu {i}", ("Nothing",)) for i in range(5))
+
+        with patch.object(executor_module, "RemoteBrowserClient", _ManyMenus):
+            execution, *_ = self._run(
+                [_declaration(kind="handoff", entity="order", record="S00005",
+                              action="Delete")],
+                [Resolved(kind="handoff", page=PagePlan(url="/orders/5", label="S00005",
+                                                        expected_path="/orders/5",
+                                                        highlight="Delete"))],
+                text="删除 S00005")
+        browser = _ManyMenus.instances[-1]
+        self.assertEqual([a for a, _ in browser.actions].count("reveal"),
+                         executor_module._MAX_REVEALS)
+        self.assertNotIn("highlight", [a for a, _ in browser.actions])
+        self.assertIn("没有找到「Delete」", execution.user_answer)
+
     def test_write_intent_cannot_be_settled_by_opening_a_page(self):
         execution, _channel, _chat, _port, events = self._run(
             [("declare_goal", {"deliverables": [{"kind": "page", "page": {"key": "p1"}}],

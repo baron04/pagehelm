@@ -295,6 +295,47 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
   return elements
 }
 
+/**
+ * Whether a control is a collapsed menu the Runtime may open: a button (or an element in
+ * the button role) that declares it is collapsed -- `aria-expanded="false"`, or a popup it
+ * has not opened -- and is not a form input, a submit button, a link, or part of the
+ * page's navigation. Opening it only shows what the application already offers; nothing is
+ * chosen in it. One rule, for the observation that offers the control and for the command
+ * that opens it, in every application.
+ */
+export function revealable(element: ElementLike | null | undefined): boolean {
+  if (!element || element.isConnected === false || element.disabled) return false
+  const tag = String(element.tagName || '').toLowerCase()
+  const role = String(explicitAttribute(element, 'role') ?? '').toLowerCase()
+  if (!(tag === 'button' || role === 'button')) return false
+  // A button submits its form unless it declares otherwise; one outside any form (the DOM
+  // still reports its default type as "submit") submits nothing.
+  const declared = explicitAttribute(element, 'type')?.toLowerCase() ?? null
+  if (declared === 'submit' || (tag === 'button' && declared === null && element.form)) return false
+  const expanded = explicitAttribute(element, 'aria-expanded')
+  const popup = explicitAttribute(element, 'aria-haspopup')
+  const collapsed = expanded === 'false'
+    || (expanded === null && popup !== null && popup !== 'false')
+  if (!collapsed) return false
+  const inside = typeof element.closest === 'function'
+    ? element.closest('nav, [role="navigation"], [role="menubar"]') : null
+  return !inside
+}
+
+/** Mark each observed control the Runtime may open as a menu (`revealable="true"`). */
+export function hydrateRevealFacts(elements: ElementRef[], selectorMap: unknown,
+                                   getByIndex: ElementLookup): ElementRef[] {
+  for (const item of elements) {
+    if (item.role !== 'button') continue
+    try {
+      if (revealable(getByIndex(selectorMap, refIndex(item.ref)))) item.attrs.revealable = 'true'
+    } catch {
+      // A stale index offers nothing to open.
+    }
+  }
+  return elements
+}
+
 /** A bounded live button method identifier for an adapter's exact click review. */
 export function hydrateButtonFacts(elements: ElementRef[], selectorMap: unknown,
                                    getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {

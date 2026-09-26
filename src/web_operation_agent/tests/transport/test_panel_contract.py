@@ -162,6 +162,11 @@ class PanelContractTests(unittest.TestCase):
         self.assertEqual(describe_action({"action": "submit", "args": {"ref": "e15"}}),
                          "提交页面表单")
         self.assertEqual(describe_action({"action": "observe"}), "重新检查当前页面")
+        self.assertEqual(describe_action({"action": "reveal", "args": {"ref": "e13"}},
+                                         {"name": "Actions", "role": "button"}),
+                         "展开“Actions”菜单")
+        self.assertEqual(describe_action({"action": "reveal", "args": {"ref": "e13"}}),
+                         "展开页面上的菜单")
         self.assertNotIn("secret", describe_action(
             {"action": "fill", "args": {"ref": "e1", "value": "secret"}}))
 

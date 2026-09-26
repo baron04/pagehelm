@@ -9,8 +9,8 @@
  */
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateButtonFacts, hydrateFormFacts,
-  hydrateLinkFacts, hydrateSelectionFacts, explicitAttribute, refIndex, type ElementLike,
-  type ElementLookup,
+  hydrateLinkFacts, hydrateRevealFacts, hydrateSelectionFacts, explicitAttribute, refIndex,
+  revealable, type ElementLike, type ElementLookup,
 } from './pageModel'
 import {canonicalUrl} from './navigation'
 import {selectedControlsFromPage} from './pageSelection'
@@ -117,6 +117,13 @@ export class Page {
   }
 
   click(ref: unknown): Promise<unknown> { return this.controller.clickElement(refIndex(ref)) }
+  /** Open a menu the control declares collapsed; refuse anything else (see `revealable`). */
+  reveal(ref: unknown): Promise<unknown> {
+    if (!revealable(this.element(ref))) {
+      throw new Error('bad_arguments: reveal target is not a collapsed menu control')
+    }
+    return this.controller.clickElement(refIndex(ref))
+  }
   input(ref: unknown, text: string): Promise<unknown> {
     const element = this.element(ref)
     if (!element || element.isConnected === false) {
@@ -255,10 +262,10 @@ export class Page {
     // the Agent cannot distinguish a short page from one that needs another observation.
     const content = `${header}\n${boundedBody.content}\n${footer}`
     const map = this.controller.selectorMap
-    const elements: ElementRef[] = hydrateSelectionFacts(hydrateButtonFacts(hydrateFormFacts(
-      hydrateLinkFacts(elementsFrom(content, epoch, this.redactor), map, this.lookup,
-        this.redactor), map, this.lookup, this.redactor), map, this.lookup,
-    this.redactor), map, this.lookup)
+    const elements: ElementRef[] = hydrateRevealFacts(hydrateSelectionFacts(hydrateButtonFacts(
+      hydrateFormFacts(hydrateLinkFacts(elementsFrom(content, epoch, this.redactor), map,
+        this.lookup, this.redactor), map, this.lookup, this.redactor), map, this.lookup,
+    this.redactor), map, this.lookup), map, this.lookup)
     const fingerprints = new Map<string, string>()
     for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
     const facets = this.readPageFacets ? this.boundedFacets() : undefined

@@ -91,7 +91,7 @@ def _clip(value: Any, limit: int) -> str:
 #: dispatch would say everything twice.
 _PAGE_TOOLS = frozenset({
     "goto", "back", "click", "fill", "select", "submit", "scroll", "wait_for", "observe",
-    "apply_facet",
+    "apply_facet", "reveal",
     "prefill_form", "finish", "ask_user"})
 
 
@@ -246,6 +246,8 @@ def describe_action(command: dict | None, target: dict | None = None) -> str:
         return f"在{quoted}中选择" if quoted else "在页面上选择选项"
     if action == "apply_facet":
         return "切换页面筛选或分组"
+    if action == "reveal":
+        return f"展开{quoted}菜单" if quoted else "展开页面上的菜单"
     if action == "submit":
         return f"提交{quoted}" if quoted else "提交页面表单"
     if action == "wait_for":

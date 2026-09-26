@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, explicitAttribute, hydrateButtonFacts, hydrateFormFacts,
-  hydrateLinkFacts, hydrateSelectionFacts, refIndex, type ElementLike,
+  hydrateLinkFacts, hydrateRevealFacts, hydrateSelectionFacts, refIndex, revealable, type ElementLike,
 } from '../src/runtime/pageModel'
 
 const redactor = createRedactor()
@@ -288,5 +288,47 @@ describe('hydrateSelectionFacts says which tab is current when the page says it 
     const lone = tabs('[0]<button data-tooltip=Kanban />')
     hydrateSelectionFacts(lone, {}, () => ({className: 'btn active'}))
     expect(lone[0]?.attrs.selected).toBeUndefined()
+  })
+})
+
+describe('revealable: a collapsed menu control the Runtime may open, in any application', () => {
+  const control = (attrs: Record<string, string>, extra: Partial<ElementLike> = {},
+                   inNavigation = false): ElementLike => ({
+    tagName: 'BUTTON', isConnected: true, form: null, ...extra,
+    hasAttribute: (name: string) => Object.hasOwn(attrs, name),
+    getAttribute: (name: string) => attrs[name] ?? null,
+    closest: () => (inNavigation ? ({} as ElementLike) : null),
+  })
+
+  it('opens a button that declares itself collapsed or declares an unopened popup', () => {
+    expect(revealable(control({'aria-expanded': 'false'}))).toBe(true)
+    expect(revealable(control({'aria-haspopup': 'menu'}))).toBe(true)
+    expect(revealable(control({role: 'button', 'aria-expanded': 'false'},
+      {tagName: 'DIV'}))).toBe(true)
+  })
+
+  it('refuses an open menu, a plain button, inputs, submit buttons and navigation', () => {
+    expect(revealable(control({'aria-expanded': 'true'}))).toBe(false)
+    expect(revealable(control({'aria-expanded': 'true', 'aria-haspopup': 'menu'}))).toBe(false)
+    expect(revealable(control({}))).toBe(false)
+    expect(revealable(control({'aria-haspopup': 'false'}))).toBe(false)
+    expect(revealable(control({'aria-expanded': 'false', role: 'combobox'},
+      {tagName: 'INPUT'}))).toBe(false)
+    expect(revealable(control({'aria-expanded': 'false', type: 'submit'}))).toBe(false)
+    // An untyped button submits the form it is in; outside any form it submits nothing.
+    expect(revealable(control({'aria-expanded': 'false'}, {form: {action: '/save'}}))).toBe(false)
+    expect(revealable(control({'aria-expanded': 'false', type: 'button'},
+      {form: {action: '/save'}}))).toBe(true)
+    expect(revealable(control({'aria-expanded': 'false'}, {disabled: true}))).toBe(false)
+    expect(revealable(control({'aria-expanded': 'false'}, {}, true))).toBe(false)
+    expect(revealable(control({'aria-expanded': 'false'}, {tagName: 'A'}))).toBe(false)
+    expect(revealable(null)).toBe(false)
+  })
+
+  it('marks only the observed buttons it may open', () => {
+    const elements = elementsFrom('[0]<button>Actions />\n[1]<button>Save />', 1, redactor)
+    const live = [control({'aria-expanded': 'false'}), control({})]
+    hydrateRevealFacts(elements, {}, (_map, index) => live[index])
+    expect(elements.map(item => item.attrs.revealable)).toEqual(['true', undefined])
   })
 })

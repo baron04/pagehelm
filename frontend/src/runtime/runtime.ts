@@ -43,7 +43,7 @@ const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
 const CAPABILITIES = [
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
   'page.goto', 'page.back', 'page.scroll', 'page.wait', 'page.apply_facet',
-  'page.highlight', 'page.handoff_form',
+  'page.highlight', 'page.handoff_form', 'page.reveal',
 ]
 
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
@@ -813,7 +813,7 @@ export class EmbeddedWebRuntime {
       }
       return {fresh: true, reason: ''}
     }
-    if (!['click', 'fill', 'select', 'submit', 'highlight'].includes(command?.action)) {
+    if (!['click', 'fill', 'select', 'submit', 'highlight', 'reveal'].includes(command?.action)) {
       return {fresh: true, reason: ''}
     }
     // Old constructed test shells have no map. Every real Runtime replaces this map during

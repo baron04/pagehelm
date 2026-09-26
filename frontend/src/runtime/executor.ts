@@ -121,6 +121,8 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
     }
     case 'apply_facet':
       return access().applyFacet(args.ref, args.active)
+    case 'reveal':
+      return access().reveal(args.ref)
     case 'submit': {
       const element = access().element(args.ref) as ControlElement | null | undefined
       const form = (String(element?.tagName || '').toUpperCase() === 'FORM'
