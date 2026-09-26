@@ -106,9 +106,42 @@ class GroundingTests(unittest.TestCase):
         named = GoalSpec.from_json({"deliverables": [{"kind": "page", "entity": "move", "record": "RINV/2026/00001"}]})
         self.assertEqual(pick(named, "两万的那张", "2026-09-26", found)[1], ())
 
+    def test_one_line_written_as_its_item_is_the_picked_records_line(self):
+        found = (Candidate(kind="record", entity="order", display="S00016",
+                           detail="Order Date 2026-08-22; Total 1582.0", id="v1",
+                           binds=(("Order Reference", "S00016"),)),
+                 Candidate(kind="record", entity="order", display="S00009",
+                           detail="Order Date 2026-08-10; Total 900.0", id="v2",
+                           binds=(("Order Reference", "S00009"),)),
+                 Candidate(kind="line", entity="line", display="[FURN_6667] Acoustic Bloc Screens (White)",
+                           id="v3", binds=(("Order Reference", "S00016"),
+                                           ("Product", "[FURN_6667] Acoustic Bloc Screens (White)"))),
+                 Candidate(kind="line", entity="line", display="[FURN_6667] Acoustic Bloc Screens (White)",
+                           id="v4", binds=(("Order Reference", "S00009"),
+                                           ("Product", "[FURN_6667] Acoustic Bloc Screens (White)"))))
+        spec = GoalSpec.from_json({"deliverables": [
+            {"kind": "fact", "entity": "line", "record": "Acoustic Bloc Screens", "fields": ["Subtotal"],
+             "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Gemini Furniture"]},
+                                                    {"field": "Order Date", "values": ["2026-08-22"]}]}}]})
+        picked, names = pick(spec, "八月二十二日那张 Gemini 订单，隔音屏这一行的小计是多少？", "2026-09-26", found)
+        self.assertEqual(names, ("S00016",))
+        d = picked.deliverables[0]
+        self.assertEqual(d.record, "")
+        self.assertEqual([(f.field, f.values) for f in d.metric.filters],
+                         [("Order Reference", ("S00016",)),
+                          ("Product", ("[FURN_6667] Acoustic Bloc Screens (White)",))])
+        # An item none of the offered lines carries: nothing is picked.
+        other = GoalSpec.from_json({"deliverables": [
+            {"kind": "fact", "entity": "line", "record": "Desk", "fields": ["Subtotal"]}]})
+        self.assertEqual(pick(other, "八月二十二日那张订单", "2026-09-26", found)[1], ())
+
     def test_days_are_read_by_shape_in_the_current_year(self):
         self.assertEqual(days("8 月 29 日的订单", "2026-09-26"), ("2026-08-29",))
-        self.assertEqual(days("八月二十二日那张", "2026-09-26"), ())
+        self.assertEqual(days("八月二十二日那张", "2026-09-26"), ("2026-08-22",))
+        self.assertEqual(days("Azure 八月二日那张退款", "2026-09-26"), ("2026-08-02",))
+        self.assertEqual(days("十二月十日", "2026-09-26"), ("2026-12-10",))
+        self.assertEqual(days("八月初那张", "2026-09-26"), ())
+        self.assertEqual(numbers_in("八月二十二日那张订单"), set())
         self.assertEqual(set(days("orders of Aug 22 and 2025-06-30, also 9/1", "2026-09-26")),
                          {"2025-06-30", "2026-08-22", "2026-09-01"})
         self.assertEqual(days("2026 年 8 月 3 日", "2026-09-26"), ("2026-08-03",))

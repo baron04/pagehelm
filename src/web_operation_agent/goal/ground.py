@@ -26,10 +26,12 @@ _ISO = re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)")
 _MONTH_DAY = re.compile(r"(?:(\d{4})\s*年\s*)?(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]")
 _SLASH = re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})(?![\d/])")
 _NAMED = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b", re.I)
+_CJK_MONTH_DAY = re.compile(r"(?:(\d{4})\s*年\s*)?(?<![一二三四五六七八九十])([一二三四五六七八九十]{1,2})月"
+                            r"([一二三四五六七八九十]{1,3})[日号]")
 
 
 def days(text: str, today: str) -> tuple[str, ...]:
-    """The calendar days a request names by shape (2026-08-29, 8 月 29 日, 8/29, Aug 29),
+    """The calendar days a request names by shape (2026-08-29, 8 月 29 日, 八月二日, 8/29, Aug 29),
     as ISO dates; a day without a year is in `today`'s year."""
     year = (today or "")[:4]
     found: list[tuple[str, str, str]] = []
@@ -41,6 +43,10 @@ def days(text: str, today: str) -> tuple[str, ...]:
         found.append((year, match.group(1), match.group(2)))
     for match in _NAMED.finditer(text or ""):
         found.append((year, str(_MONTHS[match.group(1).lower()[:3]]), match.group(2)))
+    for match in _CJK_MONTH_DAY.finditer(text or ""):
+        month, day = _cjk_small(match.group(2)), _cjk_small(match.group(3))
+        if month and day:
+            found.append((match.group(1) or year, str(month), str(day)))
     out = []
     for y, m, d in found:
         if y and 1 <= int(m) <= 12 and 1 <= int(d) <= 31:
@@ -51,7 +57,7 @@ def days(text: str, today: str) -> tuple[str, ...]:
 def without_days(text: str) -> str:
     """The text with the days `days` reads taken out, so their numbers are not taken
     for amounts or codes."""
-    for pattern in (_ISO, _MONTH_DAY, _SLASH, _NAMED):
+    for pattern in (_ISO, _MONTH_DAY, _SLASH, _NAMED, _CJK_MONTH_DAY):
         text = pattern.sub(" ", text or "")
     return text
 
@@ -152,6 +158,16 @@ _CJK_UNITS = {"十": 10, "百": 100, "千": 1000}
 _CJK_NUMBER = re.compile(r"[零〇一二两三四五六七八九十百千万]+")
 
 
+def _cjk_small(word: str) -> int | None:
+    """A month or a day written in CJK numerals (二, 十二, 二十二), or None."""
+    if "十" not in word:
+        return _CJK_DIGITS.get(word) if len(word) == 1 else None
+    tens, _, ones = word.partition("十")
+    if len(tens) > 1 or len(ones) > 1:
+        return None
+    return (_CJK_DIGITS.get(tens, 0) if tens else 1) * 10 + (_CJK_DIGITS.get(ones, 0) if ones else 0)
+
+
 def _cjk_value(word: str) -> int | None:
     """A number written in CJK numerals (两万, 一万一千七百五十), or None."""
     total, section, digit = 0, 0, 0
@@ -202,7 +218,8 @@ def pick(spec: GoalSpec, text: str, today: str,
     amounts and days fit exactly one candidate record, is pointed at that record: the
     description is what the candidates were looked up by, and a small model often writes
     the amount under a wrong field instead of choosing. Only for one record's facts,
-    page or change, or for the lines of one record. Returns (spec, names picked)."""
+    page or change, or for the lines of one record; one line written as its item is
+    that record's line of the item. Returns (spec, names picked)."""
     wanted_numbers = numbers_in(text)
     wanted_days = set(days(text, today))
     if not (wanted_numbers or wanted_days):
@@ -212,7 +229,11 @@ def pick(spec: GoalSpec, text: str, today: str,
     out = []
     for d in spec.deliverables:
         single = d.kind in ("fact", "page", "handoff") or d.entity in line_entities
-        if d.record or not single:
+        # One line written as its item (the product) is a line of a record the request
+        # only describes: the record is picked first, then its line of that item.
+        items = [c for c in candidates if c.kind == "line" and c.entity == d.entity
+                 and d.record and _norm_label(d.record) in _norm_label(c.display)]
+        if (d.record and not items) or not single:
             out.append(d)
             continue
         fits = []
@@ -231,7 +252,17 @@ def pick(spec: GoalSpec, text: str, today: str,
         kept = tuple(f for f in (d.metric.filters if d.metric else ())
                      if not (_detail_numbers(" ".join(f.values)) & wanted_numbers
                              or any(day[:7] in v for v in f.values for day in wanted_days)))
-        if chosen.entity == d.entity:
+        if items:
+            # The picked record's line of that item stands for both, alone.
+            mine = [c for c in items if any(value == chosen.display for _label, value in c.binds)]
+            if len(mine) != 1:
+                picked.pop()
+                out.append(d)
+                continue
+            d = replace(d, record="", metric=replace(
+                d.metric or Metric(op="count"),
+                filters=tuple(Filter(field=label, values=(value,)) for label, value in mine[0].binds)))
+        elif chosen.entity == d.entity:
             d = replace(d, record=chosen.display,
                         metric=replace(d.metric, filters=kept) if d.metric else None)
         else:
