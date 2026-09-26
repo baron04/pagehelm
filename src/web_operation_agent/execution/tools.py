@@ -84,7 +84,8 @@ class ToolSurface:
             principal = session._approvals.principal
             business_schemas = session.business_tools.available_schemas(
                 allow_mutations=session._approvals.mutations_enabled,
-                actor_scopes=(principal.scopes if principal is not None else None))
+                actor_scopes=(principal.scopes if principal is not None else None),
+                writes=session._requested_writes)
             read_names = session.business_tools.read_tool_names & {
                 schema["function"]["name"] for schema in business_schemas}
             metric_read_names = read_names - {RESOLVE_GOAL_CANDIDATES_TOOL}

@@ -595,6 +595,12 @@ class BusinessRuntimeValidation(unittest.TestCase):
                                    actor_scopes=("companies:write",)),
                              ["create_company"])
             self.assertEqual(names(allow_mutations=True), ["create_company"])
+            # Only the writes the request asks for are offered.
+            self.assertEqual(names(allow_mutations=True, writes=frozenset()), [])
+            self.assertEqual(names(allow_mutations=True,
+                                   writes=runtime.requested_writes("Create company Acme")),
+                             ["create_company"])
+            self.assertEqual(runtime.requested_writes("List the companies"), frozenset())
 
     def test_empty_trigger_match_uses_a_bounded_read_only_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

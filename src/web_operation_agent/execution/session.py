@@ -469,6 +469,14 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             not skill.read_only and skill.skill_id in selection.trigger_matches
             and any(trigger_requests_action(trigger, task.prompt) for trigger in skill.triggers)
             for skill in selection.skills)
+        # The writes this request itself asks for; no other write is offered or proposed
+        # this turn. Typed tools no longer wait on a Skill, so without this a model that
+        # obeyed words inside a record could propose a write the person never asked for. A
+        # reply that continues the assistant's question carries the request it answers:
+        # both are the person's words.
+        self._requested_writes = (self.business_tools.requested_writes(
+            f"{continuation_prompt}\n{task.prompt}" if clarification_context_used
+            else task.prompt) if self.business_tools is not None else frozenset())
         self._loaded_business_skill_ids: set[str] = set()
         self._auto_loaded_business_skill_ids: set[str] = set()
         if (self.deterministic_read_navigation and self._navigation_only

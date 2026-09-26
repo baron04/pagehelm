@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from ..text import _trigger_matches
+from ..text import _trigger_matches, trigger_requests_action
 from .skills import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkill,
                      BusinessSkillSelection, _without_redundant_reads)
 
@@ -85,6 +85,27 @@ class BusinessSkillCatalog:
         found += [name for name in extra
                   if isinstance(name, str) and name.strip() and name not in found]
         return tuple(dict.fromkeys(found))
+
+    def requested_writes(self, task: str) -> frozenset[str]:
+        """The write tools this request itself asks to use.
+
+        A write is asked for when the request words it as something to do, not as a
+        description ("create Ada", never "list my contacts" or "the ones created today"):
+        by the tool's own name or the action it begins with, or by a trigger of a Skill
+        that declares the tool. Records, pages and model output never count; they are not
+        the person's request.
+        """
+        text = str(task or "")
+        found = set()
+        for name in self._schemas:
+            if self._effects[name] != "write":
+                continue
+            words = [name.replace("_", " "), name.split("_")[0]] + [
+                trigger for skill in self._skills.values() if name in skill.tool_names
+                for trigger in skill.triggers]
+            if any(trigger_requests_action(word, text) for word in words):
+                found.add(name)
+        return frozenset(found)
 
     def withheld_capability(self, goal: str) -> tuple[str, ...]:
         """Tool names the adapter says this actor's grant withheld, not Skill grants."""

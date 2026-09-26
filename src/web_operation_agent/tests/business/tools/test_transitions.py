@@ -682,6 +682,75 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(len(ledger.of_kind("business_mutation_result")), 1)
             self.assertEqual(browser.url, "http://app.test/object/company/company-2")
 
+    def test_a_write_the_request_does_not_ask_for_is_never_proposed(self):
+        """A read request cannot become a write, whatever a record or the model says.
+
+        Typed tools no longer wait on a Skill, so the request itself is what can ask for a
+        change: the write is not offered, and a call to it is refused before any proposal,
+        so no approval card is ever put in front of the person. The turn goes on.
+        """
+        for prompt, asked in (("List the companies.", False),
+                              ("Which companies were created this week?", False),
+                              ("Create company Acme.", True),
+                              ("Create Acme at acme.example.", True)):
+            with self.subTest(prompt), tempfile.TemporaryDirectory() as tmp:
+                executor = _MutationExecutor()
+                runtime = BusinessToolRuntime((), executor)
+                self.assertEqual(runtime.requested_writes(prompt),
+                                 frozenset({"create_company"} if asked else ()))
+                if asked:
+                    continue
+                chat = _Chat([
+                    ("create_company", {"name": "Mallory"}),
+                    ("finish", {"outcome": "unable"}),
+                ])
+                ledger = SessionLedger(Path(tmp) / "session.jsonl", "read-no-write")
+                approvals = []
+                session = ServerAgentSession(
+                    task=TaskSpec(task_ref="T", prompt=prompt,
+                                  supported_scope="Read companies."),
+                    chat=chat, browser=_Browser(), control=ReadOnlyControl(),
+                    ledger=ledger, step_budget=4, wall_budget_s=30,
+                    business_tools=runtime,
+                    business_mutation_approval=lambda proposal: approvals.append(proposal),
+                    plain_business_answer_min_page_actions=1)
+                session.entry_observation = _observation(1)
+                session.plan()
+                session.run()
+
+                self.assertNotIn("create_company", chat.tool_names[0])
+                self.assertEqual(approvals, [])
+                self.assertEqual(executor.executions, 0)
+                self.assertEqual(ledger.of_kind("business_mutation_proposed"), [])
+                refused = ledger.of_kind("business_mutation_rejected")
+                self.assertEqual([row["error_code"] for row in refused],
+                                 ["business_write_not_requested"])
+                self.assertFalse(refused[0]["dispatched"])
+                self.assertEqual(len(chat.tool_names), 2, "the refusal comes back to the model")
+
+    def test_a_reply_to_the_assistant_s_question_carries_the_write_it_answers(self):
+        """"Acme Ltd" asks for nothing by itself; as the answer to the question a create
+        request raised, it continues that request, and its write stays asked for."""
+        pending = {"clarification_id": "c1", "question": "Which name?"}
+        for context, asked in (
+                ({"schema_version": 1, "pending_clarification": pending,
+                  "prior_turns": [{"message_id": "m1", "user": "创建公司",
+                                   "assistant": "Which name?", "status": "needs_input"}]},
+                 frozenset({"create_company"})),
+                (None, frozenset())):
+            with self.subTest(continued=context is not None), \
+                    tempfile.TemporaryDirectory() as tmp:
+                runtime = BusinessToolRuntime((_write_skill(Path(tmp) / "write.json"),),
+                                              _MutationExecutor())
+                session = ServerAgentSession(
+                    task=TaskSpec(task_ref="T", prompt="Acme Ltd",
+                                  supported_scope="Create exactly one company."),
+                    chat=_Chat([]), browser=_Browser(), control=ReadOnlyControl(),
+                    ledger=SessionLedger(Path(tmp) / "session.jsonl", "continued-write"),
+                    business_tools=runtime, conversation_context=context,
+                    business_mutation_approval=lambda proposal: None)
+                self.assertEqual(session._requested_writes, asked)
+
     def test_cancelling_followup_observation_does_not_rewrite_completed_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             cancelled = {"value": False}

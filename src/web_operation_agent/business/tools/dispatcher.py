@@ -362,18 +362,24 @@ class BusinessToolRuntime:
              allowed_ids: set[str]) -> tuple[BusinessSkill | None, str]:
         return self._catalog.load(skill_id, allowed_ids)
 
+    def requested_writes(self, task: str) -> frozenset[str]:
+        return self._catalog.requested_writes(task)
+
     def available_schemas(self, *, allow_mutations: bool,
-                          actor_scopes: tuple[str, ...] | None = None) -> list[dict]:
+                          actor_scopes: tuple[str, ...] | None = None,
+                          writes: frozenset[str] | None = None) -> list[dict]:
         """Offer deployed tools allowed by this turn, never by loaded Skill IDs.
 
-        Dispatch rechecks the live operation context; schema filtering is only a
-        bounded discovery surface, not an authorization decision.
+        `writes`, when given, is the write tools the request asks to use; no other write
+        is offered. Dispatch rechecks the live operation context; schema filtering is only
+        a bounded discovery surface, not an authorization decision.
         """
         if not isinstance(allow_mutations, bool):
             raise TypeError("allow_mutations must be a boolean")
         scopes = None if actor_scopes is None else set(actor_scopes)
         return [self._schemas[name] for name in sorted(self._schemas)
-                if (allow_mutations or self._effects[name] == "read")
+                if (self._effects[name] == "read"
+                    or allow_mutations and (writes is None or name in writes))
                 and (scopes is None or not self._required_scopes.get(name)
                      or self._required_scopes[name] in scopes)]
 
