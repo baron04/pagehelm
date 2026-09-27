@@ -797,6 +797,20 @@ class GoalTurnTests(unittest.TestCase):
         execution, *_ = self._run(declared, opened, resolved_then=lines,
                                   text="Azure 那张两万的退款打开。")
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        # A record the request's own day picked out before resolving (the day then left
+        # the conditions) stands: what is left of the conditions is not the request.
+        from types import SimpleNamespace
+        from web_operation_agent.goal.spec import GoalSpec
+        port = _Port(both)
+        state = SimpleNamespace(
+            message=SimpleNamespace(text="Acme 九月二号那笔 credit note 金额多少？"),
+            references=(), warranted=("RINV/2026/00002",), ledger=SimpleNamespace(append=lambda *a, **k: None),
+            approvals=SimpleNamespace(context=lambda *a: None), obs=SimpleNamespace(url="http://x/"), step=0)
+        spec = GoalSpec.from_json(declared[0][1])
+        kept = GoalTurnExecutor._not_chosen_for(SimpleNamespace(goal_port=port), state, spec,
+                                                Resolution(deliverables=tuple(opened), reads=()))
+        self.assertEqual(kept.deliverables, tuple(opened))
+        self.assertEqual(port.specs, [])
 
     def test_a_refusal_raised_on_several_entities_is_answered_in_each(self):
         from types import SimpleNamespace

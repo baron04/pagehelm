@@ -225,8 +225,10 @@ class _TurnState:
     #: The whole index, which the neighbourhood was cut from; rules are answered from
     #: it, so that a rule the catalogue left out still comes with the ones it names.
     full_index: object = None
-    #: The records the request's own words name, as the adapter located them.
+    #: The records the request's own words name, as the adapter located them, and the
+    #: records its own amounts, days or references picked out before resolving.
     references: tuple = ()
+    warranted: tuple = ()
 
 
 
@@ -544,10 +546,12 @@ class GoalTurnExecutor:
         if corrections:
             s.ledger.append("goal_records_corrected", step=s.step,
                             corrections=[{"declared": a, "located": b} for a, b in corrections])
+            s.warranted += tuple(b for _a, b in corrections)
         if s.candidates and spec.deliverables:
             spec, picked = pick(spec, s.message.text, today_text, s.candidates)
             if picked:
                 s.ledger.append("goal_record_picked", step=s.step, count=len(picked))
+                s.warranted += tuple(picked)
         if self.staged and spec.deliverables:
             # A declaration can be well formed and still leave out what the request
             # asked: values asked for but only a page declared, a number, code or day the
@@ -792,11 +796,13 @@ class GoalTurnExecutor:
         several records, that one among them included, the person is asked which.
 
         "Open Azure's refund of August" with two such refunds is a question, whichever of
-        the two a reading happened to name. A record the words name ("S00018"), or that a
-        description the request gives picks out alone, stands.
+        the two a reading happened to name. A record the words name ("S00018"), that the
+        request's own amounts and days picked out before resolving, or that a description
+        the request gives picks out alone, stands.
         """
         text = _norm(s.message.text)
-        named = {_norm(getattr(k, "name", "")) for k in s.references}
+        named = ({_norm(getattr(k, "name", "")) for k in s.references}
+                 | {_norm(name) for name in s.warranted})
         out = list(resolution.deliverables)
         for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
             chosen = _norm(d.record)
