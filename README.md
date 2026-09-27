@@ -228,7 +228,8 @@ agent.
   an actual write; a marker cannot substitute for it. If the application declares a
   page write guard, the Runtime requires its explicit release acknowledgement before
   reporting the handoff ready. A real page gesture or closing the panel removes the marker;
-  a gesture during an active turn fences later Agent actions and requests cancellation.
+  once an active turn has worked the page, a gesture fences later Agent actions and
+  requests cancellation; while the turn only reads and thinks, the page stays the person's.
   This is a guided handoff, not a claim that the business change happened.
 - A control that sits in a collapsed menu (a record's "Delete" under its "Actions" menu) is found the same way in every application. When the named control is not on the page, the goal turn opens up to three menus the page itself declares collapsed, in page order, and looks for the control among what each shows; it then marks it and names the menu in the reply, since the page may close the menu when the person clicks elsewhere. Opening uses the internal `reveal` page action, which the model never chooses: the Runtime clicks only a button that declares `aria-expanded="false"` or an unopened `aria-haspopup`, and refuses form inputs, links, buttons that would submit a form and anything inside page navigation. Nothing in a menu is chosen, and it runs inside the application's read-only window like any page action. Whether a control is offered is the application's to show: an account the page shows no Delete to is told the control was not found. Links are never marked; a tag's "Delete" link is not a record's Delete. Verified on Odoo (the customer record's Actions menu, fixture unchanged) and on the Contacts test application.
 - For a request that names a page state -- open a screen, switch a tab, apply a filter

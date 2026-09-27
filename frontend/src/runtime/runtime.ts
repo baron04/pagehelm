@@ -58,6 +58,9 @@ export interface WireEvent {
 
 interface Freshness { fresh: boolean; reason: string }
 
+/** Commands that only look at the page: they leave it as the person has it. */
+const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll'])
+
 export class EmbeddedWebRuntime {
   config!: RuntimeConfig
   endpoint = ''
@@ -497,6 +500,7 @@ export class EmbeddedWebRuntime {
     this.handoffGranted = false
     const messageId = crypto.randomUUID()
     this.stored.taskInFlight = true
+    this.stored.pageWorked = false
     this.stored.activeMessageId = messageId
     this.stored.cancellationPending = false
     this._save()
@@ -739,6 +743,12 @@ export class EmbeddedWebRuntime {
     if (event.composedPath().includes(this.panelContainer as EventTarget)) return
     this._clearHighlight()
     if (!this.stored?.taskInFlight || this.userIntervened) return
+    // While the assistant only reads and thinks, the page is the person's: a click or a
+    // scroll there takes nothing from the assistant, and stopping the answer for it -- and
+    // swallowing the click -- was the bug. It is taking control only once the turn has
+    // worked the page or a command is running on it; a later command is checked against
+    // a fresh observation by the server either way.
+    if (!this.stored.pageWorked && !this.stored.inFlight) return
     this.userIntervened = true
     if (this.handoffGranted) return
     // The first gesture stops the assistant, not the application. In particular it must
@@ -980,6 +990,10 @@ export class EmbeddedWebRuntime {
     if (this.userIntervened) {
       return {ok: false, code: 'user_intervened',
         detail: 'the person took control before the command was dispatched'}
+    }
+    if (!PASSIVE_ACTIONS.has(action.command.action) && !this.stored.pageWorked) {
+      this.stored.pageWorked = true
+      this._save()
     }
     // A native submit can commit a child-frame navigation before execution returns. Arm the
     // stable iframe element first so a fast server response cannot escape observation.

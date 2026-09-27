@@ -144,6 +144,8 @@ export interface StoredState {
   cachedResult?: ActionResultEnvelope | null
   approvals?: Record<string, unknown>
   taskInFlight?: boolean
+  /** The turn in flight has worked the page; kept across the documents it opens. */
+  pageWorked?: boolean
   activeMessageId?: string
   cancellationPending?: boolean
 }

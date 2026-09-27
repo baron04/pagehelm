@@ -272,10 +272,30 @@ describe('a page action in an application that names a write guard', () => {
     expect(posts[0]?.body.error_code).toBe('user_intervened')
   })
 
+  it('leaves the page to the person while the turn only reads and thinks', () => {
+    const {runtime} = actingRuntime()
+    const state = runtime as unknown as Record<string, unknown>
+    state.stored = {taskInFlight: true, pageWorked: false, inFlight: null, cachedResult: null}
+    state.cancelTask = vi.fn(async () => {})
+    const preventDefault = vi.fn()
+    const event = {isTrusted: true, cancelable: true, composedPath: () => [document.body],
+      preventDefault, stopImmediatePropagation: vi.fn()} as unknown as Event
+    runtime._userTookControl(event)
+    expect(state.userIntervened).toBeFalsy()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(state.cancelTask).not.toHaveBeenCalled()
+    // A command running on the page is the assistant's hand on it: the gesture takes it back.
+    state.stored = {taskInFlight: true, pageWorked: false,
+      inFlight: {action_id: 'a-1'}, cachedResult: null}
+    runtime._userTookControl(event)
+    expect(state.userIntervened).toBe(true)
+    expect(state.cancelTask).toHaveBeenCalledOnce()
+  })
+
   it('fences a live turn on a real page gesture but does not block the handoff gesture', () => {
     const {runtime} = actingRuntime()
     const state = runtime as unknown as Record<string, unknown>
-    state.stored = {taskInFlight: true, inFlight: null, cachedResult: null}
+    state.stored = {taskInFlight: true, pageWorked: true, inFlight: null, cachedResult: null}
     state.cancelTask = vi.fn(async () => {})
     const preventDefault = vi.fn()
     const stopImmediatePropagation = vi.fn()

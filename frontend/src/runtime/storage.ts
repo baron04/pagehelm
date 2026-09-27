@@ -85,6 +85,7 @@ export function loadSession(sessionId: string, sessionGeneration: string,
     cachedResult: stored.cachedResult || null,
     approvals: stored.approvals || {},
     taskInFlight: Boolean(stored.taskInFlight),
+    pageWorked: Boolean(stored.pageWorked),
     activeMessageId: String(stored.activeMessageId || ''),
     cancellationPending: Boolean(stored.cancellationPending),
   }
