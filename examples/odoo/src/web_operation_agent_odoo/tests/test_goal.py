@@ -78,6 +78,8 @@ _FIELDS = {
         "name": {"string": "Name", "type": "char"},
         "comment": {"string": "Notes", "type": "html"},
         "email": {"string": "Email", "type": "char"},
+        "parent_id": {"string": "Related Company", "type": "many2one", "relation": "res.partner"},
+        "function": {"string": "Job Position", "type": "char"},
     },
     "product.tag": {"name": {"string": "Name", "type": "char"}},
     "account.payment.term": {"name": {"string": "Name", "type": "char"}},
@@ -102,7 +104,8 @@ _VIEWS = {
                   '</search>'},
     "sale.order.line": {"list": "<list/>", "form": "<form/>", "search": "<search/>"},
     "res.partner": {
-        "list": '<list><field name="name"/><field name="email"/></list>',
+        "list": '<list><field name="name"/><field name="email"/><field name="parent_id"/>'
+                '<field name="function"/></list>',
         "form": '<form><notebook><page string="Contacts &amp; Addresses"/>'
                 '<page string="Internal Notes"><field name="comment"/></page></notebook></form>',
         "search": '<search/>'},
@@ -447,6 +450,45 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(result.deliverables[0].problem, "")
         self.assertEqual(searched[0], [["user_id", "in", [5]]])
         self.assertIn([["partner_id", "child_of", [11]]], searched)
+
+    def test_words_in_another_language_give_way_to_the_other_conditions(self):
+        # "三人沙发" cannot match an English name; the price picks the one order out.
+        original = self.client.call
+
+        def call(model, method, args, kwargs=None):
+            if model == "sale.order" and method == "search_read":
+                return [] if "三人沙发" in str(args[0]) else [{"id": 6, "display_name": "S00006"}]
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        result = self._resolve({"kind": "fact", "entity": "sale.order", "fields": ["Total"],
+                                "metric": {"op": "count", "filters": [
+                                    {"field": "Order Reference", "values": ["三人沙发"], "op": "contains"},
+                                    {"field": "Total", "values": ["2947.5"]}]}})
+        self.assertEqual(result.deliverables[0].problem, "")
+        self.assertEqual(result.deliverables[0].facts[0].subject, "S00006")
+
+    def test_a_named_record_with_conditions_it_does_not_meet_means_those_linked_to_it(self):
+        # "Gemini's manager": Gemini is not a manager; its contacts that are, are meant.
+        original = self.client.call
+        seen: list = []
+
+        def call(model, method, args, kwargs=None):
+            if model == "res.partner" and method == "search_count":
+                return 0 if ["id", "=", 11] in args[0] else 2
+            if model == "res.partner" and method == "search_read":
+                seen.append(args[0])
+                return [{"id": 31, "display_name": "Gemini Furniture, Ann"},
+                        {"id": 32, "display_name": "Gemini Furniture, Bob"}]
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        result = self._resolve({"kind": "fact", "entity": "res.partner", "record": "Gemini Furniture",
+                                "fields": ["Email"], "metric": {"op": "count", "filters": [
+                                    {"field": "Job Position", "values": ["Manager"]}]}})
+        self.assertEqual(result.deliverables[0].candidates,
+                         ("Gemini Furniture, Ann", "Gemini Furniture, Bob"))
+        self.assertIn(["parent_id", "child_of", [11]], seen[-1])
 
     def test_search_words_that_repeat_a_condition_add_nothing(self):
         self.client.domains.clear()

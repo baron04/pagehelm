@@ -321,6 +321,12 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             return Resolved(kind=d.kind, problem=f"{d.record!r} is ambiguous",
                             candidates=tuple(found))
         model, rid, name = found
+        if d.kind == "fact" and not via and model == entity.key and d.metric and d.metric.filters:
+            linked = self._linked_instead(d, rid, name, index)
+            if isinstance(linked, Resolved):
+                return linked
+            if linked is not None:
+                model, rid, name = linked
         if model != entity.key and d.fields and not via and model in self._models:
             # Described on one entity, found on another (an order the model looked for
             # among invoices): the fields asked for, as the entity it is on has them.
@@ -979,7 +985,8 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             # date): the conditions alone.
             return self._locate(replace(d, page=replace(d.page, search="")), index)
         if not rows:
-            elsewhere = self._other_link(d, meta, index) or self._elsewhere(d, meta, index)
+            elsewhere = (self._other_link(d, meta, index) or self._without_foreign(d, meta, index)
+                         or self._elsewhere(d, meta, index))
             if elsewhere is not None:
                 return elsewhere
             names = self._names_repair(model, meta) if any(
@@ -1032,6 +1039,50 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                     found[int(rows[0]["id"])] = (meta.model, int(rows[0]["id"]),
                                                  str(rows[0].get("display_name") or ""))
         return next(iter(found.values())) if len(found) == 1 else None
+
+    def _linked_instead(self, d: Deliverable, rid: int, name: str, index: ApplicationIndex):
+        """A record named with conditions it does not meet ("Wood Corner's manager": the
+        company, with Job Position = Manager) is the way to the records linked to it
+        that meet them, its contacts: the one such record, the several to choose from,
+        or None when the named record meets them or nothing links to it."""
+        meta = self._models.get(d.entity) or self._model_meta(d.entity)
+        entity = index.entity(d.entity)
+        scope = self._scope(replace(d, record=""), index, search=False)
+        if isinstance(scope, Resolved) or entity is None:
+            return None
+        try:
+            if self._call(meta.model, "search_count", [scope.domain + [["id", "=", rid]]], {}):
+                return None
+        except BusinessToolError:
+            return None
+        link = next((f.label for f in entity.fields
+                     if f.kind == "link" and f.relation == meta.model), None)
+        if link is None:
+            return None
+        return self._locate(replace(d, record="", metric=replace(
+            d.metric, filters=d.metric.filters + (Filter(field=link, values=(name,)),))), index)
+
+    def _without_foreign(self, d: Deliverable, meta: _ModelMeta, index: ApplicationIndex):
+        """Words in the person's language on a text field ("三人沙发" as the name) cannot
+        match names the application writes in another; when nothing fits, the other
+        conditions the request gives (a price of 1,500) pick the one record, or none."""
+        conditions = list(d.metric.filters) if d.metric else []
+        kept = [c for c in conditions
+                if not ((meta.fields.get(meta.field_by_label(c.field) or "") or {}).get("type")
+                        in ("char", "text", "html") and c.values and all(_foreign(v) for v in c.values))]
+        if not kept or len(kept) == len(conditions):
+            return None
+        scope = self._scope(replace(d, metric=replace(d.metric, filters=tuple(kept))), index, search=True)
+        if isinstance(scope, Resolved):
+            return None
+        try:
+            rows = self._call(meta.model, "search_read", [scope.domain],
+                              {"fields": ["display_name"], "limit": 2})
+        except BusinessToolError:
+            return None
+        if len(rows) != 1:
+            return None
+        return meta.model, int(rows[0]["id"]), str(rows[0].get("display_name") or "")
 
     def _elsewhere(self, d: Deliverable, meta: _ModelMeta, index: ApplicationIndex):
         """A record described by who, how much and when (Gemini's one of 1,541.50) that
