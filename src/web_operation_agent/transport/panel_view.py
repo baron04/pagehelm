@@ -353,15 +353,7 @@ def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> d
             "tone": mapping["tone"], "text": text,
             "panel_state": mapping["panel_state"],
             **({"step": node} if node else {}),
-            **({"transient": True} if node and node.get("stage") in _TRANSIENT_STAGES else {}),
-            **_source_details(payload, state, limits)}
-
-
-def _source_details(payload: dict, state: str, limits: dict) -> dict:
-    text = payload.get("source_details")
-    if state != "finished" or not isinstance(text, str) or not text.strip():
-        return {}
-    return {"source_details": _clip(text, limits["result_max_chars"])}
+            **({"transient": True} if node and node.get("stage") in _TRANSIENT_STAGES else {})}
 
 
 def project_history_record(record: dict, *, index: int) -> dict | None:
@@ -394,8 +386,7 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     if not text:
         return None
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
-            "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"],
-            **_source_details(payload, state, limits)}
+            "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"]}
 
 
 def collapse_timeline(entries: list[dict]) -> list[dict]:

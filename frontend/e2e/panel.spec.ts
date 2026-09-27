@@ -655,28 +655,6 @@ test.describe('the work process', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('source details expand by keyboard without hiding a partial answer', async ({open}) => {
-    const panel = await open(snapshot({entries: [
-      entry('e1', 'goal', '未确认报价合计？'),
-      entry('e2', 'result', '**小计**：12.50 USD\n\n这是部分回答', {
-        panel_state: 'success',
-        source_details: '读取时间：2026-09-13T00:00:00Z\n\n扫描记录：2；匹配记录：2'}),
-    ]}), {width: 390, height: 844})
-    await panel.page.locator('.woa-launcher').click()
-    const details = panel.page.locator('.woa-answer-sources')
-    const summary = details.locator('summary')
-    await expect(summary).toHaveText(labels.answerSources)
-    expect(await details.evaluate(node => (node as HTMLDetailsElement).open)).toBe(false)
-    await expect(panel.page.getByText('这是部分回答', {exact: true})).toBeVisible()
-    await summary.focus()
-    await summary.press('Enter')
-    expect(await details.evaluate(node => (node as HTMLDetailsElement).open)).toBe(true)
-    await expect(details).toContainText('2026-09-13')
-    await summary.press('Enter')
-    expect(await details.evaluate(node => (node as HTMLDetailsElement).open)).toBe(false)
-    expect(panel.errors).toEqual([])
-  })
-
   test('a turn that only ran shows its time, and one that acted folds its steps into a line', async ({open}) => {
     const panel = await open(snapshot({entries: [
       entry('e1', 'goal', '列出所有待开票的销售订单'),

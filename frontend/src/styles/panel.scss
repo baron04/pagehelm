@@ -711,17 +711,6 @@ button.woa-step__line:focus-visible {
 @keyframes woa-spin { to { transform: rotate(360deg) } }
 
 /* ─────────────────────────────────────────────── answer */
-.woa-answer-sources {
-  margin-block-start: 10px;
-  color: var(--woa-ink-muted);
-  overflow-wrap: anywhere;
-}
-.woa-answer-sources > summary { cursor: pointer; padding-block: 4px; }
-.woa-answer-sources[open] > summary { margin-block-end: 8px; }
-.woa-answer-sources > .woa-md {
-  border-inline-start: 2px solid var(--woa-line);
-  padding-inline-start: 10px;
-}
 .woa-md {
   display: flex; flex-direction: column; gap: 10px;
   /* The agent's answer is read, not scanned: a looser line than the chrome around it. */

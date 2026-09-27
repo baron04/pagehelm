@@ -306,34 +306,7 @@ def submit(turn: TurnEvidence, args: dict, *, ignored: list | None = None) -> di
         coverage = "partial"
     result = asdict(verify(AnswerDraft(tuple(conclusions), coverage), turn))
     result["presentation"] = payload.get("presentation", "brief")
-    result["sources"] = _sources(turn, tuple(entry["evidence_ref"] for entry in entries))
     return result
-
-
-def _sources(turn: TurnEvidence, refs: tuple[str, ...]) -> list[dict]:
-    """Project user-facing lineage; source-code provenance stays in the server audit."""
-    pending, visited, origins = list(refs), set(), {}
-    queries = {item.origin: item for ref in turn.ids()
-               if isinstance(item := turn.get(ref), QueryEvidence)}
-    while pending:
-        ref = pending.pop(0)
-        if ref in visited:
-            continue
-        visited.add(ref)
-        item = turn.get(ref)
-        if isinstance(item, (SourceEvidence, SourceHistoryEvidence, SkillEvidence)):
-            continue
-        origin = item.origin
-        source = origins.setdefault(origin, {
-            "kind": origin.kind, "observed_at": origin.observed_at, "scope": origin.scope})
-        if isinstance(item, (ComputationEvidence, SelectionEvidence)):
-            source["operation"] = item.operation
-            pending.extend(item.inputs)
-        query = queries.get(origin)
-        if query is not None:
-            source.update(collection=query.collection, records_scanned=query.records_scanned,
-                          matched=query.matched_count, covers_whole_scope=query.covers_whole_scope)
-    return list(origins.values())
 
 
 def evidence_index(turn: TurnEvidence, refs: tuple[str, ...]) -> str:

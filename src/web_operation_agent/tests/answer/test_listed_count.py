@@ -51,8 +51,6 @@ class TheHeadlineCountsMatchesNotRows(unittest.TestCase):
         self.assertIn("到应用的列表页查看全部", text)
         for internal in ("customer_rank", "covered only part", "条符合", "delegated user; "):
             self.assertNotIn(internal, text)
-        self.assertIn("customer_rank > 0", answer["sources"][0]["scope"],
-                      "the executed condition stays in the answer basis")
         self.assertEqual(answer["coverage"], "partial")
 
     def test_the_same_in_english(self):

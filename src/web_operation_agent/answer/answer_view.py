@@ -147,7 +147,6 @@ def unavailable_answer(user_text: str) -> str:
 def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
     data = dict(payload)
     presentation = data.pop("presentation", "brief")
-    data.pop("sources", None)
     labels = (data.pop("labels", None) or {}).get(_language(user_text), {})
     action = data.pop("action", None)
     action_text = ""
@@ -199,34 +198,6 @@ def _literal(value: object) -> str:
     return re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", text)
 
 
-def render_sources(payload: dict, *, user_text: str, max_chars: int) -> str:
-    """Optional provenance view; limitations remain visible in the main answer."""
-    chinese = _language(user_text) == "zh"
-    words = _WORDS["zh" if chinese else "en"]
-    blocks = []
-    for source in payload.get("sources", ()):
-        if source["kind"] == "source":
-            continue
-        lines = [f"**{_source_line(words, {'source_kind': source['kind']})}**",
-                 f"{'读取或计算时间' if chinese else 'Read or computation time'}: {_literal(source['observed_at'])}",
-                 f"{words['scope']}: {_literal(source['scope'])}"]
-        if "operation" in source:
-            lines.append(f"{'运算' if chinese else 'Operation'}: {_literal(source['operation'])}")
-        if "collection" in source:
-            lines.append(f"{'集合' if chinese else 'Collection'}: {_literal(source['collection'])}")
-            lines.append(f"{'扫描记录' if chinese else 'Records scanned'}: {source['records_scanned']}; "
-                         f"{'匹配记录' if chinese else 'Matches'}: {source['matched']}")
-            coverage = ("覆盖该次读取范围" if source['covers_whole_scope'] else "只覆盖部分读取范围") if chinese else (
-                "Covers this read scope" if source['covers_whole_scope'] else "Covers only part of this read scope")
-            lines.append(coverage)
-        blocks.append("\n\n".join(lines))
-    text = "\n\n---\n\n".join(blocks)
-    if len(text) <= max_chars:
-        return text
-    suffix = "\n\n来源详情达到显示限制。" if chinese else "\n\nSource details reached the display limit."
-    return text[:max(0, max_chars - len(suffix))] + suffix
-
-
 def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
            presentation: str = "brief", action_text: str = "",
            labels: dict[str, str] | None = None,
@@ -242,7 +213,7 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
     items = answer.conclusions
     # A collection count and a total can each be evidenced yet still answer a different
     # question when the model mixes collections. Put their scopes in the headline whenever
-    # this answer cites more than one scope; a provenance footer alone is easy to miss.
+    # this answer cites more than one scope; the basis line under each item is easy to miss.
     words["show_scope_head"] = len({item.get("scope") for item in items
                                     if item.get("kind") in {"selection", "aggregate", "not_found"}
                                     and item.get("scope")}) > 1
@@ -292,7 +263,7 @@ def _selection_head(words: dict, item: dict) -> str:
     by name -- whether a record of exactly that name is among them.
 
     Not the condition itself: that is adapter query syntax ("customer_rank > 0"), and it stays
-    in the answer basis. Not the listed count presented as the matching count: a read limited
+    in the step details and the audit. Not the listed count presented as the matching count: a read limited
     to 20 rows of 72 matches headlined "20 match". And not "a matching record exists" on the
     strength of a search that matches parts of names: asked whether a customer existed, a
     search for the first word of its name found six other customers and the answer said one
@@ -478,8 +449,8 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
     if kind == "page_observation":
         label = "页面显示" if words["lang"] == "zh" else "The page shows"
         # The scope of a page fact is always the same claim -- this page, at that moment --
-        # and its own text carries an observation epoch the reader has no use for; that text
-        # stays in the answer basis.
+        # and its own text carries an observation epoch the reader has no use for, so it is
+        # left out.
         return [f"**{label}**（{_literal(item['detail'])}）：{_literal(item['value'])}",
                 f"> {_source_line(words, item)} · {_literal(item['page_route'])} · "
                 f"{words['page_scope']}"]
@@ -531,8 +502,8 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
         return [f"**{label}**：{_literal(item['value'])}{unit}", _basis(words, item)]
     if kind == "not_found":
-        # The normal answer names the thing that was absent. Executed filters and scope are
-        # already available in the separate answer-basis disclosure; repeating adapter query
+        # The normal answer names the thing that was absent. The executed conditions are
+        # already in the read's step details; repeating adapter query
         # syntax here turns a one-line response into an internal diagnostic. What stays is
         # the limit of the claim: a search sees only what this actor may see, so absence
         # there says nothing about records in a scope the actor cannot read.

@@ -112,7 +112,6 @@
     "exampleMore": "更多用法",
     "exampleMorePrompt": "你能帮我做什么？",
     "workProcess": "工作过程",
-    "answerSources": "回答依据",
     "elapsedPrefix": "用时",
     "workSteps": "{count} 个步骤",
     "stepCount": "步",

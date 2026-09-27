@@ -39,7 +39,6 @@ export interface TimelineEntry {
   approval_id?: string
   authored?: 'model' | 'server'
   replayed?: boolean
-  source_details?: string
   step?: StepFacts
   /** Says only what is under way: shown while it is the newest step of a running turn. */
   transient?: boolean

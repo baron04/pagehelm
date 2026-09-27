@@ -215,9 +215,6 @@ class SourceAnswerTests(unittest.TestCase):
         self.assertEqual(payload["conclusions"][0]["citation"],
                          "apps/greenhouse/rules.py:3-4")
         self.assertEqual(payload["conclusions"][0]["support"], "if x: raise Y")
-        self.assertEqual(payload["sources"], [])
-        from web_operation_agent.answer.answer_view import render_sources
-        self.assertEqual(render_sources(payload, user_text="为什么？", max_chars=2000), "")
         with self.assertRaisesRegex(ConclusionRefused, "internal evidence"):
             answer_protocol.submit(turn, {"outcome": "answered", "answer": {
                 "version": 1, "coverage": "complete", "conclusions": [

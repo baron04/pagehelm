@@ -6632,8 +6632,7 @@
             "coverage": "partial",
             "lowered_because": [],
             "presentation": "brief",
-            "prose": "",
-            "sources": []
+            "prose": ""
           },
           "wall_seconds": 0.0,
           "write_refusals": 0
@@ -6754,8 +6753,7 @@
           "coverage": "partial",
           "lowered_because": [],
           "presentation": "brief",
-          "prose": "",
-          "sources": []
+          "prose": ""
         },
         "write_refusals": 0
       },

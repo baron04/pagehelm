@@ -274,13 +274,6 @@ function Outcome({entry, labels, limits, live, allowedOrigins}: {
       <Answer text={entry.text.slice(0, limits.result_max_chars)}
               authored={entry.authored ?? 'server'} live={live}
               labels={labels} allowedOrigins={allowedOrigins} />
-      {entry.source_details && (
-        <details className="woa-answer-sources">
-          <summary>{labels.answerSources}</summary>
-          <Answer text={entry.source_details.slice(0, limits.result_max_chars)}
-                  authored="server" live={false} labels={labels} allowedOrigins={allowedOrigins} />
-        </details>
-      )}
       <div className="woa-answer-actions">
         <CopyButton text={() => plainText(entry.text.slice(0, limits.result_max_chars))}
                     label={labels.copyAnswer} copiedLabel={labels.copied}

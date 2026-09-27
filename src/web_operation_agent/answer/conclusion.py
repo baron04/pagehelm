@@ -38,7 +38,7 @@ class ConclusionRefused(ValueError):
 
 
 def _answer_scope(turn: TurnEvidence, origin) -> str:
-    """Keep executed query syntax in provenance instead of the normal answer surface."""
+    """Keep executed query syntax out of the answer; the step details and audit carry it."""
     for ref in turn.ids():
         item = turn.get(ref)
         if not isinstance(item, QueryEvidence) or item.origin != origin or not item.conditions:
@@ -69,7 +69,7 @@ def _computed_scope(turn: TurnEvidence, scope: str) -> tuple[str, str]:
 
     The scope is the read's own scope, its query conditions, then any filter a compute chain
     added. The first belongs in the answer; the query conditions are adapter syntax and stay
-    in the answer basis; the filter is part of what a total is a total of.
+    in the step details and the audit; the filter is part of what a total is a total of.
     """
     reads = [item for ref in turn.ids()
              if isinstance(item := turn.get(ref), QueryEvidence)
