@@ -53,6 +53,11 @@ _SELECTED_ATTRS = ("aria-selected", "selected", "aria-pressed", "aria-checked")
 #: the turn itself opened is the one exception (see `_reveal_control`).
 _NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist", "navigation",
                                  "link"})
+#: Words that ask for a total over several records rather than one record's amount.
+_TOTAL_WORDS = re.compile(r"合计|总计|总额|总金额|总共|一共|共计|加起来|累计|全部|所有|分别|各|total|sum\b|"
+                          r"altogether|all\b|each\b", re.I)
+#: A sum over more records than this is a total, whatever the words.
+_MAX_AMOUNT_CHOICES = 6
 #: At most this many collapsed menus are opened looking for a control to hand over.
 _MAX_REVEALS = 3
 #: Rules about the same control or field, and rules of the same operation, answered
@@ -550,6 +555,7 @@ class GoalTurnExecutor:
                                 unresolved_after=_unresolved(repaired, second))
                 if accepted:
                     spec, resolution = repaired, second
+        resolution = self._which_amount(s, spec, resolution)
         outcomes: list[_PageOutcome | None] = []
         if any(r.page is not None for r in resolution.deliverables):
             # The declarations took their time; the page has gone on rendering meanwhile
@@ -676,6 +682,34 @@ class GoalTurnExecutor:
                         problems=[d.problem for d in resolution.deliverables],
                         reads=[list(r) for r in resolution.reads])
         return resolution
+
+    def _which_amount(self, s: _TurnState, spec: GoalSpec, resolution: Resolution) -> Resolution:
+        """"What is the amount of Acme's September invoice" when two invoices fit asks which
+        one (owner ruling, 2026-09-27): a sum over a few records is an answer only when the
+        request asks for a total. The records are listed as the choices."""
+        if _TOTAL_WORDS.search(s.message.text):
+            return resolution
+        out = list(resolution.deliverables)
+        for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
+            agg = r.aggregate
+            if not (d.kind == "aggregate" and d.metric is not None and d.metric.op == "sum"
+                    and not d.metric.group_by and agg is not None
+                    and 2 <= agg.count <= _MAX_AMOUNT_CHOICES and not r.problem):
+                continue
+            try:
+                listed = self.goal_port.resolve(
+                    GoalSpec(deliverables=(replace(d, kind="list"),)),
+                    context=s.approvals.context(s.step, "resolve"),
+                    current_path=_path_of(s.obs.url)).deliverables[0]
+            except Exception:  # noqa: BLE001 -- the sum stands when the records cannot be listed
+                continue
+            names = tuple(listed.aggregate.records) if listed.aggregate else ()
+            if len(names) < 2:
+                continue
+            s.ledger.append("goal_amount_ambiguous", step=s.step, count=agg.count)
+            out[i] = replace(r, aggregate=None, candidates=names,
+                             problem=f"{agg.count} records fit and the request asks for one amount")
+        return replace(resolution, deliverables=tuple(out))
 
     # -- pages ------------------------------------------------------------------------
     def _dispatch(self, s: _TurnState, action: str, args: dict, *, navigating: bool = False):

@@ -736,6 +736,22 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual([e["controls"] for e in events if e["event"] == "goal_page_became_handoff"],
                          [["Send by Email"]])
 
+    def test_one_amount_over_several_records_asks_which_and_a_total_does_not(self):
+        both = Aggregate(subject="Invoices · Partner = Acme", count=2,
+                         sums=(("Total", "61,000.00 USD"),), records=("INV/2026/00002", "INV/2026/00003"))
+        declared = [("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+            "metric": {"op": "sum", "field": "Total", "filters": [{"field": "Customer", "values": ["Acme"]}]}}]})]
+        execution, *_ = self._run(declared, [Resolved(kind="aggregate", aggregate=both)],
+                                  text="Acme 九月的发票金额是多少？")
+        self.assertEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("INV/2026/00002", execution.user_answer)
+        self.assertIn("INV/2026/00003", execution.user_answer)
+        self.assertNotIn("61,000", execution.user_answer)
+        total = replace(both, records=())  # a port's sum carries no record names
+        execution, *_ = self._run(declared, [Resolved(kind="aggregate", aggregate=total)],
+                                  text="Acme 九月的发票总额是多少？")
+        self.assertIn("61,000", execution.user_answer)
+
     def test_write_intent_cannot_be_settled_by_opening_a_page(self):
         execution, _channel, _chat, _port, events = self._run(
             [("declare_goal", {"deliverables": [{"kind": "page", "page": {"key": "p1"}}],
