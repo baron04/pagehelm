@@ -798,6 +798,32 @@ class GoalTurnTests(unittest.TestCase):
                                   text="Azure 那张两万的退款打开。")
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
 
+    def test_a_refusal_raised_on_several_entities_is_answered_in_each(self):
+        from types import SimpleNamespace
+        from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexRule
+        from web_operation_agent.goal.spec import Deliverable
+        message = "Prepayment percentage must be a valid percentage."
+        on_template = IndexRule(id="r1", kind="refusal", about="_check_prepayment_percent",
+                                text=f'_check_prepayment_percent refuses with "{message}" when template.p',
+                                citation="addons/sale/models/template.py:1-4@r sha256:a")
+        on_order = IndexRule(id="r2", kind="refusal", about="_check_prepayment_percent",
+                             text=f'_check_prepayment_percent refuses with "{message}" when order.p',
+                             citation="addons/sale/models/sale_order.py:9-12@r sha256:b")
+        other = IndexRule(id="r3", kind="refusal", about="action_confirm",
+                          text='action_confirm refuses with "Some other message entirely." when x',
+                          citation="addons/sale/models/sale_order.py:20-22@r sha256:c")
+        index = ApplicationIndex(entities=(
+            IndexEntity(key="sale.order.template", label="Quotation Template", rules=(on_template,)),
+            IndexEntity(key="sale.order", label="Sales Order", rules=(on_order, other))))
+        state = SimpleNamespace(full_index=index, index=index)
+        answer = GoalTurnExecutor._rules_answer(None, state, Deliverable(kind="fact", rules=("r1",)))
+        # The template was named; the order raises the same refusal and is answered too,
+        # and a different refusal of the order is not.
+        self.assertEqual([f.subject for f in answer.facts],
+                         ["Quotation Template · _check_prepayment_percent",
+                          "Sales Order · _check_prepayment_percent"])
+        self.assertEqual(len(answer.citations), 2)
+
     def test_a_list_page_for_a_request_to_create_one_is_a_create_handoff(self):
         new = [Resolved(kind="handoff", page=PagePlan(url="/orders", label="Orders",
                                                       expected_path="/orders", highlight="Confirm"))]

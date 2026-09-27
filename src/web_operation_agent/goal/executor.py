@@ -74,6 +74,10 @@ _MAX_REVEALS = 3
 #: along with the one named.
 _SAME_ABOUT_RULES = 10
 _SAME_OPERATION_RULES = 6
+#: The same refusal written on other entities, answered along with the one named.
+_SAME_REFUSAL_ELSEWHERE = 3
+#: The message a refusal rule quotes, as the index writes it.
+_REFUSAL_MESSAGE = re.compile(r'refuses with "(.{20,}?)" when')
 #: Roles of elements a value can be entered into.
 _INPUT_ROLES = frozenset({"textbox", "combobox", "select", "searchbox", "spinbutton"})
 #: Roles a field's own suggestion list uses for the records it proposes.
@@ -1135,11 +1139,12 @@ class GoalTurnExecutor:
             if rule.subject:
                 group += [r for r in entity.rules if r not in group
                           and r.subject == rule.subject][:_SAME_OPERATION_RULES]
-            for item in group:
+            group = [(entity, r) for r in group] + _same_refusal_elsewhere(index, entity, rule)
+            for owner, item in group:
                 if item.id in shown:
                     continue
                 shown.add(item.id)
-                fact = Fact(subject=f"{entity.label} · {item.about}", label=item.kind,
+                fact = Fact(subject=f"{owner.label} · {item.about}", label=item.kind,
                             value=item.text)
                 # The same rule written in two views is said once and cited twice.
                 if fact not in facts:
@@ -1400,6 +1405,22 @@ def _status_for(terminal_reason: str) -> AgentTurnStatus:
     if terminal_reason in {"user_cancelled", "operation_not_confirmed", "approval_expired"}:
         return AgentTurnStatus.CANCELLED
     return AgentTurnStatus.FAILED
+
+
+def _same_refusal_elsewhere(index, entity, rule) -> list:
+    """The same refusal on other entities: one message, several places that raise it.
+
+    Which of them the person means is theirs to say, not the declaration's; a check
+    written on both the order and its template, or on a payment and the wizard that
+    makes it, is answered in both places."""
+    found = _REFUSAL_MESSAGE.search(rule.text) if rule.kind == "refusal" else None
+    if found is None or index is None:
+        return []
+    message = found.group(1)
+    return [(other, r) for other in index.entities if other is not entity
+            for r in other.rules
+            if r.kind == "refusal" and (m := _REFUSAL_MESSAGE.search(r.text))
+            and m.group(1) == message][:_SAME_REFUSAL_ELSEWHERE]
 
 
 def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
