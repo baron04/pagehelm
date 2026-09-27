@@ -807,7 +807,8 @@ class GoalTurnExecutor:
             # asked: values asked for but only a page declared, a number, code or day the
             # request wrote that the declaration never uses. The resolver would answer it
             # anyway, so the gaps go back to the model once, before resolving.
-            gaps = _coverage_gaps(spec, scope_parts, s.message.text, today_text, s.candidates)
+            gaps = _coverage_gaps(spec, scope_parts, s.message.text, today_text, s.candidates,
+                                  named=_hands_over_a_named_control(spec, scope_parts, s.message.text))
             if gaps:
                 s.ledger.append("goal_coverage_gaps", step=s.step, gaps=list(gaps))
                 s.step += 1
@@ -1712,8 +1713,16 @@ def _numbers(text: str) -> set[str]:
     return out
 
 
+def _hands_over_a_named_control(spec: GoalSpec, parts: list, text: str) -> bool:
+    """The declaration hands over a control the request writes in the application's
+    words and the first step named: what is asked is settled by the request itself."""
+    terms = {_norm(t) for p in parts for t in (p.get("terms") or ())}
+    return any(d.kind == "handoff" and d.action and _norm(d.action) in terms
+               and _names_verbatim(text, d.action) for d in spec.deliverables)
+
+
 def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
-                   candidates: tuple = ()) -> tuple[str, ...]:
+                   candidates: tuple = (), *, named: bool = False) -> tuple[str, ...]:
     """What the request asked that the declaration leaves out, judged by shape only:
     values asked for (the first step said so) with only pages or handoffs declared; a
     code, amount or day the request wrote that appears nowhere in the declaration nor in
@@ -1721,7 +1730,7 @@ def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
     gaps = []
     reads = ("fact", "list", "aggregate")
     asked = [p for p in parts if p.get("kind") in reads]
-    if asked and not any(d.kind in reads for d in spec.deliverables):
+    if asked and not named and not any(d.kind in reads for d in spec.deliverables):
         gaps.append("the request asks for values (" + "; ".join(
             f"{p['kind']} on {p['entity']}" for p in asked) + ") but the declaration only "
             "opens a page or hands over; declare the values asked for")

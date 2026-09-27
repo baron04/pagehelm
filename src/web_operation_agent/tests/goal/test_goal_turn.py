@@ -877,6 +877,18 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("你的账号没有删除这条记录的权限", execution.user_answer)
         self.assertNotIn("你指的是哪一个", execution.user_answer)
 
+    def test_a_named_control_handed_over_is_not_sent_back_for_values(self):
+        # The first step read "where is New" as a question; the request writes the
+        # page's New, and handing it over is the answer.
+        from web_operation_agent.goal.executor import _coverage_gaps, _hands_over_a_named_control
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "handoff", "entity": "order",
+                                                     "action": "New", "page": {"key": "p1"}}]})
+        parts = [{"kind": "fact", "entity": "order", "rules": True, "terms": ["New"]}]
+        text = "给客户开 order，New 在哪里？"
+        self.assertTrue(_hands_over_a_named_control(spec, parts, text))
+        self.assertEqual(_coverage_gaps(spec, parts, text, "2026-09-26", named=True), ())
+        self.assertTrue(_coverage_gaps(spec, parts, text, "2026-09-26"))
+
     def test_a_word_that_names_a_page_is_not_taken_for_the_control_of_that_name(self):
         from web_operation_agent.goal.executor import _named_controls
         index = replace(_index(), entities=(replace(_index().entities[0], actions=("Orders", "Confirm")),))
