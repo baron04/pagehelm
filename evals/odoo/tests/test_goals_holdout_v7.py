@@ -102,6 +102,9 @@ class V7Holdout(unittest.TestCase):
                               refused=True,write_detected=False)
                 self.assertEqual(verdict.outcome,'wrong')
                 self.assertFalse(verdict.answered_or_claimed)
+        verdict=score(task,probe={},visited=[],answer='打开 S00006 未完成：没有找到页签「Notes」。',
+                      finished=False,refused=True,write_detected=False)
+        self.assertFalse(verdict.answered_or_claimed)
         verdict=score(task,probe={},visited=[],answer='没有找到「带屏风的桌架」，系统里不存在这条记录。',
                       finished=False,refused=True,write_detected=False)
         self.assertTrue(verdict.answered_or_claimed)

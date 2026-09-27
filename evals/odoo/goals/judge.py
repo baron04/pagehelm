@@ -50,7 +50,8 @@ _CHOICES = re.compile(r"(?:^|\s)1[.、．]\s*")
 #: name, a part that could not be completed, the assistant unable, the service down.
 _NOT_DONE_LINE = re.compile(
     r"^(?:无法完成|没有找到|没找到|未找到|这个请求助手做不到|模型服务暂时没有响应|应用未能|"
-    r"Could not|Nothing named|The assistant cannot|The model service)|没有执行任何操作", re.I)
+    r"Could not|Nothing named|The assistant cannot|The model service)|没有执行任何操作|"
+    r"^打开 .+ 未完成|^Opening .+ was not completed", re.I)
 #: A statement about the application itself: it does not have, record or allow this.
 _SYSTEM_LACKS = re.compile(r"不存在|不记录|不支持|系统(?:里|中)?(?:没有|无)|无权|没有权限|"
                            r"does not exist|not recorded|not supported|no permission", re.I)
