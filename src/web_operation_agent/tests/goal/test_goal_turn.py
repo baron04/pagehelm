@@ -823,6 +823,20 @@ class GoalTurnTests(unittest.TestCase):
                          ["Quotation Template · _check_prepayment_percent",
                           "Sales Order · _check_prepayment_percent"])
         self.assertEqual(len(answer.citations), 2)
+        # Placeholders named differently, and what follows the first sentence, do not
+        # make it another refusal.
+        payment = IndexRule(id="r4", kind="refusal", about="action_post", text=(
+            'action_post refuses with "To pay with %(method_name)s, the account must be '
+            'validated. Go to %(partner)s." when x'))
+        wizard = IndexRule(id="r5", kind="refusal", about="Pay › _create_payments", text=(
+            'Pay › _create_payments refuses with "To pay with %(payment_method)s, the account '
+            'must be validated. Go to the partner." when y'))
+        index = ApplicationIndex(entities=(IndexEntity(key="payment", label="Payment", rules=(payment,)),
+                                           IndexEntity(key="move", label="Invoice", rules=(wizard,))))
+        state = SimpleNamespace(full_index=index, index=index)
+        answer = GoalTurnExecutor._rules_answer(None, state, Deliverable(kind="fact", rules=("r4",)))
+        self.assertEqual([f.subject for f in answer.facts],
+                         ["Payment · action_post", "Invoice · Pay › _create_payments"])
 
     def test_a_list_page_for_a_request_to_create_one_is_a_create_handoff(self):
         new = [Resolved(kind="handoff", page=PagePlan(url="/orders", label="Orders",

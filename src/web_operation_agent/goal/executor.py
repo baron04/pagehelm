@@ -74,10 +74,12 @@ _MAX_REVEALS = 3
 #: along with the one named.
 _SAME_ABOUT_RULES = 10
 _SAME_OPERATION_RULES = 6
-#: The same refusal written on other entities, answered along with the one named.
-_SAME_REFUSAL_ELSEWHERE = 3
-#: The message a refusal rule quotes, as the index writes it.
+#: The same refusals written on other entities, answered along with a rule's own.
+_SAME_REFUSAL_ELSEWHERE = 4
+#: The message a refusal rule quotes, as the index writes it, and the placeholders a
+#: message fills in (which two places raising it may name differently).
 _REFUSAL_MESSAGE = re.compile(r'refuses with "(.{20,}?)" when')
+_PLACEHOLDER = re.compile(r"%\([^)]*\)[sd]|%[sd]|\{[^}]*\}")
 #: Roles of elements a value can be entered into.
 _INPUT_ROLES = frozenset({"textbox", "combobox", "select", "searchbox", "spinbutton"})
 #: Roles a field's own suggestion list uses for the records it proposes.
@@ -1139,7 +1141,9 @@ class GoalTurnExecutor:
             if rule.subject:
                 group += [r for r in entity.rules if r not in group
                           and r.subject == rule.subject][:_SAME_OPERATION_RULES]
-            group = [(entity, r) for r in group] + _same_refusal_elsewhere(index, entity, rule)
+            group = [(entity, r) for r in group]
+            group += [pair for item in list(group) for pair in
+                      _same_refusal_elsewhere(index, entity, item[1])][:_SAME_REFUSAL_ELSEWHERE]
             for owner, item in group:
                 if item.id in shown:
                     continue
@@ -1413,14 +1417,23 @@ def _same_refusal_elsewhere(index, entity, rule) -> list:
     Which of them the person means is theirs to say, not the declaration's; a check
     written on both the order and its template, or on a payment and the wizard that
     makes it, is answered in both places."""
-    found = _REFUSAL_MESSAGE.search(rule.text) if rule.kind == "refusal" else None
-    if found is None or index is None:
+    message = _refusal_message(rule)
+    if not message or index is None:
         return []
-    message = found.group(1)
     return [(other, r) for other in index.entities if other is not entity
             for r in other.rules
-            if r.kind == "refusal" and (m := _REFUSAL_MESSAGE.search(r.text))
-            and m.group(1) == message][:_SAME_REFUSAL_ELSEWHERE]
+            if _refusal_message(r) == message][:_SAME_REFUSAL_ELSEWHERE]
+
+
+def _refusal_message(rule) -> str:
+    """The first sentence of the message a refusal quotes, its placeholders left out:
+    the words two places raising the same refusal share."""
+    found = _REFUSAL_MESSAGE.search(rule.text) if rule.kind == "refusal" else None
+    if found is None:
+        return ""
+    words = " ".join(_PLACEHOLDER.sub("", found.group(1)).split())
+    first = re.split(r"(?<=[.!?])\s", words, maxsplit=1)[0]
+    return first if len(first) >= 20 else ""
 
 
 def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
