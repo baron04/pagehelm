@@ -257,7 +257,7 @@ def _named_controls(spec: GoalSpec, parts: list, text: str, index
             entity = index.entity(d.entity) if d.entity else None
             page = index.page(d.page.key) if d.page.key else None
             for term in _terms_for(parts, position, d, len(spec.deliverables)):
-                if not _names_verbatim(text, term):
+                if not _names_verbatim(text, term) or _names_a_page(index, term):
                     continue
                 if d.record and entity is not None:
                     control = next((a for a in entity.actions if _norm(a) == _norm(term)), "")
@@ -283,6 +283,13 @@ def _terms_for(parts: list, position: int, d, count: int) -> tuple[str, ...]:
     return tuple(term for part in parts
                  if _norm(part.get("entity") or "") == _norm(d.entity)
                  for term in (part.get("terms") or ()))
+
+
+def _names_a_page(index, term: str) -> bool:
+    """A word that is also the name of a page ("credit note" beside Credit Notes) names
+    the kind of record the request is about, not the control of the same name."""
+    wanted = _norm(term).rstrip("s")
+    return any(_norm(page.label).rstrip("s") == wanted for page in index.pages)
 
 
 def _names_verbatim(text: str, name: str) -> bool:
@@ -1013,6 +1020,9 @@ class GoalTurnExecutor:
             return first
         if not third.deliverables:
             return first
+        # What the two readings agreed a total on stays so; the deciding reading does
+        # not make a sum a total on its own.
+        third, _first = _totals_agreed(third, first)
         s.ledger.append("goal_declared", step=s.step, spec=third.to_json(), attempt=3,
                         reconciled=True, **projection)
         return third

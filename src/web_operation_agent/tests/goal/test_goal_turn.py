@@ -877,6 +877,14 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("你的账号没有删除这条记录的权限", execution.user_answer)
         self.assertNotIn("你指的是哪一个", execution.user_answer)
 
+    def test_a_word_that_names_a_page_is_not_taken_for_the_control_of_that_name(self):
+        from web_operation_agent.goal.executor import _named_controls
+        index = replace(_index(), entities=(replace(_index().entities[0], actions=("Orders", "Confirm")),))
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "page", "entity": "order", "record": "S00006"}]})
+        parts = [{"kind": "page", "entity": "order", "terms": ["Orders"]}]
+        kept, named = _named_controls(spec, parts, "把 S00006 那张 orders 打开", index)
+        self.assertEqual((kept.deliverables[0].kind, named), ("page", ()))
+
     def test_a_list_page_whose_new_the_request_names_is_a_create_handoff(self):
         scope = ("declare_scope", {"parts": [{"kind": "page", "entity": "order", "about": "",
                                               "terms": ["New", "Orders"]}]})

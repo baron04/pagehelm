@@ -354,7 +354,7 @@ DECLARE_GOAL_TOOL = {
                                     "group_by": {"type": "string"},
                                     "top": {"type": "integer"},
                                     "total": {"type": "boolean",
-                                              "description": "sum: true when the person asks for the total over every record that fits (合计, 一共, 总共, 加总, 加起来, all of them together); false when they ask the amount of one record they describe"}},
+                                              "description": "sum: true only when the person asks to add several records up (合计, 总计, 一共, 总共, 加总, 加起来, 汇总, all together); a question about the amount of something (金额是多少, 多少钱, the amount of X's quotation) is false even when several records fit, since the person is then asked which one"}},
                                 "required": ["op"]},
                             "page": {
                                 "type": "object",
