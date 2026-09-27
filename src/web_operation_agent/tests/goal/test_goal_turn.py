@@ -595,7 +595,7 @@ class GoalTurnTests(unittest.TestCase):
 
     def test_scope_terms_in_the_applications_language_are_kept_per_part(self):
         from web_operation_agent.goal.spec import scope_from_json
-        parts, _write, _why = scope_from_json({"parts": [
+        parts, _write, _why, _about = scope_from_json({"parts": [
             {"kind": "fact", "entity": "order", "rules": True,
              "terms": ["archived analytic account", " post ", "", 7, "x", "y"]}]})
         self.assertEqual(parts[0]["terms"], ["archived analytic account", "post", "x"])
@@ -1112,6 +1112,38 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
         self.assertIn("助手做不到", execution.user_answer)
         self.assertEqual(_Browser.instances[0].actions, [])
+
+    def test_a_question_about_the_assistant_is_answered_not_refused(self):
+        for staged, script in (
+                (True, [("declare_scope", {"parts": [], "about_assistant": True,
+                                           "unsupported": "这是一个关于助手能力的通用问题"})]),
+                (False, [("declare_goal", {"deliverables": [], "about_assistant": True})])):
+            with self.subTest(staged=staged):
+                _Browser.instances.clear()
+                execution, _channel, chat, port, events = self._run(
+                    script, [], text="你能帮我做什么？", staged=staged,
+                    offers=frozenset({"handoffs"}))
+                self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+                self.assertIn("我可以在这个应用里帮你", execution.user_answer)
+                self.assertIn("引导操作", execution.user_answer)
+                # Only what the adapter declares: no value filling, no rules offered.
+                self.assertNotIn("帮你填好", execution.user_answer)
+                self.assertNotIn("解释规则", execution.user_answer)
+                self.assertNotIn("做不到", execution.user_answer)
+                self.assertNotIn("通用问题", execution.user_answer)
+                self.assertEqual(port.specs, [])
+                self.assertEqual([a for a, _ in _Browser.instances[0].actions
+                                  if a != "observe"], [])
+
+    def test_about_the_assistant_does_not_replace_a_declared_part(self):
+        execution, *_ = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]}],
+                "about_assistant": True})],
+            [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？")
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertNotIn("我可以在这个应用里帮你", execution.user_answer)
 
     def test_a_reply_without_a_declaration_is_refused_not_guessed(self):
         execution, *_ = self._run([(None, {"content": "Sure, let me look."}),

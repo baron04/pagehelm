@@ -71,7 +71,10 @@ agent.
   optional capabilities a port declares by name (page filters and groups, tabs, embedded
   lines, controls to point at, value entry, page search, source rules); a deliverable
   that needs an undeclared one is answered with what the application does not offer,
-  without asking the port. The Contacts application declares tabs and handoffs and takes
+  without asking the port. A question about the assistant itself ("what can you do?") is
+  declared as such and answered by the server from the same list: the required reads,
+  plus guiding a change, entering a value or explaining a rule only when the port
+  declares them. The Contacts application declares tabs and handoffs and takes
   goal turns in its demo. A turn is marked complete only when every declared deliverable
   settles. The declaration is staged by default: the request's hard references (document
   numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the

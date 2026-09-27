@@ -183,6 +183,47 @@ def _first_line(name: str) -> str:
     return ((name or "").strip().splitlines() or [""])[0].strip()
 
 
+def assistant_answer(capabilities: frozenset[str], *, chinese: bool) -> str:
+    """What this assistant can do, asked of the assistant itself ("你能帮我做什么？").
+
+    Written here rather than by the model, and from what the adapter declares: the
+    required reads are always there, and a line for guiding a change, entering a value
+    or explaining a rule appears only when the port offers it. The question used to be
+    declared unsupported, and the reply was a refusal card saying the assistant could not
+    do the request, with the model's own note about the question in brackets.
+    """
+    if chinese:
+        lines = ["我可以在这个应用里帮你：",
+                 "- 查数据：某条记录的字段（比如一张单据的客户、日期、状态），"
+                 "符合条件的记录有多少条、金额合计多少，列出符合描述的记录；",
+                 "- 找页面：打开你要看的列表或记录，告诉你某个功能在哪里；"]
+        if "source" in capabilities:
+            lines.append("- 解释规则：某个按钮为什么不显示、某个字段什么时候能改；")
+        if "handoffs" in capabilities:
+            lines.append("- 引导操作：要新建、修改、确认、发送或付款时，打开对应页面并标出要点的按钮"
+                         + ("，你给了值的话先帮你填好" if "fill" in capabilities else "")
+                         + "，由你核对后自己完成；")
+        lines[-1] = lines[-1].removesuffix("；") + "。"
+        return "\n".join(lines + ["", "我不会替你修改数据。直接用一句话说你要什么就行，"
+                                        "可以一次问几件事。"])
+    lines = ["In this application I can:",
+             "- Look up data: a field of a record (the customer, date or status of a "
+             "document), how many records meet a condition or what they add up to, and "
+             "which records fit a description;",
+             "- Find pages: open the list or record you want to see, or say where a "
+             "feature is;"]
+    if "source" in capabilities:
+        lines.append("- Explain rules: why a button is hidden, or when a field can be changed;")
+    if "handoffs" in capabilities:
+        lines.append("- Guide a change: to create, change, confirm, send or pay something, "
+                     "open the page and point at the control"
+                     + (", filling in a value you gave" if "fill" in capabilities else "")
+                     + ", for you to check and complete;")
+    lines[-1] = lines[-1].removesuffix(";") + "."
+    return "\n".join(lines + ["", "I do not change data for you. Say what you want in one "
+                                    "sentence; you can ask several things at once."])
+
+
 class _Unmet(NamedTuple):
     """One part of a page request the page did not show, by kind and the name asked."""
     kind: str
@@ -460,7 +501,8 @@ class GoalTurnExecutor:
                             references=[{"text": k.text, "entity": k.entity, "name": k.name}
                                         for k in known][:8])
             try:
-                parts, write_intent, unsupported, projection = understand_scope(
+                (parts, write_intent, unsupported, about_assistant,
+                 projection) = understand_scope(
                     chat, prompt=s.message.text,
                     summaries=summaries(index, lookup, known), run_id=s.run_id,
                     timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
@@ -478,7 +520,11 @@ class GoalTurnExecutor:
                                  else "The model service did not respond; please try again.")
             scope_parts = parts
             s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
-                            write_intent=write_intent, unsupported=unsupported, **projection)
+                            write_intent=write_intent, unsupported=unsupported,
+                            about_assistant=about_assistant, **projection)
+            if not parts and about_assistant:
+                return self._say(s, assistant_answer(capabilities_of(self.goal_port),
+                                                     chinese=s.chinese))
             if not parts:
                 s.terminal_reason = "agent_refused"
                 return self._say(s, ("这个请求助手做不到。" + (f"（{unsupported}）" if unsupported else ""))
@@ -615,6 +661,9 @@ class GoalTurnExecutor:
                                     detail=str(exc)[:200])
         s.write_intent = spec.write_intent or any(
             d.kind == "handoff" for d in spec.deliverables)
+        if not spec.deliverables and spec.about_assistant:
+            return self._say(s, assistant_answer(capabilities_of(self.goal_port),
+                                                 chinese=s.chinese))
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
@@ -1763,4 +1812,4 @@ def _not_done(resolved: Resolved, zh: bool) -> str:
     return "Could not do this part." + (f" Records that fit: {names}." if names else "")
 
 
-__all__ = ["GoalTurnExecutor"]
+__all__ = ["GoalTurnExecutor", "assistant_answer"]

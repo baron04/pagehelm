@@ -234,6 +234,9 @@ class GoalSpec:
     write_intent: bool = False
     #: Why nothing could be declared, in the model's words, when `deliverables` is empty.
     unsupported: str = ""
+    #: The request is about the assistant itself -- what it can do, how to ask it --
+    #: rather than about the application. Read only when `deliverables` is empty.
+    about_assistant: bool = False
 
     @classmethod
     def from_json(cls, value: object) -> "GoalSpec":
@@ -263,11 +266,15 @@ class GoalSpec:
         deliverables = tuple(Deliverable.from_json(d) for d in raw)
         return cls(deliverables=deliverables,
                    write_intent=bool(value.get("write_intent", False)),
-                   unsupported=_reason(value.get("unsupported")))
+                   unsupported=_reason(value.get("unsupported")),
+                   about_assistant=value.get("about_assistant") is True)
 
     def to_json(self) -> dict:
-        return {"deliverables": [d.to_json() for d in self.deliverables],
-                "write_intent": self.write_intent, "unsupported": self.unsupported}
+        out = {"deliverables": [d.to_json() for d in self.deliverables],
+               "write_intent": self.write_intent, "unsupported": self.unsupported}
+        if self.about_assistant:
+            out["about_assistant"] = True
+        return out
 
     def differences(self, other: "GoalSpec") -> list[str]:
         """Where two readings of one request disagree, in the declaration's own terms.
@@ -363,6 +370,8 @@ DECLARE_GOAL_TOOL = {
                             "limit": {"type": "integer", "description": "list: how many records to show"}},
                         "required": ["kind"]}},
                 "write_intent": {"type": "boolean"},
+                "about_assistant": {"type": "boolean",
+                                    "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- rather than about the application or its data"},
                 "unsupported": {"type": "string",
                                 "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for; or it asks about a rule, policy or limit and RULES holds no such rule -- then say the deployed source has no rule about it; written in the person's language, naming what is missing"}},
             "required": ["deliverables"]}}}
@@ -398,13 +407,16 @@ DECLARE_SCOPE_TOOL = {
                                       "description": "true when this part asks how the application itself behaves -- why a control is shown or hidden, what it opens, when a field can be changed, what an action refuses or requires, what a field means -- rather than about the data in its records"}},
                         "required": ["kind", "entity"]}},
                 "write_intent": {"type": "boolean"},
+                "about_assistant": {"type": "boolean",
+                                    "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- rather than about the application or its data"},
                 "unsupported": {"type": "string",
                                 "description": "why nothing can be declared, when parts is empty: the request needs data the index does not hold, which no related entity may stand in for; written in the person's language, naming what is missing"}},
             "required": ["parts"]}}}
 
 
-def scope_from_json(payload: object) -> tuple[list[dict], bool, str]:
-    """The first step's answer: (parts, write_intent, unsupported), leniently read."""
+def scope_from_json(payload: object) -> tuple[list[dict], bool, str, bool]:
+    """The first step's answer: (parts, write_intent, unsupported, about_assistant),
+    leniently read."""
     if isinstance(payload, str):
         payload = json.loads(payload)
     if isinstance(payload, list):
@@ -436,7 +448,8 @@ def scope_from_json(payload: object) -> tuple[list[dict], bool, str]:
             if words:
                 part["terms"] = words
         parts.append(part)
-    return parts, bool(payload.get("write_intent", False)), _reason(payload.get("unsupported"))
+    return (parts, bool(payload.get("write_intent", False)),
+            _reason(payload.get("unsupported")), payload.get("about_assistant") is True)
 
 
 __all__ = ["DECLARE_GOAL_TOOL", "DECLARE_SCOPE_TOOL", "Deliverable", "Filter", "GoalSpec", "KINDS",

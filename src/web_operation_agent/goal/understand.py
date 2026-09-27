@@ -42,10 +42,11 @@ The list names every entity the person may read, one per line, the likeliest fir
 
 def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
                      timeout_s: float | None = None, cancelled=None,
-                     today: str = "", earlier: str = "") -> tuple[list[dict], bool, str, dict]:
+                     today: str = "", earlier: str = ""
+                     ) -> tuple[list[dict], bool, str, bool, dict]:
     """The first step of a staged declaration: entities and kinds, from the ranked
     entity summaries rather than the full index. Returns (parts, write_intent,
-    unsupported, audit projection)."""
+    unsupported, about_assistant, audit projection)."""
     messages = [
         {"role": "system", "content": SCOPE_SYSTEM},
         {"role": "user", "content": (summaries + (f"\n\nTODAY\n{today}" if today else "")
@@ -63,15 +64,15 @@ def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
             else:
                 reply = chat.complete(messages, [DECLARE_SCOPE_TOOL], run_id, **kwargs)
             payload, source = _declaration_from(reply, name="declare_scope")
-            parts, write_intent, unsupported = scope_from_json(payload)
+            parts, write_intent, unsupported, about_assistant = scope_from_json(payload)
             break
         except (ValueError, ProviderError) as exc:
             limit = 3 if isinstance(exc, ProviderError) else 2
             if attempts >= limit or (isinstance(exc, ProviderError)
                                      and not getattr(exc, "retryable", True)):
                 raise
-    return parts, write_intent, unsupported, {"source": source, "attempts": attempts,
-                                              "part_count": len(parts)}
+    return parts, write_intent, unsupported, about_assistant, {
+        "source": source, "attempts": attempts, "part_count": len(parts)}
 
 
 def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
