@@ -937,6 +937,22 @@ class GoalTurnTests(unittest.TestCase):
         neighbourhood = next(e for e in events if e["event"] == "goal_neighbourhood")
         self.assertIn("order", neighbourhood["entities"])
         self.assertEqual(port.specs[-1].conventions[0].terms, ("成交",))
+        # A record the request names by its number brings its entity in too.
+        self.ledger.write_text("")
+        scripts = [("declare_scope", {"parts": [{"kind": "page", "entity": "partner", "about": "S00006"}]}),
+                   _declaration(kind="page", entity="order", record="S00006")]
+        executor = GoalTurnExecutor(
+            channel=_Channel(page_url="http://127.0.0.1:8080/home", decision="approved"),
+            config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=_AgreeingChat(scripts), application=bind_application(_Adapter()),
+            goal_port=_TwoEntities([Resolved(kind="page", page=PagePlan(
+                url="/orders/6", label="S00006", expected_path="/orders/6"))]),
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True, readings=1)
+        executor.execute({"message_id": "m2", "text": "把 S00006 打开",
+                          "page_url": "http://127.0.0.1:8080/home"})
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines() if line]
+        neighbourhood = next(e for e in events if e["event"] == "goal_neighbourhood")
+        self.assertIn("order", neighbourhood["entities"])
 
     def test_a_sum_is_a_total_only_when_both_readings_say_so(self):
         one = Aggregate(subject="Invoices · Acme · September", count=2,
@@ -987,6 +1003,19 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(handed.deliverables[0].action, "Delete")
         self.assertEqual(controls, ("Delete",))
 
+    def test_a_first_step_that_cannot_be_read_falls_back_to_one_declaration(self):
+        scripts = [("declare_scope", {"parts": 5}), ("declare_scope", {"parts": 5}),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]
+        execution, _channel, chat, _port, events = self._run(
+            scripts, [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？", staged=True, readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertTrue(any(e["event"] == "goal_scope_unread" for e in events))
+        self.assertIn("parts must be an array, not int", next(
+            e["detail"] for e in events if e["event"] == "goal_declaration_invalid"))
+        self.assertIn("APPLICATION INDEX", chat.messages[-1][1]["content"])
+
     def test_the_first_step_may_write_its_parts_as_a_string(self):
         from web_operation_agent.goal.spec import scope_from_json
         parts, *_ = scope_from_json({"parts": json.dumps([{"kind": "list", "entity": "order"}])})
@@ -1024,6 +1053,17 @@ class GoalTurnTests(unittest.TestCase):
         asked = [spec.deliverables[0] for spec in port.specs if not spec.deliverables[0].record]
         self.assertEqual(asked[0].metric.filters[0].field, "Customer")
         self.assertEqual(asked[0].metric.filters[0].values, ("Joel Willis",))
+        # With an amount in the request, the one the model picked may be the one it names.
+        port = _JoelPort([])
+        executor = GoalTurnExecutor(
+            channel=_Channel(page_url="http://127.0.0.1:8080/home", decision="approved"),
+            config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=_AgreeingChat(list(scripts)), application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True, readings=1)
+        execution = executor.execute({"message_id": "m2", "text": "Joel 那张两千九的单打开。",
+                                      "page_url": "http://127.0.0.1:8080/home"})
+        self.assertNotEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertEqual([spec for spec in port.specs if not spec.deliverables[0].record], [])
 
     def test_of_two_readings_the_one_that_finds_what_it_describes_is_taken(self):
         customer = ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",

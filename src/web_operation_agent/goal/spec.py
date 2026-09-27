@@ -447,7 +447,7 @@ def scope_from_json(payload: object) -> tuple[list[dict], bool, str, bool]:
     if isinstance(raw, dict):
         raw = [raw] if raw.get("kind") else list(raw.values())
     if not isinstance(raw, list):
-        raise ValueError("parts must be an array")
+        raise ValueError(f"parts must be an array, not {type(raw).__name__}")
     parts = []
     for item in raw[:_MAX_DELIVERABLES]:
         if not isinstance(item, dict):

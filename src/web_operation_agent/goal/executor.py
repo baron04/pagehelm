@@ -622,6 +622,7 @@ class GoalTurnExecutor:
         # are looked for in the earlier request as well as in its own words.
         earlier, before = self._earlier()
         lookup = (before + " " + s.message.text).strip()
+        parts = None
         if self.staged:
             known = locate(self.goal_port, lookup,
                            context=s.approvals.context(s.step, "locate"))
@@ -637,16 +638,18 @@ class GoalTurnExecutor:
                     timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
                     cancelled=s.cancelled, today=today_text, earlier=earlier)
             except ValueError as exc:
+                # The first step's answer could not be read, twice: the turn goes on as a
+                # single declaration against the whole index rather than refusing.
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
-                s.terminal_reason = "agent_refused"
-                return self._say(s, "没能理解这个请求要做什么，请换个说法。" if s.chinese
-                                 else "I could not work out what this request asks for.")
+                s.ledger.append("goal_scope_unread", step=s.step)
+                parts = None
             except ProviderError as exc:
                 s.ledger.append("provider_failed", step=s.step,
                                 provider_error_code=getattr(exc, "code", "provider_error"))
                 s.terminal_reason, s.detail = "provider_error", str(exc)[:200]
                 return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                                  else "The model service did not respond; please try again.")
+        if self.staged and parts is not None:
             scope_parts = parts
             scope_unsupported = unsupported
             s.scope_parts = list(parts)
