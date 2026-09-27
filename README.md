@@ -129,7 +129,20 @@ agent.
   An adapter may carry its organisation's conventions: what some words mean there ("订单"
   is every sales order, quotations included), written by the deployment in the index's
   terms and reviewed by its owner, never inferred from the application. Both declaration
-  steps show only the conventions whose words the request says.
+  steps show only the conventions whose words the request says. A convention may also
+  restate its meaning in structure, as an entity and conditions; the server then passes
+  the ones the request names to the resolver, which widens the declared page's own scope
+  by those records rather than letting the page leave them out (quotations beside the
+  confirmed-orders page when the request says 报价). A term inside a longer term belongs
+  to the longer one, and a convention meaning every record yields to a narrower one on
+  the same entity. Their entities are always in the neighbourhood, as is the entity of a
+  record the request names by its number.
+  Two readings are settled before resolving: when one says what the application does not
+  hold and the other answers from the same entities, the turn refuses and names what is
+  missing; when exactly one resolves to something there, it is taken without a third
+  reading; a sum counts as a total over every matching record only when both say so.
+  A port may report an operation the account may not perform (`denied`), which is said
+  instead of asking which record.
   If the model declares a write intent but only resolves read-only pages or facts, opening
   those pages is reported as partial guidance, never as the requested change having occurred.
   For a new record, an adapter may expose an actor-scoped `create` operation on a collection

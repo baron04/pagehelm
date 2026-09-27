@@ -427,7 +427,21 @@ read through a translation-only allowlist separate from source retrieval; withou
 index is English only. The reference deployment's conventions, what its organisation means
 by 订单, 销售订单, 报价单, 发票, 退款 and 产品, are in `conventions/reference.json` (a draft awaiting
 the owner's review); a deployment passes its own file, and the demo takes
-`conventions_path=None` for none.
+`conventions_path=None` for none. An entry may add `records`, an `entity` and a `where` list
+of field labels with choice labels, restating its meaning in structure; the resolver then
+widens a page's own domain and default filters by those records (an empty `where` lifts
+them). The reference file gives structure to the sales-order and product entries only: the
+invoice and refund words turn to vendor documents with 供应商, which a union cannot express.
+
+A description that fits no record of the declared entity is tried once more before it is
+refused: with a name moved to the entity's other indexed link (Joel the customer rather
+than Joel the salesperson), then on the other document entities with the same fields (the
+customer, the amount, the main date); exactly one match is the record. A name copied with
+its code in brackets is looked up by its name; a record written wholly in the person's
+language that matches nothing gets a repair listing the entity's names when it has at most
+80. Signed twins of amounts (`*_signed`) are left out of the index when the unsigned field
+exists. A delete on a model the delegated user may not unlink is denied before any record
+is looked up.
 
 Resolution is read-only JSON-RPC: `name_search` for a reference (an exact display-name match
 wins, a company beats its contacts, several remaining candidates are returned as ambiguous),
