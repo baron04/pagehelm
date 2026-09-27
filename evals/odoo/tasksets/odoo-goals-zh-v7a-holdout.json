@@ -112,7 +112,7 @@
         {
           "quote": "Ready Mat 的 S00003 还是什么状态",
           "check": {
-            "answer_regex": "(?is)(?:草稿|报价|\\bdraft\\b)"
+            "answer_regex": "(?is)(?:草稿|报价|\\bdraft\\b|\\bQuotation\\b(?!\\s*Sent))"
           }
         }
       ],

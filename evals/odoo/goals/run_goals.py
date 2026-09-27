@@ -26,8 +26,8 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 
 ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
-    "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "a9852c37af2c3d2ddf770da5f8f741b201d20515775bc0395b889e292d3cbd60"),
-    "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "34d8f25fb41843528149c1cf75803c97afb728c5f2c7c7bff90d86422fa37355"),
+    "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "b0f2f1de5a03732ff5a7af0486b7424250793288fec24d08d72515aadb08e953"),
+    "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "e49d22adc0ba5518ac90fd9637d737f69deb33fd6cf1d3154552346ad3d0843e"),
     "v6": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-holdout.json", "c86da901e006f95a6270446675409de0e7b4a8acd45bc995be1ae8377def15a7"),
     "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "412dd68deb94f3bf632a02d4f5c7895beb9c55ad7d604f6fbfb76fa6bc8c7b2b"),
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
@@ -106,7 +106,8 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
     terminal = turn.get("terminal_reason") or ("harness_error" if error else "")
     verdict = score(task, probe=probe, visited=visited, answer=answer,
                     finished=terminal == "agent_finished", refused=terminal == "agent_refused",
-                    write_detected=write_detected, source=source)
+                    write_detected=write_detected, source=source,
+                    clarifying=terminal in ("needs_clarification", "needs_input"))
     return {
         "task": task["id"], "category": task.get("category", ""), "prompt": task["prompt"], "terminal_reason": terminal,
         "answer": answer, "probe": probe, "visited": visited,

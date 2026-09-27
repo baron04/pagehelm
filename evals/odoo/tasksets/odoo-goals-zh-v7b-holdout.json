@@ -75,7 +75,7 @@
         {
           "quote": "S00005 还在报价阶段吗",
           "check": {
-            "answer_regex": "(?is)(?:草稿|报价|\\bdraft\\b)"
+            "answer_regex": "(?is)(?:草稿|报价|\\bdraft\\b|\\bQuotation\\b(?!\\s*Sent))"
           }
         }
       ],
@@ -285,7 +285,7 @@
         {
           "quote": "S00020 目前是报价还是已确认",
           "check": {
-            "answer_regex": "(?is)(?:已确认|已成交|销售订单|\\bsale\\b)"
+            "answer_regex": "(?is)(?:已确认|已成交|销售订单|\\bsale\\b|\\bSales Order\\b)"
           }
         }
       ],
