@@ -135,6 +135,20 @@ class V7Holdout(unittest.TestCase):
         self.assertEqual(score(self.tasks['af01'],probe={},visited=[],
             answer='请确认是哪张？',finished=True,write_detected=False).outcome,'wrong')
 
+    def test_an_ambiguous_request_is_not_answered_by_saying_it_was_not_done(self):
+        # Several records fit; a reply that only says it could not be done, or that
+        # points somewhere to look, is neither the question the task asks for nor a
+        # truthful statement that the application lacks something.
+        task=self.tasks['ai12']
+        for answer in ('无法完成这一项。','无法完成这一项。（可在 Invoicing / Invoices 页面上自行核对）'):
+            with self.subTest(answer=answer):
+                verdict=score(task,probe={},visited=[],answer=answer,finished=False,
+                              refused=True,write_detected=False)
+                self.assertEqual(verdict.outcome,'wrong')
+                self.assertFalse(verdict.success)
+        self.assertEqual(score(task,probe={},visited=[],answer='已打开：INV/2026/00002',
+            finished=True,write_detected=False).outcome,'false_claim')
+
     def test_invoice_create_accepts_two_destinations(self):
         task=self.tasks['ap13']
         for path in ('/odoo/invoicing','/odoo/customer-invoices'):
