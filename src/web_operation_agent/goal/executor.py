@@ -160,8 +160,8 @@ def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, .
     deleting = bool(_DELETE.search(text or ""))
     out, controls = [], []
     for d in spec.deliverables:
-        if (deleting and d.kind in ("handoff", "page") and d.action
-                and (d.record or (d.metric and d.metric.filters)) and not _DELETE.search(d.action)):
+        if (deleting and (d.kind == "handoff" or (d.kind == "page" and d.action))
+                and (d.record or (d.metric and d.metric.filters)) and not _DELETE.search(d.action or "")):
             # The person asked to delete; another operation (archive) is not what they
             # asked for, however close. The page shows Delete or it does not.
             d = replace(d, action="Delete")
@@ -201,7 +201,7 @@ def _finds(resolution: Resolution) -> bool:
     return bool(resolution.deliverables) and all(
         (not r.problem and (bool(r.facts) or r.page is not None
                             or (r.aggregate is not None and r.aggregate.count > 0)))
-        or len(r.candidates) >= 2
+        or len(r.candidates) >= 2 or bool(r.denied)
         for r in resolution.deliverables)
 
 
@@ -1872,7 +1872,7 @@ def _needs_beyond(d, offered: frozenset[str]) -> frozenset[str]:
 def _unresolved(spec: GoalSpec, resolution: Resolution) -> int:
     """Deliverables that came to nothing, plus a change asked for with nothing to point at."""
     count = sum(1 for d in resolution.deliverables
-                if d.problem and not (d.facts or d.aggregate
+                if d.problem and not d.denied and not (d.facts or d.aggregate
                                       or (d.page and d.kind not in ("fact", "list", "aggregate"))))
     if spec.write_intent and not any(d.kind == "handoff" for d in spec.deliverables):
         count += 1

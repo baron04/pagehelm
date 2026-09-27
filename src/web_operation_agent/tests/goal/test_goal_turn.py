@@ -1052,6 +1052,14 @@ class GoalTurnTests(unittest.TestCase):
         handed, controls = _as_handoffs(spec, "把 Ready Mat 的草稿报价删除。")
         self.assertEqual(handed.deliverables[0].action, "Delete")
         self.assertEqual(controls, ("Delete",))
+        # A handoff with no action named is a Delete too; a denial settles the turn.
+        bare = GoalSpec.from_json({"deliverables": [{"kind": "handoff", "entity": "order",
+            "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Ready Mat"]}]}}]})
+        self.assertEqual(_as_handoffs(bare, "把 Ready Mat 的草稿报价删除。")[0].deliverables[0].action, "Delete")
+        from web_operation_agent.goal.executor import _finds, _unresolved
+        denied = Resolution(deliverables=(Resolved(kind="handoff", problem="may not", denied="delete"),))
+        self.assertTrue(_finds(denied))
+        self.assertEqual(_unresolved(bare, denied), 0)
 
     def test_a_first_step_that_cannot_be_read_falls_back_to_one_declaration(self):
         scripts = [("declare_scope", {"parts": 5}), ("declare_scope", {"parts": 5}),
