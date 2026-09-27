@@ -438,8 +438,14 @@ def scope_from_json(payload: object) -> tuple[list[dict], bool, str, bool]:
     if raw is None and payload.get("kind"):
         raw = [payload]
     raw = raw or []
+    if isinstance(raw, str):
+        # The parts written as a JSON string inside the object.
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("parts must be an array") from exc
     if isinstance(raw, dict):
-        raw = [raw]
+        raw = [raw] if raw.get("kind") else list(raw.values())
     if not isinstance(raw, list):
         raise ValueError("parts must be an array")
     parts = []

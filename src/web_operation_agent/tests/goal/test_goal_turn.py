@@ -911,6 +911,83 @@ class GoalTurnTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             IndexConvention(terms=("x",), meaning="m", conditions=(("Status", ("A",)),))
 
+    def test_a_sum_is_a_total_only_when_both_readings_say_so(self):
+        one = Aggregate(subject="Invoices · Acme · September", count=2,
+                        sums=(("Total", "61,000.00 USD"),), records=("INV/2", "INV/3"))
+        said = lambda total: ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+            "metric": {"op": "sum", "field": "Total", "total": total,
+                       "filters": [{"field": "Customer", "values": ["Acme"]}]}}]})
+        execution, _channel, chat, _port, _events = self._run(
+            [said(False), said(True)], [Resolved(kind="aggregate", aggregate=one)],
+            text="Acme 九月的发票金额是多少？")
+        # One reading alone called it a total: the flag is dropped, the readings agree,
+        # and the one-amount rule asks which invoice.
+        self.assertEqual(len(chat.messages), 2)
+        self.assertNotIn("61,000.00", execution.user_answer)
+
+    def test_an_empty_first_reading_that_says_why_meets_the_second(self):
+        missing = ("declare_goal", {"deliverables": [], "unsupported": "订单上没有签收人身份证号"})
+        neighbour = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])
+        execution, _channel, chat, port, events = self._run(
+            [missing, neighbour], [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的签收人身份证号？")
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("签收人身份证号", execution.user_answer)
+        self.assertEqual([s for s in port.specs if s.deliverables], [])
+        # A second reading that reaches an entity the first was not shown replaces it.
+        elsewhere = _declaration(kind="fact", entity="invoice", record="INV/1", fields=["Total"])
+        execution, _channel, chat, port, events = self._run(
+            [missing, elsewhere], [Resolved(kind="fact", facts=(Fact("INV/1", "Total", "10"),))],
+            text="S00006 的签收人身份证号？")
+        self.assertTrue(any(e.get("taken") == "second" for e in events
+                            if e["event"] == "goal_readings_disagree_on_existence"))
+
+    def test_a_request_to_delete_a_described_record_is_a_delete(self):
+        from web_operation_agent.goal.executor import _as_handoffs
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "handoff", "entity": "order", "action": "Cancel",
+            "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Ready Mat"]}]}}]})
+        handed, controls = _as_handoffs(spec, "把 Ready Mat 的草稿报价删除。")
+        self.assertEqual(handed.deliverables[0].action, "Delete")
+        self.assertEqual(controls, ("Delete",))
+
+    def test_the_first_step_may_write_its_parts_as_a_string(self):
+        from web_operation_agent.goal.spec import scope_from_json
+        parts, *_ = scope_from_json({"parts": json.dumps([{"kind": "list", "entity": "order"}])})
+        self.assertEqual(parts[0]["entity"], "order")
+
+    def test_a_record_picked_among_a_named_customers_several_is_asked_about(self):
+        # "Open Joel's order": the model picked one of Joel's two orders from the values
+        # offered and declared no condition; Joel is the condition the request gives.
+        class _JoelPort(_Port):
+            def locate_reference(self, text, *, context=None):
+                return (("partner", "Joel Willis"),) if text == "Joel" else ()
+
+            def resolve(self, spec, *, context=None, current_path=""):
+                self.specs.append(spec)
+                d = spec.deliverables[0]
+                if not d.record:
+                    return Resolution(deliverables=(Resolved(
+                        kind=d.kind, problem="several", candidates=("S00019", "S00020")),), reads=())
+                return Resolution(deliverables=(Resolved(kind="page", page=PagePlan(
+                    url="/orders/20", label="S00020", expected_path="/orders/20")),), reads=())
+
+        scripts = [("declare_scope", {"parts": [{"kind": "page", "entity": "order", "about": "Joel 的那张单"}]}),
+                   _declaration(kind="page", entity="order", record="S00020")]
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        port = _JoelPort([])
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=_AgreeingChat(scripts), application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True, readings=1)
+        execution = executor.execute({"message_id": "m1", "text": "Joel 的那张单打开。",
+                                      "page_url": "http://127.0.0.1:8080/home"})
+        self.assertEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("S00019", execution.user_answer)
+        self.assertIn("S00020", execution.user_answer)
+        asked = [spec.deliverables[0] for spec in port.specs if not spec.deliverables[0].record]
+        self.assertEqual(asked[0].metric.filters[0].field, "Customer")
+        self.assertEqual(asked[0].metric.filters[0].values, ("Joel Willis",))
+
     def test_of_two_readings_the_one_that_finds_what_it_describes_is_taken(self):
         customer = ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
             "metric": {"op": "sum", "field": "Total", "filters": [{"field": "Customer", "values": ["Joel"]}]}}]})

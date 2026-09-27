@@ -967,7 +967,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             # date): the conditions alone.
             return self._locate(replace(d, page=replace(d.page, search="")), index)
         if not rows:
-            elsewhere = self._elsewhere(d, meta, index)
+            elsewhere = self._other_link(d, meta, index) or self._elsewhere(d, meta, index)
             if elsewhere is not None:
                 return elsewhere
             names = self._names_repair(model, meta) if any(
@@ -986,6 +986,40 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                                     "customer); when it gives none, leave them for the person "
                                     "to choose"))
         return model, int(rows[0]["id"]), str(rows[0].get("display_name") or "")
+
+    def _other_link(self, d: Deliverable, meta: _ModelMeta, index: ApplicationIndex):
+        """A description that fits nothing, with a name put on one link of the entity
+        ("Joel's quotation" read as Joel the salesperson, when Joel is the customer): the
+        one record it fits with that name on another link the index shows for the
+        entity. Several such readings, or none, find nothing here."""
+        conditions = list(d.metric.filters) if d.metric else []
+        entity = index.entity(meta.model)
+        if entity is None or not conditions:
+            return None
+        links = [f.label for f in entity.fields if f.kind == "link"]
+        found: dict[int, tuple] = {}
+        for i, condition in enumerate(conditions):
+            name = meta.field_by_label(condition.field)
+            if name is None or (meta.fields.get(name) or {}).get("type") != "many2one":
+                continue
+            for label in links:
+                other = meta.field_by_label(label)
+                if other is None or other == name:
+                    continue
+                swapped = replace(d, metric=replace(d.metric, filters=tuple(
+                    conditions[:i]) + (replace(condition, field=label),) + tuple(conditions[i + 1:])))
+                scope = self._scope(swapped, index, search=True)
+                if isinstance(scope, Resolved):
+                    continue
+                try:
+                    rows = self._call(meta.model, "search_read", [scope.domain],
+                                      {"fields": ["display_name"], "limit": 2})
+                except BusinessToolError:
+                    continue
+                if len(rows) == 1:
+                    found[int(rows[0]["id"])] = (meta.model, int(rows[0]["id"]),
+                                                 str(rows[0].get("display_name") or ""))
+        return next(iter(found.values())) if len(found) == 1 else None
 
     def _elsewhere(self, d: Deliverable, meta: _ModelMeta, index: ApplicationIndex):
         """A record described by who, how much and when (Gemini's one of 1,541.50) that
@@ -1043,8 +1077,8 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             return ""
         names = [str(r.get("display_name") or "") for r in rows if r.get("display_name")]
         return (f"the {meta.label} records here are: " + "; ".join(names)
-                + "; if the person described one of them in their own words, write its name "
-                  "exactly as it is here")
+                + "; if the person described one of them in their own words, declare the same "
+                  "deliverable again with that name, exactly as it is here, as its record")
 
     # -- aggregates -------------------------------------------------------------------
     def _aggregate(self, d: Deliverable, index: ApplicationIndex) -> Resolved:

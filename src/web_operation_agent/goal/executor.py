@@ -37,7 +37,7 @@ from ..state.identity import PrincipalError
 from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
 from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
-from .spec import GoalSpec
+from .spec import Filter, GoalSpec, Metric
 from .ground import bind, days, ground, pick, render as render_values, without_days
 from .index import conventions_named
 from .narrow import correct_records, locate, neighbourhood, references, summaries
@@ -160,8 +160,8 @@ def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, .
     deleting = bool(_DELETE.search(text or ""))
     out, controls = [], []
     for d in spec.deliverables:
-        if (deleting and d.kind in ("handoff", "page") and d.record and d.action
-                and not _DELETE.search(d.action)):
+        if (deleting and d.kind in ("handoff", "page") and d.action
+                and (d.record or (d.metric and d.metric.filters)) and not _DELETE.search(d.action)):
             # The person asked to delete; another operation (archive) is not what they
             # asked for, however close. The page shows Delete or it does not.
             d = replace(d, action="Delete")
@@ -178,12 +178,64 @@ def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, .
     return replace(spec, deliverables=tuple(out)), tuple(controls)
 
 
+def _link_to_named(s: _TurnState, d) -> tuple[str, str] | None:
+    """The declared entity's link to a record the request names (an order's Customer for
+    a named customer): (the link field's label, that record's name), or None."""
+    for index in (s.index, s.full_index):
+        entity = index.entity(d.entity) if index is not None and d.entity else None
+        if entity is None:
+            continue
+        for known in s.references:
+            if known.entity == entity.key:
+                continue
+            field_ = next((f for f in entity.fields
+                           if f.kind == "link" and f.relation == known.entity), None)
+            if field_ is not None:
+                return field_.label, known.name
+    return None
+
+
 def _finds(resolution: Resolution) -> bool:
-    """Every deliverable resolved to something there: a value, a page, or records."""
+    """Every deliverable resolved to something there: a value, a page, records, or the
+    several records a description fits (which the person can be asked to choose from)."""
     return bool(resolution.deliverables) and all(
-        not r.problem and (bool(r.facts) or r.page is not None
-                           or (r.aggregate is not None and r.aggregate.count > 0))
+        (not r.problem and (bool(r.facts) or r.page is not None
+                            or (r.aggregate is not None and r.aggregate.count > 0)))
+        or len(r.candidates) >= 2
         for r in resolution.deliverables)
+
+
+def _askable(resolution: Resolution | None) -> int:
+    """Deliverables left unresolved with several records to ask the person about."""
+    if resolution is None:
+        return 0
+    return sum(1 for r in resolution.deliverables
+               if len(r.candidates) >= 2 and not (r.facts or r.aggregate or r.page))
+
+
+def _within(s: _TurnState, spec: GoalSpec) -> bool:
+    """Every entity the declaration names is one the readings were shown."""
+    index = s.index
+    return index is None or all(index.entity(d.entity) is not None
+                                for d in spec.deliverables if d.entity)
+
+
+def _totals_agreed(first: GoalSpec, second: GoalSpec) -> tuple[GoalSpec, GoalSpec]:
+    """A sum is the total over every record that fits only when both readings say so:
+    one reading alone takes "Acme's invoice amount this month" for a total about as
+    often as the other takes it for one invoice's amount, and the owner's rule for that
+    is to ask which. The flag then never makes the readings differ."""
+    if len(first.deliverables) != len(second.deliverables):
+        return first, second
+
+    def settled(spec: GoalSpec, agreed: list[bool]) -> GoalSpec:
+        return replace(spec, deliverables=tuple(
+            replace(d, metric=replace(d.metric, total=total)) if d.metric is not None else d
+            for d, total in zip(spec.deliverables, agreed)))
+
+    agreed = [bool(a.metric and a.metric.total and b.metric and b.metric.total)
+              for a, b in zip(first.deliverables, second.deliverables)]
+    return settled(first, agreed), settled(second, agreed)
 
 
 def _named_controls(spec: GoalSpec, parts: list, text: str, index
@@ -678,7 +730,16 @@ class GoalTurnExecutor:
             return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                              else "The model service did not respond; please try again.")
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
-        if (self.staged and not spec.deliverables and scope_parts
+        if (not spec.deliverables and spec.unsupported and not spec.about_assistant
+                and second_reading is not None):
+            # The first reading says the application does not hold what is asked. The
+            # second, read independently, settles it: saying so too, or answering from
+            # the same entities the first looked at, the refusal stands (an answer there
+            # is a neighbouring field). Only a second reading that reaches entities the
+            # first did not see replaces it.
+            spec = self._second_on_existence(s, spec, second_reading)
+            second_reading = None
+        elif (self.staged and not spec.deliverables and scope_parts
                 and not (spec.unsupported and scope_unsupported)
                 and not spec.about_assistant and not any(p.get("rules") for p in scope_parts)):
             # The first step found things to deliver in this request and the second
@@ -791,8 +852,10 @@ class GoalTurnExecutor:
                     second = self._resolve(s, repaired)
                 except _ContractBroken:
                     second = None
-                accepted = second is not None and \
+                accepted = second is not None and (
                     _unresolved(repaired, second) < _unresolved(spec, resolution)
+                    or (_unresolved(repaired, second) == _unresolved(spec, resolution)
+                        and _askable(second) > _askable(resolution)))
                 s.ledger.append("goal_repaired", step=s.step, accepted=accepted,
                                 unresolved_before=_unresolved(spec, resolution),
                                 unresolved_after=_unresolved(repaired, second))
@@ -845,6 +908,24 @@ class GoalTurnExecutor:
                       "\n\nI only found the relevant information or page. I did not make the requested change; please review it and act yourself.")
         return reply
 
+    def _second_on_existence(self, s: _TurnState, first: GoalSpec, second_reading) -> GoalSpec:
+        s.step += 1
+        try:
+            second, projection = second_reading.result()
+        except Exception as exc:  # noqa: BLE001 -- as in _agree: the first stands
+            s.ledger.append("goal_second_reading_failed", step=s.step,
+                            detail=f"{type(exc).__name__}: {exc}"[:200])
+            return first
+        s.ledger.append("goal_second_reading", step=s.step, spec=second.to_json(),
+                        agrees=not second.deliverables, differences=[], **projection)
+        if second.deliverables and not _within(s, second):
+            s.ledger.append("goal_readings_disagree_on_existence", step=s.step,
+                            taken="second", reason="entities the first did not see")
+            return second
+        if second.deliverables:
+            s.ledger.append("goal_readings_disagree_on_existence", step=s.step, taken="first")
+        return first
+
     def _agree(self, s: _TurnState, chat, index, first: GoalSpec, today, second_reading) -> GoalSpec:
         """A second, independent reading of the request; when it disagrees with the
         first, both are put in front of the model and a third reading decides.
@@ -868,7 +949,7 @@ class GoalTurnExecutor:
         # readings before they are compared: one reading dropping it is not a
         # disagreement the model needs to settle.
         if (not second.deliverables and second.unsupported and not second.about_assistant
-                and not first.about_assistant):
+                and not first.about_assistant and _within(s, first)):
             # One reading says the application does not hold what is asked, and names
             # it; the other found something to answer with. They disagree on whether
             # the data exists at all, which a third reading settles no better than the
@@ -881,6 +962,7 @@ class GoalTurnExecutor:
             s.ledger.append("goal_readings_disagree_on_existence", step=s.step)
             return GoalSpec(deliverables=(), write_intent=first.write_intent,
                             unsupported=second.unsupported)
+        first, second = _totals_agreed(first, second)
         first, named_first = _named_controls(first, s.scope_parts, s.message.text, index)
         second, named_second = _named_controls(second, s.scope_parts, s.message.text, index)
         named = tuple(dict.fromkeys(named_first + named_second))
@@ -1045,12 +1127,20 @@ class GoalTurnExecutor:
         for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
             chosen = _norm(d.record)
             if (d.kind not in ("page", "fact", "handoff") or d.rules or r.problem or not chosen
-                    or chosen in text or chosen in named
-                    or not ((d.metric and d.metric.filters) or d.page.search)):
+                    or chosen in text or chosen in named):
                 continue
+            unnamed = replace(d, record="")
+            if not ((d.metric and d.metric.filters) or d.page.search):
+                # No condition declared, but the request names who the record belongs to
+                # ("Joel's order"): that link is what the request says of it.
+                link = _link_to_named(s, d)
+                if link is None:
+                    continue
+                unnamed = replace(unnamed, metric=Metric(op="count", filters=(
+                    Filter(field=link[0], values=(link[1],)),)))
             try:
                 described = self.goal_port.resolve(
-                    GoalSpec(deliverables=(replace(d, record=""),), conventions=s.conventions),
+                    GoalSpec(deliverables=(unnamed,), conventions=s.conventions),
                     context=s.approvals.context(s.step, "resolve"),
                     current_path=_path_of(s.obs.url)).deliverables[0]
             except Exception:  # noqa: BLE001 -- the declared record stands when the check cannot run

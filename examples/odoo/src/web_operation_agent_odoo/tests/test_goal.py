@@ -425,6 +425,29 @@ class OdooGoalPortTests(unittest.TestCase):
         self.port.resolve(count)
         self.assertNotEqual(self.client.domains[-1][0], "|")
 
+    def test_a_name_put_on_the_wrong_link_is_found_on_the_one_it_fits(self):
+        # "Joel's sent quotation" declared with Joel as the salesperson: nothing fits;
+        # with Joel as the customer exactly one does, and that is the record.
+        client = self.client
+        original = client.call
+
+        def call(model, method, args, kwargs=None):
+            if model == "res.users" and method == "name_search":
+                return [[5, "Gemini Furniture"]]
+            if model == "sale.order" and method == "search_read":
+                searched.append(args[0])
+                return [] if "user_id" in str(args[0]) else [{"id": 7, "display_name": "S00007"}]
+            return original(model, method, args, kwargs)
+
+        searched: list = []
+        client.call = call
+        result = self._resolve({"kind": "fact", "entity": "sale.order", "fields": ["Total"],
+                                "metric": {"op": "count", "filters": [
+                                    {"field": "Salesperson", "values": ["Gemini Furniture"]}]}})
+        self.assertEqual(result.deliverables[0].problem, "")
+        self.assertEqual(searched[0], [["user_id", "in", [5]]])
+        self.assertIn([["partner_id", "child_of", [11]]], searched)
+
     def test_search_words_that_repeat_a_condition_add_nothing(self):
         self.client.domains.clear()
         self._resolve({"kind": "list", "entity": "sale.order", "page": {"key": "p331", "search": "Gemini Furniture"},
