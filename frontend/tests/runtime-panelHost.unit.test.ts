@@ -165,3 +165,26 @@ describe('PanelHost verbs the panel drives', () => {
     expect(act.loadOlder).not.toHaveBeenCalled()
   })
 })
+
+describe('examples the page declares after the panel went up', () => {
+  it('are shown once offered, and only the first offer counts', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    const seen = vi.fn()
+    host.subscribe(seen)
+    expect(host.examples).toEqual([])
+    host.offerExamples([])
+    expect(seen).not.toHaveBeenCalled()
+    host.offerExamples([{kind: 'query', text: '列出所有待开票的销售订单'}])
+    expect(host.examples).toEqual([{kind: 'query', text: '列出所有待开票的销售订单'}])
+    expect(seen).toHaveBeenCalledTimes(1)
+    host.offerExamples([{kind: 'find', text: '在哪里新建报价单'}])
+    expect(host.examples).toEqual([{kind: 'query', text: '列出所有待开票的销售订单'}])
+  })
+
+  it('never replace the ones the page declared at the start', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions(),
+                                examples: [{kind: 'find', text: '在哪里新建报价单'}]})
+    host.offerExamples([{kind: 'query', text: '列出所有待开票的销售订单'}])
+    expect(host.examples).toEqual([{kind: 'find', text: '在哪里新建报价单'}])
+  })
+})

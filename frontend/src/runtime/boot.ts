@@ -399,6 +399,13 @@ export function autoBoot(win: Window = window): Supervisor | null {
     cancel() {}, decide() {}, newConversation() {}, loadOlder() {},
   }, DEFAULT_CONFIGURATION,
   examplesFromPage(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars))
+  // Loaded ahead of the page -- as a harness injects it -- the tag that declares the examples
+  // is not parsed yet. Read them again once it is.
+  if (win.document.readyState === 'loading') {
+    listen('boot examples', win.document, 'DOMContentLoaded', () => shell.host.offerExamples(
+      examplesFromPage(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars)),
+    {once: true})
+  }
   const supervisor: Supervisor = new Supervisor({
     source,
     start: config => startEmbeddedRuntime(config, shell),

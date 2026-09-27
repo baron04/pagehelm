@@ -137,7 +137,7 @@ export class PanelHost implements PanelHostContract {
   /** Recovered entries use sequence zero because they belong to an earlier incarnation. */
   private recoveredHistoryVisible = true
 
-  readonly examples: readonly PanelExample[]
+  private offered: readonly PanelExample[]
 
   constructor({configuration, actions, examples = []}: {
     configuration: PanelConfiguration
@@ -148,7 +148,20 @@ export class PanelHost implements PanelHostContract {
     requireActions(actions)
     this.current = configuration
     this.actions = actions
-    this.examples = examples
+    this.offered = examples
+  }
+
+  get examples(): readonly PanelExample[] { return this.offered }
+
+  /**
+   * Examples the page declared after the panel went up -- a script that runs before the
+   * document is parsed finds no tag to read them from yet. Only the first offer counts: they
+   * are the page's, and a page declares them once.
+   */
+  offerExamples(examples: readonly PanelExample[]): void {
+    if (this.offered.length || !examples.length) return
+    this.offered = examples
+    this.commit({})
   }
 
   get configuration(): PanelConfiguration { return this.current }
