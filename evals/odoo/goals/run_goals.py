@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import html
 import json
+import re
 import time
 from pathlib import Path
 from collections import Counter
@@ -28,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
     "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "b0f2f1de5a03732ff5a7af0486b7424250793288fec24d08d72515aadb08e953"),
     "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "e49d22adc0ba5518ac90fd9637d737f69deb33fd6cf1d3154552346ad3d0843e"),
+    "mt-dev": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-multiturn-dev.json", "1686f0dce9da0f0980000864e4c4005f8f9a207dc4e68c751b249dcfd8a592ab"),
     "v6": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-holdout.json", "c86da901e006f95a6270446675409de0e7b4a8acd45bc995be1ae8377def15a7"),
     "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "412dd68deb94f3bf632a02d4f5c7895beb9c55ad7d604f6fbfb76fa6bc8c7b2b"),
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
@@ -64,6 +66,21 @@ def summarize_v7(rows: list[dict]) -> dict:
     }
 
 
+def first_turn_met(task: dict, turns: list[dict]) -> bool | None:
+    """For a task that goes on after its request, whether the first turn did what the
+    task says it should: ask with every candidate, or answer with what it names. None
+    when the task says nothing about its first turn."""
+    expected = task.get("first_turn")
+    if not expected or not turns:
+        return None
+    first = turns[0]
+    answer = first.get("answer", "")
+    if "asks" in expected:
+        return (first.get("terminal_reason") in ("needs_clarification", "needs_input")
+                and all(re.search(pattern, answer) for pattern in expected["asks"]))
+    return re.search(expected["answer_regex"], answer) is not None
+
+
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
                 model_env: Path, container: str, database: str, staged: bool = True,
                 values: bool = True) -> dict:
@@ -80,7 +97,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
             api_key_path=credentials / "api-key.json",
             storage_state_path=credentials / "storage-state.json",
             page_controller_module=env["WOA_ODOO_PAGE_CONTROLLER_MODULE"],
-            entry_path=doc["entry_path"], tasks=(task["prompt"],),
+            entry_path=doc["entry_path"], tasks=(task["prompt"], *task.get("replies", ())),
             source_root=Path(env["WOA_ODOO_SOURCE_ROOT"]),
             source_release=env["WOA_ODOO_SOURCE_RELEASE"],
             scripted=False, headless=True, output_dir=output, model_env=model_env,
@@ -99,7 +116,12 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
     from urllib.parse import urlsplit
     visited = [urlsplit(event.get("url_after") or "").path for event in events
                if event.get("event") == "action_receipt" and event.get("url_after")]
-    turn = (summary.get("turns") or [{}])[0]
+    # A task may go on after its request: the person's replies, in the same session. The
+    # outcome is the last turn's; every turn is kept.
+    turns = summary.get("turns") or []
+    turn = turns[-1] if turns else {}
+    if len(turns) < 1 + len(task.get("replies", ())):
+        error = error or f"only {len(turns)} of {1 + len(task.get('replies', ()))} turns ran"
     usage = summary.get("model_usage") or {}
     probe = summary.get("final_page_probe") or {}
     answer = turn.get("answer", "")
@@ -108,8 +130,12 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
                     finished=terminal == "agent_finished", refused=terminal == "agent_refused",
                     write_detected=write_detected, source=source,
                     clarifying=terminal in ("needs_clarification", "needs_input"))
+    first = first_turn_met(task, turns)
     return {
         "task": task["id"], "category": task.get("category", ""), "prompt": task["prompt"], "terminal_reason": terminal,
+        "turns": [{"answer": t.get("answer", ""), "terminal_reason": t.get("terminal_reason", "")}
+                  for t in turns],
+        "first_turn_met": first,
         "answer": answer, "probe": probe, "visited": visited,
         "write_detected": write_detected, "error": error, "wall_s": wall,
         "steps": turn.get("steps"), "provider_calls": usage.get("provider_calls", 0),
@@ -251,6 +277,7 @@ def main() -> int:
             rows.append(row)
             print(json.dumps({key: row[key] for key in (
                 "repeat", "task", "success", "honest", "achieved", "claimed", "outcome", "asked", "answered_or_claimed",
+                "first_turn_met",
                 "false_claims",
                 "terminal_reason", "provider_calls", "cost_cny",
                 "write_detected")}, ensure_ascii=False), flush=True)
@@ -276,7 +303,11 @@ def main() -> int:
                       "false_claims": sum(len(row["false_claims"]) for row in rows),
                       "provider_calls": sum(row["provider_calls"] for row in rows),
                       "cost_cny": round(sum(row["cost_cny"] for row in rows), 4),
-                      **(summarize_v7(rows) if arguments.taskset in ("v7a", "v7b") else {})},
+                      **(summarize_v7(rows) if all(task.get("rubric_version") == 7
+                                                   for task in doc["tasks"]) else {}),
+                      **({"first_turn_met": sum(row["first_turn_met"] is True for row in rows),
+                          "first_turn_total": sum(row["first_turn_met"] is not None for row in rows)}
+                         if any(row.get("first_turn_met") is not None for row in rows) else {})},
                      ensure_ascii=False), flush=True)
     return 0
 
