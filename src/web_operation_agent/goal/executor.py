@@ -1556,9 +1556,11 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             where = (f"（可在 {resolved.page.label} 页面上自行核对）" if zh
                      else f" (you can check on {resolved.page.label})")
         if resolved.missing:
-            lines.append((f"没有找到「{resolved.missing}」，系统里不存在这条记录。{where}") if zh
-                         else f"Nothing named \"{resolved.missing}\" was found; no such record "
-                              f"exists.{where}")
+            # Only the name was looked up: nothing is called that, which is not to say
+            # nothing the person described exists (a Chinese description of an English
+            # product name finds no name and still means a real product).
+            lines.append((f"没有找到名为「{resolved.missing}」的记录。{where}") if zh
+                         else f"Nothing named \"{resolved.missing}\" was found.{where}")
         else:
             lines.append((f"无法完成这一项：{text}{where}") if zh
                          else f"Could not do this part: {text}{where}")
@@ -1642,8 +1644,8 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             lines.append((f"打开 {plan.label} 未完成：{unmet or '页面未到达'}。") if zh
                          else f"Opening {plan.label} was not completed: {unmet or 'page not reached'}.")
     if resolved.missing and not (resolved.facts or resolved.aggregate or resolved.page):
-        lines.append((f"没有找到「{resolved.missing}」，系统里不存在这条记录。") if zh
-                     else f"Nothing named \"{resolved.missing}\" was found; no such record exists.")
+        lines.append((f"没有找到名为「{resolved.missing}」的记录。") if zh
+                     else f"Nothing named \"{resolved.missing}\" was found.")
     elif resolved.problem and not (resolved.facts or resolved.aggregate or resolved.page):
         text = resolved.problem
         if resolved.candidates:

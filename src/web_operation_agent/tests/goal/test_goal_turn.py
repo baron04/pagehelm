@@ -998,8 +998,10 @@ class GoalTurnTests(unittest.TestCase):
             [_declaration(kind="fact", entity="order", record="S00998", fields=["Customer"])],
             [Resolved(kind="fact", problem="no Sales Order matches 'S00998'", missing="S00998")],
             text="S00998 的客户是谁？")
-        self.assertIn("没有找到「S00998」", execution.user_answer)
+        self.assertIn("没有找到名为「S00998」的记录", execution.user_answer)
         self.assertNotIn("no Sales Order matches", execution.user_answer)
+        # Only the name was looked up; the reply does not say nothing of the kind exists.
+        self.assertNotIn("不存在", execution.user_answer)
 
     def test_an_aggregate_is_rendered_with_its_scope(self):
         execution, *_ = self._run(
