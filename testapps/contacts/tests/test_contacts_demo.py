@@ -1084,8 +1084,8 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
 
         counted, opened = summary["turns"]
         self.assertEqual(counted["status"], "finished")
-        self.assertIn("Count", counted["answer"])
-        self.assertIn("1", counted["answer"])
+        # A count of a search by name is headed by the name it searched for.
+        self.assertIn('**Records matching "Grace Hopper"**：1', counted["answer"])
         self.assertEqual(opened["status"], "finished")
         self.assertTrue(summary["last_url"].endswith("/contacts/grace-hopper"))
         self.assertIn("grace@example.test", summary["last_page_text"])
