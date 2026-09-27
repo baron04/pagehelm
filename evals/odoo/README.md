@@ -47,6 +47,13 @@ The A and B prompts are different; their reference date is 2026-09-26 in
 Asia/Shanghai. A served as the P8.9 development set; B was run once, as the P8.9
 holdout, on 2026-09-27, and has been seen since.
 
+`--version v7c` and `--version v7d` select two further sets written to the same
+specification and cell-by-cell split as B, each by an author who had not seen the
+assistant's implementation, verified with the zero-model oracle and sealed before
+its first run. v7-D additionally requires every clarification candidate the domain
+matches and asks only about fields the reader's views show. Each was run once as a
+holdout on 2026-09-27 and has been seen since.
+
 ## Multi-turn follow-up holdout
 
 `--version mt-holdout` selects 40 frozen Chinese two-turn tasks in
