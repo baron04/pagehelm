@@ -853,6 +853,16 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual([s for s in port.specs if s.deliverables], [])
         self.assertFalse(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
 
+    def test_a_question_about_rules_is_not_refused_for_a_reading_that_saw_no_data(self):
+        scope = ("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "rules": True,
+                                              "about": "Create Invoice"}]})
+        ruled = _declaration(kind="fact", entity="order", rules=["r1"])
+        missing = ("declare_goal", {"deliverables": [], "unsupported": "库存实体不在索引里"})
+        execution, _channel, _chat, _port, events = self._run(
+            [scope, ruled, missing], [], text="Create Invoice 按钮什么时候不显示？", staged=True)
+        self.assertFalse(any(e["event"] == "goal_readings_disagree_on_existence" for e in events))
+        self.assertIn("Create Invoice", execution.user_answer)
+
     def test_an_empty_second_step_that_says_what_is_missing_is_not_asked_again(self):
         # Both steps say the application does not hold it: the first found the order the
         # request names, and noted that the thing asked of it is not recorded.

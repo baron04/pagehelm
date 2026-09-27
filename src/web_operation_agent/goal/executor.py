@@ -753,8 +753,9 @@ class GoalTurnExecutor:
             return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                              else "The model service did not respond; please try again.")
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
+        asks_rules = any(p.get("rules") for p in scope_parts)
         if (not spec.deliverables and spec.unsupported and not spec.about_assistant
-                and second_reading is not None):
+                and second_reading is not None and not asks_rules):
             # The first reading says the application does not hold what is asked. The
             # second, read independently, settles it: saying so too, or answering from
             # the same entities the first looked at, the refusal stands (an answer there
@@ -973,7 +974,11 @@ class GoalTurnExecutor:
         # readings before they are compared: one reading dropping it is not a
         # disagreement the model needs to settle.
         if (not second.deliverables and second.unsupported and not second.about_assistant
-                and not first.about_assistant and _within(s, first)):
+                and not first.about_assistant and _within(s, first)
+                and not any(p.get("rules") for p in s.scope_parts)):
+            # (A question about how the application behaves is answered from its rules,
+            # and "no such rule" is said there; a reading's view that some data is not
+            # held says nothing about it.)
             # One reading says the application does not hold what is asked, and names
             # it; the other found something to answer with. They disagree on whether
             # the data exists at all, which a third reading settles no better than the
