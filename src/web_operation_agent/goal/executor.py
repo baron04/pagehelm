@@ -61,6 +61,8 @@ _TOTAL_WORDS = re.compile(r"合计|总计|总额|总金额|总共|一共|共计|
 _CREATE = re.compile(r"(?:新建|新增|创建|新开|开一张|录一张|录入|建一个|加一个)(?!的)|"
                      r"\b(?:create|add) (?:a|an|one)\b|\bnew (?:invoice|order|customer|quotation|bill)\b",
                      re.I)
+#: A request to delete a record, and a control that deletes.
+_DELETE = re.compile(r"删除|删掉|删了|\bdelete\b|\bremove\b", re.I)
 #: Words that point at one record ("that invoice", "the one of August").
 _ONE_RECORD = re.compile(r"那张|这张|那笔|这笔|那条|这条|那单|这单|那个|这个|哪张|哪笔|"
                          r"\bthat (?:invoice|order|refund|bill|quotation|one)\b", re.I)
@@ -114,8 +116,15 @@ def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, .
     one ("I want to make a new customer invoice, show me where"): its control is the
     page's own New. Returns (spec, the controls)."""
     creating = bool(_CREATE.search(text or ""))
+    deleting = bool(_DELETE.search(text or ""))
     out, controls = [], []
     for d in spec.deliverables:
+        if (deleting and d.kind in ("handoff", "page") and d.record and d.action
+                and not _DELETE.search(d.action)):
+            # The person asked to delete; another operation (archive) is not what they
+            # asked for, however close. The page shows Delete or it does not.
+            d = replace(d, action="Delete")
+            controls.append("Delete")
         if d.kind == "page" and d.action and d.record:
             d = replace(d, kind="handoff")
             controls.append(d.action)

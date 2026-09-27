@@ -784,6 +784,18 @@ class GoalTurnTests(unittest.TestCase):
             text="打开新建的订单列表")
         self.assertEqual(port.specs[0].deliverables[0].kind, "page")
 
+    def test_a_request_to_delete_is_never_handed_over_as_another_operation(self):
+        with patch.object(executor_module, "RemoteBrowserClient", self._MenuBrowser):
+            execution, _channel, _chat, port, _events = self._run(
+                [_declaration(kind="handoff", entity="order", record="S00005", action="Archive")],
+                [Resolved(kind="handoff", page=PagePlan(url="/orders/5", label="S00005",
+                                                        expected_path="/orders/5",
+                                                        highlight="Delete"))],
+                text="帮我删掉 S00005")
+        self.assertEqual(port.specs[-1].deliverables[0].action, "Delete")
+        self.assertIn("标出「Delete」", execution.user_answer)
+        self.assertNotIn("Archive", execution.user_answer)
+
     def test_write_intent_cannot_be_settled_by_opening_a_page(self):
         execution, _channel, _chat, _port, events = self._run(
             [("declare_goal", {"deliverables": [{"kind": "page", "page": {"key": "p1"}}],
