@@ -53,7 +53,8 @@ def _index() -> ApplicationIndex:
             rules=(_RULE, _WINDOW_RULE, _OTHER_RULE)),),
         pages=(IndexPage(key="p1", label="Orders", breadcrumb="Sales / Orders",
                          entity="order", views=("list", "kanban"),
-                         filters=("My Orders",), groups=("Salesperson",)),),
+                         filters=("My Orders",), groups=("Salesperson",),
+                         operations=("create",)),),
         source_digest="abc")
 
 
@@ -797,6 +798,58 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("标出「Send by Email」", execution.user_answer)
         self.assertEqual([e["controls"] for e in events if e["event"] == "goal_page_became_handoff"],
                          [["Send by Email"]])
+
+    def test_a_control_the_request_names_stays_when_a_reading_drops_it(self):
+        # The first step named the control the request writes; one of the two readings
+        # came back without it. The request's own words put it back before the readings
+        # are compared, so they agree and no third reading is asked for.
+        scope = ("declare_scope", {"parts": [{"kind": "page", "entity": "order", "about": "S00006",
+                                              "terms": ["Send by Email"]}]})
+        with_control = _declaration(kind="page", entity="order", record="S00006",
+                                    action="Send by Email")
+        without = _declaration(kind="page", entity="order", record="S00006")
+        execution, _channel, chat, port, events = self._run(
+            [scope, with_control, without],
+            [Resolved(kind="handoff", page=PagePlan(url="/orders/6", label="S00006",
+                                                    expected_path="/orders/6",
+                                                    highlight="Send by Email"))],
+            text="S00006 的 Send by Email 给我指出来", staged=True)
+        self.assertEqual(len(chat.messages), 3)
+        self.assertEqual((port.specs[-1].deliverables[0].kind, port.specs[-1].deliverables[0].action),
+                         ("handoff", "Send by Email"))
+        self.assertIn("标出「Send by Email」", execution.user_answer)
+        self.assertEqual([e["controls"] for e in events if e["event"] == "goal_control_named"],
+                         [["Send by Email"]])
+        self.assertFalse(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
+
+    def test_a_control_the_first_step_named_but_the_request_did_not_write_is_not_added(self):
+        # The first step's term is the model's guess when the request never writes that
+        # word; a page stays a page.
+        scope = ("declare_scope", {"parts": [{"kind": "page", "entity": "order", "about": "S00006",
+                                              "terms": ["Confirm"]}]})
+        execution, _channel, _chat, port, events = self._run(
+            [scope, _declaration(kind="page", entity="order", record="S00006")],
+            [Resolved(kind="page", page=PagePlan(url="/orders/6", label="S00006",
+                                                 expected_path="/orders/6"))],
+            text="把 S00006 打开", staged=True, readings=1)
+        self.assertEqual(port.specs[0].deliverables[0].kind, "page")
+        self.assertFalse(any(e["event"] == "goal_control_named" for e in events))
+        self.assertTrue(executor_module._names_verbatim("找到 Send 按钮", "Send"))
+        self.assertFalse(executor_module._names_verbatim("the Sender field", "Send"))
+
+    def test_a_list_page_whose_new_the_request_names_is_a_create_handoff(self):
+        scope = ("declare_scope", {"parts": [{"kind": "page", "entity": "order", "about": "",
+                                              "terms": ["New", "Orders"]}]})
+        execution, _channel, _chat, port, events = self._run(
+            [scope, _declaration(kind="page", entity="order", page={"key": "p1"})],
+            [Resolved(kind="handoff", page=PagePlan(url="/orders", label="Orders",
+                                                    expected_path="/orders", highlight="Confirm"))],
+            text="给客户开 order，New 在哪里？", staged=True, readings=1)
+        self.assertEqual((port.specs[0].deliverables[0].kind, port.specs[0].deliverables[0].action),
+                         ("handoff", "New"))
+        self.assertIn("标出「Confirm」", execution.user_answer)
+        self.assertEqual([e["controls"] for e in events if e["event"] == "goal_control_named"],
+                         [["New"]])
 
     def test_one_amount_over_several_records_asks_which_and_a_total_does_not(self):
         both = Aggregate(subject="Invoices · Partner = Acme", count=2,

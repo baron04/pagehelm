@@ -177,6 +177,63 @@ def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, .
     return replace(spec, deliverables=tuple(out)), tuple(controls)
 
 
+def _named_controls(spec: GoalSpec, parts: list, text: str, index
+                    ) -> tuple[GoalSpec, tuple[str, ...]]:
+    """A control the request names in the application's own words keeps its place in the
+    declaration. The first step's terms say what each part is about as the application
+    writes it; when such a term is a control of the declared entity (a header button) or
+    the create control of the declared list page, and the request itself writes that
+    word, a page declared without an action is the handoff to that control. A second or
+    deciding reading now and then drops the control the first reading carried ("point
+    out S00020's Preview" came back as "open S00020"); the request's own words settle
+    it, without another reading. Returns (spec, the controls named)."""
+    if not parts or not text or index is None:
+        return spec, ()
+    out, named = [], []
+    for position, d in enumerate(spec.deliverables):
+        control = ""
+        if d.kind == "page" and not d.action:
+            entity = index.entity(d.entity) if d.entity else None
+            page = index.page(d.page.key) if d.page.key else None
+            for term in _terms_for(parts, position, d, len(spec.deliverables)):
+                if not _names_verbatim(text, term):
+                    continue
+                if d.record and entity is not None:
+                    control = next((a for a in entity.actions if _norm(a) == _norm(term)), "")
+                elif (not d.record and page is not None and "create" in page.operations
+                      and _norm(term) in ("new", "create")):
+                    control = "New"
+                if control:
+                    break
+        if control:
+            d = replace(d, kind="handoff", action=control)
+            named.append(control)
+        out.append(d)
+    if not named:
+        return spec, ()
+    return replace(spec, deliverables=tuple(out)), tuple(named)
+
+
+def _terms_for(parts: list, position: int, d, count: int) -> tuple[str, ...]:
+    """The first step's terms for one deliverable: the part at the same position when
+    parts and deliverables pair up, else the parts about the same entity."""
+    if len(parts) == count:
+        return tuple(parts[position].get("terms") or ())
+    return tuple(term for part in parts
+                 if _norm(part.get("entity") or "") == _norm(d.entity)
+                 for term in (part.get("terms") or ()))
+
+
+def _names_verbatim(text: str, name: str) -> bool:
+    """Whether the request writes this name as the application does: the same letters,
+    whole (a "Send" inside "Sender" is not it), in either case."""
+    name = (name or "").strip()
+    if len(name) < 2:
+        return False
+    return re.search(r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])",
+                     text, re.I) is not None
+
+
 def _first_line(name: str) -> str:
     """A control's name as the reply quotes it: a label's first line; a help marker on a
     later line is not part of it."""
@@ -306,6 +363,9 @@ class _TurnState:
     #: records its own amounts, days or references picked out before resolving.
     references: tuple = ()
     warranted: tuple = ()
+    #: What the first step said each part is about, in the application's words; a
+    #: control it names that the request also writes stays in the declaration.
+    scope_parts: list = field(default_factory=list)
 
 
 
@@ -519,6 +579,7 @@ class GoalTurnExecutor:
                 return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                                  else "The model service did not respond; please try again.")
             scope_parts = parts
+            s.scope_parts = list(parts)
             s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
                             write_intent=write_intent, unsupported=unsupported,
                             about_assistant=about_assistant, **projection)
@@ -622,6 +683,9 @@ class GoalTurnExecutor:
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
         if second_reading is not None and spec.deliverables:
             spec = self._agree(s, chat, index, spec, today, second_reading)
+        spec, named = _named_controls(spec, s.scope_parts, s.message.text, index)
+        if named:
+            s.ledger.append("goal_control_named", step=s.step, controls=list(named))
         spec, flipped = _magnitudes(spec, s.message.text)
         if flipped:
             s.ledger.append("goal_amounts_as_magnitudes", step=s.step, fields=list(flipped))
@@ -781,6 +845,14 @@ class GoalTurnExecutor:
             s.ledger.append("goal_second_reading_failed", step=s.step,
                             detail=f"{type(exc).__name__}: {exc}"[:200])
             return first
+        # A control the request names in the application's words belongs to both
+        # readings before they are compared: one reading dropping it is not a
+        # disagreement the model needs to settle.
+        first, named_first = _named_controls(first, s.scope_parts, s.message.text, index)
+        second, named_second = _named_controls(second, s.scope_parts, s.message.text, index)
+        named = tuple(dict.fromkeys(named_first + named_second))
+        if named:
+            s.ledger.append("goal_control_named", step=s.step, controls=list(named))
         differences = first.differences(second)
         s.ledger.append("goal_second_reading", step=s.step, spec=second.to_json(),
                         agrees=not differences, differences=differences[:8], **projection)
