@@ -195,14 +195,23 @@ def _declaration(**deliverable) -> tuple:
 class _AgreeingChat(_Chat):
     """A scripted chat whose second reading repeats the first, as a steady model would,
     unless the script provides a different one. The two readings arrive from two
-    threads, so the script is handed out under a lock."""
+    threads: the first from the turn's own thread, the second from a pool. So that the
+    script means the same thing on every run, the second waits until the turn's thread
+    has asked for the same messages, and takes the next entry after it."""
 
     def __init__(self, script):
         super().__init__(script)
-        self._lock = threading.Lock()
+        self._owner = threading.get_ident()
+        self._asked = threading.Condition()
+        self._owner_messages = []
 
     def complete(self, messages, tools, _run_id, **_kwargs):
-        with self._lock:
+        with self._asked:
+            if threading.get_ident() == self._owner:
+                self._owner_messages.append(messages)
+                self._asked.notify_all()
+            else:
+                self._asked.wait_for(lambda: messages in self._owner_messages, timeout=5)
             if len(self.script) == 1:
                 self.script.append(self.script[0])
             return super().complete(messages, tools, _run_id, **_kwargs)
@@ -372,7 +381,7 @@ class GoalTurnTests(unittest.TestCase):
         as_list = _declaration(kind="list", entity="order", record="S00006", fields=["Customer"])
         as_fact = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])
         execution, _channel, chat, port, events = self._run(
-            [as_list, as_fact, as_fact],
+            [as_fact, as_list, as_fact],
             [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
             text="S00006 的客户是谁？")
         self.assertEqual(len(chat.messages), 3)
