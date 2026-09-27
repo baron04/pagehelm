@@ -696,6 +696,15 @@ test.describe('the work process', () => {
     // one -- only how long it took.
     await expect(panel.page.locator('.woa-work')).toHaveCount(0)
     await expect(panel.page.locator('.woa-took')).toContainText(labels.elapsedPrefix)
+    // How it ended is still said, with the mark the summary line of a turn with steps uses.
+    await expect(panel.page.locator('.woa-took > svg')).toHaveCount(1)
+    await expect(panel.page.locator('.woa-took')).not.toHaveAttribute('data-failed')
+    await panel.set({entries: [
+      entry('e1', 'goal', '列出所有待开票的销售订单'),
+      entry('e2', 'progress', '正在理解你的需求'),
+      entry('e3', 'result', '做不到。', {panel_state: 'refused'}),
+    ]})
+    await expect(panel.page.locator('.woa-took')).toHaveAttribute('data-failed', 'true')
 
     await panel.set({entries: [
       {id: 'f1', sequence: 1, turn_id: 't2', at: 1757000000000, kind: 'goal', tone: 'neutral',

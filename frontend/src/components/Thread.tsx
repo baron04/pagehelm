@@ -192,21 +192,29 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
   const now = useClock(turn.running)
   const total = elapsed(turn, now)
   const [open, setOpen] = useState(false)
-  // A turn whose only entry is the server saying it had started -- an old session replayed
-  // from before steps were reported -- has nothing a list can add, so it gets no list, just
-  // how long it took. Everything else keeps its steps, including after the answer lands.
+  const failed = !turn.running && FAILED_STATES.has(turn.outcome?.panel_state ?? '')
+  // Ended by the person: a grey slashed circle -- cancelled, as a CI run marks it -- not the
+  // red cross of a failure. The words for why are the answer's, directly below.
+  const stopped = !turn.running && turn.outcome?.panel_state === STOPPED_STATE
+  const mark = failed ? <CircleX {...iconProps(14)} />
+    : stopped ? <CircleSlash {...iconProps(14)} /> : <CircleCheck {...iconProps(14)} />
+  // A turn whose only entry is the server saying it had started -- a goal turn, which
+  // reports no steps, or an old session replayed from before steps were reported -- has
+  // nothing a list can add, so it gets no list: how it ended and how long it took, on the
+  // same line a turn with steps has. Everything else keeps its steps after the answer lands.
   const bare = turn.steps.length <= 1 && !turn.steps.some(step => step.step)
   if (!turn.running && bare) {
-    return <p className="woa-took">{labels.elapsedPrefix} {total}</p>
+    return (
+      <p className="woa-took" data-failed={failed ? 'true' : undefined}
+         data-stopped={stopped ? 'true' : undefined}>
+        {mark}<span>{labels.elapsedPrefix} {total}</span>
+      </p>
+    )
   }
   // Folded either way, one press from the whole record. While it runs, the line is what it
   // is doing now and how long it has been at it: enough to tell working from stuck, without
   // a growing list pushing the question off screen. Once it has landed the answer leads, and
   // the line says how much work stood behind it.
-  const failed = !turn.running && FAILED_STATES.has(turn.outcome?.panel_state ?? '')
-  // Ended by the person: a grey slashed circle -- cancelled, as a CI run marks it -- not the
-  // red cross of a failure. The words for why are the answer's, directly below.
-  const stopped = !turn.running && turn.outcome?.panel_state === STOPPED_STATE
   const current = turn.steps.at(-1)!
   // A stop takes effect at the next safe point, which can be seconds away. Until the turn
   // ends, the line says it heard the press rather than carrying on about the step.
@@ -231,8 +239,7 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
       <button type="button" className="woa-work__summary" aria-expanded={open}
               data-failed={failed ? 'true' : undefined} data-stopped={stopped ? 'true' : undefined}
               onClick={() => setOpen(!open)}>
-        {failed ? <CircleX {...iconProps(14)} />
-          : stopped ? <CircleSlash {...iconProps(14)} /> : <CircleCheck {...iconProps(14)} />}
+        {mark}
         <span>{labels.workSteps.replace('{count}', String(turn.steps.length))}
           {total && ` · ${labels.elapsedPrefix} ${total}`}</span>
         <ChevronDown {...iconProps(14)} className="woa-work__chevron" />

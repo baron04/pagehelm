@@ -690,12 +690,20 @@ button.woa-step__line:focus-visible {
 .woa-step__detail dt { color: var(--woa-ink-faint); }
 .woa-step__detail dd { margin: 0; overflow-wrap: anywhere; }
 .woa-step__detail code { font-size: var(--woa-font-size-meta); }
+/* The summary line of a turn with nothing to unfold: its mark and words sit where the
+   summary button's do, without the button. */
 .woa-took {
-  margin: 2px 0 0 24px;
-  font-size: var(--woa-font-size-meta);
-  color: var(--woa-ink-faint);
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 0;
+  padding-block: 3px;
+  font-size: var(--woa-font-size-small);
+  color: var(--woa-ink-muted);
   font-variant-numeric: tabular-nums;
 }
+.woa-took > svg:first-child { color: var(--woa-success); }
+.woa-took[data-failed] > svg:first-child { color: var(--woa-danger); }
+.woa-took[data-stopped] > svg:first-child { color: var(--woa-ink-faint); }
 
 .woa-spinner {
   width: 12px; height: 12px; flex: none;
