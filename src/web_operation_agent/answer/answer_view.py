@@ -210,7 +210,7 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
     words = {**_WORDS[_language(user_text)], "labels": dict(labels or {})}
     lines: list[str] = [action_text, ""] if action_text else []
 
-    items = answer.conclusions
+    items = _without_listed_counts(answer.conclusions)
     # A collection count and a total can each be evidenced yet still answer a different
     # question when the model mixes collections. Put their scopes in the headline whenever
     # this answer cites more than one scope; the basis line under each item is easy to miss.
@@ -256,6 +256,30 @@ def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
             break
         kept.append(line)
     return "\n".join(kept).rstrip() + suffix
+
+
+def _without_listed_counts(items: tuple[dict, ...]) -> tuple[dict, ...]:
+    """Leave out a count the answer already shows by listing every record it counted.
+
+    Asked when S00011 was ordered, a turn bound to count its read answered "数量：1" above
+    the date. The count is still verified and still required; it is only not said when the
+    records the answer lists from that same read are all there are. When the read matched
+    more than the answer lists -- a name search that also found S000110 -- the count stays,
+    because it is then the only sign that other records matched.
+    """
+    listed: dict[str, set] = {}
+    for item in items:
+        if not item.get("read"):
+            continue
+        if item["kind"] == "field_value":
+            listed.setdefault(item["read"], set()).add(item["record_id"])
+        elif item["kind"] == "selection":
+            listed.setdefault(item["read"], set()).update(item["members"])
+    return tuple(item for item in items
+                 if not (item["kind"] == "aggregate" and item.get("read")
+                         and item["covers_whole_scope"]
+                         and listed.get(item["read"])
+                         and item["value"] == str(len(listed[item["read"]]))))
 
 
 def _selection_head(words: dict, item: dict) -> str:
@@ -489,6 +513,12 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
                   {"count": "Count", "min": "Minimum", "max": "Maximum"})
         label = (words["total"] if item["covers_whole_scope"] else words["subtotal"]
                  ) if operation == "sum" else labels.get(operation, _literal(item["operation"]))
+        looked_for = _literal(str(item.get("looked_for") or "").strip())
+        if operation == "count" and looked_for and item["covers_whole_scope"]:
+            # A count of a search by name says what it counted; a bare "数量" beside one
+            # listed record reads as the answer to some other question.
+            label = (f"与“{looked_for}”匹配的记录" if chinese
+                     else f'Records matching "{looked_for}"')
         if operation != "sum" and not item["covers_whole_scope"]:
             label += "（仅限已读取范围）" if chinese else " (observed scope only)"
         # A total of the USD orders is not a total of the orders: the filter a compute chain
@@ -500,6 +530,8 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
             scope = _literal(_named(words, item["scope"]))
             label += f"（范围：{scope}）" if chinese else f" (scope: {scope})"
         unit = f" {_literal(item['unit'])}" if item.get("unit") else ""
+        if operation == "count" and looked_for and item["covers_whole_scope"] and chinese:
+            unit = " 条"
         return [f"**{label}**：{_literal(item['value'])}{unit}", _basis(words, item)]
     if kind == "not_found":
         # The normal answer names the thing that was absent. The executed conditions are

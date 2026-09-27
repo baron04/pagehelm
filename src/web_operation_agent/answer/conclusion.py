@@ -105,7 +105,7 @@ class FieldValue:
                 "field_name": item.field_name, "field_meaning": item.field_meaning,
                 "value": item.value, "empty": item.is_known_empty,
                 "unit": item.unit, "scope": _answer_scope(turn, item.origin),
-                "source_kind": item.origin.kind}
+                "source_kind": item.origin.kind, "read": item.origin.reference}
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +168,7 @@ class Selection:
                 "rows": rows, "total": total, "count_exact": count_exact,
                 "covers_whole_scope": covers,
                 "scope": _answer_scope(turn, query.origin),
-                "source_kind": item.origin.kind}
+                "source_kind": item.origin.kind, "read": query.origin.reference}
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,10 +182,20 @@ class Aggregate:
     def verify(self, turn: TurnEvidence) -> dict:
         item = _one(turn, self.evidence_id, ComputationEvidence, "an aggregate")
         scope, applied = _computed_scope(turn, item.origin.scope)
+        counted = {}
+        if item.operation == "count()" and not applied:
+            # What a plain count counted: one read, taken whole. The renderer compares it
+            # with the records the answer already lists from that read.
+            reads = [query for ref in item.inputs
+                     if isinstance(query := turn.get(ref), QueryEvidence)]
+            if len(reads) == 1 == len(item.inputs):
+                counted = {"read": reads[0].origin.reference,
+                           "looked_for": reads[0].looked_for}
         return {"kind": self.kind, "operation": item.operation, "value": item.value,
                 "value_type": item.value_type, "unit": item.unit,
                 "covers_whole_scope": item.covers_whole_scope,
-                "scope": scope, "filter": applied, "source_kind": item.origin.kind}
+                "scope": scope, "filter": applied, "source_kind": item.origin.kind,
+                **counted}
 
 
 @dataclass(frozen=True, slots=True)
