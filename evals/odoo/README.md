@@ -47,6 +47,25 @@ The A and B prompts are different; their reference date is 2026-09-26 in
 Asia/Shanghai. A served as the P8.9 development set; B was run once, as the P8.9
 holdout, on 2026-09-27, and has been seen since.
 
+## Multi-turn follow-up holdout
+
+`--version mt-holdout` selects 40 frozen Chinese two-turn tasks in
+`tasksets/odoo-goals-zh-multiturn-holdout.json`. Its prompt strings do not overlap
+the 16-task `mt-dev` set. The six reply types are candidate choice (7), correction
+(7), reference to the previous turn (7), change of question (6), narrowing (7),
+and choice by the assistant's list number (6). The adjacent seal and the runner
+pin the task file's SHA-256 digest. No model run was used to author or verify it.
+
+For numbered replies, evaluator-only candidate checks are bound to the order the
+assistant actually listed on its first turn. A zero-model parser requires a
+distinct, known candidate in each numbered item; missing, repeated or mixed
+items fail closed. The first-turn check separately requires a clarification with
+all candidates, while the final `parts` check uses the candidate at the user's
+chosen ordinal. `test_goals_multiturn_holdout.py` checks both orders and invalid
+lists. The fixture facts reused by these questions were checked under the
+ordinary reader with the zero-model v7a and v7b oracle verifier, without a page
+walk. No model performance or browser navigation outcome is claimed.
+
 Scoring writes one of five `outcome` values for every attempt: `correct`,
 `appropriate_clarification`, `truthful_refusal`, `wrong`, or `false_claim`.
 Clarification is correct only for an ambiguous task whose reply asks the user

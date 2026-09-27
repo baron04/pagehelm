@@ -15,6 +15,7 @@ import html
 import json
 import re
 import time
+from copy import deepcopy
 from pathlib import Path
 from collections import Counter
 
@@ -30,6 +31,7 @@ TASKSETS = {
     "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "b0f2f1de5a03732ff5a7af0486b7424250793288fec24d08d72515aadb08e953"),
     "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "e49d22adc0ba5518ac90fd9637d737f69deb33fd6cf1d3154552346ad3d0843e"),
     "mt-dev": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-multiturn-dev.json", "1686f0dce9da0f0980000864e4c4005f8f9a207dc4e68c751b249dcfd8a592ab"),
+    "mt-holdout": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-multiturn-holdout.json", "da14c2a4b2f1b0d7456d4e955837774545a88baefdb53da5ad1f81c0ec0cdf3b"),
     "v6": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-holdout.json", "c86da901e006f95a6270446675409de0e7b4a8acd45bc995be1ae8377def15a7"),
     "v6-rules": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v6-rules.json", "412dd68deb94f3bf632a02d4f5c7895beb9c55ad7d604f6fbfb76fa6bc8c7b2b"),
     "v2": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v2.json", "d01fb4e3fa3d92b7e6916f3d36d6df35961a32442e7d9f2212c4c5eee152b57b"),
@@ -77,8 +79,50 @@ def first_turn_met(task: dict, turns: list[dict]) -> bool | None:
     answer = first.get("answer", "")
     if "asks" in expected:
         return (first.get("terminal_reason") in ("needs_clarification", "needs_input")
-                and all(re.search(pattern, answer) for pattern in expected["asks"]))
+                and all(re.search(pattern, answer) for pattern in expected["asks"])
+                and ("numbered_choices" not in task.get("truth", {})
+                     or numbered_choice(task, answer) is not None))
     return re.search(expected["answer_regex"], answer) is not None
+
+
+_CHOICE_MARKER = re.compile(r"(?<!\S)([1-9])\s*[.、．)]\s*")
+
+
+def numbered_choice(task: dict, first_answer: str) -> dict | None:
+    """Bind a numbered reply to the actual first-turn list, with no model call.
+
+    A missing, duplicate or mixed numbered item is deliberately unscorable.
+    Candidate patterns are evaluator-only and each must match exactly one item.
+    """
+    spec = task.get("truth", {}).get("numbered_choices")
+    if not spec:
+        return None
+    markers = list(_CHOICE_MARKER.finditer(first_answer or ""))
+    choices = {}
+    for index, marker in enumerate(markers):
+        number = int(marker.group(1))
+        if number in choices:
+            return None
+        body = first_answer[marker.end():markers[index + 1].start() if index + 1 < len(markers) else None]
+        matches = [option for option in spec["options"] if re.search(option["match"], body, re.I)]
+        if len(matches) != 1:
+            return None
+        choices[number] = matches[0]
+    if (len(choices) != len(spec["options"])
+            or {option["name"] for option in choices.values()}
+            != {option["name"] for option in spec["options"]}):
+        return None
+    return choices.get(spec["selection"])
+
+
+def task_for_numbered_reply(task: dict, turns: list[dict]) -> dict:
+    """Replace the numbered placeholder with truth for the listed candidate."""
+    if "numbered_choices" not in task.get("truth", {}):
+        return task
+    selected = numbered_choice(task, turns[0].get("answer", "")) if turns else None
+    bound = deepcopy(task)
+    bound["parts"][0]["check"] = selected["check"] if selected else {"impossible": True}
+    return bound
 
 
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
@@ -126,7 +170,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
     probe = summary.get("final_page_probe") or {}
     answer = turn.get("answer", "")
     terminal = turn.get("terminal_reason") or ("harness_error" if error else "")
-    verdict = score(task, probe=probe, visited=visited, answer=answer,
+    verdict = score(task_for_numbered_reply(task, turns), probe=probe, visited=visited, answer=answer,
                     finished=terminal == "agent_finished", refused=terminal == "agent_refused",
                     write_detected=write_detected, source=source,
                     clarifying=terminal in ("needs_clarification", "needs_input"))
