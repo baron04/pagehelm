@@ -54,7 +54,7 @@ Read `README.md`, then inspect the modules and tests that define the behavior yo
 Use Python 3.12. Run the narrowest relevant test first, then the full product suite before handing off a completed code change:
 
 ```bash
-python src/web_operation_agent/tests/run_all.py -k test_product.py
+python src/web_operation_agent/tests/run_all.py -k "test_product_*.py"
 python src/web_operation_agent/tests/run_all.py
 ```
 
