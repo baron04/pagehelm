@@ -257,13 +257,13 @@ button:disabled { cursor: not-allowed; }
 .woa-handle[data-handle='e']::after { right: 2px; }
 .woa-handle[data-handle^='n']:not([data-handle='n'])::after,
 .woa-handle[data-handle^='s']:not([data-handle='s'])::after {
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 6px; height: 6px; border-radius: 50%;
   background: var(--woa-line-strong);
 }
-.woa-handle[data-handle='nw']::after { top: 5px; left: 5px; }
-.woa-handle[data-handle='ne']::after { top: 5px; right: 5px; }
-.woa-handle[data-handle='sw']::after { bottom: 5px; left: 5px; }
-.woa-handle[data-handle='se']::after { bottom: 5px; right: 5px; }
+.woa-handle[data-handle='nw']::after { top: 6px; left: 6px; }
+.woa-handle[data-handle='ne']::after { top: 6px; right: 6px; }
+.woa-handle[data-handle='sw']::after { bottom: 6px; left: 6px; }
+.woa-handle[data-handle='se']::after { bottom: 6px; right: 6px; }
 
 /* ─────────────────────────────────────────────── title bar */
 /* The bar is part of the window's own surface: no fill of its own and no rule under it.
