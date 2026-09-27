@@ -313,30 +313,34 @@
       "category": "answer",
       "entity": "product.template",
       "delivery": "answer/field",
-      "condition": "record",
+      "condition": "ambiguity",
       "prompt": "Office Chair 的标价是多少？",
       "parts": [
         {
           "quote": "Office Chair 的标价是多少",
           "check": {
-            "answer_regex": "(?is)(?:(?<![\\d.,])(?:70|70)(?:[.,]00?)?(?![\\d.,]))"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "oracle": {
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Office\\ Chair(?![\\w/-])",
+            "(?<![\\w/-])Office\\ Chair\\ Black(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Office Chair",
+            "Office Chair Black"
+          ],
           "model": "product.template",
           "domain": [
             [
-              "id",
-              "=",
-              5
+              "name",
+              "ilike",
+              "Office Chair"
             ]
-          ],
-          "field": "list_price",
-          "expected": 70.0,
-          "positive": "70.0",
-          "wrong": "明显错误的值"
+          ]
         }
       }
     },
