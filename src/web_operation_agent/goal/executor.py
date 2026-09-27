@@ -665,7 +665,10 @@ class GoalTurnExecutor:
             # The words the first step wrote in the application's language rank the
             # rules alongside the request's own, which may be in another language.
             terms = " ".join(t for p in parts for t in p.get("terms", ()))
-            index = neighbourhood(index, tuple(p["entity"] for p in parts),
+            # An entity a convention the request's words name is about ("成交" -> orders)
+            # is in the neighbourhood whatever the first step picked.
+            index = neighbourhood(index, tuple(dict.fromkeys(
+                [p["entity"] for p in parts] + [c.entity for c in s.conventions])),
                                   request=(s.message.text + " " + terms).strip(),
                                   rules=any(p.get("rules") for p in parts))
             s.index = index
@@ -1828,7 +1831,8 @@ def _needs_beyond(d, offered: frozenset[str]) -> frozenset[str]:
 def _unresolved(spec: GoalSpec, resolution: Resolution) -> int:
     """Deliverables that came to nothing, plus a change asked for with nothing to point at."""
     count = sum(1 for d in resolution.deliverables
-                if d.problem and not (d.facts or d.aggregate or d.page))
+                if d.problem and not (d.facts or d.aggregate
+                                      or (d.page and d.kind not in ("fact", "list", "aggregate"))))
     if spec.write_intent and not any(d.kind == "handoff" for d in spec.deliverables):
         count += 1
     return count

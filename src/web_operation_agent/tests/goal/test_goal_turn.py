@@ -911,6 +911,33 @@ class GoalTurnTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             IndexConvention(terms=("x",), meaning="m", conditions=(("Status", ("A",)),))
 
+    def test_an_entity_a_convention_word_names_joins_the_neighbourhood(self):
+        from web_operation_agent.goal.index import IndexConvention
+
+        class _TwoEntities(_Port):
+            def index(self, *, context=None):
+                base = _index()
+                partner = IndexEntity(key="partner", label="Contact",
+                                      fields=(IndexField(key="name", label="Name", kind="text"),))
+                return replace(base, entities=base.entities + (partner,), conventions=(
+                    IndexConvention(terms=("成交",), meaning="order confirmed", entity="order",
+                                    conditions=(("Status", ("Sales Order",)),)),))
+
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "partner", "about": "Gemini"}]}),
+                   _declaration(kind="aggregate", entity="order", metric={"op": "count"})]
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        port = _TwoEntities([Resolved(kind="aggregate", aggregate=Aggregate(subject="Orders", count=3))])
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=_AgreeingChat(scripts), application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True, readings=1)
+        executor.execute({"message_id": "m1", "text": "Gemini 九月成交了几单？",
+                          "page_url": "http://127.0.0.1:8080/home"})
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        neighbourhood = next(e for e in events if e["event"] == "goal_neighbourhood")
+        self.assertIn("order", neighbourhood["entities"])
+        self.assertEqual(port.specs[-1].conventions[0].terms, ("成交",))
+
     def test_a_sum_is_a_total_only_when_both_readings_say_so(self):
         one = Aggregate(subject="Invoices · Acme · September", count=2,
                         sums=(("Total", "61,000.00 USD"),), records=("INV/2", "INV/3"))
@@ -941,6 +968,16 @@ class GoalTurnTests(unittest.TestCase):
             text="S00006 的签收人身份证号？")
         self.assertTrue(any(e.get("taken") == "second" for e in events
                             if e["event"] == "goal_readings_disagree_on_existence"))
+
+    def test_a_read_left_unanswered_counts_as_unresolved_even_with_a_page_beside_it(self):
+        from web_operation_agent.goal.executor import _unresolved
+        page = PagePlan(url="/orders", label="Orders", expected_path="/orders")
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "order"}]})
+        unanswered = Resolution(deliverables=(Resolved(kind="list", problem="no match", page=page),))
+        self.assertEqual(_unresolved(spec, unanswered), 1)
+        opened = GoalSpec.from_json({"deliverables": [{"kind": "page", "entity": "order"}]})
+        self.assertEqual(_unresolved(opened, Resolution(deliverables=(
+            Resolved(kind="page", problem="a filter was missing", page=page),))), 0)
 
     def test_a_request_to_delete_a_described_record_is_a_delete(self):
         from web_operation_agent.goal.executor import _as_handoffs

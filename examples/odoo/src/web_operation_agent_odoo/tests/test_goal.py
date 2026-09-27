@@ -450,7 +450,7 @@ class OdooGoalPortTests(unittest.TestCase):
 
     def test_search_words_that_repeat_a_condition_add_nothing(self):
         self.client.domains.clear()
-        self._resolve({"kind": "list", "entity": "sale.order", "page": {"key": "p331", "search": "Gemini Furniture"},
+        self._resolve({"kind": "list", "entity": "sale.order", "page": {"key": "p331", "search": "Gemini"},
                        "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Gemini Furniture"]}]}})
         self.assertTrue(self.client.domains)
         self.assertFalse(any("display_name" in str(d) or "ilike" in str(d) for d in self.client.domains))

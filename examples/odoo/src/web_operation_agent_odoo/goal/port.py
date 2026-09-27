@@ -917,8 +917,12 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                 return Resolved(kind=d.kind, problem=text, repair=repair)
             domain += clause
             described.append(text)
-        said = {_norm(v) for c in metric.filters for v in c.values} | {_norm(d.record)}
-        if search and d.page.search and _norm(d.page.search) not in said:
+        # Search words within a condition's value, or holding it ("Gemini" beside the
+        # customer Gemini Furniture), say again what the condition says.
+        said = {_norm(v) for c in metric.filters for v in c.values if _norm(v)} | (
+            {_norm(d.record)} if d.record else set())
+        words = _norm(d.page.search)
+        if search and d.page.search and not any(words in v or v in words for v in said):
             clause, text = self._search_clause(meta, model, domain, d.page.search)
             if clause is None and default_clauses:
                 # Nothing within the page's default filters (customers only): the words
