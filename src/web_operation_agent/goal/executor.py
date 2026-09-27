@@ -56,6 +56,11 @@ _NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist"
 #: Words that ask for a total over several records rather than one record's amount.
 _TOTAL_WORDS = re.compile(r"合计|总计|总额|总金额|总共|一共|共计|加起来|累计|全部|所有|分别|各|total|sum\b|"
                           r"altogether|all\b|each\b", re.I)
+#: A request to create a record, as a verb ("开一张新的发票", "新建客户"), not as the
+#: adjective of records already made ("新建的订单").
+_CREATE = re.compile(r"(?:新建|新增|创建|新开|开一张|录一张|录入|建一个|加一个)(?!的)|"
+                     r"\b(?:create|add) (?:a|an|one)\b|\bnew (?:invoice|order|customer|quotation|bill)\b",
+                     re.I)
 #: Words that point at one record ("that invoice", "the one of August").
 _ONE_RECORD = re.compile(r"那张|这张|那笔|这笔|那条|这条|那单|这单|那个|这个|哪张|哪笔|"
                          r"\bthat (?:invoice|order|refund|bill|quotation|one)\b", re.I)
@@ -102,15 +107,21 @@ def _appeared(before: Counter, elements) -> list:
     return list(reversed(shown))
 
 
-def _as_handoffs(spec: GoalSpec) -> tuple[GoalSpec, tuple[str, ...]]:
+def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, ...]]:
     """A page declared with a control to act on is a handoff: the person asked to be shown
     that control ("mark Pay for me", "where is Print Labels"), and opening the page alone
-    would leave the control unmarked. Returns (spec, the controls)."""
+    would leave the control unmarked. So is a list page declared for a request to create
+    one ("I want to make a new customer invoice, show me where"): its control is the
+    page's own New. Returns (spec, the controls)."""
+    creating = bool(_CREATE.search(text or ""))
     out, controls = [], []
     for d in spec.deliverables:
         if d.kind == "page" and d.action and d.record:
             d = replace(d, kind="handoff")
             controls.append(d.action)
+        elif d.kind == "page" and creating and not d.record and not d.action and d.page.key:
+            d = replace(d, kind="handoff", action="create")
+            controls.append("create")
         out.append(d)
     if not controls:
         return spec, ()
@@ -473,7 +484,7 @@ class GoalTurnExecutor:
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
         if second_reading is not None and spec.deliverables:
             spec = self._agree(s, chat, index, spec, today, second_reading)
-        spec, handed = _as_handoffs(spec)
+        spec, handed = _as_handoffs(spec, s.message.text)
         if handed:
             s.ledger.append("goal_page_became_handoff", step=s.step, controls=list(handed))
         spec, corrections = correct_records(spec, s.message.text, known,

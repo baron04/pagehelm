@@ -768,13 +768,29 @@ class GoalTurnTests(unittest.TestCase):
             [Resolved(kind="list", aggregate=two)], text="Azure 八月的退款都有哪些？")
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
 
+    def test_a_list_page_for_a_request_to_create_one_is_a_create_handoff(self):
+        new = [Resolved(kind="handoff", page=PagePlan(url="/orders", label="Orders",
+                                                      expected_path="/orders", highlight="Confirm"))]
+        execution, _channel, _chat, port, _events = self._run(
+            [_declaration(kind="page", page={"key": "p1"})], new,
+            text="我要开一张新的订单，先指一下入口。")
+        self.assertEqual((port.specs[0].deliverables[0].kind, port.specs[0].deliverables[0].action),
+                         ("handoff", "create"))
+        self.assertIn("标出「Confirm」", execution.user_answer)
+        # "新建的订单" names orders already made; the page stays a page.
+        execution, _channel, _chat, port, _events = self._run(
+            [_declaration(kind="page", page={"key": "p1"})],
+            [Resolved(kind="page", page=PagePlan(url="/orders", label="Orders", expected_path="/orders"))],
+            text="打开新建的订单列表")
+        self.assertEqual(port.specs[0].deliverables[0].kind, "page")
+
     def test_write_intent_cannot_be_settled_by_opening_a_page(self):
         execution, _channel, _chat, _port, events = self._run(
             [("declare_goal", {"deliverables": [{"kind": "page", "page": {"key": "p1"}}],
                                "write_intent": True})],
             [Resolved(kind="page", page=PagePlan(
                 url="/orders", label="Sales / Orders", expected_path="/orders"))],
-            text="新建一张订单")
+            text="把这张订单确认掉")
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
         self.assertEqual(execution.agent.success_claim, "not_claimed")
         self.assertIn("尚未执行你请求的更改", execution.user_answer)
