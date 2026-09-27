@@ -97,7 +97,10 @@ agent.
   chose; such gaps go back to the model once. When several records fit and nothing tells
   them apart, the turn ends needing input: it asks which one, listing each with what
   distinguishes it, and a reply naming one by number or name continues the earlier
-  request with that record. On the development set of 94 Chinese requests the staged path
+  request with that record. The same question is asked when a declaration names a record the
+  request never names while the request's own conditions fit several, and when one amount is
+  asked of a few records and the request asks for no total; a record the request's own
+  amounts, days or references pick out stands. On the development set of 94 Chinese requests the staged path
   answered 89 and the single declaration 87 (one full pass each). A zero-model replay of recorded runs
   (`evals/odoo/goals/reference_recall.py`) reports how many declared records the reference
   cut recovers. With a compiled source map attached to the Odoo port (the demo attaches
@@ -113,7 +116,8 @@ agent.
   full index; an entity the request names by label, alias or the exact label of one of
   its controls joins the neighbourhood with a few rules. The model names rules by id;
   the server answers from the whole index with the rules of the same kind about the same
-  thing and of the same operation, and appends each rule's citation verbatim
+  thing and of the same operation, plus the same refusal where other entities raise it (the
+  first sentence of its message, placeholders aside), and appends each rule's citation verbatim
   (`path:start-end@release sha256:<hex>` over the exact lines), marked as a rule of the
   deployed version's source, not current data. When it names none, the refusal repeats
   the person's question as the thing no rule was found about.

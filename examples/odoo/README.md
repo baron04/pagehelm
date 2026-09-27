@@ -270,7 +270,7 @@ its own when one of them is what you are debugging:
 | `assets` | Downloads the pinned PageController tarball, checks its npm integrity, extracts the three files a deployment serves and checks each one's sha256 |
 | `up` | Starts Compose and waits until Odoo answers, not until Compose returns |
 | `database` | Creates `woa_reference` from Odoo's own demo data, installs `sale_management`, `account` and the Runtime addon, then asks the running server for the asset and hashes what it actually served |
-| `source` | Copies allowlisted structured and raw-code reading material out of the image for the ten source-qualified addons; excludes tests, demo/seed data, translations, secrets and vendored frontend libraries |
+| `source` | Copies allowlisted structured and raw-code reading material out of the image for the ten source-qualified addons; keeps each addon's `i18n/zh_CN.po` for label names and excludes other translations, tests, demo/seed data, secrets and vendored frontend libraries |
 | `credentials` | Mints an API key through the container's own Odoo shell and captures a browser session |
 | `baseline` | Records the snapshot the gate restores to |
 | `env` | Prints the configuration |
@@ -421,8 +421,10 @@ catalog, `get_views` (with each action's own search view) and `fields_get`, all 
 delegated user: readable, non-transient window actions become pages, minus the framework's
 own modules and actions whose domain or context needs a current record; the models of
 menu-reachable pages become detailed entities with their list and form fields, form tabs
-and header buttons, other models appear by label only. A short Chinese alias list covers
-the labels the reference tasks use; Odoo's own language packs are not required.
+and header buttons, other models appear by label only. Chinese names for entities, pages,
+fields and choices come from Odoo's own `i18n/zh_CN.po` catalogues under the source root,
+read through a translation-only allowlist separate from source retrieval; without them the
+index is English only.
 
 Resolution is read-only JSON-RPC: `name_search` for a reference (an exact display-name match
 wins, a company beats its contacts, several remaining candidates are returned as ambiguous),
