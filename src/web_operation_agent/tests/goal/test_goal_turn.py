@@ -801,6 +801,14 @@ class GoalTurnTests(unittest.TestCase):
                 "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Azure"]}]}}]})],
             [Resolved(kind="list", aggregate=two)], text="Azure 八月的退款都有哪些？")
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        # Listed one to a line and numbered, so a reply can say "the second one".
+        self.assertIn("共 2 条：\n1. RINV/2026/00001\n2. RINV/2026/00002", execution.user_answer)
+        one = replace(two, count=1, records=("RINV/2026/00001",))
+        execution, *_ = self._run(
+            [("declare_goal", {"deliverables": [{"kind": "list", "entity": "order",
+                "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Azure"]}]}}]})],
+            [Resolved(kind="list", aggregate=one)], text="Azure 八月的退款都有哪些？")
+        self.assertIn("共 1 条：RINV/2026/00001", execution.user_answer)
 
     def test_a_record_the_request_never_names_is_not_chosen_for_the_person(self):
         declared = [("declare_goal", {"deliverables": [{"kind": "page", "entity": "order",

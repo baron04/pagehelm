@@ -68,7 +68,7 @@ _ONE_RECORD = re.compile(r"那张|这张|那笔|这笔|那条|这条|那单|这�
                          r"\bthat (?:invoice|order|refund|bill|quotation|one)\b", re.I)
 #: Earlier turns a follow-up is read with, and how much of each reply.
 _EARLIER_TURNS = 2
-_EARLIER_REPLY_CHARS = 500
+_EARLIER_REPLY_CHARS = 1_200
 #: A sum over more records than this is a total, whatever the words.
 _MAX_AMOUNT_CHOICES = 6
 #: At most this many collapsed menus are opened looking for a control to hand over.
@@ -1578,13 +1578,17 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             # A record's name may carry a line break (a product's description under its
             # name); one record reads as one line.
             records = [" ".join(str(r).split()) for r in agg.records]
-            names = "、".join(records) if zh else ", ".join(records)
             head = (f"**{agg.subject}**：共 {agg.count} 条" if zh
                     else f"**{agg.subject}**: {agg.count} records")
-            if names:
-                head += ("：" if zh else ": ") + names
             if not agg.complete:
                 head += "（仅列出前 20 条）" if zh else " (first 20 shown)"
+            if len(records) == 1:
+                head += ("：" if zh else ": ") + records[0]
+            elif records:
+                # Numbered, one to a line, so that "the second one" in a reply means one
+                # record and the person can see which.
+                head += ("：" if zh else ":") + "".join(
+                    f"\n{number}. {record}" for number, record in enumerate(records, 1))
             lines.append(head)
         else:
             head = (f"**{agg.subject}**：{agg.count} 条" if zh
