@@ -175,3 +175,36 @@ class RankingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConventionTests(unittest.TestCase):
+    """An organisation's meaning of its words reaches the model only when the request
+    says one of them."""
+
+    def setUp(self):
+        from web_operation_agent.goal.index import IndexConvention
+        self.orders = IndexConvention(terms=("订单", "单子"), meaning="order in every Status, quotations included")
+        self.quotes = IndexConvention(terms=("报价单",), meaning="order with Status in Quotation")
+        self.index = ApplicationIndex(
+            entities=(IndexEntity(key="order", label="Order"),),
+            pages=(IndexPage(key="p1", label="Orders", breadcrumb="Sales / Orders", entity="order"),),
+            conventions=(self.orders, self.quotes))
+
+    def test_a_convention_has_terms_and_one_short_meaning(self):
+        from web_operation_agent.goal.index import IndexConvention
+        with self.assertRaises(ValueError):
+            IndexConvention(terms=(" ",), meaning="x")
+        with self.assertRaises(ValueError):
+            IndexConvention(terms=("订单",), meaning="x" * 301)
+        self.assertEqual(IndexConvention(terms=(" 订单 ", "订单"), meaning=" a  b ").terms, ("订单",))
+
+    def test_only_the_conventions_the_request_says_are_shown(self):
+        focused = neighbourhood(self.index, ("order",), request="Joel 的订单有几张？")
+        self.assertEqual(focused.conventions, (self.orders,))
+        rendered = focused.render()
+        self.assertIn("CONVENTIONS of this organisation", rendered)
+        self.assertIn("订单 / 单子: order in every Status, quotations included", rendered)
+        self.assertNotIn("报价单", rendered)
+        scope = summaries(self.index, "Acme 的报价单", ())
+        self.assertIn("报价单: order with Status in Quotation", scope)
+        self.assertNotIn("CONVENTIONS", summaries(self.index, "S00006 的客户是谁？", ()))

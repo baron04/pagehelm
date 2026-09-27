@@ -134,7 +134,8 @@ class _IndexCompiler:
                 lines_of=owner.label if owner is not None else "",
                 rules=rules.get(model, ())))
         return ApplicationIndex(entities=tuple(entities), pages=tuple(pages),
-                                source_digest=str(catalog.get("descriptor_digest") or ""))
+                                source_digest=str(catalog.get("descriptor_digest") or ""),
+                                conventions=getattr(self, "_conventions", ()))
 
     def _search_filters(self, model: str, action_id: int) -> list[_SearchFilter]:
         """The filters and groups of the search view this page actually uses."""

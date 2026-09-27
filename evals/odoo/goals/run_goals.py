@@ -127,7 +127,7 @@ def task_for_numbered_reply(task: dict, turns: list[dict]) -> dict:
 
 def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: Path,
                 model_env: Path, container: str, database: str, staged: bool = True,
-                values: bool = True, readings: int = 2) -> dict:
+                values: bool = True, readings: int = 2, conventions: bool = True) -> dict:
     source = (bound_source(doc, Path(env["WOA_ODOO_SOURCE_ROOT"]),
                            env["WOA_ODOO_SOURCE_RELEASE"])
               if "source_binding" in doc else None)
@@ -149,6 +149,7 @@ def run_attempt(task: dict, doc: dict, *, env: dict, credentials: Path, output: 
             evaluation=True, evaluation_page_click=False,
             evaluation_reference_date=doc.get("reference_date", ""),
             allow_operation_in_page=True, goal_staged=staged, goal_values=values, goal_readings=readings,
+            **({} if conventions else {"conventions_path": None}),
             final_page_probe=lambda page: page.evaluate(FINAL_STATE_PROBE)))
     except Exception as exc:  # noqa: BLE001 -- one attempt's failure is a recorded result
         error = f"{type(exc).__name__}: {exc}"[:500]
@@ -247,6 +248,8 @@ def main() -> int:
                         help="do not offer candidate values before the declaration (control arm)")
     parser.add_argument("--readings", type=int, choices=(1, 2), default=2,
                         help="independent readings of each request (1 measures the second and third)")
+    parser.add_argument("--no-conventions", action="store_true",
+                        help="run without the deployment's conventions (control arm)")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--qualification", type=Path)
     arguments = parser.parse_args()
@@ -318,7 +321,8 @@ def main() -> int:
                                   container=arguments.container, database=arguments.database,
                                   staged=not arguments.single,
                                   values=not arguments.no_values,
-                                  readings=arguments.readings)
+                                  readings=arguments.readings,
+                                  conventions=not arguments.no_conventions)
                 row["repeat"] = repeat
                 path.write_text(json.dumps(row, ensure_ascii=False, indent=1) + "\n")
             rows.append(row)

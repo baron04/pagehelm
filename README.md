@@ -123,6 +123,10 @@ agent.
   (`path:start-end@release sha256:<hex>` over the exact lines), marked as a rule of the
   deployed version's source, not current data. When it names none, the refusal repeats
   the person's question as the thing no rule was found about.
+  An adapter may carry its organisation's conventions: what some words mean there ("订单"
+  is every sales order, quotations included), written by the deployment in the index's
+  terms and reviewed by its owner, never inferred from the application. Both declaration
+  steps show only the conventions whose words the request says.
   If the model declares a write intent but only resolves read-only pages or facts, opening
   those pages is reported as partial guidance, never as the requested change having occurred.
   For a new record, an adapter may expose an actor-scoped `create` operation on a collection

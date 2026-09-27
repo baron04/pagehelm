@@ -38,4 +38,5 @@ exclude = ["web_operation_agent_odoo.tests*", "web_operation_agent_odoo.deploy*"
 web_operation_agent_odoo = [
   "policies/*.json",
   "skills/*.json",
+  "conventions/*.json",
 ]

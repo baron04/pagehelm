@@ -279,6 +279,31 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual([f.value for f in result.deliverables[0].facts],
                          ["VIP & friendly", "(empty)"])
 
+    def test_the_deployments_conventions_reach_the_index(self):
+        from web_operation_agent_odoo.conventions import REFERENCE_CONVENTIONS, load_conventions
+        conventions = load_conventions(REFERENCE_CONVENTIONS)
+        self.assertTrue(any("订单" in c.terms for c in conventions))
+        self.assertEqual(self.port.index().conventions, ())
+        self.port.attach_conventions(conventions)
+        index = self.port.index()
+        self.assertEqual(index.conventions, conventions)
+        # The meanings are written in the index's own terms.
+        self.assertTrue(all(any(e.key in c.meaning for e in index.entities) or "sale.order" in c.meaning
+                            or "account.move" in c.meaning for c in conventions))
+
+    def test_a_malformed_conventions_file_is_refused(self):
+        import tempfile
+        from pathlib import Path
+        from web_operation_agent_odoo.conventions import load_conventions
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "c.json"
+            path.write_text('{"schema_version": 2, "conventions": []}', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_conventions(path)
+            path.write_text('{"schema_version": 1, "conventions": [{"terms": "订单"}]}', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_conventions(path)
+
     def test_a_search_that_names_no_record_of_the_page_asks_for_a_condition_instead(self):
         # "Joel's order": Joel is a customer, not an order's name; the repair says to
         # put the words in a condition on the field that links to the customer.

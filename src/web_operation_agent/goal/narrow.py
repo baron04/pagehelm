@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import re
 
-from .index import ApplicationIndex, IndexEntity
+from .index import ApplicationIndex, IndexEntity, render_conventions
 
 #: A document number or code: letters and digits with separators, at least one digit,
 #: as applications number their records (S00006, INV/2026/00002, E-COM06, PO-2025-0617).
@@ -164,6 +164,7 @@ def summaries(index: ApplicationIndex, request: str,
         lines.append("KNOWN REFERENCES (text -> entity: record)")
         for k in known:
             lines.append(f"{k.text} -> {k.entity}: {k.name}")
+    lines += render_conventions([c for c in index.conventions if c.named_in(request)])
     return "\n".join(lines)
 
 
@@ -303,7 +304,8 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
             pages.append(page)
     pages = tuple(pages)
     return ApplicationIndex(entities=entities, pages=pages, source_digest=index.source_digest,
-                            complete=index.complete, focused=True)
+                            complete=index.complete, focused=True,
+                            conventions=tuple(c for c in index.conventions if c.named_in(request)))
 
 
 __all__ = ["KnownReference", "correct_records", "locate", "neighbourhood", "ranked_entities", "references",

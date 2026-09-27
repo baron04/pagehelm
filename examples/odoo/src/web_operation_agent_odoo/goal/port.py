@@ -42,6 +42,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         #: What the application calls its labels in Chinese, from its own translation
         #: files; none until a deployment attaches them.
         self._translations = translations or OdooTranslations.none()
+        self._conventions: tuple = ()
         self._lock = threading.Lock()
         self._index: ApplicationIndex | None = None
         self._actions: list[dict] = []
@@ -86,6 +87,13 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             self._translations = translations
             self._index = None
             self._models = {}
+
+    def attach_conventions(self, conventions) -> None:
+        """Give the index what this organisation means by some of its words, as its
+        deployment declares. The index is recompiled on its next use."""
+        with self._lock:
+            self._conventions = tuple(conventions)
+            self._index = None
 
     def attach_source(self, source_map, *, release: str) -> None:
         """Give the index the rules compiled from the deployment's source, cited under

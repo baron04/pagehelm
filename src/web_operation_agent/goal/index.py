@@ -142,6 +142,46 @@ class IndexPage:
         object.__setattr__(self, "aliases", tuple(_label(a, "alias") for a in self.aliases)[:12])
 
 
+#: Conventions an index carries, words per convention, and the length of a meaning.
+_MAX_CONVENTIONS = 40
+_MAX_CONVENTION_TERMS = 8
+_MAX_MEANING = 300
+
+
+@dataclass(frozen=True)
+class IndexConvention:
+    """What this organisation means by a word, written by the deployment and reviewed by
+    its owner: "订单" is every sales order, quotations included; "报价单" only those not
+    yet confirmed. The application cannot say this of itself -- two organisations on the
+    same application mean different things -- so it is declared, never inferred. The
+    meaning is written in the index's own terms (entities, fields, values)."""
+    terms: tuple[str, ...]
+    meaning: str
+
+    def __post_init__(self) -> None:
+        terms = tuple(dict.fromkeys(" ".join(str(t).split()) for t in self.terms
+                                    if str(t).strip()))[:_MAX_CONVENTION_TERMS]
+        if not terms:
+            raise ValueError("a convention names at least one term")
+        meaning = " ".join(str(self.meaning).split())
+        if not meaning or len(meaning) > _MAX_MEANING:
+            raise ValueError("a convention's meaning is one short sentence")
+        object.__setattr__(self, "terms", terms)
+        object.__setattr__(self, "meaning", meaning)
+
+    def named_in(self, text: str) -> bool:
+        said = _norm(text)
+        return any(_norm(term) in said for term in self.terms)
+
+
+def render_conventions(conventions) -> list[str]:
+    """The conventions a request's words touch, as the model reads them."""
+    if not conventions:
+        return []
+    return (["", "CONVENTIONS of this organisation (what these words mean here; declare by them)"]
+            + [f"{' / '.join(c.terms)}: {c.meaning}" for c in conventions])
+
+
 @dataclass(frozen=True)
 class ApplicationIndex:
     entities: tuple[IndexEntity, ...] = ()
@@ -152,10 +192,14 @@ class ApplicationIndex:
     #: A focused index (the neighbourhood of a few entities) renders its rules too; the
     #: full index never does, since it is bounded by what a small model can read.
     focused: bool = False
+    #: This organisation's meaning of some words. A focused index carries only those
+    #: its request says.
+    conventions: tuple[IndexConvention, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "entities", tuple(self.entities)[:_MAX_ENTITIES])
         object.__setattr__(self, "pages", tuple(self.pages)[:_MAX_PAGES])
+        object.__setattr__(self, "conventions", tuple(self.conventions)[:_MAX_CONVENTIONS])
         keys = [e.key for e in self.entities]
         if len(set(keys)) != len(keys):
             raise ValueError("entity keys must be unique")
@@ -228,6 +272,7 @@ class ApplicationIndex:
             if page.operations:
                 parts.append("operations: " + ", ".join(page.operations))
             lines.append(" | ".join(parts))
+        lines += render_conventions(self.conventions)
         if self.focused and any(e.rules for e in self.entities):
             # A catalogue, not the rules themselves: id, kind and what each is about,
             # grouped by entity and kind. The model names ids; the server answers with
@@ -263,4 +308,5 @@ def _norm(text: str) -> str:
     return "".join(ch for ch in (text or "").casefold() if not ch.isspace())
 
 
-__all__ = ["ApplicationIndex", "IndexEntity", "IndexField", "IndexPage", "IndexRule"]
+__all__ = ["ApplicationIndex", "IndexConvention", "IndexEntity", "IndexField", "IndexPage", "IndexRule",
+           "render_conventions"]

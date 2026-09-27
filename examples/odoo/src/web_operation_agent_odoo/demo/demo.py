@@ -48,6 +48,7 @@ from web_operation_agent.execution.product import (AgentTurnExecution,
 from web_operation_agent.goal.executor import GoalTurnExecutor
 
 from ..adapter import OdooApplicationAdapter
+from ..conventions import REFERENCE_CONVENTIONS, load_conventions
 from ..translations import odoo_translations
 from ..turn import odoo_turn_config
 
@@ -230,6 +231,9 @@ class OdooDemoConfig:
     #: Independent readings of each request; two that differ are settled by a third.
     #: One reads once, to measure what the second and third buy.
     goal_readings: int = 2
+    #: What this organisation means by some of its words (a deployment's reviewed
+    #: conventions file); the reference deployment's by default, None for none.
+    conventions_path: Path | None = REFERENCE_CONVENTIONS
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -756,6 +760,8 @@ def run_demo(config: OdooDemoConfig, *,
         # The application's own Chinese names for its labels, from its zh_CN catalogues.
         adapter.goal_port.attach_translations(
             odoo_translations(config.source_root, release=config.source_release))
+    if config.conventions_path is not None:
+        adapter.goal_port.attach_conventions(load_conventions(config.conventions_path))
     chat, meter = _chat(config, run_dir, adapter)
     holder: dict[str, LiveConversationRunner] = {}
 
