@@ -1550,7 +1550,7 @@
         {
           "quote": "未确认的 quotes 里，超过一千美元的几张",
           "check": {
-            "answer_regex": "(?<![\\d.,])(?:2|2)(?:[.,]00?)?(?![\\d.,])"
+            "answer_regex": "(?<![\\d.,])(?:3|3)(?:[.,]00?)?(?![\\d.,])"
           }
         }
       ],
@@ -1560,8 +1560,11 @@
           "domain": [
             [
               "state",
-              "=",
-              "draft"
+              "in",
+              [
+                "draft",
+                "sent"
+              ]
             ],
             [
               "amount_total",
@@ -1571,9 +1574,9 @@
           ],
           "operation": "count",
           "field": "name",
-          "expected": 2,
-          "positive": "2",
-          "wrong": "19"
+          "expected": 3,
+          "positive": "3",
+          "wrong": "2"
         }
       }
     },

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "status": "draft",
-  "review": "Drafted 2026-09-27 from the scope notes of the Odoo Skills and the owner's default that an unqualified 订单 includes quotations. The owner decided 产品 on 2026-09-27; the other entries await the owner's review. Meanings are written in the goal index's own terms. The records of the sales-order and product entries restate their meanings in structure; the invoice and refund entries stay words only, since 供应商 turns them to vendor documents.",
+  "review": "Drafted 2026-09-27 from the scope notes of the Odoo Skills and the owner's default that an unqualified 订单 includes quotations. The owner decided 产品 on 2026-09-27 and, on 2026-09-28, that a quotation sent to the customer and not yet confirmed is still an unconfirmed quotation (报价); the other entries await the owner's review. Meanings are written in the goal index's own terms. The records of the sales-order and product entries restate their meanings in structure; the invoice and refund entries stay words only, since 供应商 turns them to vendor documents.",
   "conventions": [
     {
       "terms": [

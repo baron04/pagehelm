@@ -535,6 +535,19 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertTrue(self.client.domains)
         self.assertFalse(any("display_name" in str(d) or "ilike" in str(d) for d in self.client.domains))
 
+    def test_an_exact_name_that_longer_names_hold_is_asked_about(self):
+        original = self.client.call
+
+        def call(model, method, args, kwargs=None):
+            if model == "sale.order" and method == "name_search":
+                return [[6, "S00006"], [8, "S00006-B"]] if args[0] == "S00006" else []
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        found = self.port._find_record("sale.order", "S00006")
+        self.assertEqual(tuple(found), ("S00006", "S00006-B"))
+        self.assertEqual(self.port._find_record("sale.order", "S00006-B"), None)
+
     def test_a_name_copied_with_its_code_is_found_by_its_name(self):
         found = self.port._find_record("sale.order", "[X1] S00006")
         self.assertEqual(found[:2], ("sale.order", 6))

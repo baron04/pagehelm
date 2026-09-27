@@ -468,6 +468,16 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         wanted = _norm(reference)
         exact = [(rid, name) for rid, name in rows
                  if _norm(_strip_code(name)) == wanted or _norm(name) == wanted]
+        # Records whose names hold the name asked for ("Office Chair Black" beside "Office
+        # Chair"): the same name may mean either, so the person is asked (owner,
+        # 2026-09-28), rather than the exact one being taken.
+        # A company's contacts are shown as "Company, Person": they are the company's
+        # people, not another record of the same name.
+        longer = [(rid, name) for rid, name in rows if (rid, name) not in exact
+                  and wanted in _norm(_strip_code(str(name)))
+                  and not _norm(str(name)).startswith(wanted + ",")]
+        if exact and longer:
+            return Ambiguous(str(name) for _rid, name in (exact[:1] + longer)[:6])
         if len(exact) == 1 or (exact and all(n == exact[0][1] for _r, n in exact)):
             rid, name = exact[0]
             return model, int(rid), str(name)

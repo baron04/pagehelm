@@ -444,7 +444,9 @@ exists. A delete on a model the delegated user may not unlink is denied before a
 is looked up.
 
 Resolution is read-only JSON-RPC: `name_search` for a reference (an exact display-name match
-wins, a company beats its contacts, several remaining candidates are returned as ambiguous),
+wins unless other records' names hold it, as "Office Chair Black" holds "Office Chair", when
+the person is asked; a company beats its contacts; several remaining candidates are returned
+as ambiguous),
 `read` for facts, `search_count`, `read_group` and `search_read` for counts, sums, groups and
 lists over the page action's literal domain plus the declared conditions (a page's
 `search_default_*` filters apply unless they name the current user), and record routes from

@@ -29,7 +29,7 @@ from web_operation_agent_odoo.demo.demo import OdooDemoConfig, run_demo
 ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
     "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "b0f2f1de5a03732ff5a7af0486b7424250793288fec24d08d72515aadb08e953"),
-    "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "e49d22adc0ba5518ac90fd9637d737f69deb33fd6cf1d3154552346ad3d0843e"),
+    "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "c5811214e19c8f6823a63977dbc3fa786a008feb5a168c6e8dcb08e38ad5c874"),
     "v7c": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7c-holdout.json", "369566fa6affe268b7b964e55ee7ef1445567a8c5086091353a23462b548f043"),
     "v7d": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7d-holdout.json", "b7e5a47246172b82a81e1aaf6b6d5891eb0c61646e3801bc6b7c9732751c90c3"),
     "mt-dev": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-multiturn-dev.json", "1686f0dce9da0f0980000864e4c4005f8f9a207dc4e68c751b249dcfd8a592ab"),
