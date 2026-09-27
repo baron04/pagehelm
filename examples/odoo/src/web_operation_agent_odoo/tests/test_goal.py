@@ -451,6 +451,27 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(searched[0], [["user_id", "in", [5]]])
         self.assertIn([["partner_id", "child_of", [11]]], searched)
 
+    def test_a_company_written_in_a_text_field_is_found_on_its_link(self):
+        # "Gemini's marketing manager" declared with Gemini in a text field: nothing fits;
+        # on the link to the company, one contact does.
+        original = self.client.call
+        searched: list = []
+
+        def call(model, method, args, kwargs=None):
+            if model == "res.partner" and method == "search_read":
+                searched.append(args[0])
+                return ([{"id": 31, "display_name": "Gemini Furniture, Ed"}]
+                        if "parent_id" in str(args[0]) else [])
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        result = self._resolve({"kind": "fact", "entity": "res.partner", "fields": ["Email"],
+                                "metric": {"op": "count", "filters": [
+                                    {"field": "Email", "values": ["Gemini Furniture"]},
+                                    {"field": "Job Position", "values": ["Marketing Manager"]}]}})
+        self.assertEqual(result.deliverables[0].problem, "")
+        self.assertTrue(any("parent_id" in str(d) for d in searched))
+
     def test_words_in_another_language_give_way_to_the_other_conditions(self):
         # "三人沙发" cannot match an English name; the price picks the one order out.
         original = self.client.call

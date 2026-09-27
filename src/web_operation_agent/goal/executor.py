@@ -186,8 +186,10 @@ def _link_to_named(s: _TurnState, d) -> tuple[str, str] | None:
         if entity is None:
             continue
         for known in s.references:
-            if known.entity == entity.key:
+            if known.entity == entity.key and _norm(known.name) == _norm(d.record):
                 continue
+            # The named record may be of the same entity (a company, for a contact picked
+            # among its people): its link to itself is the condition then.
             field_ = next((f for f in entity.fields
                            if f.kind == "link" and f.relation == known.entity), None)
             if field_ is not None:

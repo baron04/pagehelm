@@ -1019,7 +1019,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         found: dict[int, tuple] = {}
         for i, condition in enumerate(conditions):
             name = meta.field_by_label(condition.field)
-            if name is None or (meta.fields.get(name) or {}).get("type") != "many2one":
+            if name is None or (meta.fields.get(name) or {}).get("type") not in ("many2one", "char"):
+                # A name put on a link, or on a text field holding a name (a company's
+                # name written in Company Name, when the link to the company is meant).
                 continue
             for label in links:
                 other = meta.field_by_label(label)
