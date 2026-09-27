@@ -16,7 +16,7 @@
 import {DEFAULT_CONFIGURATION} from '../contract/panel'
 import {detach, later, listen, report, type Cancel} from './contain'
 import {engagementRecord} from './engagement'
-import {examplesFromPage} from './examples'
+import {examplesFromPage, watchForExamples} from './examples'
 import {startEmbeddedRuntime} from './runtime'
 import {createShell} from './shell'
 import {START_TEXT, panelStartStatus, type StartStatus} from './startStatus'
@@ -400,12 +400,9 @@ export function autoBoot(win: Window = window): Supervisor | null {
   }, DEFAULT_CONFIGURATION,
   examplesFromPage(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars))
   // Loaded ahead of the page -- as a harness injects it -- the tag that declares the examples
-  // is not parsed yet. Read them again once it is.
-  if (win.document.readyState === 'loading') {
-    listen('boot examples', win.document, 'DOMContentLoaded', () => shell.host.offerExamples(
-      examplesFromPage(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars)),
-    {once: true})
-  }
+  // is not parsed yet; watch for it instead of guessing when it is likely there.
+  watchForExamples(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars,
+    examples => shell.host.offerExamples(examples))
   const supervisor: Supervisor = new Supervisor({
     source,
     start: config => startEmbeddedRuntime(config, shell),

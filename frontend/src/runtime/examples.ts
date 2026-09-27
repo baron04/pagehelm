@@ -9,7 +9,7 @@
  * line the composer would accept.
  */
 import type {ExampleKind, PanelExample} from '../bridge/host'
-import {report} from './contain'
+import {listen, report} from './contain'
 
 const KINDS: readonly ExampleKind[] = ['query', 'find', 'operate']
 
@@ -45,4 +45,40 @@ export function parseExamples(value: string | undefined, maxChars: number): Pane
 export function examplesFromPage(doc: Document, maxChars: number): PanelExample[] {
   const tag = doc.querySelector<HTMLScriptElement>('script[data-woa-bootstrap]')
   return parseExamples(tag?.dataset.woaExamples, maxChars)
+}
+
+/**
+ * Call `onFound` the first moment the page's examples can be read, however long that takes.
+ *
+ * A harness (a demo, a test) injects the boot script ahead of the page, so the very first
+ * read finds no tag yet: the parser has not reached it. A single retry once `DOMContentLoaded`
+ * fires still raced a document still being parsed -- large enough, that event fired before the
+ * tag existed -- so the one read some of the time missed it regardless. This watches the
+ * document for the tag's own insertion instead of guessing when it is likely there, and gives
+ * up (without calling `onFound`) once the document has finished loading with none to find.
+ * Returns a function that stops watching early.
+ */
+export function watchForExamples(
+  doc: Document, maxChars: number, onFound: (examples: PanelExample[]) => void,
+): () => void {
+  const found = examplesFromPage(doc, maxChars)
+  if (found.length) {
+    onFound(found)
+    return () => {}
+  }
+  if (doc.readyState !== 'loading') return () => {}
+  const tryNow = () => {
+    const examples = examplesFromPage(doc, maxChars)
+    if (!examples.length) return
+    onFound(examples)
+    stop()
+  }
+  const observer = new MutationObserver(tryNow)
+  observer.observe(doc, {childList: true, subtree: true})
+  const stopListening = listen('watch for examples', doc, 'DOMContentLoaded', tryNow, {once: true})
+  const stop = () => {
+    observer.disconnect()
+    stopListening()
+  }
+  return stop
 }
