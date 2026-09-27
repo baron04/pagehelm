@@ -42,13 +42,14 @@ The list names every entity the person may read, one per line, the likeliest fir
 
 def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
                      timeout_s: float | None = None, cancelled=None,
-                     today: str = "") -> tuple[list[dict], bool, str, dict]:
+                     today: str = "", earlier: str = "") -> tuple[list[dict], bool, str, dict]:
     """The first step of a staged declaration: entities and kinds, from the ranked
     entity summaries rather than the full index. Returns (parts, write_intent,
     unsupported, audit projection)."""
     messages = [
         {"role": "system", "content": SCOPE_SYSTEM},
         {"role": "user", "content": (summaries + (f"\n\nTODAY\n{today}" if today else "")
+                                     + _earlier_block(earlier)
                                      + "\n\nREQUEST\n" + prompt.strip())},
     ]
     kwargs = {"max_tokens": 600, "timeout_s": timeout_s}
@@ -77,7 +78,7 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
                timeout_s: float | None = None, cancelled=None, today: str = "",
                previous: GoalSpec | None = None,
                problems: tuple[str, ...] = (), scope: str = "",
-               values: str = "") -> tuple[GoalSpec, dict]:
+               values: str = "", earlier: str = "") -> tuple[GoalSpec, dict]:
     """Ask once. Returns the parsed declaration and a bounded audit projection.
 
     `today` is the application's current date, so that a month or day the person says
@@ -87,7 +88,7 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
     field the entity does not have, several records a description matched) are shown,
     and the model declares again.
     """
-    before = ""
+    before = _earlier_block(earlier)
     if scope:
         # The staged path: what the first step settled, and the known references, so
         # that the second step fills in details rather than choosing again.
@@ -138,6 +139,13 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
     return spec, {"source": source, "deliverables": len(spec.deliverables),
                   "kinds": [d.kind for d in spec.deliverables],
                   "write_intent": spec.write_intent, "attempts": attempts}
+
+
+def _earlier_block(earlier: str) -> str:
+    """What was said before in this conversation, which a follow-up ("its total?", "the
+    Right Sit one", "both together") refers to; nothing on a conversation's first turn."""
+    return ("\n\nEARLIER IN THIS CONVERSATION (the request may refer to it)\n" + earlier.strip()
+            if earlier.strip() else "")
 
 
 def _declaration_from(reply: dict, name: str = "declare_goal") -> tuple[dict, str]:

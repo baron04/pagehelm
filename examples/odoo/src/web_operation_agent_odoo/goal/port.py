@@ -637,7 +637,11 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                                                 [[["display_name", "ilike", d.page.search]]], {}):
                 # Nothing on this page is named so: opening the list would show the
                 # person something else and say the words were found.
-                return Resolved(kind="page", problem=f"no {page.label} record matches {d.page.search!r}")
+                return Resolved(kind="page", problem=f"no {page.label} record matches {d.page.search!r}",
+                                repair=(f"no {page.label} record is named {d.page.search!r}; when the "
+                                        "words name a related record (a customer, a product), put "
+                                        "them in metric.filters on the field that links to it, and "
+                                        "leave the search empty"))
         action = next((a for a in self._actions if f"p{a['action_id']}" == page.key), None)
         if action is None:
             return Resolved(kind="page", problem="the page named is not in the index")

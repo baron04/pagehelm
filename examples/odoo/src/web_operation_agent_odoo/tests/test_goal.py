@@ -153,6 +153,8 @@ class _Client:
             return [{"id": 11, "comment": "<p>VIP &amp; <b>friendly</b></p>", "email": False}]
         if method == "search_count":
             domain = args[0]
+            if ["display_name", "ilike", "Joel"] in domain:
+                return 0
             if any(clause == ["id", "=", 6] for clause in domain if isinstance(clause, list)):
                 return 1 if ("state", "not in", ("draft", "sent", "cancel")) in [
                     tuple(c) if isinstance(c, list) else c for c in domain] else 1
@@ -276,6 +278,16 @@ class OdooGoalPortTests(unittest.TestCase):
                                 "record": "Gemini Furniture", "fields": ["Notes", "Email"]})
         self.assertEqual([f.value for f in result.deliverables[0].facts],
                          ["VIP & friendly", "(empty)"])
+
+    def test_a_search_that_names_no_record_of_the_page_asks_for_a_condition_instead(self):
+        # "Joel's order": Joel is a customer, not an order's name; the repair says to
+        # put the words in a condition on the field that links to the customer.
+        result = self._resolve({"kind": "page", "entity": "sale.order",
+                                "page": {"key": "p332", "search": "Joel"}})
+        resolved = result.deliverables[0]
+        self.assertIn("no ", resolved.problem)
+        self.assertIsNone(resolved.page)
+        self.assertIn("metric.filters on the field that links to it", resolved.repair)
 
     def test_a_list_page_carries_view_and_facets_and_passes_unknown_facets_through(self):
         result = self._resolve({"kind": "page", "page": {"key": "p332", "view": "kanban",

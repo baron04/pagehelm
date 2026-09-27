@@ -541,6 +541,39 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIsNone(executor._continued(AgentTurnMessage(message_id="m2", text="换个问题：S00001 呢",
                                                                page_url="http://127.0.0.1:8080/home")))
 
+    def test_a_follow_up_is_read_with_the_earlier_turns(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"]),
+                   ("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Total"])]
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        chat = _Chat(scripts)
+        port = _Port([Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+                     [Resolved(kind="fact", facts=(Fact("S00006", "Total", "750.00 USD"),))])
+        from web_operation_agent.state.conversation import ConversationState
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=chat, application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True,
+            readings=1, conversation_state=ConversationState())
+        executor.execute({"message_id": "m1", "text": "S00006 的客户是谁？",
+                          "page_url": "http://127.0.0.1:8080/home"})
+        second = executor.execute({"message_id": "m2", "text": "它的总金额呢？",
+                                   "page_url": "http://127.0.0.1:8080/home"})
+        self.assertIn("750.00 USD", second.user_answer)
+        # The first turn had nothing before it; both steps of the second read the first.
+        self.assertNotIn("EARLIER IN THIS CONVERSATION", chat.messages[0][1]["content"])
+        for step in (chat.messages[2], chat.messages[3]):
+            content = step[1]["content"]
+            self.assertIn("EARLIER IN THIS CONVERSATION", content)
+            self.assertIn("person: S00006 的客户是谁？", content)
+            self.assertIn("Lumber Inc", content)
+            self.assertTrue(content.rstrip().endswith("它的总金额呢？"))
+        # The record the earlier request named is located for the follow-up.
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        located = [e["references"] for e in events if e["event"] == "goal_references"]
+        self.assertEqual(located[-1], [{"text": "S00006", "entity": "order", "name": "S00006"}])
+
     def test_scope_terms_in_the_applications_language_are_kept_per_part(self):
         from web_operation_agent.goal.spec import scope_from_json
         parts, _write, _why = scope_from_json({"parts": [

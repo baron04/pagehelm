@@ -66,6 +66,9 @@ _DELETE = re.compile(r"删除|删掉|删了|\bdelete\b|\bremove\b", re.I)
 #: Words that point at one record ("that invoice", "the one of August").
 _ONE_RECORD = re.compile(r"那张|这张|那笔|这笔|那条|这条|那单|这单|那个|这个|哪张|哪笔|"
                          r"\bthat (?:invoice|order|refund|bill|quotation|one)\b", re.I)
+#: Earlier turns a follow-up is read with, and how much of each reply.
+_EARLIER_TURNS = 2
+_EARLIER_REPLY_CHARS = 500
 #: A sum over more records than this is a total, whatever the words.
 _MAX_AMOUNT_CHOICES = 6
 #: At most this many collapsed menus are opened looking for a control to hand over.
@@ -445,8 +448,12 @@ class GoalTurnExecutor:
         scope_text = ""
         scope_parts: list[dict] = []
         known = ()
+        # A follow-up is read with what was said before it, and the records it may mean
+        # are looked for in the earlier request as well as in its own words.
+        earlier, before = self._earlier()
+        lookup = (before + " " + s.message.text).strip()
         if self.staged:
-            known = locate(self.goal_port, s.message.text,
+            known = locate(self.goal_port, lookup,
                            context=s.approvals.context(s.step, "locate"))
             s.references = tuple(known)
             s.ledger.append("goal_references", step=s.step,
@@ -455,9 +462,9 @@ class GoalTurnExecutor:
             try:
                 parts, write_intent, unsupported, projection = understand_scope(
                     chat, prompt=s.message.text,
-                    summaries=summaries(index, s.message.text, known), run_id=s.run_id,
+                    summaries=summaries(index, lookup, known), run_id=s.run_id,
                     timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
-                    cancelled=s.cancelled, today=today_text)
+                    cancelled=s.cancelled, today=today_text, earlier=earlier)
             except ValueError as exc:
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
                 s.terminal_reason = "agent_refused"
@@ -502,7 +509,7 @@ class GoalTurnExecutor:
             try:
                 candidates = ground(self.goal_port,
                                     entities=tuple(dict.fromkeys(p["entity"] for p in scope_parts)),
-                                    known=known, dates=days(s.message.text, today_text),
+                                    known=known, dates=days(lookup, today_text),
                                     context=s.approvals.context(s.step, "candidates"))
             except Exception as exc:  # noqa: BLE001 -- grounding helps; its absence is not a failure
                 s.ledger.append("goal_values_failed", step=s.step,
@@ -513,7 +520,8 @@ class GoalTurnExecutor:
         unbound = functools.partial(
             understand, chat, prompt=s.message.text, index=index, run_id=s.run_id,
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
-            today=today_text, scope=scope_text, values=render_values(candidates))
+            today=today_text, scope=scope_text, values=render_values(candidates),
+            earlier=earlier)
 
         def read(**kwargs):
             # Every reading -- the first, the second, the deciding one, the repair --
@@ -1138,6 +1146,19 @@ class GoalTurnExecutor:
         s.ledger.append("goal_field_filled", step=s.step, control=plan.highlight,
                         kind=plan.fill_kind, verified=verified, shown=bool(value))
         return shown, verified
+
+    def _earlier(self) -> tuple[str, str]:
+        """This conversation's last turns as the model reads them (what the person asked,
+        what the assistant replied, clipped), and the person's last request."""
+        context = self.conversation_state.model_context() or {}
+        turns = list(context.get("prior_turns") or [])[-_EARLIER_TURNS:]
+        lines = []
+        for turn in turns:
+            lines.append("person: " + " ".join(str(turn.get("user", "")).split())[:300])
+            lines.append("assistant: " + " ".join(str(turn.get("assistant", "")).split())
+                         [:_EARLIER_REPLY_CHARS])
+        before = " ".join(str(turns[-1].get("user", "")).split())[:300] if turns else ""
+        return "\n".join(lines), before
 
     def _continued(self, message: AgentTurnMessage) -> str | None:
         """The request a reply to this conversation's pending question continues: the
