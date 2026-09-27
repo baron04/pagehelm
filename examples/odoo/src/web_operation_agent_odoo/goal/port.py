@@ -252,6 +252,14 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             # that may not, no record of them can be deleted, whichever one was meant.
             return Resolved(kind="handoff", problem=f"this account may not delete {entity.label} records",
                             denied="delete")
+        if (d.kind == "handoff" and entity is not None and self._operations
+                and "write" not in self._operations.get(entity.key, ())
+                and (d.value or (entity.field_by_label(d.action) is not None
+                                 and not any(_norm(a) == _norm(d.action) for a in entity.actions)))):
+            # A field changed to a value: the form stays read-only to an account that may
+            # not write these records, so nothing could be entered or saved.
+            return Resolved(kind="handoff", problem=f"this account may not change {entity.label} records",
+                            denied="write")
         if d.kind == "page" and entity is None and d.page.key:
             return self._list_page(d, index)
         if entity is None:

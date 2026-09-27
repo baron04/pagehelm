@@ -151,7 +151,7 @@ class _IndexCompiler:
     def _model_meta(self, model: str, *, detailed: bool = True) -> _ModelMeta:
         label = self._model_labels.get(model, model)
         fields = self._client.call(model, "fields_get", [], {
-            "attributes": ["string", "type", "relation", "selection", "searchable", "domain"]})
+            "attributes": ["string", "type", "relation", "selection", "searchable", "domain", "required"]})
         if not detailed:
             return _ModelMeta(model, label, fields, [], [], (), (), [],
                               english=self._translations.back)
@@ -190,7 +190,7 @@ class _IndexCompiler:
                 # its line description from the owner's form.
                 continue
             fields = self._client.call(comodel, "fields_get", [], {
-                "attributes": ["string", "type", "relation", "selection", "searchable", "domain"]})
+                "attributes": ["string", "type", "relation", "selection", "searchable", "domain", "required"]})
             # The line fields the form shows are the ones named in it that belong to the
             # line model and not to the record (an embedded list's tags are not nested in
             # a way a regex can bound reliably).
@@ -224,6 +224,12 @@ class _IndexCompiler:
             named = own.get(html.unescape(label).casefold())
             if named and named not in shown:
                 shown.insert(len(meta.list_fields), named)
+        # A link every record must have is part of each record whether or not
+        # the form shows it (a product's unit of measure, hidden while the feature is off):
+        # a person may ask about it, and the index should not say it is not there.
+        shown += [name for name, info in meta.fields.items()
+                  if name not in shown and info.get("required")
+                  and info.get("type") == "many2one"]
         ordered = sorted(shown, key=lambda n: (_KIND_RANK.get(_kind_of(meta.fields.get(n, {})) or "", 9),
                                                shown.index(n)))
         for name in ordered:

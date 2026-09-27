@@ -482,6 +482,12 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertTrue(plan.url.startswith("/odoo/action-"))
 
     def test_a_handoff_value_becomes_what_to_enter_only_when_certain(self):
+        # An account that may not change orders is told so, whatever the value.
+        denied = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "S00006",
+                                "action": "Order Date", "value": "2026-10-31"}, write_intent=True)
+        self.assertEqual(denied.deliverables[0].denied, "write")
+        self.port._operations["sale.order"] = frozenset({"read", "write"})
+
         def plan(action, value):
             result = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "S00006",
                                     "action": action, "value": value}, write_intent=True)

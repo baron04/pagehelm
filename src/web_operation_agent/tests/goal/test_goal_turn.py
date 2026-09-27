@@ -877,6 +877,36 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("你的账号没有删除这条记录的权限", execution.user_answer)
         self.assertNotIn("你指的是哪一个", execution.user_answer)
 
+    def test_a_control_one_reading_declared_and_the_first_step_named_is_kept(self):
+        # "确认按钮指给我": the request writes the control in Chinese; one reading
+        # declared Confirm, the other only the record; the first step named Confirm.
+        scope = ("declare_scope", {"parts": [{"kind": "page", "entity": "order", "about": "S00006",
+                                              "terms": ["Confirm"]}]})
+        page_only = _declaration(kind="page", entity="order", record="S00006")
+        handoff = ("declare_goal", {"deliverables": [{"kind": "handoff", "entity": "order",
+                                                      "record": "S00006", "action": "Confirm"}],
+                                    "write_intent": True})
+        execution, _channel, chat, port, events = self._run(
+            [scope, page_only, handoff],
+            [Resolved(kind="handoff", page=PagePlan(url="/orders/6", label="S00006",
+                                                    expected_path="/orders/6", highlight="Confirm"))],
+            text="S00006 客户同意了，确认按钮指给我，我来点。", staged=True)
+        self.assertEqual(len(chat.messages), 3)
+        self.assertEqual((port.specs[-1].deliverables[0].kind, port.specs[-1].deliverables[0].action),
+                         ("handoff", "Confirm"))
+        self.assertIn("标出「Confirm」", execution.user_answer)
+
+    def test_a_handoff_that_names_rules_still_points_at_its_control(self):
+        declared = [("declare_goal", {"deliverables": [{"kind": "handoff", "entity": "order",
+                                                        "record": "S00006", "action": "Confirm",
+                                                        "rules": ["r1"]}], "write_intent": True})]
+        execution, _channel, _chat, port, _events = self._run(
+            declared, [Resolved(kind="handoff", page=PagePlan(
+                url="/orders/6", label="S00006", expected_path="/orders/6", highlight="Confirm"))],
+            text="S00006 的 Confirm 按钮在哪？", readings=1)
+        self.assertEqual(port.specs[-1].deliverables[0].kind, "handoff")
+        self.assertIn("标出「Confirm」", execution.user_answer)
+
     def test_a_named_control_handed_over_is_not_sent_back_for_values(self):
         # The first step read "where is New" as a question; the request writes the
         # page's New, and handing it over is the answer.

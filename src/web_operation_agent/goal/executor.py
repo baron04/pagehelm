@@ -238,7 +238,7 @@ def _totals_agreed(first: GoalSpec, second: GoalSpec) -> tuple[GoalSpec, GoalSpe
     return settled(first, agreed), settled(second, agreed)
 
 
-def _named_controls(spec: GoalSpec, parts: list, text: str, index
+def _named_controls(spec: GoalSpec, parts: list, text: str, index, declared: frozenset = frozenset()
                     ) -> tuple[GoalSpec, tuple[str, ...]]:
     """A control the request names in the application's own words keeps its place in the
     declaration. The first step's terms say what each part is about as the application
@@ -257,7 +257,11 @@ def _named_controls(spec: GoalSpec, parts: list, text: str, index
             entity = index.entity(d.entity) if d.entity else None
             page = index.page(d.page.key) if d.page.key else None
             for term in _terms_for(parts, position, d, len(spec.deliverables)):
-                if not _names_verbatim(text, term) or _names_a_page(index, term):
+                if not (_names_verbatim(text, term) or _norm(term) in declared) \
+                        or _names_a_page(index, term):
+                    # A control the request writes in the application's words, or one a
+                    # reading declared on this record ("确认按钮" read as Confirm): with the
+                    # first step naming it too, that is two readings of the same thing.
                     continue
                 if d.record and entity is not None:
                     control = next((a for a in entity.actions if _norm(a) == _norm(term)), "")
@@ -983,8 +987,13 @@ class GoalTurnExecutor:
             return GoalSpec(deliverables=(), write_intent=first.write_intent,
                             unsupported=second.unsupported)
         first, second = _totals_agreed(first, second)
-        first, named_first = _named_controls(first, s.scope_parts, s.message.text, index)
-        second, named_second = _named_controls(second, s.scope_parts, s.message.text, index)
+        declared = frozenset(_norm(d.action) for d in first.deliverables + second.deliverables
+                             if d.kind == "handoff" and d.action)
+        first, named_first = _named_controls(first, s.scope_parts, s.message.text, index, declared)
+        second, named_second = _named_controls(second, s.scope_parts, s.message.text, index, declared)
+        # A handoff is a request to change something whichever reading said so.
+        first, second = (replace(r, write_intent=r.write_intent or any(
+            d.kind == "handoff" for d in r.deliverables)) for r in (first, second))
         named = tuple(dict.fromkeys(named_first + named_second))
         if named:
             s.ledger.append("goal_control_named", step=s.step, controls=list(named))
@@ -1055,7 +1064,8 @@ class GoalTurnExecutor:
         missing = [_needs_beyond(d, offered) for d in spec.deliverables]
         # A question answered by rules of the source is answered here, from the index the
         # model read, with the rules' citations; the port is not asked.
-        by_rule = [self._rules_answer(s, d) if d.rules else None for d in spec.deliverables]
+        by_rule = [self._rules_answer(s, d) if d.rules and d.kind not in ("handoff", "page") else None
+                   for d in spec.deliverables]
         missing = [frozenset() if r is not None else m for r, m in zip(by_rule, missing)]
         asked = GoalSpec(deliverables=tuple(d for d, m, r in zip(spec.deliverables, missing, by_rule)
                                             if not m and r is None),
