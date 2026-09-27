@@ -227,6 +227,9 @@ class OdooDemoConfig:
     #: Candidate values (a named record's lines, a named customer's documents) offered
     #: before the details are declared; off only to measure them.
     goal_values: bool = True
+    #: Independent readings of each request; two that differ are settled by a third.
+    #: One reads once, to measure what the second and third buy.
+    goal_readings: int = 2
 
     def __post_init__(self) -> None:
         for name in ("api_key_path", "storage_state_path", "output_dir"):
@@ -782,6 +785,7 @@ def run_demo(config: OdooDemoConfig, *,
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _message: "odoo-" + uuid.uuid4().hex[:16],
                 staged=config.goal_staged, values=config.goal_values,
+                readings=config.goal_readings,
             )
         else:
             executor = AgentTurnExecutor(
