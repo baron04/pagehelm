@@ -105,6 +105,10 @@ class Resolved:
     #: The reference the person gave that names no record here ("S00998"), so the
     #: reply can say plainly that it was not found, in the person's language.
     missing: str = ""
+    #: An operation this account may not perform on what was asked ("delete",
+    #: "create", "write"), as the application's own access rules say: the reply says so
+    #: rather than ask which record, since none of them could be acted on.
+    denied: str = ""
     #: The optional capabilities (names in `OPTIONAL`) this deliverable needed and the
     #: port does not offer; set by the core, so the reply can say so in the person's words.
     unoffered: tuple[str, ...] = ()

@@ -548,6 +548,7 @@ class GoalTurnExecutor:
         today_text = str(today() or "") if callable(today) else ""
         scope_text = ""
         scope_parts: list[dict] = []
+        scope_unsupported = ""
         known = ()
         # A follow-up is read with what was said before it, and the records it may mean
         # are looked for in the earlier request as well as in its own words.
@@ -579,6 +580,7 @@ class GoalTurnExecutor:
                 return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
                                  else "The model service did not respond; please try again.")
             scope_parts = parts
+            scope_unsupported = unsupported
             s.scope_parts = list(parts)
             s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
                             write_intent=write_intent, unsupported=unsupported,
@@ -664,11 +666,15 @@ class GoalTurnExecutor:
                              else "The model service did not respond; please try again.")
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
         if (self.staged and not spec.deliverables and scope_parts
-                and not any(p.get("rules") for p in scope_parts)):
+                and not (spec.unsupported and scope_unsupported)
+                and not spec.about_assistant and not any(p.get("rules") for p in scope_parts)):
             # The first step found things to deliver in this request and the second
-            # declared none: the two readings contradict each other, and a small model
-            # now and then answers the index instead of the request. It is asked once
-            # more with what the first step found; its answer stands either way.
+            # declared none without saying why: a small model now and then answers the
+            # index instead of the request. It is asked once more with what the first
+            # step found; its answer stands either way. When both steps said what the
+            # application does not hold, the second is not asked again: asked again, it
+            # maps the request to a neighbouring field (a payment reference for a bank's
+            # batch number), a wrong answer where the refusal was the right one.
             try:
                 again, projection = read(
                     previous=spec,
@@ -848,6 +854,20 @@ class GoalTurnExecutor:
         # A control the request names in the application's words belongs to both
         # readings before they are compared: one reading dropping it is not a
         # disagreement the model needs to settle.
+        if (not second.deliverables and second.unsupported and not second.about_assistant
+                and not first.about_assistant):
+            # One reading says the application does not hold what is asked, and names
+            # it; the other found something to answer with. They disagree on whether
+            # the data exists at all, which a third reading settles no better than the
+            # first two: the one that answers maps the request to a neighbouring field
+            # far more often than the one that refuses misses a real one. The turn says
+            # what is missing rather than answer with something close to it.
+            s.ledger.append("goal_second_reading", step=s.step, spec=second.to_json(),
+                            agrees=False, differences=["the data asked for is not held"],
+                            **projection)
+            s.ledger.append("goal_readings_disagree_on_existence", step=s.step)
+            return GoalSpec(deliverables=(), write_intent=first.write_intent,
+                            unsupported=second.unsupported)
         first, named_first = _named_controls(first, s.scope_parts, s.message.text, index)
         second, named_second = _named_controls(second, s.scope_parts, s.message.text, index)
         named = tuple(dict.fromkeys(named_first + named_second))
@@ -1867,11 +1887,20 @@ _OFFER_EN = {"facets": "page filters and groups", "sections": "tabs", "lines": "
              "search": "page search", "source": "rules from source", "values": "candidate values"}
 
 
+#: The operations an adapter may report as denied, as a person would name them.
+_DENIED = {"delete": ("删除", "delete"), "create": ("新建", "create"), "write": ("修改", "change")}
+
+
 def _not_done(resolved: Resolved, zh: bool) -> str:
     """A part that did not get done, as the person is told it. The resolver's own
     reason ("filter 'p262' is not usable here") is written for the declarer, in the
     index's terms, and stays in the audit and the repair; the person hears that it was
     not done and, when several records fit, which ones."""
+    if resolved.denied:
+        # The account's own rights, not the assistant, stand in the way; nothing was done.
+        zh_op, en_op = _DENIED.get(resolved.denied, (resolved.denied, resolved.denied))
+        return (f"你的账号没有{zh_op}这条记录的权限，助手没有执行任何操作。" if zh
+                else f"Your account has no permission to {en_op} this record; the assistant did nothing.")
     if resolved.unoffered:
         # What the application does not offer is the person's to know, plainly.
         offers = [(_OFFER_ZH if zh else _OFFER_EN).get(name, name) for name in resolved.unoffered]

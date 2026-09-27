@@ -837,6 +837,46 @@ class GoalTurnTests(unittest.TestCase):
         self.assertTrue(executor_module._names_verbatim("找到 Send 按钮", "Send"))
         self.assertFalse(executor_module._names_verbatim("the Sender field", "Send"))
 
+    def test_readings_that_disagree_on_whether_the_data_exists_end_in_the_refusal(self):
+        # One reading maps the request to a neighbouring field; the other says the
+        # application holds no such thing. Whichever arrives first, the turn says what
+        # is missing, asks no third reading and reads nothing.
+        neighbour = _declaration(kind="fact", entity="order", record="S00006", fields=["Total"])
+        missing = ("declare_goal", {"deliverables": [],
+                                    "unsupported": "订单上没有银行清算批次号这个字段"})
+        execution, _channel, chat, port, events = self._run(
+            [neighbour, missing], [Resolved(kind="fact", facts=(Fact("S00006", "Total", "10"),))],
+            text="S00006 的银行清算批次号是多少？")
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("银行清算批次号", execution.user_answer)
+        self.assertEqual(len(chat.messages), 2)
+        self.assertEqual([s for s in port.specs if s.deliverables], [])
+        self.assertFalse(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
+
+    def test_an_empty_second_step_that_says_what_is_missing_is_not_asked_again(self):
+        # Both steps say the application does not hold it: the first found the order the
+        # request names, and noted that the thing asked of it is not recorded.
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}],
+                                      "unsupported": "签收人身份证号不在索引里"}),
+                   ("declare_goal", {"deliverables": [], "unsupported": "订单上没有签收人身份证号"})]
+        execution, _channel, chat, port, events = self._run(
+            scripts, [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的签收人身份证号？", staged=True, readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("签收人身份证号", execution.user_answer)
+        self.assertEqual(len(chat.messages), 2)
+        self.assertFalse(any(e.get("redeclared") for e in events if e["event"] == "goal_declared"))
+
+    def test_an_operation_the_account_may_not_perform_is_said_and_not_asked_about(self):
+        execution, *_ = self._run(
+            [_declaration(kind="handoff", entity="order", record="S00005", action="Delete")],
+            [Resolved(kind="handoff", problem="this account may not delete Sales Order records",
+                      denied="delete")],
+            text="把 S00005 删除", readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("你的账号没有删除这条记录的权限", execution.user_answer)
+        self.assertNotIn("你指的是哪一个", execution.user_answer)
+
     def test_a_list_page_whose_new_the_request_names_is_a_create_handoff(self):
         scope = ("declare_scope", {"parts": [{"kind": "page", "entity": "order", "about": "",
                                               "terms": ["New", "Orders"]}]})

@@ -49,6 +49,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         self._models: dict[str, _ModelMeta] = {}
         self._page_filters: dict[int, list[_SearchFilter]] = {}
         self._model_labels: dict[str, str] = {}
+        #: What this actor may do on each model, from the catalog the index was
+        #: compiled from (create, read, write, unlink).
+        self._operations: dict[str, frozenset] = {}
         self._reads: list[tuple[str, str]] = []
         #: A one2many's static domain the next aggregate applies to its line scope.
         self._line_scope: list | None = None
@@ -239,6 +242,12 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                 return self._lines_list(entity.key, line_field, owner, d, index)
         if d.kind in ("aggregate", "list"):
             return self._aggregate(d, index)
+        if (d.kind in ("handoff", "page") and entity is not None and _norm(d.action) == "delete"
+                and self._operations and "unlink" not in self._operations.get(entity.key, ())):
+            # Odoo shows Delete only to an account that may delete these records; for one
+            # that may not, no record of them can be deleted, whichever one was meant.
+            return Resolved(kind="handoff", problem=f"this account may not delete {entity.label} records",
+                            denied="delete")
         if d.kind == "page" and entity is None and d.page.key:
             return self._list_page(d, index)
         if entity is None:

@@ -395,6 +395,22 @@ class OdooGoalPortTests(unittest.TestCase):
                                 write_intent=True)
         self.assertIn("not available", refused.deliverables[0].problem)
 
+    def test_a_delete_this_actor_may_not_perform_is_denied_before_any_record_is_sought(self):
+        # The actor may read orders but not delete them: whichever order was meant, the
+        # answer is the same, so no record is looked up and no one is asked which.
+        before = len(self.client.calls) if hasattr(self.client, "calls") else None
+        denied = self._resolve({"kind": "handoff", "entity": "sale.order",
+                                "record": "Ready Mat 的草稿报价", "action": "Delete"}, write_intent=True)
+        self.assertEqual(denied.deliverables[0].denied, "delete")
+        self.assertEqual(denied.deliverables[0].candidates, ())
+        self.assertEqual(denied.reads, ())
+        if before is not None:
+            self.assertEqual(len(self.client.calls), before)
+        # Another action on the same record is not affected.
+        other = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "S00006",
+                               "action": "Confirm"}, write_intent=True)
+        self.assertEqual(other.deliverables[0].denied, "")
+
     def test_a_view_the_page_lacks_is_reported_on_the_plan(self):
         result = self._resolve({"kind": "page", "page": {"key": "p173", "view": "pivot"}})
         plan = result.deliverables[0].page

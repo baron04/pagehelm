@@ -41,6 +41,7 @@ class _IndexCompiler:
                               for m in catalog.get("models", [])}
         model_operations = {m["model"]: frozenset(m.get("operations") or ())
                             for m in catalog.get("models", [])}
+        self._operations = model_operations
         transient = {m["model"] for m in catalog.get("models", []) if m.get("transient")}
         actions = []
         for action in catalog.get("actions", []):
