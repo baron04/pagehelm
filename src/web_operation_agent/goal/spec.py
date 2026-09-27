@@ -364,7 +364,7 @@ DECLARE_GOAL_TOOL = {
                         "required": ["kind"]}},
                 "write_intent": {"type": "boolean"},
                 "unsupported": {"type": "string",
-                                "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for; or it asks about a rule, policy or limit and RULES holds no such rule -- then say the deployed source has no rule about it"}},
+                                "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for; or it asks about a rule, policy or limit and RULES holds no such rule -- then say the deployed source has no rule about it; written in the person's language, naming what is missing"}},
             "required": ["deliverables"]}}}
 
 

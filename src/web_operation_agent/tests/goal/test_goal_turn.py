@@ -395,7 +395,8 @@ class GoalTurnTests(unittest.TestCase):
             [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
             offers=frozenset())
         self.assertIn("Lumber Inc", execution.user_answer)
-        self.assertIn("does not offer sections", execution.user_answer)
+        self.assertIn("这个应用没有提供页签", execution.user_answer)
+        self.assertNotIn("does not offer", execution.user_answer)
         self.assertEqual([d.kind for d in port.specs[0].deliverables], ["fact"])
         missing = next(e for e in events if e["event"] == "goal_capability_missing")
         self.assertEqual(missing["missing"], [["sections"]])
@@ -926,7 +927,12 @@ class GoalTurnTests(unittest.TestCase):
                                                  expected_path="/orders/6", section="Notes"))])
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
         self.assertIn("未完成", execution.user_answer)
-        self.assertIn("section Notes", execution.user_answer)
+        self.assertIn("没有找到页签「Notes」", execution.user_answer)
+        self.assertNotIn("section Notes", execution.user_answer)
+        # The audit keeps its own wording.
+        settled = [json.loads(line) for line in self.ledger.read_text().splitlines()
+                   if '"goal_page_settled"' in line]
+        self.assertEqual(settled[-1]["unmet"], ["section Notes"])
 
     def test_one_deliverable_cannot_complete_a_two_part_request(self):
         execution, *_ = self._run(
@@ -941,6 +947,8 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(execution.agent.success_claim, "not_claimed")
         self.assertIn("Lumber Inc", execution.user_answer)
         self.assertIn("无法完成这一项", execution.user_answer)
+        # The resolver's reason is written for the declarer and stays in the audit.
+        self.assertNotIn("Payment Terms is not on this record", execution.user_answer)
 
     def test_adapter_cannot_drop_a_declared_deliverable(self):
         execution, *_ = self._run(

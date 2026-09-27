@@ -15,7 +15,7 @@ import functools
 import json
 import re
 import time
-from typing import Callable
+from typing import Callable, NamedTuple
 from urllib.parse import urlsplit
 
 from ..business.approvals import PAGE_OPERATIONS, ApprovalWatch, OperationPlan
@@ -180,10 +180,43 @@ def _first_line(name: str) -> str:
     return ((name or "").strip().splitlines() or [""])[0].strip()
 
 
+class _Unmet(NamedTuple):
+    """One part of a page request the page did not show, by kind and the name asked."""
+    kind: str
+    name: str = ""
+
+    def __str__(self) -> str:  # the audit's wording
+        return {"not_attempted": "not attempted",
+                "not_confirmed": "working the page not confirmed",
+                "not_opened": "page did not open",
+                "error_dialog": "the application reported an error dialog",
+                "filter_on": f"filter {self.name}", "filter_off": f"filter {self.name} off",
+                "section": f"section {self.name}", "control": f"control {self.name}",
+                "view": f"{self.name} view"}[self.kind]
+
+    def said(self, zh: bool) -> str:
+        """As the person is told it."""
+        if zh:
+            return {"not_attempted": "没有执行", "not_confirmed": "没有得到操作页面的同意",
+                    "not_opened": "页面没有打开", "error_dialog": "应用弹出了错误提示",
+                    "filter_on": f"筛选「{self.name}」没有生效",
+                    "filter_off": f"筛选「{self.name}」没有取消",
+                    "section": f"没有找到页签「{self.name}」",
+                    "control": f"没有找到控件「{self.name}」",
+                    "view": f"没有切换到 {self.name} 视图"}[self.kind]
+        return {"not_attempted": "not attempted", "not_confirmed": "working the page was not agreed",
+                "not_opened": "the page did not open",
+                "error_dialog": "the application showed an error",
+                "filter_on": f"filter “{self.name}” not applied",
+                "filter_off": f"filter “{self.name}” not removed",
+                "section": f"no tab “{self.name}”", "control": f"no control “{self.name}”",
+                "view": f"not switched to the {self.name} view"}[self.kind]
+
+
 @dataclass
 class _PageOutcome:
     reached: bool = True
-    unmet: list[str] = field(default_factory=list)
+    unmet: list[_Unmet] = field(default_factory=list)
     url: str = ""
     highlighted: str = ""
     #: The menu the highlighted control is in, when the turn opened it to find it.
@@ -637,7 +670,7 @@ class GoalTurnExecutor:
                 outcomes.append(None)
                 continue
             if s.terminal_reason:
-                outcomes.append(_PageOutcome(reached=False, unmet=["not attempted"]))
+                outcomes.append(_PageOutcome(reached=False, unmet=[_Unmet("not_attempted")]))
                 continue
             outcomes.append(self._reach(s, resolved.page))
         if not s.terminal_reason:
@@ -745,7 +778,7 @@ class GoalTurnExecutor:
         resolution = Resolution(deliverables=tuple(
             r if r is not None else
             Resolved(kind=d.kind, problem="this application does not offer "
-                     + ", ".join(sorted(m)) + " here")
+                     + ", ".join(sorted(m)) + " here", unoffered=tuple(sorted(m)))
             if m else next(resolved)
             for d, m, r in zip(spec.deliverables, missing, by_rule)), reads=partial.reads)
         s.ledger.append("goal_resolved", step=s.step,
@@ -916,7 +949,7 @@ class GoalTurnExecutor:
             if reason:
                 s.terminal_reason, s.detail = reason, detail
                 out.reached = False
-                out.unmet.append("working the page not confirmed")
+                out.unmet.append(_Unmet("not_confirmed"))
                 return out
             receipt = self._dispatch(s, "goto", {"url": target}, navigating=True)
             if receipt is not None and not receipt.ok and receipt.error_code == "stale_observation" \
@@ -935,18 +968,18 @@ class GoalTurnExecutor:
                 out.reached = False
                 return out
             out.reached = False
-            out.unmet.append("page did not open" if s.obs.render_state != "blocked"
-                             else "the application reported an error dialog")
+            out.unmet.append(_Unmet("not_opened" if s.obs.render_state != "blocked"
+                                    else "error_dialog"))
             out.url = s.obs.url
             return out
         for name in plan.facets_on:
             if not self._facet(s, name, active=True):
-                out.unmet.append(f"filter {name}")
+                out.unmet.append(_Unmet("filter_on", name))
         for name in plan.facets_off:
             if not self._facet(s, name, active=False):
-                out.unmet.append(f"filter {name} off")
+                out.unmet.append(_Unmet("filter_off", name))
         if plan.section and not self._select_tab(s, plan.section):
-            out.unmet.append(f"section {plan.section}")
+            out.unmet.append(_Unmet("section", plan.section))
         if plan.highlight and plan.fill:
             # The value goes in first, so the highlight marks a field already showing it.
             element = self._find_input(s, plan)
@@ -959,13 +992,13 @@ class GoalTurnExecutor:
             if control:
                 out.highlighted, out.menu = control, menu
             else:
-                out.unmet.append(f"control {plan.highlight}")
+                out.unmet.append(_Unmet("control", plan.highlight))
         if plan.view and not self._view_shown(s.obs, plan.view):
-            out.unmet.append(f"{plan.view} view")
+            out.unmet.append(_Unmet("view", plan.view))
         out.url = s.obs.url
         out.reached = _path_of(s.obs.url) == (plan.expected_path or _path_of(s.obs.url))
         s.ledger.append("goal_page_settled", step=s.step, reached=out.reached,
-                        unmet=list(out.unmet), url=s.obs.url,
+                        unmet=[str(u) for u in out.unmet], url=s.obs.url,
                         render_state=s.obs.render_state, active_view=s.obs.active_view,
                         record_route=s.obs.record_route,
                         selected_controls=list(s.obs.selected_controls)[:8],
@@ -1548,9 +1581,6 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             and not (resolved.facts or resolved.aggregate)):
         # A question that went unanswered stays unanswered in the reply, whatever page
         # was opened beside it: the page is where to look, not an answer.
-        text = resolved.problem
-        if resolved.candidates:
-            text += (" 候选：" if zh else " candidates: ") + ", ".join(resolved.candidates)
         where = ""
         if resolved.page is not None:
             where = (f"（可在 {resolved.page.label} 页面上自行核对）" if zh
@@ -1562,8 +1592,7 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             lines.append((f"没有找到名为「{resolved.missing}」的记录。{where}") if zh
                          else f"Nothing named \"{resolved.missing}\" was found.{where}")
         else:
-            lines.append((f"无法完成这一项：{text}{where}") if zh
-                         else f"Could not do this part: {text}{where}")
+            lines.append(_not_done(resolved, zh) + where)
         return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
@@ -1631,29 +1660,51 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
                 suffix += (f"，但这个页面不支持 {plan.missing_view} 视图" if zh
                            else f", but this page does not support a {plan.missing_view} view")
             lines.append((f"已打开：{what}{suffix}") if zh else f"Opened: {what}{suffix}")
-        elif outcome.reached and all(u.startswith("filter ") for u in outcome.unmet):
+        elif outcome.reached and all(u.kind == "filter_on" for u in outcome.unmet):
             # The page is open; a filter or group it asked for has no such choice there.
             # Said as what the page lacks, not as the assistant failing, because the
             # page itself was delivered.
-            names = "、".join(u[len("filter "):] for u in outcome.unmet) if zh else \
-                ", ".join(u[len("filter "):] for u in outcome.unmet)
+            names = "、".join(u.name for u in outcome.unmet) if zh else \
+                ", ".join(u.name for u in outcome.unmet)
             lines.append((f"已打开：{plan.label}（页面上没有这个筛选项：{names}）") if zh
                          else f"Opened: {plan.label} (the page has no such filter: {names})")
         else:
-            unmet = "、".join(outcome.unmet) if zh else ", ".join(outcome.unmet)
+            unmet = "、".join(u.said(zh) for u in outcome.unmet) if zh else \
+                ", ".join(u.said(zh) for u in outcome.unmet)
             lines.append((f"打开 {plan.label} 未完成：{unmet or '页面未到达'}。") if zh
                          else f"Opening {plan.label} was not completed: {unmet or 'page not reached'}.")
     if resolved.missing and not (resolved.facts or resolved.aggregate or resolved.page):
         lines.append((f"没有找到名为「{resolved.missing}」的记录。") if zh
                      else f"Nothing named \"{resolved.missing}\" was found.")
     elif resolved.problem and not (resolved.facts or resolved.aggregate or resolved.page):
-        text = resolved.problem
-        if resolved.candidates:
-            text += (" 候选：" if zh else " candidates: ") + ", ".join(resolved.candidates)
-        lines.append((f"无法完成这一项：{text}") if zh else f"Could not do this part: {text}")
-    elif resolved.problem and resolved.facts:
-        lines.append((f"（{resolved.problem}）") if zh else f"({resolved.problem})")
+        lines.append(_not_done(resolved, zh))
     return lines
+
+
+#: The optional capabilities of a goal port (`OPTIONAL`), as a person would name them.
+_OFFER_ZH = {"facets": "页面筛选与分组", "sections": "页签", "lines": "明细行",
+             "handoffs": "指出控件", "fill": "预先填值", "search": "页面搜索",
+             "source": "源码规则", "values": "候选值"}
+_OFFER_EN = {"facets": "page filters and groups", "sections": "tabs", "lines": "line items",
+             "handoffs": "pointing at controls", "fill": "entering values",
+             "search": "page search", "source": "rules from source", "values": "candidate values"}
+
+
+def _not_done(resolved: Resolved, zh: bool) -> str:
+    """A part that did not get done, as the person is told it. The resolver's own
+    reason ("filter 'p262' is not usable here") is written for the declarer, in the
+    index's terms, and stays in the audit and the repair; the person hears that it was
+    not done and, when several records fit, which ones."""
+    if resolved.unoffered:
+        # What the application does not offer is the person's to know, plainly.
+        offers = [(_OFFER_ZH if zh else _OFFER_EN).get(name, name) for name in resolved.unoffered]
+        return (f"这个应用没有提供{'、'.join(offers)}，这一项无法完成。" if zh
+                else f"This application does not offer {', '.join(offers)}, so this part "
+                     "could not be done.")
+    names = "、".join(resolved.candidates) if zh else ", ".join(resolved.candidates)
+    if zh:
+        return "无法完成这一项。" + (f"符合的记录有：{names}。" if names else "")
+    return "Could not do this part." + (f" Records that fit: {names}." if names else "")
 
 
 __all__ = ["GoalTurnExecutor"]

@@ -22,7 +22,9 @@ agent.
   a requested change by highlighting its control for the person. Working the page still takes
   the turn's one leave, every page command runs under the application's page write control, and no
   control that could write is pressed. The reply is rendered from resolved values, never
-  from model prose, so a fact the turn reports is one it read. The Odoo demo and the goal
+  from model prose, so a fact the turn reports is one it read. A part that could not be done
+  is told as such, with the page to check and the records that fit; the resolver's own
+  reason, written in the index's terms for a repair, stays in the audit. The Odoo demo and the goal
   evaluation runner take this path for read-only sessions; mutation sessions and the
   scripted apparatus keep the step-by-step loop below. The declaration is one model output
   and can name the wrong entity, field, scope or search words; the resolver reports those

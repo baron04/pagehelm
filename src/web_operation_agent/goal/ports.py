@@ -105,6 +105,9 @@ class Resolved:
     #: The reference the person gave that names no record here ("S00998"), so the
     #: reply can say plainly that it was not found, in the person's language.
     missing: str = ""
+    #: The optional capabilities (names in `OPTIONAL`) this deliverable needed and the
+    #: port does not offer; set by the core, so the reply can say so in the person's words.
+    unoffered: tuple[str, ...] = ()
     #: What the adapter would tell the declarer so that a second declaration could
     #: succeed: the fields an entity does have, the records a description matched.
     #: Empty when the problem is not one a different declaration would fix.
