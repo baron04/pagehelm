@@ -38,7 +38,7 @@ from ..state.ledger import SessionLedger
 from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancelled
 from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import Filter, GoalSpec, Metric
-from .ground import bind, days, ground, pick, render as render_values, without_days
+from .ground import bind, days, ground, numbers_in, pick, render as render_values, without_days
 from .index import conventions_named
 from .narrow import correct_records, locate, neighbourhood, references, summaries
 from .understand import understand, understand_scope
@@ -430,6 +430,8 @@ class _TurnState:
     #: The deployment's conventions the request's own words name (never an earlier
     #: turn's), passed with every resolution.
     conventions: tuple = ()
+    #: The application's current date, for the days a request writes.
+    today: str = ""
 
 
 
@@ -611,6 +613,7 @@ class GoalTurnExecutor:
         elapsed = time.time() - s.started_at
         today = getattr(self.goal_port, "today", None)
         today_text = str(today() or "") if callable(today) else ""
+        s.today = today_text
         scope_text = ""
         scope_parts: list[dict] = []
         scope_unsupported = ""
@@ -667,8 +670,11 @@ class GoalTurnExecutor:
             terms = " ".join(t for p in parts for t in p.get("terms", ()))
             # An entity a convention the request's words name is about ("成交" -> orders)
             # is in the neighbourhood whatever the first step picked.
+            # So is the entity of a record the request names by its number (S00020), which
+            # the first step may have passed over for an entity that record relates to.
             index = neighbourhood(index, tuple(dict.fromkeys(
-                [p["entity"] for p in parts] + [c.entity for c in s.conventions])),
+                [p["entity"] for p in parts] + [c.entity for c in s.conventions]
+                + [k.entity for k in known if re.search(r"\d", k.text)])),
                                   request=(s.message.text + " " + terms).strip(),
                                   rules=any(p.get("rules") for p in parts))
             s.index = index
@@ -1135,7 +1141,10 @@ class GoalTurnExecutor:
             unnamed = replace(d, record="")
             if not ((d.metric and d.metric.filters) or d.page.search):
                 # No condition declared, but the request names who the record belongs to
-                # ("Joel's order"): that link is what the request says of it.
+                # ("Joel's order"): that link is what the request says of it. An amount or
+                # a day the request writes may pick the one out, as the model read it.
+                if numbers_in(s.message.text) or days(s.message.text, s.today):
+                    continue
                 link = _link_to_named(s, d)
                 if link is None:
                     continue
