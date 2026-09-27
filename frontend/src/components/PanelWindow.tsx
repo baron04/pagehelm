@@ -6,6 +6,7 @@ import {useHostSnapshot} from '../state/useHost'
 import {loadOpen, rememberOpen, useWindowGeometry, type Handle} from '../state/geometry'
 import {usePageNarrowing} from '../state/pagePush'
 import {isPanelShortcut} from '../state/shortcut'
+import {latestAnswer, loadSeen, rememberSeen, unreadAnswers} from '../state/unread'
 import {guarded} from './ErrorBoundary'
 import presentation from '../presentation.json'
 import avatar from '../assets/assistant-avatar.webp'
@@ -41,7 +42,7 @@ export function PanelWindow({host, allowedOrigins}: {
   const [draft, setDraft] = useState('')
   // Bumped when a new conversation's example fills the draft, so the composer takes the caret.
   const [picked, setPicked] = useState(0)
-  const [unread, setUnread] = useState(0)
+  const [seen, setSeen] = useState(loadSeen)
   const [deciding, setDeciding] = useState(false)
   const [panelFailure, setPanelFailure] = useState<HostNotice | null>(null)
   const {mode, fullScreen, geometry, docked, drawer, dragging, onPointerDown, toggleMode} =
@@ -112,19 +113,15 @@ export function PanelWindow({host, allowedOrigins}: {
     wasPending.current = pending !== null
   }, [pending, setOpen])
 
-  // What happened while the panel was collapsed, so the launcher can say there is
-  // something to come back to rather than looking idle.
-  const seenEntries = useRef(snapshot.entries.length)
+  // Answers that arrived while the panel was collapsed, so the launcher can say there is
+  // something to come back to rather than looking idle. What is on screen is seen.
+  const latest = latestAnswer(snapshot.entries)
   useEffect(() => {
-    if (open) {
-      seenEntries.current = snapshot.entries.length
-      setUnread(0)
-      return
-    }
-    const added = snapshot.entries.length - seenEntries.current
-    seenEntries.current = snapshot.entries.length
-    if (added > 0) setUnread(count => count + added)
-  }, [open, snapshot.entries.length])
+    if (!open || latest <= seen) return
+    rememberSeen(latest)
+    setSeen(latest)
+  }, [open, latest, seen])
+  const unread = open ? 0 : unreadAnswers(snapshot.entries, seen)
 
   const decidingTimer = useRef(0)
   const decide = useCallback((decision: 'approved' | 'denied') => {
@@ -153,7 +150,6 @@ export function PanelWindow({host, allowedOrigins}: {
     const next = !openNow.current
     setClosedByKeyboard(byKeyboard && !next)
     setOpen(next)
-    setUnread(0)
   }, [setOpen])
   useEffect(() => {
     const onKey = guarded('panel shortcut', (event: KeyboardEvent) => {
@@ -200,10 +196,7 @@ export function PanelWindow({host, allowedOrigins}: {
           event.preventDefault()
           toggle(true)
         }}
-        onOpen={() => {
-          setOpen(true)
-          setUnread(0)
-        }}
+        onOpen={() => setOpen(true)}
       />
     )
   }
@@ -247,10 +240,7 @@ export function PanelWindow({host, allowedOrigins}: {
         </button>}
         {/* The cross needs no words: closing is what a cross in a window's corner means. */}
         <button type="button" className="woa-icon-button" aria-label={labels.collapse}
-                onClick={() => {
-                  setOpen(false)
-                  setUnread(0)
-                }}>
+                onClick={() => setOpen(false)}>
           <X {...iconProps(16, TITLE_INK)} />
         </button>
       </header>

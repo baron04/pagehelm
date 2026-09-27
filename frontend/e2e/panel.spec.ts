@@ -43,6 +43,35 @@ test.describe('the launcher', () => {
     expect(panel.errors).toEqual([])
   })
 
+  test('the launcher counts answers not yet seen, not every line of a turn', async ({open}) => {
+    const turn = (n: number, at: number) => [
+      entry(`e${n}1`, 'goal', `问题 ${n}`, {at}),
+      entry(`e${n}2`, 'progress', '正在思考', {at: at + 1, transient: true}),
+      entry(`e${n}3`, 'progress', '正在读取业务数据', {at: at + 2}),
+      entry(`e${n}4`, 'result', `回答 ${n}`, {at: at + 3, panel_state: 'success'}),
+    ]
+    const panel = await open(snapshot())
+    const launcher = panel.page.locator('.woa-launcher')
+    const nub = launcher.locator('.woa-launcher__nub')
+    await launcher.waitFor()
+    // A whole turn finishes while the panel is put away: one answer to come back to.
+    await panel.set({entries: turn(1, 1_000)})
+    await expect(nub).toHaveText('1')
+    await launcher.click()
+    await panel.page.getByText('回答 1', {exact: true}).waitFor()
+    await panel.page.getByRole('button', {name: labels.collapse}).click()
+    await expect(nub).toHaveCount(0)
+    // A refresh starts collapsed and the session hands back the conversation already read.
+    await panel.page.reload()
+    await launcher.waitFor()
+    await panel.set({entries: turn(1, 1_000)})
+    await expect(nub).toHaveCount(0)
+    // Only what arrived after it counts.
+    await panel.set({entries: [...turn(1, 1_000), ...turn(2, 2_000)]})
+    await expect(nub).toHaveText('1')
+    expect(panel.errors).toEqual([])
+  })
+
   test('panel interactions do not reach the host application event delegates', async ({open}) => {
     const panel = await open(snapshot())
     await panel.page.evaluate(() => {
