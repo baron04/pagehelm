@@ -287,9 +287,9 @@ class OdooGoalPortTests(unittest.TestCase):
         self.port.attach_conventions(conventions)
         index = self.port.index()
         self.assertEqual(index.conventions, conventions)
-        # The meanings are written in the index's own terms.
-        self.assertTrue(all(any(e.key in c.meaning for e in index.entities) or "sale.order" in c.meaning
-                            or "account.move" in c.meaning for c in conventions))
+        # The meanings are written in the index's own terms: each names the model it is about.
+        import re
+        self.assertTrue(all(re.match(r"[a-z_]+\.[a-z_.]+\b", c.meaning) for c in conventions))
 
     def test_a_malformed_conventions_file_is_refused(self):
         import tempfile
