@@ -118,9 +118,32 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                     result = replace(result, kind=deliverable.kind)
                 resolved.append(result)
             except BusinessToolError as exc:
-                resolved.append(Resolved(kind=deliverable.kind,
-                                         problem=f"the application refused a read: {exc}"[:200]))
+                resolved.append(self._refused_read(deliverable, index, exc))
         return Resolution(deliverables=tuple(resolved), reads=tuple(self._reads))
+
+    def _refused_read(self, d: Deliverable, index: ApplicationIndex,
+                      exc: BusinessToolError) -> Resolved:
+        """A read the application refused. When a condition is the cause -- a field the
+        application lists as searchable but cannot search -- the condition is named and
+        sent back for repair instead of ending the deliverable."""
+        problem = f"the application refused a read: {exc}"[:200]
+        filters = d.metric.filters if d.metric else ()
+        if len(filters) < 2:
+            return Resolved(kind=d.kind, problem=problem)
+        culprits = []
+        for condition in filters:
+            rest = tuple(f for f in filters if f is not condition)
+            try:
+                self._resolve_one(replace(d, metric=replace(d.metric, filters=rest)), index)
+            except BusinessToolError:
+                continue
+            culprits.append(condition.field)
+        if len(culprits) != 1:
+            return Resolved(kind=d.kind, problem=problem)
+        return Resolved(kind=d.kind, problem=f"{culprits[0]!r} cannot be searched",
+                        repair=(f"the application cannot search on {culprits[0]!r}; drop that "
+                                "condition if the request did not ask for it, or use another "
+                                "field that says the same"))
 
     def today(self) -> str:
         """The current date where the application's users are, for the declaration."""
@@ -1024,8 +1047,11 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             if info.get("type") != "many2one" or field not in shown:
                 continue
             found = self._find_record(str(info["relation"]), words)
+            # A contact of a company is displayed "Company, Person"; the person's own name
+            # is the last part, as `locate_reference` reads it.
             if (isinstance(found, tuple) and not isinstance(found, Ambiguous)
-                    and _norm(_strip_code(found[2])) == _norm(words)):
+                    and _norm(words) in (_norm(_strip_code(found[2])),
+                                         _norm(str(found[2]).rsplit(",", 1)[-1]))):
                 key = (found[0], found[1])
                 if key not in hits or (field in meta.list_fields and hits[key] not in meta.list_fields):
                     hits[key] = field

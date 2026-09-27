@@ -32,7 +32,11 @@ _TECHNICAL_MODULES = frozenset({
 
 #: Field names that are chatter, activity or bookkeeping rather than business values.
 _SKIP_FIELD_PREFIXES = ("message_", "activity_", "website_message", "rating_",
-                        "has_message", "my_activity", "access_", "x_studio")
+                        "has_message", "my_activity", "access_", "x_studio",
+                        # Quick-entry inputs of a draft form (Total (Tax inc.) is what the
+                        # user types to prefill lines): stored empty, never the record's
+                        # own value, and not summable.
+                        "quick_edit_")
 
 _SKIP_FIELDS = frozenset({"company_id", "currency_id", "id", "__last_update", "sequence",
                           "color", "display_name", "write_date", "create_date",
@@ -265,7 +269,19 @@ class _ModelMeta:
         wanted = _norm(label)
         if not wanted:
             return None
-        for name, meta in self.fields.items():
+        if any(name.startswith("quick_edit_") and _norm(meta.get("string", "")) == wanted
+               for name, meta in self.fields.items()):
+            # A quick-entry input is named like the record's total; the words mean the
+            # record's own value, found by the looser matches below.
+            return self._field_by_label_among(
+                label, {n: m for n, m in self.fields.items() if not n.startswith("quick_edit_")})
+        return self._field_by_label_among(label, self.fields)
+
+    def _field_by_label_among(self, label: str, fields: dict) -> str | None:
+        wanted = _norm(label)
+        if not wanted:
+            return None
+        for name, meta in fields.items():
             if _norm(meta.get("string", "")) == wanted or name == label:
                 return name
         asked = _tokens(label)
@@ -274,20 +290,20 @@ class _ModelMeta:
         # Whole words, never substrings: "ID" is not inside "Validity". A field whose
         # own name says exactly the words asked for (validity_date for "Validity Date",
         # invoice_date for "Invoice Date") is meant even when its label differs.
-        named = [n for n in self.fields if _tokens(n.replace("_", " ")) == asked]
+        named = [n for n in fields if _tokens(n.replace("_", " ")) == asked]
         if len(named) == 1:
             return named[0]
         # A label whose words include every word asked for ("Invoice/Bill Date" for
         # "Invoice Date", "# Product Variants" for "Product Variants"); the fewest extra
         # words, then the shortest, wins.
         covering = sorted(((len(_tokens(m.get("string", "")) - asked), len(_norm(m.get("string", ""))), n)
-                           for n, m in self.fields.items() if asked <= _tokens(m.get("string", ""))))
+                           for n, m in fields.items() if asked <= _tokens(m.get("string", ""))))
         if covering:
             return covering[0][2]
         # Or the words asked for begin with a label and qualify it ("Customer name",
         # "Total amount"); a trailing word alone ("Date" in "Validity Date") names nothing.
         first = next(iter(re.findall(r"[0-9a-z\u3400-\u9fff]+", label.casefold())), "")
-        contained = sorted(((-len(_norm(m.get("string", ""))), n) for n, m in self.fields.items()
+        contained = sorted(((-len(_norm(m.get("string", ""))), n) for n, m in fields.items()
                             if first in _tokens(m.get("string", ""))
                             and _tokens(m.get("string", "")) <= asked))
         return contained[0][1] if contained else None

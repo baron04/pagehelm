@@ -720,7 +720,21 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual([a for a, _ in browser.actions].count("reveal"),
                          executor_module._MAX_REVEALS)
         self.assertNotIn("highlight", [a for a, _ in browser.actions])
-        self.assertIn("没有找到「Delete」", execution.user_answer)
+        self.assertIn("页面上没有「Delete」这个控件", execution.user_answer)
+        self.assertIn("没有执行任何操作", execution.user_answer)
+        self.assertNotIn("已打开", execution.user_answer)
+
+    def test_a_page_declared_with_a_control_is_handed_over_with_that_control_marked(self):
+        port_resolved = [Resolved(kind="handoff", page=PagePlan(
+            url="/orders/5", label="S00005", expected_path="/orders/5",
+            highlight="Send by Email"))]
+        execution, _channel, _chat, port, events = self._run(
+            [_declaration(kind="page", entity="order", record="S00005", action="Send by Email")],
+            port_resolved, text="S00005 的发邮件按钮帮我标出来")
+        self.assertEqual(port.specs[0].deliverables[0].kind, "handoff")
+        self.assertIn("标出「Send by Email」", execution.user_answer)
+        self.assertEqual([e["controls"] for e in events if e["event"] == "goal_page_became_handoff"],
+                         [["Send by Email"]])
 
     def test_write_intent_cannot_be_settled_by_opening_a_page(self):
         execution, _channel, _chat, _port, events = self._run(

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import functools
 import json
 import re
@@ -92,6 +92,21 @@ def _appeared(before: Counter, elements) -> list:
             extra[key] -= 1
             shown.append(e)
     return list(reversed(shown))
+
+
+def _as_handoffs(spec: GoalSpec) -> tuple[GoalSpec, tuple[str, ...]]:
+    """A page declared with a control to act on is a handoff: the person asked to be shown
+    that control ("mark Pay for me", "where is Print Labels"), and opening the page alone
+    would leave the control unmarked. Returns (spec, the controls)."""
+    out, controls = [], []
+    for d in spec.deliverables:
+        if d.kind == "page" and d.action and d.record:
+            d = replace(d, kind="handoff")
+            controls.append(d.action)
+        out.append(d)
+    if not controls:
+        return spec, ()
+    return replace(spec, deliverables=tuple(out)), tuple(controls)
 
 
 def _first_line(name: str) -> str:
@@ -450,6 +465,9 @@ class GoalTurnExecutor:
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
         if second_reading is not None and spec.deliverables:
             spec = self._agree(s, chat, index, spec, today, second_reading)
+        spec, handed = _as_handoffs(spec)
+        if handed:
+            s.ledger.append("goal_page_became_handoff", step=s.step, controls=list(handed))
         spec, corrections = correct_records(spec, s.message.text, known,
                                             tuple(c.display for c in s.candidates))
         if corrections:
@@ -1392,10 +1410,12 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
                               "please check it and press it yourself. The assistant prepares, "
                               "you submit."))
             else:
-                lines.append((f"已打开 {plan.label}，但没有找到「{plan.highlight}」这个控件，"
-                              "助手无法替你完成这项操作。") if zh else
-                             (f"Opened {plan.label}, but could not find the “{plan.highlight}” "
-                              "control; the assistant cannot complete this for you."))
+                # The limitation comes first: the page holds no such control for this
+                # account, and nothing was done. Opening the page is not an achievement.
+                lines.append((f"{plan.label} 页面上没有「{plan.highlight}」这个控件，可能是你的账号"
+                              "没有这项操作的权限；助手没有执行任何操作。") if zh else
+                             (f"{plan.label} shows no “{plan.highlight}” control, perhaps because "
+                              "your account has no permission for it; the assistant did nothing."))
         elif outcome.reached and not outcome.unmet:
             what = plan.label
             extras = []
