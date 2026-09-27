@@ -1058,7 +1058,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         except BusinessToolError:
             return None
         link = next((f.label for f in entity.fields
-                     if f.kind == "link" and f.relation == meta.model), None)
+                     if f.kind == "link" and f.relation == meta.model
+                     and (meta.fields.get(meta.field_by_label(f.label) or "") or {}).get("searchable") is not False),
+                    None)
         if link is None:
             return None
         return self._locate(replace(d, record="", metric=replace(
