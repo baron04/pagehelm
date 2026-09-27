@@ -1414,7 +1414,10 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                         return None, f"no {info.get('string')} matches {value!r}"
                     return clause, f"{info.get('string') or field} ~ {' / '.join(values)}"
                 ids.append(found[1])
-            operator = "child_of" if info.get("relation") == "res.partner" else "in"
+            # A customer's contacts count as the customer (child_of); a contact's own link
+            # to its company selects the company's people, never the company itself.
+            operator = ("child_of" if info.get("relation") == "res.partner"
+                        and info.get("relation") != meta.model else "in")
             return [[field, operator, ids]], text
         if kind == "selection":
             keys = []

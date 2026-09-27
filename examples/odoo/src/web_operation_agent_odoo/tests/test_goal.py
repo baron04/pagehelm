@@ -525,7 +525,8 @@ class OdooGoalPortTests(unittest.TestCase):
                                     {"field": "Job Position", "values": ["Manager"]}]}})
         self.assertEqual(result.deliverables[0].candidates,
                          ("Gemini Furniture, Ann", "Gemini Furniture, Bob"))
-        self.assertIn(["parent_id", "child_of", [11]], seen[-1])
+        # The company's people, not the company itself.
+        self.assertIn(["parent_id", "in", [11]], seen[-1])
 
     def test_search_words_that_repeat_a_condition_add_nothing(self):
         self.client.domains.clear()
