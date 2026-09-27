@@ -44,6 +44,9 @@ def main() -> int:
     if args.install:
         run("npm", "ci")
     if not args.skip_build:
+        # The design tokens and the protocol types are generated inputs of the build; a
+        # fresh checkout has neither, and the bundle does not compile without them.
+        run("npm", "run", "tokens")
         run("npm", "run", "build:runtime")
     built = DIST / "assistant.js"
     if not built.is_file():

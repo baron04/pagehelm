@@ -233,6 +233,16 @@ cp .env.example .env
 Odoo 装置的 `provision` 命令会打印准确的 Odoo 配置值。脚本模式无需模型配置，源码和
 可恢复装置两组配置也都是可选的。
 
+构建浏览器资源。网关提供的助手脚本和轨迹回放页都是生成物，不提交进仓库；没有构建时，浏览器里没有助手，
+依赖浏览器的测试和那项回放页测试会失败或跳过：
+
+```bash
+python scripts/build_runtime.py --install
+python scripts/build_panel.py
+```
+
+`--install` 在新检出上先执行一次 `npm ci`。拉取前端改动后要重新构建；另开的 worktree 也要各自构建。
+
 运行核心测试：
 
 ```bash

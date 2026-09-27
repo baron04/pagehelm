@@ -362,6 +362,18 @@ no credentials. The Odoo fixture's `provision` command prints the exact Odoo val
 Scripted runs need no model settings, and the source and resettable-fixture sections are
 optional.
 
+Build the browser assets. The assistant script the gateway serves and the trace replay page
+are generated, not committed; a checkout without them has no assistant in the browser, and
+the browser-backed tests and the one replay-page test fail or skip until they are built:
+
+```bash
+python scripts/build_runtime.py --install
+python scripts/build_panel.py
+```
+
+`--install` runs `npm ci` once for a fresh checkout. Rebuild after pulling frontend
+changes; a separate worktree needs its own build.
+
 Run the core suite:
 
 ```bash
