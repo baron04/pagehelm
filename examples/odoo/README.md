@@ -425,7 +425,7 @@ and header buttons, other models appear by label only. Chinese names for entitie
 fields and choices come from Odoo's own `i18n/zh_CN.po` catalogues under the source root,
 read through a translation-only allowlist separate from source retrieval; without them the
 index is English only. The reference deployment's conventions, what its organisation means
-by 订单, 销售订单, 报价单, 发票 and 退款, are in `conventions/reference.json` (a draft awaiting
+by 订单, 销售订单, 报价单, 发票, 退款 and 产品, are in `conventions/reference.json` (a draft awaiting
 the owner's review); a deployment passes its own file, and the demo takes
 `conventions_path=None` for none.
 
