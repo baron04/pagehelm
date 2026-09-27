@@ -737,6 +737,12 @@ class GoalTurnExecutor:
                         agrees=not differences, differences=differences[:8], **projection)
         if not differences:
             return first
+        if self._resolve_alike(s, first, second, today):
+            # Worded apart (a label in another language, conditions in another order)
+            # but pointing at the same answer: the third reading could only choose
+            # between two readings that lead to the same place.
+            s.ledger.append("goal_readings_resolve_alike", step=s.step)
+            return first
         problems = ("a second reading of the same request declared "
                     + json.dumps(second.to_json(), ensure_ascii=False)
                     + "; the readings differ in: " + "; ".join(differences[:6])
@@ -754,7 +760,29 @@ class GoalTurnExecutor:
                         reconciled=True, **projection)
         return third
 
-    def _resolve(self, s: _TurnState, spec: GoalSpec) -> Resolution:
+    def _resolve_alike(self, s: _TurnState, first: GoalSpec, second: GoalSpec, today) -> bool:
+        """Whether two readings, prepared the way a declaration is before it is
+        resolved, resolve to the same deliverables. Read-only and quiet; anything that
+        stops the comparison counts as a difference."""
+        today_text = str(today() or "") if callable(today) else ""
+
+        def prepared(spec: GoalSpec) -> GoalSpec:
+            spec, _flipped = _magnitudes(spec, s.message.text)
+            spec, _handed = _as_handoffs(spec, s.message.text)
+            spec, _corrections = correct_records(spec, s.message.text, s.references,
+                                                 tuple(c.display for c in s.candidates))
+            if s.candidates and spec.deliverables:
+                spec, _picked = pick(spec, s.message.text, today_text, s.candidates)
+            return spec
+
+        try:
+            one = self._resolve(s, prepared(first), quiet=True)
+            two = self._resolve(s, prepared(second), quiet=True)
+        except Exception:  # noqa: BLE001 -- a comparison that cannot run is a difference
+            return False
+        return one.deliverables == two.deliverables
+
+    def _resolve(self, s: _TurnState, spec: GoalSpec, *, quiet: bool = False) -> Resolution:
         # A deliverable that needs something this application's port does not offer is
         # answered here, plainly; the port sees only what it can resolve.
         offered = capabilities_of(self.goal_port)
@@ -766,7 +794,7 @@ class GoalTurnExecutor:
         asked = GoalSpec(deliverables=tuple(d for d, m, r in zip(spec.deliverables, missing, by_rule)
                                             if not m and r is None),
                          write_intent=spec.write_intent, unsupported=spec.unsupported)
-        if any(missing):
+        if any(missing) and not quiet:
             s.ledger.append("goal_capability_missing", step=s.step,
                             missing=[sorted(m) for m in missing if m], offered=sorted(offered))
         partial = self.goal_port.resolve(
@@ -778,9 +806,10 @@ class GoalTurnExecutor:
                        zip(asked.deliverables, partial.deliverables, strict=True))):
             # The adapter must answer each deliverable it was asked with one of the
             # same kind; anything else is a broken port, reported as such, not acted on.
-            s.ledger.append("goal_resolution_contract_refused", step=s.step,
-                            declared=len(asked.deliverables),
-                            resolved=len(partial.deliverables))
+            if not quiet:
+                s.ledger.append("goal_resolution_contract_refused", step=s.step,
+                                declared=len(asked.deliverables),
+                                resolved=len(partial.deliverables))
             raise _ContractBroken()
         resolved = iter(partial.deliverables)
         resolution = Resolution(deliverables=tuple(
@@ -789,6 +818,8 @@ class GoalTurnExecutor:
                      + ", ".join(sorted(m)) + " here", unoffered=tuple(sorted(m)))
             if m else next(resolved)
             for d, m, r in zip(spec.deliverables, missing, by_rule)), reads=partial.reads)
+        if quiet:
+            return resolution
         s.ledger.append("goal_resolved", step=s.step,
                         kinds=[d.kind for d in resolution.deliverables],
                         problems=[d.problem for d in resolution.deliverables],

@@ -378,11 +378,30 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(len(chat.messages), 3)
         self.assertIn("a second reading of the same request declared", chat.messages[2][1]["content"])
         self.assertIn("deliverable 1 kind", chat.messages[2][1]["content"])
-        self.assertEqual(port.specs[0].deliverables[0].kind, "fact")
-        self.assertEqual(len(port.specs), 1)
+        # Before asking a third time, both readings were resolved quietly and found to
+        # lead apart (a list here is not the fact the port answers); the turn then acts
+        # on the third reading alone.
+        self.assertEqual(port.specs[-1].deliverables[0].kind, "fact")
+        self.assertEqual(len(port.specs), 3)
+        self.assertFalse(any(e["event"] == "goal_readings_resolve_alike" for e in events))
+        self.assertEqual(sum(e["event"] == "goal_resolved" for e in events), 1)
         reading = next(e for e in events if e["event"] == "goal_second_reading")
         self.assertFalse(reading["agrees"])
         self.assertTrue(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
+        self.assertIn("Lumber Inc", execution.user_answer)
+
+    def test_two_readings_worded_apart_that_resolve_alike_need_no_third(self):
+        # One reading names the field in Chinese, the other in English; both resolve to
+        # the same answer, so no third reading is asked for.
+        in_chinese = _declaration(kind="fact", entity="order", record="S00006", fields=["客户"])
+        in_english = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])
+        execution, _channel, chat, port, events = self._run(
+            [in_chinese, in_english],
+            [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户是谁？")
+        self.assertEqual(len(chat.messages), 2)
+        self.assertTrue(any(e["event"] == "goal_readings_resolve_alike" for e in events))
+        self.assertFalse(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
         self.assertIn("Lumber Inc", execution.user_answer)
 
     def test_a_port_without_an_optional_capability_gets_a_plain_answer_not_a_call(self):
