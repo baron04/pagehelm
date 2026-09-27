@@ -472,6 +472,22 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(result.deliverables[0].problem, "")
         self.assertTrue(any("parent_id" in str(d) for d in searched))
 
+    def test_the_contacts_of_a_company_written_as_its_name_are_counted_on_the_link(self):
+        original = self.client.call
+
+        def call(model, method, args, kwargs=None):
+            if model == "res.partner" and method == "search_count":
+                return 3 if "parent_id" in str(args[0]) else 0
+            return original(model, method, args, kwargs)
+
+        self.client.call = call
+        result = self._resolve({"kind": "aggregate", "entity": "res.partner",
+                                "metric": {"op": "count", "filters": [
+                                    {"field": "Email", "values": ["Gemini Furniture"]}]}})
+        agg = result.deliverables[0].aggregate
+        self.assertEqual(agg.count, 3)
+        self.assertIn("Related Company", agg.subject)
+
     def test_words_in_another_language_give_way_to_the_other_conditions(self):
         # "三人沙发" cannot match an English name; the price picks the one order out.
         original = self.client.call

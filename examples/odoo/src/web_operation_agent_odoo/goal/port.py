@@ -1006,6 +1006,50 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                                     "to choose"))
         return model, int(rows[0]["id"]), str(rows[0].get("display_name") or "")
 
+    def _name_on_link(self, d: Deliverable, scope, index: ApplicationIndex):
+        """A count or list that finds nothing because a record's name was written into
+        a text field ("the contacts of Acme" as Company Name = Acme Corporation, which
+        holds a name only for people without a company): the one link of the entity on
+        which that name is a record, when the records it selects exist. Returns
+        (deliverable, scope) or None."""
+        meta, model = scope.meta, scope.model
+        conditions = list(d.metric.filters) if d.metric else []
+        entity = index.entity(model)
+        if not conditions or entity is None or scope.fixed:
+            return None
+        try:
+            if self._call(model, "search_count", [scope.domain], {}):
+                return None
+        except BusinessToolError:
+            return None
+        found = []
+        for i, condition in enumerate(conditions):
+            name = meta.field_by_label(condition.field)
+            if name is None or (meta.fields.get(name) or {}).get("type") != "char" or not condition.values:
+                continue
+            for field_ in entity.fields:
+                other = meta.field_by_label(field_.label) if field_.kind == "link" else None
+                info = meta.fields.get(other or "") or {}
+                if other is None or info.get("searchable") is False or not all(
+                        isinstance(self._find_record(str(info.get("relation")), v), tuple)
+                        and not isinstance(self._find_record(str(info.get("relation")), v), Ambiguous)
+                        for v in condition.values):
+                    continue
+                moved = replace(d, metric=replace(d.metric, filters=tuple(conditions[:i]) + (
+                    replace(condition, field=field_.label, op=""),) + tuple(conditions[i + 1:])))
+                again = self._scope(moved, index, search=d.kind == "list")
+                if isinstance(again, Resolved):
+                    continue
+                domain = list(again.domain)
+                if not self._call(model, "search_count", [domain], {}) and again.default_clauses:
+                    domain = [c for c in domain if c not in again.default_clauses]
+                    if self._call(model, "search_count", [domain], {}):
+                        again.domain, again.default_clauses = domain, []
+                        again.described.append("beyond the page's default filters")
+                if self._call(model, "search_count", [again.domain], {}):
+                    found.append((moved, again))
+        return found[0] if len(found) == 1 else None
+
     def _other_link(self, d: Deliverable, meta: _ModelMeta, index: ApplicationIndex):
         """A description that fits nothing, with a name put on one link of the entity
         ("Joel's quotation" read as Joel the salesperson, when Joel is the customer): the
@@ -1152,6 +1196,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         scope = self._scope(d, index, search=d.kind == "list")
         if isinstance(scope, Resolved):
             return scope
+        moved = self._name_on_link(d, scope, index)
+        if moved is not None:
+            d, scope = moved
         model, meta, page, action = scope.model, scope.meta, scope.page, scope.action
         domain, described, default_clauses = scope.domain, scope.described, scope.default_clauses
         metric = d.metric or Metric(op="count")
