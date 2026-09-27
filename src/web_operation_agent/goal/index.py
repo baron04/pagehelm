@@ -157,6 +157,13 @@ class IndexConvention:
     meaning is written in the index's own terms (entities, fields, values)."""
     terms: tuple[str, ...]
     meaning: str
+    #: The entity whose records the words select, when the deployment also says so in
+    #: structure; empty for a convention only the model reads.
+    entity: str = ""
+    #: What selects those records, as (field label, choice labels) pairs in the index's
+    #: terms. None, with an entity, is every record of it: the default reading of a word
+    #: ("订单"), which a narrower convention the same request names ("报价") overrides.
+    conditions: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         terms = tuple(dict.fromkeys(" ".join(str(t).split()) for t in self.terms
@@ -166,12 +173,48 @@ class IndexConvention:
         meaning = " ".join(str(self.meaning).split())
         if not meaning or len(meaning) > _MAX_MEANING:
             raise ValueError("a convention's meaning is one short sentence")
+        entity = " ".join(str(self.entity or "").split())
+        conditions = tuple((_label(str(label), "condition field"),
+                            tuple(_label(str(v), "condition value") for v in values))
+                           for label, values in self.conditions)
+        if conditions and not entity:
+            raise ValueError("a convention's conditions are on an entity it names")
+        if any(not values for _label_, values in conditions):
+            raise ValueError("a convention's condition names its values")
         object.__setattr__(self, "terms", terms)
         object.__setattr__(self, "meaning", meaning)
+        object.__setattr__(self, "entity", entity)
+        object.__setattr__(self, "conditions", conditions)
 
     def named_in(self, text: str) -> bool:
         said = _norm(text)
         return any(_norm(term) in said for term in self.terms)
+
+
+def conventions_named(conventions, text: str) -> tuple[IndexConvention, ...]:
+    """The structured conventions (those with an entity) a request's words name.
+
+    A term inside a longer term the request says ("订单" inside "销售订单") belongs to the
+    longer one. A convention meaning every record of an entity is the default reading of
+    its word, and yields to a narrower convention on the same entity the request also
+    names ("订单和报价" is quotations beside what the page shows, not every order twice).
+    """
+    said = _norm(text)
+    spans = []
+    for convention in conventions:
+        if not convention.entity:
+            continue
+        for term in convention.terms:
+            wanted = _norm(term)
+            start = said.find(wanted) if wanted else -1
+            while start >= 0:
+                spans.append((start, start + len(wanted), convention))
+                start = said.find(wanted, start + 1)
+    kept = [c for a, b, c in spans
+            if not any(x <= a and b <= y and (y - x) > (b - a) for x, y, _o in spans)]
+    named = list(dict.fromkeys(kept))
+    narrowed = {c.entity for c in named if c.conditions}
+    return tuple(c for c in named if c.conditions or c.entity not in narrowed)
 
 
 def render_conventions(conventions) -> list[str]:
@@ -309,4 +352,4 @@ def _norm(text: str) -> str:
 
 
 __all__ = ["ApplicationIndex", "IndexConvention", "IndexEntity", "IndexField", "IndexPage", "IndexRule",
-           "render_conventions"]
+           "conventions_named", "render_conventions"]

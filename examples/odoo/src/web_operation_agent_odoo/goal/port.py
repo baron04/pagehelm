@@ -27,7 +27,7 @@ from .lines import _LinesResolver
 from .values import _ValueCandidates
 
 from ..translations import OdooTranslations
-from .text import (Ambiguous, _EMPTY, _GROUP_LIMIT, _ModelMeta, _NOT_EMPTY, _RECORD_LIMIT, _Scope, _SearchFilter, _describes_record, _fields_of, _literal_dict, _literal_domain, _money, _norm, _period, _plain_text, _strip_code, _tab_of, _tokens)
+from .text import (_any_of, Ambiguous, _EMPTY, _GROUP_LIMIT, _ModelMeta, _NOT_EMPTY, _RECORD_LIMIT, _Scope, _SearchFilter, _describes_record, _fields_of, _literal_dict, _literal_domain, _money, _norm, _period, _plain_text, _strip_code, _tab_of, _tokens)
 
 
 #: Deliverable kinds answered by reading records; one may be answered as another.
@@ -52,6 +52,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         #: What this actor may do on each model, from the catalog the index was
         #: compiled from (create, read, write, unlink).
         self._operations: dict[str, frozenset] = {}
+        #: The deployment's conventions the request being resolved names, with the
+        #: records each selects (set per resolve from the declaration).
+        self._named_scopes: tuple = ()
         self._reads: list[tuple[str, str]] = []
         #: A one2many's static domain the next aggregate applies to its line scope.
         self._line_scope: list | None = None
@@ -118,6 +121,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         index = self.index(context=context)
         self._reads = []
         self._found_one = None
+        self._named_scopes = tuple(getattr(spec, "conventions", ()) or ())
         resolved = []
         for deliverable in spec.deliverables:
             try:
@@ -292,12 +296,16 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             # exactly one such entity holds it, and follow the link.
             rehomed = self._rehome(entity.key, d.record, index)
             if rehomed is None:
+                names = (self._names_repair(entity.key, self._models.get(entity.key))
+                         if _foreign(d.record) else "")
                 return Resolved(kind=d.kind, problem=f"no {entity.label} matches {d.record!r}",
                                 missing=d.record,
-                                repair=(f"no {entity.label} is named {d.record!r}; if the person "
-                                        "described the record rather than naming it, leave "
-                                        "record empty and put the description in "
-                                        "metric.filters (customer, amount, status, date)"))
+                                repair=(f"no {entity.label} is named {d.record!r}; "
+                                        + (f"{names}" if names else
+                                           "if the person described the record rather than "
+                                           "naming it, leave record empty and put the "
+                                           "description in metric.filters (customer, amount, "
+                                           "status, date)")))
             found, via = rehomed
             if d.via:
                 via = d.via
@@ -305,6 +313,11 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             return Resolved(kind=d.kind, problem=f"{d.record!r} is ambiguous",
                             candidates=tuple(found))
         model, rid, name = found
+        if model != entity.key and d.fields and not via and model in self._models:
+            # Described on one entity, found on another (an order the model looked for
+            # among invoices): the fields asked for, as the entity it is on has them.
+            d = replace(d, fields=_mapped_fields(d.fields, self._models[entity.key],
+                                                 self._models[model]) or d.fields)
         if via:
             meta = self._models.get(model) or self._model_meta(model)
             link = meta.link_by_label(via)
@@ -426,6 +439,16 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
 
     def _find_record(self, model: str, reference: str):
         rows = self._call(model, "name_search", [reference], {"limit": 8})
+        if not rows and _strip_code(reference) and _strip_code(reference) != reference.strip():
+            # A name as the application displays it, its code in brackets first
+            # ("[FURN_6741] Large Meeting Table"): the name search knows the name alone.
+            code = re.match(r"^\[([^\]]*)\]", reference.strip())
+            rows = [(rid, name) for rid, name in self._call(
+                model, "name_search", [_strip_code(reference)], {"limit": 8})
+                    if not code or name.startswith(f"[{code.group(1)}]") or "[" not in name]
+            if not rows:
+                return None
+            reference = _strip_code(reference)
         if not rows:
             return None
         wanted = _norm(reference)
@@ -767,6 +790,33 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             if resolved and "uid" not in str(resolved):
                 domain += through(resolved)
                 default_clauses += through(resolved)
+        fixed = False
+        scopes = [c for c in self._named_scopes if c.entity == model] if not prefix else []
+        if scopes:
+            # The words the request says, as this organisation means them ("订单" is every
+            # order, quotations included; "报价" the ones not yet confirmed): the records
+            # they name are never left out by the page the declaration went through. The
+            # page's own scope stays, widened by what the words name.
+            branches = []
+            for convention in scopes:
+                clauses: list | None = []
+                for label, values in convention.conditions:
+                    clause, _text = self._condition(meta, label, values, today=today)
+                    if clause is None:
+                        clauses = None
+                        break
+                    clauses += clause
+                if clauses is not None:
+                    branches.append(clauses)
+            if branches:
+                if any(not branch for branch in branches) or (page is not None and not domain):
+                    domain = []
+                elif page is not None:
+                    domain = _any_of([domain] + branches)
+                else:
+                    domain = _any_of(branches)
+                default_clauses, fixed = [], True
+                described.append("as " + " / ".join(c.terms[0] for c in scopes) + " means here")
         metric = d.metric or Metric(op="count")
         page_filters = self._page_filters.get(action["action_id"], meta.filters) if action \
             else meta.filters
@@ -867,7 +917,8 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                 return Resolved(kind=d.kind, problem=text, repair=repair)
             domain += clause
             described.append(text)
-        if search and d.page.search:
+        said = {_norm(v) for c in metric.filters for v in c.values} | {_norm(d.record)}
+        if search and d.page.search and _norm(d.page.search) not in said:
             clause, text = self._search_clause(meta, model, domain, d.page.search)
             if clause is None and default_clauses:
                 # Nothing within the page's default filters (customers only): the words
@@ -880,7 +931,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             domain += clause or [["display_name", "ilike", d.page.search]]
             described.append(text)
         return _Scope(model=model, meta=meta, page=page, action=action, domain=domain,
-                      described=described, default_clauses=default_clauses)
+                      described=described, default_clauses=default_clauses, fixed=fixed)
 
     def _locate(self, d: Deliverable, index: ApplicationIndex):
         """The one record a description picks out ("the quotation sent to Joel Willis",
@@ -896,7 +947,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         if scope.default_clauses:
             domains.append([c for c in scope.domain if c not in scope.default_clauses])
         page_domain = _literal_domain(str(scope.action.get("domain") or "")) if scope.action else None
-        if page_domain:
+        if page_domain and not scope.fixed:
             domains.append([c for c in domains[-1] if c not in page_domain])
         rows: list = []
         kwargs: dict = {"fields": ["display_name"], "limit": 4}
@@ -916,10 +967,16 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             # date): the conditions alone.
             return self._locate(replace(d, page=replace(d.page, search="")), index)
         if not rows:
+            elsewhere = self._elsewhere(d, meta, index)
+            if elsewhere is not None:
+                return elsewhere
+            names = self._names_repair(model, meta) if any(
+                _foreign(v) for c in (d.metric.filters if d.metric else ()) for v in c.values) else ""
             return Resolved(kind=d.kind, problem=f"no {meta.label} matches {subject}",
                             repair=(f"no {meta.label} matches {subject}; re-read the request: "
                                     "another page scope (invoices versus bills, quotations "
-                                    "versus orders), field or value may be meant"))
+                                    "versus orders), field or value may be meant"
+                                    + (f"; {names}" if names else "")))
         if len(rows) > 1:
             names = tuple(str(r.get("display_name") or "") for r in rows)
             return Resolved(kind=d.kind, problem=f"{subject} matches several {meta.label} records",
@@ -929,6 +986,65 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                                     "customer); when it gives none, leave them for the person "
                                     "to choose"))
         return model, int(rows[0]["id"]), str(rows[0].get("display_name") or "")
+
+    def _elsewhere(self, d: Deliverable, meta: _ModelMeta, index: ApplicationIndex):
+        """A record described by who, how much and when (Gemini's one of 1,541.50) that
+        no record of the declared entity fits: the one record of another document entity
+        the same description fits exactly. A person says 那张单 of an order as readily as
+        of an invoice; the conditions, not the word, tell them apart. A description that
+        needs a field the other entity lacks, or that several records there fit, finds
+        nothing here."""
+        conditions = [c for c in (d.metric.filters if d.metric else ()) if c.values]
+        if len(conditions) < 2 or d.page.search:
+            return None
+        found = []
+        for entity in index.entities:
+            other = self._models.get(entity.key)
+            if (other is None or entity.key == meta.model or entity.lines_of or other.parent
+                    or self._default_page(entity.key, index) is None):
+                continue
+            mapped = _mapped_conditions(conditions, meta, other)
+            if mapped is None:
+                continue
+            domain: list | None = []
+            for condition in mapped:
+                clause, _text = self._condition(other, condition.field, condition.values,
+                                                op=condition.op)
+                if clause is None:
+                    domain = None
+                    break
+                domain += clause
+            if not domain:
+                continue
+            try:
+                rows = self._call(entity.key, "search_read", [domain],
+                                  {"fields": ["display_name"], "limit": 2})
+            except BusinessToolError:
+                continue
+            if len(rows) > 1:
+                return None
+            if rows:
+                found.append((entity.key, int(rows[0]["id"]), str(rows[0].get("display_name") or "")))
+        return found[0] if len(found) == 1 else None
+
+    def _names_repair(self, model: str, meta: _ModelMeta | None) -> str:
+        """Every name of a small entity, for a request that describes one of them in
+        another language than the application's ("带屏风的桌架" for a product called
+        "Desk Stand with Screen"): the declarer picks the name, the names come from here."""
+        if meta is None:
+            return ""
+        try:
+            count = self._call(model, "search_count", [[]], {})
+            if not count or count > _NAMES_LISTED:
+                return ""
+            rows = self._call(model, "search_read", [[]],
+                              {"fields": ["display_name"], "limit": _NAMES_LISTED, "order": "id"})
+        except BusinessToolError:
+            return ""
+        names = [str(r.get("display_name") or "") for r in rows if r.get("display_name")]
+        return (f"the {meta.label} records here are: " + "; ".join(names)
+                + "; if the person described one of them in their own words, write its name "
+                  "exactly as it is here")
 
     # -- aggregates -------------------------------------------------------------------
     def _aggregate(self, d: Deliverable, index: ApplicationIndex) -> Resolved:
@@ -1232,6 +1348,57 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         if end is not None:
             clauses.append([field, "<", bound(end)])
         return clauses, text
+
+
+#: The most names of one entity a repair lists for a description in another language.
+_NAMES_LISTED = 80
+
+
+def _foreign(text) -> bool:
+    """Words with no Latin letter or digit: written in the person's language, where the
+    application's names are not."""
+    text = str(text or "")
+    return bool(text.strip()) and re.search(r"[A-Za-z0-9]", text) is None
+
+
+def _main_date(meta: _ModelMeta) -> str | None:
+    return next((f for f in dict.fromkeys(meta.list_fields + meta.form_fields)
+                 if (meta.fields.get(f) or {}).get("type") in ("date", "datetime")), None)
+
+
+def _same_field(name: str, source: _ModelMeta, target: _ModelMeta) -> str | None:
+    """The target's field for one of the source's: the same field (name, type and
+    relation), or, for a date, the target's main date."""
+    info = source.fields.get(name) or {}
+    there = target.fields.get(name)
+    if (there is not None and there.get("type") == info.get("type")
+            and there.get("relation") == info.get("relation")):
+        return name
+    if info.get("type") in ("date", "datetime"):
+        return _main_date(target)
+    return None
+
+
+def _mapped_conditions(conditions, source: _ModelMeta, target: _ModelMeta):
+    out = []
+    for condition in conditions:
+        name = source.field_by_label(condition.field)
+        there = _same_field(name, source, target) if name else None
+        if there is None:
+            return None
+        out.append(Filter(field=str(target.fields[there].get("string") or there),
+                          values=condition.values, op=condition.op))
+    return out
+
+
+def _mapped_fields(labels, source: _ModelMeta, target: _ModelMeta) -> tuple[str, ...]:
+    out = []
+    for label in labels:
+        name = source.field_by_label(label)
+        there = _same_field(name, source, target) if name else None
+        if there is not None:
+            out.append(str(target.fields[there].get("string") or there))
+    return tuple(dict.fromkeys(out))
 
 
 def _worded(field: str, values) -> list:

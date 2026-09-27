@@ -1,14 +1,18 @@
 {
   "schema_version": 1,
   "status": "draft",
-  "review": "Drafted 2026-09-27 from the scope notes of the Odoo Skills and the owner's default that an unqualified 订单 includes quotations. The owner decided 产品 on 2026-09-27; the other entries await the owner's review. Meanings are written in the goal index's own terms.",
+  "review": "Drafted 2026-09-27 from the scope notes of the Odoo Skills and the owner's default that an unqualified 订单 includes quotations. The owner decided 产品 on 2026-09-27; the other entries await the owner's review. Meanings are written in the goal index's own terms. The records of the sales-order and product entries restate their meanings in structure; the invoice and refund entries stay words only, since 供应商 turns them to vendor documents.",
   "conventions": [
     {
       "terms": [
         "订单",
         "单子"
       ],
-      "meaning": "sale.order (Sales Order) in every Status, quotations included; narrowed only when the request itself says so (报价 for quotations, 销售订单, 已确认 or 成交 for confirmed orders)"
+      "meaning": "sale.order (Sales Order) in every Status, quotations included; narrowed only when the request itself says so (报价 for quotations, 销售订单, 已确认 or 成交 for confirmed orders)",
+      "records": {
+        "entity": "sale.order",
+        "where": []
+      }
     },
     {
       "terms": [
@@ -17,14 +21,37 @@
         "已确认的订单",
         "成交"
       ],
-      "meaning": "sale.order with Status = Sales Order (confirmed orders); quotations are not included"
+      "meaning": "sale.order with Status = Sales Order (confirmed orders); quotations are not included",
+      "records": {
+        "entity": "sale.order",
+        "where": [
+          {
+            "field": "Status",
+            "values": [
+              "Sales Order"
+            ]
+          }
+        ]
+      }
     },
     {
       "terms": [
         "报价",
         "报价单"
       ],
-      "meaning": "sale.order with Status in Quotation, Quotation Sent (not yet confirmed)"
+      "meaning": "sale.order with Status in Quotation, Quotation Sent (not yet confirmed)",
+      "records": {
+        "entity": "sale.order",
+        "where": [
+          {
+            "field": "Status",
+            "values": [
+              "Quotation",
+              "Quotation Sent"
+            ]
+          }
+        ]
+      }
     },
     {
       "terms": [
@@ -46,7 +73,11 @@
         "产品",
         "商品"
       ],
-      "meaning": "product.template, every product whether or not it can be sold or purchased (the Sales = Yes scope of the Products page does not apply unless the request says so)"
+      "meaning": "product.template, every product whether or not it can be sold or purchased (the Sales = Yes scope of the Products page does not apply unless the request says so)",
+      "records": {
+        "entity": "product.template",
+        "where": []
+      }
     }
   ]
 }

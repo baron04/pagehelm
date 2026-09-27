@@ -95,6 +95,9 @@ class Metric:
     group_by: str = ""
     #: Report only the largest N groups; 0 means every group.
     top: int = 0
+    #: A sum the person asked for as the total over every record that fits, rather
+    #: than the amount of the one record they describe.
+    total: bool = False
 
     @classmethod
     def from_json(cls, value: object) -> "Metric":
@@ -114,7 +117,8 @@ class Metric:
         return cls(op=op, field=_text(value.get("field"), "metric field"),
                    filters=tuple(Filter.from_json(f) for f in raw_filters),
                    page_filters=_texts(value.get("page_filters"), "page filters"),
-                   group_by=_text(value.get("group_by"), "group_by"), top=top)
+                   group_by=_text(value.get("group_by"), "group_by"), top=top,
+                   total=value.get("total") is True)
 
 
 @dataclass(frozen=True)
@@ -218,7 +222,8 @@ class Deliverable:
                              **({"op": f.op} if f.op else {})}
                             for f in self.metric.filters],
                 "page_filters": list(self.metric.page_filters),
-                "group_by": self.metric.group_by, "top": self.metric.top}
+                "group_by": self.metric.group_by, "top": self.metric.top,
+                **({"total": True} if self.metric.total else {})}
         if not self.page.empty:
             out["page"] = {"key": self.page.key, "view": self.page.view,
                            "filters_on": list(self.page.filters_on),
@@ -237,6 +242,10 @@ class GoalSpec:
     #: The request is about the assistant itself -- what it can do, how to ask it --
     #: rather than about the application. Read only when `deliverables` is empty.
     about_assistant: bool = False
+    #: The deployment's conventions (`IndexConvention` with an entity) the request's
+    #: words name, set by the core from the request, never by the model: the records
+    #: those words select are not left out by the page a deliverable went through.
+    conventions: tuple = ()
 
     @classmethod
     def from_json(cls, value: object) -> "GoalSpec":
@@ -338,12 +347,14 @@ DECLARE_GOAL_TOOL = {
                                                        "description": "choice labels, names, numbers, or an id from VALUES (v3) for a name listed there; for a date field: 2026-09-12, 2026-09, 2026, 2026-09-01..2026-09-30, today, this month, last month, this quarter, last quarter, this year, last year, last 30 days, overdue. A day or month said without a year is in the current year"},
                                             "op": {"type": "string",
                                                    "enum": [o for o in FILTER_OPS if o],
-                                                   "description": "comparison for numbers, dates or text; 'starts with' for a prefix (a code beginning with E-COM)"}},
+                                                   "description": "comparison for numbers, dates or text; 'starts with' for a prefix (a code beginning with E-COM). 以上, 至少, 不低于 are >=; 超过, 高于, 多于, 过 are >; 以下, 不超过, 至多 are <=; 不到, 低于, 少于, 以内 are <"}},
                                         "required": ["field", "values"]}},
                                     "page_filters": {"type": "array",
                                                      "items": {"type": "string"}},
                                     "group_by": {"type": "string"},
-                                    "top": {"type": "integer"}},
+                                    "top": {"type": "integer"},
+                                    "total": {"type": "boolean",
+                                              "description": "sum: true when the person asks for the total over every record that fits (合计, 一共, 总共, 加总, 加起来, all of them together); false when they ask the amount of one record they describe"}},
                                 "required": ["op"]},
                             "page": {
                                 "type": "object",

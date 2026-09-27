@@ -237,6 +237,10 @@ class _IndexCompiler:
             kind = _kind_of(info)
             if kind is None:
                 continue
+            if "_signed" in name and re.sub(r"(?:_in_currency)?_signed", "", name) in meta.fields:
+                # A signed twin of an amount (negative on credit notes and refunds): the
+                # amount as the document shows it is what a person compares and asks for.
+                continue
             seen.add(name)
             relation = ""
             if kind == "link":

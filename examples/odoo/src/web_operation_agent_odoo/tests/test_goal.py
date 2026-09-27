@@ -395,6 +395,47 @@ class OdooGoalPortTests(unittest.TestCase):
                                 write_intent=True)
         self.assertIn("not available", refused.deliverables[0].problem)
 
+    def test_the_words_a_request_says_widen_the_page_scope_as_the_deployment_means_them(self):
+        from dataclasses import replace as _replace
+        from web_operation_agent.goal.index import IndexConvention
+        quotes = IndexConvention(terms=("报价",), meaning="sale.order not yet confirmed",
+                                 entity="sale.order",
+                                 conditions=(("Status", ("Quotation", "Quotation Sent")),))
+        every = IndexConvention(terms=("订单",), meaning="sale.order in every status",
+                                entity="sale.order")
+        count = GoalSpec.from_json({"deliverables": [{
+            "kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+            "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Gemini Furniture"]}]}}]})
+        # Declared on the confirmed orders' page, the request naming quotations too: the
+        # page's own records or the quotations, and the customer either way.
+        self.port.resolve(_replace(count, conventions=(quotes,)))
+        domain = self.client.domains[-1]
+        self.assertEqual(domain[0], "|")
+        self.assertIn(["state", "in", ["draft", "sent"]], domain)
+        self.assertEqual(domain[-1], ["partner_id", "child_of", [11]])
+        # A word meaning every order lifts the page's own scope; the customer stays.
+        self.port.resolve(_replace(count, conventions=(every,)))
+        self.assertEqual(self.client.domains[-1], [["partner_id", "child_of", [11]]])
+        # Declared on the entity alone, the words say which records: the quotations.
+        self.port.resolve(_replace(GoalSpec.from_json({"deliverables": [{
+            "kind": "aggregate", "entity": "sale.order", "metric": {"op": "count"}}]}),
+            conventions=(quotes,)))
+        self.assertEqual(self.client.domains[-1], [["state", "in", ["draft", "sent"]]])
+        # A convention about another entity leaves this scope alone.
+        self.port.resolve(count)
+        self.assertNotEqual(self.client.domains[-1][0], "|")
+
+    def test_search_words_that_repeat_a_condition_add_nothing(self):
+        self.client.domains.clear()
+        self._resolve({"kind": "list", "entity": "sale.order", "page": {"key": "p331", "search": "Gemini Furniture"},
+                       "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Gemini Furniture"]}]}})
+        self.assertTrue(self.client.domains)
+        self.assertFalse(any("display_name" in str(d) or "ilike" in str(d) for d in self.client.domains))
+
+    def test_a_name_copied_with_its_code_is_found_by_its_name(self):
+        found = self.port._find_record("sale.order", "[X1] S00006")
+        self.assertEqual(found[:2], ("sale.order", 6))
+
     def test_a_delete_this_actor_may_not_perform_is_denied_before_any_record_is_sought(self):
         # The actor may read orders but not delete them: whichever order was meant, the
         # answer is the same, so no record is looked up and no one is asked which.

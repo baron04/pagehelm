@@ -29,7 +29,19 @@ def load_conventions(path: str | Path) -> tuple[IndexConvention, ...]:
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("terms"), list):
             raise ValueError("a convention has terms and a meaning")
-        out.append(IndexConvention(terms=tuple(entry["terms"]), meaning=str(entry.get("meaning", ""))))
+        records = entry.get("records")
+        if records is not None and not (isinstance(records, dict)
+                                        and isinstance(records.get("entity"), str)
+                                        and isinstance(records.get("where", []), list)):
+            raise ValueError("a convention's records name an entity and a list of conditions")
+        where = (records or {}).get("where", [])
+        if not all(isinstance(w, dict) and isinstance(w.get("field"), str)
+                   and isinstance(w.get("values"), list) for w in where):
+            raise ValueError("a condition is a field and its values")
+        out.append(IndexConvention(
+            terms=tuple(entry["terms"]), meaning=str(entry.get("meaning", "")),
+            entity=(records or {}).get("entity", ""),
+            conditions=tuple((w["field"], tuple(w["values"])) for w in where)))
     return tuple(out)
 
 

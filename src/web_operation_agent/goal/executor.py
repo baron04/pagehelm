@@ -39,6 +39,7 @@ from ..transport.browser import RemoteBrowserClient, TransportError, TurnCancell
 from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_of
 from .spec import GoalSpec
 from .ground import bind, days, ground, pick, render as render_values, without_days
+from .index import conventions_named
 from .narrow import correct_records, locate, neighbourhood, references, summaries
 from .understand import understand, understand_scope
 
@@ -175,6 +176,14 @@ def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, .
     if not controls:
         return spec, ()
     return replace(spec, deliverables=tuple(out)), tuple(controls)
+
+
+def _finds(resolution: Resolution) -> bool:
+    """Every deliverable resolved to something there: a value, a page, or records."""
+    return bool(resolution.deliverables) and all(
+        not r.problem and (bool(r.facts) or r.page is not None
+                           or (r.aggregate is not None and r.aggregate.count > 0))
+        for r in resolution.deliverables)
 
 
 def _named_controls(spec: GoalSpec, parts: list, text: str, index
@@ -366,6 +375,9 @@ class _TurnState:
     #: What the first step said each part is about, in the application's words; a
     #: control it names that the request also writes stays in the declaration.
     scope_parts: list = field(default_factory=list)
+    #: The deployment's conventions the request's own words name (never an earlier
+    #: turn's), passed with every resolution.
+    conventions: tuple = ()
 
 
 
@@ -539,6 +551,7 @@ class GoalTurnExecutor:
         chat = AuditedChat(self.chat, s.ledger)
         index = self.goal_port.index(context=s.approvals.context(0, "index"))
         s.index = s.full_index = index
+        s.conventions = conventions_named(index.conventions, s.message.text)
         s.ledger.append("goal_index_ready", entities=len(index.entities),
                         pages=len(index.pages), source_digest=index.source_digest,
                         complete=index.complete)
@@ -878,12 +891,21 @@ class GoalTurnExecutor:
                         agrees=not differences, differences=differences[:8], **projection)
         if not differences:
             return first
-        if self._resolve_alike(s, first, second, today):
+        pair = self._quiet_pair(s, first, second, today)
+        if pair is not None and pair[0].deliverables == pair[1].deliverables:
             # Worded apart (a label in another language, conditions in another order)
             # but pointing at the same answer: the third reading could only choose
             # between two readings that lead to the same place.
             s.ledger.append("goal_readings_resolve_alike", step=s.step)
             return first
+        if pair is not None and _finds(pair[0]) != _finds(pair[1]):
+            # One reading finds what it describes, the other finds nothing (no record by
+            # that name, a count of none): a request is about things that are there, and
+            # the reading that finds them is the one taken, without a third.
+            chosen = first if _finds(pair[0]) else second
+            s.ledger.append("goal_readings_one_finds", step=s.step,
+                            taken="first" if chosen is first else "second")
+            return chosen
         problems = ("a second reading of the same request declared "
                     + json.dumps(second.to_json(), ensure_ascii=False)
                     + "; the readings differ in: " + "; ".join(differences[:6])
@@ -901,10 +923,9 @@ class GoalTurnExecutor:
                         reconciled=True, **projection)
         return third
 
-    def _resolve_alike(self, s: _TurnState, first: GoalSpec, second: GoalSpec, today) -> bool:
-        """Whether two readings, prepared the way a declaration is before it is
-        resolved, resolve to the same deliverables. Read-only and quiet; anything that
-        stops the comparison counts as a difference."""
+    def _quiet_pair(self, s: _TurnState, first: GoalSpec, second: GoalSpec, today):
+        """Both readings, prepared the way a declaration is before it is resolved,
+        resolved quietly (read-only, no audit); None when that cannot run."""
         today_text = str(today() or "") if callable(today) else ""
 
         def prepared(spec: GoalSpec) -> GoalSpec:
@@ -917,11 +938,10 @@ class GoalTurnExecutor:
             return spec
 
         try:
-            one = self._resolve(s, prepared(first), quiet=True)
-            two = self._resolve(s, prepared(second), quiet=True)
+            return (self._resolve(s, prepared(first), quiet=True),
+                    self._resolve(s, prepared(second), quiet=True))
         except Exception:  # noqa: BLE001 -- a comparison that cannot run is a difference
-            return False
-        return one.deliverables == two.deliverables
+            return None
 
     def _resolve(self, s: _TurnState, spec: GoalSpec, *, quiet: bool = False) -> Resolution:
         # A deliverable that needs something this application's port does not offer is
@@ -934,7 +954,8 @@ class GoalTurnExecutor:
         missing = [frozenset() if r is not None else m for r, m in zip(by_rule, missing)]
         asked = GoalSpec(deliverables=tuple(d for d, m, r in zip(spec.deliverables, missing, by_rule)
                                             if not m and r is None),
-                         write_intent=spec.write_intent, unsupported=spec.unsupported)
+                         write_intent=spec.write_intent, unsupported=spec.unsupported,
+                         conventions=s.conventions)
         if any(missing) and not quiet:
             s.ledger.append("goal_capability_missing", step=s.step,
                             missing=[sorted(m) for m in missing if m], offered=sorted(offered))
@@ -962,6 +983,7 @@ class GoalTurnExecutor:
         if quiet:
             return resolution
         s.ledger.append("goal_resolved", step=s.step,
+                        conventions=[c.terms[0] for c in s.conventions],
                         kinds=[d.kind for d in resolution.deliverables],
                         problems=[d.problem for d in resolution.deliverables],
                         reads=[list(r) for r in resolution.reads])
@@ -977,6 +999,9 @@ class GoalTurnExecutor:
         one = _ONE_RECORD.search(s.message.text)
         for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
             agg = r.aggregate
+            if d.metric is not None and d.metric.total:
+                # The declaration says the person asked for the total over all of them.
+                continue
             if (one and d.kind == "list" and agg is not None and not r.problem
                     and 2 <= len(agg.records) <= _MAX_AMOUNT_CHOICES):
                 # "Open that refund of Azure's in August" and two fit: which one.
@@ -990,7 +1015,7 @@ class GoalTurnExecutor:
                 continue
             try:
                 listed = self.goal_port.resolve(
-                    GoalSpec(deliverables=(replace(d, kind="list"),)),
+                    GoalSpec(deliverables=(replace(d, kind="list"),), conventions=s.conventions),
                     context=s.approvals.context(s.step, "resolve"),
                     current_path=_path_of(s.obs.url)).deliverables[0]
             except Exception:  # noqa: BLE001 -- the sum stands when the records cannot be listed
@@ -1025,7 +1050,7 @@ class GoalTurnExecutor:
                 continue
             try:
                 described = self.goal_port.resolve(
-                    GoalSpec(deliverables=(replace(d, record=""),)),
+                    GoalSpec(deliverables=(replace(d, record=""),), conventions=s.conventions),
                     context=s.approvals.context(s.step, "resolve"),
                     current_path=_path_of(s.obs.url)).deliverables[0]
             except Exception:  # noqa: BLE001 -- the declared record stands when the check cannot run

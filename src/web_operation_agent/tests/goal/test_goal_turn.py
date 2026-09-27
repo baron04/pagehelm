@@ -392,8 +392,8 @@ class GoalTurnTests(unittest.TestCase):
         # lead apart (a list here is not the fact the port answers); the turn then acts
         # on the third reading alone.
         self.assertEqual(port.specs[-1].deliverables[0].kind, "fact")
-        self.assertEqual(len(port.specs), 3)
-        self.assertFalse(any(e["event"] == "goal_readings_resolve_alike" for e in events))
+        self.assertFalse(any(e["event"] in ("goal_readings_resolve_alike", "goal_readings_one_finds")
+                             for e in events))
         self.assertEqual(sum(e["event"] == "goal_resolved" for e in events), 1)
         reading = next(e for e in events if e["event"] == "goal_second_reading")
         self.assertFalse(reading["agrees"])
@@ -890,6 +890,67 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("标出「Confirm」", execution.user_answer)
         self.assertEqual([e["controls"] for e in events if e["event"] == "goal_control_named"],
                          [["New"]])
+
+    def test_the_conventions_a_request_names_longest_word_first_narrower_first(self):
+        from web_operation_agent.goal.index import IndexConvention, conventions_named
+        every = IndexConvention(terms=("订单", "单子"), meaning="order every status", entity="order")
+        confirmed = IndexConvention(terms=("销售订单", "成交"), meaning="order confirmed", entity="order",
+                                    conditions=(("Status", ("Sales Order",)),))
+        quotes = IndexConvention(terms=("报价",), meaning="order not confirmed", entity="order",
+                                 conditions=(("Status", ("Quotation",)),))
+        words = IndexConvention(terms=("发票",), meaning="invoice, words only")
+        table = (every, confirmed, quotes, words)
+        self.assertEqual(conventions_named(table, "Gemini 的订单有几张"), (every,))
+        # "订单" inside "销售订单" is the longer word's.
+        self.assertEqual(conventions_named(table, "Gemini 的销售订单有几张"), (confirmed,))
+        # Every order yields to the narrower word on the same entity.
+        self.assertEqual(conventions_named(table, "Joel 的订单和报价都列出来"), (quotes,))
+        self.assertEqual(conventions_named(table, "成交的单子总额"), (confirmed,))
+        # Words-only conventions are the model's to read, not the resolver's.
+        self.assertEqual(conventions_named(table, "这张发票的金额"), ())
+        with self.assertRaises(ValueError):
+            IndexConvention(terms=("x",), meaning="m", conditions=(("Status", ("A",)),))
+
+    def test_of_two_readings_the_one_that_finds_what_it_describes_is_taken(self):
+        customer = ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+            "metric": {"op": "sum", "field": "Total", "filters": [{"field": "Customer", "values": ["Joel"]}]}}]})
+        salesperson = ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+            "metric": {"op": "sum", "field": "Total", "filters": [{"field": "Salesperson", "values": ["Joel"]}]}}]})
+
+        class _ByField(_Port):
+            def resolve(self, spec, *, context=None, current_path=""):
+                self.specs.append(spec)
+                field = spec.deliverables[0].metric.filters[0].field
+                count = 2 if field == "Customer" else 0
+                return Resolution(deliverables=(Resolved(kind="aggregate", aggregate=Aggregate(
+                    subject=f"Orders · {field} = Joel", count=count,
+                    sums=(("Total", "4,687.50 USD" if count else "0.00"),))),), reads=())
+
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        chat = _AgreeingChat([customer, salesperson])
+        port = _ByField([])
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=chat, application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=False)
+        execution = executor.execute({"message_id": "m1", "text": "Joel 名下两张单总额多少？",
+                                      "page_url": "http://127.0.0.1:8080/home"})
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        self.assertEqual(len(chat.messages), 2)
+        self.assertIn("4,687.50", execution.user_answer)
+        self.assertTrue(any(e["event"] == "goal_readings_one_finds" for e in events))
+        self.assertEqual(port.specs[-1].deliverables[0].metric.filters[0].field, "Customer")
+
+    def test_a_sum_declared_as_the_total_of_all_is_not_asked_about(self):
+        both = Aggregate(subject="Credit Notes · September", count=3,
+                         sums=(("Total", "92,750.00 USD"),))
+        declared = [("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+            "metric": {"op": "sum", "field": "Total", "total": True,
+                       "filters": [{"field": "Customer", "values": ["Acme"]}]}}]})]
+        execution, *_ = self._run(declared, [Resolved(kind="aggregate", aggregate=both)],
+                                  text="九月的 customer credits 加总多少？", readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("92,750.00", execution.user_answer)
 
     def test_one_amount_over_several_records_asks_which_and_a_total_does_not(self):
         both = Aggregate(subject="Invoices · Partner = Acme", count=2,

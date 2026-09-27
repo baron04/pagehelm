@@ -14,11 +14,13 @@ from datetime import date, timedelta
 from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.goal.ports import Candidate
 
-from .text import _ModelMeta
+from .text import _ModelMeta, _norm, _strip_code
 
 #: Per source, what is listed: a customer's documents, a record's lines.
 _DOCUMENTS = 8
 _LINES = 20
+#: Records whose names hold a located record's name, listed beside it.
+_NEAR = 4
 
 
 class _ValueCandidates:
@@ -56,6 +58,12 @@ class _ValueCandidates:
                               detail=self._summary(model, rid),
                               binds=self._owner_binds(owners.get(model), display)))
                 documents = [(model, rid, display)]
+                # Records whose names hold this one's ("Office Chair Black" beside
+                # "Office Chair"): what the request says around the name may mean one.
+                for near_id, near in self._near_names(model, rid, display):
+                    add(Candidate(kind="record", entity=model, display=near,
+                                  detail=self._summary(model, near_id),
+                                  binds=self._owner_binds(owners.get(model), near)))
             else:
                 # A partner (or any linked record) named: its documents on the
                 # entities the request is about, newest first.
@@ -91,6 +99,18 @@ class _ValueCandidates:
                     for line in self._lines_of(target, doc[1], line_entity):
                         add(self._line_candidate(line_entity, doc[2], line))
         return tuple(out)
+
+    def _near_names(self, model: str, rid: int, display: str) -> list[tuple[int, str]]:
+        plain = _strip_code(display)
+        if len(plain) < 3:
+            return []
+        try:
+            rows = self._call(model, "name_search", [plain], {"limit": _NEAR + 1})
+        except BusinessToolError:
+            return []
+        wanted = _norm(plain)
+        return [(int(i), str(n)) for i, n in rows
+                if int(i) != rid and wanted in _norm(_strip_code(str(n)))][:_NEAR]
 
     def _owner_binds(self, line_entity: str | None, doc_name: str) -> tuple:
         """For a document whose lines are asked about: the condition on the lines that

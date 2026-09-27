@@ -215,9 +215,42 @@ def _domain_at(text: str, today: date) -> list | None:
 class _Scope:
     """What a declaration's page, filters and conditions select, as a domain."""
 
-    def __init__(self, *, model, meta, page, action, domain, described, default_clauses):
+    def __init__(self, *, model, meta, page, action, domain, described, default_clauses,
+                 fixed: bool = False):
         self.model, self.meta, self.page, self.action = model, meta, page, action
         self.domain, self.described, self.default_clauses = domain, described, default_clauses
+        #: The records were chosen by the deployment's conventions for the words the
+        #: request says; the page's own domain and defaults are part of that choice and
+        #: are not lifted to find more.
+        self.fixed = fixed
+
+
+def _domain_terms(domain: list) -> list[list]:
+    """A domain in prefix notation, split into its top-level terms (implicitly and-ed)."""
+    def end(i: int) -> int:
+        item = domain[i]
+        if item == "!":
+            return end(i + 1)
+        if item in ("&", "|"):
+            return end(end(i + 1))
+        return i + 1
+    out, i = [], 0
+    while i < len(domain):
+        j = end(i)
+        out.append(list(domain[i:j]))
+        i = j
+    return out
+
+
+def _all_of(domain: list) -> list:
+    terms = _domain_terms(domain)
+    return ["&"] * (len(terms) - 1) + [item for term in terms for item in term]
+
+
+def _any_of(domains: list[list]) -> list:
+    """Records any of these (non-empty) domains selects, as one prefix-notation term."""
+    parts = [_all_of(d) for d in domains]
+    return ["|"] * (len(parts) - 1) + [item for part in parts for item in part]
 
 class Ambiguous(tuple):
     """Several records match a reference; the tuple holds their display names."""
