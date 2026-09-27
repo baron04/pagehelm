@@ -752,6 +752,22 @@ class GoalTurnTests(unittest.TestCase):
                                   text="Acme 九月的发票总额是多少？")
         self.assertIn("61,000", execution.user_answer)
 
+    def test_that_one_record_listed_twice_asks_which(self):
+        two = Aggregate(subject="Credit Notes · Partner = Azure", count=2,
+                        records=("RINV/2026/00001", "RINV/2026/00002"))
+        execution, *_ = self._run(
+            [("declare_goal", {"deliverables": [{"kind": "list", "entity": "order",
+                "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Azure"]}]}}]})],
+            [Resolved(kind="list", aggregate=two)], text="Azure 八月的那张退款打开。")
+        self.assertEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("RINV/2026/00001", execution.user_answer)
+        # A plural request lists them.
+        execution, *_ = self._run(
+            [("declare_goal", {"deliverables": [{"kind": "list", "entity": "order",
+                "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Azure"]}]}}]})],
+            [Resolved(kind="list", aggregate=two)], text="Azure 八月的退款都有哪些？")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+
     def test_write_intent_cannot_be_settled_by_opening_a_page(self):
         execution, _channel, _chat, _port, events = self._run(
             [("declare_goal", {"deliverables": [{"kind": "page", "page": {"key": "p1"}}],

@@ -56,6 +56,9 @@ _NO_HIGHLIGHT_ROLES = frozenset({"tab", "menuitem", "menu", "menubar", "tablist"
 #: Words that ask for a total over several records rather than one record's amount.
 _TOTAL_WORDS = re.compile(r"合计|总计|总额|总金额|总共|一共|共计|加起来|累计|全部|所有|分别|各|total|sum\b|"
                           r"altogether|all\b|each\b", re.I)
+#: Words that point at one record ("that invoice", "the one of August").
+_ONE_RECORD = re.compile(r"那张|这张|那笔|这笔|那条|这条|那单|这单|那个|这个|哪张|哪笔|"
+                         r"\bthat (?:invoice|order|refund|bill|quotation|one)\b", re.I)
 #: A sum over more records than this is a total, whatever the words.
 _MAX_AMOUNT_CHOICES = 6
 #: At most this many collapsed menus are opened looking for a control to hand over.
@@ -690,8 +693,16 @@ class GoalTurnExecutor:
         if _TOTAL_WORDS.search(s.message.text):
             return resolution
         out = list(resolution.deliverables)
+        one = _ONE_RECORD.search(s.message.text)
         for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
             agg = r.aggregate
+            if (one and d.kind == "list" and agg is not None and not r.problem
+                    and 2 <= len(agg.records) <= _MAX_AMOUNT_CHOICES):
+                # "Open that refund of Azure's in August" and two fit: which one.
+                s.ledger.append("goal_one_record_ambiguous", step=s.step, count=agg.count)
+                out[i] = replace(r, aggregate=None, page=None, candidates=tuple(agg.records),
+                                 problem=f"{agg.count} records fit and the request names one")
+                continue
             if not (d.kind == "aggregate" and d.metric is not None and d.metric.op == "sum"
                     and not d.metric.group_by and agg is not None
                     and 2 <= agg.count <= _MAX_AMOUNT_CHOICES and not r.problem):
