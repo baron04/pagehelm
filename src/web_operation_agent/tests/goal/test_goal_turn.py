@@ -768,6 +768,36 @@ class GoalTurnTests(unittest.TestCase):
             [Resolved(kind="list", aggregate=two)], text="Azure 八月的退款都有哪些？")
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
 
+    def test_a_record_the_request_never_names_is_not_chosen_for_the_person(self):
+        declared = [("declare_goal", {"deliverables": [{"kind": "page", "entity": "order",
+            "record": "RINV/2026/00002",
+            "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Azure"]}]}}]})]
+        opened = [Resolved(kind="page", page=PagePlan(url="/orders/9", label="RINV/2026/00002",
+                                                      expected_path="/orders/9"))]
+        both = [Resolved(kind="page", problem="Credit Notes · Customer = Azure matches several",
+                         candidates=("RINV/2026/00002", "RINV/2026/00001"))]
+        execution, _channel, _chat, port, events = self._run(
+            declared, opened, resolved_then=both, text="Azure 八月的那张退款打开。")
+        self.assertEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("RINV/2026/00001", execution.user_answer)
+        self.assertIn("RINV/2026/00002", execution.user_answer)
+        # The check looks with the request's own conditions and without the chosen record.
+        self.assertEqual(port.specs[-1].deliverables[0].record, "")
+        self.assertEqual([e["count"] for e in events if e["event"] == "goal_record_not_chosen"], [2])
+        # A record the request names stands, and is not checked.
+        execution, _channel, _chat, port, _events = self._run(
+            declared, opened, resolved_then=both, text="Azure 的 RINV/2026/00002 打开。")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(len(port.specs), 1)
+        # Conditions that fit several records, none of them the one declared, are about
+        # something else (the lines of that record); the record stands.
+        lines = [Resolved(kind="page", problem="several",
+                          candidates=("RINV/2026/00002 Large Meeting Table",
+                                      "INV/2026/00001 Large Meeting Table"))]
+        execution, *_ = self._run(declared, opened, resolved_then=lines,
+                                  text="Azure 那张两万的退款打开。")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+
     def test_a_list_page_for_a_request_to_create_one_is_a_create_handoff(self):
         new = [Resolved(kind="handoff", page=PagePlan(url="/orders", label="Orders",
                                                       expected_path="/orders", highlight="Confirm"))]

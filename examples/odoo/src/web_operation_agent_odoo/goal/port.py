@@ -905,7 +905,8 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                             candidates=names,
                             repair=(f"{subject} matches several records ({', '.join(names)}); "
                                     "add a condition the request gives (amount, date, status, "
-                                    "customer) or sort with limit 1 to pick one"))
+                                    "customer); when it gives none, leave them for the person "
+                                    "to choose"))
         return model, int(rows[0]["id"]), str(rows[0].get("display_name") or "")
 
     # -- aggregates -------------------------------------------------------------------

@@ -219,6 +219,8 @@ class _TurnState:
     #: The whole index, which the neighbourhood was cut from; rules are answered from
     #: it, so that a rule the catalogue left out still comes with the ones it names.
     full_index: object = None
+    #: The records the request's own words name, as the adapter located them.
+    references: tuple = ()
 
 
 
@@ -405,6 +407,7 @@ class GoalTurnExecutor:
         if self.staged:
             known = locate(self.goal_port, s.message.text,
                            context=s.approvals.context(s.step, "locate"))
+            s.references = tuple(known)
             s.ledger.append("goal_references", step=s.step,
                             references=[{"text": k.text, "entity": k.entity, "name": k.name}
                                         for k in known][:8])
@@ -613,6 +616,7 @@ class GoalTurnExecutor:
                 if accepted:
                     spec, resolution = repaired, second
         resolution = self._which_amount(s, spec, resolution)
+        resolution = self._not_chosen_for(s, spec, resolution)
         outcomes: list[_PageOutcome | None] = []
         if any(r.page is not None for r in resolution.deliverables):
             # The declarations took their time; the page has gone on rendering meanwhile
@@ -774,6 +778,39 @@ class GoalTurnExecutor:
             s.ledger.append("goal_amount_ambiguous", step=s.step, count=agg.count)
             out[i] = replace(r, aggregate=None, candidates=names,
                              problem=f"{agg.count} records fit and the request asks for one amount")
+        return replace(resolution, deliverables=tuple(out))
+
+    def _not_chosen_for(self, s: _TurnState, spec: GoalSpec, resolution: Resolution) -> Resolution:
+        """The one record is the request's to pick, not the model's: when the declaration
+        names a record the request never names, and what the request does say fits
+        several records, that one among them included, the person is asked which.
+
+        "Open Azure's refund of August" with two such refunds is a question, whichever of
+        the two a reading happened to name. A record the words name ("S00018"), or that a
+        description the request gives picks out alone, stands.
+        """
+        text = _norm(s.message.text)
+        named = {_norm(getattr(k, "name", "")) for k in s.references}
+        out = list(resolution.deliverables)
+        for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
+            chosen = _norm(d.record)
+            if (d.kind not in ("page", "fact", "handoff") or d.rules or r.problem or not chosen
+                    or chosen in text or chosen in named
+                    or not ((d.metric and d.metric.filters) or d.page.search)):
+                continue
+            try:
+                described = self.goal_port.resolve(
+                    GoalSpec(deliverables=(replace(d, record=""),)),
+                    context=s.approvals.context(s.step, "resolve"),
+                    current_path=_path_of(s.obs.url)).deliverables[0]
+            except Exception:  # noqa: BLE001 -- the declared record stands when the check cannot run
+                continue
+            fits = described.candidates
+            if len(fits) < 2 or not any(chosen == _norm(c) for c in fits):
+                continue
+            s.ledger.append("goal_record_not_chosen", step=s.step, count=len(fits))
+            out[i] = Resolved(kind=d.kind, candidates=tuple(fits),
+                              problem=f"{len(fits)} records fit and the request names none of them")
         return replace(resolution, deliverables=tuple(out))
 
     # -- pages ------------------------------------------------------------------------
