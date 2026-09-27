@@ -109,6 +109,37 @@ def _appeared(before: Counter, elements) -> list:
     return list(reversed(shown))
 
 
+_FLIPPED = {"<=": ">=", "<": ">", ">=": "<=", ">": "<"}
+_NEGATIVE = re.compile(r"^-\d[\d,]*(?:\.\d+)?$")
+
+
+def _magnitudes(spec: GoalSpec, text: str) -> tuple[GoalSpec, tuple[str, ...]]:
+    """An amount the person states is a magnitude ("credit notes over 30,000"). A
+    condition the model wrote with negative numbers the request never wrote -- a refund
+    thought of as negative -- is read as the magnitude, its comparison turned round.
+    Returns (spec, the fields changed)."""
+    if "-" in (text or "") or "负" in (text or "") or "−" in (text or ""):
+        return spec, ()
+    out, changed = [], []
+    for d in spec.deliverables:
+        if d.metric is not None and d.metric.filters:
+            filters = []
+            for f in d.metric.filters:
+                if f.values and all(_NEGATIVE.match(v.strip()) for v in f.values) \
+                        and (f.op in _FLIPPED or f.op in ("", "=", "between")):
+                    values = tuple(v.strip()[1:] for v in f.values)
+                    if f.op == "between":
+                        values = tuple(reversed(values))
+                    f = replace(f, values=values, op=_FLIPPED.get(f.op, f.op))
+                    changed.append(f.field)
+                filters.append(f)
+            d = replace(d, metric=replace(d.metric, filters=tuple(filters)))
+        out.append(d)
+    if not changed:
+        return spec, ()
+    return replace(spec, deliverables=tuple(out)), tuple(changed)
+
+
 def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, ...]]:
     """A page declared with a control to act on is a handoff: the person asked to be shown
     that control ("mark Pay for me", "where is Print Labels"), and opening the page alone
@@ -493,6 +524,9 @@ class GoalTurnExecutor:
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
         if second_reading is not None and spec.deliverables:
             spec = self._agree(s, chat, index, spec, today, second_reading)
+        spec, flipped = _magnitudes(spec, s.message.text)
+        if flipped:
+            s.ledger.append("goal_amounts_as_magnitudes", step=s.step, fields=list(flipped))
         spec, handed = _as_handoffs(spec, s.message.text)
         if handed:
             s.ledger.append("goal_page_became_handoff", step=s.step, controls=list(handed))
@@ -1433,6 +1467,25 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             if agg.note:
                 head += f"（{agg.note}）" if zh else f" ({agg.note})"
             lines.append(head)
+    if (resolved.problem and resolved.kind in ("list", "aggregate", "fact")
+            and not (resolved.facts or resolved.aggregate)):
+        # A question that went unanswered stays unanswered in the reply, whatever page
+        # was opened beside it: the page is where to look, not an answer.
+        text = resolved.problem
+        if resolved.candidates:
+            text += (" 候选：" if zh else " candidates: ") + ", ".join(resolved.candidates)
+        where = ""
+        if resolved.page is not None:
+            where = (f"（可在 {resolved.page.label} 页面上自行核对）" if zh
+                     else f" (you can check on {resolved.page.label})")
+        if resolved.missing:
+            lines.append((f"没有找到「{resolved.missing}」，系统里不存在这条记录。{where}") if zh
+                         else f"Nothing named \"{resolved.missing}\" was found; no such record "
+                              f"exists.{where}")
+        else:
+            lines.append((f"无法完成这一项：{text}{where}") if zh
+                         else f"Could not do this part: {text}{where}")
+        return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
         if resolved.kind == "handoff":

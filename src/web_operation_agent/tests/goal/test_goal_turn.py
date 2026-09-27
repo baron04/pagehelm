@@ -796,6 +796,18 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("标出「Delete」", execution.user_answer)
         self.assertNotIn("Archive", execution.user_answer)
 
+    def test_an_amount_the_request_states_is_a_magnitude(self):
+        from web_operation_agent.goal.executor import _magnitudes
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "order", "metric": {
+            "op": "count", "filters": [{"field": "Total", "values": ["-30000"], "op": "<="},
+                                       {"field": "Customer", "values": ["Acme"]}]}}]})
+        fixed, fields = _magnitudes(spec, "Acme 三万以上的退款是哪几张？")
+        self.assertEqual(fields, ("Total",))
+        total = fixed.deliverables[0].metric.filters[0]
+        self.assertEqual((total.values, total.op), (("30000",), ">="))
+        # A request that writes a negative amount keeps it.
+        self.assertEqual(_magnitudes(spec, "余额低于 -30000 的有哪些")[1], ())
+
     def test_write_intent_cannot_be_settled_by_opening_a_page(self):
         execution, _channel, _chat, _port, events = self._run(
             [("declare_goal", {"deliverables": [{"kind": "page", "page": {"key": "p1"}}],
