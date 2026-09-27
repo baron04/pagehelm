@@ -498,6 +498,8 @@ The second Chinese goal holdout is frozen with 84 normal goals and 10 honest-lim
 
 The frozen `v6-rules` set adds 40 source-rule questions bound to deployment release `18.0-20260909`. Its evaluator checks cited source bytes and reports answer and citation matches separately; this is evaluation support, not a completed three-arm experiment. See [the citation contract](evals/odoo/README.md#source-rule-holdout).
 
+On two single-turn Chinese holdouts written to the v7 specification by an author blind to the implementation, the goal-directed turn (qwen3.8-flash, the ordinary reader, one pass each, 2026-09-27) answered 87/100 (v7-C, trustworthiness 88.3%, 3 false claims) and 86/100 (v7-D, 89.0%, 3 false claims), with no writes; the earlier v7-A and v7-B first runs score 78 and 80 under the same judge. The remaining failures are mostly rule questions whose cited source line is not the one that states the rule, readings that differ between runs, and model-service timeouts. These are two 100-task samples of one reference deployment, with about ±5 points of run-to-run variation; they do not establish 90% accuracy.
+
 ## License
 
 See [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md).
