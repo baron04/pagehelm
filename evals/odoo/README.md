@@ -43,8 +43,9 @@ request sets in `tasksets/odoo-goals-zh-v7a-holdout.json` and
 `tasksets/odoo-goals-zh-v7b-holdout.json`. Both SHA-256 digests are pinned in
 `goals/run_goals.py`. Each set has 60 ordinary requests (`F`), 25 long-tail
 requests (`L`), and 15 unavailable or genuinely ambiguous requests (`U`).
-The A and B prompts are different. Neither has been run with a model; their
-reference date is 2026-09-26 in Asia/Shanghai.
+The A and B prompts are different; their reference date is 2026-09-26 in
+Asia/Shanghai. A served as the P8.9 development set; B was run once, as the P8.9
+holdout, on 2026-09-27, and has been seen since.
 
 Scoring writes one of five `outcome` values for every attempt: `correct`,
 `appropriate_clarification`, `truthful_refusal`, `wrong`, or `false_claim`.
@@ -56,12 +57,21 @@ adds:
 - `trustworthiness`: correct immediate answers and truthful refusals divided
   by all nonempty, non-clarifying final replies or explicit completion claims.
   This denominator includes wrong answers that do not claim completion.
-  An appropriate clarification and an empty failure are outside it.
+  An appropriate clarification and an empty failure are outside it, and so is a
+  reply to a task the application can do that says only that this attempt was
+  not done (nothing found by that name, a part not completed, the service
+  unavailable); a reply asserting that the application lacks or forbids something
+  stays in it. On an unavailable task every reply is in it.
 - `coverage`: correct immediate answers and truthful refusals divided by all
   attempts. Appropriate clarification earns a correct outcome but is not
   immediate coverage.
 - `clarification_rate`: replies that ask the user to choose or clarify divided
   by all attempts, including inappropriate requests for clarification.
+
+Replies are read as content: Markdown emphasis is removed before any check, a
+state may be given by Odoo's own label (Quotation for `draft`, Sales Order for
+`sale`), a turn that ends asking the user to choose is scored as a clarification,
+and the numbered choices' own statuses are not completion claims.
 
 For these tasks, “销售单/销售订单” means confirmed orders; an unqualified “订单”
 includes quotations unless its context narrows the state. Every scoped prompt
