@@ -855,6 +855,19 @@ class OdooGoalPortConditionTests(unittest.TestCase):
                                            "filters": [{"field": "Order Date", "values": ["someday"]}]}})
         self.assertIn("not a date or period", result.deliverables[0].problem)
 
+    def test_a_field_not_equal_to_nothing_is_a_field_that_is_set(self):
+        # "Orders with a customer": the field, no value, not equal -- the field is set.
+        resolved = self._resolve({"kind": "aggregate", "entity": "sale.order",
+                                  "page": {"key": "p331"}, "metric": {"op": "count", "filters": [
+                                      {"field": "Customer", "values": [], "op": "!="}]}})
+        self.assertEqual(resolved.deliverables[0].problem, "")
+        self.assertIn(["partner_id", "!=", False], self._last_domain())
+        # A field named with nothing to compare against, and no comparison, says nothing.
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                       "metric": {"op": "count", "filters": [{"field": "Customer", "values": []}]}})
+        self.assertFalse(any(isinstance(c, list) and c[0] == "partner_id"
+                             for c in self._last_domain()))
+
     def test_a_page_filter_that_names_today_is_written_for_this_turn(self):
         self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
                        "metric": {"op": "count", "page_filters": ["Late"]}})

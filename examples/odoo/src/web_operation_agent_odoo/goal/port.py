@@ -882,7 +882,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             domain += ["!"] + ["&"] * (len(clauses) - 1) + clauses
             described.append(f"not {item.label}")
         for condition in metric.filters:
-            if not condition.values:
+            if not _says(condition):
                 # A field named with nothing to compare against says nothing.
                 continue
             exact_field = any(_norm(i.get("string", "")) == _norm(condition.field)
@@ -920,7 +920,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                     # lines), for the person's words to be matched against.
                     scope = list(domain)
                     for other in metric.filters:
-                        if other is condition or not other.values:
+                        if other is condition or not _says(other):
                             continue
                         other_clause, _ = self._condition(meta, other.field, other.values,
                                                           op=other.op, today=today)
@@ -1151,7 +1151,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         of an invoice; the conditions, not the word, tell them apart. A description that
         needs a field the other entity lacks, or that several records there fit, finds
         nothing here."""
-        conditions = [c for c in (d.metric.filters if d.metric else ()) if c.values]
+        conditions = [c for c in (d.metric.filters if d.metric else ()) if _says(c)]
         if len(conditions) < 2 or d.page.search:
             return None
         found = []
@@ -1376,6 +1376,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         info = meta.fields[field]
         kind = info.get("type")
         text = f"{info.get('string') or field} {op or '='} {' / '.join(values)}"
+        if not values and op == "!=":
+            # "Entries with a partner": not equal to nothing, so the field is set.
+            return [[field, "!=", False]], f"{info.get('string') or field} set"
         if not values:
             return None, f"no value for {label!r}"
         if info.get("searchable") is False:
@@ -1515,6 +1518,12 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
 
 #: The most names of one entity a repair lists for a description in another language.
 _NAMES_LISTED = 80
+
+
+def _says(condition: Filter) -> bool:
+    """Whether a condition compares against something: a value, or none with not-equal,
+    which says the field is set."""
+    return bool(condition.values) or condition.op == "!="
 
 
 def _foreign(text) -> bool:
