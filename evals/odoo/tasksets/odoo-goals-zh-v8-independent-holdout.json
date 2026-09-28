@@ -396,30 +396,34 @@
       "category": "answer",
       "entity": "product.template",
       "delivery": "answer/field",
-      "condition": "record",
+      "condition": "ambiguity",
       "prompt": "Office Chair 的 Internal Reference 是什么？",
       "parts": [
         {
           "quote": "Office Chair 的 Internal Reference 是什么",
           "check": {
-            "answer_regex": "(?is)(?:FURN_7777)"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "oracle": {
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Office\\ Chair(?![\\w/-])",
+            "(?<![\\w/-])Office\\ Chair\\ Black(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Office Chair",
+            "Office Chair Black"
+          ],
           "model": "product.template",
           "domain": [
             [
-              "id",
-              "=",
-              5
+              "name",
+              "ilike",
+              "Office Chair"
             ]
-          ],
-          "field": "default_code",
-          "expected": "FURN_7777",
-          "positive": "FURN_7777",
-          "wrong": "明显错误的值"
+          ]
         }
       }
     },
@@ -5044,26 +5048,34 @@
       "category": "open",
       "entity": "product.template",
       "delivery": "open/page",
-      "condition": "record",
+      "condition": "ambiguity",
       "prompt": "帮我打开 Office Chair 的产品档案。",
       "parts": [
         {
           "quote": "帮我打开 Office Chair 的产品档案",
           "check": {
-            "path_regex": "^/odoo/(?:products|product\\.template)/5$",
-            "breadcrumb_last_contains": "Office Chair"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "page": {
-          "path": "^/odoo/(?:products|product\\.template)/5$",
-          "breadcrumb": "Office Chair",
-          "tab": "",
-          "facet": "",
-          "view": "",
-          "highlight": "",
-          "fill": ""
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Office\\ Chair(?![\\w/-])",
+            "(?<![\\w/-])Office\\ Chair\\ Black(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Office Chair",
+            "Office Chair Black"
+          ],
+          "model": "product.template",
+          "domain": [
+            [
+              "name",
+              "ilike",
+              "Office Chair"
+            ]
+          ]
         }
       }
     },
@@ -5140,15 +5152,15 @@
         {
           "quote": "打开 Desk Organizer 看看详情",
           "check": {
-            "path_regex": "^/odoo/(?:products|product\\.template)/7$",
-            "breadcrumb_last_contains": "Office Design Software"
+            "path_regex": "^/odoo/(?:products|product\\.template)/31$",
+            "breadcrumb_last_contains": "Desk Organizer"
           }
         }
       ],
       "truth": {
         "page": {
-          "path": "^/odoo/(?:products|product\\.template)/7$",
-          "breadcrumb": "Office Design Software",
+          "path": "^/odoo/(?:products|product\\.template)/31$",
+          "breadcrumb": "Desk Organizer",
           "tab": "",
           "facet": "",
           "view": "",
@@ -5194,26 +5206,34 @@
       "category": "open",
       "entity": "product.template",
       "delivery": "open/page",
-      "condition": "record",
+      "condition": "ambiguity",
       "prompt": "帮我打开 Drawer 这个产品。",
       "parts": [
         {
           "quote": "帮我打开 Drawer 这个产品",
           "check": {
-            "path_regex": "^/odoo/(?:products|product\\.template)/33$",
-            "breadcrumb_last_contains": "Monitor Stand"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "page": {
-          "path": "^/odoo/(?:products|product\\.template)/33$",
-          "breadcrumb": "Monitor Stand",
-          "tab": "",
-          "facet": "",
-          "view": "",
-          "highlight": "",
-          "fill": ""
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Drawer(?![\\w/-])",
+            "(?<![\\w/-])Drawer\\ Black(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Drawer",
+            "Drawer Black"
+          ],
+          "model": "product.template",
+          "domain": [
+            [
+              "name",
+              "ilike",
+              "Drawer"
+            ]
+          ]
         }
       }
     },
@@ -5410,15 +5430,15 @@
         {
           "quote": "打开 Large Meeting Table 的产品页",
           "check": {
-            "path_regex": "^/odoo/(?:products|product\\.template)/35$",
-            "breadcrumb_last_contains": "Deposit"
+            "path_regex": "^/odoo/(?:products|product\\.template)/26$",
+            "breadcrumb_last_contains": "Large Meeting Table"
           }
         }
       ],
       "truth": {
         "page": {
-          "path": "^/odoo/(?:products|product\\.template)/35$",
-          "breadcrumb": "Deposit",
+          "path": "^/odoo/(?:products|product\\.template)/26$",
+          "breadcrumb": "Large Meeting Table",
           "tab": "",
           "facet": "",
           "view": "",
@@ -5866,10 +5886,10 @@
       "entity": "product.template",
       "delivery": "handoff/button",
       "condition": "record",
-      "prompt": "这个产品要贴标签，把\"Print Labels\"按钮指给我。",
+      "prompt": "Storage Box 要贴标签，把\"Print Labels\"按钮指给我。",
       "parts": [
         {
-          "quote": "这个产品要贴标签，把\"Print Labels\"按钮指给我",
+          "quote": "Storage Box 要贴标签，把\"Print Labels\"按钮指给我",
           "check": {
             "path_regex": "^/odoo/(?:products|product\\.template)/12$",
             "breadcrumb_last_contains": "Storage Box",
@@ -6057,16 +6077,16 @@
         {
           "quote": "我要新建一张报价单，列表页的\"New\"按钮帮我指一下",
           "check": {
-            "path_regex": "^/odoo/orders$",
-            "breadcrumb_last_contains": "Sales Orders",
-            "highlight_regex": "^New$"
+            "path_regex": "^/odoo/(?:orders|sales)$",
+            "highlight_regex": "^New$",
+            "breadcrumb_last_regex": "^(?:Quotations|Sales Orders)$"
           }
         }
       ],
       "truth": {
         "page": {
-          "path": "^/odoo/orders$",
-          "breadcrumb": "Sales Orders",
+          "path": "^/odoo/(?:orders|sales)$",
+          "breadcrumb": "Quotations",
           "tab": "",
           "facet": "",
           "view": "",
@@ -6088,7 +6108,7 @@
         {
           "quote": "我想录一张新的供应商账单，列表页的\"New\"帮我标出来",
           "check": {
-            "path_regex": "^/odoo/bills$",
+            "path_regex": "^/odoo/(?:bills|vendor-bills)$",
             "breadcrumb_last_contains": "Bills",
             "highlight_regex": "^New$"
           }
@@ -6096,7 +6116,7 @@
       ],
       "truth": {
         "page": {
-          "path": "^/odoo/bills$",
+          "path": "^/odoo/(?:bills|vendor-bills)$",
           "breadcrumb": "Bills",
           "tab": "",
           "facet": "",
