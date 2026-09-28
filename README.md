@@ -152,8 +152,11 @@ agent.
   missing; when exactly one resolves to something there, it is taken without a third
   reading; a sum counts as a total over every matching record only when both say so.
   A port may report an operation the account may not perform (`denied`; a new record is
-  denied as a creation, not a change), which is said instead of asking which record. When a
-  request asks one thing and it is not done, the reply quotes the request; a reason the
+  denied as a creation, not a change), which is said instead of asking which record. A
+  control's rules declared for a record the request names by its reference ("S00005 的
+  Confirm 按钮在哪") become a handoff to that control; when the page does not show the
+  control, the reply gives the deployed source's rule of when it shows, with its citation,
+  instead of guessing at permissions. When a request asks one thing and it is not done, the reply quotes the request; a reason the
   model wrote in a language other than the request's is not shown, the request is quoted
   instead.
   If the model declares a write intent but only resolves read-only pages or facts, opening

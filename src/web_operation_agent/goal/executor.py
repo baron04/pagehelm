@@ -324,6 +324,43 @@ def _named_controls(spec: GoalSpec, parts: list, text: str, index, declared: fro
     return replace(spec, deliverables=tuple(out)), tuple(named)
 
 
+def _shown_when(index, entity_key: str, control: str) -> str:
+    """The source rule of when a control of an entity shows, with its citation; empty
+    when the index holds none."""
+    entity = index.entity(entity_key) if index is not None and entity_key else None
+    if entity is None or not control:
+        return ""
+    rule = next((r for r in entity.rules if r.kind == "visibility"
+                 and _norm(r.about) == _norm(control)), None)
+    if rule is None:
+        return ""
+    return rule.text + (f" [{rule.citation}]" if rule.citation else "")
+
+
+def _control_on_a_record(spec: GoalSpec, text: str, index, references
+                         ) -> tuple[GoalSpec, tuple[str, ...]]:
+    """A control's rules declared for a record the request names by its reference
+    ("其实 S00005 还能做，Confirm 按钮在哪？"): the person means that record's control, and
+    it is pointed at. Rules about a control in general ("Confirm 什么时候出现？") name no
+    record, and stay a question about the rules. Returns (spec, the controls pointed at)."""
+    if index is None or not references:
+        return spec, ()
+    located = {(k.entity, _norm(n)) for k in references for n in (k.text, k.name)}
+    out, pointed = [], []
+    for d in spec.deliverables:
+        entity = index.entity(d.entity) if d.entity else None
+        if (d.kind in ("fact", "list", "aggregate") and d.rules and d.record
+                and entity is not None and (entity.key, _norm(d.record)) in located):
+            control = next((a for a in entity.actions if _names_verbatim(text, a)), "")
+            if control:
+                d = replace(d, kind="handoff", action=control, fields=(), rules=(), metric=None)
+                pointed.append(control)
+        out.append(d)
+    if not pointed:
+        return spec, ()
+    return replace(spec, deliverables=tuple(out)), tuple(pointed)
+
+
 def _terms_for(parts: list, position: int, d, count: int) -> tuple[str, ...]:
     """The first step's terms for one deliverable: the part at the same position when
     parts and deliverables pair up, else the parts about the same entity."""
@@ -444,6 +481,9 @@ class _PageOutcome:
     filled: str = ""
     fill_verified: bool = False
     fill_failed: str = ""
+    #: When the control to point at is not on the page: the deployment's source rule of
+    #: when it shows, with its citation, read from the index (knowledge, not an action).
+    rule: str = ""
 
 
 @dataclass
@@ -840,6 +880,9 @@ class GoalTurnExecutor:
         spec, named = _named_controls(spec, s.scope_parts, s.message.text, index)
         if named:
             s.ledger.append("goal_control_named", step=s.step, controls=list(named))
+        spec, pointed = _control_on_a_record(spec, s.message.text, s.full_index, s.references)
+        if pointed:
+            s.ledger.append("goal_rule_became_handoff", step=s.step, controls=list(pointed))
         spec, flipped = _magnitudes(spec, s.message.text)
         if flipped:
             s.ledger.append("goal_amounts_as_magnitudes", step=s.step, fields=list(flipped))
@@ -946,14 +989,20 @@ class GoalTurnExecutor:
             # The declarations took their time; the page has gone on rendering meanwhile
             # and the observation the turn holds may be stale. Look once before acting.
             self._dispatch(s, "observe", {})
-        for resolved in resolution.deliverables:
+        for declared, resolved in zip(spec.deliverables, resolution.deliverables, strict=True):
             if resolved.page is None:
                 outcomes.append(None)
                 continue
             if s.terminal_reason:
                 outcomes.append(_PageOutcome(reached=False, unmet=[_Unmet("not_attempted")]))
                 continue
-            outcomes.append(self._reach(s, resolved.page))
+            outcome = self._reach(s, resolved.page)
+            if any(u.kind == "control" for u in outcome.unmet):
+                outcome.rule = _shown_when(s.full_index, declared.entity, resolved.page.highlight)
+                if outcome.rule:
+                    s.ledger.append("goal_control_rule_cited", step=s.step,
+                                    control=resolved.page.highlight)
+            outcomes.append(outcome)
         if not s.terminal_reason:
             achieved = all(_achieved(r, o) for r, o in
                            zip(resolution.deliverables, outcomes, strict=True))
@@ -2105,6 +2154,13 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                              (f"Opened {plan.label} and highlighted “{outcome.highlighted}”; "
                               "please check it and press it yourself. The assistant prepares, "
                               "you submit."))
+            elif outcome.rule:
+                # The deployment's source says when the control shows: that is the reason
+                # given, with its citation, rather than a guess about permissions.
+                lines.append((f"{plan.label} 页面上没有显示「{plan.highlight}」。部署源码的规则："
+                              f"{outcome.rule}。助手没有执行任何操作。") if zh else
+                             (f"{plan.label} does not show “{plan.highlight}”. The deployed "
+                              f"source's rule: {outcome.rule}. The assistant did nothing."))
             else:
                 # The limitation comes first: the page holds no such control for this
                 # account, and nothing was done. Opening the page is not an achievement.

@@ -968,6 +968,41 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual([e["fields"] for e in events if e["event"] == "goal_held_fields_offered"],
                          [["Sales Order.Weight"]])
 
+    def test_a_controls_rules_asked_for_on_a_named_record_point_at_the_control(self):
+        from web_operation_agent.goal.narrow import KnownReference
+        index = _index()
+        known = (KnownReference(text="S00006", entity="order", name="S00006"),)
+        ruled = GoalSpec.from_json({"deliverables": [{"kind": "fact", "entity": "order",
+                                                      "record": "S00006", "fields": ["Confirm"],
+                                                      "rules": ["r1"]}]})
+        # "S00006 的 Confirm 按钮在哪": that record's control is pointed at.
+        pointed, controls = executor_module._control_on_a_record(
+            ruled, "其实 S00006 还能做，\"Confirm\"按钮在哪？", index, known)
+        self.assertEqual(controls, ("Confirm",))
+        self.assertEqual((pointed.deliverables[0].kind, pointed.deliverables[0].action,
+                          pointed.deliverables[0].rules), ("handoff", "Confirm", ()))
+        # A control's rules asked in general name no record, and stay a rules question.
+        general = GoalSpec.from_json({"deliverables": [{"kind": "fact", "entity": "order",
+                                                        "fields": ["Confirm"], "rules": ["r1"]}]})
+        self.assertEqual(executor_module._control_on_a_record(
+            general, "Confirm 按钮什么时候出现？", index, known), (general, ()))
+        # A record the request does not name by its reference is not taken for one.
+        self.assertEqual(executor_module._control_on_a_record(
+            ruled, "报价单上的 Confirm 按钮什么时候出现？", index, ()), (ruled, ()))
+
+    def test_a_control_not_on_the_page_is_explained_by_its_source_rule(self):
+        # The page shows Confirm and Send by Email; Create Invoice has a visibility rule.
+        plan = PagePlan(url="/orders/6", label="S00006", expected_path="/orders/6",
+                        highlight="Create Invoice")
+        execution, *_ = self._run(
+            [_declaration(kind="handoff", entity="order", record="S00006",
+                          action="Create Invoice")],
+            [Resolved(kind="handoff", page=plan)], text="S00006 开发票，把 Create Invoice 标出来")
+        self.assertIn("页面上没有显示「Create Invoice」。部署源码的规则：", execution.user_answer)
+        self.assertIn("hidden when state != sale", execution.user_answer)
+        self.assertIn("sale_order_views.xml:266-271", execution.user_answer)
+        self.assertNotIn("可能是你的账号", execution.user_answer)
+
     def test_a_request_the_assistant_cannot_do_is_answered_in_the_persons_language(self):
         cannot = executor_module._cannot
         self.assertEqual(cannot("查一下签收人的身份证号", "应用里没有签收人身份证号", True),
