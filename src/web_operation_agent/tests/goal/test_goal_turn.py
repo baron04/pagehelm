@@ -912,6 +912,29 @@ class GoalTurnTests(unittest.TestCase):
                                   text="Ready Mat 的报价单金额是多少？", staged=True, readings=1)
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
 
+    def test_a_count_over_the_entity_the_request_names_drops_a_narrowing_page(self):
+        index = ApplicationIndex(
+            entities=(IndexEntity(key="partner", label="Contact", aliases=("联系人",)),),
+            pages=(IndexPage(key="p2", label="Customers", breadcrumb="Sales / Customers",
+                             entity="partner", aliases=("客户",), scope=("Customers",)),),
+            source_digest="abc")
+        spec = GoalSpec.from_json({"deliverables": [{
+            "kind": "aggregate", "entity": "partner", "metric": {"op": "count"},
+            "page": {"key": "p2", "filters_on": ["Companies"]}}]})
+        # "联系人里": every contact, not the customers the page shows on its own; the
+        # filter the declaration switched on stays.
+        dropped, pages = executor_module._entity_over_page(spec, "联系人里标记为公司的有几个？", index)
+        self.assertEqual(pages, ("p2",))
+        self.assertEqual((dropped.deliverables[0].page.key,
+                          dropped.deliverables[0].page.filters_on), ("", ("Companies",)))
+        # "客户里": the page is what the request names.
+        self.assertEqual(executor_module._entity_over_page(spec, "客户里标记为公司的有几个？", index),
+                         (spec, ()))
+        # Opening the page is left alone.
+        opened = GoalSpec.from_json({"deliverables": [{"kind": "page", "entity": "partner",
+                                                       "page": {"key": "p2"}}]})
+        self.assertEqual(executor_module._entity_over_page(opened, "打开联系人", index), (opened, ()))
+
     def test_a_request_the_assistant_cannot_do_is_answered_in_the_persons_language(self):
         cannot = executor_module._cannot
         self.assertEqual(cannot("查一下签收人的身份证号", "应用里没有签收人身份证号", True),

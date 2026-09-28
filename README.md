@@ -137,7 +137,9 @@ agent.
   the ones the request names to the resolver, which widens the declared page's own scope
   by those records rather than letting the page leave them out (quotations beside the
   confirmed-orders page when the request says 报价), along the fields the entity's
-  conventions are about, so the page's other conditions stay. A term inside a longer term belongs
+  conventions are about, so the page's other conditions stay. A count or list declared
+  through a page that narrows its entity on its own (customers among contacts) loses that
+  page when the request names the entity and not the page ("联系人里…"). A term inside a longer term belongs
   to the longer one, and a convention meaning every record yields to a narrower one on
   the same entity. Their entities are always in the neighbourhood, as is the entity of a
   record the request names by its number.

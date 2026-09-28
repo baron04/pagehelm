@@ -207,6 +207,29 @@ def _finds(resolution: Resolution) -> bool:
         for r in resolution.deliverables)
 
 
+def _entity_over_page(spec: GoalSpec, text: str, index) -> tuple[GoalSpec, tuple[str, ...]]:
+    """A count or list declared through a page that narrows its entity on its own
+    (customers among contacts), when the request names the entity and not the page
+    ("联系人里标记为公司的有几个"): every record of the entity is meant, so the page goes."""
+    lowered = text.casefold()
+
+    def says(names) -> bool:
+        return any(n and n.casefold() in lowered for n in names)
+    dropped = []
+    out = []
+    for d in spec.deliverables:
+        page = index.page(d.page.key) if d.page.key and index is not None else None
+        entity = index.entity(d.entity) if d.entity and index is not None else None
+        if (d.kind in ("aggregate", "list") and page is not None and entity is not None
+                and page.entity == entity.key and page.scope
+                and says((entity.label,) + tuple(entity.aliases))
+                and not says((page.label,) + tuple(page.aliases) + tuple(page.scope))):
+            dropped.append(page.key)
+            d = replace(d, page=replace(d.page, key=""))
+        out.append(d)
+    return (replace(spec, deliverables=tuple(out)), tuple(dropped)) if dropped else (spec, ())
+
+
 def _said_of(record: str, text: str) -> str:
     """The longest run of a record's words the request writes, when it writes some of
     them and not the whole name; empty otherwise."""
@@ -820,6 +843,9 @@ class GoalTurnExecutor:
         spec, handed = _as_handoffs(spec, s.message.text)
         if handed:
             s.ledger.append("goal_page_became_handoff", step=s.step, controls=list(handed))
+        spec, unscoped = _entity_over_page(spec, s.message.text, s.full_index)
+        if unscoped:
+            s.ledger.append("goal_page_scope_dropped", step=s.step, pages=list(unscoped))
         spec, corrections = correct_records(spec, s.message.text, known,
                                             tuple(c.display for c in s.candidates))
         if corrections:
