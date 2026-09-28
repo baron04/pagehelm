@@ -1907,43 +1907,34 @@
       "category": "answer",
       "entity": "sale.order",
       "delivery": "answer/list",
-      "condition": "scoped",
+      "condition": "ambiguity",
       "prompt": "Sales 团队手里还在报价阶段的单子列一下。",
       "parts": [
         {
           "quote": "Sales 团队手里还在报价阶段的单子列一下",
           "check": {
-            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00001(?![\\w/-]))(?=.*(?<![\\w/-])S00002(?![\\w/-]))(?=.*(?<![\\w/-])S00003(?![\\w/-]))(?=.*(?<![\\w/-])S00019(?![\\w/-]))(?!.*(?<![\\w/-])S00005(?![\\w/-]))"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "oracle": {
-          "model": "sale.order",
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Sales(?![\\w/-])",
+            "(?<![\\w/-])Pre\\-Sales(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Sales",
+            "Pre-Sales"
+          ],
+          "model": "crm.team",
           "domain": [
             [
-              "team_id",
-              "=",
-              1
-            ],
-            [
-              "state",
-              "in",
-              [
-                "draft",
-                "sent"
-              ]
+              "name",
+              "ilike",
+              "Sales"
             ]
-          ],
-          "field": "name",
-          "expected": [
-            "S00001",
-            "S00002",
-            "S00003",
-            "S00019"
-          ],
-          "positive": "S00001、S00002、S00003、S00019",
-          "wrong": "S00001、S00002、S00003、S00019、S00005"
+          ]
         }
       }
     },

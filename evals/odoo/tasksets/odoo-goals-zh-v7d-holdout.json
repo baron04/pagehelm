@@ -1305,36 +1305,34 @@
       "category": "answer",
       "entity": "sale.order",
       "delivery": "answer/aggregate",
-      "condition": "scoped",
+      "condition": "ambiguity",
       "prompt": "Sales 团队的销售订单总额是多少？",
       "parts": [
         {
           "quote": "Sales 团队的销售订单总额是多少",
           "check": {
-            "answer_regex": "(?<![\\d.,])(?:12985|12,985)[.,]50?(?![\\d.,])"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "oracle": {
-          "model": "sale.order",
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Sales(?![\\w/-])",
+            "(?<![\\w/-])Pre\\-Sales(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Sales",
+            "Pre-Sales"
+          ],
+          "model": "crm.team",
           "domain": [
             [
-              "team_id",
-              "=",
-              1
-            ],
-            [
-              "state",
-              "=",
-              "sale"
+              "name",
+              "ilike",
+              "Sales"
             ]
-          ],
-          "operation": "sum",
-          "field": "amount_total",
-          "expected": 12985.5,
-          "positive": "12985.5",
-          "wrong": "13002.5"
+          ]
         }
       }
     },
@@ -1760,50 +1758,34 @@
       "category": "answer",
       "entity": "sale.order",
       "delivery": "answer/list",
-      "condition": "scoped",
+      "condition": "ambiguity",
       "prompt": "八月份由 Sales 团队拿下的销售订单，单号都列出来。",
       "parts": [
         {
           "quote": "八月份由 Sales 团队拿下的销售订单，单号都列出来",
           "check": {
-            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00015(?![\\w/-]))(?=.*(?<![\\w/-])S00017(?![\\w/-]))(?=.*(?<![\\w/-])S00018(?![\\w/-]))(?=.*(?<![\\w/-])S00020(?![\\w/-]))(?!.*(?<![\\w/-])S00011(?![\\w/-]))"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "oracle": {
-          "model": "sale.order",
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Sales(?![\\w/-])",
+            "(?<![\\w/-])Pre\\-Sales(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Sales",
+            "Pre-Sales"
+          ],
+          "model": "crm.team",
           "domain": [
             [
-              "team_id",
-              "=",
-              1
-            ],
-            [
-              "state",
-              "=",
-              "sale"
-            ],
-            [
-              "date_order",
-              ">=",
-              "2026-08-01"
-            ],
-            [
-              "date_order",
-              "<",
-              "2026-09-01"
+              "name",
+              "ilike",
+              "Sales"
             ]
-          ],
-          "field": "name",
-          "expected": [
-            "S00015",
-            "S00017",
-            "S00018",
-            "S00020"
-          ],
-          "positive": "S00015、S00017、S00018、S00020",
-          "wrong": "S00015、S00017、S00018、S00020、S00011"
+          ]
         }
       }
     },
@@ -3577,31 +3559,19 @@
       "truth": {
         "clarification": {
           "candidate_regexes": [
-            "(?<![\\w/-])S00004(?![\\w/-])",
-            "(?<![\\w/-])S00007(?![\\w/-])",
-            "(?<![\\w/-])S00020(?![\\w/-])"
+            "(?<![\\w/-])Sales(?![\\w/-])",
+            "(?<![\\w/-])Pre\\-Sales(?![\\w/-])"
           ],
           "candidate_names": [
-            "S00004",
-            "S00007",
-            "S00020"
+            "Sales",
+            "Pre-Sales"
           ],
-          "model": "sale.order",
+          "model": "crm.team",
           "domain": [
             [
-              "user_id",
-              "=",
-              2
-            ],
-            [
-              "team_id",
-              "=",
-              1
-            ],
-            [
-              "state",
-              "=",
-              "sale"
+              "name",
+              "ilike",
+              "Sales"
             ]
           ]
         }
