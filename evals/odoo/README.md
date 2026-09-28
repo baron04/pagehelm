@@ -109,7 +109,11 @@ customer invoice handoff accepts either `/odoo/invoicing` or
 `/odoo/customer-invoices` with the `New` control highlighted. Boolean answers
 may use the visible field label and Yes/No, and field names may use visible or
 technical spelling. Limitation words and the subject keyword may appear in
-either order. Source-rule citations must cover the line that states the rule;
+either order; the subject keyword must be in the reply's own words, since a reply
+quoting the whole request back has not said what is missing (a quote of the missing
+record or field, 「S00033」, counts). A list reply that states how many records it
+lists fails when that count differs from the truth's, since a list check requires the
+records that belong and excludes only one that does not. Source-rule citations must cover the line that states the rule;
 an outer XML container line alone is insufficient. As with earlier suites,
 the citation is byte-verified and the answer must separately pass its content
 check.

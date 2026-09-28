@@ -187,6 +187,29 @@ def _v7_outcome(task: dict, *, achieved: list[bool], answer: str,
     return "wrong", asked, answered_or_claimed, explicit_claim
 
 
+def _lists_other_records(task: dict, answer: str) -> bool:
+    """Whether a reply to a list task states a count other than the truth's."""
+    oracle = (task.get("truth") or {}).get("oracle") or {}
+    expected = oracle.get("expected")
+    if (oracle.get("operation") or not isinstance(expected, list) or not expected
+            or not all(isinstance(item, str) for item in expected)):
+        return False
+    stated = re.search(r"共\s*(\d+)\s*条", answer or "")
+    return stated is not None and int(stated.group(1)) != len(expected)
+
+
+def _outside_quotes_of(answer: str, prompt: str) -> str:
+    """The answer without the spans that quote the whole request back. A quote of a part
+    of it (the record or field found missing: 「S00033」) is the explanation, and stays."""
+    def bare(text):
+        return "".join(text.split()).rstrip("。？！?!.")
+    asked = bare(prompt)
+
+    def quoted(match):
+        return " " if asked and bare(match.group(1)) == asked else match.group(0)
+    return re.sub(r"[「“\"]([^」”\"]+)[」”\"]", quoted, answer)
+
+
 def score(task: dict, *, probe: dict, visited: list[str], answer: str,
           finished: bool, write_detected: bool, refused: bool = False,
           source: CitationSource | None = None, clarifying: bool = False) -> Score:
@@ -195,14 +218,21 @@ def score(task: dict, *, probe: dict, visited: list[str], answer: str,
     answer = _plain(answer)
     parts = task["parts"]
     achieved = [_check(part["check"], probe, visited, answer, source=source) for part in parts]
+    if _lists_other_records(task, answer):
+        # A list check names the records that must be there and one that must not; a
+        # reply that says how many it lists and lists more (or fewer) is not the list.
+        achieved = [False] * len(achieved)
     impossible_only = all(part["check"].get("impossible") for part in parts)
     explanation_patterns = [part["check"]["explains_regex"] for part in parts
                             if part["check"].get("explains_regex")]
     explanations_met = all(re.search(pattern, answer or "") is not None
                            for pattern in explanation_patterns)
     if task.get("rubric_version") == 7:
+        # The request quoted back is the person's words, not an explanation of why it
+        # cannot be done: the terms must be said outside it.
+        own = _outside_quotes_of(answer or "", task.get("prompt", ""))
         explanations_met = explanations_met and all(
-            all(re.search(re.escape(term), answer or "", re.I) for term in
+            all(re.search(re.escape(term), own, re.I) for term in
                 part["check"].get("explain_keywords", ())) for part in parts)
     claimed = (bool(finished) and not _NOT_FINISHED.search(answer or "")
                and not (impossible_only and

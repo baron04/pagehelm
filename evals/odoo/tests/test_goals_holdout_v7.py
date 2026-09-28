@@ -168,6 +168,38 @@ class V7Holdout(unittest.TestCase):
         self.assertTrue(_check(check,{},[],answer,source=Source(rule)))
         self.assertFalse(_check(check,{},[],answer,source=Source(outer)))
 
+    def test_a_list_that_says_it_holds_other_records_is_not_the_list(self):
+        # The check requires the records that belong and excludes one that does not; a
+        # reply that states a different count lists records the truth does not hold.
+        task = {"rubric_version": 7, "prompt": "没有推广活动的已确认订单是哪一号？",
+                "parts": [{"check": {"answer_regex":
+                           "(?is)\\A(?=.*S00020)(?!.*S00019)"}}],
+                "truth": {"oracle": {"field": "name", "expected": ["S00020"]}}}
+        right = score(task, probe={}, visited=[], answer="**Sales Orders**：共 1 条：S00020",
+                      finished=True, write_detected=False)
+        self.assertEqual(right.outcome, "correct")
+        wrong = score(task, probe={}, visited=[], finished=True, write_detected=False,
+                      answer="**Sales Orders**：共 3 条：\n1. S00016\n2. S00020\n3. S00014")
+        self.assertNotEqual(wrong.outcome, "correct")
+
+    def test_the_request_quoted_back_is_not_the_explanation(self):
+        task = {"rubric_version": 7, "prompt": "把客户发票在地图上标出来。",
+                "parts": [{"check": {"impossible": True, "explain_keywords": ["地图"]}}],
+                "truth": {"absence": {"kind": "unsupported_view"}}}
+        quoted = score(task, probe={}, visited=[], answer="「把客户发票在地图上标出来。」这个请求助手做不到。",
+                       finished=False, refused=True, write_detected=False)
+        self.assertEqual(quoted.outcome, "wrong")
+        said = score(task, probe={}, visited=[], answer="这个请求助手做不到。（应用没有地图视图。）",
+                     finished=False, refused=True, write_detected=False)
+        self.assertEqual(said.outcome, "truthful_refusal")
+        # A quote of the part found missing is the explanation.
+        missing = {"rubric_version": 7, "prompt": "S00033 的客户是谁？",
+                   "parts": [{"check": {"impossible": True, "explain_keywords": ["S00033"]}}],
+                   "truth": {"absence": {"kind": "missing_record"}}}
+        self.assertEqual(score(missing, probe={}, visited=[], answer="没有找到名为「S00033」的记录。",
+                               finished=False, refused=True, write_detected=False).outcome,
+                         "truthful_refusal")
+
     def test_five_outcomes_and_metrics(self):
         rows=[{'outcome':o,'asked':a,'answered_or_claimed':given} for o,a,given in [
             ('correct',False,True),('appropriate_clarification',True,False),
