@@ -19,7 +19,7 @@
   "source_verification": "Every truth.sources slice was byte-hash and clause checked in the deployed release 18.0-20260909 source tree (addons/sale and addons/account view and model files); all ranges are disjoint from the v7a-v7d cited ranges.",
   "status": "FROZEN",
   "suite_id": "odoo-goals-zh-v8-independent-holdout",
-  "task_set_sha256": "sha256:d65e6bdaeac6ecc11347f0649bada4b3bd5ee712f877e95612ca222bd2f59f7d",
+  "task_set_sha256": "sha256:7deae7166afd36407633182014bbbe5b6882fed84f45ac643abf217cf0e96609",
   "tasks": 200,
   "timezone": "Asia/Shanghai",
   "verification_command": "PYTHONPATH=.:src:examples/odoo/src python evals/odoo/goals/verify_v7_holdout.py --task-file evals/odoo/tasksets/odoo-goals-zh-v8-independent-holdout.json",
