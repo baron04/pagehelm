@@ -577,6 +577,13 @@ class OdooGoalPortTests(unittest.TestCase):
         other = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "S00006",
                                "action": "Confirm"}, write_intent=True)
         self.assertEqual(other.deliverables[0].denied, "")
+        # A new record on a model the account may not create is denied as a creation.
+        created = self._resolve({"kind": "handoff", "entity": "sale.order", "action": "New",
+                                 "value": "S00099"}, write_intent=True)
+        self.assertEqual(created.deliverables[0].denied, "create")
+        created = self._resolve({"kind": "handoff", "entity": "res.partner", "action": "New",
+                                 "value": "Sunrise Trading"}, write_intent=True)
+        self.assertEqual(created.deliverables[0].denied, "")
 
     def test_a_view_the_page_lacks_is_reported_on_the_plan(self):
         result = self._resolve({"kind": "page", "page": {"key": "p173", "view": "pivot"}})

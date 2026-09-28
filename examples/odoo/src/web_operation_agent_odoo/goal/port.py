@@ -260,6 +260,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             return Resolved(kind="handoff", problem=f"this account may not delete {entity.label} records",
                             denied="delete")
         if (d.kind == "handoff" and entity is not None and self._operations
+                and _norm(d.action) not in ("new", "create")
                 and "write" not in self._operations.get(entity.key, ())
                 and (d.value or (entity.field_by_label(d.action) is not None
                                  and not any(_norm(a) == _norm(d.action) for a in entity.actions)))):
@@ -421,7 +422,8 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         if "create" not in page.operations:
             # The catalog says this actor may not create records of this entity: the
             # control is not pointed at, and the reply says so.
-            return Resolved(kind="handoff", problem="creation is not available to this actor")
+            return Resolved(kind="handoff", problem="creation is not available to this actor",
+                            denied="create")
         control = "New" if _norm(d.action) in ("", "new", "create") else d.action
         return Resolved(kind="handoff", page=PagePlan(
             url=self._action_url(action), label=page.breadcrumb,

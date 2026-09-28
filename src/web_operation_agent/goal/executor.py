@@ -699,10 +699,7 @@ class GoalTurnExecutor:
                                                      chinese=s.chinese))
             if not parts:
                 s.terminal_reason = "agent_refused"
-                return self._say(s, ("这个请求助手做不到。" + (f"（{unsupported}）" if unsupported else ""))
-                                 if s.chinese else
-                                 ("The assistant cannot do this request."
-                                  + (f" ({unsupported})" if unsupported else "")))
+                return self._say(s, _cannot(s.message.text, unsupported, s.chinese))
             # The rules of the source are shown only when the first step says a part
             # asks how the application behaves: a long catalogue of rule ids in front of
             # a question about data disturbs how a small model reads the question.
@@ -871,10 +868,7 @@ class GoalTurnExecutor:
                 why = ((f"部署源码里没有找到关于「{asked}」的规则。" if s.chinese
                         else f"The deployed source holds no rule about \"{asked}\".")
                        + (f" {why}" if why else ""))
-            return self._say(s, ("这个请求助手做不到。" + (f"（{why}）" if why else ""))
-                             if s.chinese else
-                             ("The assistant cannot do this request."
-                              + (f" ({why})" if why else "")))
+            return self._say(s, _cannot(s.message.text, why, s.chinese))
         s.step += 1
         try:
             resolution = self._resolve(s, spec)
@@ -1703,8 +1697,11 @@ class GoalTurnExecutor:
     def _reply(self, s: _TurnState, deliverables, outcomes) -> str:
         lines = []
         zh = s.chinese
+        # A request asking one thing is quoted when that thing was not done, so the
+        # person sees in their own words what was not done.
+        request = " ".join(s.message.text.split()) if len(deliverables) == 1 else ""
         for resolved, outcome in zip(deliverables, outcomes):
-            lines.extend(_render(resolved, outcome, zh))
+            lines.extend(_render(resolved, outcome, zh, request))
         if s.terminal_reason not in ("agent_finished", "agent_refused"):
             lines.append(("这次操作没有完成：" if zh else "The turn did not complete: ")
                          + (s.detail or s.terminal_reason))
@@ -1947,7 +1944,8 @@ def _repairable(spec: GoalSpec, resolution: Resolution) -> tuple[str, ...]:
     return tuple(dict.fromkeys(problems))
 
 
-def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[str]:
+def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
+            request: str = "") -> list[str]:
     lines: list[str] = []
     if resolved.facts:
         for fact in resolved.facts:
@@ -2006,7 +2004,7 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
             lines.append((f"没有找到名为「{resolved.missing}」的记录。{where}") if zh
                          else f"Nothing named \"{resolved.missing}\" was found.{where}")
         else:
-            lines.append(_not_done(resolved, zh) + where)
+            lines.append(_not_done(resolved, zh, request) + where)
         return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
@@ -2091,7 +2089,7 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool) -> list[
         lines.append((f"没有找到名为「{resolved.missing}」的记录。") if zh
                      else f"Nothing named \"{resolved.missing}\" was found.")
     elif resolved.problem and not (resolved.facts or resolved.aggregate or resolved.page):
-        lines.append(_not_done(resolved, zh))
+        lines.append(_not_done(resolved, zh, request))
     return lines
 
 
@@ -2108,16 +2106,34 @@ _OFFER_EN = {"facets": "page filters and groups", "sections": "tabs", "lines": "
 _DENIED = {"delete": ("删除", "delete"), "create": ("新建", "create"), "write": ("修改", "change")}
 
 
-def _not_done(resolved: Resolved, zh: bool) -> str:
+def _cannot(request: str, why: str, zh: bool) -> str:
+    """The reply to a request the assistant cannot do. The model's reason is shown when
+    it is written in the person's language; otherwise the request is quoted, so the
+    person is never answered in a language they did not use."""
+    if zh:
+        if why and _CJK.search(why):
+            return f"这个请求助手做不到。（{why}）"
+        return f"「{' '.join(request.split())}」这个请求助手做不到。"
+    return "The assistant cannot do this request." + (f" ({why})" if why else "")
+
+
+def _not_done(resolved: Resolved, zh: bool, request: str = "") -> str:
     """A part that did not get done, as the person is told it. The resolver's own
     reason ("filter 'p262' is not usable here") is written for the declarer, in the
     index's terms, and stays in the audit and the repair; the person hears that it was
     not done and, when several records fit, which ones."""
     if resolved.denied:
         # The account's own rights, not the assistant, stand in the way; nothing was done.
+        # A new record is not "this record": it is records of this kind.
         zh_op, en_op = _DENIED.get(resolved.denied, (resolved.denied, resolved.denied))
-        return (f"你的账号没有{zh_op}这条记录的权限，助手没有执行任何操作。" if zh
-                else f"Your account has no permission to {en_op} this record; the assistant did nothing.")
+        zh_what, en_what = (("这类记录", "records of this kind") if resolved.denied == "create"
+                            else ("这条记录", "this record"))
+        if request:
+            return (f"「{request}」没有执行：你的账号没有{zh_op}{zh_what}的权限，助手没有执行任何操作。"
+                    if zh else f"\"{request}\" was not done: your account has no permission to "
+                    f"{en_op} {en_what}; the assistant did nothing.")
+        return (f"你的账号没有{zh_op}{zh_what}的权限，助手没有执行任何操作。" if zh
+                else f"Your account has no permission to {en_op} {en_what}; the assistant did nothing.")
     if resolved.unoffered:
         # What the application does not offer is the person's to know, plainly.
         offers = [(_OFFER_ZH if zh else _OFFER_EN).get(name, name) for name in resolved.unoffered]

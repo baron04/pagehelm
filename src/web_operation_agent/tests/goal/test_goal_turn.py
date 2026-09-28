@@ -459,10 +459,10 @@ class GoalTurnTests(unittest.TestCase):
 
     def test_a_staged_scope_with_no_parts_ends_the_turn_honestly(self):
         execution, _channel, chat, port, _events = self._run(
-            [("declare_scope", {"parts": [], "unsupported": "no bank data in the index"})],
+            [("declare_scope", {"parts": [], "unsupported": "索引里没有银行数据"})],
             [], text="Acme 昨天在银行到账多少？", staged=True)
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
-        self.assertIn("no bank data", execution.user_answer)
+        self.assertIn("索引里没有银行数据", execution.user_answer)
         self.assertEqual(len(chat.messages), 1)
         self.assertEqual(port.specs, [])
 
@@ -886,6 +886,24 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
         self.assertIn("你的账号没有删除这条记录的权限", execution.user_answer)
         self.assertNotIn("你指的是哪一个", execution.user_answer)
+        # A request asking one thing is quoted, and a creation is of records of a kind.
+        execution, *_ = self._run(
+            [_declaration(kind="handoff", entity="order", action="New", value="Solar Lamp")],
+            [Resolved(kind="handoff", problem="this account may not create Product records",
+                      denied="create")],
+            text="新建一个叫 Solar Lamp 的产品，卖价定 49。", readings=1)
+        self.assertIn("「新建一个叫 Solar Lamp 的产品，卖价定 49。」没有执行：你的账号没有新建这类记录的权限",
+                      execution.user_answer)
+
+    def test_a_request_the_assistant_cannot_do_is_answered_in_the_persons_language(self):
+        cannot = executor_module._cannot
+        self.assertEqual(cannot("查一下签收人的身份证号", "应用里没有签收人身份证号", True),
+                         "这个请求助手做不到。（应用里没有签收人身份证号）")
+        # A reason the model wrote in another language is not shown; the request is.
+        self.assertEqual(cannot("把客户发票在地图上标出来", "The index has no map view.", True),
+                         "「把客户发票在地图上标出来」这个请求助手做不到。")
+        self.assertEqual(cannot("Show invoices on a map", "no map view", False),
+                         "The assistant cannot do this request. (no map view)")
 
     def test_a_control_one_reading_declared_and_the_first_step_named_is_kept(self):
         # "确认按钮指给我": the request writes the control in Chinese; one reading

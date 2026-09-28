@@ -144,8 +144,11 @@ agent.
   hold and the other answers from the same entities, the turn refuses and names what is
   missing; when exactly one resolves to something there, it is taken without a third
   reading; a sum counts as a total over every matching record only when both say so.
-  A port may report an operation the account may not perform (`denied`), which is said
-  instead of asking which record.
+  A port may report an operation the account may not perform (`denied`; a new record is
+  denied as a creation, not a change), which is said instead of asking which record. When a
+  request asks one thing and it is not done, the reply quotes the request; a reason the
+  model wrote in a language other than the request's is not shown, the request is quoted
+  instead.
   If the model declares a write intent but only resolves read-only pages or facts, opening
   those pages is reported as partial guidance, never as the requested change having occurred.
   For a new record, an adapter may expose an actor-scoped `create` operation on a collection
