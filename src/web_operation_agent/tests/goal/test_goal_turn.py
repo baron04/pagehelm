@@ -895,6 +895,23 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("「新建一个叫 Solar Lamp 的产品，卖价定 49。」没有执行：你的账号没有新建这类记录的权限",
                       execution.user_answer)
 
+    def test_a_value_of_one_record_listed_over_several_is_asked_about(self):
+        # The first step read the request as one record's value; the declaration listed
+        # the records a description fits, and two do: which one is asked, not both shown.
+        scope = ("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "Ready Mat"}]})
+        listed = _declaration(kind="list", entity="order", fields=["Total"], metric={
+            "op": "count", "filters": [{"field": "Customer", "values": ["Ready Mat"]}]})
+        two = Aggregate(subject="Quotations · Ready Mat", count=2, records=("S00003", "S00002"))
+        execution, *_ = self._run([scope, listed], [Resolved(kind="list", aggregate=two)],
+                                  text="Ready Mat 的报价单金额是多少？", staged=True, readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("1. S00003", execution.user_answer)
+        # Read as a list from the first step, the records are listed.
+        scope = ("declare_scope", {"parts": [{"kind": "list", "entity": "order", "about": "Ready Mat"}]})
+        execution, *_ = self._run([scope, listed], [Resolved(kind="list", aggregate=two)],
+                                  text="Ready Mat 的报价单金额是多少？", staged=True, readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+
     def test_a_request_the_assistant_cannot_do_is_answered_in_the_persons_language(self):
         cannot = executor_module._cannot
         self.assertEqual(cannot("查一下签收人的身份证号", "应用里没有签收人身份证号", True),

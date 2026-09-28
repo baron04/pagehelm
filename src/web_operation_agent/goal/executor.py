@@ -1137,7 +1137,10 @@ class GoalTurnExecutor:
         if _TOTAL_WORDS.search(s.message.text):
             return resolution
         out = list(resolution.deliverables)
-        one = _ONE_RECORD.search(s.message.text)
+        # The request points at one record: by its words ("那张"), or as the first step
+        # read it, a value of one record, which a later declaration made a list.
+        one = _ONE_RECORD.search(s.message.text) or (
+            s.scope_parts and all(p.get("kind") == "fact" for p in s.scope_parts))
         for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
             agg = r.aggregate
             if d.metric is not None and d.metric.total:
