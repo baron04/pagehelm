@@ -884,7 +884,8 @@ class GoalTurnTests(unittest.TestCase):
                       denied="delete")],
             text="把 S00005 删除", readings=1)
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
-        self.assertIn("你的账号没有删除这条记录的权限", execution.user_answer)
+        # Named as the person names them: the entity's Chinese name.
+        self.assertIn("你的账号没有删除销售订单的权限", execution.user_answer)
         self.assertNotIn("你指的是哪一个", execution.user_answer)
         # A request asking one thing is quoted, and a creation is of records of a kind.
         execution, *_ = self._run(
@@ -892,7 +893,7 @@ class GoalTurnTests(unittest.TestCase):
             [Resolved(kind="handoff", problem="this account may not create Product records",
                       denied="create")],
             text="新建一个叫 Solar Lamp 的产品，卖价定 49。", readings=1)
-        self.assertIn("「新建一个叫 Solar Lamp 的产品，卖价定 49。」没有执行：你的账号没有新建这类记录的权限",
+        self.assertIn("「新建一个叫 Solar Lamp 的产品，卖价定 49。」没有执行：你的账号没有新建销售订单的权限",
                       execution.user_answer)
 
     def test_a_value_of_one_record_listed_over_several_is_asked_about(self):

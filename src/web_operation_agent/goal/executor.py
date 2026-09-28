@@ -1028,7 +1028,7 @@ class GoalTurnExecutor:
             s.ledger.append("goal_write_intent_unfulfilled", step=s.step)
             if s.terminal_reason == "agent_finished":
                 s.terminal_reason = "agent_refused"
-        reply = self._reply(s, resolution.deliverables, outcomes)
+        reply = self._reply(s, resolution.deliverables, outcomes, spec.deliverables)
         if unfulfilled_write:
             reply += ("\n\n这里只是找到了相关信息或页面，尚未执行你请求的更改；请核对后自行操作。"
                       if s.chinese else
@@ -1801,14 +1801,16 @@ class GoalTurnExecutor:
         return any(_norm(c) == wanted for c in obs.selected_controls)
 
     # -- the reply --------------------------------------------------------------------
-    def _reply(self, s: _TurnState, deliverables, outcomes) -> str:
+    def _reply(self, s: _TurnState, deliverables, outcomes, declared=()) -> str:
         lines = []
         zh = s.chinese
         # A request asking one thing is quoted when that thing was not done, so the
         # person sees in their own words what was not done.
         request = " ".join(s.message.text.split()) if len(deliverables) == 1 else ""
-        for resolved, outcome in zip(deliverables, outcomes):
-            lines.extend(_render(resolved, outcome, zh, request))
+        names = [_kind_name(s.full_index, d.entity, zh) for d in declared] \
+            if len(declared) == len(deliverables) else [""] * len(deliverables)
+        for resolved, outcome, name in zip(deliverables, outcomes, names):
+            lines.extend(_render(resolved, outcome, zh, request, name))
         if s.terminal_reason not in ("agent_finished", "agent_refused"):
             lines.append(("这次操作没有完成：" if zh else "The turn did not complete: ")
                          + (s.detail or s.terminal_reason))
@@ -2052,7 +2054,7 @@ def _repairable(spec: GoalSpec, resolution: Resolution) -> tuple[str, ...]:
 
 
 def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
-            request: str = "") -> list[str]:
+            request: str = "", name: str = "") -> list[str]:
     lines: list[str] = []
     if resolved.facts:
         for fact in resolved.facts:
@@ -2111,7 +2113,7 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
             lines.append((f"没有找到名为「{resolved.missing}」的记录。{where}") if zh
                          else f"Nothing named \"{resolved.missing}\" was found.{where}")
         else:
-            lines.append(_not_done(resolved, zh, request) + where)
+            lines.append(_not_done(resolved, zh, request, name) + where)
         return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
@@ -2203,7 +2205,7 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
         lines.append((f"没有找到名为「{resolved.missing}」的记录。") if zh
                      else f"Nothing named \"{resolved.missing}\" was found.")
     elif resolved.problem and not (resolved.facts or resolved.aggregate or resolved.page):
-        lines.append(_not_done(resolved, zh, request))
+        lines.append(_not_done(resolved, zh, request, name))
     return lines
 
 
@@ -2231,7 +2233,16 @@ def _cannot(request: str, why: str, zh: bool) -> str:
     return "The assistant cannot do this request." + (f" ({why})" if why else "")
 
 
-def _not_done(resolved: Resolved, zh: bool, request: str = "") -> str:
+def _kind_name(index, entity_key: str, zh: bool) -> str:
+    """What the person calls records of an entity: the application's Chinese name for
+    it in a Chinese reply, its label otherwise; empty when the index does not hold it."""
+    entity = index.entity(entity_key) if index is not None and entity_key else None
+    if entity is None:
+        return ""
+    return (entity.aliases[0] if zh and entity.aliases else entity.label)
+
+
+def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -> str:
     """A part that did not get done, as the person is told it. The resolver's own
     reason ("filter 'p262' is not usable here") is written for the declarer, in the
     index's terms, and stays in the audit and the repair; the person hears that it was
@@ -2242,6 +2253,10 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "") -> str:
         zh_op, en_op = _DENIED.get(resolved.denied, (resolved.denied, resolved.denied))
         zh_what, en_what = (("这类记录", "records of this kind") if resolved.denied == "create"
                             else ("这条记录", "this record"))
+        if name:
+            # Named as the person names them ("没有新建产品的权限").
+            zh_what, en_what = name, (f"{name} records" if resolved.denied == "create"
+                                      else f"this {name} record")
         if request:
             return (f"「{request}」没有执行：你的账号没有{zh_op}{zh_what}的权限，助手没有执行任何操作。"
                     if zh else f"\"{request}\" was not done: your account has no permission to "
