@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[3]
 TASKSETS = {
     "v7a": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7a-holdout.json", "152b59619d66f76282171d5bf1a2caa46d05d954d359d10cab5b55d7bcfce903"),
     "v7b": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7b-holdout.json", "c5811214e19c8f6823a63977dbc3fa786a008feb5a168c6e8dcb08e38ad5c874"),
-    "v8": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v8-independent-holdout.json", "2d2051457d6dfb2b9edb8419a1c90cbacaaae508328ee59894c78de955a7a8ec"),
+    "v8": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v8-independent-holdout.json", "d65e6bdaeac6ecc11347f0649bada4b3bd5ee712f877e95612ca222bd2f59f7d"),
     "v7c": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7c-holdout.json", "ea105bf563d66c3650779a02ed7f3338dfa8ed118f05fa50401d1537cf3675df"),
     "v7d": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-v7d-holdout.json", "641a2c7f7ebab7b30df58a881b855ea93da074b3fcf717e17da6c44e3bf82f92"),
     "mt-dev": (ROOT / "evals" / "odoo" / "tasksets" / "odoo-goals-zh-multiturn-dev.json", "1686f0dce9da0f0980000864e4c4005f8f9a207dc4e68c751b249dcfd8a592ab"),
