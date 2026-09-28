@@ -935,6 +935,39 @@ class GoalTurnTests(unittest.TestCase):
                                                        "page": {"key": "p2"}}]})
         self.assertEqual(executor_module._entity_over_page(opened, "打开联系人", index), (opened, ()))
 
+    def test_a_refusal_over_a_field_no_page_shows_is_read_once_more_with_it(self):
+        base = _index()
+        order = replace(base.entities[0], held=(IndexField(key="weight", label="Weight",
+                                                           kind="number", aliases=("重量",)),))
+        index = replace(base, entities=(order,))
+
+        class _HeldPort(_Port):
+            def index(self, *, context=None):
+                return index
+        scope = ("declare_scope", {"parts": [{"kind": "list", "entity": "order", "about": "重量"}]})
+        missing = ("declare_goal", {"deliverables": [], "unsupported": "订单没有重量字段"})
+        weighed = _declaration(kind="list", entity="order", fields=["Weight"], metric={
+            "op": "count", "filters": [{"field": "Weight", "values": ["1"], "op": ">"}]})
+        listed = Resolved(kind="list", aggregate=Aggregate(subject="Orders · Weight > 1", count=1,
+                                                           records=("S00006",)))
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        chat = _AgreeingChat([scope, missing, missing, weighed])
+        port = _HeldPort([listed])
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=chat, application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=True)
+        execution = executor.execute({"message_id": "m1", "text": "重量超过 1 公斤的订单有哪些？",
+                                      "page_url": "http://127.0.0.1:8080/home"})
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("S00006", execution.user_answer)
+        # The field was shown only to the last reading.
+        self.assertNotIn("Weight[重量]", chat.messages[1][1]["content"])
+        self.assertIn("held, not shown on its pages: Weight[重量]", chat.messages[-1][1]["content"])
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        self.assertEqual([e["fields"] for e in events if e["event"] == "goal_held_fields_offered"],
+                         [["Sales Order.Weight"]])
+
     def test_a_request_the_assistant_cannot_do_is_answered_in_the_persons_language(self):
         cannot = executor_module._cannot
         self.assertEqual(cannot("查一下签收人的身份证号", "应用里没有签收人身份证号", True),

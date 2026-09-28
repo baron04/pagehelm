@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 _MAX_ENTITIES = 80
 _MAX_PAGES = 160
 _MAX_FIELDS = 80
+#: Fields an entity may hold beyond its pages; only the ones a request names are shown.
+_MAX_HELD = 200
 #: Fields rendered per entity in the full index; a focused index renders what it holds.
 _SHOWN_FIELDS = 20
 _MAX_LABEL = 80
@@ -87,12 +89,18 @@ class IndexEntity:
     #: Rules compiled from the deployment's source about this entity's controls, fields
     #: and actions. Rendered only in a focused index (a neighbourhood), never in full.
     rules: tuple[IndexRule, ...] = ()
+    #: Fields the application holds on these records that none of the pages this account
+    #: sees shows (a product's weight while the feature that shows it is off). Rendered
+    #: only in a focused index and only those the request names, so what exists is not
+    #: said to be missing and the index does not grow with what nobody asked about.
+    held: tuple[IndexField, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "entity key"))
         object.__setattr__(self, "label", _label(self.label, "entity label"))
         object.__setattr__(self, "aliases", tuple(_label(a, "alias") for a in self.aliases)[:12])
         object.__setattr__(self, "fields", tuple(self.fields)[:_MAX_FIELDS])
+        object.__setattr__(self, "held", tuple(self.held)[:_MAX_HELD])
         object.__setattr__(self, "sections", tuple(_label(s, "section") for s in self.sections)[:16])
         object.__setattr__(self, "actions", tuple(_label(a, "action") for a in self.actions)[:16])
 
@@ -289,6 +297,9 @@ class ApplicationIndex:
                      + (f" (lines of {entity.lines_of})" if entity.lines_of else "")]
             if fields:
                 parts.append(f"fields: {fields}")
+            if self.focused and entity.held:
+                parts.append("held, not shown on its pages: "
+                             + ", ".join(_render_field(f) for f in entity.held))
             if entity.sections:
                 parts.append("sections: " + ", ".join(entity.sections))
             if entity.actions:

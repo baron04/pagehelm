@@ -91,6 +91,28 @@ class RankingTests(unittest.TestCase):
         self.assertNotIn("tag", [e.key for e in wide.entities])
         self.assertEqual(neighbourhood(index, ("nope",)).entities, ())
 
+    def test_a_field_no_page_shows_is_listed_only_when_the_request_names_it(self):
+        product = IndexEntity(key="product", label="Product", aliases=("产品",),
+                              fields=(IndexField("price", "Sales Price", "money"),),
+                              held=(IndexField("weight", "Weight", "number", aliases=("重量",)),
+                                    IndexField("volume", "Volume", "number", aliases=("体积",))))
+        index = ApplicationIndex(entities=(product,), pages=(), source_digest="d")
+        # The full index never lists them.
+        self.assertNotIn("Weight", index.render())
+        # Only asked for: an ordinary neighbourhood carries none.
+        self.assertEqual(neighbourhood(index, ("product",),
+                                       request="重量超过 1 公斤的产品是哪几个？").entity("product").held, ())
+        named = neighbourhood(index, ("product",), request="重量超过 1 公斤的产品是哪几个？", held=True)
+        self.assertEqual([f.key for f in named.entity("product").held], ["weight"])
+        self.assertIn("held, not shown on its pages: Weight[重量](number)", named.render())
+        # A technical name written as a word names the field too.
+        self.assertEqual([f.key for f in neighbourhood(index, ("product",), held=True,
+                          request="Product 的 volume 是多少").entity("product").held], ["volume"])
+        # A request naming none of them carries none.
+        plain = neighbourhood(index, ("product",), request="产品有几个？", held=True)
+        self.assertEqual(plain.entity("product").held, ())
+        self.assertNotIn("held", plain.render())
+
     def test_an_entity_the_request_names_joins_with_a_few_rules_and_no_neighbours(self):
         def rule(n, kind, about, subject=""):
             return IndexRule(id=f"r{n}", kind=kind, about=about, text=f"{about} {kind} {n}",

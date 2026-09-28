@@ -841,6 +841,14 @@ class OdooGoalPortConditionTests(unittest.TestCase):
             "metric": {"op": "count", "filters": [{"field": "Product", "values": ["[D1] Desk 2"]}]}})
         self.assertEqual(self.port._line_record_from_conditions(line), line)
 
+    def test_fields_no_page_shows_are_held_on_the_entity(self):
+        order = self.index.entity("sale.order")
+        # In fields_get, on no view: held, not indexed; mail bookkeeping is neither.
+        self.assertIn("product_variant_count", [f.key for f in order.held])
+        self.assertNotIn("product_variant_count", [f.key for f in order.fields])
+        self.assertFalse({f.key for f in order.held} & {f.key for f in order.fields})
+        self.assertNotIn("message_ids", [f.key for f in order.held])
+
     def test_line_entities_come_from_the_record_form_with_the_link_first(self):
         keys = [e.key for e in self.index.entities]
         self.assertEqual(keys[keys.index("sale.order") + 1], "sale.order.line")

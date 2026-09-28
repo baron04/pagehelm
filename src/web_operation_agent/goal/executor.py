@@ -491,6 +491,8 @@ class _TurnState:
     chosen: tuple = ()
     #: The application's current date, for the days a request writes.
     today: str = ""
+    #: The entities and words the neighbourhood was built from (staged path only).
+    focus: tuple = ()
 
 
 
@@ -733,12 +735,13 @@ class GoalTurnExecutor:
             # is in the neighbourhood whatever the first step picked.
             # So is the entity of a record the request names by its number (S00020), which
             # the first step may have passed over for an entity that record relates to.
-            index = neighbourhood(index, tuple(dict.fromkeys(
+            focus = (tuple(dict.fromkeys(
                 [p["entity"] for p in parts] + [c.entity for c in s.conventions]
                 + [k.entity for k in known if re.search(r"\d", k.text)])),
-                                  request=(s.message.text + " " + terms).strip(),
+                (s.message.text + " " + terms).strip())
+            index = neighbourhood(index, focus[0], request=focus[1],
                                   rules=any(p.get("rules") for p in parts))
-            s.index = index
+            s.index, s.focus = index, focus
             s.ledger.append("goal_neighbourhood", step=s.step,
                             entities=[e.key for e in index.entities], pages=len(index.pages),
                             chars=len(index.render()))
@@ -880,6 +883,9 @@ class GoalTurnExecutor:
                                     detail=str(exc)[:200])
         s.write_intent = spec.write_intent or any(
             d.kind == "handoff" for d in spec.deliverables)
+        if (not spec.deliverables and not spec.about_assistant and s.focus
+                and not any(p.get("rules") for p in scope_parts)):
+            spec = self._held_reading(s, spec)
         if not spec.deliverables and spec.about_assistant:
             return self._say(s, assistant_answer(capabilities_of(self.goal_port),
                                                  chinese=s.chinese))
@@ -979,6 +985,29 @@ class GoalTurnExecutor:
                       if s.chinese else
                       "\n\nI only found the relevant information or page. I did not make the requested change; please review it and act yourself.")
         return reply
+
+    def _held_reading(self, s: _TurnState, spec: GoalSpec) -> GoalSpec:
+        """The readings say the application does not hold what is asked, while the
+        request names fields it holds that no page shows this account (a product's
+        weight): the request is read once more with those fields in front of the model.
+        Its declaration stands only when it declares something."""
+        held = neighbourhood(s.full_index, s.focus[0], request=s.focus[1], rules=False, held=True)
+        fields = [f"{e.label}.{f.label}" for e in held.entities for f in e.held]
+        if not fields:
+            return spec
+        s.step += 1
+        s.ledger.append("goal_held_fields_offered", step=s.step, fields=fields[:8])
+        try:
+            again, projection = s.read(index=held)
+        except (ValueError, ProviderError) as exc:
+            s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
+            return spec
+        s.ledger.append("goal_declared", step=s.step, spec=again.to_json(), attempt="held",
+                        **projection)
+        if not again.deliverables:
+            return spec
+        s.index = held
+        return again
 
     def _second_on_existence(self, s: _TurnState, first: GoalSpec, second_reading) -> GoalSpec:
         s.step += 1

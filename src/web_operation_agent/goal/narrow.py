@@ -216,6 +216,19 @@ def _ranked_rules(entity: IndexEntity, request: str):
     return tuple(chosen)
 
 
+def _names_field(item, request: str, shown=()) -> bool:
+    """Whether the request writes a field's label, one of its aliases, or its technical
+    name as a word ("可用库存（qty_available）"), outside the longer names in `shown`."""
+    if re.search(rf"(?<![\w]){re.escape(item.key.casefold())}(?![\w])", request.casefold()):
+        return True
+    names = ["".join(label.casefold().split()) for label in (item.label, *item.aliases) if label]
+    written = "".join(request.casefold().split())
+    for longer in sorted({"".join(n.casefold().split()) for n in shown if n}, key=len, reverse=True):
+        if any(len(longer) > len(n) and n in longer for n in names):
+            written = written.replace(longer, " ")
+    return any(len(n) >= 2 and n in written for n in names)
+
+
 def _named(entity: IndexEntity, request: str) -> bool:
     """Whether the request names the entity by its label or an alias, or one of its
     controls or fields by the exact label the page shows (two words at least, so that
@@ -235,7 +248,7 @@ def _named(entity: IndexEntity, request: str) -> bool:
 
 
 def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
-                  request: str = "", *, rules: bool = True) -> ApplicationIndex:
+                  request: str = "", *, rules: bool = True, held: bool = False) -> ApplicationIndex:
     """The chosen entities with what a declaration about them may need to name: the
     entities their link fields point to, their lines, the records that own them, and
     every page that shows any of these. Rendered like the full index, only smaller.
@@ -244,7 +257,9 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
     ranked by the request's words and capped; a neighbour carries its refusals, and
     the owner of chosen lines also what its form says about editing them. With
     `rules` false (a request about data, not about how the application behaves) no
-    rules are carried at all, and an entity is joined only by its label or alias."""
+    rules are carried at all, and an entity is joined only by its label or alias. With
+    `held`, a chosen entity also carries the fields its pages do not show that the
+    request names."""
     chosen = {k for k in keys if index.entity(k) is not None}
     # An entity the request names joins with a few of its rules, without bringing its
     # own neighbours: the first step's choice keeps the neighbourhood's shape.
@@ -290,8 +305,16 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
 
     # The chosen entities with every field they have; a neighbour with the few a full
     # index shows, since a declaration names its fields only through a link.
+    # With `held`, a chosen entity's fields its pages do not show come along when the
+    # request names them; a neighbour's never do. A name inside a longer name the index
+    # already shows ("日记账" in 日记账分录, "Payment" in Payment Terms) names that one.
+    shown = [n for e in index.entities for n in (e.label, *e.aliases)]
+    shown += [n for e in index.entities for f in e.fields for n in (f.label, *f.aliases)]
+    shown += [n for p in index.pages for n in (p.label, *p.aliases)]
     entities = tuple(replace(e, rules=kept(e),
-                             fields=e.fields if e.key in chosen else e.fields[:_NEIGHBOUR_FIELDS])
+                             fields=e.fields if e.key in chosen else e.fields[:_NEIGHBOUR_FIELDS],
+                             held=tuple(f for f in e.held if _names_field(f, request, shown))
+                             if held and e.key in chosen else ())
                      for e in index.entities if e.key in wanted)
     # Every page of a chosen entity; of a neighbour, the first few (its main pages).
     per_neighbour: dict[str, int] = {}

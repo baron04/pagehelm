@@ -94,7 +94,11 @@ agent.
   readings or resolving, so a description in another language is matched by choice
   rather than guessed. Nothing is searched across the whole database by a guessed name.
   The neighbourhood shows every field a chosen entity's list and form show (fields a form
-  always hides are left out); the full index still shows twenty per entity. `values=False`
+  always hides are left out); the full index still shows twenty per entity. Fields the
+  account may read that no page it sees shows (a product's weight while the feature that
+  shows it is off) are held on the entity and shown to no ordinary reading: when both
+  readings say the application does not hold what the request asks and the request names
+  such a field, it is read once more with those fields. `values=False`
   (`--no-values` on the goal runner) measures what the candidates change.
   Before resolving, a staged declaration is checked by shape for what it leaves out: values
   the first step said were asked for while only a page or handoff is declared, or a code,

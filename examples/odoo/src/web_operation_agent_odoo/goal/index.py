@@ -127,9 +127,11 @@ class _IndexCompiler:
         for model in entity_models:
             meta = self._models[model]
             owner = self._models.get(meta.parent) if meta.parent else None
+            fields = tuple(self._index_fields(meta)) if model in detailed else ()
             entities.append(IndexEntity(
                 key=model, label=meta.label, aliases=self._translations.of(meta.label),
-                fields=tuple(self._index_fields(meta)) if model in detailed else (),
+                fields=fields,
+                held=tuple(self._held_fields(meta, fields)) if model in detailed else (),
                 sections=meta.sections if model in detailed else (),
                 actions=meta.actions if model in detailed else (),
                 lines_of=owner.label if owner is not None else "",
@@ -258,6 +260,33 @@ class _IndexCompiler:
             out.append(IndexField(key=name, label=label, aliases=self._translations.of(label),
                                   kind=kind,
                                   relation=relation, choices=choices))
+        return out
+
+
+    def _held_fields(self, meta: _ModelMeta, indexed) -> list[IndexField]:
+        """The fields this account may read on the model that no page it sees shows:
+        they exist, so a question about one is answered, not refused."""
+        taken = {f.key for f in indexed}
+        # A field going by the entity's own name (a product's "Product", its variant)
+        # would be named by every request about the entity.
+        own = {n.casefold() for n in (meta.label, *self._translations.of(meta.label))}
+        out = []
+        for name, info in meta.fields.items():
+            kind = _kind_of(info)
+            if (kind is None or name in taken or name in _SKIP_FIELDS
+                    or name.startswith(_SKIP_FIELD_PREFIXES)
+                    or ("_signed" in name
+                        and re.sub(r"(?:_in_currency)?_signed", "", name) in meta.fields)):
+                continue
+            label = str(info.get("string") or name)
+            aliases = self._translations.of(label)
+            if own & {n.casefold() for n in (label, *aliases)}:
+                continue
+            out.append(IndexField(
+                key=name, label=label, aliases=aliases, kind=kind,
+                relation=str(info.get("relation") or "") if kind == "link" else "",
+                choices=tuple(str(l) for _k, l in (info.get("selection") or ()))
+                if kind == "choice" else ()))
         return out
 
 
