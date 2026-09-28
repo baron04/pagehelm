@@ -2071,7 +2071,7 @@
         {
           "quote": "所有日记账分录的总金额加起来是多少",
           "check": {
-            "answer_regex": "(?<![\\d.,])(?:15010|15,010)[.,]030?(?![\\d.,])"
+            "answer_regex": "(?<![\\d.,])(?:265314|265,314)[.,]570?(?![\\d.,])"
           }
         }
       ],
@@ -2080,16 +2080,16 @@
           "model": "account.move",
           "domain": [
             [
-              "move_type",
+              "state",
               "=",
-              "entry"
+              "posted"
             ]
           ],
           "operation": "sum",
           "field": "amount_total",
-          "expected": 15010.03,
-          "positive": "15010.03",
-          "wrong": "15027.03"
+          "expected": 265314.57,
+          "positive": "265314.57",
+          "wrong": "15010.03"
         }
       }
     },
@@ -2106,7 +2106,7 @@
         {
           "quote": "带往来单位（Partner）的日记账分录有几条",
           "check": {
-            "answer_regex": "(?<![\\d.,])(?:6|6)(?:[.,]00?)?(?![\\d.,])"
+            "answer_regex": "(?<![\\d.,])(?:19|19)(?:[.,]00?)?(?![\\d.,])"
           }
         }
       ],
@@ -2115,9 +2115,9 @@
           "model": "account.move",
           "domain": [
             [
-              "move_type",
+              "state",
               "=",
-              "entry"
+              "posted"
             ],
             [
               "partner_id",
@@ -2127,9 +2127,9 @@
           ],
           "operation": "count",
           "field": "name",
-          "expected": 6,
-          "positive": "6",
-          "wrong": "23"
+          "expected": 19,
+          "positive": "19",
+          "wrong": "6"
         }
       }
     },
@@ -2682,7 +2682,7 @@
         {
           "quote": "金额不小于 1000 的日记账分录有几条",
           "check": {
-            "answer_regex": "(?<![\\d.,])(?:5|5)(?:[.,]00?)?(?![\\d.,])"
+            "answer_regex": "(?<![\\d.,])(?:14|14)(?:[.,]00?)?(?![\\d.,])"
           }
         }
       ],
@@ -2691,9 +2691,9 @@
           "model": "account.move",
           "domain": [
             [
-              "move_type",
+              "state",
               "=",
-              "entry"
+              "posted"
             ],
             [
               "amount_total",
@@ -2703,9 +2703,9 @@
           ],
           "operation": "count",
           "field": "name",
-          "expected": 5,
-          "positive": "5",
-          "wrong": "22"
+          "expected": 14,
+          "positive": "14",
+          "wrong": "5"
         }
       }
     },
@@ -2805,7 +2805,7 @@
         {
           "quote": "日记账分录（Journal Entries）一共有几条",
           "check": {
-            "answer_regex": "(?<![\\d.,])(?:10|10)(?:[.,]00?)?(?![\\d.,])"
+            "answer_regex": "(?<![\\d.,])(?:23|23)(?:[.,]00?)?(?![\\d.,])"
           }
         }
       ],
@@ -2814,16 +2814,16 @@
           "model": "account.move",
           "domain": [
             [
-              "move_type",
+              "state",
               "=",
-              "entry"
+              "posted"
             ]
           ],
           "operation": "count",
           "field": "name",
-          "expected": 10,
-          "positive": "10",
-          "wrong": "27"
+          "expected": 23,
+          "positive": "23",
+          "wrong": "10"
         }
       }
     },
