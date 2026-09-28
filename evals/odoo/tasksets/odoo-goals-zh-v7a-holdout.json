@@ -1992,7 +1992,7 @@
         {
           "quote": "售价在一千五到两千之间的产品列一下",
           "check": {
-            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])Large\\ Desk(?![\\w/-]))(?=.*(?<![\\w/-])Flipover(?![\\w/-]))(?=.*(?<![\\w/-])Three\\-Seat\\ Sofa(?![\\w/-]))(?!.*(?<![\\w/-])Restaurant\\ Expenses(?![\\w/-]))"
+            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])Flipover(?![\\w/-]))(?=.*(?<![\\w/-])Furniture\\ Assembly(?![\\w/-]))(?=.*(?<![\\w/-])Large\\ Desk(?![\\w/-]))(?=.*(?<![\\w/-])Three\\-Seat\\ Sofa(?![\\w/-]))(?!.*(?<![\\w/-])Restaurant\\ Expenses(?![\\w/-]))"
           }
         }
       ],
@@ -2007,18 +2007,19 @@
             ],
             [
               "list_price",
-              "<",
+              "<=",
               2000
             ]
           ],
           "field": "name",
           "expected": [
-            "Large Desk",
             "Flipover",
+            "Furniture Assembly",
+            "Large Desk",
             "Three-Seat Sofa"
           ],
-          "positive": "Large Desk、Flipover、Three-Seat Sofa",
-          "wrong": "Large Desk、Flipover、Three-Seat Sofa、Restaurant Expenses"
+          "positive": "Flipover、Furniture Assembly、Large Desk、Three-Seat Sofa",
+          "wrong": "Flipover、Furniture Assembly、Large Desk、Three-Seat Sofa、Restaurant Expenses"
         }
       }
     },
