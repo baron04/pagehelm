@@ -476,7 +476,9 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         longer = [(rid, name) for rid, name in rows if (rid, name) not in exact
                   and wanted in _norm(_strip_code(str(name)))
                   and not _norm(str(name)).startswith(wanted + ",")]
-        if exact and longer:
+        # A reference with a number in it (INV/2026/00001, S00006) is an identifier, not a
+        # name: RINV/2026/00001 holding its letters is another document, not a variant.
+        if exact and longer and not re.search(r"\d", reference):
             return Ambiguous(str(name) for _rid, name in (exact[:1] + longer)[:6])
         if len(exact) == 1 or (exact and all(n == exact[0][1] for _r, n in exact)):
             rid, name = exact[0]

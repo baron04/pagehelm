@@ -544,9 +544,18 @@ class OdooGoalPortTests(unittest.TestCase):
             return original(model, method, args, kwargs)
 
         self.client.call = call
-        found = self.port._find_record("sale.order", "S00006")
-        self.assertEqual(tuple(found), ("S00006", "S00006-B"))
-        self.assertEqual(self.port._find_record("sale.order", "S00006-B"), None)
+        # A numbered reference is an identifier: the exact one is taken.
+        self.assertEqual(self.port._find_record("sale.order", "S00006")[:2], ("sale.order", 6))
+        original2 = self.client.call
+
+        def names(model, method, args, kwargs=None):
+            if model == "product.tag" and method == "name_search":
+                return [[1, "Office Chair"], [2, "Office Chair Black"]]
+            return original2(model, method, args, kwargs)
+
+        self.client.call = names
+        self.assertEqual(tuple(self.port._find_record("product.tag", "Office Chair")),
+                         ("Office Chair", "Office Chair Black"))
 
     def test_a_name_copied_with_its_code_is_found_by_its_name(self):
         found = self.port._find_record("sale.order", "[X1] S00006")
