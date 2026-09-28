@@ -1433,9 +1433,11 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         info = meta.fields[field]
         kind = info.get("type")
         text = f"{info.get('string') or field} {op or '='} {' / '.join(values)}"
-        if not values and op == "!=":
-            # "Entries with a partner": not equal to nothing, so the field is set.
-            return [[field, "!=", False]], f"{info.get('string') or field} set"
+        if not values and op in ("!=", "="):
+            # "Entries with a partner": not equal to nothing, so the field is set;
+            # "orders with no campaign": equal to nothing, so it is not.
+            return ([[field, op, False]],
+                    f"{info.get('string') or field} {'set' if op == '!=' else 'not set'}")
         if not values:
             return None, f"no value for {label!r}"
         if info.get("searchable") is False:
@@ -1583,9 +1585,9 @@ _NAMES_LISTED = 80
 
 
 def _says(condition: Filter) -> bool:
-    """Whether a condition compares against something: a value, or none with not-equal,
-    which says the field is set."""
-    return bool(condition.values) or condition.op == "!="
+    """Whether a condition compares against something: a value, or none with not-equal
+    or equal, which say the field is set or is not."""
+    return bool(condition.values) or condition.op in ("!=", "=")
 
 
 def _foreign(text) -> bool:

@@ -900,6 +900,11 @@ class OdooGoalPortConditionTests(unittest.TestCase):
                                       {"field": "Customer", "values": [], "op": "!="}]}})
         self.assertEqual(resolved.deliverables[0].problem, "")
         self.assertIn(["partner_id", "!=", False], self._last_domain())
+        # Equal to nothing: the field is not set ("orders with no campaign").
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                       "metric": {"op": "count", "filters": [
+                           {"field": "Customer", "values": [], "op": "="}]}})
+        self.assertIn(["partner_id", "=", False], self._last_domain())
         # A field named with nothing to compare against, and no comparison, says nothing.
         self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
                        "metric": {"op": "count", "filters": [{"field": "Customer", "values": []}]}})
