@@ -3595,43 +3595,34 @@
       "category": "answer",
       "entity": "sale.order",
       "delivery": "answer/list",
-      "condition": "scoped",
+      "condition": "ambiguity",
       "prompt": "Sales 团队已确认但金额不到 1000 的订单是哪几号？",
       "parts": [
         {
           "quote": "Sales 团队已确认但金额不到 1000 的订单是哪几号",
           "check": {
-            "answer_regex": "(?is)\\A(?=.*(?<![\\w/-])S00017(?![\\w/-]))(?=.*(?<![\\w/-])S00018(?![\\w/-]))(?!.*(?<![\\w/-])S00013(?![\\w/-]))"
+            "impossible": true
           }
         }
       ],
       "truth": {
-        "oracle": {
-          "model": "sale.order",
+        "clarification": {
+          "candidate_regexes": [
+            "(?<![\\w/-])Sales(?![\\w/-])",
+            "(?<![\\w/-])Pre\\-Sales(?![\\w/-])"
+          ],
+          "candidate_names": [
+            "Sales",
+            "Pre-Sales"
+          ],
+          "model": "crm.team",
           "domain": [
             [
-              "team_id",
-              "=",
-              1
-            ],
-            [
-              "state",
-              "=",
-              "sale"
-            ],
-            [
-              "amount_total",
-              "<",
-              1000
+              "name",
+              "ilike",
+              "Sales"
             ]
-          ],
-          "field": "name",
-          "expected": [
-            "S00017",
-            "S00018"
-          ],
-          "positive": "S00017、S00018",
-          "wrong": "S00017、S00018、S00013"
+          ]
         }
       }
     },
