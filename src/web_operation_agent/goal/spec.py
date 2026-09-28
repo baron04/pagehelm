@@ -246,6 +246,10 @@ class GoalSpec:
     #: words name, set by the core from the request, never by the model: the records
     #: those words select are not left out by the page a deliverable went through.
     conventions: tuple = ()
+    #: The names the person picked in answer to this conversation's question about
+    #: which record was meant, set by the core, never by the model: a name several
+    #: records hold, once chosen, is the record of exactly that name.
+    chosen: tuple[str, ...] = ()
 
     @classmethod
     def from_json(cls, value: object) -> "GoalSpec":

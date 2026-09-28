@@ -207,6 +207,26 @@ def _finds(resolution: Resolution) -> bool:
         for r in resolution.deliverables)
 
 
+def _said_of(record: str, text: str) -> str:
+    """The longest run of a record's words the request writes, when it writes some of
+    them and not the whole name; empty otherwise."""
+    words = record.split()
+    lowered = text.casefold()
+    for size in range(len(words) - 1, 0, -1):
+        for start in range(len(words) - size + 1):
+            span = " ".join(words[start:start + size])
+            if len(_norm(span)) >= 3 and span.casefold() in lowered:
+                return span
+    return ""
+
+
+def _names_exactly(name: str, words: str) -> bool:
+    """Whether a displayed name is the words and nothing more than a code in brackets
+    ("[FURN_7777] Office Chair" for "Office Chair")."""
+    rest = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", name.casefold().replace(words.casefold(), "", 1))
+    return words.casefold() in name.casefold() and not re.search(r"\w", rest)
+
+
 def _askable(resolution: Resolution | None) -> int:
     """Deliverables left unresolved with several records to ask the person about."""
     if resolution is None:
@@ -443,6 +463,9 @@ class _TurnState:
     #: The deployment's conventions the request's own words name (never an earlier
     #: turn's), passed with every resolution.
     conventions: tuple = ()
+    #: The name the person chose in answer to the pending question, if this turn is
+    #: that answer.
+    chosen: tuple = ()
     #: The application's current date, for the days a request writes.
     today: str = ""
 
@@ -581,14 +604,16 @@ class GoalTurnExecutor:
         writes = WriteWatch(control=self.control, ledger=ledger, run_id=run_id,
                             write_guard_declared=bool(self.application.descriptor.page_write_guard))
         continued = self._continued(turn_message)
+        chosen: tuple = ()
         if continued is not None:
             ledger.append("goal_clarification_answered", message_id=turn_message.message_id)
-            turn_message = replace(turn_message, text=continued)
+            text, name = continued
+            turn_message, chosen = replace(turn_message, text=text), (name,)
         state = _TurnState(message=turn_message, run_id=run_id, ledger=ledger,
                            browser=browser, writes=writes, approvals=approvals,
                            obs=current.observation, started_at=started_at,
                            chinese=bool(_CJK.search(turn_message.text)),
-                           cancelled=cancelled)
+                           cancelled=cancelled, chosen=chosen)
         self.channel.publish("progress", {"state": "agent_started"},
                              turn_id=turn_message.message_id)
         try:
@@ -1077,7 +1102,7 @@ class GoalTurnExecutor:
         asked = GoalSpec(deliverables=tuple(d for d, m, r in zip(spec.deliverables, missing, by_rule)
                                             if not m and r is None),
                          write_intent=spec.write_intent, unsupported=spec.unsupported,
-                         conventions=s.conventions)
+                         conventions=s.conventions, chosen=s.chosen)
         if any(missing) and not quiet:
             s.ledger.append("goal_capability_missing", step=s.step,
                             missing=[sorted(m) for m in missing if m], offered=sorted(offered))
@@ -1137,7 +1162,8 @@ class GoalTurnExecutor:
                 continue
             try:
                 listed = self.goal_port.resolve(
-                    GoalSpec(deliverables=(replace(d, kind="list"),), conventions=s.conventions),
+                    GoalSpec(deliverables=(replace(d, kind="list"),), conventions=s.conventions,
+                             chosen=s.chosen),
                     context=s.approvals.context(s.step, "resolve"),
                     current_path=_path_of(s.obs.url)).deliverables[0]
             except Exception:  # noqa: BLE001 -- the sum stands when the records cannot be listed
@@ -1169,6 +1195,29 @@ class GoalTurnExecutor:
             if (d.kind not in ("page", "fact", "handoff") or d.rules or r.problem or not chosen
                     or chosen in text or chosen in named):
                 continue
+            said = _said_of(d.record, s.message.text)
+            if said:
+                # The request writes only part of the name ("Office Chair" of "[FURN_7777]
+                # Office Chair"): what those words name is the request's, not the pick.
+                try:
+                    worded = self.goal_port.resolve(
+                        GoalSpec(deliverables=(replace(d, record=said),),
+                                 conventions=s.conventions, chosen=s.chosen),
+                        context=s.approvals.context(s.step, "resolve"),
+                        current_path=_path_of(s.obs.url)).deliverables[0]
+                except Exception:  # noqa: BLE001 -- the declared record stands when the check cannot run
+                    worded = None
+                fits = worded.candidates if worded is not None else ()
+                # A record the words name exactly, passed over for a longer name ("黑色
+                # Office Chair" read as Office Chair Black): the request said what tells
+                # them apart. Otherwise the pick is the model's.
+                exact = [c for c in fits if _names_exactly(c, said)]
+                if (len(fits) >= 2 and any(chosen == _norm(c) for c in fits)
+                        and not (exact and all(chosen != _norm(c) for c in exact))):
+                    s.ledger.append("goal_record_not_chosen", step=s.step, count=len(fits))
+                    out[i] = Resolved(kind=d.kind, candidates=tuple(fits),
+                                      problem=f"{len(fits)} records hold the name the request gives")
+                    continue
             unnamed = replace(d, record="")
             if not ((d.metric and d.metric.filters) or d.page.search):
                 # No condition declared, but the request names who the record belongs to
@@ -1183,7 +1232,8 @@ class GoalTurnExecutor:
                     Filter(field=link[0], values=(link[1],)),)))
             try:
                 described = self.goal_port.resolve(
-                    GoalSpec(deliverables=(unnamed,), conventions=s.conventions),
+                    GoalSpec(deliverables=(unnamed,), conventions=s.conventions,
+                             chosen=s.chosen),
                     context=s.approvals.context(s.step, "resolve"),
                     current_path=_path_of(s.obs.url)).deliverables[0]
             except Exception:  # noqa: BLE001 -- the declared record stands when the check cannot run
@@ -1490,10 +1540,10 @@ class GoalTurnExecutor:
         before = " ".join(str(turns[-1].get("user", "")).split())[:300] if turns else ""
         return "\n".join(lines), before
 
-    def _continued(self, message: AgentTurnMessage) -> str | None:
+    def _continued(self, message: AgentTurnMessage) -> tuple[str, str] | None:
         """The request a reply to this conversation's pending question continues: the
-        earlier request with the record the person chose. None when the message does not
-        answer a pending choice, which then stands on its own."""
+        earlier request with the record the person chose, and that record's name. None
+        when the message does not answer a pending choice, which then stands on its own."""
         pending = self.conversation_state.pending_clarification
         asked = self.conversation_state.last_user_text()
         if not pending or not asked or pending.get("response_kind") != "single_choice":
@@ -1506,8 +1556,8 @@ class GoalTurnExecutor:
                            if c["record_ref"].casefold() in reply), None)
         if chosen is None:
             return None
-        return (f"{asked}（指的是 {chosen['record_ref']}）" if _CJK.search(asked)
-                else f"{asked} (meaning {chosen['record_ref']})")
+        return ((f"{asked}（指的是 {chosen['record_ref']}）" if _CJK.search(asked)
+                 else f"{asked} (meaning {chosen['record_ref']})"), chosen["record_ref"])
 
     def _rules_answer(self, s: _TurnState, d) -> Resolved:
         """The rules a deliverable names, as facts with their citations. A rule id the

@@ -445,8 +445,12 @@ is looked up.
 
 Resolution is read-only JSON-RPC: `name_search` for a reference (an exact display-name match
 wins unless other records' names hold it, as "Office Chair Black" holds "Office Chair", when
-the person is asked; a company beats its contacts; several remaining candidates are returned
-as ambiguous),
+the person is asked; a company beats its contacts; a numbered reference is the one document
+whose name begins with it; several remaining candidates are returned as ambiguous, whichever
+begins with the words; a name the person chose in answer to that question is the record of
+exactly that name; a condition's value several records hold is asked about only when more
+than one of them is among the records the rest of the declaration describes -- on an order
+whose lines hold Drawer and not Drawer Black, "Drawer" is Drawer),
 `read` for facts, `search_count`, `read_group` and `search_read` for counts, sums, groups and
 lists over the page action's literal domain plus the declared conditions (a page's
 `search_default_*` filters apply unless they name the current user), and record routes from

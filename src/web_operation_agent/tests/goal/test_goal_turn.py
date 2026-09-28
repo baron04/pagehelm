@@ -566,7 +566,7 @@ class GoalTurnTests(unittest.TestCase):
                          ["S00002", "S00003"])
         self.assertEqual(executor._continued(AgentTurnMessage(message_id="m2", text="2",
                                                               page_url="http://127.0.0.1:8080/home")),
-                         "Ready Mat 那份报价的总额？（指的是 S00003）")
+                         ("Ready Mat 那份报价的总额？（指的是 S00003）", "S00003"))
         self.assertIsNone(executor._continued(AgentTurnMessage(message_id="m2", text="换个问题：S00001 呢",
                                                                page_url="http://127.0.0.1:8080/home")))
 
@@ -1213,6 +1213,28 @@ class GoalTurnTests(unittest.TestCase):
                 "metric": {"op": "count", "filters": [{"field": "Customer", "values": ["Azure"]}]}}]})],
             [Resolved(kind="list", aggregate=one)], text="Azure 八月的退款都有哪些？")
         self.assertIn("共 1 条：RINV/2026/00001", execution.user_answer)
+
+    def test_a_name_several_records_hold_is_asked_about_whichever_the_model_picked(self):
+        # The request writes "Office Chair"; the model picked one of the two records that
+        # hold it, by the code the candidate values carry. The pick is the model's.
+        priced = [Resolved(kind="fact", facts=(Fact("[P7] Office Chair", "Sales Price", "70.00"),))]
+        held = [Resolved(kind="fact", problem="'Office Chair' is ambiguous",
+                         candidates=("[P7] Office Chair", "[P8] Office Chair Black"))]
+        picked = [_declaration(kind="fact", entity="order", record="[P7] Office Chair",
+                               fields=["Sales Price"])]
+        execution, _channel, _chat, port, events = self._run(
+            picked, priced, resolved_then=held, text="Office Chair 的标价是多少？")
+        self.assertEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("Office Chair Black", execution.user_answer)
+        self.assertEqual(port.specs[-1].deliverables[0].record, "Office Chair")
+        self.assertEqual([e["count"] for e in events if e["event"] == "goal_record_not_chosen"], [2])
+        # Passing over the record the words name exactly for a longer one, the model read
+        # what the request says to tell them apart ("黑色"): the pick stands.
+        black = [_declaration(kind="fact", entity="order", record="[P8] Office Chair Black",
+                              fields=["Sales Price"])]
+        execution, *_ = self._run(black, priced, resolved_then=held,
+                                  text="黑色 Office Chair 的标价是多少？")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
 
     def test_a_record_the_request_never_names_is_not_chosen_for_the_person(self):
         declared = [("declare_goal", {"deliverables": [{"kind": "page", "entity": "order",

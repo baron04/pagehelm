@@ -1,6 +1,7 @@
 """The Odoo goal port over a scripted JSON-RPC client: index and resolution, no model."""
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from web_operation_agent.goal.spec import GoalSpec
@@ -867,6 +868,40 @@ class OdooGoalPortConditionTests(unittest.TestCase):
                        "metric": {"op": "count", "filters": [{"field": "Customer", "values": []}]}})
         self.assertFalse(any(isinstance(c, list) and c[0] == "partner_id"
                              for c in self._last_domain()))
+
+    def test_a_value_several_records_hold_is_asked_about_when_more_than_one_is_in_scope(self):
+        terms = [[7, "Immediate Payment"], [8, "Immediate Payment Split"]]
+        in_scope = {"rows": terms}
+        call = self.client.call
+
+        def call_with_terms(model, method, args, kwargs=None):
+            if model == "account.payment.term" and method == "name_search":
+                return [row for row in terms if args[0].casefold() in row[1].casefold()]
+            if model == "sale.order" and method == "search_read" and \
+                    (kwargs or {}).get("fields") == ["payment_term_id"]:
+                return [{"id": i, "payment_term_id": row} for i, row in enumerate(in_scope["rows"])]
+            return call(model, method, args, kwargs)
+        self.client.call = call_with_terms
+        declared = {"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},
+                    "metric": {"op": "count", "filters": [
+                        {"field": "Payment Terms", "values": ["Immediate Payment"]}]}}
+        # Both orders' terms hold the name: the person is asked which.
+        resolved = self._resolve(declared).deliverables[0]
+        self.assertEqual(resolved.candidates, ("Immediate Payment", "Immediate Payment Split"))
+        # Only one of them is on the orders described: that one is meant.
+        in_scope["rows"] = terms[:1]
+        resolved = self._resolve(declared).deliverables[0]
+        self.assertEqual((resolved.problem, resolved.candidates), ("", ()))
+        self.assertIn(["payment_term_id", "=", 7], self._last_domain())
+        # Once the person has chosen the name, it is the record of exactly that name.
+        in_scope["rows"] = terms
+        resolved = self.port.resolve(replace(GoalSpec.from_json({"deliverables": [declared]}),
+                                             chosen=("Immediate Payment",))).deliverables[0]
+        self.assertEqual((resolved.problem, resolved.candidates), ("", ()))
+        # The words said as words ("contains") are every record holding them.
+        contains = {**declared, "metric": {"op": "count", "filters": [
+            {"field": "Payment Terms", "values": ["Immediate Payment"], "op": "contains"}]}}
+        self.assertEqual(self._resolve(contains).deliverables[0].candidates, ())
 
     def test_a_page_filter_that_names_today_is_written_for_this_turn(self):
         self._resolve({"kind": "aggregate", "entity": "sale.order", "page": {"key": "p331"},

@@ -55,6 +55,11 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         #: The deployment's conventions the request being resolved names, with the
         #: records each selects (set per resolve from the declaration).
         self._named_scopes: tuple = ()
+        #: The names the person chose when asked which record was meant (set per
+        #: resolve): each is the record of exactly that name.
+        self._chosen: frozenset = frozenset()
+        #: The records a condition's value may mean, when several hold its name.
+        self._held_by: tuple = ()
         self._reads: list[tuple[str, str]] = []
         #: A one2many's static domain the next aggregate applies to its line scope.
         self._line_scope: list | None = None
@@ -122,6 +127,8 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         self._reads = []
         self._found_one = None
         self._named_scopes = tuple(getattr(spec, "conventions", ()) or ())
+        self._chosen = frozenset(_norm(_strip_code(n) or n)
+                                 for n in getattr(spec, "chosen", ()) or ())
         resolved = []
         for deliverable in spec.deliverables:
             try:
@@ -438,6 +445,20 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                 hits.append((found, str(meta.fields[links[0]].get("string") or links[0])))
         return hits[0] if len(hits) == 1 else None
 
+    def _links_within(self, model: str, field: str, domain: list) -> list[tuple[int, str]]:
+        """The distinct records a link field points to among the records `domain`
+        describes, as (id, display name)."""
+        try:
+            rows = self._call(model, "search_read", [domain], {"fields": [field], "limit": 200})
+        except BusinessToolError:
+            return []
+        links: dict[int, str] = {}
+        for row in rows:
+            value = row.get(field)
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                links.setdefault(int(value[0]), str(value[1]))
+        return list(links.items())
+
     def _names_of(self, model: str, field: str, domain: list) -> list[str]:
         """The distinct names a link field has among the records `domain` describes."""
         try:
@@ -478,7 +499,7 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                   and not _norm(str(name)).startswith(wanted + ",")]
         # A reference with a number in it (INV/2026/00001, S00006) is an identifier, not a
         # name: RINV/2026/00001 holding its letters is another document, not a variant.
-        if exact and longer and not re.search(r"\d", reference):
+        if exact and longer and not re.search(r"\d", reference) and wanted not in self._chosen:
             return Ambiguous(str(name) for _rid, name in (exact[:1] + longer)[:6])
         if len(exact) == 1 or (exact and all(n == exact[0][1] for _r, n in exact)):
             rid, name = exact[0]
@@ -486,15 +507,18 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
         if len(rows) == 1:
             rid, name = rows[0]
             return model, int(rid), str(name)
-        prefix = [(rid, name) for rid, name in rows
-                  if _norm(_strip_code(name)).startswith(wanted)]
-        if len(prefix) == 1:
-            rid, name = prefix[0]
-            return model, int(rid), str(name)
         # Contacts of a company carry the company's name first: the company is meant.
         companies = [(rid, name) for rid, name in rows if "," not in str(name)]
         if len(companies) == 1:
             rid, name = companies[0]
+            return model, int(rid), str(name)
+        # A number shown with more after it ("BILL/2025/06/0001 (INV/2025/0057)") is that
+        # document. A name several names hold ("Chair": Chair floor protection, Office
+        # Chair) may mean any of them, whichever begins with it: the person is asked.
+        prefix = [(rid, name) for rid, name in rows
+                  if _norm(_strip_code(name)).startswith(wanted)]
+        if len(prefix) == 1 and re.search(r"\d", reference):
+            rid, name = prefix[0]
             return model, int(rid), str(name)
         return Ambiguous(str(name) for _rid, name in rows[:6])
 
@@ -911,6 +935,25 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                     continue
             clause, text = self._condition(meta, condition.field, condition.values,
                                            op=condition.op, today=today)
+            if clause is None and text.startswith("several "):
+                # A name several records hold is asked about only when more than one of
+                # them is among the records the rest of the declaration describes: on
+                # S00009, whose lines hold Drawer and not Drawer Black, "Drawer" is Drawer.
+                held, named_field = self._held_by, meta.field_by_label(condition.field)
+                scope = list(domain)
+                for other in metric.filters:
+                    if other is condition or not _says(other):
+                        continue
+                    other_clause, _ = self._condition(meta, other.field, other.values,
+                                                      op=other.op, today=today)
+                    scope += other_clause or []
+                present = [(rid, name) for rid, name in self._links_within(
+                    meta.model, named_field, scope) if name in held]
+                if len(present) != 1:
+                    return Resolved(kind=d.kind, problem=text, candidates=tuple(
+                        name for _rid, name in present) if len(present) > 1 else held)
+                rid, name = present[0]
+                clause, text = [[named_field, "=", rid]], f"{condition.field} = {name}"
             if clause is None:
                 named_field = meta.field_by_label(condition.field)
                 if (named_field is not None and text.startswith("no ")
@@ -1408,7 +1451,12 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
             ids = []
             for value in values:
                 found = self._find_record(str(info["relation"]), value)
-                if found is None or isinstance(found, Ambiguous) or op == "contains":
+                if isinstance(found, Ambiguous) and op != "contains":
+                    # A name several records hold ("Sales" beside "Pre-Sales"): which one
+                    # is meant is asked, as for the record a request is about.
+                    self._held_by = tuple(found)
+                    return None, f"several {info.get('string') or field} records are named {value!r}"
+                if found is None or op == "contains":
                     # Not one record's name: the records whose names contain the words
                     # ("Office" among products), which the search box would also find.
                     clause = ["|"] * (len(values) - 1) + [[field, "ilike", v] for v in values]

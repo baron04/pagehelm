@@ -103,9 +103,12 @@ agent.
   them apart, the turn ends needing input: it asks which one, listing each with what
   distinguishes it, and a reply naming one by number or name continues the earlier
   request with that record. The same question is asked when a declaration names a record the
-  request never names while the request's own conditions fit several, and when one amount is
-  asked of a few records and the request asks for no total; a record the request's own
-  amounts, days or references pick out stands. On the development set of 94 Chinese requests the staged path
+  request never names while the request's own conditions fit several, when it picks one of
+  several records whose names hold the words the request writes (a pick that passes over the
+  record those words name exactly, for a longer name, stands: the request said what tells
+  them apart), and when one amount is asked of a few records and the request asks for no
+  total; a record the request's own amounts, days or references pick out stands. A name the
+  person chooses in reply is resolved as the record of exactly that name. On the development set of 94 Chinese requests the staged path
   answered 89 and the single declaration 87 (one full pass each). A zero-model replay of recorded runs
   (`evals/odoo/goals/reference_recall.py`) reports how many declared records the reference
   cut recovers. With a compiled source map attached to the Odoo port (the demo attaches
