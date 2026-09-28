@@ -428,6 +428,16 @@ class OdooGoalPortTests(unittest.TestCase):
         # A convention about another entity leaves this scope alone.
         self.port.resolve(count)
         self.assertNotEqual(self.client.domains[-1][0], "|")
+        # With the deployment's words for orders about Status, a word meaning every order
+        # widens the page along Status only: a page's other clause stays (every order
+        # still to invoice, not every order).
+        self.port._conventions = (every, quotes)
+        orders = next(a for a in self.port._actions if a["action_id"] == 331)
+        orders["domain"] = ("[('state', 'not in', ('draft', 'sent', 'cancel')), "
+                            "('invoice_status', '=', 'to invoice')]")
+        self.port.resolve(_replace(count, conventions=(every,)))
+        self.assertEqual([list(c) for c in self.client.domains[-1]],
+                         [["invoice_status", "=", "to invoice"], ["partner_id", "child_of", [11]]])
 
     def test_a_name_put_on_the_wrong_link_is_found_on_the_one_it_fits(self):
         # "Joel's sent quotation" declared with Joel as the salesperson: nothing fits;

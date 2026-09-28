@@ -430,7 +430,9 @@ the owner's review); a deployment passes its own file, and the demo takes
 `conventions_path=None` for none. An entry may add `records`, an `entity` and a `where` list
 of field labels with choice labels, restating its meaning in structure; the resolver then
 widens a page's own domain and default filters by those records (an empty `where` lifts
-them). The reference file gives structure to the sales-order and product entries only: the
+them). When the entity's entries name fields in their `where` (Status, for orders), only the
+page's clauses on those fields are widened and its other clauses stay: 订单 on Orders to
+Invoice is every order still to invoice, quotations included. The reference file gives structure to the sales-order and product entries only: the
 invoice and refund words turn to vendor documents with 供应商, which a union cannot express.
 
 A description that fits no record of the declared entity is tried once more before it is

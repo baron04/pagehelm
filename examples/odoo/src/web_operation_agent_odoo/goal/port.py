@@ -861,13 +861,25 @@ class OdooGoalPort(_IndexCompiler, _LinesResolver, _ValueCandidates):
                 if clauses is not None:
                     branches.append(clauses)
             if branches:
+                # The words widen the page along what this organisation's words for the
+                # entity are about (Status, for orders and quotations): the page's other
+                # clauses stay ("订单" on Orders to Invoice is every order still to
+                # invoice). Words about nothing in particular widen the page's whole scope.
+                dims = {meta.field_by_label(label) for c in self._conventions
+                        if c.entity == model for label, _values in c.conditions} - {None}
+                kept: list = []
+                if dims and all(isinstance(c, (list, tuple)) and len(c) == 3 for c in domain):
+                    kept = [c for c in domain if c[0] not in dims]
+                    domain = [c for c in domain if c[0] in dims]
                 if any(not branch for branch in branches) or (page is not None and not domain):
                     domain = []
                 elif page is not None:
                     domain = _any_of([domain] + branches)
                 else:
                     domain = _any_of(branches)
-                default_clauses, fixed = [], True
+                domain = kept + domain
+                default_clauses = [c for c in default_clauses if c in kept]
+                fixed = True
                 described.append("as " + " / ".join(c.terms[0] for c in scopes) + " means here")
         metric = d.metric or Metric(op="count")
         page_filters = self._page_filters.get(action["action_id"], meta.filters) if action \
