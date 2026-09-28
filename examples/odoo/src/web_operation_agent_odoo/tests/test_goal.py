@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 import unittest
 
-from web_operation_agent.goal.spec import GoalSpec
+from web_operation_agent.goal.spec import Deliverable, GoalSpec
 from web_operation_agent_odoo.goal import OdooGoalPort
 from web_operation_agent_odoo.translations import OdooTranslations, parse_po
 
@@ -818,6 +818,18 @@ class OdooGoalPortConditionTests(unittest.TestCase):
 
     def _last_domain(self):
         return self.client.domains[-1]
+
+    def test_a_record_a_line_links_to_is_the_lines_own_condition(self):
+        # "S00004 订单里 [FURN_8888] Office Lamp 那行": the code's digits do not make the
+        # product a document the line belongs to, even where another model finds the
+        # name; the product is the line's own.
+        found = {("product.product", "[D1] Desk 2"): ("product.product", 12, "[D1] Desk 2"),
+                 ("sale.order", "[D1] Desk 2"): ("sale.order", 9, "S00009")}
+        self.port._find_record = lambda model, value: found.get((model, value))
+        line = Deliverable.from_json({
+            "kind": "fact", "entity": "sale.order.line", "fields": ["Quantity"],
+            "metric": {"op": "count", "filters": [{"field": "Product", "values": ["[D1] Desk 2"]}]}})
+        self.assertEqual(self.port._line_record_from_conditions(line), line)
 
     def test_line_entities_come_from_the_record_form_with_the_link_first(self):
         keys = [e.key for e in self.index.entities]

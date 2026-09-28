@@ -170,9 +170,13 @@ class _LinesResolver:
             value = condition.values[0] if single else ""
             if field is not None and not is_link:
                 # A document number under some other field's name ("Invoice" for the
-                # invoice date field) still names the owner.
-                hit = owner_named(value) if single and re.search(r"[0-9]", value) \
-                    and meta.fields[field].get("type") not in ("integer", "float", "monetary") else None
+                # invoice date field) still names the owner. A record the field itself
+                # links to ("[FURN_8888] Office Lamp" as the Product) is the line's own.
+                info = meta.fields[field]
+                own = (single and info.get("type") == "many2one"
+                       and proper(self._find_record(str(info["relation"]), value)))
+                hit = owner_named(value) if single and not own and re.search(r"[0-9]", value) \
+                    and info.get("type") not in ("integer", "float", "monetary") else None
                 if hit is not None:
                     owner = owner or hit
                     continue
