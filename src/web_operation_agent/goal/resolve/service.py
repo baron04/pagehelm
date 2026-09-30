@@ -6,6 +6,7 @@ capabilities it offers -- and never resolves a declaration itself.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import re
 import threading
 from datetime import date
@@ -31,9 +32,14 @@ class GoalData(DataPort, Protocol):
 class DataGoalPort:
     """`GoalPort` over an application's `GoalData`."""
 
-    def __init__(self, data: GoalData, *, today: date | None = None):
+    def __init__(self, data: GoalData, *, today: date | None = None,
+                 reference_workers: int = 1):
         """`today` fixes the date relative periods count from, for an evaluation whose
         truth was written on a given day; otherwise it is the application's current date."""
+        if isinstance(reference_workers, bool) or not isinstance(reference_workers, int) or not 1 <= reference_workers <= 8:
+            raise ValueError("reference_workers must be an integer between 1 and 8")
+        # Opt in only for data adapters whose actor-bound reads are safe concurrently.
+        self.reference_workers = reference_workers
         self.data, self._today = data, today
         self._lock = threading.Lock()
         self._schema: Schema | None = None
@@ -65,29 +71,35 @@ class DataGoalPort:
         if not text.strip() or re.fullmatch(r"[\d.,/-]+", text.strip()):
             return ()
         index = self.index(context=context)
-        resolver = self._resolver(index)
-        hits = []
-        for entity in dict.fromkeys(p.entity for p in index.pages):
+        entities = tuple(dict.fromkeys(p.entity for p in index.pages))
+        serial_resolver = self._resolver(index) if self.reference_workers == 1 else None
+
+        def find(entity):
+            # A resolver is mutable; never share one between reader threads.
+            resolver = serial_resolver if serial_resolver is not None else self._resolver(index)
             if resolver.view(entity) is None:
-                continue
+                return None
             try:
                 found = resolver._find_record(entity, text)
             except DataRefused:
-                # A list may need a selected parent or other page context. Its refusal
-                # does not make the other actor-visible entities unsearchable.
-                continue
+                # A missing parent/context on one list does not hide other entities.
+                return None
             if not isinstance(found, tuple) or isinstance(found, Ambiguous):
-                continue
+                return None
             wanted = norm(text)
             shown = norm(resolver._own_name(found[2]))
-            # Exact, or the record's name begins with the words; a mere substring inside
-            # a name is not a reference to that record. A record shown with the one it
-            # belongs to ("Company, Person") is also named by its own part.
             own = norm(found.personal)
             if (shown == wanted or shown.startswith(wanted) or norm(found[2]).startswith(wanted)
                     or own == wanted or own.startswith(wanted)):
-                hits.append((entity, found[2]))
-        return tuple(hits[:3])
+                return entity, found[2]
+            return None
+
+        if self.reference_workers > 1 and len(entities) > 1:
+            with ThreadPoolExecutor(max_workers=self.reference_workers) as pool:
+                hits = list(pool.map(find, entities))  # Keep index order, not completion order.
+        else:
+            hits = [find(entity) for entity in entities]
+        return tuple(hit for hit in hits if hit is not None)[:3]
 
     def locate_names(self, names: tuple[str, ...], *, entities: tuple[str, ...] = (),
                      context: OperationContext | None = None):

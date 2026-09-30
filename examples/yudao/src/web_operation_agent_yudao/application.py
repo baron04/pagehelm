@@ -122,7 +122,7 @@ class YudaoApplication:
         if conventions is not None:
             # What this organisation means by some words, as its owner reviewed them.
             self.goal_data.attach_conventions(load_conventions(conventions))
-        self.goal_port = DataGoalPort(self.goal_data, today=today)
+        self.goal_port = DataGoalPort(self.goal_data, today=today, reference_workers=4)
         data = DeclaredDataClassifier(())
         postconditions = ResultPostconditionVerifier(())
         routes = DeclaredRoutePort(APPLICATION_ID, _PAGE_ROUTES,

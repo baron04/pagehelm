@@ -43,6 +43,7 @@ class YudaoClient:
         self._tenant = str(account.tenant if account is not None else tenant or "1")
         self._lock = threading.Lock()
         self.calls: list[str] = []
+        self._read_generation = 0
 
     @staticmethod
     def for_token(base_url: str, token: str, tenant: str, *, timeout_s: float = 20) -> "YudaoClient":
@@ -56,7 +57,15 @@ class YudaoClient:
         if self._account is not None or not token:
             raise ValueError("only a client made from a token takes a newer one")
         with self._lock:
+            if self._token != token:
+                self._read_generation += 1
             self._token = token
+
+    @property
+    def read_generation(self) -> int:
+        """Non-secret cache generation; renewed credentials invalidate brief data reads."""
+        with self._lock:
+            return self._read_generation
 
     @property
     def tenant(self) -> str:
@@ -69,6 +78,7 @@ class YudaoClient:
             if code == _UNAUTHORIZED and attempt == 0 and self._account is not None:
                 with self._lock:
                     self._token = None
+                    self._read_generation += 1
                 continue
             return self._data(path, code, body)
         raise DataRefused(f"{path}: not authorised")

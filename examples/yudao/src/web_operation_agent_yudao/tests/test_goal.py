@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import unittest
 from copy import deepcopy
+from unittest.mock import patch
 
-from web_operation_agent.goal.data import Compare, DataRefused, all_of
+from web_operation_agent.goal.data import EVERYTHING, Compare, DataRefused, all_of
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.goal.spec import GoalSpec
 
@@ -149,6 +150,36 @@ class YudaoGoalDataTests(unittest.TestCase):
 
     def ask(self, deliverable):
         return self.port.resolve(GoalSpec.from_json({"deliverables": [deliverable]})).deliverables[0]
+
+    def test_complete_list_serves_narrow_queries_with_local_filtering(self):
+        broad = self.data._matching("crm/contract", EVERYTHING)
+        calls = len(self.client.calls)
+        narrow = self.data._matching("crm/contract", Compare("name", "contains", "瑞达"))
+        self.assertEqual([row["id"] for row in narrow], [12])
+        self.assertEqual(len(self.client.calls), calls)
+        self.assertEqual(len(broad), 2)
+
+    def test_list_cache_expires_and_credential_change_invalidates_reads(self):
+        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=100):
+            self.data._fetch("crm/contract", EVERYTHING)
+        calls = len(self.client.calls)
+        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=115):
+            self.data._fetch("crm/contract", EVERYTHING)
+        self.assertEqual(len(self.client.calls), calls + 3)
+        self.client.read_generation = 1
+        self.data._fetch("crm/contract", EVERYTHING)
+        self.assertEqual(len(self.client.calls), calls + 6)
+
+    def test_cache_lifetime_starts_when_slow_read_finishes_and_is_bounded(self):
+        self.data._keep_read(("slow",), (1,), 0)
+        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=200):
+            self.data._keep_read(("slow",), (2,), 0)
+        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=214):
+            self.assertEqual(self.data._cached_read(("slow",), 0), (2,))
+        for i in range(130):
+            self.data._keep_read((i,), (i,), 0)
+        self.assertEqual(len(self.data._read), 128)
+        self.assertIsNone(self.data._cached_read(("slow",), 0))
 
     def test_pages_become_entities_only_where_the_account_may_query_a_documented_list(self):
         schema = self.data.schema()
@@ -641,7 +672,11 @@ class TokenClientTests(unittest.TestCase):
         with self.assertRaises(DataRefused):
             client.get("system/auth/get-permission-info")
         self.assertEqual(seen, [("GET", "system/auth/get-permission-info", "t1")])
+        self.assertEqual(client.read_generation, 0)
+        client.renew("t1")
+        self.assertEqual(client.read_generation, 0)
         client.renew("t2")
+        self.assertEqual(client.read_generation, 1)
         with self.assertRaises(DataRefused):
             client.get("crm/customer/page")
         self.assertEqual(seen[-1][2], "t2")
@@ -715,6 +750,15 @@ class _FmsClient(_Client):
 
 
 class ParentSelectionTests(unittest.TestCase):
+    def test_complete_list_cache_never_crosses_required_parent_scope(self):
+        client = _FmsClient([{"id": 1, "companyName": "One"}, {"id": 2, "companyName": "Two"}])
+        data = YudaoGoalData(client, FMS_DOCS)
+        first = data._fetch("fms/voucher", Compare("accountSetId", "eq", "1"))
+        second = data._fetch("fms/voucher", Compare("accountSetId", "eq", "2"))
+        self.assertEqual(str(first[0]["accountSetId"]), "1")
+        self.assertEqual(str(second[0]["accountSetId"]), "2")
+        self.assertEqual(len([p for path, p in client.calls if path == "fms/voucher/page"]), 2)
+
     def test_a_page_whose_address_names_a_multi_word_list_endpoint_is_that_list(self):
         # `/fms/config/account-set` reads `/admin-api/fms/config/account-set/list`: two
         # words deep, a `/list` rather than a `/page`, and a permission that names neither.

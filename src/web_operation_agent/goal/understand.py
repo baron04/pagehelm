@@ -16,23 +16,24 @@ from __future__ import annotations
 import json
 
 from ..modeling.provider import ProviderError
+from .declaration_cache import cached_read
 from .index import ApplicationIndex
 from .spec import DECLARE_GOAL_TOOL, DECLARE_SCOPE_TOOL, GoalSpec, scope_from_json
 
-UNDERSTAND_SYSTEM = """You translate one request to a business web application into a goal declaration by calling declare_goal exactly once.
+UNDERSTAND_SYSTEM = """Translate the request into the application's vocabulary; call declare_goal exactly once. Follow the tool's field descriptions.
 
-Use only names that appear in the APPLICATION INDEX: entity keys, field labels, page keys, filter names, group names, section names and action names. The person may write in another language than the index; map their words to the index's names (for example a word meaning "quotations" maps to the Quotations page, a word meaning "customer" to the Customer field). Copy record references (order numbers, invoice numbers, names) exactly as the person wrote them. Never invent a name that is not in the index; if nothing fits, leave deliverables empty and say why in `unsupported`, in the person's language.
+Use only entity keys, field labels, page keys, filters, groups, sections and actions in APPLICATION INDEX. Translate the person's language to those names; copy record numbers and names exactly. If nothing fits, leave deliverables empty and explain unsupported in the person's language. Never invent an index name or substitute a neighbouring field for missing data.
 
-Deliverable kinds:
-- fact: the value of one or more fields of one named record. Set entity, record and fields. If the record is reached through a link field of the named record (the customer of order X), set entity and record to what the person named, via to the link field's label, and fields to labels of the linked entity.
-- aggregate: a count or a sum over records with conditions. Set entity, page.key to the list page whose scope applies (for example invoices to customers versus bills from vendors; confirmed orders versus quotations), metric.op, metric.field for a sum, metric.filters as field label plus values (use choice labels from the index, or the person's own words for a name), metric.group_by with metric.top for "which X has the most".
-- list: which records match a description. Set entity, page.key and page.search with the search words translated into the index's language (the index is in English: a word meaning "chair" becomes "Chair").
-- page: show a page. For a list page set page.key with view, filters_on, filters_off, group_by as asked. For a record's page set entity and record (and via when a linked record is meant) and section when a part of the record is asked for. A question asking where something is kept, viewed or configured is a page deliverable for that page.
-- handoff: the person asks to change, create, confirm, send, pay, cancel or register something. Set write_intent true. For an existing record, set entity, record and a form action name from the index so its control can be shown. For a new record that does not exist yet, do not search for its proposed name: set entity, the collection page key and action "create" only when that page lists the create operation; the adapter will find the actual entry control. The assistant never performs the change itself.
+Kinds and required details:
+- fact: fields of a named record; set entity, record and fields.
+- aggregate: count or sum with metric.op, metric.field for sum, and metric.filters using index choice labels or the person's names. page.key identifies the list's scope (customer invoices vs vendor bills, quotations vs confirmed orders). Use metric.group_by and top for "which X has the most".
+- list: matching records; set entity, page.key and page.search translated to the application's language.
+- page: only an explicit open/show/navigate request or a question asking where something is viewed or configured. A list uses page.key, view, filters_on/off and group_by; a record uses entity, record and section if requested.
+- handoff: a requested change, create, confirm, send, pay, cancel or register; set write_intent true and the existing record's indexed action. For a new record, leave record empty; use the collection page and action "create" only if its operations allow create. Never search for a proposed new name. The assistant does not perform the change itself.
 
-Linked records: when the person names one record but wants another that it links to -- the customer of an order, the vendor of a bill, the payment terms an invoice uses -- entity and record are always the record they named, and via is the link field's label on that entity. "Show me the customer's details / profile / record" is a page deliverable with via; "what are the payment terms' rules" is a page deliverable with via, because the linked record's own page shows its rules.
+For a linked record, entity and record identify the record the person named, via is its link field, and fields belong to the linked entity. "Show the customer's profile" and "what are the linked payment terms' rules" are page deliverables with via. Record lines are their own entity, as the tool describes.
 
-A request that asks several things gets one deliverable per thing, in the order asked. Do not add a page deliverable merely to support a fact or aggregate answer: the page key inside an aggregate identifies its data scope and does not mean the person asked to open that page. Add a separate page deliverable only when the person explicitly asks to open, show, navigate to, or look at a page or record. Prefer the most specific page (a named record's page over a list page)."""
+One deliverable per thing asked, in request order. Do not add a page just to support a fact or aggregate: its page.key defines data scope, not navigation. Add a separate page only when explicitly requested; prefer a named record's page to a list."""
 
 
 SCOPE_SYSTEM = """You read one request to a business web application and say which entities of the index it is about and what kind of deliverable each thing asked for is, by calling declare_scope exactly once.
@@ -42,7 +43,7 @@ The list names actor-visible entities. In a large application LIKELY ENTITIES ca
 
 def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
                      timeout_s: float | None = None, cancelled=None,
-                     today: str = "", earlier: str = ""
+                     today: str = "", earlier: str = "", cache=None, cache_namespace=""
                      ) -> tuple[list[dict], bool, str, bool, dict]:
     """The first step of a staged declaration: entities and kinds, from the ranked
     entity summaries rather than the full index. Returns (parts, write_intent,
@@ -53,6 +54,9 @@ def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
                                      + _earlier_block(earlier)
                                      + "\n\nREQUEST\n" + prompt.strip())},
     ]
+    key, held = cached_read(cache, cache_namespace, chat, messages, [DECLARE_SCOPE_TOOL], cancelled)
+    if held is not None:
+        return held
     kwargs = {"max_tokens": 600, "timeout_s": timeout_s}
     attempts = 0
     while True:
@@ -71,15 +75,18 @@ def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
             if attempts >= limit or (isinstance(exc, ProviderError)
                                      and not getattr(exc, "retryable", True)):
                 raise
-    return parts, write_intent, unsupported, about_assistant, {
-        "source": source, "attempts": attempts, "part_count": len(parts)}
+    result = (parts, write_intent, unsupported, about_assistant, {
+        "source": source, "attempts": attempts, "part_count": len(parts)})
+    if cache is not None and not write_intent:
+        cache.put(key, result)
+    return result
 
 
 def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
                timeout_s: float | None = None, cancelled=None, today: str = "",
                previous: GoalSpec | None = None,
                problems: tuple[str, ...] = (), scope: str = "",
-               values: str = "", earlier: str = "") -> tuple[GoalSpec, dict]:
+               values: str = "", earlier: str = "", cache=None, cache_namespace="") -> tuple[GoalSpec, dict]:
     """Ask once. Returns the parsed declaration and a bounded audit projection.
 
     `today` is the application's current date, so that a month or day the person says
@@ -100,7 +107,7 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
         before += ("\n\nVALUES (id kind entity: exact name — detail); write the id "
                    "(v3) where one of these is meant\n" + values)
     if previous is not None and problems:
-        before += ("\n\nYOUR DECLARATION\n" + json.dumps(previous.to_json(), ensure_ascii=False)
+        before += ("\n\nYOUR DECLARATION\n" + json.dumps(previous.to_json(), ensure_ascii=False, separators=(",", ":"))
                    + "\n\nPROBLEMS\n" + "\n".join(f"- {p}" for p in problems[:4])
                    + "\n\nDeclare again, correcting these and keeping what was right.")
     # The request is the last thing in the message: a small model reads the tail most
@@ -116,6 +123,12 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
                                      + (f"\n\nTODAY\n{today}" if today else "")
                                      + before + tail + prompt.strip())},
     ]
+    # Repairs must remain new readings, even if an identical repair was seen before.
+    if previous is not None or problems:
+        cache = None
+    key, held = cached_read(cache, cache_namespace, chat, messages, [DECLARE_GOAL_TOOL], cancelled)
+    if held is not None:
+        return held
     kwargs = {"max_tokens": 1_500, "timeout_s": timeout_s}
     attempts = 0
     while True:
@@ -137,9 +150,12 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
             if attempts >= limit or (isinstance(exc, ProviderError)
                                      and not getattr(exc, "retryable", True)):
                 raise
-    return spec, {"source": source, "deliverables": len(spec.deliverables),
+    result = (spec, {"source": source, "deliverables": len(spec.deliverables),
                   "kinds": [d.kind for d in spec.deliverables],
-                  "write_intent": spec.write_intent, "attempts": attempts}
+                  "write_intent": spec.write_intent, "attempts": attempts})
+    if cache is not None and not spec.write_intent and all(d.kind != "handoff" for d in spec.deliverables):
+        cache.put(key, result)
+    return result
 
 
 def _earlier_block(earlier: str) -> str:

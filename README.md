@@ -89,6 +89,24 @@ agent.
   to the reconciliation path. A tie between an answer and a clarification that offers
   that answer may keep the answer. These extra readings and the bounded repairs add
   model calls, latency and spend; this is not a one-call turn.
+  Parsed read-only declarations have an executor-local, 128-entry cache with a
+  120-second lifetime. Keys bind the principal, model/options, source digest and exact
+  prompt context (including history, date, scope and candidate values). The two initial
+  readings use separate entries; repairs, extra votes and write declarations are never
+  reused. A new conversation clears the cache. Hits are audited as `cache_hit` with zero
+  provider attempts; business data is resolved again, and page/write approvals remain fresh.
+  `declaration_cache=False` disables this optimization for comparisons. Declaration
+  instructions avoid repeating tool-field explanations, and scope/repair JSON is compact;
+  the staged request still appears at both ends of its message.
+  Yudao's actor-local complete-list/detail cache stays at 15 seconds, starts its lifetime
+  after a successful read, and holds at most 128 entries. A cached complete list can serve
+  narrower local filters under the same required parent scope; credential renewal
+  invalidates cached reads and linked-record names. Failed or incomplete reads are not cached.
+  Yudao also opts into four concurrent actor-bound reference lookups, preserving index order
+  and checking every entity; other adapters keep sequential reads unless explicitly enabled
+  with `DataGoalPort(reference_workers=...)`. Each reader owns its resolver.
+  These optimizations have offline scripted coverage; live model latency and answer accuracy
+  have not been requalified after the prompt change.
   For an index larger than 60 entities, actor-visible labels, pages
   and fields retrieve up to 60 detailed candidates; the other entities keep only their
   key and label in a compact directory, with a roughly 12,000-character first-step budget.

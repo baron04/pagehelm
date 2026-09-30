@@ -266,6 +266,33 @@ class GoalTurnTests(unittest.TestCase):
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
         return execution, channel, chat, port, events
 
+    def test_warm_declarations_save_three_calls_but_resolve_changed_business_data(self):
+        scope = ("declare_scope", {"parts": [{"kind": "fact", "entity": "order"}]})
+        goal = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])
+        chat = _AgreeingChat([scope, goal, goal] * 3)
+        channel = _Channel(page_url="http://127.0.0.1:8080/home", decision="approved")
+        port = _Port([Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Old Customer"),))])
+        executor = GoalTurnExecutor(
+            channel=channel, config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=chat, application=bind_application(_Adapter()), goal_port=port,
+            control=ReadOnlyControl(), run_id_factory=lambda m: "run-" + m.message_id, staged=True)
+        for i in range(4):
+            result = executor.execute({"message_id": f"m{i}", "text": "S00006 的客户是谁？",
+                                       "page_url": "http://127.0.0.1:8080/home"})
+            self.assertIn("Old Customer", result.user_answer)
+        self.assertEqual(len(chat.messages), 9)  # History stabilizes; fourth turn uses three hits.
+        reads_before = len(port.specs)
+        port.resolved = [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "New Customer"),))]
+        result = executor.execute({"message_id": "m4", "text": "S00006 的客户是谁？",
+                                   "page_url": "http://127.0.0.1:8080/home"})
+        self.assertIn("New Customer", result.user_answer)
+        self.assertEqual(len(chat.messages), 9)
+        self.assertGreater(len(port.specs), reads_before)
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        hits = [event for event in events if event.get("cache_hit")]
+        self.assertEqual(len(hits), 6)
+        self.assertTrue(all(event["attempts"] == 0 for event in hits))
+
     def test_a_fact_and_a_page_are_answered_from_one_model_call(self):
         execution, channel, chat, port, events = self._run(
             [("declare_goal", {"deliverables": [
@@ -650,7 +677,7 @@ class GoalTurnTests(unittest.TestCase):
         # The request opens the message and closes it.
         self.assertTrue(second.startswith("REQUEST\nS00006 的客户是谁？"))
         self.assertTrue(second.endswith("REQUEST (again)\nS00006 的客户是谁？"))
-        self.assertIn('"about": "S00006"', second)
+        self.assertIn('"about":"S00006"', second)
         kinds = [e["event"] for e in events]
         for name in ("goal_references", "goal_scope_declared", "goal_neighbourhood", "goal_declared",
                      "goal_second_reading"):
@@ -677,7 +704,7 @@ class GoalTurnTests(unittest.TestCase):
         named = next(e for e in events if e["event"] == "goal_names")
         self.assertEqual(named["found"], [{"text": "厦门海湾食品有限公司", "entity": "partner",
                                            "name": "厦门海湾食品有限公司"}])
-        self.assertIn('"entity": "partner"', chat.messages[1][1]["content"])
+        self.assertIn('"entity":"partner"', chat.messages[1][1]["content"])
 
     def test_a_staged_scope_with_no_parts_ends_the_turn_honestly(self):
         execution, _channel, chat, port, _events = self._run(

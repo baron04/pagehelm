@@ -43,6 +43,7 @@ from .ground import bind, days, ground, numbers_in, pick, render as render_value
 from .index import conventions_named
 from .narrow import (correct_records, locate, locate_names, neighbourhood, references,
                      summaries)
+from .declaration_cache import DeclarationCache
 from .understand import understand, understand_scope
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -617,12 +618,14 @@ class GoalTurnExecutor:
                  goal_port: GoalPort, control, run_id_factory,
                  ledger_factory=SessionLedger,
                  conversation_state: ConversationState | None = None,
-                 readings: int = 2, staged: bool = True, values: bool = True):
+                 readings: int = 2, staged: bool = True, values: bool = True,
+                 declaration_cache: bool = True):
         #: The staged path (the default): the request's hard references are located by
         #: the adapter, the model first picks entities and kinds from one-line summaries,
         #: then declares the details against those entities' neighbourhood of the index,
         #: where the rules of the deployment's source are. Off, the model declares once
         #: against the whole index, as a comparison or for a scripted apparatus.
+        self.declaration_cache = DeclarationCache() if declaration_cache else None
         self.staged = bool(staged)
         #: Candidate values offered before the details are declared, when the port has
         #: them; off only to measure what they change.
@@ -649,6 +652,8 @@ class GoalTurnExecutor:
         turn_message = AgentTurnMessage.from_wire(message)
         dropped = (self.conversation_state.clear()
                    if self.channel.take_new_conversation() else -1)
+        if dropped >= 0 and self.declaration_cache is not None:
+            self.declaration_cache.clear()
         if not self.application.descriptor.owns_url(turn_message.page_url):
             raise AgentTurnError(AgentTurnErrorCode.APPLICATION_MISMATCH,
                                  "the task belongs to a different application origin",
@@ -791,6 +796,10 @@ class GoalTurnExecutor:
         today = getattr(self.goal_port, "today", None)
         today_text = str(today() or "") if callable(today) else ""
         s.today = today_text
+        principal = s.approvals.principal
+        cache_owner = (principal.binding_digest if principal is not None else "anonymous",
+                       id(self.chat), getattr(self.chat, "temperature", None),
+                       index.source_digest)
         scope_text = ""
         scope_parts: list[dict] = []
         scope_unsupported = ""
@@ -813,7 +822,8 @@ class GoalTurnExecutor:
                     chat, prompt=s.message.text,
                     summaries=summaries(index, lookup, known), run_id=s.run_id,
                     timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
-                    cancelled=s.cancelled, today=today_text, earlier=earlier)
+                    cancelled=s.cancelled, today=today_text, earlier=earlier,
+                    cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"))
             except ValueError as exc:
                 # The first step's answer could not be read, twice: the turn goes on as a
                 # single declaration against the whole index rather than refusing.
@@ -876,7 +886,7 @@ class GoalTurnExecutor:
             scope_text = json.dumps({"parts": parts, "write_intent": write_intent,
                                      "known_references": [
                                          {"text": k.text, "entity": k.entity, "name": k.name}
-                                         for k in known]}, ensure_ascii=False)
+                                         for k in known]}, ensure_ascii=False, separators=(",", ":"))
             s.step += 1
             elapsed = time.time() - s.started_at
         candidates = ()
@@ -898,11 +908,13 @@ class GoalTurnExecutor:
             today=today_text, scope=scope_text, values=render_values(candidates),
             earlier=earlier)
 
-        def read(**kwargs):
+        def read(*, cache_slot=None, **kwargs):
             # Every reading -- the first, the second, the deciding one, the repair --
             # sees the same scope and values, and has its value ids bound to the exact
             # names before it is compared or resolved.
-            spec, projection = unbound(**kwargs)
+            spec, projection = unbound(
+                cache=self.declaration_cache if cache_slot is not None else None,
+                cache_namespace=(cache_owner, cache_slot), **kwargs)
             if candidates:
                 spec, bound, unknown = bind(spec, candidates)
                 projection = {**projection, "values_bound": bound,
@@ -915,10 +927,10 @@ class GoalTurnExecutor:
         second_reading = None
         if self.readings > 1:
             pool = ThreadPoolExecutor(max_workers=1)
-            second_reading = pool.submit(read)
+            second_reading = pool.submit(read, cache_slot="second")
             pool.shutdown(wait=False)
         try:
-            spec, projection = read()
+            spec, projection = read(cache_slot="first")
         except ValueError as exc:
             s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
             s.terminal_reason = "agent_refused"

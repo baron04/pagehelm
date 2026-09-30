@@ -16,6 +16,7 @@ left out.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 import re
 import threading
 import time
@@ -57,6 +58,7 @@ _USERS, _DEPTS = "system/user", "system/dept"
 _SHOWN_FOR_S = 30.0
 #: How long a list read is reused: within one turn, never across a person's pause.
 _READ_FOR_S = 15.0
+_READ_CACHE_SIZE = 128
 #: The link a line carries to the record whose detail holds it.
 _OWNER = "__owner"
 #: The most records whose details are read for a question about all their lines.
@@ -88,7 +90,8 @@ class YudaoGoalData:
         self._shown: dict[str, tuple[float, dict]] = {}
         #: (entity, pushed-down parameters) -> (when read, rows): one answer reads the same
         #: list several times (a count, its rows, a total).
-        self._read: dict[tuple, tuple[float, tuple]] = {}
+        self._read: OrderedDict[tuple, tuple] = OrderedDict()
+        self._read_generation = getattr(client, "read_generation", 0)
 
     # -- index and schema ---------------------------------------------------------------------
     def attach_conventions(self, conventions) -> None:
@@ -639,17 +642,22 @@ class YudaoGoalData:
         params = self._pushdown(spec, where)
         params = self._with_parent(spec, params)
         key = (entity, tuple(sorted((k, str(v)) for k, v in params.items())))
-        now = time.monotonic()
-        with self._lock:
-            held = self._read.get(key)
-        if held is not None and now - held[0] <= _READ_FOR_S:
-            return list(held[1])
+        generation = getattr(self._client, "read_generation", 0)
+        # Only complete lists are cached. A broader read with the SAME required
+        # parent scope can serve a narrower condition; _matching still applies every
+        # condition locally. Never borrow a list from another required parent.
+        broad = (entity, tuple(sorted((k, str(v)) for k, v in params.items()
+                                      if k in spec.required)))
+        held = self._cached_read(key, generation)
+        if held is None and broad != key:
+            held = self._cached_read(broad, generation)
+        if held is not None:
+            return list(held)
         try:
             rows = self._fetch_pages(entity, spec, params)
         except DataRefused as exc:
             raise self._unmet_conditions(spec, params, exc) from None
-        with self._lock:
-            self._read[key] = (now, tuple(rows))
+        self._keep_read(key, tuple(rows), generation)
         return rows
 
     def _fetch_pages(self, entity: str, spec: "_Entity", params: dict) -> list[dict]:
@@ -713,18 +721,42 @@ class YudaoGoalData:
     def _detail(self, spec: "_Entity", id: str) -> dict | None:
         """A record's detail, kept as briefly as list reads are."""
         key = (spec.get_path, id)
-        now = time.monotonic()
-        with self._lock:
-            held = self._read.get(key)
-        if held is not None and now - held[0] <= _READ_FOR_S:
-            return held[1]
+        generation = getattr(self._client, "read_generation", 0)
+        held = self._cached_read(key, generation)
+        if held is not None:
+            return held
         # A failure is not an empty table, and is not cached for a later request.
         detail = self._client.get(spec.get_path, id=id)
         if not isinstance(detail, dict):
             raise DataRefused(f"{spec.key} {id}: detail is unavailable")
-        with self._lock:
-            self._read[key] = (now, detail)
+        self._keep_read(key, detail, generation)
         return detail
+
+    def _cached_read(self, key, generation):
+        with self._lock:
+            if generation != getattr(self._client, "read_generation", 0):
+                return None
+            if generation != self._read_generation:
+                self._read.clear()
+                self._shown.clear()
+                self._read_generation = generation
+            held = self._read.get(key)
+            if held is None:
+                return None
+            if time.monotonic() - held[0] >= _READ_FOR_S:
+                del self._read[key]
+                return None
+            self._read.move_to_end(key)
+            return held[1]
+
+    def _keep_read(self, key, value, generation):
+        with self._lock:
+            if generation != getattr(self._client, "read_generation", 0):
+                return  # An in-flight old credential read must not seed the new cache.
+            self._read[key] = (time.monotonic(), value)
+            self._read.move_to_end(key)
+            while len(self._read) > _READ_CACHE_SIZE:
+                self._read.popitem(last=False)
 
     def _all(self, entity: str) -> list[dict]:
         return self._fetch(entity, EVERYTHING)
@@ -921,6 +953,8 @@ class YudaoGoalData:
     def _display_of(self, entity: str, id: str) -> str:
         """A linked record's name when the row carries only its number, from the list the
         account reads it from (kept briefly: one answer reads many rows)."""
+        generation = getattr(self._client, "read_generation", 0)
+        self._cached_read(("generation_check",), generation)
         now = time.monotonic()
         with self._lock:
             held = self._shown.get(entity)
@@ -931,7 +965,8 @@ class YudaoGoalData:
                 rows = []
             held = (now, {str(r.get("id")): self._display(entity, r) for r in rows})
             with self._lock:
-                self._shown[entity] = held
+                if generation == getattr(self._client, "read_generation", 0):
+                    self._shown[entity] = held
         return held[1].get(id, "")
 
     def _zone(self):
