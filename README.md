@@ -105,8 +105,17 @@ agent.
   Yudao also opts into four concurrent actor-bound reference lookups, preserving index order
   and checking every entity; other adapters keep sequential reads unless explicitly enabled
   with `DataGoalPort(reference_workers=...)`. Each reader owns its resolver.
-  These optimizations have offline scripted coverage; live model latency and answer accuracy
-  have not been requalified after the prompt change.
+  A 2026-10-01 real-model comparison using `qwen3.8-flash` on the previously seen, sealed
+  Yudao v6 set scored 59/63 before and 61/63 after, with the original judge unchanged.
+  Two score changes reflect answer-label matching rather than corrected data; the new
+  scope failure passed two fresh-session rechecks in each version. This does not establish
+  general accuracy equivalence. Cold median attempt time stayed essentially unchanged
+  (21.99 vs 22.13 seconds), with 202 vs 208 model calls. Two fixed questions repeated five
+  times each passed 10/10 in both versions; calls fell from 33 to 20. Once context stabilized,
+  optimized repetitions used zero model calls and took 20–25 ms of server-turn time on the
+  unchanged fixture; this is not UI end-to-end latency. The full comparison and rechecks
+  used 478 calls (1,517,136 input and 142,386 output tokens), metered at CNY 0.862724 from
+  provider-reported usage and registered rates, rather than a provider invoice.
   For an index larger than 60 entities, actor-visible labels, pages
   and fields retrieve up to 60 detailed candidates; the other entities keep only their
   key and label in a compact directory, with a roughly 12,000-character first-step budget.
