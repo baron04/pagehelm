@@ -21,8 +21,8 @@ lab/
 
 .DS_Store
 
-# Node / frontend
-node_modules/
+# Node / frontend (a directory, or a link to a shared one)
+node_modules
 dist/
 storybook-static/
 *.tsbuildinfo

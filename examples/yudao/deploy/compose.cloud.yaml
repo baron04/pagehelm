@@ -1,0 +1,51 @@
+# Overrides for the public host: `docker compose -f compose.yaml -f compose.cloud.yaml up -d`
+# (cloud/deploy.sh does it). YUDAO_JAVA_OPTS sizes the server for the host's memory.
+# Images are pinned by digest because the host pulls through third-party mirrors.
+services:
+  mysql:
+    image: mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b  # 8.0
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--lower-case-table-names=1",
+              "--innodb-buffer-pool-size=96M", "--performance-schema=OFF", "--max-connections=60", "--skip-log-bin"]
+    ports: !reset []
+    restart: unless-stopped
+  redis:
+    image: redis@sha256:298e5b3bc566bade82f46ad5511777a4a07a294097ce16ada2f6a42be5239df5
+    command: ["redis-server", "--maxmemory", "64mb", "--save", ""]
+    restart: unless-stopped
+  server:
+    image: eclipse-temurin@sha256:d7051a45dd955e4d5d1db4d3f4269fe13d1c6dff8cc6b7ef89fc8577b96c1982  # 21-jre
+    environment:
+      JAVA_OPTS: ${YUDAO_JAVA_OPTS:--Xms256m -Xmx1280m -XX:MaxMetaspaceSize=512m -XX:+UseSerialGC -Xss512k -XX:TieredStopAtLevel=1}
+      # No mock login, no fixed SMS code, no API docs outside the container network.
+      YUDAO_SERVER_ARGS: >-
+        --yudao.security.mock-enable=false
+        --yudao.sms-code.begin-code=100000 --yudao.sms-code.end-code=999999
+        --spring.boot.admin.client.enabled=false
+    ports: ["127.0.0.1:48080:48080"]
+    restart: unless-stopped
+  web:
+    # The host's own nginx serves the UI and proxies the API (cloud/nginx.site.conf), and
+    # holds the site's certificate.
+    profiles: [container-web]
+  agent:
+    # The assistant host, on when the owner has put the model provider's settings in
+    # /opt/yudao/agent.env (deploy.sh then enables the profile). It reads yudao as each
+    # signed-in person, with their own token, and offers no writes.
+    profiles: [agent]
+    build:
+      context: ${YUDAO_CACHE}/agent
+      dockerfile: agent.Dockerfile
+    image: woa-yudao-agent:current
+    env_file: [/opt/yudao/agent.env]
+    command: ["--api-base", "http://server:48080", "--public-origin", "https://${YUDAO_DOMAIN}",
+              "--state-dir", "/var/lib/woa-yudao", "--ui-source", "/opt/source/ui",
+              "--source-root", "/opt/source", "--source-release", "${YUDAO_RELEASE:-v2026.09}"]
+    volumes:
+      - agent-state:/var/lib/woa-yudao
+      - ${YUDAO_CACHE}/source:/opt/source:ro
+    ports: ["127.0.0.1:48091:48091", "127.0.0.1:48092:48092"]
+    depends_on: [server]
+    restart: unless-stopped
+
+volumes:
+  agent-state:
