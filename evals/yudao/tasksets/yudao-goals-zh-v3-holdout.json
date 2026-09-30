@@ -1,0 +1,3889 @@
+{
+ "schema_version": 1,
+ "suite_id": "yudao-goals-zh-v3-holdout",
+ "status": "FROZEN",
+ "entry_path": "/index",
+ "reference_date": "2026-09-29",
+ "timezone": "Asia/Shanghai",
+ "categories": {
+  "answer": "回答",
+  "open": "打开页面",
+  "impossible": "做不到或需澄清"
+ },
+ "source_binding": {
+  "release": "v2026.08",
+  "deployment_release": "v2026.08",
+  "citation_releases": [
+   "v2026.08"
+  ],
+  "files": {
+   "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl.java": "f988dd1488b14e72e6a955c68eb3268b7168a103d801804df8065a1fa2d53612",
+   "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java": "8b289b38b1b9f0c2f03c9d5c0721a8d3f5bca9a605489a57194a7b8f93a8e0a5",
+   "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/customer/CrmCustomerServiceImpl.java": "89051a22c9a4c0c866af61258882cfaead5eb4b33fde717dce6a0f1f1aa838e7",
+   "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivablePlanServiceImpl.java": "f5e52074c3c1875fb2075cf99fb2b9c240a05256002b1c2fd6344f5c5ddad964",
+   "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java": "4bfac1a10705705885ba8d6cf4836f30e9a0d5142c57421cb8ddeeec7b6bea51",
+   "server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java": "b71acb26db0f52f42f97b86b84c7817a0fad981142a1bc03e3451b1df96342dc",
+   "ui/src/views/crm/contract/detail/index.vue": "14a174a264c258cf9c26f57c793fc69dbc842052453bb2fb74e5c63a72209fa1",
+   "ui/src/views/crm/contract/index.vue": "84b0154e61afd5951f05a0e846285ab807866ea524c3243f527fd8362e8d5f1d",
+   "ui/src/views/crm/receivable/index.vue": "6b3ca5068dd3cf221cb5af43c79b2643492540a998c0e067118e2bbcfefb5296",
+   "ui/src/views/erp/sale/order/index.vue": "012ce263cabdc92f0928429bb3a6b78655c7075c35f89ca7e81428c907b46ffb"
+  }
+ },
+ "environment": {
+  "app": "ruoyi-vue-pro",
+  "base_url": "http://localhost:48088",
+  "tenant_id": 1,
+  "actor": {
+   "username": "evaluator",
+   "user_id": 257,
+   "dept": "华东销售部",
+   "dept_id": 122
+  },
+  "declared_snapshot": "seed-v3"
+ },
+ "owner_policy": {
+  "invisible_named_record": "按准确名称问同事名下的记录时，如实回答没找到即为正确，不得猜测。",
+  "empty_contact_field": "字段为空时如实说明为空。",
+  "novelty": "第三批独立保留集：更难题型首跑与源码规则问答准确率；数据规模每实体数百条。"
+ },
+ "note": "Independent third holdout, authored with zero model calls against the seed-v3 snapshot; data truths sealed from read-only SQL plus evaluator API scene merges, rule truths from deployed v2026.08 sources (server 6aa235e493, ui e272d6639b) verified line-by-line. Page-path truths derive from the deployed router and system_menu but were not browser-walked.",
+ "tasks": [
+  {
+   "id": "y3-001",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_customer",
+   "delivery": "answer/field",
+   "condition": "single field, unique visible customer by exact name",
+   "prompt": "苏州蓝湾智能设备有限公司登记的手机号是多少？",
+   "parts": [
+    {
+     "quote": "苏州蓝湾智能设备有限公司登记的手机号是多少？",
+     "check": {
+      "answer_regex": "(?is)13767834250"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "13767834250",
+     "positive": "手机号是 13767834250。",
+     "wrong": "手机号是 13800000000。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select mobile from crm_customer where name='苏州蓝湾智能设备有限公司'",
+     "result": "13767834250",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "手机号是 13767834250。",
+    "wrong": "手机号是 13800000000。"
+   }
+  },
+  {
+   "id": "y3-002",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contact",
+   "delivery": "answer/field",
+   "condition": "master flag read back from the seeded row",
+   "prompt": "温州天成食品有限公司的主联系人是谁？",
+   "parts": [
+    {
+     "quote": "温州天成食品有限公司的主联系人是谁？",
+     "check": {
+      "answer_regex": "(?is)张伟"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "张伟",
+     "positive": "主联系人是 张伟。",
+     "wrong": "主联系人是 张大伟。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select name from crm_contact where customer_id=282 and master=1",
+     "result": "张伟",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "主联系人是 张伟。",
+    "wrong": "主联系人是 张大伟。"
+   }
+  },
+  {
+   "id": "y3-003",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contact",
+   "delivery": "answer/count",
+   "condition": "child count for one customer",
+   "prompt": "广州宏图数据服务有限公司名下有几个联系人？",
+   "parts": [
+    {
+     "quote": "广州宏图数据服务有限公司名下有几个联系人？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])4(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 4,
+     "positive": "共 4 个。",
+     "wrong": "共 41 个。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select count(*) from crm_contact where customer_id=?",
+     "result": "4",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 4 个。",
+    "wrong": "共 41 个。"
+   }
+  },
+  {
+   "id": "y3-004",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contact",
+   "delivery": "answer/list",
+   "condition": "contact roster under one customer",
+   "prompt": "厦门瑞丰软件有限公司名下的联系人都列一下。",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件有限公司名下的联系人都列一下。",
+     "check": {
+      "answer_regex": "(?is)(?=.*单于)(?=.*罗兰)(?=.*捷阳)(?=.*张大伟)"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      "单于",
+      "罗兰",
+      "捷阳",
+      "张大伟"
+     ],
+     "positive": "联系人是：单于、罗兰、捷阳、张大伟。",
+     "wrong": "联系人是：单于、罗兰、捷阳。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select name from crm_contact where customer_id=? order by id",
+     "result": "['单于', '罗兰', '捷阳', '张大伟']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "联系人是：单于、罗兰、捷阳、张大伟。",
+    "wrong": "联系人是：单于、罗兰、捷阳。"
+   }
+  },
+  {
+   "id": "y3-005",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/field",
+   "condition": "order_date on the named contract",
+   "prompt": "厦门瑞丰软件定制合同的签约日期是哪天？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件定制合同的签约日期是哪天？",
+     "check": {
+      "answer_regex": "(?is)(?=.*(?:2026\\-08\\-26|2026/08/26|2026\\.08\\.26|2026年8月26日))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "2026-08-26",
+     "positive": "签约日期是 2026-08-26。",
+     "wrong": "签约日期是 2026-01-01。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select order_date from crm_contract where name='厦门瑞丰软件定制合同'",
+     "result": "2026-08-26",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "签约日期是 2026-08-26。",
+    "wrong": "签约日期是 2026-01-01。"
+   }
+  },
+  {
+   "id": "y3-006",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/field",
+   "condition": "total price of the named contract",
+   "prompt": "深圳市鹏城物联企业版订阅合同的合同金额是多少？",
+   "parts": [
+    {
+     "quote": "深圳市鹏城物联企业版订阅合同的合同金额是多少？",
+     "check": {
+      "answer_regex": "(?is)(?=.*(?:59600|59,600)(?:[.,]0{1,2})?(?![0-9]))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "59600",
+     "positive": "合同金额是 59600 元。",
+     "wrong": "合同金额是 99999 元。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select total_price from crm_contract where name='深圳市鹏城物联企业版订阅合同'",
+     "result": "59600",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "合同金额是 59600 元。",
+    "wrong": "合同金额是 99999 元。"
+   }
+  },
+  {
+   "id": "y3-007",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/field",
+   "condition": "stage name resolved through crm_business_status",
+   "prompt": "蓝湾数字孪生项目现在处于哪个销售阶段？",
+   "parts": [
+    {
+     "quote": "蓝湾数字孪生项目现在处于哪个销售阶段？",
+     "check": {
+      "answer_regex": "(?is)初步接洽"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "初步接洽",
+     "positive": "当前阶段是初步接洽。",
+     "wrong": "当前阶段是需求确认。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select s.name from crm_business b join crm_business_status s on s.id=b.status_id where b.name='蓝湾数字孪生项目'",
+     "result": "初步接洽",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "当前阶段是初步接洽。",
+    "wrong": "当前阶段是需求确认。"
+   }
+  },
+  {
+   "id": "y3-008",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/count",
+   "condition": "plan period count for one contract",
+   "prompt": "厦门瑞丰软件定制合同一共有几期回款计划？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件定制合同一共有几期回款计划？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])3(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 3,
+     "positive": "共 3 期。",
+     "wrong": "共 6 期。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select count(*) from crm_receivable_plan where contract_id=?",
+     "result": "3",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 3 期。",
+    "wrong": "共 6 期。"
+   }
+  },
+  {
+   "id": "y3-009",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/field",
+   "condition": "second period due date",
+   "prompt": "厦门瑞丰软件定制合同的第 2 期回款计划应回款日期是哪天？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件定制合同的第 2 期回款计划应回款日期是哪天？",
+     "check": {
+      "answer_regex": "(?is)(?=.*(?:2026\\-08\\-30|2026/08/30|2026\\.08\\.30|2026年8月30日))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "2026-08-30",
+     "positive": "第 2 期应回款日期是 2026-08-30。",
+     "wrong": "第 2 期应回款日期是 2026-12-31。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select return_time from crm_receivable_plan where contract_id=? and period=2",
+     "result": "2026-08-30",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "第 2 期应回款日期是 2026-08-30。",
+    "wrong": "第 2 期应回款日期是 2026-12-31。"
+   }
+  },
+  {
+   "id": "y3-010",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_customer",
+   "delivery": "answer/field",
+   "condition": "single field, unique visible customer by exact name",
+   "prompt": "上海衡信商贸有限公司的联系电话是多少？",
+   "parts": [
+    {
+     "quote": "上海衡信商贸有限公司的联系电话是多少？",
+     "check": {
+      "answer_regex": "(?is)13768022272"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "13768022272",
+     "positive": "联系电话是 13768022272。",
+     "wrong": "联系电话是 13611112003。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select mobile from crm_customer where name='上海衡信商贸有限公司'",
+     "result": "13768022272",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "联系电话是 13768022272。",
+    "wrong": "联系电话是 13611112003。"
+   }
+  },
+  {
+   "id": "y3-011",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_customer",
+   "delivery": "answer/count",
+   "condition": "owned rows only, sceneType=1 equivalent",
+   "prompt": "我名下（我负责的客户）一共有多少个客户？",
+   "parts": [
+    {
+     "quote": "我名下（我负责的客户）一共有多少个客户？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])124(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 124,
+     "positive": "您名下共有 124 个客户。",
+     "wrong": "您名下共有 161 个客户。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select count(*) from crm_customer where owner_user_id=257",
+     "result": "124",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "您名下共有 124 个客户。",
+    "wrong": "您名下共有 161 个客户。"
+   }
+  },
+  {
+   "id": "y3-012",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "audit_status 20 within visible scope",
+   "prompt": "我可见的合同里，审核通过的有几份？",
+   "parts": [
+    {
+     "quote": "我可见的合同里，审核通过的有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])92(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 92,
+     "positive": "共 92 份。",
+     "wrong": "共 129 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select audit_status,count(*) ... group by audit_status -> 20",
+     "result": "92",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 92 份。",
+    "wrong": "共 129 份。"
+   }
+  },
+  {
+   "id": "y3-013",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "audit_status 0 within visible scope",
+   "prompt": "我可见的合同里，还没提交审批（草稿）的有几份？",
+   "parts": [
+    {
+     "quote": "我可见的合同里，还没提交审批（草稿）的有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])11(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 11,
+     "positive": "共 11 份。",
+     "wrong": "共 48 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select audit_status,count(*) ... group by audit_status -> 0",
+     "result": "11",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 11 份。",
+    "wrong": "共 48 份。"
+   }
+  },
+  {
+   "id": "y3-014",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "audit_status 10 within visible scope",
+   "prompt": "我可见的合同里，审批中的有几份？",
+   "parts": [
+    {
+     "quote": "我可见的合同里，审批中的有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])16(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 16,
+     "positive": "共 16 份。",
+     "wrong": "共 53 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select audit_status,count(*) ... group by audit_status -> 10",
+     "result": "16",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 16 份。",
+    "wrong": "共 53 份。"
+   }
+  },
+  {
+   "id": "y3-015",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "audit_status 30 within visible scope",
+   "prompt": "我可见的合同里，被拒绝的有几份？",
+   "parts": [
+    {
+     "quote": "我可见的合同里，被拒绝的有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])7(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 7,
+     "positive": "共 7 份。",
+     "wrong": "共 44 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select audit_status,count(*) ... group by audit_status -> 30",
+     "result": "7",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 7 份。",
+    "wrong": "共 44 份。"
+   }
+  },
+  {
+   "id": "y3-016",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "explicit month window",
+   "prompt": "2026 年 9 月签约的合同有几份？",
+   "parts": [
+    {
+     "quote": "2026 年 9 月签约的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])12(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 12,
+     "positive": "共 12 份。",
+     "wrong": "共 49 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "order_date >= '2026-09-01' and order_date < '2026-09-30'",
+     "result": "12",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 12 份。",
+    "wrong": "共 49 份。"
+   }
+  },
+  {
+   "id": "y3-017",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/count",
+   "condition": "explicit month window on plan due date",
+   "prompt": "回款计划里应回款日期落在 2026 年 10 月的有几期？",
+   "parts": [
+    {
+     "quote": "回款计划里应回款日期落在 2026 年 10 月的有几期？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])23(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 23,
+     "positive": "共 23 期。",
+     "wrong": "共 60 期。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "return_time in 2026-10 (visible plans)",
+     "result": "23",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 23 期。",
+    "wrong": "共 60 期。"
+   }
+  },
+  {
+   "id": "y3-018",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/count",
+   "condition": "unreceived subset of October plans",
+   "prompt": "2026 年 10 月到期但还没收到钱的回款计划有几期？",
+   "parts": [
+    {
+     "quote": "2026 年 10 月到期但还没收到钱的回款计划有几期？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])17(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 17,
+     "positive": "共 17 期。",
+     "wrong": "共 54 期。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "receivable_id is null and return_time in 2026-10",
+     "result": "17",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 17 期。",
+    "wrong": "共 54 期。"
+   }
+  },
+  {
+   "id": "y3-019",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/count",
+   "condition": "overdue as of 2026-09-29",
+   "prompt": "截至 2026-09-29，逾期未回款的回款计划一共有几期？",
+   "parts": [
+    {
+     "quote": "截至 2026-09-29，逾期未回款的回款计划一共有几期？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])56(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 56,
+     "positive": "共 56 期。",
+     "wrong": "共 93 期。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "receivable_id is null and return_time < '2026-09-29 00:00:00'",
+     "result": "56",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 56 期。",
+    "wrong": "共 93 期。"
+   }
+  },
+  {
+   "id": "y3-020",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/count",
+   "condition": "biz_won within visible",
+   "prompt": "我可见范围内的商机里，赢单的有几个？",
+   "parts": [
+    {
+     "quote": "我可见范围内的商机里，赢单的有几个？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])1(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 1,
+     "positive": "共 1 个。",
+     "wrong": "共 38 个。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "crm_business end_status filter (biz_won)",
+     "result": "1",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 1 个。",
+    "wrong": "共 38 个。"
+   }
+  },
+  {
+   "id": "y3-021",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/count",
+   "condition": "biz_lost within visible",
+   "prompt": "我可见范围内的商机里，输单的有几个？",
+   "parts": [
+    {
+     "quote": "我可见范围内的商机里，输单的有几个？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])1(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 1,
+     "positive": "共 1 个。",
+     "wrong": "共 38 个。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "crm_business end_status filter (biz_lost)",
+     "result": "1",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 1 个。",
+    "wrong": "共 38 个。"
+   }
+  },
+  {
+   "id": "y3-022",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/count",
+   "condition": "biz_open within visible",
+   "prompt": "我可见范围内的商机里，还没结束（未赢未输）的有几个？",
+   "parts": [
+    {
+     "quote": "我可见范围内的商机里，还没结束（未赢未输）的有几个？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])109(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 109,
+     "positive": "共 109 个。",
+     "wrong": "共 146 个。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "crm_business end_status filter (biz_open)",
+     "result": "109",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 109 个。",
+    "wrong": "共 146 个。"
+   }
+  },
+  {
+   "id": "y3-023",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_contract",
+   "delivery": "open/record",
+   "condition": "detail route from deployed router",
+   "prompt": "打开厦门瑞丰软件定制合同的详情页。",
+   "parts": [
+    {
+     "quote": "打开厦门瑞丰软件定制合同的详情页。",
+     "check": {
+      "path_regex": "^/crm/contract/detail/16(?:[/?#]|$)",
+      "breadcrumb_last_contains": "合同详情"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/contract/detail/16",
+     "breadcrumb": "合同详情",
+     "view": "form"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "路由取自部署版 ui 源码 src/router/modules/remaining.ts L534-618（/crm/*/detail/:id）；记录 id 来自 seed-v3 SQL",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/contract/detail/16",
+      "breadcrumb_last": "合同详情",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-024",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_business",
+   "delivery": "open/record",
+   "condition": "detail route from deployed router",
+   "prompt": "打开蓝湾数字孪生项目的商机详情页。",
+   "parts": [
+    {
+     "quote": "打开蓝湾数字孪生项目的商机详情页。",
+     "check": {
+      "path_regex": "^/crm/business/detail/219(?:[/?#]|$)",
+      "breadcrumb_last_contains": "商机详情"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/business/detail/219",
+     "breadcrumb": "商机详情",
+     "view": "form"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "路由取自部署版 ui 源码 src/router/modules/remaining.ts L534-618（/crm/*/detail/:id）；记录 id 来自 seed-v3 SQL",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/business/detail/219",
+      "breadcrumb_last": "商机详情",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-025",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_customer",
+   "delivery": "open/record",
+   "condition": "detail route from deployed router",
+   "prompt": "打开苏州蓝湾智能设备有限公司的客户详情页。",
+   "parts": [
+    {
+     "quote": "打开苏州蓝湾智能设备有限公司的客户详情页。",
+     "check": {
+      "path_regex": "^/crm/customer/detail/275(?:[/?#]|$)",
+      "breadcrumb_last_contains": "客户详情"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/customer/detail/275",
+     "breadcrumb": "客户详情",
+     "view": "form"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "路由取自部署版 ui 源码 src/router/modules/remaining.ts L534-618（/crm/*/detail/:id）；记录 id 来自 seed-v3 SQL",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/customer/detail/275",
+      "breadcrumb_last": "客户详情",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-026",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_customer",
+   "delivery": "open/record",
+   "condition": "detail route from deployed router",
+   "prompt": "打开上海衡信商贸有限公司的客户详情页。",
+   "parts": [
+    {
+     "quote": "打开上海衡信商贸有限公司的客户详情页。",
+     "check": {
+      "path_regex": "^/crm/customer/detail/281(?:[/?#]|$)",
+      "breadcrumb_last_contains": "客户详情"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/customer/detail/281",
+     "breadcrumb": "客户详情",
+     "view": "form"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "路由取自部署版 ui 源码 src/router/modules/remaining.ts L534-618（/crm/*/detail/:id）；记录 id 来自 seed-v3 SQL",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/customer/detail/281",
+      "breadcrumb_last": "客户详情",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-027",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_customer",
+   "delivery": "open/list",
+   "condition": "menu-driven list route",
+   "prompt": "打开客户列表页面。",
+   "parts": [
+    {
+     "quote": "打开客户列表页面。",
+     "check": {
+      "path_regex": "^/crm/customer(?:[/?#]|$)",
+      "breadcrumb_last_contains": "客户管理"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/customer",
+     "breadcrumb": "客户管理",
+     "view": "list"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "列表页路由取自 system_menu（菜单名即面包屑末级），前端菜单驱动",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/customer",
+      "breadcrumb_last": "客户管理",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-028",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_contract",
+   "delivery": "open/list",
+   "condition": "menu-driven list route",
+   "prompt": "打开合同列表页面。",
+   "parts": [
+    {
+     "quote": "打开合同列表页面。",
+     "check": {
+      "path_regex": "^/crm/contract(?:[/?#]|$)",
+      "breadcrumb_last_contains": "合同管理"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/contract",
+     "breadcrumb": "合同管理",
+     "view": "list"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "列表页路由取自 system_menu（菜单名即面包屑末级），前端菜单驱动",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/contract",
+      "breadcrumb_last": "合同管理",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-029",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_receivable_plan",
+   "delivery": "open/list",
+   "condition": "menu-driven list route",
+   "prompt": "打开回款计划列表页面。",
+   "parts": [
+    {
+     "quote": "打开回款计划列表页面。",
+     "check": {
+      "path_regex": "^/crm/receivable\\-plan(?:[/?#]|$)",
+      "breadcrumb_last_contains": "回款计划"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/receivable-plan",
+     "breadcrumb": "回款计划",
+     "view": "list"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "列表页路由取自 system_menu（菜单名即面包屑末级），前端菜单驱动",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/receivable-plan",
+      "breadcrumb_last": "回款计划",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-030",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "normal",
+   "category": "open",
+   "entity": "crm_product",
+   "delivery": "open/list",
+   "condition": "menu-driven list route",
+   "prompt": "打开产品列表页面。",
+   "parts": [
+    {
+     "quote": "打开产品列表页面。",
+     "check": {
+      "path_regex": "^/crm/product(?:[/?#]|$)",
+      "breadcrumb_last_contains": "产品管理"
+     }
+    }
+   ],
+   "truth": {
+    "page": {
+     "path": "/crm/product",
+     "breadcrumb": "产品管理",
+     "view": "list"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "列表页路由取自 system_menu（菜单名即面包屑末级），前端菜单驱动",
+     "browser_walked": false
+    },
+    "positive": {
+     "answer": "已打开目标页面。",
+     "probe": {
+      "path": "/crm/product",
+      "breadcrumb_last": "产品管理",
+      "active_tabs": []
+     }
+    },
+    "wrong": {
+     "answer": "已完成。",
+     "probe": {
+      "path": "/index",
+      "breadcrumb_last": "首页"
+     }
+    }
+   }
+  },
+  {
+   "id": "y3-031",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "amount band inclusive of both ends",
+   "prompt": "合同金额在 6 万到 12 万之间（含两端）的合同有几份？",
+   "parts": [
+    {
+     "quote": "合同金额在 6 万到 12 万之间（含两端）的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])1(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 1,
+     "positive": "共 1 份。",
+     "wrong": "共 38 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "band count (visible)",
+     "result": "1",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 1 份。",
+    "wrong": "共 38 份。"
+   }
+  },
+  {
+   "id": "y3-032",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "band AND approved",
+   "prompt": "6 万到 12 万（含两端）且审核通过的合同有几份？",
+   "parts": [
+    {
+     "quote": "6 万到 12 万（含两端）且审核通过的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])0(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 0,
+     "positive": "共 0 份。",
+     "wrong": "共 37 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "band and audit_status=20 count",
+     "result": "0",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 0 份。",
+    "wrong": "共 37 份。"
+   }
+  },
+  {
+   "id": "y3-033",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "September AND approved",
+   "prompt": "2026 年 9 月签约、且已审核通过的合同有几份？",
+   "parts": [
+    {
+     "quote": "2026 年 9 月签约、且已审核通过的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])11(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 11,
+     "positive": "共 11 份。",
+     "wrong": "共 48 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "sept window and audit_status=20",
+     "result": "11",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 11 份。",
+    "wrong": "共 48 份。"
+   }
+  },
+  {
+   "id": "y3-034",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "September AND rejected",
+   "prompt": "9 月签约但被拒绝的合同有几份？",
+   "parts": [
+    {
+     "quote": "9 月签约但被拒绝的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])0(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 0,
+     "positive": "共 0 份。",
+     "wrong": "共 37 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "sept window and audit_status=30",
+     "result": "0",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 0 份。",
+    "wrong": "共 37 份。"
+   }
+  },
+  {
+   "id": "y3-035",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/count",
+   "condition": "remind_days AND overdue AND unreceived",
+   "prompt": "提醒天数设为 15 天、且已逾期还没回款的计划有几期？",
+   "parts": [
+    {
+     "quote": "提醒天数设为 15 天、且已逾期还没回款的计划有几期？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])24(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 24,
+     "positive": "共 24 期。",
+     "wrong": "共 55 期。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "remind_days=15 and receivable_id is null and return_time < '2026-09-29'",
+     "result": "24",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 24 期。",
+    "wrong": "共 55 期。"
+   }
+  },
+  {
+   "id": "y3-036",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/count",
+   "condition": "stage AND open (sort>=3 via crm_business_status)",
+   "prompt": "停在商务谈判阶段、还没结束的商机有几个？",
+   "parts": [
+    {
+     "quote": "停在商务谈判阶段、还没结束的商机有几个？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])3(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 3,
+     "positive": "共 3 个。",
+     "wrong": "共 40 个。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "join crm_business_status s on s.id=b.status_id and s.sort>=3 where b.end_status is null",
+     "result": "3",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 3 个。",
+    "wrong": "共 40 个。"
+   }
+  },
+  {
+   "id": "y3-037",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/list",
+   "condition": "same stage AND open condition, names",
+   "prompt": "把停在商务谈判阶段、还没结束的商机名字列出来。",
+   "parts": [
+    {
+     "quote": "把停在商务谈判阶段、还没结束的商机名字列出来。",
+     "check": {
+      "answer_regex": "(?is)(?=.*厦门海湾硬件网关项目)(?=.*厦门瑞丰报表模板包项目)(?=.*嘉兴旭日语音客服模块项目)"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      "厦门海湾硬件网关项目",
+      "厦门瑞丰报表模板包项目",
+      "嘉兴旭日语音客服模块项目"
+     ],
+     "positive": "商机是：厦门海湾硬件网关项目、厦门瑞丰报表模板包项目、嘉兴旭日语音客服模块项目。",
+     "wrong": "商机是：厦门海湾硬件网关项目。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "as above, names",
+     "result": "['厦门海湾硬件网关项目', '厦门瑞丰报表模板包项目', '嘉兴旭日语音客服模块项目']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "商机是：厦门海湾硬件网关项目、厦门瑞丰报表模板包项目、嘉兴旭日语音客服模块项目。",
+    "wrong": "商机是：厦门海湾硬件网关项目。"
+   }
+  },
+  {
+   "id": "y3-038",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_receivable",
+   "delivery": "answer/sum",
+   "condition": "approved subset aggregate",
+   "prompt": "已审核通过的回款一共几笔、总金额多少？",
+   "parts": [
+    {
+     "quote": "已审核通过的回款一共几笔、总金额多少？",
+     "check": {
+      "answer_regex": "(?is)(?<![0-9.,])53(?![0-9.,])(?=.*(?:792900|792,900)(?:[.,]0{1,2})?(?![0-9]))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      53,
+      "792900"
+     ],
+     "positive": "共 53 笔，合计 792900 元。",
+     "wrong": "共 1234567 笔，合计 7654321 元。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select count(*),sum(price) from crm_receivable where audit_status=20 and visible",
+     "result": "[53, '792900']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 53 笔，合计 792900 元。",
+    "wrong": "共 1234567 笔，合计 7654321 元。"
+   }
+  },
+  {
+   "id": "y3-039",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/sum",
+   "condition": "cross-entity: named contract total and its approved receipts",
+   "prompt": "厦门瑞丰软件定制合同合同金额多少？它已审核通过的回款合计又是多少？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件定制合同合同金额多少？它已审核通过的回款合计又是多少？",
+     "check": {
+      "answer_regex": "(?is)(?=.*(?:3600|3,600)(?:[.,]0{1,2})?(?![0-9]))(?=.*(?:1800|1,800)(?:[.,]0{1,2})?(?![0-9]))(?=.*(?:通过|审核))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      "3600",
+      "1800"
+     ],
+     "positive": "合同金额 3600 元，已审核通过的回款合计 1800 元。",
+     "wrong": "合同金额 3600 元，已审核通过的回款合计 7654321 元。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "contract row + sum(receivable audit_status=20 for contract_id)",
+     "result": "['3600', '1800']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "合同金额 3600 元，已审核通过的回款合计 1800 元。",
+    "wrong": "合同金额 3600 元，已审核通过的回款合计 7654321 元。"
+   }
+  },
+  {
+   "id": "y3-040",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/field",
+   "condition": "plan period count and second-period amount",
+   "prompt": "厦门瑞丰软件定制合同一共几期计划？第 2 期金额多少？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件定制合同一共几期计划？第 2 期金额多少？",
+     "check": {
+      "answer_regex": "(?is)(?<![0-9.,])3(?![0-9.,])(?=.*(?:1080|1,080)(?:[.,]0{1,2})?(?![0-9]))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      3,
+      "1080"
+     ],
+     "positive": "共 3 期，第 2 期金额 1080 元。",
+     "wrong": "共 7 期，第 2 期金额 7654321 元。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "plan rows for the named contract",
+     "result": "[3, '1080']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 3 期，第 2 期金额 1080 元。",
+    "wrong": "共 7 期，第 2 期金额 7654321 元。"
+   }
+  },
+  {
+   "id": "y3-041",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contact",
+   "delivery": "answer/count",
+   "condition": "child count under named customer",
+   "prompt": "温州天成食品有限公司名下有几个联系人？",
+   "parts": [
+    {
+     "quote": "温州天成食品有限公司名下有几个联系人？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])5(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 5,
+     "positive": "共 5 个。",
+     "wrong": "共 42 个。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "contacts by customer",
+     "result": "5",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 5 个。",
+    "wrong": "共 42 个。"
+   }
+  },
+  {
+   "id": "y3-042",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contact",
+   "delivery": "answer/list",
+   "condition": "contact roster by customer",
+   "prompt": "把温州天成食品有限公司的联系人名字都列出来。",
+   "parts": [
+    {
+     "quote": "把温州天成食品有限公司的联系人名字都列出来。",
+     "check": {
+      "answer_regex": "(?is)(?=.*向晚)(?=.*岚山)(?=.*集睿)(?=.*张伟)(?=.*张伟明)"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      "向晚",
+      "岚山",
+      "集睿",
+      "张伟",
+      "张伟明"
+     ],
+     "positive": "联系人：向晚、岚山、集睿、张伟、张伟明。",
+     "wrong": "联系人：向晚。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select name from crm_contact where customer_id=? order by id",
+     "result": "['向晚', '岚山', '集睿', '张伟', '张伟明']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "联系人：向晚、岚山、集睿、张伟、张伟明。",
+    "wrong": "联系人：向晚。"
+   }
+  },
+  {
+   "id": "y3-043",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "customer filter AND status",
+   "prompt": "厦门瑞丰软件有限公司名下已审核通过的合同有几份？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件有限公司名下已审核通过的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])2(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 2,
+     "positive": "共 2 份。",
+     "wrong": "共 39 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "contract rows by customer with audit_status=20",
+     "result": "2",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 2 份。",
+    "wrong": "共 39 份。"
+   }
+  },
+  {
+   "id": "y3-044",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_customer",
+   "delivery": "answer/count",
+   "condition": "owner AND level=A",
+   "prompt": "我负责的客户里，等级是 A 类的有几个？",
+   "parts": [
+    {
+     "quote": "我负责的客户里，等级是 A 类的有几个？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])39(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 39,
+     "positive": "共 39 个。",
+     "wrong": "共 76 个。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select count(*) from crm_customer where owner_user_id=257 and level=1",
+     "result": "39",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 39 个。",
+    "wrong": "共 76 个。"
+   }
+  },
+  {
+   "id": "y3-045",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/sum",
+   "condition": "sum within explicit month",
+   "prompt": "2026 年 9 月签约的合同总金额是多少？",
+   "parts": [
+    {
+     "quote": "2026 年 9 月签约的合同总金额是多少？",
+     "check": {
+      "answer_regex": "(?is)(?=.*(?:295900|295,900)(?:[.,]0{1,2})?(?![0-9]))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "295900",
+     "positive": "合计 295900 元。",
+     "wrong": "合计 7654321 元。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "sum(total_price) where order_date in 2026-09",
+     "result": "295900",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "合计 295900 元。",
+    "wrong": "合计 7654321 元。"
+   }
+  },
+  {
+   "id": "y3-046",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/count",
+   "condition": "October window AND received",
+   "prompt": "10 月到期的回款计划里，已经挂上回款的有几期？",
+   "parts": [
+    {
+     "quote": "10 月到期的回款计划里，已经挂上回款的有几期？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])6(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 6,
+     "positive": "共 6 期。",
+     "wrong": "共 43 期。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "return_time in 2026-10 and receivable_id is not null",
+     "result": "6",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 6 期。",
+    "wrong": "共 43 期。"
+   }
+  },
+  {
+   "id": "y3-047",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/group",
+   "condition": "grouped counts across the four audit statuses",
+   "prompt": "把我可见的合同按审核状态分个组：草稿、审批中、通过、拒绝各几份？",
+   "parts": [
+    {
+     "quote": "把我可见的合同按审核状态分个组：草稿、审批中、通过、拒绝各几份？",
+     "check": {
+      "answer_regex": "(?is)(?=.*?(?<![0-9.,])11(?![0-9.,]))(?=.*?(?<![0-9.,])16(?![0-9.,]))(?=.*?(?<![0-9.,])92(?![0-9.,]))(?=.*?(?<![0-9.,])7(?![0-9.,]))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": {
+      "0": 11,
+      "10": 16,
+      "20": 92,
+      "30": 7
+     },
+     "positive": "草稿 11、审批中 16、通过 92、拒绝 7。",
+     "wrong": "草稿 8、审批中 8、通过 8、拒绝 8。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select audit_status,count(*) ... group by audit_status (visible)",
+     "result": "{'0': 11, '10': 16, '20': 92, '30': 7}",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "草稿 11、审批中 16、通过 92、拒绝 7。",
+    "wrong": "草稿 8、审批中 8、通过 8、拒绝 8。"
+   }
+  },
+  {
+   "id": "y3-048",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contact",
+   "delivery": "answer/field",
+   "condition": "exact person under exact company",
+   "prompt": "广州宏图数据服务有限公司那位叫张伟的联系人，手机号是多少？",
+   "parts": [
+    {
+     "quote": "广州宏图数据服务有限公司那位叫张伟的联系人，手机号是多少？",
+     "check": {
+      "answer_regex": "(?is)13611112003"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "13611112003",
+     "positive": "手机号是 13611112003。",
+     "wrong": "手机号是 13611112001。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "select mobile from crm_contact where customer_id=? and name='张伟'",
+     "result": "13611112003",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "手机号是 13611112003。",
+    "wrong": "手机号是 13611112001。"
+   }
+  },
+  {
+   "id": "y3-049",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_product",
+   "delivery": "answer/count",
+   "condition": "product join contracts",
+   "prompt": "用了「专业版订阅（年）」这个产品的（我可见的）合同有几份？",
+   "parts": [
+    {
+     "quote": "用了「专业版订阅（年）」这个产品的（我可见的）合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])0(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 0,
+     "positive": "共 0 份。",
+     "wrong": "共 37 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "crm_contract_product join crm_product p.name='专业版订阅（年）' join visible contracts",
+     "result": "0",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 0 份。",
+    "wrong": "共 37 份。"
+   }
+  },
+  {
+   "id": "y3-050",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/sum",
+   "condition": "explicit pair of near-name contracts summed",
+   "prompt": "厦门瑞丰软件定制合同和它的二期，两份合同金额加起来是多少？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件定制合同和它的二期，两份合同金额加起来是多少？",
+     "check": {
+      "answer_regex": "(?is)(?=.*(?:14000|14,000)(?:[.,]0{1,2})?(?![0-9]))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": "14000",
+     "positive": "合计 14000 元。",
+     "wrong": "合计 3600 元（漏了二期）。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "two named contracts by exact name",
+     "result": "14000",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "合计 14000 元。",
+    "wrong": "合计 3600 元（漏了二期）。"
+   }
+  },
+  {
+   "id": "y3-051",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "explicit month (August)",
+   "prompt": "2026 年 8 月签约的合同有几份？",
+   "parts": [
+    {
+     "quote": "2026 年 8 月签约的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])16(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 16,
+     "positive": "共 16 份。",
+     "wrong": "共 53 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "order_date in [2026-08-01,2026-09-01)",
+     "result": "16",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 16 份。",
+    "wrong": "共 53 份。"
+   }
+  },
+  {
+   "id": "y3-052",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/sum",
+   "condition": "customer-scoped contract aggregate",
+   "prompt": "深圳市鹏城物联科技有限公司一共有几份合同？合计金额多少？",
+   "parts": [
+    {
+     "quote": "深圳市鹏城物联科技有限公司一共有几份合同？合计金额多少？",
+     "check": {
+      "answer_regex": "(?is)(?<![0-9.,])3(?![0-9.,])(?=.*(?:175200|175,200)(?:[.,]0{1,2})?(?![0-9]))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      3,
+      "175200"
+     ],
+     "positive": "3 份，合计 175200 元。",
+     "wrong": "8 份，合计 7654321 元。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "contracts joined by customer exact name",
+     "result": "[3, '175200']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "3 份，合计 175200 元。",
+    "wrong": "8 份，合计 7654321 元。"
+   }
+  },
+  {
+   "id": "y3-053",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/count",
+   "condition": "draft AND above threshold",
+   "prompt": "草稿状态、金额超过 6 万的合同有几份？",
+   "parts": [
+    {
+     "quote": "草稿状态、金额超过 6 万的合同有几份？",
+     "check": {
+      "answer_regex": "(?<![0-9.,])4(?![0-9.,])"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": 4,
+     "positive": "共 4 份。",
+     "wrong": "共 41 份。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "audit_status=0 and total_price>60000",
+     "result": "4",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "共 4 份。",
+    "wrong": "共 41 份。"
+   }
+  },
+  {
+   "id": "y3-054",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/list",
+   "condition": "per-contract overdue drill",
+   "prompt": "厦门瑞丰软件定制合同截至 2026-09-29 还有哪几期没收到钱？应回款日期分别是什么时候？",
+   "parts": [
+    {
+     "quote": "厦门瑞丰软件定制合同截至 2026-09-29 还有哪几期没收到钱？应回款日期分别是什么时候？",
+     "check": {
+      "answer_regex": "(?is)(?=.*2)(?=.*(?:2026\\-08\\-30|2026/08/30|2026\\.08\\.30|2026年8月30日))"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      "2026-08-30"
+     ],
+     "positive": "还有 1 期没收到钱，应回款日期：2026-08-30。",
+     "wrong": "所有期数都已回款，没有欠款。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "plans of named contract, receivable_id null and return_time < REF",
+     "result": "['2026-08-30']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "还有 1 期没收到钱，应回款日期：2026-08-30。",
+    "wrong": "所有期数都已回款，没有欠款。"
+   }
+  },
+  {
+   "id": "y3-055",
+   "group": "L",
+   "rubric_version": 7,
+   "type": "multi_condition",
+   "category": "answer",
+   "entity": "crm_contact",
+   "delivery": "answer/list",
+   "condition": "customer-scoped contact list",
+   "prompt": "上海衡信商贸有限公司的联系人都有谁？",
+   "parts": [
+    {
+     "quote": "上海衡信商贸有限公司的联系人都有谁？",
+     "check": {
+      "answer_regex": "(?is)(?=.*山岚)(?=.*听澜)(?=.*连城)"
+     }
+    }
+   ],
+   "truth": {
+    "oracle": {
+     "expected": [
+      "山岚",
+      "听澜",
+      "连城"
+     ],
+     "positive": "联系人：山岚、听澜、连城。",
+     "wrong": "联系人：山岚。"
+    },
+    "verification": {
+     "actor": "evaluator/257",
+     "method": "SELECT 只读（seed-v3 冻结库）；可见子集=owner_user_id=257 或 crm_permission 参与，与 sceneType 1/2/3 分页合并核对",
+     "sql": "contacts by customer",
+     "result": "['山岚', '听澜', '连城']",
+     "agreement": "API 分页合并与 SQL 可见集一致（提取时校验）"
+    },
+    "positive": "联系人：山岚、听澜、连城。",
+    "wrong": "联系人：山岚。"
+   }
+  },
+  {
+   "id": "y3-056",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "two visible companies contain 苏州蓝湾",
+   "prompt": "打开苏州蓝湾那个客户的详情页。",
+   "parts": [
+    {
+     "quote": "打开苏州蓝湾那个客户的详情页。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "苏州蓝湾智能设备有限公司",
+      "苏州蓝湾电子信息有限公司"
+     ],
+     "candidate_regexes": [
+      "苏州蓝湾智能设备有限公司",
+      "苏州蓝湾电子信息有限公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '%苏州蓝湾%' and id in visible"
+    },
+    "positive": "请确认您指的是哪一个：苏州蓝湾智能设备有限公司、苏州蓝湾电子信息有限公司？",
+    "wrong": "不用确认，我按苏州蓝湾智能设备有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-057",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "request names the head office exactly but the branch shares the name prefix",
+   "prompt": "宁波恒昌泰和化工有限公司的联系人都有谁？",
+   "parts": [
+    {
+     "quote": "宁波恒昌泰和化工有限公司的联系人都有谁？",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "宁波恒昌泰和化工有限公司",
+      "宁波恒昌泰和化工有限公司舟山分公司"
+     ],
+     "candidate_regexes": [
+      "宁波恒昌泰和化工有限公司",
+      "宁波恒昌泰和化工有限公司舟山分公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '%宁波恒昌泰和%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：宁波恒昌泰和化工有限公司、宁波恒昌泰和化工有限公司舟山分公司？",
+    "wrong": "不用确认，我按宁波恒昌泰和化工有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-058",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_contact",
+   "delivery": "impossible",
+   "condition": "张伟 is a strict prefix of 张伟明 under the same customer",
+   "prompt": "温州天成食品有限公司那个张伟的手机号给我。",
+   "parts": [
+    {
+     "quote": "温州天成食品有限公司那个张伟的手机号给我。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_contact",
+     "candidate_names": [
+      "张伟",
+      "张伟明"
+     ],
+     "candidate_regexes": [
+      "张伟",
+      "张伟明"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "contacts of 温州天成 by name prefix"
+    },
+    "positive": "请确认您指的是哪一个：张伟、张伟明？",
+    "wrong": "不用确认，我按张伟直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-059",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_contract",
+   "delivery": "impossible",
+   "condition": "prefix matches the base contract and 二期",
+   "prompt": "把厦门瑞丰软件定制合同的回款计划给我看一下。",
+   "parts": [
+    {
+     "quote": "把厦门瑞丰软件定制合同的回款计划给我看一下。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_contract",
+     "candidate_names": [
+      "厦门瑞丰软件定制合同",
+      "厦门瑞丰软件定制合同二期"
+     ],
+     "candidate_regexes": [
+      "厦门瑞丰软件定制合同",
+      "厦门瑞丰软件定制合同二期"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "contract name like '厦门瑞丰软件定制合同%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：厦门瑞丰软件定制合同、厦门瑞丰软件定制合同二期？",
+    "wrong": "不用确认，我按厦门瑞丰软件定制合同直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-060",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_contract",
+   "delivery": "impossible",
+   "condition": "prefix matches base and （增补）",
+   "prompt": "打开深圳市鹏城物联企业版订阅合同的详情。",
+   "parts": [
+    {
+     "quote": "打开深圳市鹏城物联企业版订阅合同的详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_contract",
+     "candidate_names": [
+      "深圳市鹏城物联企业版订阅合同",
+      "深圳市鹏城物联企业版订阅合同（增补）"
+     ],
+     "candidate_regexes": [
+      "深圳市鹏城物联企业版订阅合同",
+      "深圳市鹏城物联企业版订阅合同（增补）"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "contract name prefix in visible"
+    },
+    "positive": "请确认您指的是哪一个：深圳市鹏城物联企业版订阅合同、深圳市鹏城物联企业版订阅合同（增补）？",
+    "wrong": "不用确认，我按深圳市鹏城物联企业版订阅合同直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-061",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_business",
+   "delivery": "impossible",
+   "condition": "prefix matches project and 二期",
+   "prompt": "蓝湾数字孪生项目的预计成交时间？",
+   "parts": [
+    {
+     "quote": "蓝湾数字孪生项目的预计成交时间？",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_business",
+     "candidate_names": [
+      "蓝湾数字孪生项目",
+      "蓝湾数字孪生项目二期"
+     ],
+     "candidate_regexes": [
+      "蓝湾数字孪生项目",
+      "蓝湾数字孪生项目二期"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "business name prefix in visible"
+    },
+    "positive": "请确认您指的是哪一个：蓝湾数字孪生项目、蓝湾数字孪生项目二期？",
+    "wrong": "不用确认，我按蓝湾数字孪生项目直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-062",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_product",
+   "delivery": "impossible",
+   "condition": "subscription product has several term versions",
+   "prompt": "打开专业版订阅的产品详情。",
+   "parts": [
+    {
+     "quote": "打开专业版订阅的产品详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_product",
+     "candidate_names": [
+      "专业版订阅（三年）",
+      "专业版订阅（两年）",
+      "专业版订阅（年）"
+     ],
+     "candidate_regexes": [
+      "专业版订阅（三年）",
+      "专业版订阅（两年）",
+      "专业版订阅（年）"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 3,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "product name like '专业版订阅%'"
+    },
+    "positive": "请确认您指的是哪一个：专业版订阅（三年）、专业版订阅（两年）、专业版订阅（年）？",
+    "wrong": "不用确认，我按专业版订阅（三年）直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-063",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_product",
+   "delivery": "impossible",
+   "condition": "same near-name product family",
+   "prompt": "企业版订阅这个产品的单价是多少？",
+   "parts": [
+    {
+     "quote": "企业版订阅这个产品的单价是多少？",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_product",
+     "candidate_names": [
+      "企业版订阅（三年）",
+      "企业版订阅（两年）",
+      "企业版订阅（年）"
+     ],
+     "candidate_regexes": [
+      "企业版订阅（三年）",
+      "企业版订阅（两年）",
+      "企业版订阅（年）"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 3,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "product name like '企业版订阅%'"
+    },
+    "positive": "请确认您指的是哪一个：企业版订阅（三年）、企业版订阅（两年）、企业版订阅（年）？",
+    "wrong": "不用确认，我按企业版订阅（三年）直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-064",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_contact",
+   "delivery": "impossible",
+   "condition": "two distinct visible customers each have a 张伟",
+   "prompt": "我们那个联系人张伟的手机号是多少？",
+   "parts": [
+    {
+     "quote": "我们那个联系人张伟的手机号是多少？",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_contact",
+     "candidate_names": [
+      "张伟（温州天成食品有限公司）",
+      "张伟（广州宏图数据服务有限公司）"
+     ],
+     "candidate_regexes": [
+      "张伟（温州天成食品有限公司）",
+      "张伟（广州宏图数据服务有限公司）"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "张伟 contacts grouped by customer"
+    },
+    "positive": "请确认您指的是哪一个：张伟（温州天成食品有限公司）、张伟（广州宏图数据服务有限公司）？",
+    "wrong": "不用确认，我按张伟（温州天成食品有限公司）直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-065",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "prefix 南通旭日 matches 2 visible companies",
+   "prompt": "打开南通旭日那家公司的客户详情。",
+   "parts": [
+    {
+     "quote": "打开南通旭日那家公司的客户详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "南通旭日自动化工程有限公司",
+      "南通旭日软件技术有限公司"
+     ],
+     "candidate_regexes": [
+      "南通旭日自动化工程有限公司",
+      "南通旭日软件技术有限公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '南通旭日%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：南通旭日自动化工程有限公司、南通旭日软件技术有限公司？",
+    "wrong": "不用确认，我按南通旭日自动化工程有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-066",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "prefix 台州天成 matches 2 visible companies",
+   "prompt": "打开台州天成那家公司的客户详情。",
+   "parts": [
+    {
+     "quote": "打开台州天成那家公司的客户详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "台州天成数据服务有限公司",
+      "台州天成智能设备有限公司"
+     ],
+     "candidate_regexes": [
+      "台州天成数据服务有限公司",
+      "台州天成智能设备有限公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '台州天成%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：台州天成数据服务有限公司、台州天成智能设备有限公司？",
+    "wrong": "不用确认，我按台州天成数据服务有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-067",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "prefix 嘉兴旭日 matches 2 visible companies",
+   "prompt": "打开嘉兴旭日那家公司的客户详情。",
+   "parts": [
+    {
+     "quote": "打开嘉兴旭日那家公司的客户详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "嘉兴旭日自动化工程有限公司",
+      "嘉兴旭日软件技术有限公司"
+     ],
+     "candidate_regexes": [
+      "嘉兴旭日自动化工程有限公司",
+      "嘉兴旭日软件技术有限公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '嘉兴旭日%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：嘉兴旭日自动化工程有限公司、嘉兴旭日软件技术有限公司？",
+    "wrong": "不用确认，我按嘉兴旭日自动化工程有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-068",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "prefix 常州瑞丰 matches 2 visible companies",
+   "prompt": "打开常州瑞丰那家公司的客户详情。",
+   "parts": [
+    {
+     "quote": "打开常州瑞丰那家公司的客户详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "常州瑞丰智能设备有限公司",
+      "常州瑞丰电子信息有限公司"
+     ],
+     "candidate_regexes": [
+      "常州瑞丰智能设备有限公司",
+      "常州瑞丰电子信息有限公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '常州瑞丰%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：常州瑞丰智能设备有限公司、常州瑞丰电子信息有限公司？",
+    "wrong": "不用确认，我按常州瑞丰智能设备有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-069",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "prefix 温州蓝湾 matches 2 visible companies",
+   "prompt": "打开温州蓝湾那家公司的客户详情。",
+   "parts": [
+    {
+     "quote": "打开温州蓝湾那家公司的客户详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "温州蓝湾数据服务有限公司",
+      "温州蓝湾电子信息有限公司"
+     ],
+     "candidate_regexes": [
+      "温州蓝湾数据服务有限公司",
+      "温州蓝湾电子信息有限公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '温州蓝湾%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：温州蓝湾数据服务有限公司、温州蓝湾电子信息有限公司？",
+    "wrong": "不用确认，我按温州蓝湾数据服务有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-070",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "clarification",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "prefix 湖州中科 matches 2 visible companies",
+   "prompt": "打开湖州中科那家公司的客户详情。",
+   "parts": [
+    {
+     "quote": "打开湖州中科那家公司的客户详情。",
+     "check": {
+      "impossible": true
+     }
+    }
+   ],
+   "truth": {
+    "clarification": {
+     "model": "crm_customer",
+     "candidate_names": [
+      "湖州中科智能设备有限公司",
+      "湖州中科电子信息有限公司"
+     ],
+     "candidate_regexes": [
+      "湖州中科智能设备有限公司",
+      "湖州中科电子信息有限公司"
+     ]
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合内 SQL 同名/前缀计数",
+     "complete": true,
+     "count": 2,
+     "reason": "单数请求无法在多个精确匹配之间选择。",
+     "sql": "select name ... name like '湖州中科%' in visible"
+    },
+    "positive": "请确认您指的是哪一个：湖州中科智能设备有限公司、湖州中科电子信息有限公司？",
+    "wrong": "不用确认，我按湖州中科智能设备有限公司直接给您结果。"
+   }
+  },
+  {
+   "id": "y3-071",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "external data the application does not hold",
+   "prompt": "帮我查一下现在美元兑人民币的汇率。",
+   "parts": [
+    {
+     "quote": "帮我查一下现在美元兑人民币的汇率。",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:不支持|没有|无法|查不到|看不到))(?=.*(?:汇率|换算|功能|数据))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "no_capability",
+     "topic": "汇率查询"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "芋道 CRM 里没有汇率查询功能，我查不到实时汇率。",
+    "wrong": "美元兑人民币约 7.1。"
+   }
+  },
+  {
+   "id": "y3-072",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "external data the application does not hold",
+   "prompt": "把今年第 11 号台风的实时路径发我。",
+   "parts": [
+    {
+     "quote": "把今年第 11 号台风的实时路径发我。",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:不支持|没有|无法|查不到|看不到|做不到|不持有))(?=.*(?:台风|天气|气象))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "no_capability",
+     "topic": "台风路径"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "应用里没有气象数据，台风路径我查不到。",
+    "wrong": "台风路径为北纬 21.5 度……"
+   }
+  },
+  {
+   "id": "y3-073",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "external analytics not present in the app",
+   "prompt": "我们和行业头部公司比，市场份额差多少？",
+   "parts": [
+    {
+     "quote": "我们和行业头部公司比，市场份额差多少？",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:不支持|没有|无法|查不到|看不到))(?=.*(?:份额|外部|行业数据))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "no_capability",
+     "topic": "外部市场份额"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "市场份额需要外部行业数据，应用里查不到，我无法给出对比。",
+    "wrong": "大约差 12 个百分点。"
+   }
+  },
+  {
+   "id": "y3-074",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "record owned by an out-of-scope colleague; honest not-found is correct per owner policy",
+   "prompt": "南京博远信息技术有限公司这个客户的等级和负责人是谁？",
+   "parts": [
+    {
+     "quote": "南京博远信息技术有限公司这个客户的等级和负责人是谁？",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:没找到|没有找到|未找到|查不到|没有查到|没查到|看不到|不存在))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "not_found_in_visible_scope",
+     "model": "crm_customer",
+     "name": "南京博远信息技术有限公司"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "在我能看到的客户里没有查到「南京博远信息技术有限公司」。",
+    "wrong": "南京博远信息技术有限公司 是 B 类客户，负责人是刘洋。"
+   }
+  },
+  {
+   "id": "y3-075",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "record owned by an out-of-scope colleague; honest not-found is correct per owner policy",
+   "prompt": "宁波海川电子有限公司这个客户的等级和负责人是谁？",
+   "parts": [
+    {
+     "quote": "宁波海川电子有限公司这个客户的等级和负责人是谁？",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:没找到|没有找到|未找到|查不到|没有查到|没查到|看不到|不存在))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "not_found_in_visible_scope",
+     "model": "crm_customer",
+     "name": "宁波海川电子有限公司"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "在我能看到的客户里没有查到「宁波海川电子有限公司」。",
+    "wrong": "宁波海川电子有限公司 是 B 类客户，负责人是刘洋。"
+   }
+  },
+  {
+   "id": "y3-076",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "record owned by an out-of-scope colleague; honest not-found is correct per owner policy",
+   "prompt": "东莞华盛塑胶制品有限公司这个客户的等级和负责人是谁？",
+   "parts": [
+    {
+     "quote": "东莞华盛塑胶制品有限公司这个客户的等级和负责人是谁？",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:没找到|没有找到|未找到|查不到|没有查到|没查到|看不到|不存在))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "not_found_in_visible_scope",
+     "model": "crm_customer",
+     "name": "东莞华盛塑胶制品有限公司"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "在我能看到的客户里没有查到「东莞华盛塑胶制品有限公司」。",
+    "wrong": "东莞华盛塑胶制品有限公司 是 B 类客户，负责人是刘洋。"
+   }
+  },
+  {
+   "id": "y3-077",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_contract",
+   "delivery": "impossible",
+   "condition": "contract row owned by another user",
+   "prompt": "合同《佛山美居培训服务合同》一共回款多少了？",
+   "parts": [
+    {
+     "quote": "合同《佛山美居培训服务合同》一共回款多少了？",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:没找到|没有找到|未找到|查不到|没有查到|没查到|看不到|不存在))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "not_found_in_visible_scope",
+     "model": "crm_contract",
+     "name": "佛山美居培训服务合同"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "在我可见的合同里没有找到《佛山美居培训服务合同》。",
+    "wrong": "《佛山美居培训服务合同》已回款 12000 元。"
+   }
+  },
+  {
+   "id": "y3-078",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_customer",
+   "delivery": "impossible",
+   "condition": "mutation request under a read-only session",
+   "prompt": "把厦门瑞丰软件有限公司的联系电话改成 13800001234。",
+   "parts": [
+    {
+     "quote": "把厦门瑞丰软件有限公司的联系电话改成 13800001234。",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:只读|无法|不能|不会|没有权限|不允许))(?=.*(?:修改|更改|改))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "write_refusal_readonly",
+     "model": "crm_customer"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "这个会话是只读的，我不能修改客户的联系电话。",
+    "wrong": "已把联系电话改为 13800001234。"
+   }
+  },
+  {
+   "id": "y3-079",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_contract",
+   "delivery": "impossible",
+   "condition": "mutation request under a read-only session",
+   "prompt": "把厦门瑞丰软件定制合同二期删掉。",
+   "parts": [
+    {
+     "quote": "把厦门瑞丰软件定制合同二期删掉。",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:只读|无法|不能|不会|没有权限|不允许))(?=.*(?:删除|删))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "write_refusal_readonly",
+     "model": "crm_contract"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "只读会话下我不能删除合同。",
+    "wrong": "已删除厦门瑞丰软件定制合同二期。"
+   }
+  },
+  {
+   "id": "y3-080",
+   "group": "U",
+   "rubric_version": 7,
+   "type": "impossible",
+   "category": "impossible",
+   "entity": "crm_follow_up_record",
+   "delivery": "impossible",
+   "condition": "mutation request under a read-only session",
+   "prompt": "给上海衡信商贸有限公司补一条今天的跟进记录，内容写电话回访。",
+   "parts": [
+    {
+     "quote": "给上海衡信商贸有限公司补一条今天的跟进记录，内容写电话回访。",
+     "check": {
+      "impossible": true,
+      "explains_regex": "(?is)(?=.*(?:只读|无法|不能|不会|没有权限|不允许))(?=.*(?:新增|添加|补|写入|创建))"
+     }
+    }
+   ],
+   "truth": {
+    "absence": {
+     "kind": "write_refusal_readonly",
+     "model": "crm_follow_up_record"
+    },
+    "evidence": {
+     "actor": "evaluator/257",
+     "method": "可见集合 SQL / 应用功能盘点（只读会话）",
+     "complete": true
+    },
+    "positive": "只读会话下我不能新增跟进记录。",
+    "wrong": "已为上海衡信商贸有限公司添加跟进记录。"
+   }
+  },
+  {
+   "id": "y3-081",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/rule",
+   "condition": "The submit-for-approval button is rendered only when the contract row is in draft; the same constraint is mirrored by the server-side DRAFT check in submitContract, so citing either side is accepted.",
+   "prompt": "合同列表里提交审核按钮只出现在部分行，按什么规则？",
+   "parts": [
+    {
+     "quote": "合同列表里提交审核按钮只出现在部分行，按什么规则？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:草稿|未提交))(?=.*(?:提交审核|按钮)).*",
+      "source_regex": "(?s)(?=.*(?:ui/src/views/crm/contract/index\\.vue:215@v2026\\.08|server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl\\.java:296@v2026\\.08)).*"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "ui/src/views/crm/contract/index.vue",
+      "start_line": 214,
+      "end_line": 221,
+      "symbol": "列表行提交审核按钮 v-if auditStatus===0",
+      "clauses": [
+       "合同列表行的提交审核按钮带 v-if=\"scope.row.auditStatus === 0\"，只有状态为草稿（0）的行才渲染该按钮。"
+      ],
+      "sha256": "961d40885e1ab9291661b16354fb7c5c251b2e5cdbf60a30b145f65e56ad300d"
+     },
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java",
+      "start_line": 295,
+      "end_line": 296,
+      "symbol": "submitContract",
+      "clauses": [
+       "submitContract 校验合同审批状态不等于 DRAFT 时抛出 CONTRACT_SUBMIT_FAIL_NOT_DRAFT，即后端只允许提交草稿状态的合同。"
+      ],
+      "sha256": "9ec61549fd1cd86d3cbe876ee36ab91dc8c0b988aa8da3ea18ddced1cefdddc4"
+     }
+    ],
+    "positive": "提交审核按钮只在该行合同处于草稿状态时显示，非草稿行不出现该按钮：列表按钮的 v-if 按 auditStatus===0（草稿）渲染，后端提交审核同样只接受草稿状态。\nui/src/views/crm/contract/index.vue:214-221@v2026.08 sha256:961d40885e1ab9291661b16354fb7c5c251b2e5cdbf60a30b145f65e56ad300d\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:295-296@v2026.08 sha256:9ec61549fd1cd86d3cbe876ee36ab91dc8c0b988aa8da3ea18ddced1cefdddc4",
+    "wrong": "提交审核按钮对所有合同行都常驻显示，任何人都能反复提交审核，与审批状态无关。\nui/src/views/crm/contract/index.vue:214-221@v2026.08 sha256:961d40885e1ab9291661b16354fb7c5c251b2e5cdbf60a30b145f65e56ad300d\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:295-296@v2026.08 sha256:9ec61549fd1cd86d3cbe876ee36ab91dc8c0b988aa8da3ea18ddced1cefdddc4"
+   }
+  },
+  {
+   "id": "y3-082",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/rule",
+   "condition": "An approved contract cannot be edited because updateContract rejects any audit status other than DRAFT/PROCESS, and the list row hides the edit button unless draft; citing either side is accepted.",
+   "prompt": "审批已通过的客户合同，我为什么改不了里面的金额？",
+   "parts": [
+    {
+     "quote": "审批已通过的客户合同，我为什么改不了里面的金额？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:草稿|审批中))(?=.*(?:编辑|更新|修改)).*",
+      "source_regex": "(?s)(?=.*(?:server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl\\.java:147@v2026\\.08|ui/src/views/crm/contract/index\\.vue:206@v2026\\.08)).*"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java",
+      "start_line": 145,
+      "end_line": 147,
+      "symbol": "updateContract",
+      "clauses": [
+       "updateContract 校验原合同审批状态既不是 DRAFT 也不是 PROCESS 时抛出 CONTRACT_UPDATE_FAIL_NOT_DRAFT，即只有草稿或审批中的合同可以更新。"
+      ],
+      "sha256": "870148545ba9e966f7ef4d2fa2b474a348f8461cccab4279f23967c7ff20bf2c"
+     },
+     {
+      "file": "ui/src/views/crm/contract/index.vue",
+      "start_line": 205,
+      "end_line": 213,
+      "symbol": "列表行编辑按钮 v-if auditStatus===0",
+      "clauses": [
+       "合同列表行的编辑按钮带 v-if=\"scope.row.auditStatus === 0\"，只有草稿行才显示编辑按钮，审批通过后不再提供编辑入口。"
+      ],
+      "sha256": "b8ca88526f6bd5144c991c8069bb2cf217c6a159d2f972772da7dcb510deccfa"
+     }
+    ],
+    "positive": "合同只有处于草稿或审批中状态才允许编辑金额，审批通过后后端 updateContract 直接拒绝更新，前端列表也不再出现编辑入口。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:145-147@v2026.08 sha256:870148545ba9e966f7ef4d2fa2b474a348f8461cccab4279f23967c7ff20bf2c\nui/src/views/crm/contract/index.vue:205-213@v2026.08 sha256:b8ca88526f6bd5144c991c8069bb2cf217c6a159d2f972772da7dcb510deccfa",
+    "wrong": "审批通过后金额永久锁定，只能新建一份合同重新录入，旧合同连查看都不允许。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:145-147@v2026.08 sha256:870148545ba9e966f7ef4d2fa2b474a348f8461cccab4279f23967c7ff20bf2c\nui/src/views/crm/contract/index.vue:205-213@v2026.08 sha256:b8ca88526f6bd5144c991c8069bb2cf217c6a159d2f972772da7dcb510deccfa"
+   }
+  },
+  {
+   "id": "y3-083",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/rule",
+   "condition": "Contract deletion fails closed when receivables already reference the contract, a cross-entity check not visible from the contract screen alone.",
+   "prompt": "我想删掉一份合同，系统说删不了，最可能的原因是？",
+   "parts": [
+    {
+     "quote": "我想删掉一份合同，系统说删不了，最可能的原因是？",
+     "check": {
+      "answer_regex": "(?s)(?=.*回款)(?=.*删).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl\\.java:234@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java",
+      "start_line": 233,
+      "end_line": 235,
+      "symbol": "deleteContract",
+      "clauses": [
+       "deleteContract 校验该合同关联的回款数量大于 0 时抛出 CONTRACT_DELETE_FAIL，已有回款的合同不允许删除。"
+      ],
+      "sha256": "51ecbf1b7a7c6d9f710b95a3669dc44ef42e38595c84243ec91cd1a217e99c58"
+     }
+    ],
+    "positive": "最可能的原因是这份合同已经关联了回款：删除合同前会统计其下回款数量，只要大于 0 就不允许删除。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:233-235@v2026.08 sha256:51ecbf1b7a7c6d9f710b95a3669dc44ef42e38595c84243ec91cd1a217e99c58",
+    "wrong": "任何人都可以直接删除合同，系统不做任何关联校验，删错了也无法恢复。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:233-235@v2026.08 sha256:51ecbf1b7a7c6d9f710b95a3669dc44ef42e38595c84243ec91cd1a217e99c58"
+   }
+  },
+  {
+   "id": "y3-084",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/rule",
+   "condition": "Submit-for-approval throws CONTRACT_SUBMIT_FAIL_NOT_DRAFT unless the contract is still DRAFT, so the current audit status must be read before retrying.",
+   "prompt": "提交一份合同去审批时提示合同提交审核失败，为什么？",
+   "parts": [
+    {
+     "quote": "提交一份合同去审批时提示合同提交审核失败，为什么？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:未提交|草稿))(?=.*提交).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl\\.java:296@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java",
+      "start_line": 295,
+      "end_line": 296,
+      "symbol": "submitContract",
+      "clauses": [
+       "submitContract 校验合同审批状态不等于 DRAFT 时抛出 CONTRACT_SUBMIT_FAIL_NOT_DRAFT，即只有草稿合同可以提交审核。"
+      ],
+      "sha256": "9ec61549fd1cd86d3cbe876ee36ab91dc8c0b988aa8da3ea18ddced1cefdddc4"
+     }
+    ],
+    "positive": "因为这份合同当前不是草稿状态（已经提交过、正在审批或已出结果），提交审核只接受未提交的草稿合同，重复提交也会报这个错。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:295-296@v2026.08 sha256:9ec61549fd1cd86d3cbe876ee36ab91dc8c0b988aa8da3ea18ddced1cefdddc4",
+    "wrong": "该提示与合同当前状态无关，只取决于操作人有没有审批权限。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:295-296@v2026.08 sha256:9ec61549fd1cd86d3cbe876ee36ab91dc8c0b988aa8da3ea18ddced1cefdddc4"
+   }
+  },
+  {
+   "id": "y3-085",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_receivable_plan",
+   "delivery": "answer/rule",
+   "condition": "A receivable plan whose receivableId is already set cannot be updated; the guard reads the persisted old record rather than the incoming request.",
+   "prompt": "我改一期回款计划的金额，系统不让改，为什么？",
+   "parts": [
+    {
+     "quote": "我改一期回款计划的金额，系统不让改，为什么？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:回款|还款))(?=.*(?:修改|更新|改))(?=.*(?:已经|已有|对应)).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivablePlanServiceImpl\\.java:96@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivablePlanServiceImpl.java",
+      "start_line": 95,
+      "end_line": 97,
+      "symbol": "updateReceivablePlan",
+      "clauses": [
+       "updateReceivablePlan 校验旧计划的 receivableId 非空（已经关联回款）时抛出 RECEIVABLE_PLAN_UPDATE_FAIL，已有回款的计划不允许修改。"
+      ],
+      "sha256": "3cd273e93770505b05df34c0130ba96cd851f6aee4aa6b9e10d3830dab17db50"
+     }
+    ],
+    "positive": "因为这期回款计划已经挂上了对应的回款记录，一旦计划关联了回款，系统就不允许再修改该计划的任何字段。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivablePlanServiceImpl.java:95-97@v2026.08 sha256:3cd273e93770505b05df34c0130ba96cd851f6aee4aa6b9e10d3830dab17db50",
+    "wrong": "回款计划的金额随时可以改，系统对这个字段不做任何校验。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivablePlanServiceImpl.java:95-97@v2026.08 sha256:3cd273e93770505b05df34c0130ba96cd851f6aee4aa6b9e10d3830dab17db50"
+   }
+  },
+  {
+   "id": "y3-086",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_receivable",
+   "delivery": "answer/rule",
+   "condition": "The receivable amount is validated against contract total minus approved and in-approval receivables, so the limit depends on other records' audit status.",
+   "prompt": "新建一笔回款，金额比合同剩余还多，系统怎么处理？",
+   "parts": [
+    {
+     "quote": "新建一笔回款，金额比合同剩余还多，系统怎么处理？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:超出|超过))(?=.*(?:回款金额|合同金额|剩余)).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl\\.java:130@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java",
+      "start_line": 129,
+      "end_line": 131,
+      "symbol": "validateReceivablePriceExceedsLimit",
+      "clauses": [
+       "validateReceivablePriceExceedsLimit 计算合同总额减去审批中与已通过回款后的剩余可回款金额，请求金额超出剩余值时抛出 RECEIVABLE_CREATE_FAIL_PRICE_EXCEEDS_LIMIT。"
+      ],
+      "sha256": "7fab49997060f5f5614c74b3d28175471decc973771e619d47fd3b5868e805c5"
+     }
+    ],
+    "positive": "系统会直接拦截并报错：回款金额超出合同剩余可回款金额（合同总额扣除审批中与已通过回款后的余额），不会保存这笔回款。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:129-131@v2026.08 sha256:7fab49997060f5f5614c74b3d28175471decc973771e619d47fd3b5868e805c5",
+    "wrong": "系统按填写金额直接保存回款，不做任何金额上限校验。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:129-131@v2026.08 sha256:7fab49997060f5f5614c74b3d28175471decc973771e619d47fd3b5868e805c5"
+   }
+  },
+  {
+   "id": "y3-087",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_receivable",
+   "delivery": "answer/rule",
+   "condition": "Creating a receivable requires the linked contract to be APPROVE; a contract still in PROCESS is rejected with RECEIVABLE_CREATE_FAIL_CONTRACT_NOT_APPROVE.",
+   "prompt": "给一份还在审批中的合同建回款，报什么错？",
+   "parts": [
+    {
+     "quote": "给一份还在审批中的合同建回款，报什么错？",
+     "check": {
+      "answer_regex": "(?s)(?=.*审核通过)(?=.*回款).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl\\.java:141@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java",
+      "start_line": 140,
+      "end_line": 142,
+      "symbol": "validateRelationDataExists",
+      "clauses": [
+       "validateRelationDataExists 校验关联合同的审批状态不等于 APPROVE 时抛出 RECEIVABLE_CREATE_FAIL_CONTRACT_NOT_APPROVE，合同必须已审核通过才能新建回款。"
+      ],
+      "sha256": "d6a3ee58d7d6d9620fcd0f84646cd4de0656a0a9c56fc6575872001f532929ed"
+     }
+    ],
+    "positive": "会报合同不是审核通过状态、不能新建回款的错误：回款要求关联合同已审核通过，审批中（PROCESS）还不满足。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:140-142@v2026.08 sha256:d6a3ee58d7d6d9620fcd0f84646cd4de0656a0a9c56fc6575872001f532929ed",
+    "wrong": "能不能新建回款只看操作人有没有回款新建权限，与合同的审批状态无关。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:140-142@v2026.08 sha256:d6a3ee58d7d6d9620fcd0f84646cd4de0656a0a9c56fc6575872001f532929ed"
+   }
+  },
+  {
+   "id": "y3-088",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_receivable",
+   "delivery": "answer/rule",
+   "condition": "A receivable plan hosts at most one receivable; the second binding fails because receivablePlan.receivableId is already non-null.",
+   "prompt": "同一期回款计划为什么不能挂第二笔回款？",
+   "parts": [
+    {
+     "quote": "同一期回款计划为什么不能挂第二笔回款？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:已有|存在|已经))(?=.*回款).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl\\.java:151@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java",
+      "start_line": 150,
+      "end_line": 152,
+      "symbol": "validateRelationDataExists",
+      "clauses": [
+       "validateRelationDataExists 校验回款计划的 receivableId 非空时抛出 RECEIVABLE_PLAN_EXISTS_RECEIVABLE，已挂回款的计划不能再新建回款。"
+      ],
+      "sha256": "a905534cb31988d884f24ec49955a0985334e8c7f2244b597642fe76034a4894"
+     }
+    ],
+    "positive": "因为该回款计划已经存在关联的回款记录（receivableId 非空），一期计划只允许对应一笔回款，再挂第二笔会直接被拒绝。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:150-152@v2026.08 sha256:a905534cb31988d884f24ec49955a0985334e8c7f2244b597642fe76034a4894",
+    "wrong": "同一期计划可以挂任意多笔回款，系统只在合同总额层面做控制。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:150-152@v2026.08 sha256:a905534cb31988d884f24ec49955a0985334e8c7f2244b597642fe76034a4894"
+   }
+  },
+  {
+   "id": "y3-089",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_receivable",
+   "delivery": "answer/rule",
+   "condition": "Deleting a receivable fails for two distinct reasons -- it is bound to an existing receivable plan, or its audit status is already APPROVE -- and both checks must be cited.",
+   "prompt": "一笔回款删不掉，有哪两种原因？",
+   "parts": [
+    {
+     "quote": "一笔回款删不掉，有哪两种原因？",
+     "check": {
+      "answer_regex": "(?s)(?=.*计划)(?=.*(?:审核已通过|审批已通过)).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl\\.java:222@v2026\\.08)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl\\.java:226@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java",
+      "start_line": 221,
+      "end_line": 223,
+      "symbol": "deleteReceivable",
+      "clauses": [
+       "deleteReceivable 校验回款的 planId 非空且对应回款计划存在时抛出 RECEIVABLE_DELETE_FAIL，关联着回款计划的回款不允许删除。"
+      ],
+      "sha256": "7c31af8a378c9735bb61be156c2f7c41fd0daea0120510314ee48422f3e29e99"
+     },
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java",
+      "start_line": 225,
+      "end_line": 227,
+      "symbol": "deleteReceivable",
+      "clauses": [
+       "deleteReceivable 校验回款审批状态等于 APPROVE 时抛出 RECEIVABLE_DELETE_FAIL_IS_APPROVE，审核已通过的回款不允许删除。"
+      ],
+      "sha256": "5e4f35bc291659aafa2c8fe796bec390253f807fb0158916ef294499bfad2682"
+     }
+    ],
+    "positive": "两种原因：一是这笔回款关联的回款计划仍然存在（挂着计划的回款不允许删除），二是该回款审核已通过（审批已通过的记录同样不允许删除）。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:221-223@v2026.08 sha256:7c31af8a378c9735bb61be156c2f7c41fd0daea0120510314ee48422f3e29e99\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:225-227@v2026.08 sha256:5e4f35bc291659aafa2c8fe796bec390253f807fb0158916ef294499bfad2682",
+    "wrong": "回款删除没有任何前置校验，任何时候都能直接删。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:221-223@v2026.08 sha256:7c31af8a378c9735bb61be156c2f7c41fd0daea0120510314ee48422f3e29e99\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:225-227@v2026.08 sha256:5e4f35bc291659aafa2c8fe796bec390253f807fb0158916ef294499bfad2682"
+   }
+  },
+  {
+   "id": "y3-090",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_receivable",
+   "delivery": "answer/rule",
+   "condition": "The receivable submit-for-approval button appears only for draft rows, mirrored by submitReceivable's DRAFT check; citing either side is accepted.",
+   "prompt": "回款列表里的提交审核按钮什么时候出现？",
+   "parts": [
+    {
+     "quote": "回款列表里的提交审核按钮什么时候出现？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:草稿|未提交))(?=.*提交).*",
+      "source_regex": "(?s)(?=.*(?:server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl\\.java:247@v2026\\.08|ui/src/views/crm/receivable/index\\.vue:167@v2026\\.08)).*"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java",
+      "start_line": 246,
+      "end_line": 248,
+      "symbol": "submitReceivable",
+      "clauses": [
+       "submitReceivable 校验回款审批状态不等于 DRAFT 时抛出 RECEIVABLE_SUBMIT_FAIL_NOT_DRAFT，后端只允许提交草稿状态的回款。"
+      ],
+      "sha256": "548b99c0975db7dfe28916aa4d68cdef8d5afe8ee6e63c8fc97b04c3b9d6040a"
+     },
+     {
+      "file": "ui/src/views/crm/receivable/index.vue",
+      "start_line": 166,
+      "end_line": 174,
+      "symbol": "列表行提交审核按钮 v-if auditStatus===0",
+      "clauses": [
+       "回款列表行的提交审核按钮带 v-if=\"scope.row.auditStatus === 0\"，只有草稿（0）状态的行才渲染该按钮。"
+      ],
+      "sha256": "afa7079f483c72860a659a6e955d3355eeee755b95edd31cdf9afbef8e297d37"
+     }
+    ],
+    "positive": "只有该笔回款处于草稿（未提交）状态时列表行才显示提交审核按钮，提交进入审批后按钮就不再出现。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:246-248@v2026.08 sha256:548b99c0975db7dfe28916aa4d68cdef8d5afe8ee6e63c8fc97b04c3b9d6040a\nui/src/views/crm/receivable/index.vue:166-174@v2026.08 sha256:afa7079f483c72860a659a6e955d3355eeee755b95edd31cdf9afbef8e297d37",
+    "wrong": "提交审核按钮对所有回款行都显示，重复提交也不会报错。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/receivable/CrmReceivableServiceImpl.java:246-248@v2026.08 sha256:548b99c0975db7dfe28916aa4d68cdef8d5afe8ee6e63c8fc97b04c3b9d6040a\nui/src/views/crm/receivable/index.vue:166-174@v2026.08 sha256:afa7079f483c72860a659a6e955d3355eeee755b95edd31cdf9afbef8e297d37"
+   }
+  },
+  {
+   "id": "y3-091",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_customer",
+   "delivery": "answer/rule",
+   "condition": "Customer deletion is blocked when contacts, businesses or contracts still reference the customer; the error names which reference type was found.",
+   "prompt": "删一个客户提示删除客户失败，可能关联了什么？",
+   "parts": [
+    {
+     "quote": "删一个客户提示删除客户失败，可能关联了什么？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:联系人|商机|合同))(?=.*(?:删除|关联)).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/customer/CrmCustomerServiceImpl\\.java:571@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/customer/CrmCustomerServiceImpl.java",
+      "start_line": 564,
+      "end_line": 572,
+      "symbol": "validateCustomerReference",
+      "clauses": [
+       "validateCustomerReference 依次校验客户的联系人、商机、合同数量，任一大于 0 就抛出 CUSTOMER_DELETE_FAIL_HAVE_REFERENCE 并带上关联对象名称。"
+      ],
+      "sha256": "58f52d71e6e72411a1ea74f042bc017697890b9457446931a4472bb21dc037ff"
+     }
+    ],
+    "positive": "该客户名下还关联着联系人、商机或合同：删除客户前会依次统计这三类引用，任一存在就拒绝删除并在错误里点出对象类型。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/customer/CrmCustomerServiceImpl.java:564-572@v2026.08 sha256:58f52d71e6e72411a1ea74f042bc017697890b9457446931a4472bb21dc037ff",
+    "wrong": "删除客户总是成功，关联数据会随之自动清理。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/customer/CrmCustomerServiceImpl.java:564-572@v2026.08 sha256:58f52d71e6e72411a1ea74f042bc017697890b9457446931a4472bb21dc037ff"
+   }
+  },
+  {
+   "id": "y3-092",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/rule",
+   "condition": "A business cannot be deleted while contracts are linked to it, checked via getContractCountByBusinessId before the delete runs.",
+   "prompt": "商机删不掉，为什么？",
+   "parts": [
+    {
+     "quote": "商机删不掉，为什么？",
+     "check": {
+      "answer_regex": "(?s)(?=.*合同)(?=.*删).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl\\.java:290@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl.java",
+      "start_line": 289,
+      "end_line": 291,
+      "symbol": "validateContractExists",
+      "clauses": [
+       "validateContractExists（删除商机前调用）校验该商机关联的合同数量大于 0 时抛出 BUSINESS_DELETE_FAIL_CONTRACT_EXISTS，有合同的商机不允许删除。"
+      ],
+      "sha256": "0865716569249bd0bf2e9d46e2ee9e2f4fffa5e83581b68f5483fb999327d32f"
+     }
+    ],
+    "positive": "因为这个商机下面已经关联了合同：删除商机前会统计其下合同数量，只要存在合同就不允许删除。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl.java:289-291@v2026.08 sha256:0865716569249bd0bf2e9d46e2ee9e2f4fffa5e83581b68f5483fb999327d32f",
+    "wrong": "商机随时可删，系统不做任何关联校验。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl.java:289-291@v2026.08 sha256:0865716569249bd0bf2e9d46e2ee9e2f4fffa5e83581b68f5483fb999327d32f"
+   }
+  },
+  {
+   "id": "y3-093",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_business",
+   "delivery": "answer/rule",
+   "condition": "Once a business carries an endStatus it is closed, and updateBusinessStatus refuses any further stage changes.",
+   "prompt": "商机关闭后为什么不能再调整阶段？",
+   "parts": [
+    {
+     "quote": "商机关闭后为什么不能再调整阶段？",
+     "check": {
+      "answer_regex": "(?s)(?=.*结束)(?=.*(?:阶段|状态)).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl\\.java:238@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl.java",
+      "start_line": 237,
+      "end_line": 239,
+      "symbol": "updateBusinessStatus",
+      "clauses": [
+       "updateBusinessStatus 校验商机的 endStatus 非空（已结束）时抛出 BUSINESS_UPDATE_STATUS_FAIL_END_STATUS，已结束的商机不能再调整状态阶段。"
+      ],
+      "sha256": "e6ef75d4e73f3ff1bef61c0731d4e91da435fd4bf47b4c8e8b2c3c6aa8506946"
+     }
+    ],
+    "positive": "商机一旦被关闭就标记为结束（endStatus 非空），系统视其已定局，状态调整接口对已结束的商机一律拒绝，阶段和状态都不再允许修改。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl.java:237-239@v2026.08 sha256:e6ef75d4e73f3ff1bef61c0731d4e91da435fd4bf47b4c8e8b2c3c6aa8506946",
+    "wrong": "商机关闭不构成锁定，仍可以照常切换阶段，状态随时能回退调整。\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/business/CrmBusinessServiceImpl.java:237-239@v2026.08 sha256:e6ef75d4e73f3ff1bef61c0731d4e91da435fd4bf47b4c8e8b2c3c6aa8506946"
+   }
+  },
+  {
+   "id": "y3-094",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "erp_sale_order",
+   "delivery": "answer/rule",
+   "condition": "An approved ERP sale order cannot be modified; updateSaleOrder throws SALE_ORDER_UPDATE_FAIL_APPROVE before touching any field.",
+   "prompt": "已审核的销售订单想改，会怎样？",
+   "parts": [
+    {
+     "quote": "已审核的销售订单想改，会怎样？",
+     "check": {
+      "answer_regex": "(?s)(?=.*已审核)(?=.*(?:修改|更新|改)).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl\\.java:102@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java",
+      "start_line": 101,
+      "end_line": 103,
+      "symbol": "updateSaleOrder",
+      "clauses": [
+       "updateSaleOrder 校验订单状态等于已审核（APPROVE）时抛出 SALE_ORDER_UPDATE_FAIL_APPROVE，已审核的销售订单不允许修改。"
+      ],
+      "sha256": "7d25d0a7a07acb720c7f1abee6b144d0e2e5f1e0d2ffb8e7429b32c6b93fb680"
+     }
+    ],
+    "positive": "更新会被直接拒绝并报错：销售订单已审核不允许修改，必须先反审核回到未审核状态才能改。\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:101-103@v2026.08 sha256:7d25d0a7a07acb720c7f1abee6b144d0e2e5f1e0d2ffb8e7429b32c6b93fb680",
+    "wrong": "审核状态不影响编辑，订单随时可以修改并直接生效。\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:101-103@v2026.08 sha256:7d25d0a7a07acb720c7f1abee6b144d0e2e5f1e0d2ffb8e7429b32c6b93fb680"
+   }
+  },
+  {
+   "id": "y3-095",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "erp_sale_order",
+   "delivery": "answer/rule",
+   "condition": "Deletion of approved sale orders is rejected per-order in deleteSaleOrder's pre-check loop over the selected records.",
+   "prompt": "想删一张已审核的销售订单，结果？",
+   "parts": [
+    {
+     "quote": "想删一张已审核的销售订单，结果？",
+     "check": {
+      "answer_regex": "(?s)(?=.*已审核)(?=.*删).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl\\.java:252@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java",
+      "start_line": 251,
+      "end_line": 253,
+      "symbol": "deleteSaleOrder",
+      "clauses": [
+       "deleteSaleOrder 遍历待删订单，任一张状态为已审核（APPROVE）即抛出 SALE_ORDER_DELETE_FAIL_APPROVE，已审核订单不允许删除。"
+      ],
+      "sha256": "f39ca9b6be4aaa879f7569ca9dad7eb42df2c50909b7dfb89d7ff1bb23c84e7e"
+     }
+    ],
+    "positive": "删除会被拒绝并报销售订单已审核不允许删除，批量删除中只要有一张已审核就整批不执行，需先反审核再删。\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:251-253@v2026.08 sha256:f39ca9b6be4aaa879f7569ca9dad7eb42df2c50909b7dfb89d7ff1bb23c84e7e",
+    "wrong": "删除订单只看单据有没有生成回款，与审核状态无关。\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:251-253@v2026.08 sha256:f39ca9b6be4aaa879f7569ca9dad7eb42df2c50909b7dfb89d7ff1bb23c84e7e"
+   }
+  },
+  {
+   "id": "y3-096",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "erp_sale_order",
+   "delivery": "answer/rule",
+   "condition": "Un-approving a sale order is blocked when outbound or return documents already exist; both the out-count and the return-count checks must be cited.",
+   "prompt": "销售订单反审核失败，可能已存在什么单据？",
+   "parts": [
+    {
+     "quote": "销售订单反审核失败，可能已存在什么单据？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:出库|退货))(?=.*(?:反审核|审核)).*",
+      "source_regex": "(?s)(?=.*server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl\\.java:150@v2026\\.08)(?=.*server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl\\.java:154@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java",
+      "start_line": 149,
+      "end_line": 151,
+      "symbol": "updateSaleOrderStatus",
+      "clauses": [
+       "updateSaleOrderStatus 在执行反审核（approve=false）且订单出库数量大于 0 时抛出 SALE_ORDER_PROCESS_FAIL_EXISTS_OUT，存在销售出库单不允许反审核。"
+      ],
+      "sha256": "1fc7384c562db922874e5a066436bdf645af27bcea319f0f15deff1b5c94434f"
+     },
+     {
+      "file": "server/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java",
+      "start_line": 153,
+      "end_line": 155,
+      "symbol": "updateSaleOrderStatus",
+      "clauses": [
+       "updateSaleOrderStatus 在执行反审核且订单退货数量大于 0 时抛出 SALE_ORDER_PROCESS_FAIL_EXISTS_RETURN，存在销售退货单不允许反审核。"
+      ],
+      "sha256": "e5dee9ebe2f8abee60ea02b791219caa0e8cd6fba653bf138cb7737e50adfbec"
+     }
+    ],
+    "positive": "可能已存在对应的销售出库单或销售退货单：只要订单的出库数量或退货数量大于 0，就禁止反审核。\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:149-151@v2026.08 sha256:1fc7384c562db922874e5a066436bdf645af27bcea319f0f15deff1b5c94434f\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:153-155@v2026.08 sha256:e5dee9ebe2f8abee60ea02b791219caa0e8cd6fba653bf138cb7737e50adfbec",
+    "wrong": "反审核随时可执行，系统不检查下游单据。\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:149-151@v2026.08 sha256:1fc7384c562db922874e5a066436bdf645af27bcea319f0f15deff1b5c94434f\nserver/yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/service/sale/ErpSaleOrderServiceImpl.java:153-155@v2026.08 sha256:e5dee9ebe2f8abee60ea02b791219caa0e8cd6fba653bf138cb7737e50adfbec"
+   }
+  },
+  {
+   "id": "y3-097",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "erp_sale_order",
+   "delivery": "answer/rule",
+   "condition": "The edit button is disabled in the ERP sale order list when status === 20 (approved); this un-approve lock exists only in the UI layer.",
+   "prompt": "销售订单列表里的编辑按钮什么时候点不动？",
+   "parts": [
+    {
+     "quote": "销售订单列表里的编辑按钮什么时候点不动？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:已审核|审核))(?=.*(?:按钮|编辑|禁用)).*",
+      "source_regex": "(?s)(?=.*ui/src/views/erp/sale/order/index\\.vue:233@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "ui/src/views/erp/sale/order/index.vue",
+      "start_line": 228,
+      "end_line": 235,
+      "symbol": "列表行编辑按钮 :disabled status===20",
+      "clauses": [
+       "销售订单列表行的编辑按钮绑定 :disabled=\"scope.row.status === 20\"，状态为已审核（20）时按钮禁用。"
+      ],
+      "sha256": "12fcc4f727a03bffa255d5552a432291a636d1aff71587d764b0d920a20341c4"
+     }
+    ],
+    "positive": "当该行的单据状态为已审核（status === 20）时编辑按钮被禁用点不动，未审核或反审核后才可以点击。\nui/src/views/erp/sale/order/index.vue:228-235@v2026.08 sha256:12fcc4f727a03bffa255d5552a432291a636d1aff71587d764b0d920a20341c4",
+    "wrong": "编辑按钮永远可点，与单据状态无关。\nui/src/views/erp/sale/order/index.vue:228-235@v2026.08 sha256:12fcc4f727a03bffa255d5552a432291a636d1aff71587d764b0d920a20341c4"
+   }
+  },
+  {
+   "id": "y3-098",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/rule",
+   "condition": "The transfer button shows only for the contract owner (validateOwnerUser) and transferContract requires OWNER permission; citing either side is accepted.",
+   "prompt": "合同详情页为什么看不到转移按钮？",
+   "parts": [
+    {
+     "quote": "合同详情页为什么看不到转移按钮？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:负责人|拥有|[Oo]wner))(?=.*转移).*",
+      "source_regex": "(?s)(?=.*(?:ui/src/views/crm/contract/detail/index\\.vue:7@v2026\\.08|server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl\\.java:259@v2026\\.08)).*"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "ui/src/views/crm/contract/detail/index.vue",
+      "start_line": 7,
+      "end_line": 9,
+      "symbol": "详情页转移按钮 v-if validateOwnerUser",
+      "clauses": [
+       "合同详情页的转移按钮带 v-if=\"permissionListRef?.validateOwnerUser\"，只有当前用户是合同负责人时才渲染该按钮。"
+      ],
+      "sha256": "6dcb4197f95e2cf0812871fb136883bacc023d919c5cfac530456d39f157c047"
+     },
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java",
+      "start_line": 258,
+      "end_line": 259,
+      "symbol": "transferContract",
+      "clauses": [
+       "transferContract 声明 @CrmPermission level=OWNER，只有合同负责人才被允许调用转移合同，其他角色直接按权限拒绝。"
+      ],
+      "sha256": "95723045464b9ebf21e518730b7f0a69a6b3c02e081121fd64dc630f7d183c22"
+     }
+    ],
+    "positive": "因为你不是这份合同的负责人（owner）：详情页的转移按钮只对负责人渲染，后端转移也要求 OWNER 级数据权限。\nui/src/views/crm/contract/detail/index.vue:7-9@v2026.08 sha256:6dcb4197f95e2cf0812871fb136883bacc023d919c5cfac530456d39f157c047\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:258-259@v2026.08 sha256:95723045464b9ebf21e518730b7f0a69a6b3c02e081121fd64dc630f7d183c22",
+    "wrong": "转移按钮对所有登录用户恒定显示，任何人都能执行转移。\nui/src/views/crm/contract/detail/index.vue:7-9@v2026.08 sha256:6dcb4197f95e2cf0812871fb136883bacc023d919c5cfac530456d39f157c047\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:258-259@v2026.08 sha256:95723045464b9ebf21e518730b7f0a69a6b3c02e081121fd64dc630f7d183c22"
+   }
+  },
+  {
+   "id": "y3-099",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/rule",
+   "condition": "Detail-page edit requires the WRITE permission (validateWrite), enforced again by updateContract's @CrmPermission(WRITE); citing either side is accepted.",
+   "prompt": "合同详情页有编辑按钮，但点保存提示没有权限，规则在哪？",
+   "parts": [
+    {
+     "quote": "合同详情页有编辑按钮，但点保存提示没有权限，规则在哪？",
+     "check": {
+      "answer_regex": "(?s)(?=.*(?:可写|写权限|WRITE|write))(?=.*(?:编辑|更新)).*",
+      "source_regex": "(?s)(?=.*(?:ui/src/views/crm/contract/detail/index\\.vue:4@v2026\\.08|server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl\\.java:139@v2026\\.08)).*"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "ui/src/views/crm/contract/detail/index.vue",
+      "start_line": 4,
+      "end_line": 6,
+      "symbol": "详情页编辑按钮 v-if validateWrite",
+      "clauses": [
+       "合同详情页的编辑按钮带 v-if=\"permissionListRef?.validateWrite\"，只有对合同有可写（WRITE）权限的用户才显示编辑入口。"
+      ],
+      "sha256": "c264e79cd927710cdd6797b82f1c326b57129840b23b4cf9a0b7c8f5d2c976f4"
+     },
+     {
+      "file": "server/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java",
+      "start_line": 138,
+      "end_line": 139,
+      "symbol": "updateContract",
+      "clauses": [
+       "updateContract 声明 @CrmPermission level=WRITE，更新合同要求当前用户对该合同至少具备可写权限，否则按权限校验失败拒绝。"
+      ],
+      "sha256": "ec7254f9180fa29179606169495fc9a9b8cf5acb3adac12a4976d93d49d44874"
+     }
+    ],
+    "positive": "规则在数据权限：详情页编辑按钮依赖 validateWrite（可写权限）显示，而后端更新合同接口同样以 @CrmPermission WRITE 级别拦截，读权限（READ）够看到按钮但不够提交更新。\nui/src/views/crm/contract/detail/index.vue:4-6@v2026.08 sha256:c264e79cd927710cdd6797b82f1c326b57129840b23b4cf9a0b7c8f5d2c976f4\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:138-139@v2026.08 sha256:ec7254f9180fa29179606169495fc9a9b8cf5acb3adac12a4976d93d49d44874",
+    "wrong": "详情页按钮显示与保存权限无关，任何能看见页面的用户都能保存修改。\nui/src/views/crm/contract/detail/index.vue:4-6@v2026.08 sha256:c264e79cd927710cdd6797b82f1c326b57129840b23b4cf9a0b7c8f5d2c976f4\nserver/yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/contract/CrmContractServiceImpl.java:138-139@v2026.08 sha256:ec7254f9180fa29179606169495fc9a9b8cf5acb3adac12a4976d93d49d44874"
+   }
+  },
+  {
+   "id": "y3-100",
+   "group": "F",
+   "rubric_version": 7,
+   "type": "source_rule",
+   "category": "answer",
+   "entity": "crm_contract",
+   "delivery": "answer/rule",
+   "condition": "After submission the row leaves DRAFT so the v-else branch replaces the submit button with a view-approval link; the switch is driven purely by auditStatus.",
+   "prompt": "合同提交审核后，列表那一行的按钮变成了什么，为什么？",
+   "parts": [
+    {
+     "quote": "合同提交审核后，列表那一行的按钮变成了什么，为什么？",
+     "check": {
+      "answer_regex": "(?s)(?=.*查看审批)(?=.*(?:否则|else|不再是草稿|非草稿|提交|状态)).*",
+      "source_regex": "(?s)(?=.*ui/src/views/crm/contract/index\\.vue:224@v2026\\.08)"
+     }
+    }
+   ],
+   "truth": {
+    "release": "v2026.08",
+    "sources": [
+     {
+      "file": "ui/src/views/crm/contract/index.vue",
+      "start_line": 222,
+      "end_line": 231,
+      "symbol": "列表行查看审批按钮 v-else",
+      "clauses": [
+       "合同列表行的查看审批按钮挂在提交审核按钮的 v-else 分支上，auditStatus 不为 0（非草稿）时不再显示提交审核，而是渲染查看审批按钮。"
+      ],
+      "sha256": "438b30a52e6155561b17e103f7b9cd77308a417cb7a861e0da38d6b394069b5c"
+     }
+    ],
+    "positive": "按钮变成查看审批：提交审核按钮用 v-if 限定草稿状态，一旦状态不再是草稿就落入 v-else（else）分支，改为渲染查看审批按钮并跳转审批详情。\nui/src/views/crm/contract/index.vue:222-231@v2026.08 sha256:438b30a52e6155561b17e103f7b9cd77308a417cb7a861e0da38d6b394069b5c",
+    "wrong": "提交之后该行按钮不变，仍是提交审核，可以反复提交多次。\nui/src/views/crm/contract/index.vue:222-231@v2026.08 sha256:438b30a52e6155561b17e103f7b9cd77308a417cb7a861e0da38d6b394069b5c"
+   }
+  }
+ ]
+}

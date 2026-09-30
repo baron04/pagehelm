@@ -143,6 +143,15 @@ class BusinessProxyTests(unittest.TestCase):
         self.assertRegex(proxy.skill_digest, r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(proxy.tool_catalog_digest, r"^sha256:[0-9a-f]{64}$")
 
+    def test_selected_skill_cannot_expose_tools_outside_the_actor_s_scopes(self):
+        runtime, skill = _runtime()
+        with self.assertRaisesRegex(ValueError, "for this actor"):
+            PageAgentBusinessProxy(
+                run_token="opaque-business-token", runtime=runtime,
+                loaded_skill_ids=(skill.skill_id,), context=_context(write=True),
+                expected_catalog_sha256=runtime.catalog_sha256,
+                max_business_calls=1, max_route_calls=1)
+
     def test_read_call_is_principal_bound_and_routes_are_retained(self):
         proxy = self._proxy()
         result = proxy.handle({

@@ -1,0 +1,58 @@
+{
+  "suite_id": "yudao-goals-zh-v5-holdout",
+  "task_set_file": "yudao-goals-zh-v5-holdout.json",
+  "task_set_sha256": "cdf8732c442f211093a2dfd2507444664d4bf461b6f4314fbfa749eef3ed6294",
+  "judge": {
+    "path": "evals/odoo/goals/judge.py",
+    "sha256": "96148a00e70cbe34eb80759b3c976fb3d4b74c4326d25800c95fa69843f5d593",
+    "rubric_version": 7
+  },
+  "task_count": 48,
+  "module_counts": {
+    "system": 6,
+    "infra": 6,
+    "pay": 6,
+    "bpm": 5,
+    "member": 5,
+    "mall": 7,
+    "crm": 5,
+    "erp": 8
+  },
+  "type_counts": {
+    "navigation": 16,
+    "configuration": 16,
+    "record": 8,
+    "composite": 4,
+    "impossible": 4
+  },
+  "environment": {
+    "app": "ruoyi-vue-pro",
+    "application_release": "v2026.09",
+    "base_url": "http://127.0.0.1:48189",
+    "tenant_id": 1,
+    "actor": {
+      "username": "opsreader4",
+      "user_id": 258,
+      "roles": [
+        "sales_rep",
+        "v4_ops_reader"
+      ],
+      "dept": "华东销售部",
+      "dept_id": 122
+    },
+    "declared_snapshot": "yudao-v5-2609-snapshot.sql.gz"
+  },
+  "reference_date": "2026-09-30",
+  "timezone": "Asia/Shanghai",
+  "snapshot": {
+    "name": "yudao-v5-2609-snapshot.sql.gz",
+    "sha256": "292f560afdcf6ba75db5d2ac57b8e8b25bb8168080a4b6d1f7a6b78cab3f4cd8",
+    "method": "isolated v4 synthetic snapshot migrated incrementally to v2026.09; mysqldump --single-transaction"
+  },
+  "authorship": {
+    "kind": "developer-authored",
+    "model_calls": 0,
+    "agent_runs": 0,
+    "candidate_runs": 0
+  }
+}

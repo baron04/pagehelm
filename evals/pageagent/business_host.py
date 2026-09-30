@@ -87,13 +87,15 @@ class PageAgentBusinessProxy:
             if skill is None:
                 raise ValueError(f"business Skill is unavailable: {reason}")
             skills.append(skill)
-        schemas = runtime.schemas_for(selected_ids)
-        if not schemas:
-            raise ValueError("selected Skills expose no tools")
-        contains_mutation = any(
-            runtime.is_mutation(schema["function"]["name"]) for schema in schemas)
+        selected_names = {name for skill in skills for name in skill.tool_names}
+        contains_mutation = any(runtime.is_mutation(name) for name in selected_names)
         if contains_mutation and not allow_mutations:
             raise ValueError("PageAgent baseline business tools must be read-only")
+        schemas = tuple(schema for schema in runtime.available_schemas(
+            allow_mutations=allow_mutations, actor_scopes=context.principal.scopes)
+            if schema["function"]["name"] in selected_names)
+        if not schemas:
+            raise ValueError("selected Skills expose no tools for this actor")
         cards = [skill.loaded_card() for skill in skills]
         instructions = "APP SKILLS\n" + json.dumps(
             cards, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
