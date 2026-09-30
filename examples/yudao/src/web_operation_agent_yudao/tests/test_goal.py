@@ -1,0 +1,857 @@
+"""yudao goal data over a recorded-shape API double: schema, reads and resolution."""
+from __future__ import annotations
+
+import unittest
+from copy import deepcopy
+
+from web_operation_agent.goal.data import Compare, DataRefused, all_of
+from web_operation_agent.goal.resolve.service import DataGoalPort
+from web_operation_agent.goal.spec import GoalSpec
+
+from web_operation_agent_yudao.goal import YudaoGoalData
+from web_operation_agent_yudao.ui_source import ListView, UiSource
+
+
+def _prop(kind, description, fmt=None):
+    out = {"type": kind, "description": description}
+    if fmt:
+        out["format"] = fmt
+    return out
+
+
+def _page(tag, item, params):
+    return {"get": {"tags": [tag], "parameters": [
+        {"in": "query", "name": n, "schema": {"type": t}} for n, t in params],
+        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": f"#/components/schemas/R{item}"}}}}}}}
+
+
+def _schemas(item, props):
+    return {f"R{item}": {"properties": {"data": {"$ref": f"#/components/schemas/P{item}"}}},
+            f"P{item}": {"properties": {"list": {"items": {"$ref": f"#/components/schemas/{item}"}}}},
+            item: {"properties": props}}
+
+
+DOCS = {
+    "paths": {
+        "/admin-api/crm/contract/page": _page("管理后台 - CRM 合同", "Contract", [
+            ("name", "string"), ("customerId", "integer"), ("auditStatus", "integer"), ("sceneType", "integer")]),
+        "/admin-api/crm/contract/get": {"get": {"parameters": [
+            {"in": "query", "name": "id", "required": True}]}},
+        "/admin-api/crm/customer/page": _page("管理后台 - CRM 客户", "Customer", [
+            ("name", "string"), ("sceneType", "integer")]),
+        "/admin-api/erp/supplier/page": _page("管理后台 - ERP 供应商", "Supplier", [("name", "string")]),
+        "/admin-api/bpm/process-instance/my-page": _page("管理后台 - 流程实例", "Instance", [("name", "string")]),
+    },
+    "components": {"schemas": {
+        **_schemas("Contract", {
+            "id": _prop("integer", "编号"), "name": _prop("string", "合同名称"),
+            "customerId": _prop("integer", "客户编号"), "customerName": _prop("string", "客户名称"),
+            "ownerUserId": _prop("integer", "负责人的用户编号"), "ownerUserName": _prop("string", "负责人名字"),
+            "auditStatus": _prop("integer", "审批状态"), "totalPrice": _prop("number", "合同金额"),
+            "orderDate": _prop("string", "下单日期", "date-time"),
+            "discountPercent": _prop("number", "整单折扣，百分比"),
+            "stageId": _prop("integer", "合同阶段编号"), "stageName": _prop("string", "阶段名字"),
+            "endStatus": {"type": "integer"},
+            "channelCodes": {"type": "array", "description": "已开通的渠道编码", "items": {"type": "string"}},
+            "appSecret": _prop("string", "应用密钥")}),
+        **_schemas("Customer", {"id": _prop("integer", "编号"), "name": _prop("string", "客户名称"),
+                                "level": _prop("integer", "客户等级")}),
+        **_schemas("Instance", {"id": _prop("string", "编号"), "name": _prop("string", "流程名称")}),
+        **_schemas("Supplier", {"id": _prop("integer", "编号"), "name": _prop("string", "供应商名称"),
+                                "status": _prop("integer", "开启状态")}),
+    }},
+}
+
+MENUS = [
+    {"name": "CRM 系统", "path": "/crm", "children": [
+        {"name": "合同管理", "path": "contract", "component": "crm/contract/index"},
+        {"name": "客户管理", "path": "customer", "component": "crm/customer/index"},
+        {"name": "客户公海", "path": "customer/pool", "component": "crm/customer/pool/index"}]},
+    {"name": "ERP 系统", "path": "/erp", "children": [
+        {"name": "采购管理", "path": "purchase", "children": [
+            {"name": "供应商信息", "path": "supplier", "component": "erp/purchase/supplier/index"}]}]},
+    {"name": "工作流程", "path": "/bpm", "children": [
+        {"name": "我的流程", "path": "task/my", "component": "bpm/processInstance/index"}]},
+    {"name": "作者动态", "path": "https://example.com"},
+]
+PERMISSIONS = ["crm:contract:query", "crm:contract:create", "crm:customer:query", "erp:supplier:query",
+               "bpm:process-instance:query"]
+DICTS = [{"dictType": "crm_audit_status", "value": "0", "label": "未提交"},
+         {"dictType": "crm_audit_status", "value": "20", "label": "审核通过"},
+         {"dictType": "crm_customer_level", "value": "1", "label": "A （重点客户）"},
+         {"dictType": "common_status", "value": "0", "label": "开启"},
+         {"dictType": "common_status", "value": "1", "label": "关闭"},
+         {"dictType": "crm_contract_end_status_type", "value": "1", "label": "赢单"},
+         {"dictType": "crm_contract_end_status_type", "value": "2", "label": "输单"},
+         {"dictType": "crm_contract_channel_code", "value": "web", "label": "网站"},
+         {"dictType": "crm_contract_channel_code", "value": "app", "label": "App"}]
+DICT_TYPES = [{"id": 82, "name": "CRM 合同结束状态类型", "type": "crm_contract_end_status_type"}]
+USERS = [{"id": 257, "nickname": "评测员"}, {"id": 249, "nickname": "张伟"}]
+
+CONTRACTS = {
+    1: [{"id": 11, "name": "云帆企业版合同", "customerId": 5, "customerName": "杭州云帆科技有限公司",
+         "ownerUserId": 257, "auditStatus": 20, "totalPrice": 29800.0, "orderDate": 1788192000000,
+         "stageId": 3, "stageName": "履约中"}],
+    2: [{"id": 12, "name": "瑞达实施服务合同", "customerId": 6, "customerName": "苏州瑞达精密机械有限公司",
+         "ownerUserId": 249, "auditStatus": 0, "totalPrice": 7500.0, "orderDate": 1785513600000}],
+    3: [{"id": 11, "name": "云帆企业版合同", "customerId": 5, "customerName": "杭州云帆科技有限公司",
+         "ownerUserId": 257, "auditStatus": 20, "totalPrice": 29800.0, "orderDate": 1788192000000}],
+}
+
+
+class _Client:
+    tenant = "1"
+
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    def get(self, path, **params):
+        self.calls.append((path, params))
+        if path == "system/auth/get-permission-info":
+            return {"menus": MENUS, "permissions": PERMISSIONS}
+        if path == "system/dict-data/simple-list":
+            return DICTS
+        if path == "system/dict-type/simple-list":
+            return DICT_TYPES
+        if path == "system/user/simple-list":
+            return USERS
+        if path == "system/dept/simple-list":
+            return []
+        if path == "crm/contract/page":
+            if params.get("sceneType") is None:
+                raise AssertionError("a CRM list must be read with its scene")
+            rows = [r for r in CONTRACTS[params["sceneType"]]
+                    if not params.get("name") or params["name"] in r["name"]]
+            return {"list": rows, "total": len(rows)}
+        if path == "crm/contract/get":
+            return next(r for rows in CONTRACTS.values() for r in rows if r["id"] == int(params["id"]))
+        if path == "crm/customer/page":
+            rows = [{"id": 5, "name": "云帆科技有限公司", "level": 1},
+                    {"id": 6, "name": "苏州瑞达精密机械有限公司", "level": 1}]
+            rows = [r for r in rows if not params.get("name") or params["name"] in r["name"]]
+            return {"list": rows, "total": len(rows)}
+        if path == "bpm/process-instance/my-page":
+            return {"list": [{"id": "p1", "name": "请假"}], "total": 1}
+        if path == "erp/supplier/page":
+            rows = [{"id": 1, "name": "宁波海川电子有限公司", "status": 0}]
+            return {"list": rows, "total": 1}
+        raise AssertionError(path)
+
+
+class YudaoGoalDataTests(unittest.TestCase):
+    def setUp(self):
+        self.client = _Client()
+        ui = UiSource(views={"crm/contract/index": ListView(columns=("name", "customerName", "totalPrice")),
+                             "bpm/processInstance/index": ListView(endpoint="/bpm/process-instance/my-page")},
+                      records={"/crm/contract": "/crm/contract/detail/{id}"})
+        self.data = YudaoGoalData(self.client, DOCS, ui=ui)
+        self.port = DataGoalPort(self.data)
+
+    def ask(self, deliverable):
+        return self.port.resolve(GoalSpec.from_json({"deliverables": [deliverable]})).deliverables[0]
+
+    def test_pages_become_entities_only_where_the_account_may_query_a_documented_list(self):
+        schema = self.data.schema()
+        self.assertEqual([p.key for p in schema.pages], ["/crm/contract", "/crm/customer", "/erp/purchase/supplier",
+                                                         "/bpm/task/my"])
+        # A page that reads another list than its path's ("my-page") is that list, named
+        # as its menu is.
+        self.assertEqual(schema.page("/bpm/task/my").entity, "bpm/process-instance/my")
+        self.assertEqual(schema.entity("bpm/process-instance/my").label, "我的流程")
+        self.assertEqual(self.data.count("bpm/process-instance/my", all_of()), 1)
+        # The pool page has no endpoint of its own; the supplier page's resource is its
+        # last word, not its whole path.
+        self.assertEqual(schema.page("/erp/purchase/supplier").entity, "erp/supplier")
+        self.assertEqual(schema.page("/crm/contract").operations, ("create",))
+        index = self.port.index()
+        self.assertEqual(index.page("/erp/purchase/supplier").breadcrumb, "ERP 系统 / 采购管理 / 供应商信息")
+        self.assertIn("合同管理", index.entity("crm/contract").aliases)
+
+    def test_department_number_is_a_readable_field_of_the_actor_visible_record(self):
+        class DepartmentClient(_Client):
+            def get(self, path, **params):
+                if path == "system/dept/simple-list":
+                    return [{"id": 122, "name": "华东销售部"}]
+                return super().get(path, **params)
+
+        data = YudaoGoalData(DepartmentClient(), DOCS)
+        port = DataGoalPort(data)
+        self.assertEqual(data.schema().entity("system/dept").field("id").label, "编号")
+        result = port.resolve(GoalSpec.from_json({"deliverables": [{
+            "kind": "fact", "entity": "system/dept", "record": "华东销售部", "fields": ["编号"]}]}))
+        self.assertEqual(result.deliverables[0].facts[0].value, "122")
+
+    def test_get_without_record_id_is_not_used_as_a_detail_read(self):
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/pay/wallet/page"] = _page("管理后台 - 钱包", "Wallet", [])
+        docs["paths"]["/admin-api/pay/wallet/get"] = {"get": {"parameters": [
+            {"in": "query", "name": "userId", "required": True}]}}
+        docs["components"]["schemas"].update(_schemas("Wallet", {
+            "id": _prop("integer", "编号"), "balance": _prop("integer", "余额")}))
+
+        class WalletClient(_Client):
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {"menus": [{"name": "支付", "path": "/pay", "children": [
+                        {"name": "钱包", "path": "wallet", "component": "pay/wallet/index"}]}],
+                        "permissions": ["pay:wallet:query"]}
+                if path == "pay/wallet/page":
+                    return {"list": [{"id": 1, "balance": 12840}], "total": 1}
+                if path == "pay/wallet/get":
+                    raise AssertionError("the userId lookup can create a wallet")
+                return super().get(path, **params)
+
+        data = YudaoGoalData(WalletClient(), docs, ui=UiSource(
+            tables={"pay/wallet/components/WalletForm": {"balance": "余额"}}))
+        self.assertEqual(data.schema().page("/pay/wallet").entity, "pay/wallet")
+        self.assertEqual(data.read("pay/wallet", "1", ("balance",)).values["balance"], 12840)
+
+    def test_a_documented_tree_page_reads_nested_records_with_a_bound(self):
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/system/area/tree"] = {"get": {
+            "tags": ["管理后台 - 地区"],
+            "parameters": [{"in": "query", "name": "region", "schema": {"type": "integer"}}],
+            "responses": {"200": {"content": {"*/*": {
+                "schema": {"$ref": "#/components/schemas/RArea"}}}}}}}
+        docs["components"]["schemas"].update({
+            "RArea": {"properties": {"data": {"type": "array", "items": {
+                "$ref": "#/components/schemas/Area"}}}},
+            "Area": {"properties": {"id": _prop("integer", "编号"),
+                                     "name": _prop("string", "地区名称")}},
+        })
+
+        class TreeClient(_Client):
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {"menus": [{"name": "系统", "path": "/system", "children": [
+                        {"name": "地区管理", "path": "area", "component": "system/area/index"}]}],
+                        "permissions": []}
+                if path == "system/area/tree":
+                    assert params["region"] == 1
+                    return [{"id": 1, "name": "省", "children": [{"id": 2, "name": "市"}]}]
+                return super().get(path, **params)
+
+        data = YudaoGoalData(TreeClient(), docs,
+                             ui=UiSource(views={"system/area/index": ListView(
+                                 endpoint="/system/area/tree", fixed_params=(("region", 1),))}))
+        self.assertEqual(data.schema().page("/system/area").entity, "system/area")
+        self.assertEqual(data.count("system/area", all_of()), 2)
+        limited = YudaoGoalData(TreeClient(), docs,
+                                 ui=UiSource(views={"system/area/index": ListView(
+                                     endpoint="/system/area/tree", fixed_params=(("region", 1),))}),
+                                 max_rows=1)
+        with self.assertRaises(DataRefused):
+            limited.count("system/area", all_of())
+
+    def test_fields_are_typed_from_the_documentation_and_named_from_the_dictionaries(self):
+        contract = self.data.schema().entity("crm/contract")
+        fields = {f.key: f for f in contract.fields}
+        self.assertEqual((fields["customerId"].kind, fields["customerId"].label, fields["customerId"].relation),
+                         ("link", "客户", "crm/customer"))
+        self.assertEqual((fields["ownerUserId"].kind, fields["ownerUserId"].relation), ("link", "system/user"))
+        self.assertNotIn("customerName", fields)
+        self.assertEqual([c.label for c in fields["auditStatus"].choices], ["未提交", "审核通过"])
+        self.assertEqual(fields["totalPrice"].kind, "money")
+        self.assertEqual(fields["discountPercent"].label, "整单折扣")
+        self.assertEqual(contract.total, "totalPrice")
+        # The list's columns come first, in the list's order.
+        self.assertEqual([f.key for f in contract.fields[:3]], ["name", "customerId", "totalPrice"])
+        # A field named by the module's naming (crm_customer_level), and a status with no
+        # dictionary by that naming read as yudao's common on/off status, as its pages do.
+        self.assertEqual(self.data.schema().entity("crm/customer").field("level").kind, "choice")
+        status = self.data.schema().entity("erp/supplier").field("status")
+        self.assertEqual([c.label for c in status.choices], ["开启", "关闭"])
+
+    def test_a_crm_list_is_read_under_every_scene_and_merged(self):
+        rows = self.data.rows("crm/contract", all_of(), fields=("name",))
+        self.assertEqual(sorted(r.display for r in rows), ["云帆企业版合同", "瑞达实施服务合同"])
+        scenes = [p.get("sceneType") for path, p in self.client.calls if path == "crm/contract/page"]
+        self.assertEqual(scenes, [1, 2, 3])
+
+    def test_one_answer_reads_a_list_once(self):
+        self.data.count("crm/contract", all_of())
+        self.data.rows("crm/contract", all_of(), fields=("name",))
+        scenes = [p.get("sceneType") for path, p in self.client.calls if path == "crm/contract/page"]
+        self.assertEqual(scenes, [1, 2, 3])
+        self.assertIn("values", self.data.capabilities())
+
+    def test_a_condition_is_pushed_down_only_where_it_loses_no_match(self):
+        self.data.count("crm/contract", all_of(Compare("customerId", "in", ("5",)),
+                                               Compare("totalPrice", "gt", 1000)))
+        params = [p for path, p in self.client.calls if path == "crm/contract/page"][-1]
+        self.assertEqual(params.get("customerId"), "5")
+        self.assertNotIn("totalPrice", params)
+
+    def test_declarations_resolve_through_the_core(self):
+        approved = self.ask({"kind": "aggregate", "entity": "crm/contract", "metric": {
+            "op": "sum", "field": "合同金额", "filters": [{"field": "审批状态", "values": ["审核通过"]}]}})
+        self.assertEqual((approved.aggregate.count, approved.aggregate.sums), (1, (("合同金额", "29,800.00"),)))
+        mine = self.ask({"kind": "list", "entity": "crm/contract", "fields": ["客户"], "metric": {
+            "op": "count", "filters": [{"field": "负责人", "values": ["张伟"]}]}})
+        self.assertEqual(mine.aggregate.records, ("瑞达实施服务合同 — 客户: 苏州瑞达精密机械有限公司",))
+        fact = self.ask({"kind": "fact", "entity": "crm/contract", "record": "云帆企业版合同",
+                         "fields": ["审批状态", "下单日期"]})
+        self.assertEqual([f.value for f in fact.facts], ["审核通过", "2026-09-01"])
+        page = self.ask({"kind": "page", "entity": "crm/contract", "record": "云帆企业版合同"})
+        self.assertEqual(page.page.url, "/crm/contract/detail/11")
+        # Without a record page of its own, a record opens as its list.
+        supplier = self.ask({"kind": "page", "entity": "erp/supplier", "record": "宁波海川"})
+        self.assertEqual(supplier.page.url, "/erp/purchase/supplier")
+        # "Open the contract list": the page's one way of showing records is the list,
+        # so there is no view to switch to or find missing.
+        listed = self.ask({"kind": "page", "entity": "crm/contract",
+                           "page": {"key": "/crm/contract", "view": "list"}})
+        self.assertEqual((listed.problem, listed.page.view, listed.page.missing_view), ("", "", ""))
+
+
+class UndescribedCodeTests(unittest.TestCase):
+    def test_a_code_the_api_leaves_undescribed_is_named_by_its_dictionary(self):
+        data = YudaoGoalData(_Client(), DOCS)
+        field = next(f for f in data.schema().entity("crm/contract").fields if f.key == "endStatus")
+        self.assertEqual((field.label, field.kind), ("合同结束状态", "choice"))
+        self.assertEqual([c.label for c in field.choices], ["赢单", "输单"])
+
+    def test_several_codes_read_as_their_names_and_secrets_are_never_read(self):
+        client = _Client()
+        CONTRACTS[1][0]["channelCodes"] = ["web", "app"]
+        CONTRACTS[1][0]["appSecret"] = "s3cr3t"
+        try:
+            data = YudaoGoalData(client, DOCS)
+            fields = {f.key: f for f in data.schema().entity("crm/contract").fields}
+            self.assertEqual(fields["channelCodes"].label, "已开通的渠道")
+            self.assertNotIn("appSecret", fields)
+            row = data.read("crm/contract", "11", ("channelCodes",))
+            self.assertEqual(row.shown["channelCodes"], "网站、App")
+        finally:
+            CONTRACTS[1][0].pop("channelCodes"); CONTRACTS[1][0].pop("appSecret")
+
+
+class DeclarationRepairTests(unittest.TestCase):
+    """What the resolver tells the declarer when a name or field is not where declared."""
+
+    def setUp(self):
+        self.port = DataGoalPort(YudaoGoalData(_Client(), DOCS))
+
+    def ask(self, deliverable):
+        return self.port.resolve(GoalSpec.from_json({"deliverables": [deliverable]})).deliverables[0]
+
+    def test_a_fact_about_an_unnamed_record_is_the_one_in_scope_or_asks_which(self):
+        several = self.ask({"kind": "fact", "entity": "crm/contract", "fields": ["合同金额"]})
+        self.assertEqual(sorted(several.candidates), ["云帆企业版合同", "瑞达实施服务合同"])
+        one = self.ask({"kind": "fact", "entity": "crm/contract", "fields": ["合同金额"],
+                        "metric": {"op": "count", "filters": [{"field": "负责人", "values": ["张伟"]}]}})
+        self.assertEqual([f.value for f in one.facts], ["7,500.00"])
+
+    def test_the_records_pointing_at_a_named_record_are_the_ones_meant(self):
+        contracts = self.ask({"kind": "page", "entity": "crm/contract", "record": "苏州瑞达精密机械有限公司"})
+        self.assertEqual(contracts.page.label, "瑞达实施服务合同")
+
+    def test_an_empty_list_asked_for_as_a_whole_is_an_answer(self):
+        suppliers = self.ask({"kind": "list", "entity": "crm/contract", "metric": {
+            "op": "count", "filters": [{"field": "负责人", "values": ["评测员"]},
+                                       {"field": "审批状态", "values": ["未提交"]}]}})
+        self.assertTrue(suppliers.problem)  # conditions that fit nothing may be a misreading
+
+    def test_words_before_a_name_are_not_part_of_it(self):
+        fact = self.ask({"kind": "fact", "entity": "crm/contract", "record": "我的云帆企业版合同",
+                         "fields": ["合同金额"]})
+        self.assertEqual([f.value for f in fact.facts], ["29,800.00"])
+
+    def test_a_name_that_is_another_entitys_record_says_which(self):
+        missing = self.ask({"kind": "fact", "entity": "erp/supplier", "record": "苏州瑞达精密机械",
+                            "fields": ["开启状态"]})
+        self.assertTrue(missing.problem)
+        self.assertIn("entity crm/customer", missing.repair)
+
+    def test_a_name_several_records_of_another_entity_hold_points_there(self):
+        # Customers' names begin with "苏州瑞达" too, but only one does: it is that record's.
+        missing = self.ask({"kind": "fact", "entity": "erp/supplier", "record": "瑞达",
+                            "fields": ["开启状态"]})
+        self.assertTrue(missing.problem)
+        # Two contract names hold "合同" only further in: nobody is pointed at.
+        nowhere = self.ask({"kind": "fact", "entity": "erp/supplier", "record": "合同",
+                            "fields": ["开启状态"]})
+        self.assertEqual(nowhere.elsewhere, ())
+
+    def test_a_field_the_entity_does_not_have_asks_for_the_declaration_again(self):
+        fact = self.ask({"kind": "fact", "entity": "crm/contract", "record": "云帆企业版合同",
+                         "fields": ["合同金额", "付款条件"]})
+        self.assertEqual([f.value for f in fact.facts], ["29,800.00"])
+        self.assertIn("no field named '付款条件'", fact.repair)
+
+
+class _StrictDetailClient(_Client):
+    """A detail endpoint that checks a record more strictly than its list, and leaves a
+    number's name unfilled, as some of yudao's do."""
+
+    def get(self, path, **params):
+        if path == "crm/contract/get":
+            if int(params["id"]) == 12:
+                raise DataRefused("crm/contract/get: 1020007001 没有权限")
+            row = dict(super().get(path, **params))
+            row["stageName"] = None
+            return row
+        return super().get(path, **params)
+
+
+class DetailReadTests(unittest.TestCase):
+    def setUp(self):
+        self.data = YudaoGoalData(_StrictDetailClient(), DOCS)
+        self.port = DataGoalPort(self.data)
+
+    def ask(self, deliverable):
+        return self.port.resolve(GoalSpec.from_json({"deliverables": [deliverable]})).deliverables[0]
+
+    def test_a_number_without_a_record_of_its_own_is_shown_by_its_name(self):
+        fields = {f.key: f for f in self.data.schema().entity("crm/contract").fields}
+        self.assertNotIn("stageId", fields)
+        self.assertEqual((fields["stageName"].label, fields["stageName"].kind), ("合同阶段", "text"))
+        # The detail leaves the name unfilled; the list the account reads it from has it.
+        fact = self.ask({"kind": "fact", "entity": "crm/contract", "record": "云帆企业版合同",
+                         "fields": ["合同阶段"]})
+        self.assertEqual([f.value for f in fact.facts], ["履约中"])
+
+    def test_a_fact_whose_fields_are_all_empty_names_the_fields_that_hold_a_value(self):
+        fact = self.ask({"kind": "fact", "entity": "crm/contract", "record": "云帆企业版合同",
+                         "fields": ["整单折扣"]})
+        self.assertEqual(fact.empty, ("整单折扣",))
+        self.assertIn("合同金额", fact.repair)
+        self.assertNotIn("整单折扣,", fact.repair)
+        # One field with a value is an answer: nothing to repair.
+        both = self.ask({"kind": "fact", "entity": "crm/contract", "record": "云帆企业版合同",
+                         "fields": ["整单折扣", "合同金额"]})
+        self.assertEqual((both.empty, both.repair), (("整单折扣",), ""))
+
+    def test_a_record_the_detail_refuses_is_read_as_the_accounts_list_shows_it(self):
+        fact = self.ask({"kind": "fact", "entity": "crm/contract", "record": "瑞达实施服务合同",
+                         "fields": ["合同金额"]})
+        self.assertEqual([f.value for f in fact.facts], ["7,500.00"])
+
+
+class _LinesClient(_Client):
+    """A contract's detail carries its products, as yudao's does."""
+
+    def get(self, path, **params):
+        row = super().get(path, **params)
+        if path == "crm/contract/get":
+            products = {11: [{"id": 1, "productName": "企业版订阅", "count": 2.0, "productPrice": 14900.0},
+                             {"id": 2, "productName": "实施服务", "count": 1.0, "productPrice": 3000.0}],
+                        12: [{"id": 3, "productName": "实施服务", "count": 3.0, "productPrice": 2500.0}]}
+            row = {**row, "products": products[int(params["id"])]}
+        return row
+
+
+class LineTests(unittest.TestCase):
+    def setUp(self):
+        ui = UiSource(tables={"crm/contract/components/ContractProductForm": {
+            "productName": "产品名称", "count": "数量", "productPrice": "价格（元）", "id": "操作"}})
+        self.data = YudaoGoalData(_LinesClient(), DOCS, ui=ui)
+        self.port = DataGoalPort(self.data)
+
+    def test_a_detail_s_line_table_is_an_entity_of_its_own(self):
+        lines = self.data.schema().entity("crm/contract/products")
+        self.assertEqual(lines.lines_of, "crm/contract")
+        self.assertEqual([(f.key, f.label) for f in lines.fields],
+                         [("__owner", "合同"), ("productName", "产品名称"), ("count", "数量"),
+                          ("productPrice", "价格")])
+        owner = self.data.schema().entity("crm/contract").field("products")
+        self.assertEqual((owner.kind, owner.relation), ("lines", "crm/contract/products"))
+        self.assertIn("lines", self.data.capabilities())
+
+    def test_lines_are_read_for_one_record_or_across_all(self):
+        from web_operation_agent.goal.data import Compare
+        one = self.data.rows("crm/contract/products", Compare("__owner", "eq", "12"), fields=("count",))
+        self.assertEqual([(r.display, r.values["count"]) for r in one], [("实施服务", 3.0)])
+        total, _ = self.data.total("crm/contract/products",
+                                   Compare("productName", "contains", "实施服务"), "count")
+        self.assertEqual(total, 4.0)
+
+    def test_an_unreadable_owner_refuses_counts_and_totals_instead_of_omitting_its_lines(self):
+        self.data.schema()
+        get = self.data._client.get
+
+        def refuse(path, **params):
+            if path == "crm/contract/get" and str(params.get("id")) == "12":
+                raise DataRefused("detail denied", reason="无权限")
+            return get(path, **params)
+
+        self.data._client.get = refuse
+        for read in (lambda: self.data.count("crm/contract/products", all_of()),
+                     lambda: self.data.total("crm/contract/products", all_of(), "count")):
+            with self.assertRaises(DataRefused) as caught:
+                read()
+            self.assertEqual(caught.exception.reason, "无权限")
+        self.data._client.get = get
+        self.assertEqual(self.data.total("crm/contract/products", all_of(), "count"), (6.0, ""))
+
+    def test_a_missing_line_table_is_not_an_empty_line_table(self):
+        self.data.schema()
+        get = self.data._client.get
+        self.data._client.get = lambda path, **params: {} if path == "crm/contract/get" else get(path, **params)
+        with self.assertRaises(DataRefused):
+            self.data.count("crm/contract/products", Compare("__owner", "eq", "12"))
+
+    def test_line_prices_use_the_column_s_declared_unit(self):
+        data = YudaoGoalData(_LinesClient(), DOCS, ui=UiSource(tables={
+            "crm/contract/components/ContractProductForm": {
+                "productName": "产品名称", "count": "数量", "productPrice": "价格（分）"}}))
+        data.schema()
+        where = Compare("__owner", "eq", "12")
+        row = data.rows("crm/contract/products", where, fields=("productPrice",))[0]
+        self.assertEqual(row.values["productPrice"], 25.0)
+        self.assertEqual(row.shown["productPrice"], "25.00 元")
+        self.assertEqual(data.total("crm/contract/products", where, "productPrice"), (25.0, "元"))
+
+    def test_raw_line_api_units_take_precedence_over_formatted_column_units(self):
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/crm/contract/get"]["get"]["responses"] = {
+            "200": {"content": {"application/json": {"schema": {"properties": {
+                "data": {"$ref": "#/components/schemas/ContractDetail"}}}}}}}
+        docs["components"]["schemas"].update({
+            "ContractDetail": {"properties": {"products": {"type": "array", "items": {
+                "$ref": "#/components/schemas/ContractLine"}}}},
+            "ContractLine": {"properties": {"productPrice": {
+                "type": "integer", "description": "单价，单位：分"}}}})
+        data = YudaoGoalData(_LinesClient(), docs, ui=self.data._ui)
+        data.schema()
+        where = Compare("__owner", "eq", "12")
+        row = data.rows("crm/contract/products", where, fields=("productPrice",))[0]
+        self.assertEqual(row.values["productPrice"], 25.0)
+        self.assertEqual(row.shown["productPrice"], "25.00 元")
+        self.assertEqual(data.total("crm/contract/products", where, "productPrice"), (25.0, "元"))
+
+
+class MoneyUnitTests(unittest.TestCase):
+    def test_cents_and_yuan_use_one_scale_for_facts_filters_and_totals(self):
+        for unit, expected, shown in (("分", 298.0, "298.00 元"),
+                                      ("元", 29800.0, "29,800.00 元")):
+            with self.subTest(unit=unit):
+                docs = deepcopy(DOCS)
+                docs["components"]["schemas"]["Contract"]["properties"]["totalPrice"]["description"] = \
+                    f"合同金额，单位：{unit}"
+                docs["paths"]["/admin-api/crm/contract/page"]["get"]["parameters"].append(
+                    {"in": "query", "name": "totalPrice", "schema": {"type": "integer"}})
+                client = _Client()
+                data = YudaoGoalData(client, docs)
+                data.schema()
+                row = data.read("crm/contract", "11", ("totalPrice",))
+                self.assertEqual(row.values["totalPrice"], expected)
+                self.assertEqual(row.shown["totalPrice"], shown)
+                where = Compare("totalPrice", "eq", expected)
+                self.assertEqual(data.count("crm/contract", where), 1)
+                self.assertEqual(data.total("crm/contract", where, "totalPrice"), (expected, "元"))
+                if unit == "分":
+                    self.assertFalse(any("totalPrice" in params for path, params in client.calls
+                                         if path == "crm/contract/page"))
+                self.assertEqual(data.total("crm/contract", Compare("totalPrice", "lt", 0),
+                                            "totalPrice"), (0.0, "元"))
+
+    def test_an_undeclared_currency_is_not_invented(self):
+        data = YudaoGoalData(_Client(), DOCS)
+        data.schema()
+        self.assertEqual(data.read("crm/contract", "11", ("totalPrice",)).shown["totalPrice"], "29,800.00")
+        self.assertEqual(data.total("crm/contract", Compare("@id", "eq", "11"), "totalPrice"),
+                         (29800.0, ""))
+
+
+class _BranchClient(_Client):
+    """A customer whose name holds another's whole: "云帆科技有限公司杭州分公司", with no contract."""
+
+    def get(self, path, **params):
+        if path == "crm/customer/page":
+            rows = [{"id": 5, "name": "云帆科技有限公司", "level": 1},
+                    {"id": 7, "name": "云帆科技有限公司杭州分公司", "level": 1},
+                    {"id": 6, "name": "苏州瑞达精密机械有限公司", "level": 1}]
+            rows = [r for r in rows if not params.get("name") or params["name"] in r["name"]]
+            return {"list": rows, "total": len(rows)}
+        return super().get(path, **params)
+
+
+class ExactAmongLongerTests(unittest.TestCase):
+    def test_a_condition_naming_one_record_exactly_among_longer_names_asks_which(self):
+        port = DataGoalPort(YudaoGoalData(_BranchClient(), DOCS))
+        resolved = port.resolve(GoalSpec.from_json({"deliverables": [{
+            "kind": "list", "entity": "crm/contract", "metric": {
+                "op": "count", "filters": [{"field": "客户", "values": ["云帆科技有限公司"]}]}}]})).deliverables[0]
+        # The branch has no contract, and is still offered: the person may mean either.
+        self.assertEqual(list(resolved.candidates), ["云帆科技有限公司", "云帆科技有限公司杭州分公司"])
+
+
+class _TwinClient(_Client):
+    """Two contracts of one name, at two customers."""
+
+    def get(self, path, **params):
+        if path == "crm/contract/page":
+            rows = [{"id": 11, "name": "云帆企业版合同", "customerId": 5, "customerName": "杭州云帆科技有限公司",
+                     "ownerUserId": 257, "auditStatus": 20, "totalPrice": 29800.0},
+                    {"id": 13, "name": "云帆企业版合同", "customerId": 6, "customerName": "苏州瑞达精密机械有限公司",
+                     "ownerUserId": 257, "auditStatus": 0, "totalPrice": 100.0}]
+            rows = [r for r in rows if not params.get("name") or params["name"] in r["name"]]
+            return {"list": rows, "total": len(rows)}
+        if path == "crm/contract/get":
+            return next(r for r in self.get("crm/contract/page", sceneType=1)["list"]
+                        if r["id"] == int(params["id"]))
+        return super().get(path, **params)
+
+
+class SameNameTests(unittest.TestCase):
+    def test_records_of_one_name_are_told_apart_by_whose_they_are(self):
+        data = YudaoGoalData(_TwinClient(), DOCS)
+        data.schema()
+        self.assertEqual([r.display for r in data.find("crm/contract", "云帆企业版合同")],
+                         ["云帆企业版合同（杭州云帆科技有限公司）", "云帆企业版合同（苏州瑞达精密机械有限公司）"])
+        chosen = data.find("crm/contract", "云帆企业版合同（苏州瑞达精密机械有限公司）")
+        self.assertEqual([(r.id, r.name) for r in chosen], [("13", "云帆企业版合同")])
+        asked = DataGoalPort(data).resolve(GoalSpec.from_json({"deliverables": [{
+            "kind": "fact", "entity": "crm/contract", "record": "云帆企业版合同", "fields": ["合同金额"]}]}))
+        self.assertEqual(len(asked.deliverables[0].candidates), 2)
+
+
+class NameLookupTests(unittest.TestCase):
+    def setUp(self):
+        self.port = DataGoalPort(YudaoGoalData(_Client(), DOCS))
+
+    def test_a_whole_name_is_its_record_and_a_shared_beginning_is_nobody(self):
+        found = self.port.locate_names(("云帆科技有限公司", "张伟"), entities=("crm/contract",))
+        self.assertEqual([(t, e) for t, e, _n in found],
+                         [("云帆科技有限公司", "crm/customer"), ("张伟", "system/user")])
+        # "云帆" begins a contract's name and a customer's: neither is taken.
+        self.assertEqual(self.port.locate_names(("云帆",), entities=("crm/contract",)), ())
+        # One entity's name alone begins with it: that record.
+        self.assertEqual(self.port.locate_names(("瑞达",), entities=("crm/contract",)),
+                         (("瑞达", "crm/contract", "瑞达实施服务合同"),))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TokenClientTests(unittest.TestCase):
+    """A client made from a person's own token never logs in, and takes a newer token."""
+
+    def test_an_expired_token_is_refused_not_logged_in_again(self):
+        from web_operation_agent_yudao.client import YudaoClient
+        client = YudaoClient.for_token("http://yudao.invalid", "t1", "1")
+        seen = []
+
+        def request(method, path, *, params=None, body=None, token=None):
+            seen.append((method, path, token))
+            return 401, {"code": 401, "msg": "expired"}
+        client._request = request
+        with self.assertRaises(DataRefused):
+            client.get("system/auth/get-permission-info")
+        self.assertEqual(seen, [("GET", "system/auth/get-permission-info", "t1")])
+        client.renew("t2")
+        with self.assertRaises(DataRefused):
+            client.get("crm/customer/page")
+        self.assertEqual(seen[-1][2], "t2")
+        self.assertEqual(client.tenant, "1")
+        with self.assertRaises(ValueError):
+            YudaoClient.for_token("http://yudao.invalid", "", "1")
+
+
+def _required_page(tag, item, required):
+    """A documented list whose named query parameters the endpoint itself requires."""
+    return {"get": {"tags": [tag], "parameters": [
+        {"in": "query", "name": name, "required": True, "schema": {"type": "integer"}}
+        for name in required],
+        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": f"#/components/schemas/R{item}"}}}}}}}
+
+
+def _array_list(tag, item, props):
+    """A documented unpaged list: `CommonResult<List<Item>>`."""
+    return {"paths": {f"/admin-api/{tag}": {"get": {"tags": ["管理后台 - FMS 账套"], "parameters": [
+        {"in": "query", "name": "companyName", "schema": {"type": "string"}}],
+        "responses": {"200": {"content": {"*/*": {"schema": {"$ref": f"#/components/schemas/R{item}"}}}}}}}},
+        "components": {"schemas": {
+            f"R{item}": {"properties": {"data": {"type": "array",
+                                                 "items": {"$ref": f"#/components/schemas/{item}"}}}},
+            item: {"properties": props}}}}
+
+
+FMS_MENUS = [
+    {"name": "FMS 财务管理", "path": "/fms", "children": [
+        {"name": "账套", "path": "config/account-set", "component": "fms/config/accountSet/index"},
+        {"name": "凭证管理", "path": "voucher", "component": "fms/voucher/index"}]},
+]
+
+ACCOUNT_SET_DOCS = _array_list("fms/config/account-set/list", "AccountSet",
+                               {"id": _prop("integer", "账套编号"),
+                                "companyName": _prop("string", "公司名称")})
+FMS_DOCS = {
+    "paths": {
+        **ACCOUNT_SET_DOCS["paths"],
+        "/admin-api/fms/voucher/page": _required_page("管理后台 - FMS 凭证", "Voucher", ["accountSetId"]),
+    },
+    "components": {"schemas": {
+        **ACCOUNT_SET_DOCS["components"]["schemas"],
+        **_schemas("Voucher", {"id": _prop("integer", "编号"), "digest": _prop("string", "摘要"),
+                               "accountSetId": _prop("integer", "账套编号")}),
+    }},
+}
+
+
+class _FmsClient(_Client):
+    """The accounting pages' endpoints: a list read under the account set it belongs to."""
+
+    def __init__(self, account_sets):
+        super().__init__()
+        self.account_sets = account_sets
+
+    def get(self, path, **params):
+        if path == "system/auth/get-permission-info":
+            # No permission names these resources: the account's menu is the evidence it
+            # may open the page, and the page's own address names its list.
+            return {"menus": FMS_MENUS, "permissions": []}
+        if path == "fms/config/account-set/list":
+            self.calls.append((path, params))
+            return list(self.account_sets)
+        if path == "fms/voucher/page":
+            self.calls.append((path, params))
+            if params.get("accountSetId") is None:
+                raise DataRefused("fms/voucher/page: 400 请求参数不正确:账套不能为空")
+            return {"list": [{"id": 1, "digest": "提现", "accountSetId": params["accountSetId"]}], "total": 1}
+        return super().get(path, **params)
+
+
+class ParentSelectionTests(unittest.TestCase):
+    def test_a_page_whose_address_names_a_multi_word_list_endpoint_is_that_list(self):
+        # `/fms/config/account-set` reads `/admin-api/fms/config/account-set/list`: two
+        # words deep, a `/list` rather than a `/page`, and a permission that names neither.
+        data = YudaoGoalData(_FmsClient([{"id": 1, "companyName": "示例信息技术有限公司"}]), FMS_DOCS)
+        schema = data.schema()
+        self.assertEqual(schema.page("/fms/config/account-set").entity, "fms/config/account-set")
+        self.assertEqual(data._entities["fms/config/account-set"].list_path, "fms/config/account-set/list")
+        self.assertEqual([(r.id, r.values["companyName"]) for r in
+                          data.rows("fms/config/account-set", all_of(), fields=("companyName",))],
+                         [("1", "示例信息技术有限公司")])
+
+    def test_a_required_parent_the_question_did_not_name_is_the_only_one_the_account_reads(self):
+        # The account reads one account set, which is the one the application itself would
+        # show; the vouchers are read under it without the question naming it.
+        client = _FmsClient([{"id": 1, "companyName": "示例信息技术有限公司"}])
+        data = YudaoGoalData(client, FMS_DOCS)
+        data.schema()
+        rows = data.rows("fms/voucher", all_of(), fields=("digest",))
+        self.assertEqual([(r.id, r.values["digest"]) for r in rows], [("1", "提现")])
+        self.assertEqual([p for path, p in client.calls if path == "fms/voucher/page"],
+                         [{"pageNo": 1, "pageSize": 200, "accountSetId": 1}])
+        self.assertEqual(data.count("fms/voucher", all_of()), 1)
+
+    def test_several_parents_are_the_person_s_choice_and_the_read_refuses(self):
+        client = _FmsClient([{"id": 1, "companyName": "示例信息技术有限公司"},
+                             {"id": 2, "companyName": "示例第二有限公司"}])
+        data = YudaoGoalData(client, FMS_DOCS)
+        data.schema()
+        with self.assertRaises(DataRefused):
+            data.rows("fms/voucher", all_of())
+        self.assertEqual([p for path, p in client.calls if path == "fms/voucher/page"],
+                         [{"pageNo": 1, "pageSize": 200}])
+
+
+class RefusalReasonTests(unittest.TestCase):
+    def test_a_refused_read_carries_the_application_s_own_sentence(self):
+        # The application's own words ("请选择时间范围") are what a person can act on; the
+        # endpoint and the code stay in the message for the audit.
+        from web_operation_agent_yudao.client import YudaoClient
+        client = YudaoClient.for_token("http://yudao.invalid", "t1", "1")
+        client._request = lambda *a, **k: (400, {"code": 400, "msg": "请求参数不正确:请选择时间范围"})
+        with self.assertRaises(DataRefused) as caught:
+            client.get("crm/statistics-product/get-product-sales-list")
+        self.assertEqual(caught.exception.reason, "请求参数不正确:请选择时间范围")
+        self.assertIn("crm/statistics-product/get-product-sales-list", str(caught.exception))
+
+    def test_a_transport_failure_carries_no_application_sentence(self):
+        import urllib.error
+        from unittest.mock import patch
+        from web_operation_agent_yudao.client import YudaoClient
+        client = YudaoClient.for_token("http://yudao.invalid", "t1", "1")
+        with patch("web_operation_agent_yudao.client.urllib.request.urlopen",
+                   side_effect=urllib.error.URLError("no route to host")):
+            with self.assertRaises(DataRefused) as caught:
+                client.get("crm/customer/page")
+        self.assertEqual(caught.exception.reason, "")
+        self.assertIn("URLError", str(caught.exception))
+
+
+class _StatisticsClient(_Client):
+    """A list whose endpoint requires two conditions and reports them one at a time."""
+
+    MENUS = [{"name": "ERP 系统", "path": "/erp", "children": [
+        {"name": "销售统计", "path": "sale/statistics", "component": "erp/statistics/index"}]}]
+
+    def get(self, path, **params):
+        if path == "system/auth/get-permission-info":
+            return {"menus": self.MENUS, "permissions": []}
+        if path == "erp/sale/statistics/list":
+            self.calls.append((path, params))
+            missing = [name for name in ("deptId", "times") if params.get(name) is None]
+            if missing:
+                label = {"deptId": "部门 id", "times": "时间范围"}[missing[0]]
+                said = f"请求参数不正确:{label}不能为空"
+                raise DataRefused(f"{path}: 400 {said}", reason=said)
+            return [{"id": 1, "amount": 10.0, "deptId": params["deptId"]}]
+        return super().get(path, **params)
+
+
+STATISTICS_DOCS = {
+    "paths": {
+        "/admin-api/erp/sale/statistics/list": {"get": {
+            "tags": ["管理后台 - ERP 销售统计"],
+            "parameters": [
+                {"in": "query", "name": "deptId", "required": True, "description": "部门 id",
+                 "schema": {"type": "integer"}},
+                {"in": "query", "name": "times", "required": True, "description": "时间范围",
+                 "schema": {"type": "integer"}}],
+            "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/RStat"}}}}}}},
+    },
+    "components": {"schemas": {
+        **_schemas("Stat", {"id": _prop("integer", "编号"), "amount": _prop("number", "金额"),
+                            "deptId": _prop("integer", "部门编号")}),
+    }},
+}
+
+
+class RefusalConditionTests(unittest.TestCase):
+    def test_a_refused_read_names_every_condition_the_page_waits_for(self):
+        # The application reports one missing parameter at a time; the person is told all
+        # of them, as the documentation names them, and none is supplied.
+        data = YudaoGoalData(_StatisticsClient(), STATISTICS_DOCS)
+        data.schema()
+        with self.assertRaises(DataRefused) as caught:
+            data.rows("erp/sale/statistics", all_of())
+        self.assertIn("部门 id", caught.exception.reason)
+        self.assertIn("不能为空", caught.exception.reason)
+        self.assertIn("时间范围", caught.exception.reason)
+        self.assertIn("erp/sale/statistics/list: 400", str(caught.exception))
+
+    def test_a_condition_the_application_already_named_is_not_repeated(self):
+        client = _StatisticsClient()
+        data = YudaoGoalData(client, STATISTICS_DOCS)
+        data.schema()
+
+        def answer(path, **params):
+            raise DataRefused(f"{path}: 400 请求参数不正确:请选择时间范围",
+                              reason="请求参数不正确:请选择时间范围")
+        client.get = answer
+        with self.assertRaises(DataRefused) as caught:
+            data.rows("erp/sale/statistics", all_of())
+        self.assertEqual(caught.exception.reason.count("时间范围"), 1)
+        self.assertIn("部门 id", caught.exception.reason)
+
+
+class ReferenceConventionTests(unittest.TestCase):
+    """The deployment's own words, as the owner reviewed them."""
+
+    def test_the_mall_s_words_for_an_unpaid_order_name_the_order_state(self):
+        from web_operation_agent.goal.conventions import load_conventions
+        from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
+
+        conventions = load_conventions(REFERENCE_CONVENTIONS)
+        unpaid = next(c for c in conventions if "还没付款" in c.terms)
+        # The mall tracks payment as the order's state; the boolean field answers a
+        # different question, and the convention says which one the words mean.
+        self.assertEqual(unpaid.entity, "trade/order")
+        self.assertEqual(unpaid.conditions, (("订单状态", ("待支付",)),))
+        self.assertTrue(unpaid.named_in("商城订单里还没付款的有多少笔？"))
+        self.assertFalse(unpaid.named_in("采购订单有几个？"))

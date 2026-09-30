@@ -1,0 +1,153 @@
+"""yudao as a read-only application: descriptor, ports and identity for goal-directed turns.
+
+There are no business tools: a goal-directed turn reads through `YudaoGoalData`, which
+the core resolves over, and writes are not offered. What this module adds is what every
+composition needs -- the application's identity, its routes, and the page controller it
+serves -- and the one thing that makes reads honest: the browser's user and the server's
+account must be the same person, as the application itself says.
+"""
+from __future__ import annotations
+
+import json
+import time
+from datetime import date
+from pathlib import Path
+import urllib.error
+import urllib.request
+
+from web_operation_agent.business.runtime import BusinessToolRuntime
+from web_operation_agent.composition.descriptor import (APPLICATION_ADAPTER_VERSION,
+                                                        ApplicationDescriptor)
+from web_operation_agent.composition.ports import (ApplicationPorts, ConservativeMutationReconciler,
+                                                   DeclaredDataClassifier, DeclaredRoutePort,
+                                                   ResultPostconditionVerifier)
+from web_operation_agent.goal.conventions import load_conventions
+from web_operation_agent.goal.resolve.service import DataGoalPort
+from web_operation_agent.state.identity import (PRINCIPAL_CONTEXT_VERSION, IdentityAssertion,
+                                                PrincipalContext, PrincipalError,
+                                                bind_matching_identity)
+
+from .client import YudaoAccount, YudaoClient
+from .conventions import REFERENCE_CONVENTIONS
+from .goal import YudaoGoalData
+from .ui_source import UiSource
+
+APPLICATION_ID = "yudao"
+#: Where the application's own pages live: every admin page is a path of words.
+_PAGE_ROUTES = (r"/[a-z0-9][a-z0-9/_-]*",)
+#: Query keys that would carry a session into a page address; refused and redacted.
+SESSION_HANDOFF_KEYS = frozenset({"token", "access_token", "accessToken", "refresh_token"})
+#: Where the deployment serves the pinned page controller, same-origin.
+PAGE_CONTROLLER_PATH = "/woa/page-controller.js"
+
+
+class _NoTools:
+    """A tool executor with no tools: goal-directed turns read through goal data."""
+
+    def tool_schemas(self):
+        return ()
+
+    def tool_effects(self):
+        return {}
+
+    def execute(self, name, args, **_kwargs):
+        raise LookupError(f"yudao offers no tool {name!r}")
+
+
+class YudaoIdentityPort:
+    """The browser's token and the server's account, each asked of yudao who it is.
+
+    `get-permission-info` answers with the user's id; the tenant is the one both requests
+    carry. `bind_matching_identity` refuses unless both name the same user in the same
+    tenant, which keeps the server from reading as anyone but the person at the page.
+    """
+
+    required = True
+    required_scopes = frozenset({"yudao.read"})
+
+    def __init__(self, base_url: str, client: YudaoClient, *, lifetime_s: int = 300):
+        self._base_url, self._client, self.lifetime_s = base_url.rstrip("/"), client, lifetime_s
+
+    def _assertion(self, user: dict, source: str) -> IdentityAssertion:
+        issued = int(time.time() * 1000)
+        return IdentityAssertion(
+            schema_version=PRINCIPAL_CONTEXT_VERSION, source=source, application_id=APPLICATION_ID,
+            tenant_id=str(self._client.tenant), workspace_id=str(user.get("deptId") or "none"),
+            actor_id=str(user["id"]), issued_at=issued, expires_at=issued + self.lifetime_s * 1000)
+
+    def page_identity(self, access_token: str) -> IdentityAssertion:
+        """What the browser is, asked of yudao with the browser's own access token."""
+        request = urllib.request.Request(
+            f"{self._base_url}/admin-api/system/auth/get-permission-info",
+            headers={"tenant-id": str(self._client.tenant), "Authorization": f"Bearer {access_token}"})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                payload = json.load(response)
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            raise PrincipalError("yudao's identity endpoint is unavailable") from exc
+        if payload.get("code") != 0 or not isinstance((payload.get("data") or {}).get("user"), dict):
+            raise PrincipalError("the browser's session is not signed in to yudao")
+        return self._assertion(payload["data"]["user"], "page_session")
+
+    def bind(self, page_identity: IdentityAssertion, *, delegation_id: str,
+             lifetime_s: int = 300, now_ms: int | None = None) -> PrincipalContext:
+        user = (self._client.get("system/auth/get-permission-info") or {}).get("user")
+        if not isinstance(user, dict):
+            raise PrincipalError("the server's yudao account has no user")
+        return bind_matching_identity(page_identity, self._assertion(user, "delegated_api"),
+                                      delegation_id=delegation_id,
+                                      scopes=tuple(sorted(self.required_scopes)), now_ms=now_ms)
+
+    def validate(self, principal: PrincipalContext | None, *, application_id: str) -> None:
+        if principal is None:
+            raise PrincipalError("this application requires a verified principal")
+        principal.require_live(application_id=application_id)
+
+
+class YudaoApplication:
+    """The composed read-only adapter: `bind_application(YudaoApplication(...))`."""
+
+    def __init__(self, origin: str, account: YudaoAccount | None, api_docs: dict, *,
+                 api_base_url: str = "", ui: UiSource | None = None,
+                 time_zone: str = "Asia/Shanghai", today: date | None = None, source=None,
+                 conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None):
+        self.origin = origin.rstrip("/")
+        api_base = (api_base_url or self.origin).rstrip("/")
+        # A client of its own account, or the one given (a person's own token).
+        self.client = client if client is not None else YudaoClient(api_base, account)
+        self.goal_data = YudaoGoalData(self.client, api_docs, ui=ui, time_zone=time_zone)
+        if source is not None:
+            # The deployment's source rules: when a control shows, what an operation refuses.
+            self.goal_data.attach_source(source)
+        if conventions is not None:
+            # What this organisation means by some words, as its owner reviewed them.
+            self.goal_data.attach_conventions(load_conventions(conventions))
+        self.goal_port = DataGoalPort(self.goal_data, today=today)
+        data = DeclaredDataClassifier(())
+        postconditions = ResultPostconditionVerifier(())
+        routes = DeclaredRoutePort(APPLICATION_ID, _PAGE_ROUTES,
+                                   session_handoff_query_keys=SESSION_HANDOFF_KEYS)
+        self.identity = YudaoIdentityPort(api_base, self.client)
+        self.business_tools = BusinessToolRuntime(
+            (), _NoTools(), application_id=APPLICATION_ID, data_classifier=data,
+            postcondition_verifier=postconditions, route_validator=routes)
+        self.ports = ApplicationPorts(
+            identity=self.identity, routes=routes, postconditions=postconditions,
+            reconciliation=ConservativeMutationReconciler(), data=data,
+            goal_scopes=YudaoIdentityPort.required_scopes)
+        self.descriptor = ApplicationDescriptor(
+            schema_version=APPLICATION_ADAPTER_VERSION, application_id=APPLICATION_ID,
+            display_name="芋道管理系统", origin=self.origin, navigation_mode="spa",
+            page_controller_module=self.origin + PAGE_CONTROLLER_PATH,
+            catalog_sha256=self.business_tools.catalog_sha256)
+
+    def health(self) -> dict:
+        try:
+            user = (self.client.get("system/auth/get-permission-info") or {}).get("user") or {}
+        except Exception as exc:  # the health check reports, it never raises
+            return {"passed": False, "error": type(exc).__name__}
+        return {"passed": bool(user.get("id")), "actor": str(user.get("id") or "")}
+
+
+__all__ = ["APPLICATION_ID", "PAGE_CONTROLLER_PATH", "SESSION_HANDOFF_KEYS", "YudaoApplication",
+           "YudaoIdentityPort"]

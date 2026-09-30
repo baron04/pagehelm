@@ -1,0 +1,162 @@
+{
+ "schema_version": 1,
+ "status": "reviewed",
+ "review": "The owner decided on 2026-09-29: 客户 is the CRM customer, 产品 the ERP product, and 成交 a CRM contract whose approval passed; and, as proposed, that 订单 is every ERP sales order whatever its approval, that 回款 is money received while 回款计划 are the plans and 待回款 the plans with no receipt yet, that an approval process is one of the person's own processes (我的流程), and that 我能看的 is every record the account may read. Terms are kept narrow where a word sits inside a field's name (审批 in 审批状态), and longer words (采购订单, 进销存客户, CRM 产品) are entries of their own so that they keep their meaning. Meanings are written in the goal index's own terms. The owner decided on 2026-09-30 that, of a 商城订单, 未付款/没付款/还没付款 (and 未支付) mean 订单状态 = 待支付: the mall tracks payment as the order state, and the boolean 支付 field answers a different question.",
+ "conventions": [
+  {
+   "terms": [
+    "客户"
+   ],
+   "meaning": "crm/customer (CRM 客户); the ERP customer (erp/customer) only when the request says 进销存 or ERP",
+   "records": {
+    "entity": "crm/customer",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "进销存客户",
+    "ERP 客户",
+    "进销存的客户"
+   ],
+   "meaning": "erp/customer (ERP 客户)",
+   "records": {
+    "entity": "erp/customer",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "产品"
+   ],
+   "meaning": "erp/product (ERP 产品信息); the CRM product (crm/product) only when the request says CRM",
+   "records": {
+    "entity": "erp/product",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "CRM 产品",
+    "CRM产品"
+   ],
+   "meaning": "crm/product (CRM 产品)",
+   "records": {
+    "entity": "crm/product",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "成交",
+    "已成交",
+    "成交的合同"
+   ],
+   "meaning": "crm/contract with 审批状态 = 审核通过",
+   "records": {
+    "entity": "crm/contract",
+    "where": [
+     {
+      "field": "审批状态",
+      "values": [
+       "审核通过"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "terms": [
+    "订单",
+    "销售订单",
+    "销售单"
+   ],
+   "meaning": "erp/sale-order in every 销售状态 (未审核 and 已审核); narrowed only when the request says 已审核 or 未审核",
+   "records": {
+    "entity": "erp/sale-order",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "采购订单",
+    "采购单"
+   ],
+   "meaning": "erp/purchase-order in every status",
+   "records": {
+    "entity": "erp/purchase-order",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "回款"
+   ],
+   "meaning": "crm/receivable: money received; the plans of what is to be received are 回款计划",
+   "records": {
+    "entity": "crm/receivable",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "回款计划"
+   ],
+   "meaning": "crm/receivable-plan: the planned receipts of a contract, by 期数",
+   "records": {
+    "entity": "crm/receivable-plan",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "待回款",
+    "未回款",
+    "还没回款"
+   ],
+   "meaning": "crm/receivable-plan records whose 回款 is empty (no money received for them yet)"
+  },
+  {
+   "terms": [
+    "未付款",
+    "没付款",
+    "还没付款",
+    "未支付",
+    "还没支付"
+   ],
+   "meaning": "trade/order (商城订单) whose 订单状态 is 待支付: no payment has been made. The mall tracks payment as the order's state; the boolean 是否已支付 field answers a different question.",
+   "records": {
+    "entity": "trade/order",
+    "where": [
+     {
+      "field": "订单状态",
+      "values": [
+       "待支付"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "terms": [
+    "审批流程",
+    "我发起的流程",
+    "我发起的审批",
+    "我的流程"
+   ],
+   "meaning": "bpm/process-instance/my (我的流程): the approval processes the person started",
+   "records": {
+    "entity": "bpm/process-instance/my",
+    "where": []
+   }
+  },
+  {
+   "terms": [
+    "我能看的",
+    "我能看到的",
+    "我可见的"
+   ],
+   "meaning": "every record this account may read (those it owns, takes part in, and its subordinates'), not only those it is 负责人 of"
+  }
+ ]
+}
