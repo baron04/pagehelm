@@ -80,7 +80,7 @@ run_gate() {   # run_gate <name> <required:0|1> <command...>
   fi
 }
 
-export PYTHONPATH="${ROOT}/src:${ROOT}/examples/odoo/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTHONPATH="${ROOT}/src:${ROOT}/examples/odoo/src:${ROOT}/examples/yudao/src:${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # ---------------------------------------------------------------- offline gates
 run_gate "core distribution boundary" 1 "${PYTHON}" scripts/check_core_boundary.py
@@ -120,6 +120,11 @@ run_gate "ordinary-browser host (offline)" 1 "${PYTHON}" -m unittest \
 run_gate "odoo example suite" 1 "${PYTHON}" -m unittest discover \
   -s examples/odoo/src/web_operation_agent_odoo/tests \
   -t examples/odoo/src
+run_gate "yudao example and host suite (offline)" 1 "${PYTHON}" -m unittest discover \
+  -s examples/yudao/src/web_operation_agent_yudao/tests \
+  -t examples/yudao/src
+run_gate "Yudao evaluation apparatus (offline)" 1 "${PYTHON}" -m unittest discover \
+  -s evals/yudao/tests -t .
 # P8 source qualification stays model-free.  The full 40-task run needs a deployment-owned
 # extracted source tree and is therefore an operated gate; these tests keep the frozen
 # manifest, citation drift probe, and cross-release diff apparatus in every repository run.
@@ -170,10 +175,13 @@ build_and_check_wheel() {
   rm -rf dist build src/*.egg-info
   rm -rf examples/odoo/dist examples/odoo/build \
     examples/odoo/src/*.egg-info
+  rm -rf examples/yudao/dist examples/yudao/build examples/yudao/src/*.egg-info
   "${PYTHON}" -m pip wheel --no-deps --quiet --wheel-dir dist . || return 1
   "${PYTHON}" -m pip wheel --no-deps --quiet \
     --wheel-dir examples/odoo/dist examples/odoo \
     || return 1
+  "${PYTHON}" -m pip wheel --no-deps --quiet \
+    --wheel-dir examples/yudao/dist examples/yudao || return 1
   "${PYTHON}" scripts/check_wheel_contents.py || return 1
 
   # Importing from outside the checkout is the part a path-shadowed test cannot prove. Core
@@ -241,7 +249,8 @@ odoo = OdooApplicationAdapter(base_url="http://127.0.0.1:8069",
 assert odoo.business_tools.tool_names == frozenset(
     {"query_sale_orders", "query_quotations", "query_customers", "query_products",
      "query_customer_invoices", "prepare_customer_form", "discover_entities",
-     "describe_entity", "query_entity_records"})
+     "describe_entity", "query_entity_records", "resolve_record_reference",
+     "find_page_entries", "resolve_goal_candidates"})
 assert odoo.business_tools.mutation_tool_names == frozenset()
 # The packaged write Skills have to be present in the wheel too, or a mutation-enabled
 # deployment fails at composition time with a missing package-data entry -- exactly the
@@ -256,6 +265,24 @@ assert odoo.source_capability().session_kwargs()["source_affordance_mode"] == "o
 assert isinstance(odoo.source_capability(), SourceCapability)
 print("the Odoo distribution installs on top of core and composes outside the checkout")
 PY
+  ) || return 1
+  local yudao_wheel
+  yudao_wheel="$("${PYTHON}" -c \
+    'import glob, os; print(os.path.abspath(glob.glob("examples/yudao/dist/*.whl")[0]))')"
+  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps \
+    "${yudao_wheel}" || return 1
+  ( cd "${smoke_cwd}" && env -u PYTHONPATH \
+      "${smoke_venv}/bin/python" -I - <<'PYUD'
+from web_operation_agent_yudao.application import YudaoApplication
+from web_operation_agent_yudao.client import YudaoAccount
+from web_operation_agent_yudao.native_server import YudaoHost
+from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
+app = YudaoApplication("http://127.0.0.1:48080", YudaoAccount("synthetic", "synthetic"), {})
+assert app.business_tools.tool_names == frozenset()
+assert app.business_tools.mutation_tool_names == frozenset()
+assert REFERENCE_CONVENTIONS.is_file() and YudaoHost
+print("the Yudao wheel composes read-only with its conventions outside the checkout")
+PYUD
   ) || return 1
   rm -rf "${smoke_venv}" "${smoke_cwd}"
 }

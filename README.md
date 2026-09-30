@@ -13,10 +13,9 @@ agent.
 
 ## Current capabilities
 
-- A goal-directed turn asks the model once: given the application's index (entities,
+- A goal-directed turn asks the model to declare the request against the application's index (entities,
   fields, pages, views, filters, groups, sections and controls, compiled by the adapter
-  under the acting user), declare what the person wants. The server then resolves the
-  declaration without further model calls: records by the application's own name search,
+  under the acting user). The server resolves each declaration deterministically: records by the application's own name search,
   field values by typed reads, counts and sums by scoped queries, pages by reviewed action
   routes, tabs by their visible name, filters and groups by the page's own facet state, and
   a requested change by highlighting its control for the person. Working the page still takes
@@ -42,7 +41,9 @@ agent.
   describes rather than names ("the quotation sent to Joel Willis", "last month's
   customer invoice", "the 31,750 credit note") is picked out by its conditions within the
   declared page's scope, or beyond the page's defaults when they hide it; only exactly one
-  match is acted on, and none or several is said so, with the candidates. A named record
+  match is acted on, and none or several is said so, with the candidates. A name condition
+  that exactly matches one record and prefixes another asks which record the person means,
+  even when only one of them remains inside the declared scope. A named record
   that does not exist is never turned into a creation; a creation opens the page declared
   for the entity, else its widest page. A list that finds exactly one record binds a
   later deliverable of the same turn that names none. The declaration is made knowing the
@@ -50,8 +51,9 @@ agent.
   year. When the resolver finds something a different declaration would fix (a field the
   entity does not have, a description that matched several records, a change asked for
   with nothing to point at), it says so in the index's terms and the model declares once
-  more; the second declaration is taken only when fewer deliverables stay unresolved, and
-  there is no third. A handoff that carries the value the person gave for a field enters
+  more, for at most two repair rounds. A repair is accepted only when the unresolved
+  work decreases, or at equal unresolved work when it enables a useful clarification;
+  the kind of record the person named is preserved. A handoff that carries the value the person gave for a field enters
   it first (typed text, a date at day precision, a choice the field offers, or a linked
   record typed by name and chosen among the field's own suggestions) and checks what the
   field then shows; saving stays with the person, the page write guard holds throughout,
@@ -78,12 +80,21 @@ agent.
   goal turns in its demo. A turn is marked complete only when every declared deliverable
   settles. The declaration is staged by default: the request's hard references (document
   numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the
-  model first picks entities and deliverable kinds from one ranked line per entity, and
+  model first picks entities and deliverable kinds from ranked entity summaries, and
   then declares the details against those entities' neighbourhood of the index (their
   links, lines and owners, a few KB rather than the whole index), with the request at the
   start and at the end of that message; the details are read twice and reconciled like a
-  single declaration. Words the request shares with an entity's label only order that
-  list; nothing is dropped. `staged=False` on the executor (`--single` on the goal runner)
+  single declaration. If both readings resolve to different answers, two additional
+  independent readings vote among those resolved answers; an unresolved tie falls back
+  to the reconciliation path. A tie between an answer and a clarification that offers
+  that answer may keep the answer. These extra readings and the bounded repairs add
+  model calls, latency and spend; this is not a one-call turn.
+  For an index larger than 60 entities, actor-visible labels, pages
+  and fields retrieve up to 60 detailed candidates; the other entities keep only their
+  key and label in a compact directory, with a roughly 12,000-character first-step budget.
+  The model may select from either. An even larger index may leave some trailing labels
+  out, so retrieval alone does not prove the requested entity is absent.
+  `staged=False` on the executor (`--single` on the goal runner)
   declares once against the whole index, for comparison; the Contacts demo's scripted
   walkthrough does so. A port that declares candidate values (`values`) is asked, after
   the entities are chosen, for real values near what the request names: a named record
@@ -319,7 +330,17 @@ agent.
   one entry to the assistant: it is on the page from the moment the script runs. A session
   is made when the person sends something, opens a conversation the tab already has, or a
   turn is under way (as on a page the agent opened); an idle one is let go after five
-  minutes. Why a session could not be started is said in the panel, with Retry.
+  minutes. A session whose sign-in lapsed, that the page left idle, or that a host restart
+  ended comes back unannounced with the next message; why a session could not be started
+  is said in the panel, with Retry.
+- One session can be open on several pages at once, as when a host keys it to the person
+  rather than the tab. Every page follows the same conversation and may ask; a turn runs on
+  the page that asked it, and only that page is handed its page commands and its card
+  asking to work the page. A message from another page while a turn waits on that card
+  stops the waiting turn and runs next; one that arrives while a turn is working waits for
+  it.
+  Full document navigation transfers the turn to the same tab’s new document and retires
+  the old one. An action already claimed is completed by receipt and is never dispatched again.
 - The panel opens as a floating window on the launcher's corner, or as a full-height drawer at the right edge; a title-bar button switches between them. On a viewport at least 900px wide the drawer narrows the host page by setting the root element's width, and gives it back when closed; elements the application positions against the viewport (`position: fixed`, such as dialogs and notifications) are not narrowed and can sit partly under the drawer. On a narrower viewport the drawer covers the page instead. The chosen mode, the floating window's placement, and the drawer's width are kept in the browser's local storage; switching modes resets placement and width to their defaults.
 - Optional SQLite stores provide session ownership, progress outbox, bounded conversation
   context, mutation journals, backups, and explicit operator settlement.
@@ -343,10 +364,17 @@ Application adapter
 ```
 
 The core package is application-neutral. Application behavior enters only through adapters,
-Skills, typed tools, and application-owned verification. Odoo ships as a separate
+Skills, typed tools, and application-owned verification. A goal-directed turn is resolved by
+the core over the adapter's goal data (its index, schema and reads); the adapter never
+resolves a declaration itself. Odoo ships as a separate
 `web-operation-agent-odoo` distribution. The synthetic Contacts application under
 [`testapps/`](testapps/contacts/README.md) is internal browser/protocol test apparatus, not a
-second public reference.
+second public reference. The experimental [Yudao adapter and resettable deployment](examples/yudao/deploy/README.md)
+provide another goal-data implementation; they are not a production readiness claim.
+Yudao keeps failed detail reads as failures, so incomplete line data cannot become a
+zero count or total. Explicit yuan/cents units from its API or line columns are retained:
+cents are normalized to yuan for facts, comparisons and totals, while a field with no
+declared currency is not assigned one.
 
 Important design documents:
 
@@ -425,8 +453,9 @@ scripts/qualify.sh
 ```
 
 `--require-browser` makes Chromium and built frontend prerequisites mandatory.
-`--require-live` additionally requires the configured live Odoo qualification. A `BLOCKED`
-gate did not run and is not a pass.
+`--require-live` additionally requires the configured live Odoo qualification.
+The offline gates include the Yudao adapter, native host lifecycle, evaluation apparatus
+and separate wheel import/assets checks. A `BLOCKED` gate did not run and is not a pass.
 
 The independent Odoo evaluator's offline apparatus can be run directly:
 
@@ -506,7 +535,7 @@ source compilation, fixture provisioning, and qualification.
   model requests. Use that combination only where the deployment's data policy permits it.
 - Browser and accessibility coverage is strongest on Chromium; other engines and screen
   readers are not comprehensively qualified.
-- A reached page state is checked against the declared path, selected controls and any declared active filters or groups, plus explicit requests for the five conventional views and filter/group changes above. An application may first resolve a reviewed, deployment-bound route alias to its installed path; that does not grant navigation or count as a rendered page. Removing a filter additionally requires that exact filter to have been observed active on the same path earlier in the turn, followed by typed evidence that it is absent. The application must supply typed active-facet state; a same-named menu choice or column never counts. The pending-render signal catches a changed SPA URL with the old page projection; an adapter-reported blocking error and a wrong view also prevent arrival. These guards do not prove that all asynchronous loading has finished or verify record identity, other view names, or that the model declared an implicit facet request such as “look at orders by salesperson.” The new facet action has scripted contract tests, not a repeated model-backed success rate. The earlier 37-task Chinese development run must not be presented as the P8.8 holdout result.
+- A reached page state is checked against the declared path, selected controls and any declared active filters or groups, plus explicit requests for the five conventional views and filter/group changes above. An application may first resolve a reviewed, deployment-bound route alias to its installed path; that does not grant navigation or count as a rendered page. Removing a filter additionally requires that exact filter to have been observed active on the same path earlier in the turn, followed by typed evidence that it is absent. The application must supply typed active-facet state; a same-named menu choice or column never counts. The pending-render signal catches a changed SPA URL with the old page projection; an adapter-reported blocking error and a wrong view also prevent arrival. A changed URL with no rendered page controls or application-reported page state cannot settle as ready. These guards do not prove that all asynchronous loading has finished or verify record identity, other view names, or that the model declared an implicit facet request such as “look at orders by salesperson.” The new facet action has scripted contract tests, not a repeated model-backed success rate. The earlier 37-task Chinese development run must not be presented as the P8.8 holdout result.
 - An empty typed read no longer ends the turn automatically: the Agent receives the exact query result and can check whether the entity and filters match the question. This does not yet prove that a model-selected query covers the user's intent. In the earlier 37-goal run, the old automatic answer incorrectly reported two existing records as absent; one of those reads had searched a customer name for an order number.
 - Reaching a declared page target no longer blocks further reading or observation for requests classified as more than pure navigation. Apart from the explicit view and facet checks above, a target still covers only the conditions the Agent declared, so a question or other presentation requirement omitted from that declaration can remain unmet.
 - The goal-directed turn scored 35/37 on one rerun of the seen Chinese development set before a write-intent settlement fix; one failure was an unrequested page added to a data answer, and one was a misleading "opened" reply to a create request with no write. The two cases were then rerun three times each: the data question succeeded, and the create request was honestly refused, not fulfilled. A separate 17-task qualification set written and frozen before execution passed twice (34/34 attempts), but its author also implemented the system, so this is not an independently authored holdout or a broad 90% accuracy claim. Odoo and the smaller Contacts REST app implement the index/resolver contract, not equivalent model-level coverage. The server requires every declared deliverable to settle and refuses a page without two stable rendered observations; this does not prove all asynchronous content has loaded. Free-text list search is answered from a scoped read rather than typed into the page's search box. A creation handoff was verified three times on an actor-writable Odoo quotation page, but it only highlights New; it does not prefill or submit, and an actor without create access cannot use it.

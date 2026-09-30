@@ -57,7 +57,7 @@ DISTRIBUTIONS = {
         ],
         # The core package must not carry any application's own assets. A name containing
         # The core wheel carries no application, example, or internal test application.
-        "forbidden_name_substrings": ["odoo", "demo", "contacts", "testapps"],
+        "forbidden_name_substrings": ["odoo", "yudao", "demo", "contacts", "testapps"],
     },
     "web-operation-agent-odoo": {
         "glob": "examples/odoo/dist/web_operation_agent_odoo-[0-9]*.whl",
@@ -81,6 +81,21 @@ DISTRIBUTIONS = {
         # work once installed.
         "forbidden_prefixes": ["web_operation_agent_odoo/deploy/"],
         "forbidden_name_substrings": ["contacts", "testapps"],
+    },
+    "web-operation-agent-yudao": {
+        "glob": "examples/yudao/dist/web_operation_agent_yudao-[0-9]*.whl",
+        "required": [
+            "web_operation_agent_yudao/__init__.py",
+            "web_operation_agent_yudao/application.py",
+            "web_operation_agent_yudao/client.py",
+            "web_operation_agent_yudao/goal.py",
+            "web_operation_agent_yudao/native_server.py",
+            "web_operation_agent_yudao/source.py",
+            "web_operation_agent_yudao/ui_source.py",
+            "web_operation_agent_yudao/conventions/reference.json",
+        ],
+        "forbidden_prefixes": ["web_operation_agent_yudao/deploy/"],
+        "forbidden_name_substrings": ["odoo", "contacts", "testapps"],
     },
 }
 
