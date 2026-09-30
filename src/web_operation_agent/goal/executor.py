@@ -1,10 +1,11 @@
-"""A goal-directed turn: understand once, resolve, act, check, reply.
+"""A goal-directed turn: declare, resolve, act, check, reply.
 
 Same wire contract as `AgentTurnExecutor` -- a channel, a config, a chat, a bound
 application -- and the same fail-closed edges: every page switch is confirmed by the
 person, every page command runs under the write control the application declares, and no
-control that could write is ever pressed. What differs is that the model is asked one
-question and the rest of the turn is server code the audit can replay.
+control that could write is ever pressed. The model declares the request; independent
+readings and bounded repairs may add declarations. Resolution is server code the audit
+can replay.
 """
 from __future__ import annotations
 
@@ -40,7 +41,8 @@ from .ports import Fact, GoalPort, PagePlan, Resolution, Resolved, capabilities_
 from .spec import Filter, GoalSpec, Metric
 from .ground import bind, days, ground, numbers_in, pick, render as render_values, without_days
 from .index import conventions_named
-from .narrow import correct_records, locate, neighbourhood, references, summaries
+from .narrow import (correct_records, locate, locate_names, neighbourhood, references,
+                     summaries)
 from .understand import understand, understand_scope
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -67,6 +69,13 @@ _DELETE = re.compile(r"删除|删掉|删了|\bdelete\b|\bremove\b", re.I)
 #: Words that point at one record ("that invoice", "the one of August").
 _ONE_RECORD = re.compile(r"那张|这张|那笔|这笔|那条|这条|那单|这单|那个|这个|哪张|哪笔|"
                          r"\bthat (?:invoice|order|refund|bill|quotation|one)\b", re.I)
+#: Bounded repairs, accepted on progress or a useful clarification at equal unresolved work.
+_REPAIRS = 2
+#: Independent readings added when two disagree, so that most of them can settle it.
+_MORE_READINGS = 2
+#: An ordinal picks one record out of several as an amount or a day does ("第二期", "第3张",
+#: "the 2nd").
+_ORDINAL = re.compile(r"第\s*(?:\d+|[一二两三四五六七八九十]+)|\b\d+(?:st|nd|rd|th)\b", re.I)
 #: Earlier turns a follow-up is read with, and how much of each reply.
 _EARLIER_TURNS = 2
 _EARLIER_REPLY_CHARS = 1_200
@@ -90,6 +99,18 @@ _INPUT_ROLES = frozenset({"textbox", "combobox", "select", "searchbox", "spinbut
 _SUGGESTION_ROLES = frozenset({"option", "menuitem", "listitem", "link"})
 
 
+#: Turns the person (or a card they left unanswered) stopped.
+_STOPPED = ("user_cancelled", "operation_not_confirmed", "approval_expired", "approval_denied")
+
+
+def _provider_failed(exc: ProviderError, chinese: bool) -> str:
+    if getattr(exc, "code", "") == "provider_allowance_spent":
+        return ("你今天的助手使用额度已用完，明天会自动恢复。" if chinese
+                else "Your assistant allowance for today is used up; it starts again tomorrow.")
+    return ("模型服务暂时没有响应，请稍后再试。" if chinese
+            else "The model service did not respond; please try again.")
+
+
 def _norm(text: str) -> str:
     return "".join(ch for ch in (text or "").casefold() if not ch.isspace()
                    ).replace("&amp;", "&")
@@ -98,6 +119,10 @@ def _norm(text: str) -> str:
 def _tokens(text: str) -> set[str]:
     return {t for t in re.split(r"[^0-9a-z\u3400-\u9fff]+", (text or "").casefold()) if t}
 
+
+def _language(s) -> str:
+    """The person's language as the resolver describes scopes in it."""
+    return "zh" if s.chinese else ""
 
 def _path_of(url: str) -> str:
     return urlsplit(url).path or "/"
@@ -195,6 +220,42 @@ def _link_to_named(s: _TurnState, d) -> tuple[str, str] | None:
             if field_ is not None:
                 return field_.label, known.name
     return None
+
+
+def _answer_key(resolution: Resolution) -> tuple:
+    """What a resolution answers, for counting readings that agree: a page by the address
+    it opens (two readings opening one record's page agree, however they title it), the
+    choices asked about as a set, and anything else as resolved, in full."""
+    out = []
+    for r in resolution.deliverables:
+        if r.page is not None and not r.problem and not (r.facts or r.aggregate):
+            out.append(("page", r.page.url))
+        elif len(r.candidates) >= 2 and not (r.facts or r.aggregate):
+            out.append(("ask", tuple(sorted(r.candidates))))
+        else:
+            out.append(("resolved", r))
+    return tuple(out)
+
+
+def _asks(key: tuple) -> bool:
+    return any(part[0] == "ask" for part in key)
+
+
+def _answer_among(answer: Resolution, question: Resolution) -> bool:
+    """Whether an answer is, deliverable by deliverable, the same as a question's or one
+    of the choices it asks about (the record a page opens, or a fact is of, is among the
+    names asked about)."""
+    if len(answer.deliverables) != len(question.deliverables):
+        return False
+    for a, q in zip(answer.deliverables, question.deliverables):
+        if len(q.candidates) < 2 or q.facts or q.aggregate:
+            if _answer_key(Resolution(deliverables=(a,))) != _answer_key(Resolution(deliverables=(q,))):
+                return False
+            continue
+        named = (a.page.label if a.page is not None else "") or (a.facts[0].subject if a.facts else "")
+        if not named or named not in q.candidates:
+            return False
+    return True
 
 
 def _finds(resolution: Resolution) -> bool:
@@ -394,7 +455,16 @@ def _first_line(name: str) -> str:
     return ((name or "").strip().splitlines() or [""])[0].strip()
 
 
-def assistant_answer(capabilities: frozenset[str], *, chinese: bool) -> str:
+def _areas(index) -> list[str]:
+    """The application's top-level areas as its menus name them, in their order."""
+    if index is None:
+        return []
+    return list(dict.fromkeys(
+        p.breadcrumb.split(" / ")[0].strip() for p in index.pages
+        if p.breadcrumb and " / " in p.breadcrumb))
+
+
+def assistant_answer(capabilities: frozenset[str], *, chinese: bool, areas=()) -> str:
     """What this assistant can do, asked of the assistant itself ("你能帮我做什么？").
 
     Written here rather than by the model, and from what the adapter declares: the
@@ -404,7 +474,9 @@ def assistant_answer(capabilities: frozenset[str], *, chinese: bool) -> str:
     do the request, with the model's own note about the question in brackets.
     """
     if chinese:
-        lines = ["我可以在这个应用里帮你：",
+        opening = ([f"这个应用里你能用到的模块有：{'、'.join(areas)}（共 {len(areas)} 个）。", ""]
+                   if areas else [])
+        lines = opening + ["我可以在这个应用里帮你：",
                  "- 查数据：某条记录的字段（比如一张单据的客户、日期、状态），"
                  "符合条件的记录有多少条、金额合计多少，列出符合描述的记录；",
                  "- 找页面：打开你要看的列表或记录，告诉你某个功能在哪里；"]
@@ -417,7 +489,9 @@ def assistant_answer(capabilities: frozenset[str], *, chinese: bool) -> str:
         lines[-1] = lines[-1].removesuffix("；") + "。"
         return "\n".join(lines + ["", "我不会替你修改数据。直接用一句话说你要什么就行，"
                                         "可以一次问几件事。"])
-    lines = ["In this application I can:",
+    opening = ([f"The areas of this application open to you: {', '.join(areas)} "
+                f"({len(areas)} in all).", ""] if areas else [])
+    lines = opening + ["In this application I can:",
              "- Look up data: a field of a record (the customer, date or status of a "
              "document), how many records meet a condition or what they add up to, and "
              "which records fit a description;",
@@ -554,8 +628,8 @@ class GoalTurnExecutor:
         #: them; off only to measure what they change.
         self.values = bool(values)
         #: How many independent readings of the request are declared before acting.
-        #: With two, a request the model reads differently each time is caught: the two
-        #: readings are shown to it side by side and it declares once more, deciding.
+        #: With two, differing resolved answers get two additional independent readings
+        #: and a vote; an unresolved vote falls back to a reconciliation declaration.
         #: One reading trusts the first declaration as it is.
         self.readings = max(1, int(readings))
         self.channel = channel
@@ -750,8 +824,7 @@ class GoalTurnExecutor:
                 s.ledger.append("provider_failed", step=s.step,
                                 provider_error_code=getattr(exc, "code", "provider_error"))
                 s.terminal_reason, s.detail = "provider_error", str(exc)[:200]
-                return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
-                                 else "The model service did not respond; please try again.")
+                return self._say(s, _provider_failed(exc, s.chinese))
         if self.staged and parts is not None:
             scope_parts = parts
             scope_unsupported = unsupported
@@ -761,10 +834,25 @@ class GoalTurnExecutor:
                             about_assistant=about_assistant, **projection)
             if not parts and about_assistant:
                 return self._say(s, assistant_answer(capabilities_of(self.goal_port),
-                                                     chinese=s.chinese))
+                                                     chinese=s.chinese, areas=_areas(s.full_index)))
             if not parts:
                 s.terminal_reason = "agent_refused"
                 return self._say(s, _cannot(s.message.text, unsupported, s.chinese))
+            # Names the first step copied out of the request (a customer written in the
+            # person's language, which no reference shape reveals) are looked for on the
+            # entities it picked and those they link to; a record found joins the known ones.
+            seen = {k.text for k in known} | {k.name for k in known}
+            named = tuple(n for n in dict.fromkeys(n for p in parts for n in p.get("names", ()))
+                          if n not in seen)
+            if named:
+                found = locate_names(self.goal_port, named,
+                                     entities=tuple(dict.fromkeys(p["entity"] for p in parts)),
+                                     context=s.approvals.context(s.step, "locate"))
+                s.ledger.append("goal_names", step=s.step, names=list(named)[:8],
+                                found=[{"text": k.text, "entity": k.entity, "name": k.name}
+                                       for k in found][:8])
+                known = tuple(known) + found
+                s.references = tuple(known)
             # The rules of the source are shown only when the first step says a part
             # asks how the application behaves: a long catalogue of rule ids in front of
             # a question about data disturbs how a small model reads the question.
@@ -840,8 +928,7 @@ class GoalTurnExecutor:
             s.ledger.append("provider_failed", step=s.step,
                             provider_error_code=getattr(exc, "code", "provider_error"))
             s.terminal_reason, s.detail = "provider_error", str(exc)[:200]
-            return self._say(s, "模型服务暂时没有响应，请稍后再试。" if s.chinese
-                             else "The model service did not respond; please try again.")
+            return self._say(s, _provider_failed(exc, s.chinese))
         s.ledger.append("goal_declared", step=s.step, spec=spec.to_json(), **projection)
         asks_rules = any(p.get("rules") for p in scope_parts)
         if (not spec.deliverables and spec.unsupported and not spec.about_assistant
@@ -931,7 +1018,7 @@ class GoalTurnExecutor:
             spec = self._held_reading(s, spec)
         if not spec.deliverables and spec.about_assistant:
             return self._say(s, assistant_answer(capabilities_of(self.goal_port),
-                                                 chinese=s.chinese))
+                                                 chinese=s.chinese, areas=_areas(s.full_index)))
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
@@ -951,37 +1038,70 @@ class GoalTurnExecutor:
             s.terminal_reason = "agent_refused"
             return self._say(s, "应用未能完整解析这次请求。" if s.chinese
                              else "The application could not resolve this request completely.")
-        problems = _repairable(spec, resolution)
-        if problems:
-            # The one repair: the resolver found something a different declaration
-            # would fix and says what; the model declares once more with that in
-            # front of it. The second declaration replaces the first only when fewer
-            # deliverables stay unresolved, so a repair never makes the turn worse.
+        for _round in range(_REPAIRS):
+            problems = _repairable(spec, resolution)
+            if not problems:
+                break
+            # A repair: the resolver found something a different declaration would fix
+            # and says what; the model declares once more with that in front of it. The
+            # new declaration replaces the old only when it leaves less unresolved, so a
+            # repair never makes the turn worse; one that helps may be followed by one
+            # more (a name found on another entity, whose field is then empty).
             s.ledger.append("goal_repair_requested", step=s.step, problems=list(problems))
             s.step += 1
             elapsed = time.time() - s.started_at
+            # A name found on another entity than the one declared, or a declaration a
+            # repair already moved there: the repair is read against a neighbourhood
+            # that has those entities too, so that the next round can keep them.
+            beyond = tuple(dict.fromkeys(
+                [k for d in resolution.deliverables for k in d.elsewhere]
+                + [d.entity for d in spec.deliverables if d.entity]))
+            seen = {e.key for e in s.index.entities} if s.index is not None else set()
+            wider = ({"index": neighbourhood(s.full_index, tuple(dict.fromkeys(s.focus[0] + beyond)),
+                                             request=s.focus[1], rules=False)}
+                     if any(k not in seen for k in beyond) and s.focus and s.full_index is not None
+                     else {})
             try:
-                repaired, projection = s.read(previous=spec, problems=problems)
+                repaired, projection = s.read(previous=spec, problems=problems, **wider)
             except (ValueError, ProviderError) as exc:
                 s.ledger.append("goal_repair_failed", step=s.step, detail=str(exc)[:200])
                 repaired = None
-            if repaired is not None and repaired.deliverables:
-                s.ledger.append("goal_declared", step=s.step, spec=repaired.to_json(),
-                                attempt=2, **projection)
-                s.step += 1
-                try:
-                    second = self._resolve(s, repaired)
-                except _ContractBroken:
-                    second = None
-                accepted = second is not None and (
-                    _unresolved(repaired, second) < _unresolved(spec, resolution)
-                    or (_unresolved(repaired, second) == _unresolved(spec, resolution)
-                        and _askable(second) > _askable(resolution)))
-                s.ledger.append("goal_repaired", step=s.step, accepted=accepted,
-                                unresolved_before=_unresolved(spec, resolution),
-                                unresolved_after=_unresolved(repaired, second))
-                if accepted:
-                    spec, resolution = repaired, second
+            if repaired is not None and not repaired.deliverables:
+                s.ledger.append("goal_repair_empty", step=s.step,
+                                unsupported=(repaired.unsupported or "")[:200])
+            if repaired is None or not repaired.deliverables:
+                break
+            s.ledger.append("goal_declared", step=s.step, spec=repaired.to_json(),
+                            attempt=2 + _round, **projection)
+            s.step += 1
+            try:
+                second = self._resolve(s, repaired)
+            except _ContractBroken:
+                second = None
+            # A repair corrects names, fields and conditions; what the person asked
+            # for -- a record to open, a list, a value -- stays what the readings said,
+            # except a change asked for, which the repair may make a handoff.
+            kept = len(repaired.deliverables) != len(spec.deliverables) or all(
+                after.kind in (before.kind, "handoff")
+                for before, after in zip(spec.deliverables, repaired.deliverables))
+            # A kind of record the person named ("这个客户") is the one they mean: a repair
+            # may not answer from another entity's record of the same name instead.
+            kept = kept and not _moved_from_named_kind(s, spec, repaired)
+            # A name nobody's record has is answered as not found. A repair that turns it
+            # into conditions which find nothing either is not nearer an answer, and would
+            # lose the name the person gave.
+            kept = kept and not (second is not None and _still_nothing(resolution, second))
+            accepted = second is not None and kept and (
+                _unresolved(repaired, second) < _unresolved(spec, resolution)
+                or (_unresolved(repaired, second) == _unresolved(spec, resolution)
+                    and _askable(second) > _askable(resolution)))
+            s.ledger.append("goal_repaired", step=s.step, accepted=accepted,
+                            unresolved_before=_unresolved(spec, resolution),
+                            unresolved_after=(_unresolved(repaired, second)
+                                              if second is not None else None))
+            if not accepted:
+                break
+            spec, resolution = repaired, second
         resolution = self._which_amount(s, spec, resolution)
         resolution = self._not_chosen_for(s, spec, resolution)
         outcomes: list[_PageOutcome | None] = []
@@ -1038,14 +1158,19 @@ class GoalTurnExecutor:
     def _held_reading(self, s: _TurnState, spec: GoalSpec) -> GoalSpec:
         """The readings say the application does not hold what is asked, while the
         request names fields it holds that no page shows this account (a product's
-        weight): the request is read once more with those fields in front of the model.
-        Its declaration stands only when it declares something."""
-        held = neighbourhood(s.full_index, s.focus[0], request=s.focus[1], rules=False, held=True)
+        weight), or what it asks is held by records that point at the chosen ones (a
+        contract's payment plans): the request is read once more with those in front of
+        the model. Its declaration stands only when it declares something."""
+        held = neighbourhood(s.full_index, s.focus[0], request=s.focus[1], rules=False,
+                             held=True, inbound=True)
         fields = [f"{e.label}.{f.label}" for e in held.entities for f in e.held]
-        if not fields:
+        seen = {e.key for e in s.index.entities} if s.index is not None else set()
+        joined = [e.key for e in held.entities if e.key not in seen]
+        if not fields and not joined:
             return spec
         s.step += 1
-        s.ledger.append("goal_held_fields_offered", step=s.step, fields=fields[:8])
+        s.ledger.append("goal_held_fields_offered", step=s.step, fields=fields[:8],
+                        entities=joined[:8])
         try:
             again, projection = s.read(index=held)
         except (ValueError, ProviderError) as exc:
@@ -1054,6 +1179,16 @@ class GoalTurnExecutor:
         s.ledger.append("goal_declared", step=s.step, spec=again.to_json(), attempt="held",
                         **projection)
         if not again.deliverables:
+            return spec
+        try:
+            tried = self._resolve(s, again, quiet=True)
+        except _ContractBroken:
+            return spec
+        if all(r.problem and not (r.facts or r.aggregate or r.page or r.candidates)
+               for r in tried.deliverables):
+            # What the wider reading declared resolves to nothing: the readings' own
+            # account of why the request cannot be answered stands.
+            s.ledger.append("goal_held_reading_unresolved", step=s.step)
             return spec
         s.index = held
         return again
@@ -1078,7 +1213,7 @@ class GoalTurnExecutor:
 
     def _agree(self, s: _TurnState, chat, index, first: GoalSpec, today, second_reading) -> GoalSpec:
         """A second, independent reading of the request; when it disagrees with the
-        first, both are put in front of the model and a third reading decides.
+        first, resolved answers vote with two more readings before reconciliation.
 
         A small model reads the same request differently from one call to the next --
         a list of lines as a count, a field as a page -- and a resolver cannot tell a
@@ -1147,6 +1282,14 @@ class GoalTurnExecutor:
             s.ledger.append("goal_readings_one_finds", step=s.step,
                             taken="first" if chosen is first else "second")
             return chosen
+        if pair is not None:
+            # Two independent readings that lead to different answers: two more, read
+            # just as independently, and the answer most of them lead to is taken. A
+            # reading shown the others is swayed by what it is shown; independent ones
+            # are not, and a small model's own majority is steadier than its choice.
+            taken = self._majority(s, index, first, second, pair, today)
+            if taken is not None:
+                return taken
         problems = ("a second reading of the same request declared "
                     + json.dumps(second.to_json(), ensure_ascii=False)
                     + "; the readings differ in: " + "; ".join(differences[:6])
@@ -1170,27 +1313,96 @@ class GoalTurnExecutor:
     def _quiet_pair(self, s: _TurnState, first: GoalSpec, second: GoalSpec, today):
         """Both readings, prepared the way a declaration is before it is resolved,
         resolved quietly (read-only, no audit); None when that cannot run."""
-        today_text = str(today() or "") if callable(today) else ""
-
-        def prepared(spec: GoalSpec) -> GoalSpec:
-            spec, _flipped = _magnitudes(spec, s.message.text)
-            spec, _handed = _as_handoffs(spec, s.message.text)
-            spec, _corrections = correct_records(spec, s.message.text, s.references,
-                                                 tuple(c.display for c in s.candidates))
-            if s.candidates and spec.deliverables:
-                spec, _picked = pick(spec, s.message.text, today_text, s.candidates)
-            return spec
-
         try:
-            return (self._resolve(s, prepared(first), quiet=True),
-                    self._resolve(s, prepared(second), quiet=True))
+            return (self._quietly(s, first, today), self._quietly(s, second, today))
         except Exception:  # noqa: BLE001 -- a comparison that cannot run is a difference
             return None
+
+    def _quietly(self, s: _TurnState, spec: GoalSpec, today) -> Resolution:
+        """A reading resolved as its declaration would be, read-only and unaudited."""
+        today_text = str(today() or "") if callable(today) else ""
+        spec, _flipped = _magnitudes(spec, s.message.text)
+        spec, _handed = _as_handoffs(spec, s.message.text)
+        spec, _corrections = correct_records(spec, s.message.text, s.references,
+                                             tuple(c.display for c in s.candidates))
+        if s.candidates and spec.deliverables:
+            spec, _picked = pick(spec, s.message.text, today_text, s.candidates)
+        return self._resolve(s, spec, quiet=True)
+
+    def _majority(self, s: _TurnState, index, first: GoalSpec, second: GoalSpec, pair,
+                  today) -> GoalSpec | None:
+        """Two more independent readings; the reading whose answer most of the four lead
+        to, when that answer finds what it describes and at least two agree on it alone;
+        None otherwise, and the deciding reading settles it."""
+        with ThreadPoolExecutor(max_workers=_MORE_READINGS) as pool:
+            futures = [pool.submit(s.read) for _ in range(_MORE_READINGS)]
+        readings = [(first, pair[0]), (second, pair[1])]
+        for future in futures:
+            try:
+                vote, projection = future.result()
+            except Exception as exc:  # noqa: BLE001 -- a missing vote is no vote
+                s.ledger.append("goal_vote_failed", step=s.step,
+                                detail=f"{type(exc).__name__}: {exc}"[:200])
+                continue
+            if not vote.deliverables:
+                continue
+            vote, _first = _totals_agreed(vote, first)
+            vote, _named = _named_controls(vote, s.scope_parts, s.message.text, index)
+            try:
+                resolved = self._quietly(s, vote, today)
+            except Exception:  # noqa: BLE001 -- a vote that cannot be resolved is no vote
+                continue
+            s.ledger.append("goal_declared", step=s.step, spec=vote.to_json(), attempt="vote",
+                            **projection)
+            readings.append((vote, resolved))
+        wanted = {p.get("kind") for p in s.scope_parts or ()}
+        if wanted:
+            # What is asked for -- a record to open, a list, a value -- is the first
+            # step's; a reading that asks for another kind has no vote on the answer.
+            readings = [(spec, resolved) for spec, resolved in readings
+                        if {d.kind for d in spec.deliverables} == wanted]
+        groups: list[list[int]] = []
+        keys: list[tuple] = []
+        for i, (_spec, resolved) in enumerate(readings):
+            key = _answer_key(resolved)
+            if key in keys:
+                groups[keys.index(key)].append(i)
+            else:
+                keys.append(key)
+                groups.append([i])
+        if not groups:
+            s.ledger.append("goal_readings_voted", step=s.step, votes=0, groups=[])
+            return None
+        top = max(len(g) for g in groups)
+        leaders = [g for g in groups if len(g) == top]
+        s.ledger.append("goal_readings_voted", step=s.step, votes=len(readings),
+                        groups=[len(g) for g in groups])
+        if len(leaders) > 1:
+            # A tie between an answer and a question whose choices include it: the
+            # readings that answered used what the request says to pick one, the others
+            # did not; the answer stands. Any other tie is no majority.
+            definite = [g for g in leaders if not _asks(keys[groups.index(g)])]
+            asking = [g for g in leaders if _asks(keys[groups.index(g)])]
+            if (len(definite) == 1 and asking
+                    and all(_answer_among(readings[definite[0][0]][1], readings[g[0]][1])
+                            for g in asking)):
+                leaders = definite
+        best = leaders[0]
+        if len(best) < 2 or len(leaders) > 1 or not _finds(readings[best[0]][1]):
+            return None
+        s.ledger.append("goal_readings_majority", step=s.step, taken=best[0], agreeing=len(best))
+        return readings[best[0]][0]
 
     def _resolve(self, s: _TurnState, spec: GoalSpec, *, quiet: bool = False) -> Resolution:
         # A deliverable that needs something this application's port does not offer is
         # answered here, plainly; the port sees only what it can resolve.
         offered = capabilities_of(self.goal_port)
+        spec = _search_as_record(spec, offered, s.full_index or s.index)
+        # A page the port can open is opened even when the port does not offer the filters
+        # and groups asked to be applied to it: what the person asked to see is reached,
+        # and the reply says what was left out. A read is not narrowed this way -- a
+        # filter it cannot apply would change the numbers.
+        spec, left_out = _ask_what_it_can(spec, offered)
         missing = [_needs_beyond(d, offered) for d in spec.deliverables]
         # A question answered by rules of the source is answered here, from the index the
         # model read, with the rules' citations; the port is not asked.
@@ -1200,7 +1412,7 @@ class GoalTurnExecutor:
         asked = GoalSpec(deliverables=tuple(d for d, m, r in zip(spec.deliverables, missing, by_rule)
                                             if not m and r is None),
                          write_intent=spec.write_intent, unsupported=spec.unsupported,
-                         conventions=s.conventions, chosen=s.chosen)
+                         conventions=s.conventions, language=_language(s), chosen=s.chosen)
         if any(missing) and not quiet:
             s.ledger.append("goal_capability_missing", step=s.step,
                             missing=[sorted(m) for m in missing if m], offered=sorted(offered))
@@ -1223,14 +1435,16 @@ class GoalTurnExecutor:
             r if r is not None else
             Resolved(kind=d.kind, problem="this application does not offer "
                      + ", ".join(sorted(m)) + " here", unoffered=tuple(sorted(m)))
-            if m else next(resolved)
-            for d, m, r in zip(spec.deliverables, missing, by_rule)), reads=partial.reads)
+            if m else replace(next(resolved), unoffered=tuple(sorted(left)))
+            for d, m, r, left in zip(spec.deliverables, missing, by_rule, left_out)),
+            reads=partial.reads)
         if quiet:
             return resolution
         s.ledger.append("goal_resolved", step=s.step,
                         conventions=[c.terms[0] for c in s.conventions],
                         kinds=[d.kind for d in resolution.deliverables],
                         problems=[d.problem for d in resolution.deliverables],
+                        left_out=[list(x) for x in left_out if x],
                         reads=[list(r) for r in resolution.reads])
         return resolution
 
@@ -1238,7 +1452,9 @@ class GoalTurnExecutor:
         """"What is the amount of Acme's September invoice" when two invoices fit asks which
         one (owner ruling, 2026-09-27): a sum over a few records is an answer only when the
         request asks for a total. The records are listed as the choices."""
-        if _TOTAL_WORDS.search(s.message.text):
+        if _TOTAL_WORDS.search(s.message.text) or (
+                s.scope_parts and all(p.get("kind") == "aggregate" for p in s.scope_parts)):
+            # Asked for a total, in so many words or as the first step read the request.
             return resolution
         out = list(resolution.deliverables)
         # The request points at one record: by its words ("那张"), or as the first step
@@ -1263,7 +1479,7 @@ class GoalTurnExecutor:
                 continue
             try:
                 listed = self.goal_port.resolve(
-                    GoalSpec(deliverables=(replace(d, kind="list"),), conventions=s.conventions,
+                    GoalSpec(deliverables=(replace(d, kind="list"),), conventions=s.conventions, language=_language(s),
                              chosen=s.chosen),
                     context=s.approvals.context(s.step, "resolve"),
                     current_path=_path_of(s.obs.url)).deliverables[0]
@@ -1303,7 +1519,7 @@ class GoalTurnExecutor:
                 try:
                     worded = self.goal_port.resolve(
                         GoalSpec(deliverables=(replace(d, record=said),),
-                                 conventions=s.conventions, chosen=s.chosen),
+                                 conventions=s.conventions, language=_language(s), chosen=s.chosen),
                         context=s.approvals.context(s.step, "resolve"),
                         current_path=_path_of(s.obs.url)).deliverables[0]
                 except Exception:  # noqa: BLE001 -- the declared record stands when the check cannot run
@@ -1324,7 +1540,8 @@ class GoalTurnExecutor:
                 # No condition declared, but the request names who the record belongs to
                 # ("Joel's order"): that link is what the request says of it. An amount or
                 # a day the request writes may pick the one out, as the model read it.
-                if numbers_in(s.message.text) or days(s.message.text, s.today):
+                if (numbers_in(s.message.text) or days(s.message.text, s.today)
+                        or _ORDINAL.search(s.message.text)):
                     continue
                 link = _link_to_named(s, d)
                 if link is None:
@@ -1333,7 +1550,7 @@ class GoalTurnExecutor:
                     Filter(field=link[0], values=(link[1],)),)))
             try:
                 described = self.goal_port.resolve(
-                    GoalSpec(deliverables=(unnamed,), conventions=s.conventions,
+                    GoalSpec(deliverables=(unnamed,), conventions=s.conventions, language=_language(s),
                              chosen=s.chosen),
                     context=s.approvals.context(s.step, "resolve"),
                     current_path=_path_of(s.obs.url)).deliverables[0]
@@ -1399,13 +1616,12 @@ class GoalTurnExecutor:
             path_ok = not expected_path or _path_of(obs.url) == expected_path
             # An application that reports what it rendered (a record route, the active
             # view, its facets) is believed when it does; one that reports nothing of the
-            # kind counts as rendered when it is not pending and shows some controls,
-            # and the two consecutive observations below must then list the same ones.
+            # kind must show controls. A changed URL with an empty loading screen is
+            # not proof that the destination rendered, even if a generic runtime marked
+            # the new projection ready.
             markers = bool(obs.record_route) or bool(obs.active_view) or obs.page_facets is not None
-            reports = markers or obs.render_state in ("ready", "pending")
             rendered = ((bool(obs.record_route) if record else bool(obs.active_view))
-                        or obs.page_facets is not None) if markers else (
-                not reports and bool(obs.elements)) or obs.render_state == "ready"
+                        or obs.page_facets is not None) if markers else bool(obs.elements)
             names = frozenset(e.name for e in obs.elements)
             if obs.render_state == "blocked":
                 return False
@@ -1689,7 +1905,8 @@ class GoalTurnExecutor:
                 if item.id in shown:
                     continue
                 shown.add(item.id)
-                fact = Fact(subject=f"{owner.label} · {item.about}", label=item.kind,
+                fact = Fact(subject=f"{owner.label} · {item.about}",
+                            label=_RULE_KIND_ZH.get(item.kind, item.kind) if s.chinese else item.kind,
                             value=item.text)
                 # The same rule written in two views is said once and cited twice.
                 if fact not in facts:
@@ -1811,9 +2028,15 @@ class GoalTurnExecutor:
             if len(declared) == len(deliverables) else [""] * len(deliverables)
         for resolved, outcome, name in zip(deliverables, outcomes, names):
             lines.extend(_render(resolved, outcome, zh, request, name))
-        if s.terminal_reason not in ("agent_finished", "agent_refused"):
-            lines.append(("这次操作没有完成：" if zh else "The turn did not complete: ")
-                         + (s.detail or s.terminal_reason))
+        # A turn stopped by the person, or by an unanswered card, says so in the line of
+        # the deliverable it stopped; the internal detail behind it is not the person's.
+        if s.terminal_reason not in ("agent_finished", "agent_refused") + _STOPPED:
+            detail = s.detail or s.terminal_reason
+            if zh and not re.search(r"[\u3400-\u9fff]", detail):
+                lines.append("这次操作没有完成。")
+            else:
+                lines.append(("这次操作没有完成：" if zh else "The turn did not complete: ")
+                             + detail)
         return self._say(s, "\n\n".join(line for line in lines if line))
 
     def _say(self, s: _TurnState, text: str) -> str:
@@ -2015,6 +2238,39 @@ class _ContractBroken(Exception):
     """The port answered a declaration with deliverables that do not match it."""
 
 
+def _search_as_record(spec: GoalSpec, offered: frozenset[str], index=None) -> GoalSpec:
+    """Where the application offers no page search, the words a deliverable would have
+    searched for are read for what they are: the name of what is listed ("收款单" on the
+    receipts page) says nothing, and a page deliverable's other words name the record to
+    open, looked up as its name."""
+    if "search" in offered or not any(d.page.search for d in spec.deliverables):
+        return spec
+
+    def names_the_kind(d) -> bool:
+        entity = index.entity(d.entity) if index is not None and d.entity else None
+        page = index.page(d.page.key) if index is not None and d.page.key else None
+        said = _norm(d.page.search)
+        names = [*(entity.label, *entity.aliases)] if entity is not None else []
+        names += [page.label, *page.aliases] if page is not None else []
+        return any(said == _norm(n) or said in _norm(n) for n in names if n)
+
+    def a_condition_already(d) -> bool:
+        # The words are a value the deliverable's conditions already hold ("厦门瑞丰软件定制合同"
+        # as the 合同 of a payment-plan list): searching for them again adds nothing.
+        said = _norm(d.page.search)
+        return d.metric is not None and any(
+            said == _norm(v) for f in d.metric.filters for v in f.values)
+
+    out = []
+    for d in spec.deliverables:
+        if d.page.search and (names_the_kind(d) or a_condition_already(d)):
+            d = replace(d, page=replace(d.page, search=""))
+        elif d.kind == "page" and d.page.search and not d.record:
+            d = replace(d, record=d.page.search, page=replace(d.page, search=""))
+        out.append(d)
+    return replace(spec, deliverables=tuple(out))
+
+
 def _needs_beyond(d, offered: frozenset[str]) -> frozenset[str]:
     """The optional capabilities a deliverable needs that the port does not offer."""
     needs = set()
@@ -2032,14 +2288,73 @@ def _needs_beyond(d, offered: frozenset[str]) -> frozenset[str]:
     return frozenset(needs) - offered
 
 
-def _unresolved(spec: GoalSpec, resolution: Resolution) -> int:
-    """Deliverables that came to nothing, plus a change asked for with nothing to point at."""
-    count = sum(1 for d in resolution.deliverables
-                if d.problem and not d.denied and not (d.facts or d.aggregate
-                                      or (d.page and d.kind not in ("fact", "list", "aggregate"))))
+def _ask_what_it_can(spec: GoalSpec, offered: frozenset[str]) -> tuple[GoalSpec, tuple[tuple[str, ...], ...]]:
+    """The spec as the port can be asked it, and per deliverable the capabilities left
+    out of it.
+
+    A page is asked for without the filters and groups the port does not offer: the page
+    itself is what the person asked to see, and the reply says plainly that this
+    application does not offer them. A read keeps its filters -- dropping one would answer
+    about more records than were asked for -- so it stays a deliverable this application
+    cannot answer.
+    """
+    out, left = [], []
+    for d in spec.deliverables:
+        drop = frozenset({"facets"} & _needs_beyond(d, offered)) if d.kind == "page" else frozenset()
+        if drop:
+            d = replace(d, page=replace(d.page, filters_on=(), filters_off=(), group_by=""))
+        out.append(d)
+        left.append(tuple(sorted(drop)))
+    return replace(spec, deliverables=tuple(out)), tuple(left)
+
+
+def _unresolved(spec: GoalSpec, resolution: Resolution) -> tuple[int, int]:
+    """How much is left unanswered, worst first: deliverables that came to nothing (and a
+    change asked for with nothing to point at), then answers that are there but not whole
+    (every field asked for empty, or some asked for missing). Compared as a pair, a found
+    record with an empty field is nearer an answer than no record at all."""
+    hard = sum(1 for d in resolution.deliverables
+               if d.problem and not d.denied and not (d.facts or d.aggregate
+                                     or (d.page and d.kind not in ("fact", "list", "aggregate"))))
     if spec.write_intent and not any(d.kind == "handoff" for d in spec.deliverables):
-        count += 1
-    return count
+        hard += 1
+    soft = sum(1 for d in resolution.deliverables
+               if d.facts and not d.problem and len(d.empty) == len(d.facts))
+    soft += sum(1 for d in resolution.deliverables if d.facts and d.problem and not d.denied)
+    return hard, soft
+
+
+def _moved_from_named_kind(s: _TurnState, before: GoalSpec, after: GoalSpec) -> bool:
+    """A repaired deliverable now on another entity, where the request names the kind of
+    record declared first (its label or one of its aliases) and not the new one's."""
+    index = s.full_index or s.index
+    if index is None:
+        return False
+    said = _norm(s.message.text)
+
+    def named(key: str) -> bool:
+        entity = index.entity(key) if key else None
+        if entity is None:
+            return False
+        # Its label or an alias, or a word the deployment's conventions give it ("客户"
+        # for the CRM's customers).
+        words = [entity.label, *entity.aliases]
+        words += [t for c in getattr(index, "conventions", ()) or () if c.entity == key
+                  for t in c.terms]
+        return any(n and _norm(n) in said for n in words)
+
+    return any(b.entity and a.entity and b.entity != a.entity and named(b.entity)
+               and not named(a.entity)
+               for b, a in zip(before.deliverables, after.deliverables))
+
+
+def _still_nothing(before: Resolution, after: Resolution) -> bool:
+    """Every deliverable came to nothing before because a name was not found, and after
+    the repair every one still comes to nothing."""
+    def nothing(d) -> bool:
+        return bool(d.problem) and not (d.facts or d.aggregate or d.page or d.candidates)
+    return (bool(before.deliverables) and all(nothing(d) and d.missing for d in before.deliverables)
+            and all(nothing(d) for d in after.deliverables))
 
 
 def _repairable(spec: GoalSpec, resolution: Resolution) -> tuple[str, ...]:
@@ -2053,13 +2368,20 @@ def _repairable(spec: GoalSpec, resolution: Resolution) -> tuple[str, ...]:
     return tuple(dict.fromkeys(problems))
 
 
+#: A rule's kind, as a Chinese reply names it.
+_RULE_KIND_ZH = {"visibility": "何时显示", "editability": "何时可改", "refusal": "何时拒绝",
+                 "meaning": "含义", "target": "打开什么"}
+#: A value the record does not hold, as a Chinese reply says it.
+_EMPTY_ZH = {"(empty)": "（空）"}
+
+
 def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
             request: str = "", name: str = "") -> list[str]:
     lines: list[str] = []
     if resolved.facts:
         for fact in resolved.facts:
-            lines.append(f"**{fact.subject} · {fact.label}**：{fact.value}" if zh
-                         else f"**{fact.subject} · {fact.label}**: {fact.value}")
+            lines.append(f"**{fact.subject} · {fact.label}**：{_EMPTY_ZH.get(fact.value, fact.value)}"
+                         if zh else f"**{fact.subject} · {fact.label}**: {fact.value}")
         if resolved.citations:
             # The rule's source, verbatim: the lines it names are hashed, so a reader
             # or an evaluator can check the citation names exactly those bytes.
@@ -2187,6 +2509,13 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                 # is not something this page offers, and the reply says so.
                 suffix += (f"，但这个页面不支持 {plan.missing_view} 视图" if zh
                            else f", but this page does not support a {plan.missing_view} view")
+            if resolved.unoffered:
+                # The page is open; the filtering or grouping asked to be applied to it is
+                # not something this application offers, and the reply says so.
+                offers = ("、".join(_OFFER_ZH.get(n, n) for n in resolved.unoffered) if zh
+                          else ", ".join(_OFFER_EN.get(n, n) for n in resolved.unoffered))
+                suffix += (f"，但这个应用没有提供{offers}" if zh
+                           else f", but this application does not offer {offers}")
             lines.append((f"已打开：{what}{suffix}") if zh else f"Opened: {what}{suffix}")
         elif outcome.reached and all(u.kind == "filter_on" for u in outcome.unmet):
             # The page is open; a filter or group it asked for has no such choice there.
@@ -2263,12 +2592,32 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -
                     f"{en_op} {en_what}; the assistant did nothing.")
         return (f"你的账号没有{zh_op}{zh_what}的权限，助手没有执行任何操作。" if zh
                 else f"Your account has no permission to {en_op} {en_what}; the assistant did nothing.")
+    if "handoffs" in resolved.unoffered:
+        # A change asked of an assistant that can only read here: that is the reason,
+        # not the capabilities a guided change would have used. The request is quoted, so
+        # the person sees which change was not made.
+        asked = (f"「{request}」没有执行：" if zh else f"\"{request}\" was not done: ") if request else ""
+        return (asked + "助手在这个应用里是只读的：只能查数据、打开页面，不能替你修改、提交或审核，"
+                "也不能带你完成这项修改" + ("。" if asked else "，这一项没有执行。") if zh
+                else asked + "The assistant is read-only in this application: it can look up "
+                     "data and open pages, but cannot change, submit or approve anything, or "
+                     "guide you through the change" + ("." if asked else "; this part was not done."))
     if resolved.unoffered:
         # What the application does not offer is the person's to know, plainly.
         offers = [(_OFFER_ZH if zh else _OFFER_EN).get(name, name) for name in resolved.unoffered]
         return (f"这个应用没有提供{'、'.join(offers)}，这一项无法完成。" if zh
                 else f"This application does not offer {', '.join(offers)}, so this part "
                      "could not be done.")
+    if resolved.refused:
+        # The application's own sentence for a read it refused, when that sentence names
+        # what it needs ("请选择时间范围"): the person can act on that, and a bare "not
+        # done" leaves them with nothing to do. Shown when it is in their language, as a
+        # model's reason is; the audit keeps the fuller one either way.
+        why = " ".join(resolved.refused.split())
+        if zh and _CJK.search(why):
+            return f"这一项没有完成：{why}。"
+        if not zh:
+            return f"This part was not done: {why}."
     names = "、".join(resolved.candidates) if zh else ", ".join(resolved.candidates)
     if zh:
         return "无法完成这一项。" + (f"符合的记录有：{names}。" if names else "")

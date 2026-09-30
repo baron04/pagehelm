@@ -1,25 +1,14 @@
-"""Words, periods, domains and per-model metadata shared by the Odoo goal index and resolver.
+"""Words, domains and per-model metadata shared by the Odoo index and data port.
 
-Nothing here talks to Odoo; these are the pure helpers and value types the compiler and
-the resolver both use.
+Nothing here talks to Odoo; these are the pure helpers and value types the index
+compiler and the data port both use.
 """
 from __future__ import annotations
 
-from dataclasses import replace
-
 import ast
-from datetime import date, datetime, time as time_of_day, timedelta, timezone
+from datetime import date
 import html
 import re
-import threading
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-from web_operation_agent.business.runtime import BusinessToolError
-from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
-                                             IndexPage)
-from web_operation_agent.goal.ports import Aggregate, Fact, PagePlan, Resolution, Resolved
-from web_operation_agent.goal.spec import Deliverable, Filter, GoalSpec, Metric, PageSpec
-from web_operation_agent.state.identity import OperationContext
 
 
 #: Modules whose actions are the framework's own, not the business application's.
@@ -56,15 +45,6 @@ _FIELD_TAG = re.compile(r'<field\b[^>]*?\bname="([^"]+)"')
 _KIND_RANK = {"link": 0, "choice": 1, "money": 2, "number": 3, "date": 4, "text": 5,
               "html": 6, "bool": 7}
 
-_RECORD_LIMIT = 40
-
-_GROUP_LIMIT = 20
-
-#: Values that ask whether a field is set at all, in the index's language and in Chinese.
-_EMPTY = frozenset({"empty", "notset", "none", "unset", "空", "为空", "没有"})
-
-_NOT_EMPTY = frozenset({"notempty", "set", "any", "nonempty", "非空", "不为空", "有"})
-
 #: Line fields that are bookkeeping for the form, not values a person asks about.
 _SKIP_LINE_FIELDS = frozenset({"sequence", "display_type", "is_downpayment", "product_updatable",
                                "product_uom_category_id", "product_uom_readonly",
@@ -73,39 +53,6 @@ _SKIP_LINE_FIELDS = frozenset({"sequence", "display_type", "is_downpayment", "pr
                                "analytic_distribution", "partner_id", "product_type"})
 
 _MAX_LINE_FIELDS = 24
-
-#: Relative periods a date condition may name, in the index's language and in Chinese.
-_PERIODS = {
-    "today": "today", "今天": "today", "yesterday": "yesterday", "昨天": "yesterday",
-    "this week": "this_week", "本周": "this_week", "last week": "last_week", "上周": "last_week",
-    "this month": "this_month", "本月": "this_month", "这个月": "this_month",
-    "last month": "last_month", "上月": "last_month", "上个月": "last_month",
-    "this quarter": "this_quarter", "本季度": "this_quarter",
-    "last quarter": "last_quarter", "上季度": "last_quarter", "上个季度": "last_quarter",
-    "this year": "this_year", "今年": "this_year", "last year": "last_year", "去年": "last_year",
-    "overdue": "overdue", "逾期": "overdue", "过期": "overdue",
-}
-
-_LAST_DAYS = re.compile(r"^(?:last|past|最近|过去)\s*(\d{1,3})\s*(?:days|天)$", re.I)
-
-_DAY = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
-
-_MONTH = re.compile(r"^(\d{4})-(\d{2})$")
-
-_YEAR = re.compile(r"^(\d{4})$")
-
-_RANGE = re.compile(r"^(\d{4}-\d{2}-\d{2})\s*(?:\.\.|~|to|至|到)\s*(\d{4}-\d{2}-\d{2})$")
-
-def _fields_of(index: ApplicationIndex, model: str) -> str:
-    entity = index.entity(model) if model else None
-    if entity is None:
-        return ""
-    return ", ".join(f.label for f in entity.fields[:20])
-
-def _describes_record(d: Deliverable) -> bool:
-    """The deliverable carries conditions that can pick a record out without its name."""
-    return bool((d.metric is not None and d.metric.filters) or d.page.filters_on
-                or d.page.search)
 
 def _literal_domain(text: str) -> list | None:
     """A domain expressed as a Python literal, or None when it needs a context."""
@@ -143,63 +90,6 @@ def _plain_text(markup: str) -> str:
 def _money(amount: float, currency: str) -> str:
     return f"{amount:,.2f} {currency}".strip()
 
-def _month_start(day: date) -> date:
-    return day.replace(day=1)
-
-def _add_months(day: date, months: int) -> date:
-    month = day.month - 1 + months
-    return date(day.year + month // 12, month % 12 + 1, 1)
-
-def _period(value: str, today: date) -> tuple[date | None, date | None] | None:
-    """A named or written period as [start, end) dates; None when it is not one."""
-    text = " ".join(value.strip().lower().split())
-    name = _PERIODS.get(text)
-    if name == "today":
-        return today, today + timedelta(days=1)
-    if name == "yesterday":
-        return today - timedelta(days=1), today
-    if name == "this_week":
-        start = today - timedelta(days=today.weekday())
-        return start, start + timedelta(days=7)
-    if name == "last_week":
-        start = today - timedelta(days=today.weekday() + 7)
-        return start, start + timedelta(days=7)
-    if name == "this_month":
-        return _month_start(today), _add_months(today, 1)
-    if name == "last_month":
-        return _add_months(today, -1), _month_start(today)
-    if name in ("this_quarter", "last_quarter"):
-        quarter_start = date(today.year, 3 * ((today.month - 1) // 3) + 1, 1)
-        if name == "last_quarter":
-            quarter_start = _add_months(quarter_start, -3)
-        return quarter_start, _add_months(quarter_start, 3)
-    if name == "this_year":
-        return date(today.year, 1, 1), date(today.year + 1, 1, 1)
-    if name == "last_year":
-        return date(today.year - 1, 1, 1), date(today.year, 1, 1)
-    if name == "overdue":
-        return None, today
-    match = _LAST_DAYS.match(text)
-    if match:
-        days = int(match.group(1))
-        return today - timedelta(days=days), today + timedelta(days=1)
-    match = _RANGE.match(text)
-    if match:
-        start, end = date.fromisoformat(match.group(1)), date.fromisoformat(match.group(2))
-        return start, end + timedelta(days=1)
-    match = _DAY.match(text)
-    if match:
-        start = date.fromisoformat(text)
-        return start, start + timedelta(days=1)
-    match = _MONTH.match(text)
-    if match:
-        start = date(int(match.group(1)), int(match.group(2)), 1)
-        return start, _add_months(start, 1)
-    match = _YEAR.match(text)
-    if match:
-        return date(int(text), 1, 1), date(int(text) + 1, 1, 1)
-    return None
-
 _TODAY_CALLS = re.compile(r"(?:context_today\(\)|time)\.strftime\('([^']+)'\)")
 
 def _domain_at(text: str, today: date) -> list | None:
@@ -211,19 +101,6 @@ def _domain_at(text: str, today: date) -> list | None:
         return literal
     substituted = _TODAY_CALLS.sub(lambda m: repr(today.strftime(m.group(1))), text)
     return _literal_domain(substituted)
-
-class _Scope:
-    """What a declaration's page, filters and conditions select, as a domain."""
-
-    def __init__(self, *, model, meta, page, action, domain, described, default_clauses,
-                 fixed: bool = False):
-        self.model, self.meta, self.page, self.action = model, meta, page, action
-        self.domain, self.described, self.default_clauses = domain, described, default_clauses
-        #: The records were chosen by the deployment's conventions for the words the
-        #: request says; the page's own domain and defaults are part of that choice and
-        #: are not lifted to find more.
-        self.fixed = fixed
-
 
 def _domain_terms(domain: list) -> list[list]:
     """A domain in prefix notation, split into its top-level terms (implicitly and-ed)."""
@@ -246,14 +123,6 @@ def _all_of(domain: list) -> list:
     terms = _domain_terms(domain)
     return ["&"] * (len(terms) - 1) + [item for term in terms for item in term]
 
-
-def _any_of(domains: list[list]) -> list:
-    """Records any of these (non-empty) domains selects, as one prefix-notation term."""
-    parts = [_all_of(d) for d in domains]
-    return ["|"] * (len(parts) - 1) + [item for part in parts for item in part]
-
-class Ambiguous(tuple):
-    """Several records match a reference; the tuple holds their display names."""
 
 class _SearchFilter:
     __slots__ = ("name", "label", "domain", "group_by", "raw", "date_field")

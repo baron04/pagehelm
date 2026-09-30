@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField, IndexPage,
                                              IndexRule)
+from web_operation_agent.goal.resolve.service import DataGoalPort
+from web_operation_agent.goal.resolve.resolver import Resolver
 from web_operation_agent.goal.spec import GoalSpec
-from web_operation_agent.goal.narrow import (KnownReference, correct_records, locate, neighbourhood,
+from web_operation_agent.goal.narrow import (KnownReference, candidate_entities, correct_records, locate, neighbourhood,
                                               ranked_entities, references, summaries)
 
 
@@ -66,6 +72,47 @@ class LocateTests(unittest.TestCase):
     def test_a_port_without_the_method_contributes_nothing(self):
         self.assertEqual(locate(object(), "S00006"), ())
 
+    def test_one_context_dependent_list_refusal_does_not_abort_reference_location(self):
+        index = ApplicationIndex(entities=(IndexEntity("requires-parent", "Child"),
+                                           IndexEntity("normal", "Normal")),
+                                 pages=(IndexPage("/child", "Child", "Child", "requires-parent"),
+                                        IndexPage("/normal", "Normal", "Normal", "normal")))
+
+        class Data:
+            def index(self, *, context=None):
+                return index
+
+        class Resolver:
+            def __init__(self):
+                self.asked = []
+
+            def view(self, _entity):
+                return SimpleNamespace(fields={})
+
+            def _find_record(self, entity, _text):
+                self.asked.append(entity)
+                if entity == "requires-parent":
+                    raise DataRefused("parent required")
+                return None
+
+        resolver = Resolver()
+        port = DataGoalPort(Data())
+        with patch.object(port, "_resolver", return_value=resolver):
+            self.assertEqual(port.locate_reference("ABC123"), ())
+            self.assertEqual(resolver.asked, ["requires-parent", "normal"])
+            self.assertEqual(port.locate_names(("Alice",), entities=("requires-parent", "normal")), ())
+
+    def test_context_dependent_related_list_does_not_hide_an_absent_record(self):
+        index = ApplicationIndex(entities=(IndexEntity("customer", "Customer"),
+                                           IndexEntity("statistics", "Statistics")))
+        resolver = Resolver(None, index, None)
+        link = SimpleNamespace(kind="link", relation="customer")
+        view = SimpleNamespace(listed=True, shown=("customerId",),
+                               fields={"customerId": link})
+        with patch.object(resolver, "view", return_value=view), patch.object(
+                resolver, "_find_record", side_effect=DataRefused("department required")):
+            self.assertIsNone(resolver._rehome("customer", "Missing customer"))
+
 
 class RankingTests(unittest.TestCase):
     def test_named_entities_first_then_mentioned_then_the_rest_nothing_dropped(self):
@@ -81,6 +128,30 @@ class RankingTests(unittest.TestCase):
         self.assertIn("KNOWN REFERENCES", text)
         self.assertLess(len(text), 1200)
 
+    def test_large_index_retrieves_named_pages_fields_references_and_conventions(self):
+        from web_operation_agent.goal.index import IndexConvention
+        filler = tuple(IndexEntity(key=f"misc/item-{n}", label=f"Generic Item {n}")
+                       for n in range(300))
+        target = IndexEntity(key="trade/order", label="交易订单",
+                             fields=(IndexField("amount", "实付金额", "money"),))
+        named = IndexEntity(key="crm/contract", label="合同")
+        index = ApplicationIndex(
+            entities=filler + (target, named),
+            pages=(IndexPage(key="/mall/order", label="商城订单", breadcrumb="商城 / 订单",
+                             entity="trade/order"),),
+            conventions=(IndexConvention(terms=("成交",), meaning="已成交合同",
+                                         entity="crm/contract"),))
+        known = (KnownReference("C-100", "crm/contract", "C-100"),)
+        selected = candidate_entities(index, "商城订单的实付金额和成交合同", known)
+        self.assertIn("trade/order", [e.key for e in selected])
+        self.assertIn("crm/contract", [e.key for e in selected])
+        rendered = summaries(index, "商城订单的实付金额和成交合同", known)
+        self.assertLessEqual(len(rendered), 12_500)
+        self.assertIn("trade/order: 交易订单", rendered)
+        self.assertIn("crm/contract: 合同", rendered)
+        self.assertIn("OTHER ENTITIES", rendered)
+        self.assertNotIn("misc/item-299: Generic Item 299 |", rendered)
+
     def test_the_neighbourhood_keeps_links_lines_and_owners_and_their_pages(self):
         index = _index()
         near = neighbourhood(index, ("line",))
@@ -90,6 +161,19 @@ class RankingTests(unittest.TestCase):
         self.assertEqual({e.key for e in wide.entities}, {"order", "partner", "line"})
         self.assertNotIn("tag", [e.key for e in wide.entities])
         self.assertEqual(neighbourhood(index, ("nope",)).entities, ())
+
+    def test_records_pointing_at_the_chosen_one_join_when_the_request_names_them_in_part(self):
+        index = _index()
+        # "Journal Entry" links to the contact; a request naming a word of its label
+        # brings it in, one that does not leaves it out.
+        self.assertIn("invoice", {e.key for e in neighbourhood(
+            index, ("partner",), request="the journal of Acme").entities})
+        self.assertNotIn("invoice", {e.key for e in neighbourhood(
+            index, ("partner",), request="Acme's phone").entities})
+        self.assertIn("invoice", {e.key for e in neighbourhood(
+            replace(index, entities=tuple(replace(e, label="记账凭证") if e.key == "invoice" else e
+                                          for e in index.entities)),
+            ("partner",), request="客户的凭证有哪些").entities})
 
     def test_a_field_no_page_shows_is_listed_only_when_the_request_names_it(self):
         product = IndexEntity(key="product", label="Product", aliases=("产品",),
@@ -193,6 +277,26 @@ class RankingTests(unittest.TestCase):
         index = ApplicationIndex(entities=(IndexEntity(key="invoice", label="Journal Entry", rules=rules),))
         near = neighbourhood(index, ("invoice",), request="currency")
         self.assertEqual([r.id for r in near.entity("invoice").rules], ["r0"])
+
+
+class NameLocationTests(unittest.TestCase):
+    def test_names_go_to_the_port_that_locates_names_and_fall_back_to_references(self):
+        from web_operation_agent.goal.narrow import locate_names
+
+        class _Names:
+            def locate_names(self, names, *, entities=(), context=None):
+                assert entities == ("order",)
+                return tuple((n, "partner", n + " Ltd") for n in names if n == "Acme")
+
+        found = locate_names(_Names(), ("Acme", "Nobody"), entities=("order",))
+        self.assertEqual(found, (KnownReference("Acme", "partner", "Acme Ltd"),))
+
+        class _References:
+            def locate_reference(self, text, *, context=None):
+                return (("order", text),) if text == "S00004" else ()
+
+        self.assertEqual(locate_names(_References(), ("S00004",)),
+                         (KnownReference("S00004", "order", "S00004"),))
 
 
 if __name__ == "__main__":

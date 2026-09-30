@@ -362,8 +362,14 @@ class ApplicationPorts:
     reconciliation: ApplicationMutationReconciler
     data: BusinessDataClassifier
     forms: ApplicationFormPort = NoApplicationForms()
+    #: Scopes the adapter's goal data reads under (`goal.resolve.service.GoalData`), for an
+    #: application whose goal-directed reads are not already covered by a tool's scope.
+    goal_scopes: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
+        if (not isinstance(self.goal_scopes, frozenset)
+                or not all(isinstance(s, str) and s.strip() for s in self.goal_scopes)):
+            raise TypeError("goal scopes must be a frozenset of non-empty strings")
         checks = (
             isinstance(self.identity, ApplicationIdentityPort),
             isinstance(self.routes, ApplicationRoutePort),

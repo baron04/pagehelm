@@ -64,7 +64,7 @@ def bind_application(adapter: ApplicationAdapter) -> BoundApplication:
     if ports.reconciliation.supported_tools != tools.mutation_tool_names:
         raise ValueError("reconciliation port must cover every mutation tool")
     declared_scopes = frozenset(scope for scope in tools.required_scopes.values() if scope) \
-        | ports.forms.required_scopes
+        | ports.forms.required_scopes | ports.goal_scopes
     if ports.identity.required_scopes != declared_scopes:
         raise ValueError("identity port scopes differ from the business tool catalog")
     if tools.data_classifier is not ports.data:

@@ -7,6 +7,7 @@ from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from web_operation_agent.business.control import ReadOnlyControl
@@ -105,6 +106,25 @@ def _obs(epoch: int, url: str, *, tabs=(), selected=(), facets=None, candidates=
                            landmarks=["main"], elements=elements, content="page",
                            render_state=render_state, selected_controls=list(selected),
                            page_facets=facets, facet_candidates=candidates)
+
+
+class PageReadinessTests(unittest.TestCase):
+    def test_ready_route_without_rendered_page_evidence_does_not_settle(self):
+        executor = GoalTurnExecutor.__new__(GoalTurnExecutor)
+        state = SimpleNamespace(obs=_obs(1, "https://app.test/orders"))
+        waits = []
+
+        def dispatch(s, action, args):
+            waits.append((action, args))
+            s.obs = _obs(s.obs.epoch + 1, s.obs.url,
+                         buttons=("New",) if s.obs.elements else ())
+            return object()
+
+        executor._dispatch = dispatch
+        self.assertFalse(executor._wait_ready(state, "/orders", record=False))
+        self.assertTrue(waits)
+        state.obs = _obs(1, "https://app.test/orders", buttons=("New",))
+        self.assertTrue(executor._wait_ready(state, "/orders", record=False))
 
 
 class _Browser:
@@ -231,10 +251,10 @@ class GoalTurnTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run(self, script, resolved, *, decision="approved", text="S00006 的客户是谁？看看其他信息",
-             resolved_then=None, offers=OPTIONAL, staged=False, readings=2):
+             resolved_then=None, offers=OPTIONAL, staged=False, readings=2, port=None):
         channel = _Channel(page_url="http://127.0.0.1:8080/home", decision=decision)
         chat = _AgreeingChat(script)
-        port = _Port(resolved, resolved_then, offers)
+        port = port or _Port(resolved, resolved_then, offers)
         executor = GoalTurnExecutor(
             channel=channel,
             config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
@@ -294,7 +314,7 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(len(port.specs), 2)
         repaired = next(e for e in events if e["event"] == "goal_repaired")
         self.assertTrue(repaired["accepted"])
-        self.assertEqual((repaired["unresolved_before"], repaired["unresolved_after"]), (1, 0))
+        self.assertEqual((repaired["unresolved_before"], repaired["unresolved_after"]), ([1, 0], [0, 0]))
 
     def test_a_second_declaration_that_is_no_better_is_not_taken(self):
         problem = Resolved(kind="fact", problem="no Order matches 'X'", repair="no Order is named 'X'")
@@ -400,6 +420,40 @@ class GoalTurnTests(unittest.TestCase):
         self.assertTrue(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
         self.assertIn("Lumber Inc", execution.user_answer)
 
+    def test_readings_that_lead_apart_are_settled_by_most_independent_readings(self):
+        class _ByField(_Port):
+            def resolve(self, spec, *, context=None, current_path=""):
+                self.specs.append(spec)
+                return Resolution(deliverables=tuple(
+                    Resolved(kind="fact", facts=(Fact("S00006", f, f"{f} of S00006"),))
+                    for d in spec.deliverables for f in d.fields[:1]), reads=())
+        customer = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])
+        total = _declaration(kind="fact", entity="order", record="S00006", fields=["Total"])
+        execution, _channel, chat, _port, events = self._run(
+            [customer, total, total, total], [], text="S00006 的金额是多少？",
+            port=_ByField([]))
+        voted = next(e for e in events if e["event"] == "goal_readings_voted")
+        self.assertEqual((voted["votes"], sorted(voted["groups"])), (4, [1, 3]))
+        self.assertTrue(any(e["event"] == "goal_readings_majority" for e in events))
+        self.assertFalse(any("a second reading of the same request declared" in m[1]["content"]
+                             for m in chat.messages))
+        self.assertIn("Total of S00006", execution.user_answer)
+
+    def test_a_tied_vote_takes_the_answer_a_question_offers_as_a_choice(self):
+        from web_operation_agent.goal.executor import _answer_among, _answer_key
+        opened = Resolution(deliverables=(Resolved(kind="page", page=PagePlan(
+            url="/plans/9", label="期数 1", expected_path="/plans/9")),))
+        titled = Resolution(deliverables=(Resolved(kind="page", page=PagePlan(
+            url="/plans/9", label="第 1 期", expected_path="/plans/9")),))
+        asked = Resolution(deliverables=(Resolved(kind="page", problem="several",
+                                                  candidates=("期数 2", "期数 1")),))
+        # The same page opened is one answer, however it is labelled.
+        self.assertEqual(_answer_key(opened), _answer_key(titled))
+        self.assertTrue(_answer_among(opened, asked))
+        other = Resolution(deliverables=(Resolved(kind="page", page=PagePlan(
+            url="/plans/3", label="期数 3", expected_path="/plans/3")),))
+        self.assertFalse(_answer_among(other, asked))
+
     def test_two_readings_worded_apart_that_resolve_alike_need_no_third(self):
         # One reading names the field in Chinese, the other in English; both resolve to
         # the same answer, so no third reading is asked for.
@@ -432,6 +486,152 @@ class GoalTurnTests(unittest.TestCase):
         # Nothing was left to open, so the page was not even looked at.
         self.assertEqual(_Browser.instances[0].actions, [])
 
+    def test_a_change_where_the_assistant_only_reads_is_refused_as_read_only(self):
+        execution, _channel, _chat, port, _events = self._run(
+            [("declare_goal", {"write_intent": True, "deliverables": [
+                {"kind": "handoff", "entity": "order", "record": "S00006", "action": "Confirm"}]})],
+            [], text="把 S00006 确认掉", offers=frozenset())
+        self.assertIn("只读", execution.user_answer)
+        self.assertNotIn("没有提供", execution.user_answer)
+        self.assertEqual(port.specs, [])
+
+    def test_an_ordinal_the_request_writes_lets_the_pick_stand(self):
+        from web_operation_agent.goal.executor import _ORDINAL
+        for text in ("打开合同的第二期回款计划", "第3张订单", "the 2nd plan"):
+            self.assertIsNotNone(_ORDINAL.search(text), text)
+        self.assertIsNone(_ORDINAL.search("打开合同的回款计划详情"))
+
+    def test_a_repair_that_helps_may_be_followed_by_one_more(self):
+        class _Steps(_Port):
+            def __init__(self, steps):
+                super().__init__([])
+                self.steps = steps
+
+            def resolve(self, spec, *, context=None, current_path=""):
+                self.specs.append(spec)
+                return Resolution(deliverables=(self.steps[min(len(self.specs), len(self.steps)) - 1],),
+                                  reads=())
+        port = _Steps([
+            Resolved(kind="fact", problem="no Vendor matches 'Acme'", missing="Acme",
+                     repair="'Acme' is Contact record 'Acme Ltd'"),
+            Resolved(kind="fact", facts=(Fact("Acme Ltd", "Phone", "(empty)"),), empty=("Phone",),
+                     repair="Phone holds no value; Mobile holds one"),
+            Resolved(kind="fact", facts=(Fact("Acme Ltd", "Phone", "(empty)"),
+                                         Fact("Acme Ltd", "Mobile", "139"),), empty=("Phone",)),
+        ])
+        execution, _channel, _chat, _port, events = self._run(
+            [_declaration(kind="fact", entity="order", record="Acme", fields=["Phone"]),
+             _declaration(kind="fact", entity="order", record="Acme Ltd", fields=["Phone"]),
+             _declaration(kind="fact", entity="order", record="Acme Ltd", fields=["Phone", "Mobile"])],
+            [], text="Acme 的电话是多少？", readings=1, port=port)
+        rounds = [e for e in events if e["event"] == "goal_repaired"]
+        self.assertEqual([r["accepted"] for r in rounds], [True, True])
+        self.assertEqual(rounds[0]["unresolved_after"], [0, 1])
+        self.assertIn("139", execution.user_answer)
+
+    def test_a_repair_keeps_what_the_person_asked_for(self):
+        # "Open that order's detail" fits two: the repair may not turn it into a list.
+        execution, _channel, _chat, _port, events = self._run(
+            [("declare_goal", {"deliverables": [{"kind": "page", "entity": "order", "record": "Acme"}]}),
+             ("declare_goal", {"deliverables": [{"kind": "list", "entity": "order", "metric": {
+                 "op": "count", "filters": [{"field": "Customer", "values": ["Acme"]}]}}]})],
+            [Resolved(kind="page", problem="'Acme' matches several", candidates=("S00002", "S00003"),
+                      repair="add a condition the request gives")],
+            resolved_then=[Resolved(kind="list", aggregate=Aggregate(
+                subject="Orders", count=2, records=("S00002", "S00003")))],
+            text="打开 Acme 那张订单的详情", readings=1)
+        repaired = next(e for e in events if e["event"] == "goal_repaired")
+        self.assertFalse(repaired["accepted"])
+        self.assertIn("你指的是哪一个", execution.user_answer)
+
+    def test_without_page_search_the_words_searched_for_name_the_record(self):
+        _execution, _channel, _chat, port, _events = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "page", "entity": "order", "page": {"key": "p1", "search": "S00006"}}]})],
+            [Resolved(kind="page", page=PagePlan(url="/orders/6", label="S00006",
+                                                 expected_path="/orders/6"))],
+            offers=OPTIONAL - {"search"})
+        asked = port.specs[0].deliverables[0]
+        self.assertEqual((asked.record, asked.page.search), ("S00006", ""))
+
+    def test_without_page_search_the_name_of_what_is_listed_is_dropped(self):
+        _execution, _channel, _chat, port, _events = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "list", "entity": "order", "page": {"key": "p1", "search": "销售订单"}}]})],
+            [Resolved(kind="list", aggregate=Aggregate(subject="Orders", count=0, records=()))],
+            offers=OPTIONAL - {"search"})
+        asked = port.specs[0].deliverables[0]
+        self.assertEqual((asked.record, asked.page.search), ("", ""))
+
+    def test_without_page_search_words_a_condition_already_holds_are_dropped(self):
+        _execution, _channel, _chat, port, _events = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "list", "entity": "order", "metric": {
+                    "op": "count", "filters": [{"field": "Customer", "values": ["Acme Ltd"]}]},
+                 "page": {"key": "p1", "search": "Acme Ltd"}}]})],
+            [Resolved(kind="list", aggregate=Aggregate(subject="Orders", count=0, records=()))],
+            offers=OPTIONAL - {"search"})
+        asked = port.specs[0].deliverables[0]
+        self.assertEqual((asked.record, asked.page.search), ("", ""))
+
+    def test_a_repair_is_read_with_the_entity_where_the_name_was_found(self):
+        class _TwoEntities(_Port):
+            def index(self, *, context=None):
+                base = _index()
+                return replace(base, entities=base.entities + (
+                    IndexEntity(key="vendor", label="Vendor", aliases=("供应商",)),),
+                    pages=base.pages + (IndexPage(key="p9", label="Vendors",
+                                                  breadcrumb="Purchase / Vendors", entity="vendor"),))
+        port = _TwoEntities(
+            [Resolved(kind="fact", problem="no Sales Order matches 'Acme'", missing="Acme",
+                      elsewhere=("vendor",),
+                      repair="'Acme' is Vendor record 'Acme Ltd' (entity vendor)")],
+            then=[Resolved(kind="fact", facts=(Fact("Acme Ltd", "Phone", "123"),))])
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "Acme"}]}),
+                   _declaration(kind="fact", entity="order", record="Acme", fields=["Total"]),
+                   _declaration(kind="fact", entity="vendor", record="Acme Ltd", fields=["Phone"])]
+        execution, _channel, chat, port, events = self._run(
+            scripts, [], text="Acme 的电话是多少？", staged=True, port=port, readings=1)
+        self.assertIn("123", execution.user_answer)
+        # The first details were read without the vendor; the repair with it.
+        self.assertNotIn("vendor: Vendor", chat.messages[1][1]["content"])
+        self.assertIn("vendor: Vendor", chat.messages[-1][1]["content"])
+
+    def test_a_repair_may_not_answer_from_another_kind_than_the_one_the_person_named(self):
+        class _TwoEntities(_Port):
+            def index(self, *, context=None):
+                base = _index()
+                return replace(base, entities=base.entities + (
+                    IndexEntity(key="vendor", label="Vendor", aliases=("供应商",)),),
+                    pages=base.pages + (IndexPage(key="p9", label="Vendors",
+                                                  breadcrumb="Purchase / Vendors", entity="vendor"),))
+        port = _TwoEntities(
+            [Resolved(kind="fact", problem="no Sales Order matches 'Acme'", missing="Acme",
+                      elsewhere=("vendor",),
+                      repair="'Acme' is Vendor record 'Acme Ltd' (entity vendor)")],
+            then=[Resolved(kind="fact", facts=(Fact("Acme Ltd", "Phone", "123"),))])
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "Acme"}]}),
+                   _declaration(kind="fact", entity="order", record="Acme", fields=["Total"]),
+                   _declaration(kind="fact", entity="vendor", record="Acme Ltd", fields=["Phone"])]
+        execution, _channel, _chat, _port, events = self._run(
+            scripts, [], text="Acme 这张销售订单的金额是多少？", staged=True, port=port, readings=1)
+        self.assertNotIn("123", execution.user_answer)
+        self.assertIn("没有找到名为「Acme」", execution.user_answer)
+
+    def test_a_repair_that_still_finds_nothing_keeps_the_name_not_found(self):
+        port = _Port(
+            [Resolved(kind="fact", problem="no Sales Order matches 'Acme'", missing="Acme",
+                      repair="no Sales Order is named 'Acme'")],
+            then=[Resolved(kind="fact", problem="no Sales Order matches these conditions",
+                           repair="re-read the request")])
+        execution, _channel, _chat, _port, events = self._run(
+            [_declaration(kind="fact", entity="order", record="Acme", fields=["Total"]),
+             ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "order", "metric": {
+                 "op": "count", "filters": [{"field": "Customer", "values": ["Acme"], "op": "contains"}]}}]})],
+            [], text="Acme 的订单金额是多少？", port=port, readings=1)
+        self.assertEqual([e["accepted"] for e in events if e["event"] == "goal_repaired"], [False])
+        self.assertIn("没有找到名为「Acme」", execution.user_answer)
+
     def test_the_staged_path_locates_references_chooses_a_scope_then_declares_details(self):
         scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
                    _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]
@@ -456,6 +656,28 @@ class GoalTurnTests(unittest.TestCase):
                      "goal_second_reading"):
             self.assertIn(name, kinds)
         self.assertEqual(port.specs[0].deliverables[0].record, "S00006")
+
+    def test_names_the_scope_copies_are_located_and_join_the_known_references(self):
+        # A customer written in Chinese has no reference shape; the first step copies it
+        # and the port finds the record it names on the entities the parts are about.
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order",
+                                                 "names": ["厦门海湾食品有限公司", " "]}]}),
+                   _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])]
+        asked = []
+
+        class _NamesPort(_Port):
+            def locate_names(self, names, *, entities=(), context=None):
+                asked.append((names, entities))
+                return tuple((n, "partner", n) for n in names if n.startswith("厦门"))
+
+        port = _NamesPort([Resolved(kind="fact", facts=(Fact("S00006", "Customer", "厦门海湾食品有限公司"),))])
+        execution, _channel, chat, _port, events = self._run(
+            scripts, [], text="厦门海湾食品有限公司的订单客户是谁？", staged=True, port=port)
+        self.assertEqual(asked, [(("厦门海湾食品有限公司",), ("order",))])
+        named = next(e for e in events if e["event"] == "goal_names")
+        self.assertEqual(named["found"], [{"text": "厦门海湾食品有限公司", "entity": "partner",
+                                           "name": "厦门海湾食品有限公司"}])
+        self.assertIn('"entity": "partner"', chat.messages[1][1]["content"])
 
     def test_a_staged_scope_with_no_parts_ends_the_turn_honestly(self):
         execution, _channel, chat, port, _events = self._run(
@@ -610,6 +832,9 @@ class GoalTurnTests(unittest.TestCase):
              "terms": ["archived analytic account", " post ", "", 7, "x", "y"]}]})
         self.assertEqual(parts[0]["terms"], ["archived analytic account", "post", "x"])
         self.assertNotIn("terms", scope_from_json({"parts": [{"kind": "fact", "entity": "order"}]})[0][0])
+        named = scope_from_json({"parts": [{"kind": "fact", "entity": "order",
+                                            "names": ["  厦门海湾 ", "", 3, "A", "B", "C", "D"]}]})[0][0]
+        self.assertEqual(named["names"], ["厦门海湾", "A", "B", "C"])
 
     def test_a_data_question_is_declared_without_the_rules_catalogue(self):
         scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
@@ -1177,10 +1402,10 @@ class GoalTurnTests(unittest.TestCase):
         page = PagePlan(url="/orders", label="Orders", expected_path="/orders")
         spec = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "order"}]})
         unanswered = Resolution(deliverables=(Resolved(kind="list", problem="no match", page=page),))
-        self.assertEqual(_unresolved(spec, unanswered), 1)
+        self.assertEqual(_unresolved(spec, unanswered), (1, 0))
         opened = GoalSpec.from_json({"deliverables": [{"kind": "page", "entity": "order"}]})
         self.assertEqual(_unresolved(opened, Resolution(deliverables=(
-            Resolved(kind="page", problem="a filter was missing", page=page),))), 0)
+            Resolved(kind="page", problem="a filter was missing", page=page),))), (0, 0))
 
     def test_a_request_to_delete_a_described_record_is_a_delete(self):
         from web_operation_agent.goal.executor import _as_handoffs
@@ -1196,7 +1421,7 @@ class GoalTurnTests(unittest.TestCase):
         from web_operation_agent.goal.executor import _finds, _unresolved
         denied = Resolution(deliverables=(Resolved(kind="handoff", problem="may not", denied="delete"),))
         self.assertTrue(_finds(denied))
-        self.assertEqual(_unresolved(bare, denied), 0)
+        self.assertEqual(_unresolved(bare, denied), (0, 0))
 
     def test_a_first_step_that_cannot_be_read_falls_back_to_one_declaration(self):
         scripts = [("declare_scope", {"parts": 5}), ("declare_scope", {"parts": 5}),
@@ -1424,7 +1649,7 @@ class GoalTurnTests(unittest.TestCase):
         index = ApplicationIndex(entities=(
             IndexEntity(key="sale.order.template", label="Quotation Template", rules=(on_template,)),
             IndexEntity(key="sale.order", label="Sales Order", rules=(on_order, other))))
-        state = SimpleNamespace(full_index=index, index=index)
+        state = SimpleNamespace(full_index=index, index=index, chinese=False)
         answer = GoalTurnExecutor._rules_answer(None, state, Deliverable(kind="fact", rules=("r1",)))
         # The template was named; the order raises the same refusal and is answered too,
         # and a different refusal of the order is not.
@@ -1442,7 +1667,7 @@ class GoalTurnTests(unittest.TestCase):
             'must be validated. Go to the partner." when y'))
         index = ApplicationIndex(entities=(IndexEntity(key="payment", label="Payment", rules=(payment,)),
                                            IndexEntity(key="move", label="Invoice", rules=(wizard,))))
-        state = SimpleNamespace(full_index=index, index=index)
+        state = SimpleNamespace(full_index=index, index=index, chinese=False)
         answer = GoalTurnExecutor._rules_answer(None, state, Deliverable(kind="fact", rules=("r4",)))
         self.assertEqual([f.subject for f in answer.facts],
                          ["Payment · action_post", "Invoice · Pay › _create_payments"])
@@ -1647,6 +1872,15 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("助手做不到", execution.user_answer)
         self.assertEqual(_Browser.instances[0].actions, [])
 
+    def test_a_change_asked_of_a_read_only_assistant_names_the_request(self):
+        execution, *_ = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "handoff", "entity": "order", "record": "S00006", "action": "Delete"}],
+                "write_intent": True})],
+            [], text="把 S00006 删掉。", offers=OPTIONAL - {"handoffs"})
+        self.assertIn("「把 S00006 删掉。」没有执行", execution.user_answer)
+        self.assertIn("只读", execution.user_answer)
+
     def test_a_question_about_the_assistant_is_answered_not_refused(self):
         for staged, script in (
                 (True, [("declare_scope", {"parts": [], "about_assistant": True,
@@ -1659,6 +1893,8 @@ class GoalTurnTests(unittest.TestCase):
                     offers=frozenset({"handoffs"}))
                 self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
                 self.assertIn("我可以在这个应用里帮你", execution.user_answer)
+                # What the application has, as its menus name its areas.
+                self.assertIn("这个应用里你能用到的模块有：Sales（共 1 个）", execution.user_answer)
                 self.assertIn("引导操作", execution.user_answer)
                 # Only what the adapter declares: no value filling, no rules offered.
                 self.assertNotIn("帮你填好", execution.user_answer)
@@ -1743,3 +1979,76 @@ class DeclarationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HalfSupportedRequestTests(unittest.TestCase):
+    """A request whose optional addition the port does not offer is still done as far as
+    it can be, and a refusal that knows what the application asked for says it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ledger = Path(self.tmp.name) / "audit.jsonl"
+        _Browser.instances.clear()
+        self.patcher = patch.object(executor_module, "RemoteBrowserClient", _Browser)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.tmp.cleanup()
+
+    def _run(self, script, resolved, *, offers, text):
+        channel = _Channel(page_url="http://127.0.0.1:8080/home")
+        executor = GoalTurnExecutor(
+            channel=channel,
+            config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=_AgreeingChat(script), application=bind_application(_Adapter()),
+            goal_port=_Port(resolved, offers=offers), control=ReadOnlyControl(),
+            run_id_factory=lambda _m: "goal-run")
+        execution = executor.execute({"message_id": "m1", "text": text,
+                                      "page_url": "http://127.0.0.1:8080/home"})
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        return execution, events
+
+    def test_the_page_is_opened_when_the_port_offers_no_filters_or_groups(self):
+        # The request asks for the list grouped as well; the port offers no facets. The
+        # page is what the person asked to see, so it is opened and the reply says plainly
+        # what this application does not offer -- the turn is not refused.
+        execution, events = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "page", "entity": "order", "record": "S00006",
+                 "page": {"group_by": "Status"}}]})],
+            [Resolved(kind="page", page=PagePlan(url="/orders/6", label="订单 S00006",
+                                                 expected_path="/orders/6"))],
+            offers=frozenset(), text="打开订单 S00006，按下单状态分组给我看")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("已打开：订单 S00006", execution.user_answer)
+        self.assertIn("这个应用没有提供页面筛选与分组", execution.user_answer)
+        asked = next(e for e in events if e["event"] == "goal_resolved")
+        self.assertEqual(asked["left_out"], [["facets"]])
+        self.assertNotIn("goal_capability_missing", [e["event"] for e in events])
+
+    def test_a_read_keeps_the_condition_the_port_cannot_apply(self):
+        # A count whose filter the port cannot apply is not answered about every record
+        # instead: it stays a part this application cannot do.
+        execution, events = self._run(
+            [("declare_goal", {"deliverables": [
+                {"kind": "list", "entity": "order",
+                 "metric": {"op": "count", "page_filters": ["To pay"]}}]})],
+            [], offers=frozenset(), text="有多少订单是已确认的？")
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("这个应用没有提供页面筛选与分组", execution.user_answer)
+        self.assertEqual(next(e for e in events if e["event"] == "goal_capability_missing")["missing"],
+                         [["facets"]])
+
+    def test_a_refused_read_says_what_the_application_asked_for(self):
+        from web_operation_agent.goal.executor import _not_done
+        reason = "请求参数不正确:请选择时间范围"
+        self.assertEqual(
+            _not_done(Resolved(kind="list", problem="the application refused a read: x",
+                               refused=reason), True),
+            f"这一项没有完成：{reason}。")
+        # A reason not written in the person's language is not put in front of them.
+        self.assertEqual(_not_done(Resolved(kind="list", problem="x", refused="pick a period"),
+                                   True), "无法完成这一项。")
+        self.assertEqual(_not_done(Resolved(kind="list", problem="x", refused="pick a period"),
+                                   False), "This part was not done: pick a period.")

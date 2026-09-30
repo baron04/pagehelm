@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-_MAX_ENTITIES = 80
-_MAX_PAGES = 160
+#: Bounds on the whole index, not on what a model reads: a request is declared against a
+#: ranked, narrowed part of it. A whole application (a few hundred list pages) fits.
+_MAX_ENTITIES = 2000
+_MAX_PAGES = 4000
 _MAX_FIELDS = 80
 #: Fields an entity may hold beyond its pages; only the ones a request names are shown.
 _MAX_HELD = 200
@@ -64,9 +66,13 @@ class IndexRule:
     #: opens, the method that refuses), so that the rules of one operation -- a control's
     #: conditions, what it opens, what it refuses -- are answered together.
     subject: str = ""
+    #: Where the control is, as a person tells pages apart ("详情页", "列表页"), when one
+    #: entity shows a control of the same name in more than one place.
+    place: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", _label(self.id, "rule id"))
+        object.__setattr__(self, "place", " ".join(str(self.place).split())[:_MAX_LABEL])
         object.__setattr__(self, "subject", " ".join(str(self.subject).split())[:_MAX_LABEL])
         object.__setattr__(self, "kind", _label(self.kind, "rule kind"))
         object.__setattr__(self, "about", " ".join(str(self.about).split())[:_MAX_LABEL])
@@ -246,10 +252,17 @@ class ApplicationIndex:
     #: This organisation's meaning of some words. A focused index carries only those
     #: its request says.
     conventions: tuple[IndexConvention, ...] = ()
+    #: How the application names the person the index was compiled for (the acting
+    #: account), so that "my customers" is declared with the name records carry.
+    actor: str = ""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "entities", tuple(self.entities)[:_MAX_ENTITIES])
-        object.__setattr__(self, "pages", tuple(self.pages)[:_MAX_PAGES])
+        object.__setattr__(self, "actor", " ".join(str(self.actor).split())[:_MAX_LABEL])
+        entities, pages = tuple(self.entities), tuple(self.pages)
+        if len(entities) > _MAX_ENTITIES or len(pages) > _MAX_PAGES:
+            raise ValueError("application index exceeds its entity or page bound")
+        object.__setattr__(self, "entities", entities)
+        object.__setattr__(self, "pages", pages)
         object.__setattr__(self, "conventions", tuple(self.conventions)[:_MAX_CONVENTIONS])
         keys = [e.key for e in self.entities]
         if len(set(keys)) != len(keys):
@@ -327,6 +340,10 @@ class ApplicationIndex:
                 parts.append("operations: " + ", ".join(page.operations))
             lines.append(" | ".join(parts))
         lines += render_conventions(self.conventions)
+        if self.actor:
+            lines.append("")
+            lines.append(f"THE PERSON ASKING is {self.actor}: where the request says I, me or my "
+                         f"(我, 我的), a person field's value is {self.actor}")
         if self.focused and any(e.rules for e in self.entities):
             # A catalogue, not the rules themselves: id, kind and what each is about,
             # grouped by entity and kind. The model names ids; the server answers with
@@ -338,7 +355,8 @@ class ApplicationIndex:
             for entity in self.entities:
                 by_kind: dict[str, list[str]] = {}
                 for rule in entity.rules[:_MAX_RULES_PER_ENTITY]:
-                    by_kind.setdefault(rule.kind, []).append(f"{rule.id} {rule.about}")
+                    by_kind.setdefault(rule.kind, []).append(
+                        f"{rule.id} {rule.about}" + (f" ({rule.place})" if rule.place else ""))
                 for kind, items in by_kind.items():
                     lines.append(f"{entity.label} · {kind}: " + "; ".join(items))
         return "\n".join(lines)

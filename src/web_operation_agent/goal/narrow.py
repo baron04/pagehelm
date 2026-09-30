@@ -4,10 +4,9 @@ Two things happen here, in this order. First, the hard references in the request
 document numbers, codes, names written in Latin script, amounts and dates -- are cut out
 by their shape, which no language changes, and the adapter is asked which records they
 name; a reference that names a record settles its entity without any model. Second, the
-index is rendered as one line per entity, ranked so that the entities of known references
-come first, then entities whose label or aliases the request mentions, then the rest; the
-model picks entities and deliverable kinds from that, and words the request shares with
-a label only order the list, never cut it.
+index is rendered as one line per entity. For a large application, actor-visible labels,
+pages and fields retrieve a bounded candidate set before the model picks entities and
+deliverable kinds. Located references and reviewed conventions always join that set.
 """
 from __future__ import annotations
 
@@ -27,6 +26,11 @@ _AMOUNT = re.compile(r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.])\d{2,}(?
 #: A calendar date written with digits.
 _DATE = re.compile(r"\d{4}-\d{2}(?:-\d{2})?")
 _MAX_REFERENCES = 8
+#: Keep the existing full catalogue for small applications. Large catalogues are
+#: retrieved before they are shown to a small model; this is a prompt bound, not an
+#: index or permission bound.
+_MAX_SCOPE_CHARS = 12_000
+_MAX_SCOPE_ENTITIES = 60
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,22 @@ def locate(port, text: str, *, context=None) -> tuple[KnownReference, ...]:
     return tuple(known)
 
 
+def locate_names(port, names: tuple[str, ...], *, entities: tuple[str, ...] = (),
+                 context=None) -> tuple[KnownReference, ...]:
+    """The records the names a model copied out of the request name, looked for on the
+    entities those parts are about and the ones they link to. A name the shape of a
+    reference does not reveal (a customer written in Chinese) is found here; one no record
+    holds, or several do, adds nothing."""
+    method = getattr(port, "locate_names", None)
+    if not callable(method):
+        return tuple(k for name in names for k in locate(port, name, context=context))
+    known: list[KnownReference] = []
+    for text, entity, name in method(tuple(names), entities=tuple(entities), context=context) or ():
+        if entity and name:
+            known.append(KnownReference(text=str(text), entity=str(entity), name=str(name)))
+    return tuple(known)
+
+
 def _tokens(text: str) -> set[str]:
     return {t for t in re.split(r"[^0-9a-z㐀-鿿]+", (text or "").casefold()) if t}
 
@@ -138,16 +158,88 @@ def ranked_entities(index: ApplicationIndex, request: str,
     return tuple(first + second + rest)
 
 
+def _overlap(label: str, request: str, words: set[str]) -> int:
+    """Match whole Latin words and CJK pairs, without application-specific synonyms."""
+    label_words = _tokens(label)
+    score = len(label_words & words) * 4
+    normalized = "".join(request.casefold().split())
+    name = "".join(label.casefold().split())
+    if len(name) >= 2 and name in normalized:
+        score += 24
+    pairs = {name[i:i + 2] for i in range(len(name) - 1)
+             if _cjk(name[i]) and _cjk(name[i + 1])}
+    score += min(4, sum(pair in normalized for pair in pairs)) * 5
+    return score
+
+
+def candidate_entities(index: ApplicationIndex, request: str,
+                       known: tuple[KnownReference, ...]) -> tuple[IndexEntity, ...]:
+    """Retrieve a bounded, actor-visible set for the first model step.
+
+    Page names and fields help when the request says what it wants to see rather than
+    the entity's name. One representative per module helps a request whose words do not
+    match the application's labels. This retrieval is advisory: the later declaration
+    still resolves only against the full, actor-scoped index.
+    """
+    named = {k.entity for k in known}
+    named.update(c.entity for c in index.conventions if c.entity and c.named_in(request))
+    pages: dict[str, list[str]] = {}
+    for page in index.pages:
+        pages.setdefault(page.entity, []).extend((page.label, page.breadcrumb))
+    words = _tokens(request)
+    scored = []
+    for position, entity in enumerate(index.entities):
+        labels = (entity.label, *entity.aliases)
+        label_score = max((_overlap(label, request, words) for label in labels), default=0)
+        page_score = max((_overlap(label, request, words) for label in pages.get(entity.key, ())),
+                         default=0)
+        field_score = max((_overlap(label, request, words)
+                           for field in (*entity.fields, *entity.held)
+                           for label in (field.label, *field.aliases)), default=0)
+        owner_score = _overlap(entity.lines_of, request, words) if entity.lines_of else 0
+        score = (1000 if entity.key in named else 0) + 4 * label_score + 2 * page_score \
+            + field_score + owner_score
+        scored.append((-score, position, entity))
+    scored.sort(key=lambda row: row[:2])
+    # Retain at least one entity from each module among the candidates. The full
+    # catalogue's order decides ties, so retrieval and its audit are reproducible.
+    representatives = {}
+    for row in scored:
+        representatives.setdefault(row[2].key.split("/", 1)[0], row[2].key)
+    pinned = named | set(representatives.values())
+    limit = max(_MAX_SCOPE_ENTITIES, len(pinned))
+    chosen = scored[:limit]
+    present = {row[2].key for row in chosen}
+    missing = [row for row in scored[limit:] if row[2].key in pinned and row[2].key not in present]
+    for row in missing:
+        replace_at = next((i for i in range(len(chosen) - 1, -1, -1)
+                           if chosen[i][2].key not in pinned), None)
+        if replace_at is not None:
+            chosen[replace_at] = row
+    chosen.sort(key=lambda row: row[:2])
+    return tuple(row[2] for row in chosen)
+
+
 def summaries(index: ApplicationIndex, request: str,
               known: tuple[KnownReference, ...]) -> str:
-    """One line per entity, ranked, with the pages that show it; what the first step
-    of a staged declaration reads instead of the full index."""
+    """Detailed retrieved candidates and a compact directory for a large index.
+
+    The compact directory lets the model select a semantically related entity whose
+    label did not share the request's words. It is still bounded; unlike the detailed
+    candidates, it carries no fields, controls, aliases or page breadcrumbs.
+    """
     pages_of: dict[str, list[str]] = {}
     for page in index.pages:
         pages_of.setdefault(page.entity, []).append(f"{page.key} {page.breadcrumb}")
     lines = ["ENTITIES (key: label [aliases] | pages)"]
     named = {k.entity: k for k in known}
-    for entity in ranked_entities(index, request, known):
+    ranked = ranked_entities(index, request, known)
+    large = len(index.entities) > _MAX_SCOPE_ENTITIES
+    if large:
+        ranked = candidate_entities(index, request, known)
+        lines[0] = "LIKELY ENTITIES (key: label [aliases] | pages)"
+    shown = set()
+    for entity in ranked:
         parts = [f"{entity.key}: {entity.label}"
                  + (f" [{', '.join(entity.aliases)}]" if entity.aliases else "")
                  + (f" (lines of {entity.lines_of})" if entity.lines_of else "")]
@@ -158,7 +250,21 @@ def summaries(index: ApplicationIndex, request: str,
         pages = pages_of.get(entity.key, [])
         if pages:
             parts.append("pages: " + "; ".join(pages[:6]))
-        lines.append(" | ".join(parts))
+        line = " | ".join(parts)
+        if large and len("\n".join(lines)) + len(line) > _MAX_SCOPE_CHARS \
+                and entity.key not in named:
+            continue
+        lines.append(line)
+        shown.add(entity.key)
+    if large:
+        lines.append("OTHER ENTITIES (key: label; also selectable)")
+        for entity in index.entities:
+            if entity.key in shown:
+                continue
+            line = f"{entity.key}: {entity.label}"
+            if len("\n".join(lines)) + len(line) > _MAX_SCOPE_CHARS:
+                break
+            lines.append(line)
     if known:
         lines.append("")
         lines.append("KNOWN REFERENCES (text -> entity: record)")
@@ -190,9 +296,9 @@ def _ranked_rules(entity: IndexEntity, request: str):
     for position, rule in enumerate(entity.rules):
         # One catalogue entry per control or field and kind: the answer brings the
         # other rules of the same kind about the same thing along with the one named.
-        if (rule.kind, rule.about) in listed:
+        if (rule.kind, rule.about, rule.place) in listed:
             continue
-        listed.add((rule.kind, rule.about))
+        listed.add((rule.kind, rule.about, rule.place))
         overlap = len(words & (_tokens(rule.about) | _tokens(rule.text)))
         scored.append((-overlap, position, rule))
     scored.sort(key=lambda item: item[:2])
@@ -247,8 +353,29 @@ def _named(entity: IndexEntity, request: str) -> bool:
     return False
 
 
+def _partly_named(entity, request: str) -> bool:
+    """Whether the request holds a word of an entity's or a field's label: two
+    characters of a label in a language written without spaces, or a whole word of four
+    letters or more of one written with them."""
+    request_norm = "".join(request.casefold().split())
+    words = _tokens(request)
+    for label in (entity.label, *entity.aliases):
+        text = "".join(label.casefold().split())
+        if any(_cjk(text[i]) and _cjk(text[i + 1]) and text[i:i + 2] in request_norm
+               for i in range(len(text) - 1)):
+            return True
+        if any(len(w) >= 4 and w in words for w in _tokens(label)):
+            return True
+    return False
+
+
+def _cjk(ch: str) -> bool:
+    return "\u3400" <= ch <= "\u9fff"
+
+
 def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
-                  request: str = "", *, rules: bool = True, held: bool = False) -> ApplicationIndex:
+                  request: str = "", *, rules: bool = True, held: bool = False,
+                  inbound: bool = False) -> ApplicationIndex:
     """The chosen entities with what a declaration about them may need to name: the
     entities their link fields point to, their lines, the records that own them, and
     every page that shows any of these. Rendered like the full index, only smaller.
@@ -259,7 +386,8 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
     `rules` false (a request about data, not about how the application behaves) no
     rules are carried at all, and an entity is joined only by its label or alias. With
     `held`, a chosen entity also carries the fields its pages do not show that the
-    request names."""
+    request names. With `inbound`, an entity whose records point at a chosen one also
+    joins when the request names part of one of its fields."""
     chosen = {k for k in keys if index.entity(k) is not None}
     # An entity the request names joins with a few of its rules, without bringing its
     # own neighbours: the first step's choice keeps the neighbourhood's shape.
@@ -278,6 +406,13 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
             owners.add(by_label[entity.lines_of])
         for other in index.entities:
             if other.lines_of == entity.label:
+                wanted.add(other.key)
+            elif (other.key not in wanted
+                  and (_partly_named(other, request)
+                       or (inbound and any(_partly_named(f, request) for f in other.fields)))
+                  and any(f.kind == "link" and f.relation == key for f in other.fields)):
+                # Records that point at the chosen one and that the request names in part
+                # ("第二期回款" beside a contract: its 回款计划).
                 wanted.add(other.key)
 
     def kept(entity: IndexEntity):
@@ -327,9 +462,10 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
             pages.append(page)
     pages = tuple(pages)
     return ApplicationIndex(entities=entities, pages=pages, source_digest=index.source_digest,
+                            actor=index.actor,
                             complete=index.complete, focused=True,
                             conventions=tuple(c for c in index.conventions if c.named_in(request)))
 
 
-__all__ = ["KnownReference", "correct_records", "locate", "neighbourhood", "ranked_entities", "references",
+__all__ = ["KnownReference", "correct_records", "locate", "locate_names", "neighbourhood", "ranked_entities", "references",
            "summaries"]

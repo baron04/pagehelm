@@ -246,6 +246,9 @@ class GoalSpec:
     #: words name, set by the core from the request, never by the model: the records
     #: those words select are not left out by the page a deliverable went through.
     conventions: tuple = ()
+    #: The person's language ("zh"), set by the core from the request, so that the scope
+    #: an answer reports is described in it; never set by the model.
+    language: str = ""
     #: The names the person picked in answer to this conversation's question about
     #: which record was meant, set by the core, never by the model: a name several
     #: records hold, once chosen, is the record of exactly that name.
@@ -386,7 +389,7 @@ DECLARE_GOAL_TOOL = {
                         "required": ["kind"]}},
                 "write_intent": {"type": "boolean"},
                 "about_assistant": {"type": "boolean",
-                                    "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- rather than about the application or its data"},
+                                    "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- or about what the application as a whole offers (its modules, menus, functions), rather than about records or one page"},
                 "unsupported": {"type": "string",
                                 "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for; or it asks about a rule, policy or limit and RULES holds no such rule -- then say the deployed source has no rule about it; written in the person's language, naming what is missing"}},
             "required": ["deliverables"]}}}
@@ -416,6 +419,8 @@ DECLARE_SCOPE_TOOL = {
                                        "description": "entity key from the list. A question about a record's lines, items or products is about the line entity (marked 'lines of X'), not X"},
                             "about": {"type": "string",
                                       "description": "the record or records meant, in the person's words (a number, a name, a description), or empty"},
+                            "names": {"type": "array", "maxItems": 4, "items": {"type": "string"},
+                                      "description": "names of particular records the person wrote for this part -- a customer, a supplier, a product, a person, a document -- each copied exactly as written; not amounts, dates, statuses or descriptions"},
                             "terms": {"type": "array", "maxItems": 3, "items": {"type": "string"},
                                       "description": "one to three words in the application's language (the index's) naming what this part is about -- a control, a field, an action, a product -- as the application would write them"},
                             "rules": {"type": "boolean",
@@ -423,7 +428,7 @@ DECLARE_SCOPE_TOOL = {
                         "required": ["kind", "entity"]}},
                 "write_intent": {"type": "boolean"},
                 "about_assistant": {"type": "boolean",
-                                    "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- rather than about the application or its data"},
+                                    "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- or about what the application as a whole offers (its modules, menus, functions), rather than about records or one page"},
                 "unsupported": {"type": "string",
                                 "description": "why nothing can be declared, when parts is empty: the request needs data the index does not hold, which no related entity may stand in for; written in the person's language, naming what is missing"}},
             "required": ["parts"]}}}
@@ -463,6 +468,11 @@ def scope_from_json(payload: object) -> tuple[list[dict], bool, str, bool]:
                 "about": _text(item.get("about"), "about")}
         if item.get("rules") is True:
             part["rules"] = True
+        names = item.get("names")
+        if isinstance(names, list):
+            written = [" ".join(str(n).split())[:80] for n in names if isinstance(n, str) and n.strip()][:4]
+            if written:
+                part["names"] = written
         terms = item.get("terms")
         if isinstance(terms, list):
             words = [" ".join(str(t).split())[:40] for t in terms if isinstance(t, str) and t.strip()][:3]

@@ -8,41 +8,12 @@ application. `reference.json` is the reference deployment's.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from web_operation_agent.goal.index import IndexConvention
+from web_operation_agent.goal.conventions import load_conventions
 
 #: The reference deployment's conventions.
 REFERENCE_CONVENTIONS = Path(__file__).with_name("reference.json")
-
-
-def load_conventions(path: str | Path) -> tuple[IndexConvention, ...]:
-    """The conventions a deployment's file declares; a malformed file is refused."""
-    document = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(document, dict) or document.get("schema_version") != 1:
-        raise ValueError("a conventions file has schema_version 1")
-    entries = document.get("conventions")
-    if not isinstance(entries, list):
-        raise ValueError("a conventions file lists its conventions")
-    out = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("terms"), list):
-            raise ValueError("a convention has terms and a meaning")
-        records = entry.get("records")
-        if records is not None and not (isinstance(records, dict)
-                                        and isinstance(records.get("entity"), str)
-                                        and isinstance(records.get("where", []), list)):
-            raise ValueError("a convention's records name an entity and a list of conditions")
-        where = (records or {}).get("where", [])
-        if not all(isinstance(w, dict) and isinstance(w.get("field"), str)
-                   and isinstance(w.get("values"), list) for w in where):
-            raise ValueError("a condition is a field and its values")
-        out.append(IndexConvention(
-            terms=tuple(entry["terms"]), meaning=str(entry.get("meaning", "")),
-            entity=(records or {}).get("entity", ""),
-            conditions=tuple((w["field"], tuple(w["values"])) for w in where)))
-    return tuple(out)
 
 
 __all__ = ["REFERENCE_CONVENTIONS", "load_conventions"]

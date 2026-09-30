@@ -3,20 +3,12 @@ compiled from runtime metadata, read-only, under the delegated user.
 """
 from __future__ import annotations
 
-from dataclasses import replace
-
-import ast
-from datetime import date, datetime, time as time_of_day, timedelta, timezone
 import html
 import re
-import threading
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from web_operation_agent.business.runtime import BusinessToolError
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
                                              IndexPage)
-from web_operation_agent.goal.ports import Aggregate, Fact, PagePlan, Resolution, Resolved
-from web_operation_agent.goal.spec import Deliverable, Filter, GoalSpec, Metric, PageSpec
 from web_operation_agent.state.identity import OperationContext
 
 from .source import rules_for

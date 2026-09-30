@@ -755,13 +755,13 @@ def run_demo(config: OdooDemoConfig, *,
     if getattr(capability, "source_map", None) is not None and config.source_release:
         # The goal index carries the rules of the deployment's source, cited under the
         # deployment's release name; the same compile the tool loop uses.
-        adapter.goal_port.attach_source(capability.source_map, release=config.source_release)
+        adapter.goal_data.attach_source(capability.source_map, release=config.source_release)
     if config.source_root is not None and config.source_release:
         # The application's own Chinese names for its labels, from its zh_CN catalogues.
-        adapter.goal_port.attach_translations(
+        adapter.goal_data.attach_translations(
             odoo_translations(config.source_root, release=config.source_release))
     if config.conventions_path is not None:
-        adapter.goal_port.attach_conventions(load_conventions(config.conventions_path))
+        adapter.goal_data.attach_conventions(load_conventions(config.conventions_path))
     chat, meter = _chat(config, run_dir, adapter)
     holder: dict[str, LiveConversationRunner] = {}
 

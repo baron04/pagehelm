@@ -28,6 +28,17 @@ Adapter 启用该工具面时必须运行 `assert_entity_read_contract`，并补
 
 运行时使用的所有应用 URL 形状都归路由端口所有。普通 Adapter 只声明 typed tool 路径，并为空源码合同返回空路由身份。需要源码能力的集成可以额外声明带 `scope`、`route` 命名组的合同路由模式，以及明确的应用入口模式。通用 Agent 只调用端口识别路由、发现入口页 scope 和校验观察到的 handoff 链接，不解析具体框架的 URL 约定。应用特有的 session handoff 查询参数名应写入 `session_handoff_query_keys`，并传给 `LiveProductSession(sensitive_query_keys=...)`，使内嵌 Runtime 在 DOM 内容离开浏览器前删除这些值。
 
+## 目标数据
+
+目标式回合的解析由核心完成，对所有应用都一样：条件是什么意思、一个名字指哪条记录、何时放开页面自带的默认筛选、明细行和所属单据怎么对应、一段描述符合哪条记录。Adapter 只提供 `GoalData`（`web_operation_agent.goal.resolve.service`），应用以 `DataGoalPort(goal_data)` 作为自己的目标端口：
+
+- `index()`：模型据以声明的 `ApplicationIndex`；`capabilities()`：提供了哪些可选能力；
+- `schema()`：核心解析所依据的实体、字段（类型、关联实体、选项及其内部键、能否作为条件、出现在哪里）、筛选、页面和各实体的合计字段，以当前用户身份从应用自己的元数据得出；
+- `find`、`read`、`count`、`rows`、`total`、`groups`：读取，接受以字段键表示的条件树（`Compare`、`All`、`Any`、`Not`、`Via`）；以及 `page_address`、`record_address`；
+- `time_zone()`；`name_of()` 给出记录显示名里的本名；可选的 `labels_for()` 给出应用自己的翻译里一个词对应的标签。
+
+Adapter 负责把条件翻译成自己的查询语言。应用接口不能按某种比较筛选时，读取当前用户可见的记录，用 `matches` 在内存中过滤，限制条数，读不全时如实说明。页面保存的范围可以是 `Native` 子句，只由产生它的 Adapter 执行。`resolve` 不是 Adapter 的方法。
+
 ## PageController 与静态 Runtime
 
 应用 Origin 必须提供一个导出 `PageController` 和 `getElementByIndex` 的 ES module。Minimal 示例为合成页面提供了一个小型兼容 controller。真实集成应固定并部署已经通过资格验证的 PageController 实现，再把准确的同源 URL 写入 `ApplicationDescriptor.page_controller_module`。其它 Origin 上的 CDN URL 会被拒绝。

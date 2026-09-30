@@ -1,5 +1,4 @@
-"""Odoo's goal port: index compilation and deterministic resolution (see ``port``)."""
-from .port import OdooGoalPort
-from .text import Ambiguous
+"""Odoo's goal data: index compilation and read-only data access (see ``port``)."""
+from .port import OdooGoalData
 
-__all__ = ["Ambiguous", "OdooGoalPort"]
+__all__ = ["OdooGoalData"]

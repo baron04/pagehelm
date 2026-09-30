@@ -30,6 +30,7 @@ from web_operation_agent.composition.ports import (
     ResultPostconditionVerifier,
 )
 from web_operation_agent.composition.sources import SourceCapability
+from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.planning.repository_source import (CombinedSourceLookup,
                                                             RepositorySourceLookup)
 from web_operation_agent.planning.source_facts import CompiledSourceLookup
@@ -44,7 +45,7 @@ from .descriptors import OdooRuntimeDescriptorReader
 from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
 from .generic_forms import OdooFormPort
 from ..click_policy import OdooReviewedClickPolicy, load_review
-from ..goal import OdooGoalPort
+from ..goal import OdooGoalData
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
                     PREPARE_CUSTOMER_EDIT_TOOL, PREPARE_CUSTOMER_FORM_TOOL,
@@ -317,7 +318,9 @@ class OdooApplicationAdapter:
             data=data,
             forms=forms,
         )
-        self.goal_port = OdooGoalPort(executor)
+        #: The index and reads goal-directed turns resolve against; the core resolves.
+        self.goal_data = OdooGoalData(executor)
+        self.goal_port = DataGoalPort(self.goal_data)
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
             application_id=APPLICATION_ID,

@@ -1,9 +1,11 @@
-"""What an application provides to a goal-directed turn, and what it hands back.
+"""The goal port a goal-directed turn talks to, and what a resolution hands back.
 
-The adapter owns every application fact: how a reference becomes a record, which page
-shows an entity, what a filter means, how a value is displayed. The core owns the turn:
-asking once, confirming page switches, dispatching generic page commands, checking the
-outcome against the resolution, and writing the reply.
+The core owns the turn -- asking once, confirming page switches, dispatching generic page
+commands, checking the outcome against the resolution, writing the reply -- and the
+resolution itself (`goal.resolve`). The adapter owns the application's facts: its index,
+its schema, the records it reads under the acting user, how a value is displayed, and
+where a page or record lives (`goal.data`). `goal.resolve.service.DataGoalPort` is the
+`GoalPort` over those facts; a test may stand in its own.
 """
 from __future__ import annotations
 
@@ -100,6 +102,10 @@ class Resolved:
     page: PagePlan | None = None
     #: Why this deliverable could not be resolved: not found, ambiguous, unsupported.
     problem: str = ""
+    #: The application's own sentence for a read it refused, when that sentence named
+    #: what it needs ("请选择时间范围"): the reply says it, so the person knows what the
+    #: page asks for before it shows anything.
+    refused: str = ""
     #: Candidate names when a reference was ambiguous, so the reply can ask.
     candidates: tuple[str, ...] = ()
     #: The reference the person gave that names no record here ("S00998"), so the
@@ -116,6 +122,12 @@ class Resolved:
     #: succeed: the fields an entity does have, the records a description matched.
     #: Empty when the problem is not one a different declaration would fix.
     repair: str = ""
+    #: Entities (keys) where the name that no record of the declared entity has is one
+    #: record's, so that a repair can be declared on them.
+    elsewhere: tuple[str, ...] = ()
+    #: The facts asked for that the record holds no value in (their labels): a fact
+    #: all of whose fields are empty has not answered the question yet.
+    empty: tuple[str, ...] = ()
     #: Source citations backing the facts (`path:start-end@release sha256:<hex>`), each
     #: rendered verbatim in the reply as a rule of the deployment's source, not data.
     citations: tuple[str, ...] = ()
@@ -146,7 +158,7 @@ OPTIONAL = frozenset({"facets", "sections", "lines", "handoffs", "fill", "search
 
 
 class GoalPort(Protocol):
-    """Compiled by the adapter under the acting user; read-only by construction.
+    """Read-only by construction; `DataGoalPort` is the implementation over an adapter's data.
 
     The contract has two levels. The required level is `index` and `resolve` for facts,
     aggregates, lists and pages of named records. The optional level is declared by

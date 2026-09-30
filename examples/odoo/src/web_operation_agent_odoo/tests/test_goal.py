@@ -5,7 +5,8 @@ from dataclasses import replace
 import unittest
 
 from web_operation_agent.goal.spec import Deliverable, GoalSpec
-from web_operation_agent_odoo.goal import OdooGoalPort
+from web_operation_agent.goal.resolve.service import DataGoalPort
+from web_operation_agent_odoo.goal import OdooGoalData
 from web_operation_agent_odoo.translations import OdooTranslations, parse_po
 
 _CATALOG = {
@@ -188,7 +189,9 @@ _TRANSLATIONS = OdooTranslations(
 class OdooGoalPortTests(unittest.TestCase):
     def setUp(self):
         self.client = _Client()
-        self.port = OdooGoalPort(self.client, translations=_TRANSLATIONS)
+        self.data = OdooGoalData(self.client, translations=_TRANSLATIONS)
+        self.port = DataGoalPort(self.data)
+        self._resolver = lambda: self.port._resolver(self.port.index())
         self.index = self.port.index()
 
     def test_the_index_keeps_business_pages_and_drops_technical_and_bound_ones(self):
@@ -219,7 +222,7 @@ class OdooGoalPortTests(unittest.TestCase):
                   "helper": {"string": "Total (Tax inc.)", "type": "monetary"}}
         meta = _ModelMeta("m", "Entries", fields, ["amount_signed"], ["helper"], (), (), [],
                           list_arch='<list><field name="amount_signed" string="Total"/></list>')
-        labels = [f.label for f in self.port._index_fields(meta)]
+        labels = [f.label for f in self.data._index_fields(meta)]
         self.assertEqual(labels, ["Total Signed", "Total", "Total (Tax inc.)"])
 
     def test_create_handoff_uses_actor_allowed_page_not_proposed_record_lookup(self):
@@ -288,7 +291,7 @@ class OdooGoalPortTests(unittest.TestCase):
         conventions = load_conventions(REFERENCE_CONVENTIONS)
         self.assertTrue(any("订单" in c.terms for c in conventions))
         self.assertEqual(self.port.index().conventions, ())
-        self.port.attach_conventions(conventions)
+        self.data.attach_conventions(conventions)
         index = self.port.index()
         self.assertEqual(index.conventions, conventions)
         # The meanings are written in the index's own terms: each names the model it is about.
@@ -344,7 +347,7 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(agg.sums, (("Total", "92,750.00 USD"),))
         self.assertEqual(agg.subject,
                          "Quotations · Customer = Gemini Furniture · Status = Sales Order")
-        self.assertIn(("search_count", "sale.order"), result.reads)
+        self.assertIn(("count", "sale.order"), result.reads)
 
     def test_a_grouped_count_reports_the_largest_groups(self):
         result = self._resolve({"kind": "aggregate", "entity": "sale.order",
@@ -431,10 +434,12 @@ class OdooGoalPortTests(unittest.TestCase):
         # With the deployment's words for orders about Status, a word meaning every order
         # widens the page along Status only: a page's other clause stays (every order
         # still to invoice, not every order).
-        self.port._conventions = (every, quotes)
-        orders = next(a for a in self.port._actions if a["action_id"] == 331)
+        self.data.attach_conventions((every, quotes))
+        self.port.index()
+        orders = next(a for a in self.data._actions if a["action_id"] == 331)
         orders["domain"] = ("[('state', 'not in', ('draft', 'sent', 'cancel')), "
                             "('invoice_status', '=', 'to invoice')]")
+        self.port.invalidate()  # the page's domain is compiled into the schema
         self.port.resolve(_replace(count, conventions=(every,)))
         self.assertEqual([list(c) for c in self.client.domains[-1]],
                          [["invoice_status", "=", "to invoice"], ["partner_id", "child_of", [11]]])
@@ -556,7 +561,7 @@ class OdooGoalPortTests(unittest.TestCase):
 
         self.client.call = call
         # A numbered reference is an identifier: the exact one is taken.
-        self.assertEqual(self.port._find_record("sale.order", "S00006")[:2], ("sale.order", 6))
+        self.assertEqual(self._resolver()._find_record("sale.order", "S00006")[:2], ("sale.order", "6"))
         original2 = self.client.call
 
         def names(model, method, args, kwargs=None):
@@ -565,12 +570,12 @@ class OdooGoalPortTests(unittest.TestCase):
             return original2(model, method, args, kwargs)
 
         self.client.call = names
-        self.assertEqual(tuple(self.port._find_record("product.tag", "Office Chair")),
+        self.assertEqual(tuple(self._resolver()._find_record("product.tag", "Office Chair")),
                          ("Office Chair", "Office Chair Black"))
 
     def test_a_name_copied_with_its_code_is_found_by_its_name(self):
-        found = self.port._find_record("sale.order", "[X1] S00006")
-        self.assertEqual(found[:2], ("sale.order", 6))
+        found = self._resolver()._find_record("sale.order", "[X1] S00006")
+        self.assertEqual(found[:2], ("sale.order", "6"))
 
     def test_a_delete_this_actor_may_not_perform_is_denied_before_any_record_is_sought(self):
         # The actor may read orders but not delete them: whichever order was meant, the
@@ -606,7 +611,8 @@ class OdooGoalPortTests(unittest.TestCase):
         denied = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "S00006",
                                 "action": "Order Date", "value": "2026-10-31"}, write_intent=True)
         self.assertEqual(denied.deliverables[0].denied, "write")
-        self.port._operations["sale.order"] = frozenset({"read", "write"})
+        self.data._operations["sale.order"] = frozenset({"read", "write"})
+        self.port.invalidate()  # the operations are compiled into the schema
 
         def plan(action, value):
             result = self._resolve({"kind": "handoff", "entity": "sale.order", "record": "S00006",
@@ -615,17 +621,18 @@ class OdooGoalPortTests(unittest.TestCase):
         dated = plan("Order Date", "2026-10-31").page
         self.assertEqual((dated.fill, dated.fill_kind), ("2026-10-31", "text"))
         self.assertEqual(plan("Order Date", "2026-10").page.fill, "")
-        meta = self.port._models["sale.order"]
-        self.assertEqual(self.port._fill_for(meta, "state", "Quotation Sent"),
+        resolver = self._resolver()
+        meta = resolver.view("sale.order")
+        self.assertEqual(resolver._fill_for(meta, "state", "Quotation Sent"),
                          ("sent", "choice", "Quotation Sent"))
-        self.assertEqual(self.port._fill_for(meta, "state", "Lost"), ("", "", ""))
+        self.assertEqual(resolver._fill_for(meta, "state", "Lost"), ("", "", ""))
         linked = plan("Payment Terms", "End of Following Month").page
         self.assertEqual((linked.fill, linked.fill_kind), ("End of Following Month", "link"))
         nobody = plan("Payment Terms", "Nobody")
         self.assertEqual(nobody.page.fill, "")
         self.assertIn("no Payment Terms is named 'Nobody'", nobody.repair)
-        self.assertEqual(self.port._fill_for(meta, "amount_total", "1,200.50")[0], "1200.50")
-        self.assertEqual(self.port._fill_for(meta, "amount_total", "a lot")[0], "")
+        self.assertEqual(resolver._fill_for(meta, "amount_total", "1,200.50")[0], "1200.50")
+        self.assertEqual(resolver._fill_for(meta, "amount_total", "a lot")[0], "")
         self.assertEqual(plan("Confirm", "").page.fill, "")
 
     def test_a_reference_is_located_on_the_entities_the_pages_show(self):
@@ -713,7 +720,7 @@ class OdooGoalPortTests(unittest.TestCase):
         ]
         source_map = SourceMap(schema_version=SCHEMA_VERSIONS["SourceMap"], attestation_id="a",
                                repository_id="odoo", release="bound", relations=relations)
-        self.port.attach_source(source_map, release="18.0-20260909")
+        self.data.attach_source(source_map, release="18.0-20260909")
         self.assertIn("source", self.port.capabilities())
         entity = self.port.index().entity("sale.order")
         by_kind = {}
@@ -767,17 +774,6 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertIn('action_confirm refuses with "It is not allowed', refusals[0].text)
         self.assertEqual(refusals[0].subject, "action_confirm")
 
-    def test_a_link_name_matches_by_its_words_in_any_order(self):
-        from web_operation_agent_odoo.goal.port import _worded
-        self.assertEqual(_worded("product_id", ["acoustic screens"]),
-                         ["&", ["product_id", "ilike", "acoustic"], ["product_id", "ilike", "screen"]])
-        self.assertEqual(_worded("product_id", ["Black Office Chair", "Desk"]),
-                         ["|", "&", "&", ["product_id", "ilike", "Black"],
-                          ["product_id", "ilike", "Office"], ["product_id", "ilike", "Chair"],
-                          ["product_id", "ilike", "Desk"]])
-        # Words only a person would type in another script have nothing to match.
-        self.assertEqual(_worded("product_id", ["白色隔音屏"]), [])
-
     def test_candidate_values_are_the_lines_and_documents_near_what_the_request_names(self):
         self.assertIn("values", self.port.capabilities())
         # A named order: itself and its lines, the line's item by its exact name.
@@ -791,7 +787,7 @@ class OdooGoalPortTests(unittest.TestCase):
         partner = self.port.candidates(entities=("sale.order.line",),
                                        known=(("res.partner", "Gemini Furniture"),))
         self.assertEqual([(c.kind, c.display) for c in partner], [("record", "S00006"), ("line", "Desk")])
-        self.assertIn(["partner_id", "child_of", 11], self.client.domains[-2])
+        self.assertIn(["partner_id", "child_of", [11]], self.client.domains[-2])
         # A day the request names: the documents dated that day.
         dated = self.port.candidates(entities=("sale.order",), dates=("2026-08-12",))
         self.assertEqual([c.display for c in dated], ["S00006"])
@@ -801,15 +797,15 @@ class OdooGoalPortTests(unittest.TestCase):
         self.assertEqual(self.port.candidates(entities=("sale.order.line",)), ())
 
     def test_a_flag_that_is_off_reads_as_no(self):
-        self.assertEqual(self.port._display(False, {"type": "boolean"}, {}), "No")
-        self.assertEqual(self.port._display(True, {"type": "boolean"}, {}), "Yes")
-        self.assertEqual(self.port._display(False, {"type": "char"}, {}), "(empty)")
+        self.assertEqual(self.data._display(False, {"type": "boolean"}, {}), "No")
+        self.assertEqual(self.data._display(True, {"type": "boolean"}, {}), "Yes")
+        self.assertEqual(self.data._display(False, {"type": "char"}, {}), "(empty)")
 
     def test_a_contact_of_a_company_is_located_by_its_own_name(self):
         self.assertIn(("res.partner", "Gemini Furniture, Ed"), self.port.locate_reference("Ed"))
 
     def test_field_labels_match_by_whole_words_and_field_names(self):
-        meta = self.port._models["sale.order"]
+        meta = self.data._models["sale.order"]
         self.assertEqual(meta.field_by_label("Order Date"), "date_order")
         self.assertEqual(meta.field_by_label("Product Variants"), "product_variant_count")
         self.assertEqual(meta.field_by_label("Customer name"), "partner_id")
@@ -820,7 +816,9 @@ class OdooGoalPortTests(unittest.TestCase):
 class OdooGoalPortConditionTests(unittest.TestCase):
     def setUp(self):
         self.client = _Client()
-        self.port = OdooGoalPort(self.client, translations=_TRANSLATIONS)
+        self.data = OdooGoalData(self.client, translations=_TRANSLATIONS)
+        self.port = DataGoalPort(self.data)
+        self._resolver = lambda: self.port._resolver(self.port.index())
         self.index = self.port.index()
 
     def _resolve(self, deliverable):
@@ -835,11 +833,12 @@ class OdooGoalPortConditionTests(unittest.TestCase):
         # name; the product is the line's own.
         found = {("product.product", "[D1] Desk 2"): ("product.product", 12, "[D1] Desk 2"),
                  ("sale.order", "[D1] Desk 2"): ("sale.order", 9, "S00009")}
-        self.port._find_record = lambda model, value: found.get((model, value))
+        resolver = self._resolver()
+        resolver._find_record = lambda model, value: found.get((model, value))
         line = Deliverable.from_json({
             "kind": "fact", "entity": "sale.order.line", "fields": ["Quantity"],
             "metric": {"op": "count", "filters": [{"field": "Product", "values": ["[D1] Desk 2"]}]}})
-        self.assertEqual(self.port._line_record_from_conditions(line), line)
+        self.assertEqual(resolver._line_record_from_conditions(line), line)
 
     def test_fields_no_page_shows_are_held_on_the_entity(self):
         order = self.index.entity("sale.order")
@@ -873,7 +872,7 @@ class OdooGoalPortConditionTests(unittest.TestCase):
         self.assertEqual(resolved.deliverables[0].problem, "")
         self.assertIn(["state", "in", ["sent"]], self._last_domain())
         # Without a catalogue there are no Chinese names at all: nothing hand-written.
-        bare = OdooGoalPort(_Client()).index()
+        bare = OdooGoalData(_Client()).index()
         self.assertEqual(bare.page("p331").aliases, ())
 
     def test_a_date_period_becomes_utc_bounds_in_the_users_zone(self):
@@ -920,7 +919,7 @@ class OdooGoalPortConditionTests(unittest.TestCase):
             if model == "account.payment.term" and method == "name_search":
                 return [row for row in terms if args[0].casefold() in row[1].casefold()]
             if model == "sale.order" and method == "search_read" and \
-                    (kwargs or {}).get("fields") == ["payment_term_id"]:
+                    "payment_term_id" in (kwargs or {}).get("fields", ()):
                 return [{"id": i, "payment_term_id": row} for i, row in enumerate(in_scope["rows"])]
             return call(model, method, args, kwargs)
         self.client.call = call_with_terms
@@ -930,11 +929,12 @@ class OdooGoalPortConditionTests(unittest.TestCase):
         # Both orders' terms hold the name: the person is asked which.
         resolved = self._resolve(declared).deliverables[0]
         self.assertEqual(resolved.candidates, ("Immediate Payment", "Immediate Payment Split"))
-        # Only one of them is on the orders described: that one is meant.
+        # Owner ruling: an exact name beside a longer name still needs a choice,
+        # even when only one is on the orders described.
         in_scope["rows"] = terms[:1]
         resolved = self._resolve(declared).deliverables[0]
-        self.assertEqual((resolved.problem, resolved.candidates), ("", ()))
-        self.assertIn(["payment_term_id", "=", 7], self._last_domain())
+        self.assertEqual(resolved.candidates, ("Immediate Payment", "Immediate Payment Split"))
+        self.assertIn("several Payment Terms", resolved.problem)
         # Once the person has chosen the name, it is the record of exactly that name.
         in_scope["rows"] = terms
         resolved = self.port.resolve(replace(GoalSpec.from_json({"deliverables": [declared]}),

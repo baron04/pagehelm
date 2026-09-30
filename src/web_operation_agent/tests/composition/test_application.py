@@ -52,6 +52,30 @@ class ApplicationAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stale"):
             bind_application(adapter)
 
+    def test_goal_scopes_join_the_scopes_the_identity_must_carry(self):
+        # An adapter whose goal-directed reads no tool covers declares their scope on its
+        # ports; the identity must carry exactly the tools' scopes and those.
+        from dataclasses import replace
+
+        class _Identity:
+            required = True
+            required_scopes = frozenset({"ledger.goal-read"})
+
+            def bind(self, *_a, **_k):
+                raise AssertionError
+
+            def validate(self, *_a, **_k):
+                return None
+
+        adapter = _InvoiceAdapter()
+        adapter.ports = replace(adapter.ports, identity=_Identity())
+        with self.assertRaisesRegex(ValueError, "identity port scopes"):
+            bind_application(adapter)
+        adapter.ports = replace(adapter.ports, goal_scopes=frozenset({"ledger.goal-read"}))
+        self.assertEqual(bind_application(adapter).ports.goal_scopes, frozenset({"ledger.goal-read"}))
+        with self.assertRaises(TypeError):
+            replace(adapter.ports, goal_scopes={"ledger.goal-read"})
+
     def test_descriptor_rejects_cross_origin_page_controller(self):
         adapter = _InvoiceAdapter()
         with self.assertRaisesRegex(ValueError, "same-origin"):

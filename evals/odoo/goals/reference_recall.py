@@ -16,7 +16,8 @@ import json
 from pathlib import Path
 
 from web_operation_agent.goal.narrow import locate, references
-from web_operation_agent_odoo.goal import OdooGoalPort
+from web_operation_agent.goal.resolve.service import DataGoalPort
+from web_operation_agent_odoo.goal import OdooGoalData
 from web_operation_agent_odoo.server.executor import OdooBusinessToolExecutor
 from web_operation_agent_odoo.server.identity import OdooApiKeyStore
 
@@ -36,7 +37,7 @@ def main(argv=None) -> int:
     client = OdooBusinessToolExecutor(
         base_url=args.base_url, keys=OdooApiKeyStore(args.credentials / "api-key.json"),
         timeout_s=20, allow_private_http=True)
-    port = OdooGoalPort(client)
+    port = DataGoalPort(OdooGoalData(client))
     port.index()
     wanted = 0
     cut = 0
