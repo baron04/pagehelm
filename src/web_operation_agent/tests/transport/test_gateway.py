@@ -379,12 +379,12 @@ class GatewayTests(unittest.TestCase):
 
         _, _, takeover_raw = self.request(
             "POST", f"/v1/sessions/{sid}/hello",
-            hello(sid, runtime_instance_id="runtime-document-2").to_json(), lease="")
+            hello(sid, runtime_instance_id="runtime-document-2", client_id="browser-tab-2").to_json(), lease="")
         self.lease = json.loads(takeover_raw)["lease_id"]
+        # A second page joins the session; the first keeps following it.
         status, _, body = self.request(
             "GET", f"/v1/sessions/{sid}/events", lease=first_lease)
-        self.assertEqual(status, 409)
-        self.assertEqual(json.loads(body)["code"], "runtime_replaced")
+        self.assertEqual(status, 200)
 
     def test_cors_preflight_advertises_lease_header(self):
         sid = self.grant.session_id

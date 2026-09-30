@@ -658,11 +658,12 @@ class ChannelTests(unittest.TestCase):
                 CancellationRequest(1, "other-session", "message-security"),
                 lease_id=self.lease)
         new_lease = self.channel.accept_hello(hello(
-            self.grant.session_id, runtime_instance_id="runtime-document-2"))["lease_id"]
+            self.grant.session_id, runtime_instance_id="runtime-document-2", client_id="browser-tab-2"))["lease_id"]
         with self.assertRaisesRegex(RemoteProtocolError, "lease"):
             self.channel.accept_cancellation(
                 CancellationRequest(1, self.grant.session_id, "message-security"),
-                lease_id=self.lease)
+                lease_id="fabricated-lease")
+        # Another page of the same session may stop the task.
         self.assertTrue(self.channel.accept_cancellation(
             CancellationRequest(1, self.grant.session_id, "message-security"),
             lease_id=new_lease)["accepted"])
@@ -852,36 +853,134 @@ class ChannelTests(unittest.TestCase):
                          if event.kind == "action"]
         self.assertEqual(len(action_events), 1)
 
-    def test_runtime_takeover_preserves_old_claim_for_same_client_result(self):
+    def test_full_navigation_replaces_only_its_tab_and_finishes_without_redispatch(self):
         action = action_for(self.grant.session_id, self.first)
         self.channel.enqueue_action(action)
-        first_claim = self.channel.claim_action(
-            {"action_id": action.action_id}, lease_id=self.lease)
-        self.assertFalse(first_claim["duplicate"])
-        self.assertTrue(self.channel.claim_action(
-            {"action_id": action.action_id}, lease_id=self.lease)["duplicate"])
-
-        takeover = self.channel.accept_hello(hello(
-            self.grant.session_id, cursor="e00000002",
-            runtime_instance_id="runtime-document-2"))
-        new_lease = takeover["lease_id"]
-        self.assertNotEqual(new_lease, self.lease)
-        with self.assertRaisesRegex(RemoteProtocolError, "replaced"):
-            self.channel.validate_active_lease(self.lease)
-        refused_claim = self.channel.claim_action(
-            {"action_id": action.action_id}, lease_id=new_lease)
-        self.assertEqual(refused_claim,
+        self.channel.claim_action({"action_id": action.action_id}, lease_id=self.lease)
+        other = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="other-tab", client_id="other-tab"))["lease_id"]
+        fresh = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="new-document"))["lease_id"]
+        self.channel.validate_lease(other)
+        with self.assertRaises(RemoteProtocolError):
+            self.channel.validate_lease(self.lease)
+        with self.assertRaises(RemoteProtocolError):
+            self.channel.accept_hello(hello(self.grant.session_id))
+        self.assertEqual(self.channel.claim_action({"action_id": action.action_id}, lease_id=fresh),
                          {"claimed": False, "reason": "already_claimed"})
-        with self.assertRaisesRegex(RemoteProtocolError, "replaced"):
-            self.channel.accept_hello(hello(
-                self.grant.session_id,
-                runtime_instance_id="runtime-document-1"))
-
         after = observation(self.grant.session_id, 2, caused_by=action.action_id,
                             url=ORIGIN + "/next")
-        reply = self.channel.accept_result(completed(action, after),
-                                           lease_id=new_lease)
-        self.assertFalse(reply["duplicate"])
+        self.channel.accept_result(completed(action, after), lease_id=fresh)
+        self.assertEqual(self.channel.latest_observation_envelope, after)
+        self.assertNotIn("action", [e.kind for e in self.channel.events_after(lease_id=other)])
+
+    def test_navigation_preserves_queued_messages_for_its_tab(self):
+        self.channel.accept_message({"message_id": "queued-navigation", "text": "one",
+                                     "page_url": ORIGIN + "/start"}, lease_id=self.lease)
+        fresh = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="new-document"))["lease_id"]
+        self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="other-tab", client_id="other-tab"))
+        self.channel.wait_for_message(timeout_s=0)
+        self.assertEqual(self.channel._active_lease_id, fresh)
+
+    def test_a_second_page_joins_without_taking_the_first_pages_action(self):
+        action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(action)
+        self.assertFalse(self.channel.claim_action(
+            {"action_id": action.action_id}, lease_id=self.lease)["duplicate"])
+
+        second = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="runtime-document-2", client_id="browser-tab-2"))["lease_id"]
+        self.assertNotEqual(second, self.lease)
+        # Both pages stay open on the session.
+        self.channel.validate_lease(self.lease)
+        self.channel.validate_lease(second)
+        # The action is the first page's: the second is neither handed it nor may claim it.
+        self.assertNotIn("action", [event.kind for event in
+                                    self.channel.events_after(lease_id=second)])
+        self.assertIn("action", [event.kind for event in
+                                 self.channel.events_after(lease_id=self.lease)])
+        self.assertEqual(self.channel.claim_action(
+            {"action_id": action.action_id}, lease_id=second),
+            {"claimed": False, "reason": "another_page"})
+        after = observation(self.grant.session_id, 2, caused_by=action.action_id,
+                            url=ORIGIN + "/next")
+        with self.assertRaisesRegex(RemoteProtocolError, "current task"):
+            self.channel.accept_result(completed(action, after), lease_id=second)
+        self.assertFalse(self.channel.accept_result(
+            completed(action, after), lease_id=self.lease)["duplicate"])
+
+    def test_a_turn_runs_on_the_page_that_sent_it(self):
+        second = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="runtime-document-2", client_id="browser-tab-2"))["lease_id"]
+        there = dataclasses.replace(
+            observation(self.grant.session_id, 1, url=ORIGIN + "/other"),
+            observation_id="o-second-1")
+        self.channel.accept_observation(there, lease_id=second)
+        # The first page is still the one observed until a turn from the second begins.
+        self.assertEqual(self.channel.latest_observation_envelope.observation_id, "o-1")
+        self.channel.accept_message({"message_id": "m-first", "text": "one",
+                                     "page_url": ORIGIN + "/start"}, lease_id=self.lease)
+        self.channel.accept_message({"message_id": "m-second", "text": "two",
+                                     "page_url": ORIGIN + "/other"}, lease_id=second)
+        self.assertEqual(self.channel.wait_for_message(timeout_s=1)["message_id"], "m-first")
+        self.assertEqual(self.channel.latest_observation_envelope.observation_id, "o-1")
+        self.channel.complete_message("m-first")
+        self.assertEqual(self.channel.wait_for_message(timeout_s=1)["message_id"], "m-second")
+        self.assertEqual(self.channel.latest_observation_envelope.observation_id, "o-second-1")
+        self.assertEqual(self.channel.wait_for_client(1).runtime_instance_id,
+                         "runtime-document-2")
+
+    def test_asking_from_another_page_stops_a_turn_waiting_for_confirmation(self):
+        self.channel.accept_message({"message_id": "m-first", "text": "one",
+                                     "page_url": ORIGIN + "/start"}, lease_id=self.lease)
+        self.channel.wait_for_message(timeout_s=1)
+        self.channel.request_approval(ApprovalRequest(
+            schema_version=1, approval_id="approval-1", effect="Operate this page",
+            targets=("Page",), expires_at=int(time.time() * 1000) + 60_000))
+        second = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="runtime-document-2", client_id="browser-tab-2"))["lease_id"]
+        # The confirmation is the first page's to give: the second page is not shown it
+        # and cannot answer it.
+        self.assertNotIn("approval_required", [
+            event.kind for event in self.channel.events_after(lease_id=second)])
+        with self.assertRaisesRegex(RemoteProtocolError, "current task"):
+            self.channel.accept_approval(ApprovalDecision(
+                schema_version=1, session_id=self.grant.session_id,
+                approval_id="approval-1", decision="approved"), lease_id=second)
+        self.channel.accept_message({"message_id": "m-second", "text": "two",
+                                     "page_url": ORIGIN + "/start"}, lease_id=second)
+        self.assertTrue(self.channel.message_cancelled("m-first"))
+        self.assertEqual(self.channel.wait_for_approval("approval-1", timeout_s=0).decision,
+                         "denied")
+        self.channel.complete_message("m-first")
+        self.assertEqual(self.channel.wait_for_message(timeout_s=1)["message_id"], "m-second")
+        # Now the second page's turn runs; the first page's card is still not the second's.
+        self.assertNotIn("approval_required", [
+            event.kind for event in self.channel.events_after(lease_id=second)])
+
+    def test_a_turn_at_work_is_not_stopped_by_another_page_asking(self):
+        self.channel.accept_message({"message_id": "m-first", "text": "one",
+                                     "page_url": ORIGIN + "/start"}, lease_id=self.lease)
+        self.channel.wait_for_message(timeout_s=1)
+        second = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="runtime-document-2", client_id="browser-tab-2"))["lease_id"]
+        self.channel.accept_message({"message_id": "m-second", "text": "two",
+                                     "page_url": ORIGIN + "/start"}, lease_id=second)
+        self.assertFalse(self.channel.message_cancelled("m-first"))
+
+    def test_a_page_long_gone_makes_room_for_a_new_one(self):
+        registry = RemoteSessionRegistry(limits=RemoteSessionLimits(max_runtime_instances=2))
+        grant, channel = registry.create(allowed_origins=[ORIGIN], session_id="small")
+        first = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        second = channel.accept_hello(hello(
+            grant.session_id, runtime_instance_id="runtime-document-2", client_id="browser-tab-2"))["lease_id"]
+        channel.accept_hello(hello(grant.session_id, runtime_instance_id="runtime-document-3", client_id="browser-tab-3"))
+        # The first page is the active one and stays; the idle second one made room.
+        channel.validate_lease(first)
+        with self.assertRaisesRegex(RemoteProtocolError, "no longer held"):
+            channel.validate_lease(second)
 
     def test_same_lease_claim_retry_survives_deadline_after_response_loss(self):
         action = action_for(self.grant.session_id, self.first)

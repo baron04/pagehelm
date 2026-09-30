@@ -469,3 +469,56 @@ class TheReportedLedgerPathCarriesNoMachine(unittest.TestCase):
         p = os.path.expanduser("~/.cache/woa-test-display/y.jsonl")
         m = SpendMeter(ledger=p)
         self.assertEqual(str(m.ledger), p, "only the reported name changes, not the target")
+
+
+class DailyAllowanceContract(unittest.TestCase):
+    def _meter(self, directory, allowance, key="a1b2c3d4"):
+        return SpendMeter(ledger=Path(directory) / "spend.jsonl", price=PRICE,
+                          allowance=allowance, allowance_key=key)
+
+    def test_a_key_that_spent_its_day_is_refused_before_dispatch(self):
+        from web_operation_agent.modeling.client import ChatModel
+        from web_operation_agent.modeling.provider import ProviderError
+        from web_operation_agent.modeling.spend import DailyAllowance
+        with tempfile.TemporaryDirectory() as directory:
+            allowance = DailyAllowance(0.01)
+            meter = self._meter(directory, allowance)
+            meter.record(provider="p", model="qwen3.8-flash", run_id="r",
+                         usage={"prompt_tokens": 20000, "completion_tokens": 0})
+            self.assertFalse(meter.within_allowance())
+            chat = ChatModel(meter, env={"AGENT_OPENAI_BASE_URL": "https://example.invalid/v1",
+                                         "AGENT_OPENAI_API_KEY": "k",
+                                         "AGENT_OPENAI_MODEL": "qwen3.8-flash"})
+            with mock.patch("urllib.request.urlopen", side_effect=AssertionError("dispatched")):
+                with self.assertRaises(ProviderError) as caught:
+                    chat.complete([{"role": "user", "content": "hi"}], None, "r")
+            self.assertEqual(caught.exception.code, "provider_allowance_spent")
+            self.assertFalse(caught.exception.dispatched)
+            # Another person is not affected.
+            self.assertTrue(self._meter(directory, allowance, key="ffff0000").within_allowance())
+
+    def test_the_day_is_rebuilt_from_the_ledger_and_turns_over(self):
+        from web_operation_agent.modeling.spend import DailyAllowance
+        with tempfile.TemporaryDirectory() as directory:
+            first = DailyAllowance(1.0, utc_offset_minutes=480)
+            meter = self._meter(directory, first)
+            meter.record(provider="p", model="qwen3.8-flash", run_id="r",
+                         usage={"prompt_tokens": 200_000, "completion_tokens": 400_000})
+            rows = [json.loads(line) for line in
+                    (Path(directory) / "spend.jsonl").read_text().splitlines()]
+            self.assertEqual(rows[-1]["allowance_key"], "a1b2c3d4")
+            restarted = DailyAllowance(1.0, utc_offset_minutes=480)
+            restarted.load(Path(directory) / "spend.jsonl")
+            self.assertAlmostEqual(restarted.spent("a1b2c3d4"), first.spent("a1b2c3d4"))
+            self.assertFalse(restarted.allows("a1b2c3d4"))
+            import time as _time
+            tomorrow = _time.time() + 86400
+            with mock.patch("web_operation_agent.modeling.spend.time.time", return_value=tomorrow):
+                self.assertTrue(restarted.allows("a1b2c3d4"))
+
+    def test_the_person_is_told_the_allowance_is_spent(self):
+        from web_operation_agent.goal.executor import _provider_failed
+        from web_operation_agent.modeling.provider import ProviderError
+        spent = ProviderError("x", code="provider_allowance_spent")
+        self.assertIn("额度已用完", _provider_failed(spent, True))
+        self.assertIn("暂时没有响应", _provider_failed(ProviderError("x"), True))

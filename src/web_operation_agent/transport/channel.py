@@ -103,11 +103,20 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
                            if principal is not None else limit_expiry)
         self._condition = threading.Condition(threading.RLock())
         self._hello: ClientHello | None = None
+        # Every page the session is open on holds a lease of its own. The active lease is the
+        # page whose message the current (or last) turn runs: that page is observed and acts
+        # for it, and the others follow the conversation and may send the next message.
         self._active_lease_id = ""
-        self._active_runtime_instance_id = ""
         self._runtime_leases: dict[str, str] = {}
-        self._lease_clients: dict[str, str] = {}
         self._retired_runtime_instances: set[str] = set()
+        self._lease_clients: dict[str, str] = {}
+        self._lease_hellos: dict[str, ClientHello] = {}
+        self._lease_observations: dict[str, ObservationEnvelope] = {}
+        self._lease_seen: dict[str, int] = {}
+        self._message_leases: dict[str, str] = {}
+        #: The page each action or card was for, by event sequence: the turn's page when it
+        #: was published.
+        self._event_leases: dict[int, str] = {}
         self._latest_observation: ObservationEnvelope | None = None
         self._observation_digests: dict[str, str] = {}
         self._actions: dict[str, ActionEnvelope] = {}
@@ -146,7 +155,9 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
             "principal_digest": (principal.binding_digest if principal else ""),
         })
 
-        if self.recovered_history:
+        # A session that ended quietly comes back as it was. Only one that was cut off in
+        # the middle of a task says so: that task did not finish and is not rerun.
+        if self.recovered_history and self._owner.interrupted:
             self._append_event("progress", {
                 "state": "session_recovered",
                 "message": "会话已重新连接。此前未完成的任务没有重跑，请检查结果后提交新任务；写入仍需重新确认。"})

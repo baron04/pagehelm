@@ -234,7 +234,7 @@ def _handler(registry: RemoteSessionRegistry, *, sse_wait_s: float,
                 channel.touch_client_activity()
                 return channel, ""
             lease_id = self.headers.get("X-WOA-Lease", "")
-            channel.validate_active_lease(lease_id)
+            channel.validate_lease(lease_id)
             channel.touch_client_activity()
             return channel, lease_id
 

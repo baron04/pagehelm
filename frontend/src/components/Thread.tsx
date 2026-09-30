@@ -90,11 +90,15 @@ interface Turn {
 
 function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   const turns: Turn[] = []
+  // A turn keeps its place even when another's lines arrive between its own -- two pages of
+  // one conversation can each have asked something -- so its answer stays under its question.
+  const byId = new Map<string, Turn>()
   for (const entry of entries) {
-    let turn = turns.at(-1)
+    let turn = entry.turn_id ? byId.get(entry.turn_id) : turns.at(-1)
     if (!turn || turn.id !== entry.turn_id) {
       turn = {id: entry.turn_id, goal: null, steps: [], outcome: null, running: false}
       turns.push(turn)
+      if (entry.turn_id) byId.set(entry.turn_id, turn)
     }
     if (entry.kind === 'goal') turn.goal = entry
     else if (entry.kind === 'result') turn.outcome = entry
@@ -263,6 +267,21 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
     </div>
   )
 })
+
+/**
+ * What a turn shows between being sent and the server's first step: the same live line a
+ * working turn has, at once, so sending never looks like nothing happening.
+ */
+function Starting({labels}: {labels: Labels}): React.JSX.Element {
+  return (
+    <div className="woa-work" data-running="true">
+      <span className="woa-work__live">
+        <span className="woa-work__mark" aria-hidden="true"><span className="woa-spinner" /></span>
+        <span className="woa-work__now">{labels.turnStarting}</span>
+      </span>
+    </div>
+  )
+}
 
 function Outcome({entry, labels, limits, live, allowedOrigins}: {
   entry: TimelineEntry
@@ -459,6 +478,8 @@ export function Thread(props: ThreadProps): React.JSX.Element {
               <div className="woa-agent">
                 {/* While the card is up, the card is what the turn is doing: a line above it
                     saying that a confirmation is needed said it twice. */}
+                {turn.running && turn.steps.length === 0 && !turn.outcome
+                  && <Starting labels={labels} />}
                 {turn.steps.length > 0 && !(props.footer && turn.running
                     && turn.steps.at(-1)?.kind === 'approval') && (
                   <WorkProcess turn={turn} labels={labels}
@@ -486,12 +507,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 {labels.undelivered} · <button type="button" onClick={onRetry}>{labels.retry}</button>
               </span>
             )
-            : (
-              <span className="woa-sending">
-                <CircleCheck {...iconProps(12)} />
-                {labels.statusQueued}
-              </span>
-            )}
+            : <div className="woa-agent"><Starting labels={labels} /></div>}
         </div>
       )}
       {props.footer}

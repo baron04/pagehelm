@@ -5,6 +5,7 @@ import time
 
 from ..schemas import (ActionEnvelope, ActionResultEnvelope, ApprovalDecision,
                        ApprovalRequest, ClientHello, ObservationEnvelope, TaskEvent)
+from .channel_state import TURN_PAGE_EVENTS
 from .panel_view import action_target
 from .protocol import (RemoteProtocolError, _copy_json, _copy_wire, _event_sequence,
                        _safe_payload)
@@ -129,19 +130,23 @@ class ChannelServer:
                      wait_s: float = 0) -> list[TaskEvent]:
         after = _event_sequence(event_id)
         with self._condition:
-            self._require_active_lease(lease_id)
+            self._require_lease(lease_id)
             if after > len(self._events):
                 raise RemoteProtocolError("Last-Event-ID is ahead of this session")
             if len(self._events) <= after and wait_s > 0:
                 self._condition.wait_for(
                     lambda: (self._closed or len(self._events) > after
-                             or lease_id != self._active_lease_id),
+                             or lease_id not in self._lease_hellos),
                     timeout=self._bounded_wait(wait_s),
                 )
-            self._require_active_lease(lease_id)
+            self._require_lease(lease_id)
             if len(self._events) <= after:
                 self._ensure_open()
-            return [_copy_wire(event) for event in self._events[after:]]
+            # An action, and a confirmation to work the page, are for the page the turn runs
+            # on; the other pages follow the conversation and stay free to ask.
+            return [_copy_wire(event) for event in self._events[after:]
+                    if event.kind not in TURN_PAGE_EVENTS
+                    or self._event_leases.get(event.sequence) == lease_id]
 
     # -- synchronous server adapter waits ------------------------------------------
     def wait_for_client(self, timeout_s: float) -> ClientHello:
@@ -220,6 +225,9 @@ class ChannelServer:
                         self._durable_store.transition(
                             self._owner, message["message_id"], "running")
                     self._active_message_id = message["message_id"]
+                    # The turn runs on the page that sent it.
+                    self._activate_lease(
+                        self._message_leases.pop(message["message_id"], ""))
                     return message
                 # Raises if the session really is over; otherwise it outlived this wait.
                 self._ensure_open()

@@ -27,6 +27,8 @@ class SessionOwner:
     scope: str
     owner: str
     fence: int
+    #: Messages the previous owner had accepted or started and never finished.
+    interrupted: int = 0
 
 
 class SQLiteSessionStore:
@@ -86,10 +88,11 @@ class SQLiteSessionStore:
             db.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?)",
                        (sid, scope, owner, fence, now + self.lease_ms))
             # Neither queued nor started messages are safe to replay after a crash.
-            db.execute("UPDATE messages SET state='interrupted', updated=? "
-                       "WHERE sid=? AND state IN ('accepted','running')", (now, sid))
+            interrupted = db.execute(
+                "UPDATE messages SET state='interrupted', updated=? "
+                "WHERE sid=? AND state IN ('accepted','running')", (now, sid)).rowcount
             db.commit()
-        return SessionOwner(sid, scope, owner, fence)
+        return SessionOwner(sid, scope, owner, fence, interrupted)
 
     def _check(self, db, owner):
         row = db.execute("SELECT * FROM sessions WHERE sid=?", (owner.session_id,)).fetchone()

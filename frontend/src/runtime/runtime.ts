@@ -26,6 +26,7 @@ import {Page, loadPageController, type PageControllerApi, type PageFacetReader,
   type ActiveViewReader, type FacetCandidateReader, type FacetApplier} from './page'
 import type {ElementLookup} from './pageModel'
 import {createShell, type PanelShell} from './shell'
+import {DEFAULT_CONFIGURATION} from '../contract/panel'
 import {backoffAfter, classifyTransportError, type PanelHost, type TransportVerdict} from './panelHost'
 import {createRedactor, type Redactor} from './redaction'
 import * as results from './results'
@@ -237,6 +238,7 @@ export class EmbeddedWebRuntime {
   _raise(error: unknown, fallback = 'submit_failed'): TransportVerdict {
     const failure = error as {code?: unknown; status?: unknown} | null | undefined
     const verdict = classifyTransportError(failure, this.panelConfiguration)
+    if (verdict.terminal && this._lapsed(verdict.code)) return verdict
     if (verdict.terminal) {
       this.endState = verdict.state
       this.stopped = true
@@ -387,12 +389,30 @@ export class EmbeddedWebRuntime {
   }
 
   _expire(code: string): void {
-    if (this.stopped) return
+    if (this.stopped || this._lapsed(code)) return
     this.endState = 'ended'
     this.stopped = true
     this.eventAbortController?.abort()
     this._panelState('ended')
     this.panelHost?.raise(code, {retryable: false})
+  }
+
+  /**
+   * End quietly when the session lapsed rather than failed -- its sign-in ran out while
+   * nobody was using it, the page went quiet, the host restarted. The person's session comes
+   * back as it was on their next message, so there is nothing to tell them.
+   */
+  _lapsed(code: string): boolean {
+    const lapses = this.panelConfiguration?.lapse_codes ?? DEFAULT_CONFIGURATION.lapse_codes
+    if (!lapses.includes(code)) return false
+    if (!this.stopped) {
+      this.endState = 'lapsed'
+      this.stopped = true
+      this.cancelExpiry?.()
+      this.cancelExpiry = null
+      this.eventAbortController?.abort()
+    }
+    return true
   }
 
   canRenewSession(): boolean {
@@ -670,6 +690,10 @@ export class EmbeddedWebRuntime {
         return
       case 'progress': {
         const mapped = this.panelConfiguration?.progress_states?.[String(event.payload.state || '')]
+        // A session may be open on several pages. While this page waits on a turn of its
+        // own, another page's turn moving or ending is that page's, not this one's.
+        const own = this.stored.activeMessageId
+        if (own && turnId !== own) return
         if (mapped?.terminal) {
           this._finishTurn(turnId)
           // A confirmation whose turn is over can never be answered. Leaving it up is how a
@@ -687,6 +711,7 @@ export class EmbeddedWebRuntime {
         return
       }
       case 'terminal':
+        if (this._lapsed(String(event.payload?.reason || ''))) return
         this._finishTurn(turnId)
         this._panelState('ended')
         // The terminal cursor is durable once this returns. A closed server session has no

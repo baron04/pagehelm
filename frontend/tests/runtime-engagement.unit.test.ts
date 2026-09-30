@@ -37,17 +37,31 @@ describe('how far a tab has gone with the assistant', () => {
       getItem: (key: string) => store.get(key) ?? null,
       setItem: (key: string, value: string) => { store.set(key, value) },
     } as unknown as Storage
-    const first = engagementRecord(storage)
+    const first = engagementRecord(storage, null)
     first.note(snapshot({}, {busy: true}), true)
-    expect(engagementRecord(storage).read()).toBe('active')
+    expect(engagementRecord(storage, null).read()).toBe('active')
 
     const blocked = {
       getItem: () => { throw new Error('blocked') },
       setItem: () => { throw new Error('blocked') },
     } as unknown as Storage
-    const record = engagementRecord(blocked)
+    const record = engagementRecord(blocked, blocked)
     expect(record.read()).toBe('none')
     record.note(snapshot(), true)
     expect(record.read()).toBe('engaged')
+  })
+
+  it('lets a new tab know there is a conversation, but not that a turn is under way', () => {
+    const make = () => {
+      const store = new Map<string, string>()
+      return {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => { store.set(key, value) },
+      } as unknown as Storage
+    }
+    const site = make()
+    engagementRecord(make(), site).note(snapshot({}, {busy: true}), true)
+    expect(engagementRecord(make(), site).read()).toBe('engaged')
+    expect(engagementRecord(make(), make()).read()).toBe('none')
   })
 })

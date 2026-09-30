@@ -17,10 +17,11 @@ DEFAULT_LEASE = object()
 
 def hello(session_id: str, *, cursor: str = "",
           runtime_instance_id: str = "runtime-document-1",
+          client_id: str = "browser-tab-1",
           application_id: str = "", principal_digest: str = "") -> ClientHello:
     return ClientHello(
         schema_version=SCHEMA_VERSIONS["ClientHello"], session_id=session_id,
-        client_id="browser-tab-1", runtime="test-runtime/1",
+        client_id=client_id, runtime="test-runtime/1",
         runtime_instance_id=runtime_instance_id,
         capabilities=("dom.observe", "dom.click", "dom.fill", "dom.select", "dom.submit",
                       "page.goto", "page.back", "page.scroll", "page.wait"), page_origin=ORIGIN,

@@ -277,11 +277,17 @@ class PanelContractTests(unittest.TestCase):
 class ASessionEndIsSaidNotCoded(unittest.TestCase):
     """A closed session left "任务结束（delegated_authority_changed）" in the timeline (P7.5)."""
 
+    def test_a_session_that_lapsed_leaves_no_line(self):
+        """It comes back as it was on the next message; there is nothing to tell."""
+        for reason in ("principal_expired", "session_expired", "browser_inactive",
+                       "native_bootstrap_replaced", "host_stopped"):
+            with self.subTest(reason=reason):
+                self.assertIsNone(project_event(_event("terminal", {"reason": reason}), at=0))
+
     def test_every_reason_the_channel_closes_with_reads_as_a_sentence(self):
-        reasons = ("principal_revoked", "principal_expired", "principal_validation_failed",
-                   "session_expired", "browser_inactive", "native_bootstrap_replaced",
+        reasons = ("principal_revoked", "principal_validation_failed",
                    "delegated_authority_changed", "identity_authority_mismatch",
-                   "host_stopped", "turn_capacity_exhausted", "session_closed",
+                   "turn_capacity_exhausted", "session_closed",
                    "runner_setup_failed", "")
         for reason in reasons:
             with self.subTest(reason=reason):

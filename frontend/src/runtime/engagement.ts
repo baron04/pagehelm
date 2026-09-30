@@ -8,8 +8,9 @@
  * -- the agent opened another page, or a confirmation is waiting -- reconnects at once,
  * without being asked, since the turn cannot go on otherwise.
  *
- * The server keys a conversation to this tab (the runtime instance id beside this record), so
- * a tab with no record here has no conversation to show.
+ * Having a conversation is remembered for the whole site as well (`localStorage`): a
+ * deployment may key the conversation to the person rather than the tab, and a new tab of
+ * theirs then has one to show. A turn under way is this tab's alone.
  */
 import type {PanelSnapshot} from '../bridge/host'
 
@@ -35,11 +36,13 @@ export function engagementOf(snapshot: PanelSnapshot, connected: boolean,
   return connection.busy || connection.stopping || pendingApproval ? 'active' : 'engaged'
 }
 
-export function engagementRecord(storage: Storage | null = sessionStorageOrNull()): EngagementRecord {
+export function engagementRecord(storage: Storage | null = storageOrNull('sessionStorage'),
+                                 site: Storage | null = storageOrNull('localStorage')): EngagementRecord {
   let current: Engagement = 'none'
   try {
     const stored = storage?.getItem(KEY)
     if (stored === 'engaged' || stored === 'active') current = stored
+    else if (site?.getItem(KEY) === 'engaged') current = 'engaged'
   } catch { /* a profile that blocks site data simply starts from nothing each time */ }
   return {
     read: () => current,
@@ -47,14 +50,17 @@ export function engagementRecord(storage: Storage | null = sessionStorageOrNull(
       const next = engagementOf(snapshot, connected, current)
       if (next === current) return
       current = next
-      try { storage?.setItem(KEY, next) } catch { /* as above */ }
+      try {
+        storage?.setItem(KEY, next)
+        site?.setItem(KEY, 'engaged')
+      } catch { /* as above */ }
     },
   }
 }
 
-function sessionStorageOrNull(): Storage | null {
+function storageOrNull(name: 'sessionStorage' | 'localStorage'): Storage | null {
   try {
-    return typeof sessionStorage === 'undefined' ? null : sessionStorage
+    return typeof globalThis[name] === 'undefined' ? null : globalThis[name]
   } catch {
     return null
   }

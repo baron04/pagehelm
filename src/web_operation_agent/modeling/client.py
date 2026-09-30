@@ -319,6 +319,11 @@ class ChatModel(_ConcreteChatProvider):
             raise ProviderError(
                 "provider call cancelled before dispatch", code="provider_cancelled",
                 retryable=False, dispatched=False)
+        within_allowance = getattr(self.meter, "within_allowance", None)
+        if within_allowance is not None and not within_allowance():
+            raise ProviderError("the daily model allowance is spent",
+                                code="provider_allowance_spent", retryable=False,
+                                dispatched=False)
         guard = getattr(self, "runtime_guard", None)
         acquired = False
         request_id = ""

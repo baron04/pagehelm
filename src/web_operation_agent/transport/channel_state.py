@@ -10,6 +10,10 @@ from .protocol import (RemoteProtocolError, RemoteSessionClosed, _MAX_EVENT_BYTE
                        _copy_json, _copy_wire)
 
 
+#: Events only the page a turn runs on is handed: its commands, and the card asking to work it.
+TURN_PAGE_EVENTS = frozenset({"action", "approval_required"})
+
+
 class ChannelState:
     def _renew_owner(self):
         while not self._heartbeat_stop.wait(self._durable_store.lease_ms / 3000):
@@ -130,6 +134,8 @@ class ChannelState:
                 raise RemoteSessionClosed("durable event commit failed") from exc
         self._events.append(event)
         self._event_times[event.sequence] = self._now_ms()
+        if kind in TURN_PAGE_EVENTS:
+            self._event_leases[event.sequence] = self._active_lease_id
         self._condition.notify_all()
         return _copy_wire(event)
 
@@ -202,16 +208,46 @@ class ChannelState:
                 self._capacity_exhausted("event")
             return self._new_event(kind, payload, turn_id=turn_id)
 
-    def _require_active_lease(self, lease_id: str) -> None:
+    def _require_lease(self, lease_id: str) -> None:
+        """Any page the session is open on: it follows the conversation and may send."""
         if not isinstance(lease_id, str) or not lease_id:
             raise RemoteProtocolError("X-WOA-Lease is required", code="invalid_lease", status=401)
-        if lease_id != self._active_lease_id:
+        if lease_id not in self._lease_hellos:
             raise RemoteProtocolError(
-                "the runtime lease has been replaced by a newer document",
+                "the runtime lease is no longer held by this session",
                 code="runtime_replaced",
                 status=409,
             )
+        self._lease_seen[lease_id] = self._now_ms()
 
-    def validate_active_lease(self, lease_id: str) -> None:
+    def _require_active_lease(self, lease_id: str) -> None:
+        """The page the current turn runs on: only it executes that turn's actions."""
+        self._require_lease(lease_id)
+        if lease_id != self._active_lease_id:
+            raise RemoteProtocolError(
+                "this page does not run the current task",
+                code="not_turn_page",
+                status=409,
+            )
+
+    def _activate_lease(self, lease_id: str) -> None:
+        """Make `lease_id` the page the next turn observes and acts on. Holds the condition."""
+        if lease_id not in self._lease_hellos:
+            return
+        self._active_lease_id = lease_id
+        self._hello = self._lease_hellos[lease_id]
+        self._latest_observation = self._lease_observations.get(lease_id)
+        self._condition.notify_all()
+
+    def _release_lease(self, lease_id: str) -> None:
+        """Forget one page's lease; the caller holds the condition."""
+        for instance, held in list(self._runtime_leases.items()):
+            if held == lease_id:
+                del self._runtime_leases[instance]
+        self._lease_hellos.pop(lease_id, None)
+        self._lease_observations.pop(lease_id, None)
+        self._lease_seen.pop(lease_id, None)
+
+    def validate_lease(self, lease_id: str) -> None:
         with self._condition:
-            self._require_active_lease(lease_id)
+            self._require_lease(lease_id)

@@ -24,6 +24,7 @@ class ChannelPanel:
             "progress_states": _copy_json(contract["progress_states"]),
             "terminal_error_codes": list(contract["terminal_error_codes"]),
             "terminal_panel_state_by_code": dict(contract["terminal_panel_state_by_code"]),
+            "lapse_codes": list(contract["lapse_codes"]),
             "session_expires_at": self.expires_at,
             "principal_expires_at": (self.principal.expires_at
                                      if self.principal is not None else 0),
@@ -44,20 +45,22 @@ class ChannelPanel:
         if after and before:
             raise RemoteProtocolError("timeline takes after or before, not both", status=400)
         with self._condition:
-            self._require_active_lease(lease_id)
+            self._require_lease(lease_id)
             cursor = _event_sequence(after)
             if cursor > len(self._events):
                 raise RemoteProtocolError("timeline cursor is ahead of this session")
             if after and len(self._events) <= cursor and wait_s > 0:
                 self._condition.wait_for(
                     lambda: (self._closed or len(self._events) > cursor
-                             or lease_id != self._active_lease_id),
+                             or lease_id not in self._lease_hellos),
                     timeout=self._bounded_wait(wait_s),
                 )
-                self._require_active_lease(lease_id)
-            return self._panel_timeline(after=after, before=before, limit=limit)
+                self._require_lease(lease_id)
+            return self._panel_timeline(after=after, before=before, limit=limit,
+                                        lease_id=lease_id)
 
-    def _panel_timeline(self, *, after: str, before: str, limit: int) -> dict:
+    def _panel_timeline(self, *, after: str, before: str, limit: int,
+                        lease_id: str = "") -> dict:
         """Project the event log for the panel; the caller holds ``self._condition``."""
         entries: list[dict] = []
         replayed: list[dict] = []
@@ -97,7 +100,8 @@ class ChannelPanel:
             "close_reason": self._close_reason,
             "pending_approval": None,
         }
-        if self._pending_approval_id:
+        # The card is for the page the turn runs on; another page is free to ask.
+        if self._pending_approval_id and lease_id == self._active_lease_id:
             pending = self._approvals[self._pending_approval_id]
             # A card whose deadline has passed is not something to ask the person for. The
             # turn that raised it is on its way to ending; the panel is told what happened

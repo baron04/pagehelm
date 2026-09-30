@@ -33,6 +33,7 @@ export const CONFIGURATION = {
   progress_states: contract.progress_states,
   terminal_error_codes: contract.terminal_error_codes,
   terminal_panel_state_by_code: contract.terminal_panel_state_by_code,
+  lapse_codes: contract.lapse_codes,
   session_expires_at: 0,
   principal_expires_at: 0,
 } as PanelConfiguration

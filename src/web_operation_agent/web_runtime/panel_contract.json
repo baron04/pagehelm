@@ -128,6 +128,7 @@
     "composerClosed": "会话已结束",
     "composerAtLimit": "已达输入上限",
     "undelivered": "未送达",
+    "turnStarting": "正在理解你的需求",
     "statusConnecting": "正在连接",
     "statusReady": "已就绪",
     "statusQueued": "已提交",
@@ -177,6 +178,22 @@
     "principal_expired": "登录已过期，请重新登录后继续。",
     "session_expired": "与助手的连接已断开，正在重新连接。"
   },
+  "lapse_codes_comment": [
+    "Why a session ended when nothing about it was wrong: its sign-in lapsed while nobody was",
+    "using it, the page went quiet, or the host restarted or replaced it. The person's session",
+    "comes back as it was the next time they ask, so the panel says nothing about these."
+  ],
+  "lapse_codes": [
+    "principal_expired",
+    "session_expired",
+    "browser_inactive",
+    "host_stopped",
+    "server_stopped",
+    "bootstrap_replaced",
+    "native_bootstrap_replaced",
+    "unknown_session",
+    "not_found"
+  ],
   "terminal_error_codes": [
     "session_closed",
     "unknown_session",

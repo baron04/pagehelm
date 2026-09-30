@@ -78,12 +78,76 @@ class BudgetExhausted(Exception):
         self.kind = kind
 
 
+class DailyAllowance:
+    """What each key (a person, as the deployment names them) may spend on the model per day.
+
+    Checked before a call is dispatched, so a key that has reached its limit sends nothing
+    more until the day turns; calls already in flight finish and are counted, so the limit
+    can be passed by at most what those calls cost. The tally is rebuilt from the ledger's
+    rows for today when the process starts, so a restart does not hand everyone a new day.
+    A call whose usage the provider did not report counts as nothing here; the ledger keeps
+    it as unknown.
+    """
+
+    def __init__(self, limit_cny: float, *, utc_offset_minutes: int = 0):
+        if (isinstance(limit_cny, bool) or not isinstance(limit_cny, (int, float))
+                or not limit_cny > 0 or limit_cny != limit_cny):
+            raise ValueError("limit_cny must be a positive number")
+        self.limit_cny = float(limit_cny)
+        self._offset_s = int(utc_offset_minutes) * 60
+        self._lock = threading.Lock()
+        self._day = self._today()
+        self._spent: dict[str, float] = {}
+
+    def _today(self, t: float | None = None) -> int:
+        return int(((time.time() if t is None else t) + self._offset_s) // 86400)
+
+    def _roll(self) -> None:
+        today = self._today()
+        if today != self._day:
+            self._day, self._spent = today, {}
+
+    def load(self, ledger: str | Path) -> None:
+        """Count today's rows that carry an allowance key."""
+        try:
+            lines = Path(ledger).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        with self._lock:
+            self._roll()
+            for line in lines:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                key, cost, t = row.get("allowance_key"), row.get("call_cost_cny"), row.get("t")
+                if (isinstance(key, str) and isinstance(cost, (int, float))
+                        and isinstance(t, (int, float)) and self._today(t) == self._day):
+                    self._spent[key] = self._spent.get(key, 0.0) + float(cost)
+
+    def spent(self, key: str) -> float:
+        with self._lock:
+            self._roll()
+            return self._spent.get(key, 0.0)
+
+    def allows(self, key: str) -> bool:
+        return self.spent(key) < self.limit_cny
+
+    def add(self, key: str, cost_cny: float) -> None:
+        with self._lock:
+            self._roll()
+            self._spent[key] = self._spent.get(key, 0.0) + float(cost_cny)
+
+
 class SpendMeter:
     """Cumulative usage, one ledger line per call, with the two stop lines."""
 
     def __init__(self, *, ledger: str | Path | None = None, batch_id: str = "",
                  run_input_token_abort: int = 220000, batch_cost_stop: float | None = None,
-                 price: dict | None = None):
+                 price: dict | None = None,
+                 allowance: DailyAllowance | None = None, allowance_key: str = ""):
         # Precedence: an explicit argument, then the environment override, then the
         # project ledger. The environment is how a test run redirects everything at once;
         # a caller that names a file means that file.
@@ -103,6 +167,13 @@ class SpendMeter:
         # model actually in use; a module-level fallback would book a run at some other
         # model's rates and the ledger would look right while being wrong.
         self.price = price
+        if allowance is not None and not re.fullmatch(r"[0-9a-f]{8,64}", allowance_key):
+            raise ValueError("allowance_key must be an opaque lowercase hex identifier")
+        self.allowance, self.allowance_key = allowance, allowance_key
+
+    def within_allowance(self) -> bool:
+        """False once this meter's key has spent its daily allowance."""
+        return self.allowance is None or self.allowance.allows(self.allowance_key)
 
     def cost_of(self, i: int, o: int, c: int) -> float:
         if self.price is None:
@@ -213,6 +284,8 @@ class SpendMeter:
                    "call_cost_cny": round(call_cost, 6),
                    "batch_cost_cny": round(next_batch_cost, 4),
                    "run_in_tokens": next_run_in, "calls": next_calls}
+            if self.allowance is not None:
+                rec["allowance_key"] = self.allowance_key
             if request_id:
                 rec["provider_request_id"] = request_id
             if selected_reported_model:
@@ -228,6 +301,8 @@ class SpendMeter:
             self.batch_out = next_batch_out
             self.batch_cached = next_batch_cached
             self.run_in[run_id] = next_run_in
+            if self.allowance is not None:
+                self.allowance.add(self.allowance_key, call_cost)
             self._commit_run_record(
                 run_id=run_id, rec=rec, reported_model=selected_reported_model,
                 request_id=request_id, unmetered=False, known_cost=call_cost)

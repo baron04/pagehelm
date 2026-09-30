@@ -303,6 +303,9 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         if code == "provider_rate_limited":
             return ("模型服务当前请求过多，请稍后重试。" if chinese else
                     "The model service is rate limited. Try again shortly.")
+        if code == "provider_allowance_spent":
+            return ("你今天的助手使用额度已用完，明天会自动恢复。" if chinese else
+                    "Your assistant allowance for today is used up; it starts again tomorrow.")
         if code == "provider_authentication":
             return ("模型服务配置无效，请联系管理员检查凭据。" if chinese else
                     "The model service credentials are invalid. Contact the administrator.")

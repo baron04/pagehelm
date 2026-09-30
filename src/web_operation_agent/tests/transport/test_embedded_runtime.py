@@ -623,7 +623,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           let threw = false;
           try {{ await runtime._startConnectedRuntime(); }} catch {{ threw = true; }}
           process.stdout.write(JSON.stringify({{order, states, notices, threw,
-            mounted: Boolean(runtime.panelHost)}}));
+            mounted: Boolean(runtime.panelHost), endState: runtime.endState}}));
         """
         proc = subprocess.run(["node", "--input-type=module", "-e", script],
                               text=True, capture_output=True, timeout=10, check=True)
@@ -631,10 +631,12 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertEqual(result["order"], ["hello", "attach", "observe"])
         self.assertTrue(result["mounted"], "the panel must exist once the server has spoken")
         self.assertTrue(result["threw"], "the caller still learns that startup failed")
-        # And it is the panel that says which way: a session the server no longer has is
-        # over, so the panel ends rather than spinning on a connection that will not come.
-        self.assertEqual(result["states"], ["ended"])
-        self.assertEqual(result["notices"], ["not_found"])
+        # A session the server no longer has lapsed: this Runtime stops without a word and
+        # the next message brings the person's session back, rather than spinning on a
+        # connection that will not come or telling them something went wrong.
+        self.assertEqual(result["endState"], "lapsed")
+        self.assertEqual(result["states"], [])
+        self.assertEqual(result["notices"], [])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_a_runtime_that_stops_for_good_frees_the_page_and_only_its_own_claim(self):

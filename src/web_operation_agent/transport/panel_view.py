@@ -47,6 +47,8 @@ def _validate_contract(contract: dict) -> None:
             raise ValueError(f"terminal code {code} maps to an unknown panel state")
         if code not in contract["terminal_error_codes"]:
             raise ValueError(f"terminal code {code} is not listed as terminal")
+    if not all(isinstance(code, str) and code for code in contract["lapse_codes"]):
+        raise ValueError("lapse codes must be non-empty strings")
     if not set(contract["notices"]) >= set(contract["terminal_error_codes"]):
         raise ValueError("every terminal transport code needs user-visible guidance")
     # The panel falls back to this one when a code arrives that nothing anticipated. It
@@ -322,6 +324,8 @@ def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> d
         return {**base, "kind": "approval", "tone": "warning",
                 "text": text, "approval_id": str(payload.get("approval_id") or "")}
     if event.kind == "terminal":
+        if str(payload.get("reason") or "") in panel_contract()["lapse_codes"]:
+            return None
         return {**base, "kind": "result", "tone": "neutral",
                 "text": session_ended_message(str(payload.get("reason") or ""))}
     if event.kind != "progress":
