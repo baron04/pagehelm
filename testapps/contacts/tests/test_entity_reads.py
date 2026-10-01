@@ -171,6 +171,32 @@ class ContactsEntityReadContractTests(unittest.TestCase):
                 expected_record_id="grace-hopper", expected_value="Grace Hopper",
             )
 
+    def test_rest_port_can_bind_a_fixed_unit_from_its_own_schema(self):
+        class RestCreditsPort(_ContactsEntityReadPort):
+            def fields(self, entity, *, context=None):
+                return super().fields(entity, context=context) + (
+                    EntityField("credits", "Synthetic credits", "monetary", summable=True,
+                                fixed_unit="TEST"),)
+
+            def query(self, request, *, context=None):
+                page = super().query(request, context=context)
+                # The synthetic application defines one TEST credit per name character.
+                matched = [row for row in self._executor._contact_rows()
+                           if all(self._matches(row, f) for f in request.filters)]
+                return replace(page, aggregates=(EntityAggregate(
+                    "credits", str(sum(len(r["name"]) for r in matched)), len(matched), "TEST"),))
+
+        tools = EntityReadTools(RestCreditsPort(_FakeContactsExecutor()), application_id=APPLICATION_ID)
+        entity = tools.execute("discover_entities", {"query": "contacts"}).content[
+            "candidates"][0]["entity_id"]
+        fields = {f["label"]: f["field_id"] for f in tools.execute(
+            "describe_entity", {"entity_id": entity}).content["fields"]}
+        result = tools.execute("query_entity_records", {
+            "entity_id": entity, "field_ids": [fields["Name"]], "limit": 1,
+            "aggregate_field_ids": [fields["Synthetic credits"]]})
+        self.assertEqual({"field_id": fields["Synthetic credits"], "label": "Synthetic credits",
+                          "sum": "24", "count": 2, "unit": "TEST"}, result.content["aggregates"][0])
+
     def test_adapter_exposes_the_same_three_tool_names_without_native_query_escape_hatches(self):
         adapter = MinimalContactsAdapter("http://127.0.0.1:1", api_token="delegated")
         self.assertTrue(ENTITY_READ_TOOLS <= adapter.business_tools.tool_names)

@@ -424,6 +424,26 @@ resolves a declaration itself. Odoo ships as a separate
 [`testapps/`](testapps/contacts/README.md) is internal browser/protocol test apparatus, not a
 second public reference. The experimental [Yudao adapter and resettable deployment](examples/yudao/deploy/README.md)
 provide another goal-data implementation; they are not a production readiness claim.
+The Yudao native host uses the shared tool loop for source questions, actor-bound data
+reads and mixed requests. Its generic tools discover entities and fields, resolve records,
+query conditions, counts and sums, and return qualified page addresses; adapters do not
+enumerate individual natural-language questions. Optional repository search indexes
+allowlisted Vue/TypeScript/Java code and documentation once at host startup, without a
+SourceMap or rule compiler, and returns bounded, verified excerpts. Source never grants
+API or navigation authority. It cannot supply current data, missing API metadata, or Git
+history absent from the deployment. After a typed API read, the same agent receives a
+fresh page observation before another decision. Fixed currency units use the shared read
+contract, also tested with the structurally different Contacts REST application.
+This path has not been qualified against the previous real-model goal set. Source keyword
+recall, latency and tool-call count remain limitations; no accuracy-equivalence claim is made.
+Two 2026-10-01 synthetic five-question pilots used `qwen3.8-flash` on provider
+`ws-ld6klhbp5exxks76`: 41 calls, 301,034 input and 6,602 output tokens, metered CNY 0.0866
+from provider usage and registered rates. Both answered source, count and mixed questions
+and refused unavailable Git history. Calls fell from 21 to 20, while per-case times ranged
+from 8.66–24.36 to 9.57–23.85 seconds; this shows no consistent speedup. The browser was
+scripted and all data/source synthetic, so these are neither UI latency nor holdout accuracy.
+The older goal demo/evaluation path remains available for comparison. Native-host writes,
+form entry and clicks (including tab selection) remain disabled.
 Assistant-requested Yudao page changes use full document navigation, letting the application's
 Vue Router initialize its own browser history. Manual menu changes retain the application's
 normal SPA navigation; assistant page changes incur a full page load.

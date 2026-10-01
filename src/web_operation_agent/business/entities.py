@@ -350,6 +350,9 @@ class EntityField:
     # accepted from the Agent or included in the Agent-facing field descriptor.
     unit_field_reference: str = ""
     related_entity_reference: str = ""
+    # A fixed denomination declared by the application's schema (rather than a
+    # per-record currency field). Never supplied by the model or inferred from a label.
+    fixed_unit: str = ""
 
     def __post_init__(self) -> None:
         reference = _text(self.reference, "entity field reference", 240)
@@ -378,6 +381,12 @@ class EntityField:
                 raise ValueError("only monetary fields may bind a unit field")
             object.__setattr__(self, "unit_field_reference", _text(
                 self.unit_field_reference, "entity unit field reference", 240))
+        if not isinstance(self.fixed_unit, str):
+            raise ValueError("a fixed monetary unit must be text")
+        if self.fixed_unit:
+            if self.kind != "monetary" or self.unit_field_reference:
+                raise ValueError("a fixed unit requires monetary values and no unit field")
+            object.__setattr__(self, "fixed_unit", _text(self.fixed_unit, "fixed monetary unit", 80))
         if self.related_entity_reference:
             if self.kind != "reference":
                 raise ValueError("only reference fields may bind a related entity")
@@ -537,6 +546,7 @@ def _field_binding(entity_id: str, fields: tuple[EntityField, ...]) -> str:
                         for choice in field.choices],
             "evidence_type": field.evidence_type,
             "unit_field_reference": field.unit_field_reference,
+            **({"fixed_unit": field.fixed_unit} if field.fixed_unit else {}),
             "related_entity_reference": field.related_entity_reference,
         } for field in fields],
     })
@@ -838,7 +848,7 @@ class EntityReadTools:
                 or any(not _FIELD_ID.fullmatch(item)
                        or item not in by_id or not by_id[item].summable
                        or (by_id[item].kind == "monetary"
-                           and not by_id[item].unit_field_reference)
+                           and not (by_id[item].unit_field_reference or by_id[item].fixed_unit))
                        for item in aggregate_ids)):
             raise BusinessToolRequestError(
                 "aggregate_field_ids must name described summable fields with units")
@@ -892,6 +902,8 @@ class EntityReadTools:
             if field is None or (field.kind == "monetary") != bool(aggregate.unit):
                 raise BusinessToolContractError(
                     "the application returned an unrequested or unbound aggregate")
+            if field.fixed_unit and aggregate.unit != field.fixed_unit:
+                raise BusinessToolContractError("the application changed the declared aggregate unit")
             grouped_counts[field.reference] += aggregate.count
         if any(count != page.matched_count for count in grouped_counts.values()):
             raise BusinessToolContractError(
@@ -921,6 +933,8 @@ class EntityReadTools:
                     if not number.is_finite():
                         raise BusinessToolContractError(
                             "the application returned a nonfinite monetary value")
+                if field.fixed_unit and cell.value and cell.unit != field.fixed_unit:
+                    raise BusinessToolContractError("the application changed the declared monetary unit")
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         origin = Origin(kind="typed", reference=QUERY_ENTITY_RECORDS_TOOL,
                         observed_at=observed_at, scope=page.scope)

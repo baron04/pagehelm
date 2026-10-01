@@ -162,7 +162,7 @@ class FormPrefillProductPath(unittest.TestCase):
             self.assertIn("prefill_form", chat.tool_names[0])
             self.assertIn("prefill_form", chat.tool_names[2])
             self.assertNotIn("fill", chat.tool_names[2])
-            self.assertEqual(browser.actions, ["goto", "fill", "fill", "handoff_form"])
+            self.assertEqual(browser.actions, ["observe", "goto", "fill", "fill", "handoff_form"])
             self.assertNotIn("submit", browser.actions)
             self.assertIn("has not been submitted", result.agent_said)
             self.assertEqual(len(ledger.of_kind("form_prefill_completed")), 1)
@@ -225,7 +225,7 @@ class FormPrefillProductPath(unittest.TestCase):
             self.assertIn("has not been submitted", result.agent_said)
             # It looked again rather than giving up, and both fields were filled.
             self.assertEqual(browser.actions,
-                             ["goto", "fill", "observe", "fill", "fill", "handoff_form"])
+                             ["observe", "goto", "fill", "observe", "fill", "fill", "handoff_form"])
             self.assertEqual(len(ledger.of_kind("form_prefill_completed")), 1)
             self.assertNotIn("submit", browser.actions)
 
@@ -319,7 +319,7 @@ class AFormTheApplicationSavesIsConfirmedFirst(unittest.TestCase):
         self.assertEqual(len(asked), 1)
         self.assertIn("NovaForge", asked[0]["targets"][0])
         self.assertIn("+1 512 555 0142 → +1 512 555 0199", asked[0]["targets"][0])
-        self.assertEqual(browser.actions, ["goto", "fill", "handoff_form"])
+        self.assertEqual(browser.actions, ["observe", "goto", "fill", "handoff_form"])
         self.assertIn("saved", result.agent_said.lower())
         self.assertEqual(len(ledger.of_kind("form_handoff_approved")), 1)
 

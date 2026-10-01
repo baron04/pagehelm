@@ -72,6 +72,62 @@ READ_ONLY_NAVIGATION_POLICY = POTENTIALLY_WRITING_ACTIONS - {"goto"}
 class ProductReadAndNavigationTests(unittest.TestCase):
     def setUp(self):
         _RemoteBrowser.instances.clear()
+
+    def test_business_read_refreshes_page_before_the_next_model_decision(self):
+        class ChangedAfterRead(_RemoteBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                receipt.observation.content = "The person moved to another page during the API read"
+                return receipt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query-skill.json")
+            chat = _Chat([("query_companies", {}), (None, {"content": "done"})])
+            executor = AgentTurnExecutor(
+                channel=_Channel(), chat=chat, control=ReadOnlyControl(),
+                run_id_factory=lambda _message: "fresh-read",
+                business_tools=BusinessToolRuntime((skill,), _Executor()),
+                config=AgentTurnConfig(
+                    supported_scope="Read companies.", ledger_path=root / "audit.jsonl",
+                    plain_business_answer_min_page_actions=0))
+            with patch.object(turn, "RemoteBrowserClient", ChangedAfterRead):
+                executor.run_once(_message())
+            self.assertEqual(2, len(chat.messages))
+            feedback = chat.messages[-1][-1]["content"]
+            self.assertIn("Acme", feedback)
+            self.assertIn("The person moved to another page during the API read", feedback)
+
+    def test_business_read_stops_if_its_fresh_page_receipt_is_missing_or_stale(self):
+        for failure in ("stale", "failed", "missing"):
+            class BadRefresh(_RemoteBrowser):
+                def execute(self, action, args=None, expect_navigation=False):
+                    receipt = super().execute(action, args, expect_navigation)
+                    if failure == "stale":
+                        receipt.observation.epoch = 1
+                    elif failure == "failed":
+                        receipt.ok = False
+                    else:
+                        receipt.observation = None
+                    return receipt
+
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                skill = _skill(root / "query-skill.json")
+                chat = _Chat([("query_companies", {})])
+                executor = AgentTurnExecutor(
+                    channel=_Channel(), chat=chat, control=ReadOnlyControl(),
+                    run_id_factory=lambda _message: "failed-refresh",
+                    business_tools=BusinessToolRuntime((skill,), _Executor()),
+                    config=AgentTurnConfig(
+                        supported_scope="Read companies.", ledger_path=root / "audit.jsonl",
+                        plain_business_answer_min_page_actions=0))
+                with patch.object(turn, "RemoteBrowserClient", BadRefresh):
+                    result = executor.run_once(_message())
+                self.assertEqual("transport_error", result.terminal_reason)
+                self.assertEqual(1, len(chat.messages))
+                self.assertEqual(["observe"], BadRefresh.instances[-1].actions)
+
     def test_read_turn_preserves_skill_transition_and_uses_injected_renderer(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -191,7 +247,7 @@ class ProductReadAndNavigationTests(unittest.TestCase):
             self.assertEqual(len(chat.tool_names), 2)
             self.assertIn("query_companies", chat.tool_names[0])
             self.assertNotIn("load_skill", chat.tool_names[0])
-            self.assertEqual(_RemoteBrowser.instances[-1].actions, ["goto"])
+            self.assertEqual(_RemoteBrowser.instances[-1].actions, ["observe", "goto"])
             events = [json.loads(line) for line in
                       (root / "session.jsonl").read_text().splitlines()]
             self.assertEqual(

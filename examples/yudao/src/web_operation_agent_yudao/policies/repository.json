@@ -1,0 +1,21 @@
+{
+  "repository_id": "yudao/deployed-source",
+  "allow_globs": [
+    "ui/src/**/*.vue", "ui/src/**/*.ts", "ui/src/**/*.js", "ui/src/**/*.tsx",
+    "server/yudao-module-*/**/src/main/java/**/*.java",
+    "server/yudao-framework/**/src/main/java/**/*.java",
+    "ui/README*.md", "server/README*.md",
+    "ui/docs/**/*.md", "server/docs/**/*.md",
+    "ui/CODEOWNERS", "server/CODEOWNERS",
+    "ui/.github/CODEOWNERS", "server/.github/CODEOWNERS"
+  ],
+  "deny_globs": [
+    "**/.env*", "**/.git/**", "**/node_modules/**", "**/target/**", "**/dist/**",
+    "**/build/**", "**/generated/**", "**/test/**", "**/tests/**", "**/__tests__/**",
+    "**/*.test.*", "**/*.spec.*", "**/uploads/**", "**/upload/**", "**/storage/**",
+    "**/data/**", "**/logs/**", "**/database/**", "**/databases/**",
+    "**/secrets/**", "**/credentials/**", "**/*.pem", "**/*.key", "**/*.p12",
+    "**/*.sql", "**/*.db", "**/*.sqlite*", "**/*.map"
+  ],
+  "max_bytes_per_read": 262144
+}

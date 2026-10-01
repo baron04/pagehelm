@@ -168,7 +168,8 @@ class YudaoGoalDataTests(unittest.TestCase):
         self.assertEqual(len(self.client.calls), calls + 3)
         self.client.read_generation = 1
         self.data._fetch("crm/contract", EVERYTHING)
-        self.assertEqual(len(self.client.calls), calls + 6)
+        # Renewal refreshes menus/dictionaries as well as the three CRM scene reads.
+        self.assertEqual(len(self.client.calls), calls + 9)
 
     def test_cache_lifetime_starts_when_slow_read_finishes_and_is_bounded(self):
         self.data._keep_read(("slow",), (1,), 0)

@@ -21,6 +21,13 @@ from web_operation_agent.goal.data import DataRefused
 _UNAUTHORIZED = 401
 
 
+class YudaoReadRefused(DataRefused):
+    """Preserve the application's response code across the legacy and generic readers."""
+    def __init__(self, message: str, *, code, reason: str = ""):
+        super().__init__(message, reason=reason)
+        self.code = code
+
+
 @dataclass(frozen=True)
 class YudaoAccount:
     username: str
@@ -107,6 +114,12 @@ class YudaoClient:
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            # The transport's authorization status must not turn into a retryable
+            # availability failure. Do not echo an HTML error body or response headers.
+            if exc.code in (401, 403):
+                return exc.code, {"code": exc.code}
+            raise DataRefused(f"{path}: HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise DataRefused(f"{path}: {type(exc).__name__}") from exc
         return payload.get("code"), payload
@@ -117,7 +130,7 @@ class YudaoClient:
             # The application's own sentence is what a person can act on ("请选择时间范围");
             # the endpoint and the code stay in the audit's fuller rendering.
             message = str(body.get("msg") or "")[:120]
-            raise DataRefused(f"{path}: {code} {message}", reason=message)
+            raise YudaoReadRefused(f"{path}: {code} {message}", code=code, reason=message)
         return body.get("data")
 
 

@@ -38,9 +38,9 @@ from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductCapacityError,
                                                   LiveProductServer)
-from web_operation_agent.execution.product import AgentTurnConfig
-from web_operation_agent.goal.executor import GoalTurnExecutor
+from web_operation_agent.execution.product import AgentTurnExecutor
 from web_operation_agent.modeling.client import ChatModel, SpendMeter
+from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.modeling.spend import DailyAllowance
 from web_operation_agent.state.conversation import SQLiteConversationState
 from web_operation_agent.state.identity import PrincipalError
@@ -49,7 +49,8 @@ from web_operation_agent.state.store import SQLiteSessionStore
 from .application import YudaoApplication
 from .client import YudaoClient
 from .conventions import REFERENCE_CONVENTIONS
-from .source import YudaoSource
+from .repository import repository_source
+from .turn import yudao_turn_config
 from .ui_source import UiSource
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
@@ -117,8 +118,7 @@ class YudaoHost:
         config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.api_docs = _api_docs(config.api_base)
         self.ui = UiSource.read(config.ui_source) if config.ui_source else None
-        self.source = (YudaoSource(config.source_root, release=config.source_release)
-                       if config.source_root and config.source_release else None)
+        self.source = repository_source(config.source_root, config.source_release)
         self.store = SQLiteSessionStore(config.state_dir / "session-store.sqlite3")
         self.server = LiveProductServer(
             max_sessions=config.max_sessions, max_sessions_per_actor=1,
@@ -175,7 +175,7 @@ class YudaoHost:
 
     def _application(self, client: YudaoClient) -> YudaoApplication:
         return YudaoApplication(self.config.public_origin, None, self.api_docs,
-                                api_base_url=self.config.api_base, ui=self.ui, source=self.source,
+                                api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client)
 
     def _open(self, app: YudaoApplication, principal, key):
@@ -194,16 +194,16 @@ class YudaoHost:
         meter = SpendMeter(ledger=self.ledger, batch_id=f"yudao-native-{run_dir.name}",
                            allowance=self.allowance, allowance_key=person)
         chat = ChatModel(meter, env=dict(self.config.model_env), model=self.config.model,
-                         max_completion_tokens=1024, timeout=self.config.turn_timeout_s)
+                         max_completion_tokens=1024, timeout=self.config.turn_timeout_s,
+                         egress_policy=ProviderEgressPolicy(
+                             session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
 
         def runner_factory(channel):
-            executor = GoalTurnExecutor(
+            executor = AgentTurnExecutor(
                 channel=channel,
-                config=AgentTurnConfig(
-                    supported_scope="Read this account's available application records and open their pages.",
-                    ledger_path=run_dir / "audit.jsonl", wall_budget_s=self.config.turn_timeout_s,
-                    transport_timeout_s=30, require_identity=True),
-                chat=chat, application=bound, goal_port=app.goal_port, control=ReadOnlyControl(),
+                config=yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
+                                          source=self.source),
+                chat=chat, application=bound, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
                     self.config.state_dir / "conversation-state.sqlite3", session_id))

@@ -9,7 +9,9 @@ from unittest.mock import patch
 
 from web_operation_agent.schemas import ClientHello
 from web_operation_agent.state.identity import PrincipalError
-from web_operation_agent_yudao.application import YudaoIdentityPort
+from web_operation_agent.execution.product import AgentTurnExecutor
+from web_operation_agent.modeling.egress import ProviderEgressPolicy
+from web_operation_agent_yudao.application import SESSION_HANDOFF_KEYS, YudaoIdentityPort
 from web_operation_agent_yudao.native_server import BootstrapRefused, YudaoHost, YudaoHostConfig
 
 
@@ -26,6 +28,8 @@ class NativeHostTests(unittest.TestCase):
         patch("web_operation_agent_yudao.native_server._api_docs", return_value={}).start()
         self.chat = patch("web_operation_agent_yudao.native_server.ChatModel").start()
         self.chat.return_value.model = "scripted/no-model"
+        self.chat.return_value.egress_policy = ProviderEgressPolicy(
+            session_handoff_keys=SESSION_HANDOFF_KEYS)
         self.chat.return_value.complete.side_effect = AssertionError("models are forbidden in this test")
 
         def actor(token):
@@ -59,6 +63,20 @@ class NativeHostTests(unittest.TestCase):
         self.assertEqual(active.client._token, "synthetic-a-new")
         self.assertEqual(active.session.channel.principal.delegation_id, active.delegation_id)
         self.assertEqual(host.server.session_count, 1)
+        self.chat.return_value.complete.assert_not_called()
+
+    def test_production_uses_the_generic_agent_loop_without_source_as_a_prerequisite(self):
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "tab")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertIsInstance(executor, AgentTurnExecutor)
+        self.assertFalse(executor.config.source.runtime_source)
+        self.assertIn("query_entity_records", executor.business_tools.tool_names)
+        self.assertFalse(executor.business_tools.has_mutations)
+        self.assertIn("submit", executor.config.disabled_actions)
+        self.assertNotIn("goto", executor.config.disabled_actions)
+        policy = self.chat.call_args.kwargs["egress_policy"]
+        self.assertTrue({k.casefold() for k in SESSION_HANDOFF_KEYS} <= policy.handoffs.query_keys)
         self.chat.return_value.complete.assert_not_called()
 
     def test_bootstrap_and_renewal_leave_navigation_to_the_application_document(self):

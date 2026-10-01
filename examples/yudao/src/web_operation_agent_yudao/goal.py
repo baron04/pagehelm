@@ -92,6 +92,7 @@ class YudaoGoalData:
         #: list several times (a count, its rows, a total).
         self._read: OrderedDict[tuple, tuple] = OrderedDict()
         self._read_generation = getattr(client, "read_generation", 0)
+        self._schema_generation = self._read_generation
 
     # -- index and schema ---------------------------------------------------------------------
     def attach_conventions(self, conventions) -> None:
@@ -140,8 +141,22 @@ class YudaoGoalData:
 
     def schema(self) -> Schema:
         with self._lock:
+            generation = getattr(self._client, "read_generation", 0)
+            if generation != self._schema_generation:
+                # A renewed credential can carry changed menus and permissions. Rebuild
+                # metadata as well as data, so old opaque entity IDs cannot survive it.
+                self._schema, self._index = None, None
+                self._entities.clear()
+                self._lines.clear()
+                self._read.clear()
+                self._shown.clear()
+                self._read_generation = generation
+                self._schema_generation = generation
             if self._schema is None:
                 self._schema = self._compile()
+                if generation != getattr(self._client, "read_generation", 0):
+                    self._schema = None
+                    raise DataRefused("credentials changed while reading application metadata")
             return self._schema
 
     def _compile(self) -> Schema:
@@ -941,7 +956,7 @@ class YudaoGoalData:
         if info.kind == "choice":
             key = str(raw)
             return key, next((c.label for c in info.choices if c.key == key), key)
-        if info.kind == "money" and isinstance(raw, (int, float)):
+        if info.kind == "money" and isinstance(raw, (int, float)) and not isinstance(raw, bool):
             unit = money_unit or (spec.money.get(info.key, "") if spec is not None else "")
             amount = Decimal(str(raw)) / (100 if unit == "分" else 1)
             suffix = " 元" if unit in ("元", "分") else (" " + unit if unit else "")

@@ -293,7 +293,7 @@ class ProductAnswerAndContinuationTests(unittest.TestCase):
             self.assertIn("potentially stale", second_opening)
             self.assertIn("load_skill", chat.tool_names[3])
             self.assertIn("query_companies", chat.tool_names[3])
-            self.assertEqual(_RemoteBrowser.instances[1].actions, ["goto"])
+            self.assertEqual(_RemoteBrowser.instances[1].actions, ["observe", "goto"])
             events = [json.loads(line) for line in
                       (root / "session.jsonl").read_text().splitlines()]
             self.assertEqual(

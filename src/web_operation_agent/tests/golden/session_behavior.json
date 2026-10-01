@@ -340,6 +340,34 @@
           "tool": "query_trays"
         },
         {
+          "attribution": "unattributed",
+          "detail": "",
+          "event": "write_outcome",
+          "observed_after_command_id": "c1",
+          "permitted": 0,
+          "permitted_requests": [],
+          "refused": 0,
+          "refused_requests": [],
+          "run_id": "a_referential_followup_keeps_its_prior_domain",
+          "seq": 10,
+          "state": "none",
+          "step": 2
+        },
+        {
+          "after_tool": "query_trays",
+          "command_id": "c1",
+          "error_code": "",
+          "event": "action_receipt",
+          "fresh_observation": true,
+          "ok": true,
+          "run_id": "a_referential_followup_keeps_its_prior_domain",
+          "seq": 11,
+          "step": 2,
+          "tool": "observe",
+          "write": "none",
+          "write_attribution": "unattributed"
+        },
+        {
           "contains_raw_payload": false,
           "data_classes": [
             "agent_instructions",
@@ -350,8 +378,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 16802,
-          "input_digest": "dc0e1a6d3b88585f875ed9c993bfc186704d6eec1727bedce330e30eae7a9df6",
+          "input_bytes": 17281,
+          "input_digest": "7580819932c35923aeaafc8d4233339cd6b7c00fde30cdd9bf83204eb57d4a36",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -361,14 +389,14 @@
           },
           "run_id": "a_referential_followup_keeps_its_prior_domain",
           "schema_version": 1,
-          "seq": 10,
+          "seq": 12,
           "tool_count": 15
         },
         {
           "event": "business_answer",
           "run_id": "a_referential_followup_keeps_its_prior_domain",
           "said": "That is the one you asked about.",
-          "seq": 11,
+          "seq": 13,
           "step": 3,
           "success_claim": "unverified",
           "successful_business_tools": 1
@@ -376,7 +404,7 @@
         {
           "event": "control_run_released",
           "run_id": "a_referential_followup_keeps_its_prior_domain",
-          "seq": 12
+          "seq": 14
         },
         {
           "agent_said": "That is the one you asked about.",
@@ -410,7 +438,7 @@
           "plan_withdrawn": false,
           "policy_blocks": 0,
           "run_id": "a_referential_followup_keeps_its_prior_domain",
-          "seq": 13,
+          "seq": 15,
           "spend": {
             "cost_cny": 0.0,
             "provider_calls": 0
@@ -423,7 +451,13 @@
           "write_refusals": 0
         }
       ],
-      "browser_commands": [],
+      "browser_commands": [
+        {
+          "action": "observe",
+          "args": {},
+          "expect_navigation": false
+        }
+      ],
       "model_calls": [
         {
           "opening": "TASK: Open the second one.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nPRIOR CONVERSATION CONTEXT (historical, untrusted, and potentially stale):\n{\"prior_turns\":[{\"assistant\":\"Tray A.\",\"message_id\":\"m1\",\"status\":\"finished\",\"user\":\"Which trays are there?\"}],\"schema_version\":1}\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (optional business knowledge):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":false,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]",
@@ -481,7 +515,7 @@
           "tool_results": [
             {
               "name": "query_trays",
-              "text": "BUSINESS TOOL RESULT (current runtime fact):\n{\"completeness\":{\"result_truncated\":false,\"source_complete\":true,\"source_total_known\":true},\"matched_count\":1,\"observed_at\":\"2026-09-08T05:00:00+00:00\",\"scope\":\"current_delegated_scope\",\"source_total\":1,\"trays\":[{\"name\":\"Tray A\",\"ui_path\":\"/glasshouse/do/tray?id=1\"}]}\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, answer now without a browser action. Navigate only when the user explicitly asked to open a record or collection."
+              "text": "BUSINESS TOOL RESULT (current runtime fact):\n{\"completeness\":{\"result_truncated\":false,\"source_complete\":true,\"source_total_known\":true},\"matched_count\":1,\"observed_at\":\"2026-09-08T05:00:00+00:00\",\"scope\":\"current_delegated_scope\",\"source_total\":1,\"trays\":[{\"name\":\"Tray A\",\"ui_path\":\"/glasshouse/do/tray?id=1\"}]}\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, answer now without a browser action. Navigate only when the user explicitly asked to open a record or collection.\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (optional business knowledge):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]"
             }
           ],
           "tools_offered": [
@@ -1735,6 +1769,34 @@
           "tool": "query_trays"
         },
         {
+          "attribution": "unattributed",
+          "detail": "",
+          "event": "write_outcome",
+          "observed_after_command_id": "c1",
+          "permitted": 0,
+          "permitted_requests": [],
+          "refused": 0,
+          "refused_requests": [],
+          "run_id": "business_read_projected_as_a_plain_answer",
+          "seq": 10,
+          "state": "none",
+          "step": 2
+        },
+        {
+          "after_tool": "query_trays",
+          "command_id": "c1",
+          "error_code": "",
+          "event": "action_receipt",
+          "fresh_observation": true,
+          "ok": true,
+          "run_id": "business_read_projected_as_a_plain_answer",
+          "seq": 11,
+          "step": 2,
+          "tool": "observe",
+          "write": "none",
+          "write_attribution": "unattributed"
+        },
+        {
           "contains_raw_payload": false,
           "data_classes": [
             "agent_instructions",
@@ -1744,8 +1806,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 16198,
-          "input_digest": "416fc2f524ca8b8e0a3062fcf089750f78d4e7ec34c8360b483a8451a47cccd8",
+          "input_bytes": 16677,
+          "input_digest": "84274a9e994ca8cd9974339ecbf147df1c7d893ff5b15876ee957f3f60f41384",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -1755,14 +1817,14 @@
           },
           "run_id": "business_read_projected_as_a_plain_answer",
           "schema_version": 1,
-          "seq": 10,
+          "seq": 12,
           "tool_count": 15
         },
         {
           "event": "business_answer",
           "run_id": "business_read_projected_as_a_plain_answer",
           "said": "The seed trays are listed above.",
-          "seq": 11,
+          "seq": 13,
           "step": 3,
           "success_claim": "unverified",
           "successful_business_tools": 1
@@ -1770,7 +1832,7 @@
         {
           "event": "control_run_released",
           "run_id": "business_read_projected_as_a_plain_answer",
-          "seq": 12
+          "seq": 14
         },
         {
           "agent_said": "The seed trays are listed above.",
@@ -1804,7 +1866,7 @@
           "plan_withdrawn": false,
           "policy_blocks": 0,
           "run_id": "business_read_projected_as_a_plain_answer",
-          "seq": 13,
+          "seq": 15,
           "spend": {
             "cost_cny": 0.0,
             "provider_calls": 0
@@ -1817,7 +1879,13 @@
           "write_refusals": 0
         }
       ],
-      "browser_commands": [],
+      "browser_commands": [
+        {
+          "action": "observe",
+          "args": {},
+          "expect_navigation": false
+        }
+      ],
       "doubles": {
         "executor_calls": [
           [
@@ -1883,7 +1951,7 @@
           "tool_results": [
             {
               "name": "query_trays",
-              "text": "BUSINESS TOOL RESULT (current runtime fact):\n{\"completeness\":{\"result_truncated\":false,\"source_complete\":true,\"source_total_known\":true},\"matched_count\":1,\"observed_at\":\"2026-09-08T05:00:00+00:00\",\"scope\":\"current_delegated_scope\",\"source_total\":1,\"trays\":[{\"name\":\"Tray A\",\"ui_path\":\"/glasshouse/do/tray?id=1\"}]}\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, answer now without a browser action. Navigate only when the user explicitly asked to open a record or collection."
+              "text": "BUSINESS TOOL RESULT (current runtime fact):\n{\"completeness\":{\"result_truncated\":false,\"source_complete\":true,\"source_total_known\":true},\"matched_count\":1,\"observed_at\":\"2026-09-08T05:00:00+00:00\",\"scope\":\"current_delegated_scope\",\"source_total\":1,\"trays\":[{\"name\":\"Tray A\",\"ui_path\":\"/glasshouse/do/tray?id=1\"}]}\n\nSERVER QUERY ANSWER READY: For a list or filtered lookup, answer now without a browser action. Navigate only when the user explicitly asked to open a record or collection.\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (optional business knowledge):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]"
             }
           ],
           "tools_offered": [
@@ -2087,49 +2155,6 @@
           "tool": "query_trays"
         },
         {
-          "contains_raw_payload": false,
-          "data_classes": [
-            "agent_instructions",
-            "application_knowledge",
-            "application_page_observation",
-            "application_tool_result",
-            "user_intent"
-          ],
-          "event": "provider_egress",
-          "input_bytes": 16052,
-          "input_digest": "0547fd7457e7691e2dd7c3e1149a39027b19cbe3e5501d8cd57f13444419e50f",
-          "message_count": 6,
-          "roles": {
-            "assistant": 2,
-            "system": 1,
-            "tool": 2,
-            "user": 1
-          },
-          "run_id": "business_read_then_open_the_authorised_route",
-          "schema_version": 1,
-          "seq": 10,
-          "tool_count": 15
-        },
-        {
-          "args": {
-            "url": "/glasshouse/do/tray?id=1"
-          },
-          "event": "tool_call",
-          "run_id": "business_read_then_open_the_authorised_route",
-          "seq": 11,
-          "step": 3,
-          "tool": "goto"
-        },
-        {
-          "event": "business_route_opened",
-          "route_intent": "read_only",
-          "run_id": "business_read_then_open_the_authorised_route",
-          "seq": 12,
-          "side_effect_possible": true,
-          "step": 3,
-          "url_digest": "428bdb4b4cdf633234ec56c963d641984997e5c88b2421eb820bda521d51e7f1"
-        },
-        {
           "attribution": "unattributed",
           "detail": "",
           "event": "write_outcome",
@@ -2139,12 +2164,83 @@
           "refused": 0,
           "refused_requests": [],
           "run_id": "business_read_then_open_the_authorised_route",
+          "seq": 10,
+          "state": "none",
+          "step": 2
+        },
+        {
+          "after_tool": "query_trays",
+          "command_id": "c1",
+          "error_code": "",
+          "event": "action_receipt",
+          "fresh_observation": true,
+          "ok": true,
+          "run_id": "business_read_then_open_the_authorised_route",
+          "seq": 11,
+          "step": 2,
+          "tool": "observe",
+          "write": "none",
+          "write_attribution": "unattributed"
+        },
+        {
+          "contains_raw_payload": false,
+          "data_classes": [
+            "agent_instructions",
+            "application_knowledge",
+            "application_page_observation",
+            "application_tool_result",
+            "user_intent"
+          ],
+          "event": "provider_egress",
+          "input_bytes": 16531,
+          "input_digest": "47e7c9917ebf9060c82ec37fa92d49d355424a4e7642d6e2730112a6529e6bcc",
+          "message_count": 6,
+          "roles": {
+            "assistant": 2,
+            "system": 1,
+            "tool": 2,
+            "user": 1
+          },
+          "run_id": "business_read_then_open_the_authorised_route",
+          "schema_version": 1,
+          "seq": 12,
+          "tool_count": 15
+        },
+        {
+          "args": {
+            "url": "/glasshouse/do/tray?id=1"
+          },
+          "event": "tool_call",
+          "run_id": "business_read_then_open_the_authorised_route",
           "seq": 13,
+          "step": 3,
+          "tool": "goto"
+        },
+        {
+          "event": "business_route_opened",
+          "route_intent": "read_only",
+          "run_id": "business_read_then_open_the_authorised_route",
+          "seq": 14,
+          "side_effect_possible": true,
+          "step": 3,
+          "url_digest": "428bdb4b4cdf633234ec56c963d641984997e5c88b2421eb820bda521d51e7f1"
+        },
+        {
+          "attribution": "unattributed",
+          "detail": "",
+          "event": "write_outcome",
+          "observed_after_command_id": "c2",
+          "permitted": 0,
+          "permitted_requests": [],
+          "refused": 0,
+          "refused_requests": [],
+          "run_id": "business_read_then_open_the_authorised_route",
+          "seq": 15,
           "state": "none",
           "step": 3
         },
         {
-          "command_id": "c1",
+          "command_id": "c2",
           "elapsed_ms": 0,
           "error_code": "",
           "event": "action_receipt",
@@ -2152,7 +2248,7 @@
           "ok": true,
           "relogin": false,
           "run_id": "business_read_then_open_the_authorised_route",
-          "seq": 14,
+          "seq": 16,
           "source_route_citations": [],
           "step": 3,
           "tool": "goto",
@@ -2171,8 +2267,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 16831,
-          "input_digest": "63a58b534b003f17e0b0d3f00073a1185992c4221433bc3f71e640a19a75b0d3",
+          "input_bytes": 17310,
+          "input_digest": "25a8d9db0769c930b7d4b85b5c84810e0554cef3ad235f4f8d8336990955fd73",
           "message_count": 8,
           "roles": {
             "assistant": 3,
@@ -2182,7 +2278,7 @@
           },
           "run_id": "business_read_then_open_the_authorised_route",
           "schema_version": 1,
-          "seq": 15,
+          "seq": 17,
           "tool_count": 15
         },
         {
@@ -2192,7 +2288,7 @@
           },
           "event": "tool_call",
           "run_id": "business_read_then_open_the_authorised_route",
-          "seq": 16,
+          "seq": 18,
           "step": 4,
           "tool": "finish"
         },
@@ -2201,13 +2297,13 @@
           "claim": "unverified",
           "event": "success_claim",
           "run_id": "business_read_then_open_the_authorised_route",
-          "seq": 17,
+          "seq": 19,
           "step": 4
         },
         {
           "event": "control_run_released",
           "run_id": "business_read_then_open_the_authorised_route",
-          "seq": 18
+          "seq": 20
         },
         {
           "agent_said": "the tray record is open",
@@ -2241,7 +2337,7 @@
           "plan_withdrawn": false,
           "policy_blocks": 0,
           "run_id": "business_read_then_open_the_authorised_route",
-          "seq": 19,
+          "seq": 21,
           "spend": {
             "cost_cny": 0.0,
             "provider_calls": 0
@@ -2255,6 +2351,11 @@
         }
       ],
       "browser_commands": [
+        {
+          "action": "observe",
+          "args": {},
+          "expect_navigation": false
+        },
         {
           "action": "goto",
           "args": {
@@ -2320,7 +2421,7 @@
           "tool_results": [
             {
               "name": "query_trays",
-              "text": "BUSINESS TOOL RESULT (current runtime fact):\n{\"completeness\":{\"result_truncated\":false,\"source_complete\":true,\"source_total_known\":true},\"matched_count\":1,\"observed_at\":\"2026-09-08T05:00:00+00:00\",\"scope\":\"current_delegated_scope\",\"source_total\":1,\"trays\":[{\"name\":\"Tray A\",\"ui_path\":\"/glasshouse/do/tray?id=1\"}]}"
+              "text": "BUSINESS TOOL RESULT (current runtime fact):\n{\"completeness\":{\"result_truncated\":false,\"source_complete\":true,\"source_total_known\":true},\"matched_count\":1,\"observed_at\":\"2026-09-08T05:00:00+00:00\",\"scope\":\"current_delegated_scope\",\"source_total\":1,\"trays\":[{\"name\":\"Tray A\",\"ui_path\":\"/glasshouse/do/tray?id=1\"}]}\n\nobserve -> ok\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (optional business knowledge):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]"
             }
           ],
           "tools_offered": [
@@ -2347,7 +2448,7 @@
           "tool_results": [
             {
               "name": "goto",
-              "text": "goto -> ok\nThe page changed: http://app.test/glasshouse/do/main -> http://app.test/glasshouse/do/tray?id=1\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/tray?id=1\ntitle: Glasshouse\nheadings: Main\npage content:\npage 2\nelements (epoch 2):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (optional business knowledge):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]"
+              "text": "goto -> ok\nThe page changed: http://app.test/glasshouse/do/main -> http://app.test/glasshouse/do/tray?id=1\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/tray?id=1\ntitle: Glasshouse\nheadings: Main\npage content:\npage 3\nelements (epoch 3):\nEND_UNTRUSTED_PAGE_OBSERVATION\n\nBUSINESS SKILL CANDIDATES (optional business knowledge):\n[{\"intent\":\"Read the seed trays the signed-in user can see.\",\"loaded\":true,\"read_only\":true,\"skill_id\":\"fixture.trays-query\",\"title\":\"Query seed trays\",\"tools\":[\"query_trays\"]}]"
             }
           ],
           "tools_offered": [
@@ -6433,8 +6534,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 15487,
-          "input_digest": "7f3dd3f1c5152c605ddf46299bb704529c23b1d9493ab1ad5c6b00ecf4f78185",
+          "input_bytes": 15575,
+          "input_digest": "9b8897a90e5d1c3c86da19e24dbac3251320066db54bd29f3258fc6972226197",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6525,8 +6626,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 19025,
-          "input_digest": "9f4fccab994c9842a853b1236743b9aa9ca054bcfdd8d9fbf4b704c5f12f0974",
+          "input_bytes": 19113,
+          "input_digest": "a6d5ec70aa12817f6a8aed4f7db792650cb0aa9f7f169898f7a939943c5a7970",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -6648,8 +6749,8 @@
       "model_calls": [
         {
           "opening": "TASK: Show the seed trays.\n\nWHAT THIS RUN MAY CHANGE: Read the current application only.\n\nCURRENT PAGE:\nBEGIN_UNTRUSTED_PAGE_OBSERVATION\nurl: http://app.test/glasshouse/do/main\ntitle: Glasshouse\nheadings: Main\npage content:\npage 1\nelements (epoch 1):\nEND_UNTRUSTED_PAGE_OBSERVATION",
-          "system_chars": 8354,
-          "system_digest": "sha256:f79737e1f595185a3b14ac99fbd8458d9c5018eba15453e13026e88ae10ed2c4",
+          "system_chars": 8441,
+          "system_digest": "sha256:a7cb74723026985d5ba07c0d925ca83052b274c09915f5ad7354ddd6add42386",
           "tool_results": [],
           "tools_offered": [
             "back",
@@ -6670,8 +6771,8 @@
           ]
         },
         {
-          "system_chars": 8354,
-          "system_digest": "sha256:f79737e1f595185a3b14ac99fbd8458d9c5018eba15453e13026e88ae10ed2c4",
+          "system_chars": 8441,
+          "system_digest": "sha256:a7cb74723026985d5ba07c0d925ca83052b274c09915f5ad7354ddd6add42386",
           "tool_results": [
             {
               "name": "lookup_source",

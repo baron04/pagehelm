@@ -1,10 +1,8 @@
-"""yudao as a read-only application: descriptor, ports and identity for goal-directed turns.
+"""Actor-bound Yudao reads behind the existing application-neutral tool contracts.
 
-There are no business tools: a goal-directed turn reads through `YudaoGoalData`, which
-the core resolves over, and writes are not offered. What this module adds is what every
-composition needs -- the application's identity, its routes, and the page controller it
-serves -- and the one thing that makes reads honest: the browser's user and the server's
-account must be the same person, as the application itself says.
+The adapter translates metadata and API access, not natural-language questions. The
+legacy goal port remains available to the frozen evaluation apparatus; production turns
+may combine generic reads, repository evidence and fresh page observations in one loop.
 """
 from __future__ import annotations
 
@@ -30,6 +28,7 @@ from web_operation_agent.state.identity import (PRINCIPAL_CONTEXT_VERSION, Ident
 from .client import YudaoAccount, YudaoClient
 from .conventions import REFERENCE_CONVENTIONS
 from .goal import YudaoGoalData
+from .generic_reads import YudaoReadTools
 from .ui_source import UiSource
 
 APPLICATION_ID = "yudao"
@@ -39,19 +38,6 @@ _PAGE_ROUTES = (r"/[a-z0-9][a-z0-9/_-]*",)
 SESSION_HANDOFF_KEYS = frozenset({"token", "access_token", "accessToken", "refresh_token"})
 #: Where the deployment serves the pinned page controller, same-origin.
 PAGE_CONTROLLER_PATH = "/woa/page-controller.js"
-
-
-class _NoTools:
-    """A tool executor with no tools: goal-directed turns read through goal data."""
-
-    def tool_schemas(self):
-        return ()
-
-    def tool_effects(self):
-        return {}
-
-    def execute(self, name, args, **_kwargs):
-        raise LookupError(f"yudao offers no tool {name!r}")
 
 
 class YudaoIdentityPort:
@@ -123,13 +109,24 @@ class YudaoApplication:
             # What this organisation means by some words, as its owner reviewed them.
             self.goal_data.attach_conventions(load_conventions(conventions))
         self.goal_port = DataGoalPort(self.goal_data, today=today, reference_workers=4)
-        data = DeclaredDataClassifier(())
+        reads = YudaoReadTools(self.goal_data, application_id=APPLICATION_ID)
+        names = tuple(reads.tool_effects())
+        classes = {
+            "discover_entities": ("application.metadata",),
+            "describe_entity": ("application.metadata",),
+            "query_entity_records": ("business.generic_record", "business.identifier"),
+            "resolve_record_reference": ("business.generic_record", "business.identifier", "application.route"),
+            "find_page_entries": ("application.metadata", "application.route"),
+            "resolve_goal_candidates": ("application.metadata", "application.route", "business.identifier"),
+        }
+        data = DeclaredDataClassifier(tuple((name, classes[name]) for name in names))
         postconditions = ResultPostconditionVerifier(())
         routes = DeclaredRoutePort(APPLICATION_ID, _PAGE_ROUTES,
                                    session_handoff_query_keys=SESSION_HANDOFF_KEYS)
         self.identity = YudaoIdentityPort(api_base, self.client)
         self.business_tools = BusinessToolRuntime(
-            (), _NoTools(), application_id=APPLICATION_ID, data_classifier=data,
+            (), reads, application_id=APPLICATION_ID,
+            required_scopes={name: "yudao.read" for name in names}, data_classifier=data,
             postcondition_verifier=postconditions, route_validator=routes)
         self.ports = ApplicationPorts(
             identity=self.identity, routes=routes, postconditions=postconditions,

@@ -30,4 +30,4 @@ where = ["src"]
 exclude = ["web_operation_agent_yudao.tests*"]
 
 [tool.setuptools.package-data]
-web_operation_agent_yudao = ["conventions/*.json"]
+web_operation_agent_yudao = ["conventions/*.json", "policies/*.json"]

@@ -504,7 +504,7 @@ class BusinessReActTransition(unittest.TestCase):
 
                 self.assertEqual(result.terminal_reason, "permission_denied")
                 self.assertEqual(len(chat.messages), 3, "the refusal is handed back once")
-                self.assertEqual(browser.actions, [])
+                self.assertEqual(browser.actions, ["observe"])
                 ledger = session.ledger
                 self.assertEqual(ledger.of_kind("business_tool_rejected"), [])
                 self.assertEqual(ledger.of_kind("business_tool_result"), [])
@@ -857,7 +857,7 @@ class BusinessReActTransition(unittest.TestCase):
                              "the model must not receive a chance to retry")
             self.assertEqual(len(ledger.of_kind("business_mutation_indeterminate")), 1)
 
-    def test_load_query_and_finish_use_server_facts_without_page_dispatch(self):
+    def test_load_query_and_finish_use_server_facts_without_page_operations(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _skill(Path(tmp) / "skill.json")
             runtime = BusinessToolRuntime((skill,), _ProjectedExecutor())
@@ -887,8 +887,9 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertIn("query_companies", chat.tool_names[0])
             self.assertIn("wait_for", chat.tool_names[0])
             self.assertIn("query_companies", chat.tool_names[1])
-            self.assertEqual(browser.actions, [])
-            self.assertEqual(ledger.of_kind("action_receipt"), [])
+            self.assertEqual(browser.actions, ["observe"])
+            self.assertTrue(ledger.of_kind("action_receipt")[0]["fresh_observation"])
+            self.assertEqual(result.page_actions, 0)
             facts = [message["content"] for turn in chat.messages for message in turn
                      if message.get("role") == "tool"]
             self.assertTrue(any("BUSINESS SKILL LOADED" in text for text in facts))
@@ -1169,7 +1170,7 @@ class BusinessReActTransition(unittest.TestCase):
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "approval_denied")
-            self.assertEqual(browser.actions, [])
+            self.assertEqual(browser.actions, ["observe"])
             self.assertEqual(
                 len(ledger.of_kind("explicit_mutation_navigation_rejected")), 1)
 
@@ -1201,7 +1202,7 @@ class BusinessReActTransition(unittest.TestCase):
             self.assertEqual(result.agent_said, "Opened Acme.")
             self.assertEqual(result.page_actions, 1)
             self.assertFalse(result.business_answer_projected)
-            self.assertEqual(browser.actions, ["goto"])
+            self.assertEqual(browser.actions, ["observe", "goto"])
             self.assertEqual(browser.url, "http://app.test/object/company/company-1")
             opened = ledger.of_kind("business_route_opened")
             self.assertEqual(len(opened), 1)
@@ -1232,7 +1233,7 @@ class BusinessReActTransition(unittest.TestCase):
             result = session.run()
 
             self.assertEqual(result.terminal_reason, "agent_refused")
-            self.assertEqual(browser.actions, [])
+            self.assertEqual(browser.actions, ["observe"])
             self.assertEqual(len(ledger.of_kind("page_route_rejected")), 1)
             self.assertEqual(len(ledger.of_kind("business_route_opened")), 0)
 

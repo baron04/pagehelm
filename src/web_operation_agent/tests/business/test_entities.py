@@ -398,6 +398,41 @@ class EntityReadContractTests(unittest.TestCase):
                 "aggregate_field_ids": [field["field_id"]],
             })
 
+    def test_schema_declared_fixed_currency_is_bound_and_cannot_drift(self):
+        class FixedUnitPort(_Port):
+            unit = "USD"
+            aggregate_unit = "USD"
+
+            def fields(self, entity, *, context=None):
+                return (EntityField("amount", "Amount", "monetary", summable=True,
+                                    fixed_unit="USD"),)
+
+            def query(self, request, *, context=None):
+                return EntityQueryPage(
+                    records=(EntityRecord("r1", "1", (EntityCell("amount", "10.50", self.unit),)),),
+                    matched_count=1, source_total=1, source="fixture API", scope="actor records",
+                    aggregates=(EntityAggregate("amount", "10.50", 1, self.aggregate_unit),))
+
+        port = FixedUnitPort()
+        tools = EntityReadTools(port, application_id="fixture.app")
+        entity = tools.execute("discover_entities", {"query": "work items"}).content[
+            "candidates"][0]["entity_id"]
+        field = tools.execute("describe_entity", {"entity_id": entity}).content["fields"][0]["field_id"]
+        args = {"entity_id": entity, "field_ids": [field], "aggregate_field_ids": [field]}
+        self.assertEqual("USD", tools.execute("query_entity_records", args).content["aggregates"][0]["unit"])
+        for value in ("EUR", ""):
+            port.unit = value
+            with self.subTest(cell_unit=value), self.assertRaises(BusinessToolContractError):
+                tools.execute("query_entity_records", args)
+        port.unit, port.aggregate_unit = "USD", "EUR"
+        with self.assertRaises(BusinessToolContractError):
+            tools.execute("query_entity_records", args)
+        for kwargs in ({"kind": "text", "fixed_unit": "USD"},
+                       {"kind": "monetary", "fixed_unit": "USD", "unit_field_reference": "currency"},
+                       {"kind": "monetary", "fixed_unit": None}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                EntityField(reference="amount", label="Amount", **kwargs)
+
     def test_related_record_binding_is_opaque_and_only_for_catalog_entities(self):
         class RelatedPort(_Port):
             target = "internal.work.item"

@@ -301,6 +301,35 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
             reason=detail, side_effect_possible=False,
             identity=operation_identity)
         feedback = "BUSINESS TOOL FAILED: " + detail
+    # A business read can take long enough for the user to change the page. Give the
+    # same agent the result and a fresh observation before its next decision; otherwise
+    # a later click can be planned against the page seen before the API request.
+    if session._cancel_requested():
+        return _Next(session._finish(result, t0, "user_cancelled",
+                                    "the user stopped this task after the read", steps=step))
+    try:
+        session._browser_attempts += 1
+        receipt = session.browser.execute("observe", {})
+    except TransportError as exc:
+        return _Next(session._finish(result, t0, session._transport_terminal("observe"),
+                                    str(exc), steps=step))
+    write = session._writes.write_outcome(receipt, step, action_may_write=False)
+    fresh = bool(receipt.ok and receipt.observation is not None
+                 and receipt.observation.epoch > obs.epoch)
+    session.ledger.append(
+        "action_receipt", step=step, tool="observe", command_id=receipt.command_id,
+        after_tool=name, ok=receipt.ok, error_code=receipt.error_code,
+        write=write["state"], write_attribution="unattributed", fresh_observation=fresh)
+    reason, detail = session._writes.settle_write(write)
+    if reason:
+        return _Next(session._finish(result, t0, reason, detail, steps=step))
+    if not fresh:
+        return _Next(session._finish(result, t0, "transport_error",
+                                    "the read completed but a fresh page observation is unavailable",
+                                    steps=step))
+    obs = receipt.observation
+    note = session._ground(obs, receipt, write["state"], write["refused_requests"])
+    feedback += "\n\n" + session._render(obs, receipt, note, write)
     session._sync_plan_message(messages)
     messages += [_assistant_call(call), _tool_result(call, feedback)]
     messages = _trim(messages, session.keep_observations)

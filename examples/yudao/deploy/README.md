@@ -123,7 +123,24 @@ The server takes about four minutes to start on two vCPUs.
 
 ## Goal data adapter
 
-`src/web_operation_agent_yudao` is the adapter a goal-directed turn resolves against. It supplies `GoalData` only; the core resolves.
+`src/web_operation_agent_yudao` supplies actor-bound metadata and reads. The native host
+uses the existing shared `AgentTurnExecutor`, with generic entity/field discovery,
+record lookup, filtered queries, counts/sums and qualified page addresses. The goal demo
+and sealed goal runner retain `GoalTurnExecutor` for comparison. Both use the same reader;
+neither requires one adapter method per natural-language question.
+
+Native-host `--source-root` holds `ui/` and `server/`; `--source-release` identifies the
+deployed snapshot. `repository.py` indexes the code and documentation allowlist in
+`policies/repository.json` once at startup and returns bounded exact-byte citations.
+It does not compile `YudaoSource` or require a SourceMap. Repository access is optional:
+without these flags the ordinary read tools still work. An explicitly missing root or
+release fails startup. Static ownership requires a declaration in code or documentation;
+business record owners are not engineering owners. Snapshot-only deployments explicitly
+refuse Git-history questions rather than substitute application operation logs.
+Source-only and mixed source/data turns are covered by synthetic tests. The previous
+sealed real-model goal scores do not qualify this new tool-loop path. Chinese keyword
+recall and latency remain under investigation. Writes, form entry and clicks, including
+tab selection, are disabled in the native host.
 
 - The schema is compiled under the acting account from its menus and button permissions, the API documentation (`/v3/api-docs`, reachable only from the server side in the public deployment) and the dictionaries. Every module the account's menus reach is considered. A page becomes an entity only when its source or menu identifies a documented list of records; a dashboard or settings page without one is not claimed as a record list. A page whose own address names a documented list is that list even when no permission names it: the resource may be several words deep (`fms/voucher/statistics`) and the endpoint a `/list` rather than a `/page`, and the menu is the evidence the account may open the page. The response must describe its items, so a page whose endpoint the documentation leaves shapeless is not claimed.
 - Lists filter only by the parameters each page defines, so a read pushes down the conditions a parameter narrows without losing a match, reads every page up to 4,000 records, and filters the rest in memory with the core's `matches`. Beyond the bound the read is refused rather than answered from part of the records. A list whose endpoint requires a parent the question did not name is read under that parent when the account can read exactly one such record (`mp/user`'s official account, `fms/voucher`'s account set, the payroll record of a month) — the parent the application itself shows. Several candidates stay the person's choice, and the read refuses with the parameter it needs.
@@ -135,7 +152,16 @@ The server takes about four minutes to start on two vCPUs.
 - `conventions/reference.json` holds what the reference organisation means by some words, as the owner reviewed them (客户 is the CRM customer, 产品 the ERP product, 成交 an approved contract, 订单 every ERP sales order, 回款 money received, an approval process one of the person's own, 我能看的 every record the account may read). `YudaoApplication` loads it unless given another file or none; `--no-conventions` runs without it.
 - `YudaoSource` optionally compiles the deployment's rules from the bound release's server and admin UI (`--source-root` holding `server/` and `ui/`, `--source-release` naming the release): when a button shows (its `v-if` and `v-hasPermi`), when a form field cannot be changed (its input's `:disabled` condition on the record or on how the form was opened; conditions on the page's own state are left out), and what the operation a button calls refuses (the service method's `throw exception(...)` under its `if`, with the module's error message), both tied to the operation's URL and cited as `path:lines@release sha256:...`. The rules are shown to the model only for a question about how the application behaves; a question about data is read with the same index as without them.
 
-`YudaoApplication` composes it read-only for a live session: no business tools, the goal data's reads under the scope `yudao.read`, and an identity port that asks yudao who the browser's token and the server's account are and refuses unless both are the same user in the same tenant. The deployment serves the pinned PageController under `/woa/` (copied from a verified tarball and checked with `require_served_directory`). The demo signs a browser in as the evaluation account, injects the assistant, submits tasks through the panel and meters model calls into the project's spend ledger:
+`YudaoApplication` composes the generic read tools under `yudao.read`, with no mutation
+tools, and an identity port that refuses unless the browser token and the server reader
+identify the same user and tenant. Credential renewal invalidates data caches and metadata
+bindings; expired or denied reads preserve authentication/permission errors. The shared
+read contract carries API-declared fixed money units, refuses malformed amounts, and does
+not report partial or missing aggregate data as zero. Only qualified record templates
+yield record addresses; a collection address is not a record address. The deployment
+serves the pinned PageController under `/woa/` (copied from a verified tarball and checked
+with `require_served_directory`). The goal demo signs a browser in as the evaluation
+account, injects the assistant, submits tasks through the panel and meters model calls:
 
 ```bash
 python -m web_operation_agent_yudao.demo --account account.json --source-root $YUDAO_CACHE --source-release v2026.09 --model-env ../../.env --task "为什么我看不到合同的提交审核按钮？"

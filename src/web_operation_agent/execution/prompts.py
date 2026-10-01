@@ -353,6 +353,7 @@ When the user asks how the application behaves -- what a status or field value m
 operation is refused, which screen lists something -- and no Skill or tool result says, use
 lookup_source before answering from general knowledge. A returned source#N may be cited as
 source_excerpt. Submit a concise, user-facing statement of the answer with that reference;
+evidence_ref is the ID alone (source#N or history#N), never the path or line citation.
 also submit a short exact support span copied from that reference's source result. The
 support span, source location and bytes remain internal evidence and are not displayed in
 the answer. Do not treat a matching span as proof of a current record's state or event cause.
