@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from web_operation_agent.schemas import ClientHello
 from web_operation_agent.state.identity import PrincipalError
-from web_operation_agent.execution.product import AgentTurnExecutor
+from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent_yudao.application import SESSION_HANDOFF_KEYS, YudaoIdentityPort
 from web_operation_agent_yudao.native_server import BootstrapRefused, YudaoHost, YudaoHostConfig
@@ -65,14 +65,13 @@ class NativeHostTests(unittest.TestCase):
         self.assertEqual(host.server.session_count, 1)
         self.chat.return_value.complete.assert_not_called()
 
-    def test_production_uses_the_generic_agent_loop_without_source_as_a_prerequisite(self):
+    def test_production_uses_deterministic_goals_without_source_as_a_prerequisite(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
         executor = host._sessions[("1", "1")].session.runner.executor
-        self.assertIsInstance(executor, AgentTurnExecutor)
+        self.assertIsInstance(executor, GoalTurnExecutor)
         self.assertFalse(executor.config.source.runtime_source)
-        self.assertIn("query_entity_records", executor.business_tools.tool_names)
-        self.assertFalse(executor.business_tools.has_mutations)
+        self.assertIsNotNone(executor.goal_port)
         self.assertIn("submit", executor.config.disabled_actions)
         self.assertNotIn("goto", executor.config.disabled_actions)
         policy = self.chat.call_args.kwargs["egress_policy"]

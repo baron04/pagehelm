@@ -140,6 +140,18 @@ class _Client:
 
 
 class YudaoGoalDataTests(unittest.TestCase):
+    def test_total_refuses_missing_values_but_keeps_numeric_zero(self):
+        for value in (None, "", float("nan"), float("inf")):
+            rows = deepcopy(CONTRACTS[1] + CONTRACTS[2])
+            rows[0]["totalPrice"] = value
+            with self.subTest(value=value), patch.object(self.data, "_matching", return_value=rows):
+                with self.assertRaises(DataRefused):
+                    self.data.total("crm/contract", all_of(), "totalPrice")
+        rows = deepcopy(CONTRACTS[1] + CONTRACTS[2])
+        rows[0]["totalPrice"] = 0
+        with patch.object(self.data, "_matching", return_value=rows):
+            self.assertEqual((7500.0, ""), self.data.total("crm/contract", all_of(), "totalPrice"))
+
     def setUp(self):
         self.client = _Client()
         ui = UiSource(views={"crm/contract/index": ListView(columns=("name", "customerName", "totalPrice")),

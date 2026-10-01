@@ -44,6 +44,67 @@ def _write(root: Path, files: dict[str, str] = FILES) -> None:
 
 
 class LanguageNeutralRepositoryLookupTests(unittest.TestCase):
+    def test_lexical_symbol_hop_finds_usage_without_a_framework_compiler(self):
+        for suffix, implementation in (
+            ("py", "def delete_archive(row):\n    if row.locked:\n        raise RuntimeError(ARCHIVE_DELETE_BLOCKED)\n"),
+            ("java", "void deleteArchive(Row row) {\n  if (row.locked) throw error(ARCHIVE_DELETE_BLOCKED);\n}\n")):
+            with self.subTest(language=suffix), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                _write(root, {"src/messages.py": "ARCHIVE_DELETE_BLOCKED = 'archive deletion locked'\n",
+                    f"src/service.{suffix}": implementation,
+                    "src/doc.md": "archive deletion locked " * 30,
+                    "src/help.md": "archive deletion locked " * 20})
+                tree = _tree(root)
+                hits = RepositorySourceLookup(tree).search("archive deletion locked", limit=2)
+                self.assertIn(f"src/service.{suffix}", [hit.evidence.path for hit in hits])
+                self.assertTrue(all(tree.verify(hit.evidence) for hit in hits))
+
+    def test_exact_identifier_finds_body_usage_not_only_filename_fragments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"src/messages.py": "ARCHIVE_DELETE_BLOCKED = 'delete blocked'\n",
+                "src/rules.py": "if locked: raise RuntimeError(ARCHIVE_DELETE_BLOCKED)\n",
+                "src/doc.md": "archive delete blocked " * 20})
+            hits = RepositorySourceLookup(_tree(root)).search("ARCHIVE_DELETE_BLOCKED", limit=2)
+            self.assertEqual({"src/messages.py", "src/rules.py"}, {hit.evidence.path for hit in hits})
+
+    def test_snapshot_search_survives_root_removal_but_live_verification_refuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root)
+            lookup = RepositorySourceLookup(_tree(root))
+            hit = lookup.search("invoice approval denied", limit=1)[0]
+        self.assertEqual(hit, lookup.search("invoice approval denied", limit=1)[0])
+        self.assertFalse(lookup.verify(hit.evidence))
+
+    def test_explicit_relative_path_refines_a_search_without_granting_a_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {
+                "src/order/page.js": "// order approve status permission\n",
+                "src/other/page.js": "// approve approve status status permission permission\n"})
+            tree = _tree(root)
+            hit = RepositorySourceLookup(tree).search(
+                "order/page.js approve status permission", limit=1)[0]
+            self.assertEqual("src/order/page.js", hit.evidence.path)
+            self.assertTrue(tree.verify(hit.evidence))
+
+    def test_matched_error_keeps_the_neighbouring_guard_in_verified_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            body = "\n".join(["# filler"] * 9 + [
+                "if approved:", "    raise PermissionError('archived row deletion denied')"]
+                + ["# filler"] * 9) + "\n"
+            _write(root, {"src/rules.py": body})
+            tree = _tree(root)
+            lookup = RepositorySourceLookup(tree, line_limit=8, overlap=0)
+            hit = lookup.search("archived row deletion denied", limit=1)[0]
+            self.assertIn("if approved:", hit.text)
+            self.assertTrue(tree.verify(hit.evidence))
+            (root / "src/rules.py").write_text(body.replace("approved", "rejected"))
+            self.assertFalse(lookup.verify(hit.evidence))
+            self.assertEqual(hit, lookup.search("archived row deletion denied", limit=1)[0])
+
     def test_component_and_server_source_need_no_framework_compiler(self):
         files = {
             "src/CustomerDetails.vue": '<el-tab-pane label="回款" />\n',

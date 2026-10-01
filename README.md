@@ -424,16 +424,25 @@ resolves a declaration itself. Odoo ships as a separate
 [`testapps/`](testapps/contacts/README.md) is internal browser/protocol test apparatus, not a
 second public reference. The experimental [Yudao adapter and resettable deployment](examples/yudao/deploy/README.md)
 provide another goal-data implementation; they are not a production readiness claim.
-The Yudao native host uses the shared tool loop for source questions, actor-bound data
-reads and mixed requests. Its generic tools discover entities and fields, resolve records,
-query conditions, counts and sums, and return qualified page addresses; adapters do not
-enumerate individual natural-language questions. Optional repository search indexes
-allowlisted Vue/TypeScript/Java code and documentation once at host startup, without a
-SourceMap or rule compiler, and returns bounded, verified excerpts. Source never grants
-API or navigation authority. It cannot supply current data, missing API metadata, or Git
-history absent from the deployment. After a typed API read, the same agent receives a
-fresh page observation before another decision. Fixed currency units use the shared read
-contract, also tested with the structurally different Contacts REST application.
+The Yudao native host uses staged goal declarations for actor-bound business reads and
+page requests, with bounded raw repository answers beside them. One scope declaration
+preserves every business and static-source part of a mixed request; business details use
+the existing paired readings and deterministic resolver, rather than a growing generic
+tool history. Applications may opt into this path with `repository_answers=True` on a
+staged `GoalTurnExecutor`; existing goal callers keep their prior behavior by default.
+Optional repository search indexes allowlisted code and documentation once at host
+startup, without a SourceMap or rule compiler. Matched windows include bounded adjacent
+lines so a guard is not separated from its refusal. Source answers first use small
+matched summaries to select relevant primary evidence or locate an implementation,
+then select server-numbered literal spans from bounded evidence. They verify exact
+release bytes, display selected citations, and allow one shared declaration repair
+across the retrieval and answer stages. This verifies attribution, not semantic entailment of the model's
+paraphrase. Source never grants API, navigation or write authority, and cannot supply
+current data or Git history. This goal composition explicitly refuses history queries,
+including when a separate history provider is configured. Each source retrieval returns to the same server-side
+turn with a fresh page observation before another model decision. This composition is
+also tested with the structurally different Contacts REST application. Ordinary reads
+and page navigation still work without repository access.
 Generic counts accept `field_ids=[]` and return a ready aggregate bound to the executed
 query. Yudao and Odoo skip row reads for this request; filters, actor identity and exact
 count validation remain in force. A certified count does not prove that the model chose
@@ -450,6 +459,17 @@ before and 37/40 after; median server-turn time was 19.05 / 13.58 seconds and ca
 It uses a transport-double browser and is not independent holdout or UI latency evidence.
 An automatic-navigation variant was rejected after its live replay worsened the tail;
 its activation and core changes were removed. See the [full comparison and accounting](evals/yudao/tool_loop/RESULTS.zh-CN.md).
+A 2026-10-02 recovery replay used the unchanged 63-case judge with the final frozen
+staged business/raw-source composition: **57/63**, with business, navigation and refusal
+cases passing 47/47 and source rules 10/16. Compared with the 22/63 loop, input tokens
+fell from 4,266,926 to 695,595 (83.7%) and calls from 322 to 204. Median attempt time
+fell from 27.45 to 23.27 seconds and P95 from 95.60 to 35.41; it remains slower than the
+old goal baseline. The same corrected development browser apparatus scored 37/40 for
+the loop and 40/40 for the final composition; median server-turn time was 12.14 / 10.01
+seconds, but P95 worsened from 46.11 to 51.17. This seen synthetic data does not establish
+general accuracy or production UI latency. The earlier 60/63 candidate failed development
+qualification and is not the final score. See the [recovery results, residual failures and
+complete paid accounting](evals/yudao/tool_loop/RECOVERY.zh-CN.md).
 The older goal demo/evaluation path remains available for comparison. Native-host writes,
 form entry and clicks (including tab selection) remain disabled.
 Assistant-requested Yudao page changes use full document navigation, letting the application's
@@ -561,8 +581,8 @@ The adapter includes versioned Skills and an optional source compiler for Odoo m
 views, fields, method documentation, and user-visible refusal conditions. A generic raw-code
 index covers allowlisted Python, JavaScript, XML and access declarations alongside those
 compiled facts. Both are restricted to modules installed in the running deployment, and
-source-backed answers state the conclusion without displaying cited bytes or locations; the
-citations remain available to server-side audit. A full matching Git commit can optionally
+the generic tool loop presents source-backed conclusions with citations kept in server-side
+audit. The opted-in goal composition displays its selected citation locations. A full matching Git commit can optionally
 enable local history; an extracted image tree without `.git` reports history unavailable.
 Runtime facts remain authoritative when source or documentation disagrees. The installed
 add-on also exposes a bounded actor-scoped model/action catalog. The

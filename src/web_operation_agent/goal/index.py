@@ -44,7 +44,9 @@ class IndexField:
     def __post_init__(self) -> None:
         object.__setattr__(self, "key", _label(self.key, "field key"))
         object.__setattr__(self, "label", _label(self.label, "field label"))
-        object.__setattr__(self, "choices", tuple(_label(c, "choice") for c in self.choices)[:8])
+        # Choices are the field's actual vocabulary, not ranked examples. Dropping a
+        # tail value makes the declarer falsely conclude that condition is unavailable.
+        object.__setattr__(self, "choices", tuple(_label(c, "choice") for c in self.choices))
         object.__setattr__(self, "aliases", tuple(_label(a, "alias") for a in self.aliases)[:3])
 
 

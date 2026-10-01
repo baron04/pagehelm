@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import re
+import math
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -610,8 +611,11 @@ class YudaoGoalData:
         amount = Decimal(0)
         for row in self._matching(entity, where):
             value = self._row(entity, row, (field,)).values.get(field)
-            if isinstance(value, (int, float)):
-                amount += Decimal(str(value))
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value)):
+                raise DataRefused("求和字段存在缺失或无效值，无法计算完整合计。",
+                                  reason="求和字段存在缺失或无效值，无法计算完整合计。")
+            amount += Decimal(str(value))
         unit = self._money_for(entity, field)
         return float(amount), "元" if unit in ("元", "分") else unit
 

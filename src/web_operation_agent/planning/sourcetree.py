@@ -171,7 +171,7 @@ class SourceTree:
             return False
         try:
             fresh = self.cite(ref.path, ref.start_line, ref.end_line)
-        except (AccessDenied, SchemaError, UnicodeDecodeError):
+        except (AccessDenied, SchemaError, UnicodeDecodeError, OSError):
             return False
         return fresh.sha256 == ref.sha256
 

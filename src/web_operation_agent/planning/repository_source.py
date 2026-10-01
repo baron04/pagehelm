@@ -8,9 +8,11 @@ properties as compiled relations.
 from __future__ import annotations
 
 import math
+import re
+import hashlib
 from collections import Counter
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .source_facts import SourceHit, SourceLookup, terms
 from .sourcetree import AccessDenied, SourceTree
@@ -26,6 +28,12 @@ SOURCE_FILENAMES = frozenset({
     "dockerfile", "makefile", "procfile", "codeowners", ".editorconfig",
 })
 _K1, _B = 1.2, 0.75
+_SYMBOL = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+
+
+def _symbols(text: str) -> frozenset[str]:
+    return frozenset(word for word in _SYMBOL.findall(text)
+                     if "_" in word or any(c.isupper() for c in word[1:]))
 
 
 def _is_source_file(path: str) -> bool:
@@ -77,6 +85,7 @@ class RepositoryBlock:
     evidence: EvidenceRef
     language: str
     document: Counter[str]
+    symbols: frozenset[str]
 
 
 class RepositorySourceLookup:
@@ -128,13 +137,19 @@ class RepositorySourceLookup:
                 if not document:
                     continue
                 evidence = tree.cite(path, start, end, excerpt_chars=char_limit)
-                blocks.append(RepositoryBlock(evidence, language, document))
+                evidence = self._context(evidence, lines)
+                blocks.append(RepositoryBlock(evidence, language, document, _symbols(evidence.excerpt)))
                 lengths.append(sum(document.values()))
                 document_frequency.update(document.keys())
                 if len(blocks) > max_blocks:
                     raise ValueError(f"allowlisted source surface exceeds {max_blocks} blocks")
         self._tree = tree
         self._blocks = tuple(blocks)
+        symbol_blocks: dict[str, set[int]] = {}
+        for index, block in enumerate(blocks):
+            for symbol in block.symbols:
+                symbol_blocks.setdefault(symbol, set()).add(index)
+        self._symbol_blocks = {s: frozenset(indices) for s, indices in symbol_blocks.items()}
         self._lengths = tuple(lengths)
         self._average = sum(lengths) / len(lengths) if lengths else 0.0
         count = len(blocks)
@@ -167,6 +182,10 @@ class RepositorySourceLookup:
         if not wanted:
             return ()
         scored: list[tuple[float, str, int, int]] = []
+        # A model may refine using a path seen in source. A named allowlisted file
+        # must outrank incidental matches on its generic directory words.
+        paths = tuple(re.findall(r"[\w.-]+(?:/[\w.-]+){2,}", query))
+        identifiers = _symbols(query)
         for index, block in enumerate(self._blocks):
             shared = wanted & block.document.keys()
             if not shared:
@@ -179,14 +198,81 @@ class RepositorySourceLookup:
                 score += self._idf[word] * frequency * (_K1 + 1) / (frequency + norm)
             if score:
                 ref = block.evidence
+                basename = ref.path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                if any(ref.path == p or ref.path.endswith("/" + p) for p in paths):
+                    score += 10_000
+                elif basename in identifiers:
+                    score += 1000
+                # Preserve exact symbols when a refined query names a guard/error.
+                # Tokenization splits identifiers for multilingual matching; those
+                # fragments alone otherwise bury the actual usage among generic hits.
+                score += 40 * len(identifiers & block.symbols)
                 scored.append((-score, ref.path, ref.start_line, index))
         scored.sort()
+        # One bounded lexical hop connects a matched error/validator declaration
+        # to its actual usages. No framework parser, feature map or inferred rule.
+        # Only identifiers on the lines that match the question participate.
+        line_symbols = []
+        for _, _, _, index in scored[:8]:
+            for line in self._blocks[index].evidence.excerpt.splitlines():
+                relevance = sum(self._idf[t] for t in wanted & set(terms(line)))
+                if relevance:
+                    for symbol in _symbols(line) - identifiers:
+                        frequency = len(self._symbol_blocks[symbol])
+                        if 2 <= frequency <= 40:
+                            line_symbols.append((-relevance, frequency, symbol,
+                                                 self._blocks[index].evidence.path))
+        linked = {}
+        for _, _, symbol, origin in sorted(set(line_symbols)):
+            linked.setdefault(symbol, origin)
+            if len(linked) == 3:
+                break
+        if linked and not paths:
+            expanded = sorted((score - 40 * sum(symbol in self._blocks[index].symbols
+                                                and path != origin for symbol, origin in linked.items()),
+                               path, start, index) for score, path, start, index in scored)
+            # Cross references supplement lexical hits; they cannot displace all
+            # original page markup or other evidence that answered the query.
+            first = scored[:(limit + 1) // 2]
+            held = {entry[3] for entry in first}
+            scored = first + [entry for entry in expanded if entry[3] not in held]
         return tuple(
-            SourceHit(evidence=self._blocks[index].evidence,
-                      text=self._blocks[index].evidence.excerpt,
+            SourceHit(evidence=ref,
+                      text=ref.excerpt,
                       verbatim=True, max_chars=4000, fact_type="implementation")
             for _, _, _, index in scored[:limit]
+            for ref in (self._blocks[index].evidence,)
         )
+
+    @staticmethod
+    def _context(reference: EvidenceRef, lines: list[str]) -> EvidenceRef:
+        """Keep neighbouring guards with a matched message or statement.
+
+        Build from the allowlisted snapshot at index construction, so searches
+        keep working after an extraction directory is removed. Live verification
+        remains separate. Expansion keeps the match and is bounded by whole lines.
+        """
+        start, end = reference.start_line, reference.end_line
+        size = len("".join(lines[start - 1:end]))
+        for distance in range(1, 25):
+            for before in (True, False):
+                candidate = reference.start_line - distance if before else reference.end_line + distance
+                if not 1 <= candidate <= len(lines):
+                    continue
+                # Never create a gap after a neighbouring line exceeds the budget.
+                if candidate != (start - 1 if before else end + 1):
+                    continue
+                length = len(lines[candidate - 1])
+                if size + length > 4000:
+                    continue
+                size += length
+                if before:
+                    start = candidate
+                else:
+                    end = candidate
+        body = "".join(lines[start - 1:end])
+        return replace(reference, start_line=start, end_line=end,
+                       sha256=hashlib.sha256(body.encode()).hexdigest(), excerpt=body[:4000].rstrip())
 
     def verify(self, reference: EvidenceRef) -> bool:
         return self._tree.verify(reference)

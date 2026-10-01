@@ -150,7 +150,9 @@ class TheUnconfirmedQuotationsQuestionIsAnswered(unittest.TestCase):
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertEqual(result.verified_answer["conclusions"][0]["members"],
                              ("sale.order/2", "sale.order/3", "sale.order/4"))
-            self.assertEqual(browser.actions, [])
+            # A typed read returns to the agent with a fresh page observation.
+            # Observing is read-only; no page interaction was dispatched.
+            self.assertEqual(browser.actions, ["observe"])
 
 
 if __name__ == "__main__":

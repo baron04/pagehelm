@@ -124,10 +124,12 @@ The server takes about four minutes to start on two vCPUs.
 ## Goal data adapter
 
 `src/web_operation_agent_yudao` supplies actor-bound metadata and reads. The native host
-uses the existing shared `AgentTurnExecutor`, with generic entity/field discovery,
-record lookup, filtered queries, counts/sums and qualified page addresses. The goal demo
-and sealed goal runner retain `GoalTurnExecutor` for comparison. Both use the same reader;
-neither requires one adapter method per natural-language question.
+uses staged `GoalTurnExecutor` declarations and deterministic resolution for business
+records, conditions, aggregates and page requests. Raw repository answers share the
+same scope and turn, preserving mixed requests without a growing general tool history.
+The demo and sealed runner expose `--executor goal|agent|hybrid`: `goal` is the prior
+compiled-rule baseline, `agent` retains the generic loop for comparisons, and `hybrid`
+uses the native host's current composition. All use the same actor-bound reader.
 
 Native-host `--source-root` holds `ui/` and `server/`; `--source-release` identifies the
 deployed snapshot. `repository.py` indexes the code and documentation allowlist in
@@ -137,9 +139,11 @@ without these flags the ordinary read tools still work. An explicitly missing ro
 release fails startup. Static ownership requires a declaration in code or documentation;
 business record owners are not engineering owners. Snapshot-only deployments explicitly
 refuse Git-history questions rather than substitute application operation logs.
-Source-only and mixed source/data turns are covered by synthetic tests. The previous
-sealed real-model goal scores do not qualify this new tool-loop path. Chinese keyword
-recall and latency remain under investigation. Writes, form entry and clicks, including
+Source questions use one small retrieval declaration and one answer declaration, with
+at most one shared format repair. Answers include selected release-bound citations. Literal support checks establish attribution, not semantic correctness.
+Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.
+See the [recovery qualification](../../../evals/yudao/tool_loop/RECOVERY.zh-CN.md) for
+real-model results and remaining limits. Writes, form entry and clicks, including
 tab selection, are disabled in the native host.
 
 - The schema is compiled under the acting account from its menus and button permissions, the API documentation (`/v3/api-docs`, reachable only from the server side in the public deployment) and the dictionaries. Every module the account's menus reach is considered. A page becomes an entity only when its source or menu identifies a documented list of records; a dashboard or settings page without one is not claimed as a record list. A page whose own address names a documented list is that list even when no permission names it: the resource may be several words deep (`fms/voucher/statistics`) and the endpoint a `/list` rather than a `/page`, and the menu is the evidence the account may open the page. The response must describe its items, so a page whose endpoint the documentation leaves shapeless is not claimed.

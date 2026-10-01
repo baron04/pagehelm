@@ -11,6 +11,7 @@ from testapps.contacts.app import (ACTORS_BY_ID, DEMO_SESSION_COOKIE,
 from testapps.contacts.goal import ContactsGoalPort
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStatus
 from web_operation_agent.goal import executor as goal_executor
 from web_operation_agent.goal.executor import GoalTurnExecutor
@@ -21,6 +22,31 @@ from web_operation_agent.tests.support.business import _Chat
 
 
 class ContactsGoalPortTests(unittest.TestCase):
+    def test_rest_fact_and_repository_ownership_share_one_goal_turn(self):
+        from web_operation_agent.tests.goal.test_repository_answers import Lookup, source_reply, scope
+        with MinimalContactsApplication() as application, tempfile.TemporaryDirectory() as tmp:
+            adapter, principal, _ = self._bound(application, "ada-lovelace")
+            chat = _Chat([
+                scope([{"kind": "fact", "entity": "contacts", "about": "Grace Hopper"}]), ("declare_source_queries", {"queries_0": []}), source_reply(),
+                ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "contacts",
+                    "record": "Grace Hopper", "fields": ["Email"]}]})])
+            executor = GoalTurnExecutor(
+                channel=_Channel(page_url=application.origin + "/contacts", principal=principal),
+                config=AgentTurnConfig(supported_scope="read", require_identity=True,
+                    ledger_path=Path(tmp) / "audit.jsonl",
+                    source=SourceCapability(runtime_source=True, lookup=Lookup())),
+                chat=chat, application=bind_application(adapter), goal_port=ContactsGoalPort(adapter),
+                control=ReadOnlyControl(), run_id_factory=lambda _m: "mixed-repository", readings=1,
+                repository_answers=True)
+            with patch.object(goal_executor, "RemoteBrowserClient", _RemoteBrowser):
+                result = executor.execute({"message_id": "mixed", "page_url": application.origin + "/contacts",
+                    "text": "What is Grace Hopper's email and who maintains the interface code?"})
+            self.assertEqual(AgentTurnStatus.FINISHED, result.status)
+            self.assertIn("grace@example.test", result.user_answer)
+            self.assertIn("Aurora team", result.user_answer)
+            self.assertIn("docs/owners.md:1-1@synthetic-1 sha256:", result.user_answer)
+            self.assertEqual(4, len(chat.messages))
+
     def _bound(self, application, actor_id):
         actor = ACTORS_BY_ID[actor_id]
         adapter = MinimalContactsAdapter(application.origin, api_token=actor.token)

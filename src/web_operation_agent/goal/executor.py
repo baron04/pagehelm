@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from ..business.approvals import PAGE_OPERATIONS, ApprovalWatch, OperationPlan
 from ..business.control import ApprovalGate, ApprovalGrant
 from ..business.writes import WriteWatch
+from ..answer.conclusion import ConclusionRefused
 from ..composition.binding import BoundApplication
 from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnErrorCode,
                                  AgentTurnExecution, AgentTurnMessage, AgentTurnStatus,
@@ -465,7 +466,8 @@ def _areas(index) -> list[str]:
         if p.breadcrumb and " / " in p.breadcrumb))
 
 
-def assistant_answer(capabilities: frozenset[str], *, chinese: bool, areas=()) -> str:
+def assistant_answer(capabilities: frozenset[str], *, chinese: bool, areas=(),
+                     repository_answers: bool = False) -> str:
     """What this assistant can do, asked of the assistant itself ("你能帮我做什么？").
 
     Written here rather than by the model, and from what the adapter declares: the
@@ -483,6 +485,8 @@ def assistant_answer(capabilities: frozenset[str], *, chinese: bool, areas=()) -
                  "- 找页面：打开你要看的列表或记录，告诉你某个功能在哪里；"]
         if "source" in capabilities:
             lines.append("- 解释规则：某个按钮为什么不显示、某个字段什么时候能改；")
+        if repository_answers:
+            lines.append("- 查源码知识：检索部署的代码与文档，解释规则或已记录的工程职责，并给出出处；")
         if "handoffs" in capabilities:
             lines.append("- 引导操作：要新建、修改、确认、发送或付款时，打开对应页面并标出要点的按钮"
                          + ("，你给了值的话先帮你填好" if "fill" in capabilities else "")
@@ -500,6 +504,8 @@ def assistant_answer(capabilities: frozenset[str], *, chinese: bool, areas=()) -
              "feature is;"]
     if "source" in capabilities:
         lines.append("- Explain rules: why a button is hidden, or when a field can be changed;")
+    if repository_answers:
+        lines.append("- Search deployed code and documentation for rules or documented engineering ownership, with citations;")
     if "handoffs" in capabilities:
         lines.append("- Guide a change: to create, change, confirm, send or pay something, "
                      "open the page and point at the control"
@@ -608,6 +614,8 @@ class _TurnState:
     today: str = ""
     #: The entities and words the neighbourhood was built from (staged path only).
     focus: tuple = ()
+    source_answer: str = ""
+    source_complete: bool = True
 
 
 
@@ -619,7 +627,9 @@ class GoalTurnExecutor:
                  ledger_factory=SessionLedger,
                  conversation_state: ConversationState | None = None,
                  readings: int = 2, staged: bool = True, values: bool = True,
-                 declaration_cache: bool = True):
+                 declaration_cache: bool = True,
+                 disabled_page_actions: frozenset[str] = frozenset(),
+                 repository_answers: bool = False):
         #: The staged path (the default): the request's hard references are located by
         #: the adapter, the model first picks entities and kinds from one-line summaries,
         #: then declares the details against those entities' neighbourhood of the index,
@@ -627,6 +637,15 @@ class GoalTurnExecutor:
         #: against the whole index, as a comparison or for a scripted apparatus.
         self.declaration_cache = DeclarationCache() if declaration_cache else None
         self.staged = bool(staged)
+        # Goal actions are fixed read-only procedures under application write control.
+        # A host may further restrict those procedures; the model-tool disabled set
+        # historically belongs to the generic loop, not these procedures.
+        self.disabled_page_actions = frozenset(disabled_page_actions)
+        if not isinstance(repository_answers, bool):
+            raise TypeError("repository_answers must be boolean")
+        self.repository_answers = repository_answers and config.source.runtime_source
+        if self.repository_answers and not self.staged:
+            raise ValueError("repository answers require the staged goal declaration")
         #: Candidate values offered before the details are declared, when the port has
         #: them; off only to measure what they change.
         self.values = bool(values)
@@ -799,7 +818,7 @@ class GoalTurnExecutor:
         principal = s.approvals.principal
         cache_owner = (principal.binding_digest if principal is not None else "anonymous",
                        id(self.chat), getattr(self.chat, "temperature", None),
-                       index.source_digest)
+                       index.source_digest, self.config.source.content_digest)
         scope_text = ""
         scope_parts: list[dict] = []
         scope_unsupported = ""
@@ -823,7 +842,8 @@ class GoalTurnExecutor:
                     summaries=summaries(index, lookup, known), run_id=s.run_id,
                     timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
                     cancelled=s.cancelled, today=today_text, earlier=earlier,
-                    cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"))
+                    cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"),
+                    repository_source=self.repository_answers)
             except ValueError as exc:
                 # The first step's answer could not be read, twice: the turn goes on as a
                 # single declaration against the whole index rather than refusing.
@@ -842,9 +862,44 @@ class GoalTurnExecutor:
             s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
                             write_intent=write_intent, unsupported=unsupported,
                             about_assistant=about_assistant, **projection)
+            sources = projection.get("source_requests", ())
+            if sources:
+                from .source_answers import answer, retrieve
+                s.write_intent = write_intent
+                try:
+                    retrieved, evidence = retrieve(self.config.source, sources, s.ledger)
+                    self._dispatch(s, "observe", {})
+                    if s.terminal_reason:
+                        return ""
+                    result = answer(chat, source=self.config.source, requests=sources,
+                        retrieved=retrieved, evidence=evidence, run_id=s.run_id,
+                        cancelled=s.cancelled, chinese=s.chinese, ledger=s.ledger,
+                        prompt=s.message.text,
+                        page=lambda: {"path": urlsplit(s.obs.url).path, "epoch": s.obs.epoch,
+                                      "render_state": s.obs.render_state,
+                                      "active_view": s.obs.active_view[:120]},
+                        refresh=lambda: bool(self._dispatch(s, "observe", {}) is not None
+                                             and not s.terminal_reason),
+                        timeout_s=max(1.0, self.config.wall_budget_s - (time.time() - s.started_at)))
+                    s.source_answer, s.source_complete = result.text, result.complete
+                except ProviderError as exc:
+                    s.terminal_reason = "provider_error"
+                    return self._say(s, _provider_failed(exc, s.chinese))
+                except (ValueError, ConclusionRefused) as exc:
+                    s.source_complete = False
+                    s.source_answer = ("源码回答未通过证据核验。" if s.chinese
+                                       else "The source answer did not pass evidence verification.")
+                    s.ledger.append("goal_source_answer_refused", error_type=type(exc).__name__,
+                                    detail=str(exc)[:200])
+                if s.terminal_reason:
+                    return ""
+                if not parts:
+                    s.terminal_reason = "agent_finished" if s.source_complete and not write_intent else "agent_refused"
+                    return ""
             if not parts and about_assistant:
                 return self._say(s, assistant_answer(capabilities_of(self.goal_port),
-                                                     chinese=s.chinese, areas=_areas(s.full_index)))
+                    chinese=s.chinese, areas=_areas(s.full_index),
+                    repository_answers=self.repository_answers))
             if not parts:
                 s.terminal_reason = "agent_refused"
                 return self._say(s, _cannot(s.message.text, unsupported, s.chinese))
@@ -903,7 +958,9 @@ class GoalTurnExecutor:
                             kinds=sorted({c.kind for c in candidates}))
             s.candidates = candidates
         unbound = functools.partial(
-            understand, chat, prompt=s.message.text, index=index, run_id=s.run_id,
+            understand, chat, prompt=(s.message.text + (
+                "\n\nStatic questions are answered separately; declare EVERY business data/page part only."
+                if s.source_answer else "")), index=index, run_id=s.run_id,
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
             today=today_text, scope=scope_text, values=render_values(candidates),
             earlier=earlier)
@@ -1030,7 +1087,8 @@ class GoalTurnExecutor:
             spec = self._held_reading(s, spec)
         if not spec.deliverables and spec.about_assistant:
             return self._say(s, assistant_answer(capabilities_of(self.goal_port),
-                                                 chinese=s.chinese, areas=_areas(s.full_index)))
+                chinese=s.chinese, areas=_areas(s.full_index),
+                repository_answers=self.repository_answers))
         if not spec.deliverables:
             s.terminal_reason = "agent_refused"
             why = spec.unsupported or ""
@@ -1579,6 +1637,10 @@ class GoalTurnExecutor:
     # -- pages ------------------------------------------------------------------------
     def _dispatch(self, s: _TurnState, action: str, args: dict, *, navigating: bool = False):
         """One page command under write control, with its receipt on the record."""
+        if action in self.disabled_page_actions:
+            s.terminal_reason, s.detail = "agent_refused", "the deployment disabled this page action"
+            s.ledger.append("goal_action_disabled", action=action)
+            return None
         if action in PAGE_OPERATIONS:
             # Every page operation is under the turn's one leave; asked for at the first.
             reason, detail = s.approvals.confirm_operation(
@@ -2056,6 +2118,15 @@ class GoalTurnExecutor:
 
     # -- settlement -------------------------------------------------------------------
     def _settle(self, s: _TurnState, current, text: str) -> AgentTurnExecution:
+        if s.source_answer:
+            text = "\n\n".join(part for part in (text, s.source_answer) if part)
+            if not s.source_complete and s.terminal_reason in ("", "agent_finished"):
+                s.terminal_reason = "agent_refused"
+            if len(text) > self.config.max_user_answer_chars:
+                s.terminal_reason = "agent_refused"
+                text = (("回答超过展示长度，以下仅为部分结果，请缩小问题范围。\n\n" if s.chinese
+                         else "The answer exceeds the display limit; only part is shown. Please narrow the request.\n\n")
+                        + text)
         release = s.writes.end_control()
         if release is not None and not s.terminal_reason:
             s.terminal_reason, s.detail = "control_plane_error", str(release)[:200]

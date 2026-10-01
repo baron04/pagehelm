@@ -23,6 +23,8 @@ DISTRIBUTIONS = {
             "web_operation_agent/business/forms.py",
             "web_operation_agent/composition/binding.py",
             "web_operation_agent/composition/ports.py",
+            "web_operation_agent/goal/source_answers.py",
+            "web_operation_agent/planning/repository_source.py",
             "web_operation_agent/sourcetree.py",
             "web_operation_agent/xmlscan.py",
             "web_operation_agent/policies/model_options.json",

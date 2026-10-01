@@ -472,7 +472,8 @@ class DataPort(Protocol):
         """At most `limit` rows; `order` is (field key, descending) pairs."""
 
     def total(self, entity: str, where: Cond, field: str) -> tuple[float, str]:
-        """The sum of a number or money field, and its unit (a currency) when one."""
+        """The complete scoped sum and unit. Raise DataRefused for unknown values;
+        missing values are not zero unless the application's field contract says so."""
 
     def groups(self, entity: str, where: Cond, field: str, *, limit: int = 12,
                by_month: bool = False) -> tuple[Group, ...]:

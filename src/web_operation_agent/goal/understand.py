@@ -14,6 +14,7 @@ than into more prose here.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 
 from ..modeling.provider import ProviderError
 from .declaration_cache import cached_read
@@ -36,38 +37,58 @@ For a linked record, entity and record identify the record the person named, via
 One deliverable per thing asked, in request order. Do not add a page just to support a fact or aggregate: its page.key defines data scope, not navigation. Add a separate page only when explicitly requested; prefer a named record's page to a list."""
 
 
-SCOPE_SYSTEM = """You read one request to a business web application and say which entities of the index it is about and what kind of deliverable each thing asked for is, by calling declare_scope exactly once.
+_SCOPE_INTRO = 'You read one request to a business web application and say which entities of the index it is about and what kind of deliverable each thing asked for is, by calling declare_scope exactly once.\n\nThe list names actor-visible entities. In a large application LIKELY ENTITIES carry pages and aliases; OTHER ENTITIES carry only their key and label and may also be chosen. A record the request names is already resolved under KNOWN REFERENCES, and its entity is the one meant unless the request asks about something that record links to or contains (its customer, its lines). The person may write in another language than the list; map their words to the entity keys. Data outside the application -- another system, a bank, email or chat, a carrier, a competitor, what will happen in the future -- has no stand-in among the entities: leave parts empty and say what is missing. '
 
-The list names actor-visible entities. In a large application LIKELY ENTITIES carry pages and aliases; OTHER ENTITIES carry only their key and label and may also be chosen. A record the request names is already resolved under KNOWN REFERENCES, and its entity is the one meant unless the request asks about something that record links to or contains (its customer, its lines). The person may write in another language than the list; map their words to the entity keys. Data outside the application -- another system, a bank, email or chat, a carrier, a competitor, what will happen in the future -- has no stand-in among the entities: leave parts empty and say what is missing. A question about a rule of the application itself -- why a control is hidden, when a field can be changed, what an action refuses, whether something is required or limited -- is a fact about the entity it concerns: pick that entity and mark the part rules; the second step shows the rules of the deployment's source and says when there is no such rule. Pick the entity a fact, count or list is about; for a change, the entity of the record to change, which for an action one of its controls offers (pay a bill, invoice an order) is that record's entity; for a page, the entity of the record or list to open. When the person identifies one record and asks for something it links to or contains (the customer of an order, the company of a bill, the lines of an invoice), the entity is the identified record's -- the linked thing is a detail for the second step -- except that a question about a record's lines is about the line entity. If nothing fits, leave parts empty and say what is missing in `unsupported`."""
+_SCOPE_RULES = "A question about a rule of the application itself -- why a control is hidden, when a field can be changed, what an action refuses, whether something is required or limited -- is a fact about the entity it concerns: pick that entity and mark the part rules; the second step shows the rules of the deployment's source and says when there is no such rule. "
+
+_SCOPE_BUSINESS = "Pick the entity a fact, count or list is about; for a change, the entity of the record to change, which for an action one of its controls offers (pay a bill, invoice an order) is that record's entity; for a page, the entity of the record or list to open. When the person identifies one record and asks for something it links to or contains (the customer of an order, the company of a bill, the lines of an invoice), the entity is the identified record's -- the linked thing is a detail for the second step -- except that a question about a record's lines is about the line entity. If nothing fits, leave parts empty and say what is missing in `unsupported`."
+
+SCOPE_SYSTEM = _SCOPE_INTRO + _SCOPE_RULES + _SCOPE_BUSINESS
 
 
 def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
                      timeout_s: float | None = None, cancelled=None,
-                     today: str = "", earlier: str = "", cache=None, cache_namespace=""
+                     today: str = "", earlier: str = "", cache=None, cache_namespace="",
+                     repository_source: bool = False
                      ) -> tuple[list[dict], bool, str, bool, dict]:
     """The first step of a staged declaration: entities and kinds, from the ranked
     entity summaries rather than the full index. Returns (parts, write_intent,
     unsupported, about_assistant, audit projection)."""
+    tool = DECLARE_SCOPE_TOOL
+    system = SCOPE_SYSTEM
+    if repository_source:
+        from .source_answers import source_scope_tool, SOURCE_SCOPE_INSTRUCTIONS
+        tool = source_scope_tool(deepcopy(tool))
+        system = (_SCOPE_INTRO + _SCOPE_BUSINESS).replace("leave parts empty", "set kind_0=none") + SOURCE_SCOPE_INSTRUCTIONS
     messages = [
-        {"role": "system", "content": SCOPE_SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": (summaries + (f"\n\nTODAY\n{today}" if today else "")
                                      + _earlier_block(earlier)
                                      + "\n\nREQUEST\n" + prompt.strip())},
     ]
-    key, held = cached_read(cache, cache_namespace, chat, messages, [DECLARE_SCOPE_TOOL], cancelled)
+    if repository_source:
+        # Keep the request as its own final message. A metadata-heavy scope must
+        # not make a small model treat the index itself as the user's question.
+        messages[-1]["content"] = messages[-1]["content"].rsplit("\n\nREQUEST\n", 1)[0]
+        messages.append({"role": "user", "content": "REQUEST\n" + prompt.strip()})
+    key, held = cached_read(cache, cache_namespace, chat, messages, [tool], cancelled)
     if held is not None:
         return held
-    kwargs = {"max_tokens": 600, "timeout_s": timeout_s}
+    kwargs = {"max_tokens": 1100 if repository_source else 600, "timeout_s": timeout_s}
     attempts = 0
     while True:
         attempts += 1
         try:
             if cancelled is not None:
-                reply = chat.complete_cancellable(messages, [DECLARE_SCOPE_TOOL], run_id,
+                reply = chat.complete_cancellable(messages, [tool], run_id,
                                                   cancelled=cancelled, **kwargs)
             else:
-                reply = chat.complete(messages, [DECLARE_SCOPE_TOOL], run_id, **kwargs)
+                reply = chat.complete(messages, [tool], run_id, **kwargs)
             payload, source = _declaration_from(reply, name="declare_scope")
+            sources = ()
+            if repository_source:
+                from .source_answers import split_source_scope
+                payload, sources = split_source_scope(payload)
             parts, write_intent, unsupported, about_assistant = scope_from_json(payload)
             break
         except (ValueError, ProviderError) as exc:
@@ -75,8 +96,17 @@ def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,
             if attempts >= limit or (isinstance(exc, ProviderError)
                                      and not getattr(exc, "retryable", True)):
                 raise
+            if repository_source and isinstance(exc, ValueError):
+                messages = [*messages[:3], {"role": "user", "content":
+                    "Your declaration was invalid: " + str(exc)[:200] +
+                    ". Call declare_scope again for the original REQUEST. "
+                    "Use consecutive flat fields kind_0, about_0, terms_0, entity_0, then "
+                    "kind_1, etc. kind_0=source requires a short about_0 phrase and "
+                    "terms_0 as a real JSON array of one to three queries; omit entity_0. "
+                    "Do not wrap JSON in a string or put quotes inside the topic phrase."}]
     result = (parts, write_intent, unsupported, about_assistant, {
-        "source": source, "attempts": attempts, "part_count": len(parts)})
+        "source": source, "attempts": attempts, "part_count": len(parts),
+        **({"source_requests": sources} if repository_source else {})})
     if cache is not None and not write_intent:
         cache.put(key, result)
     return result

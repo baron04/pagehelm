@@ -21,6 +21,8 @@ from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.execution.context import SessionContext
 from web_operation_agent.execution.product import AgentTurnExecutor
 from web_operation_agent.execution import turn
+from web_operation_agent.goal import executor as goal_executor
+from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.modeling.client import ChatModel,SpendMeter,load_env
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.state.identity import PrincipalContext
@@ -42,6 +44,9 @@ class Browser(_RemoteBrowser):
         if r.observation:
             r.observation.title='合成应用';r.observation.landmarks=['合成页面']
             r.observation.content='当前页面 '+self.url+'。业务记录只能从类型化接口读取。'
+            # This fixture serves rendered collection pages. A ready URL alone
+            # must not stand in for the goal executor's rendered-page verification.
+            r.observation.active_view='list'
         return r
 
 def main():
@@ -51,6 +56,7 @@ def main():
     ap.add_argument('--lane',default='1/1')
     ap.add_argument('--case',action='append',default=[])
     ap.add_argument('--options',type=Path)
+    ap.add_argument('--executor', choices=('agent', 'hybrid'), default='agent')
     args=ap.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     lane,lanes=map(int,args.lane.split('/'))
     if not 1 <= lane <= lanes <= 8:
@@ -69,7 +75,8 @@ def main():
         'runner_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         'authorship':'implementation-agent-authored development set, not independent holdout',
         'cases':len(fixture.CASES),'model':chat.model,'provider':chat.provider,
-        'scope':'synthetic data/source, transport-double browser','options':options},indent=2))
+        'scope':'synthetic data/source, transport-double browser','options':options,
+        'executor':args.executor},indent=2))
     with tempfile.TemporaryDirectory() as tmp:
         root=Path(tmp)
         for relative,text in fixture.SOURCE.items():
@@ -82,9 +89,13 @@ def main():
             now=int(time.time()*1000)
             principal=PrincipalContext(1,'yudao','1','synthetic','257','dev',now-1000,now+1800000,('yudao.read',))
             app=YudaoApplication('http://localhost',None,fixture.documents(),client=fixture.Client(fixture.VARIANTS.get(cid,'normal')),ui=UiSource(views={'bpm/processInstance/index':ListView(columns=('name',),endpoint='/bpm/process-instance/my-page')},records={'/crm/customer':'/crm/customer/detail/{id}'}),conventions=None)
-            exe=AgentTurnExecutor(channel=_Channel(page_url='http://localhost/index',principal=principal),chat=chat,application=bind_application(app),control=ReadOnlyControl(),config=yudao_turn_config(run_dir,timeout_s=180,source=source),run_id_factory=lambda _m:'dev-'+cid)
+            executor = GoalTurnExecutor if args.executor == 'hybrid' else AgentTurnExecutor
+            config = yudao_turn_config(run_dir, timeout_s=180, source=source)
+            extra = {'goal_port': app.goal_port, 'disabled_page_actions': config.disabled_actions,
+                     'repository_answers': True} if args.executor == 'hybrid' else {}
+            exe=executor(channel=_Channel(page_url='http://localhost/index',principal=principal),chat=chat,application=bind_application(app),control=ReadOnlyControl(),config=config,run_id_factory=lambda _m:'dev-'+cid, **extra)
             begin=time.monotonic()
-            with patch.object(turn,'RemoteBrowserClient',Browser),patch.object(SessionContext,'_now_line',lambda self:'CURRENT TIME: 2026-09-30 12:00 (Asia/Shanghai).'):
+            with patch.object(turn,'RemoteBrowserClient',Browser),patch.object(goal_executor,'RemoteBrowserClient',Browser),patch.object(SessionContext,'_now_line',lambda self:'CURRENT TIME: 2026-09-30 12:00 (Asia/Shanghai).'):
                 result=exe.execute({'message_id':cid,'text':prompt,'page_url':'http://localhost/index'})
             elapsed=time.monotonic()-begin
             audit=[json.loads(l) for l in (run_dir/'audit.jsonl').read_text().splitlines()]

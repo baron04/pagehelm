@@ -38,7 +38,7 @@ from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductCapacityError,
                                                   LiveProductServer)
-from web_operation_agent.execution.product import AgentTurnExecutor
+from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.modeling.client import ChatModel, SpendMeter
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.modeling.spend import DailyAllowance
@@ -199,11 +199,13 @@ class YudaoHost:
                              session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
 
         def runner_factory(channel):
-            executor = AgentTurnExecutor(
+            turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
+                                           source=self.source)
+            executor = GoalTurnExecutor(
                 channel=channel,
-                config=yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
-                                          source=self.source),
-                chat=chat, application=bound, control=ReadOnlyControl(),
+                config=turn_config, disabled_page_actions=turn_config.disabled_actions,
+                repository_answers=True,
+                chat=chat, application=bound, goal_port=app.goal_port, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
                     self.config.state_dir / "conversation-state.sqlite3", session_id))

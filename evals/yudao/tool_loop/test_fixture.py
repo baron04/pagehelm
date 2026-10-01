@@ -36,6 +36,8 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual("http://localhost/crm/contract", receipt.url_after)
         self.assertEqual(receipt.url_after, receipt.observation.url)
         self.assertEqual("ready", receipt.observation.render_state)
+        self.assertEqual("list", receipt.observation.active_view)
+        self.assertEqual("list", browser.execute("wait_for", {"ms": 500}).observation.active_view)
 
     def test_source_fixture_is_allowlisted_and_retains_cited_team_declaration(self):
         with tempfile.TemporaryDirectory() as tmp:

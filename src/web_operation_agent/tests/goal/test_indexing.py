@@ -9,6 +9,17 @@ from web_operation_agent.goal.resolve.indexing import index_from_schema
 
 
 class IndexFromSchemaTests(unittest.TestCase):
+    def test_all_choice_labels_survive_in_the_focused_declaration_vocabulary(self):
+        from web_operation_agent.goal.narrow import neighbourhood
+        from web_operation_agent.goal.data import Choice
+        choices = tuple(f"Flow {n}" for n in range(12))
+        schema = Schema(entities=(EntitySchema(key="movement", label="Movement", fields=(
+            FieldSchema("flow", "Flow", "choice", choices=tuple(
+                Choice(str(n), label) for n, label in enumerate(choices))),)),))
+        index = index_from_schema(schema)
+        self.assertEqual(choices, index.entity("movement").fields[0].choices)
+        self.assertIn("Flow 11", neighbourhood(index, ("movement",)).render())
+
     def test_large_index_is_kept_whole_or_rejected_explicitly(self):
         entities = tuple(IndexEntity(key=f"item-{n}", label=f"Item {n}") for n in range(300))
         pages = tuple(IndexPage(key=f"/item/{n}", label=f"Page {n}",

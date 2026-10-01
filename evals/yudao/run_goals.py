@@ -240,9 +240,9 @@ def run_attempt(task: dict, doc: dict, *, args, api_docs: dict, ui, env: dict,
         start_path=doc["entry_path"], turn_timeout_s=_TURN_TIMEOUT_S,
         today=date.fromisoformat(doc["reference_date"]), batch_id=f"{run_name}-{task['id']}",
         source=source, conventions=None if args.no_conventions else REFERENCE_CONVENTIONS)
-    if getattr(args, "executor", "goal") == "agent":
+    if getattr(args, "executor", "goal") != "goal":
         from dataclasses import replace
-        session = replace(session, executor_mode="agent")
+        session = replace(session, executor_mode=args.executor)
     error, summary = _bounded(session, deadline_s=args.attempt_deadline_s), {}
     if not error:
         summary = json.loads((run_dir / "records.json").read_text())
@@ -282,8 +282,8 @@ def main() -> int:
     parser.add_argument("--ui-source", type=Path)
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--source-release", default="")
-    parser.add_argument("--executor", choices=("goal", "agent"), default="goal",
-                        help="goal baseline or native-host generic agent loop")
+    parser.add_argument("--executor", choices=("goal", "agent", "hybrid"), default="goal",
+                        help="goal baseline, generic agent loop, or native staged business/source composition")
     parser.add_argument("--no-conventions", action="store_true",
                         help="run without the deployment's reviewed conventions (control arm)")
     parser.add_argument("--container", default="woa-yudao-mysql-1")
@@ -331,7 +331,7 @@ def main() -> int:
                           "reference_date": doc["reference_date"],
                           "model": env["AGENT_OPENAI_MODEL"]}, ensure_ascii=False))
         return 0
-    source = (repository_source(args.source_root, args.source_release) if args.executor == "agent"
+    source = (repository_source(args.source_root, args.source_release) if args.executor != "goal"
               else source_rules(args.source_root, args.source_release))
     run_name = f"{doc['suite_id']}-{args.output.name}"
     lane, lanes = (int(part) for part in args.lane.split("/"))

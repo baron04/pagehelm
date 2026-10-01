@@ -117,8 +117,8 @@ class YudaoSession:
     executor_mode: str = "goal"
 
     def __post_init__(self):
-        if self.executor_mode not in {"goal", "agent"}:
-            raise ValueError("executor_mode must be goal or agent")
+        if self.executor_mode not in {"goal", "agent", "hybrid"}:
+            raise ValueError("executor_mode must be goal, agent or hybrid")
 
 
 def run_session(session: YudaoSession) -> dict:
@@ -154,6 +154,13 @@ def run_session(session: YudaoSession) -> dict:
             executor = AgentTurnExecutor(
                 **common, config=yudao_turn_config(run_dir,
                     timeout_s=int(session.turn_timeout_s), source=session.source))
+        elif session.executor_mode == "hybrid":
+            turn_config = yudao_turn_config(run_dir,
+                timeout_s=int(session.turn_timeout_s), source=session.source)
+            executor = GoalTurnExecutor(
+                **common, config=turn_config, disabled_page_actions=turn_config.disabled_actions,
+                repository_answers=True,
+                goal_port=app.goal_port)
         else:
             executor = GoalTurnExecutor(
                 **common, config=AgentTurnConfig(
@@ -333,7 +340,7 @@ def main(argv=None) -> int:
                         help="run without the deployment's reviewed conventions")
     parser.add_argument("--model-env", type=Path, help="env file holding the model provider settings")
     parser.add_argument("--model", default=None)
-    parser.add_argument("--executor", choices=("goal", "agent"), default="goal")
+    parser.add_argument("--executor", choices=("goal", "agent", "hybrid"), default="goal")
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--start-path", default="/index")
     parser.add_argument("--run-dir", type=Path, default=None)
@@ -347,7 +354,7 @@ def main(argv=None) -> int:
         api_docs=read_api_docs(api_base), tasks=tuple(args.task),
         run_dir=args.run_dir or Path.cwd() / ".artifacts" / f"yudao-demo-{uuid.uuid4().hex[:8]}",
         api_base=api_base, ui=ui_source(args.ui_source, args.source_root),
-        source=(repository_source(args.source_root, args.source_release) if args.executor == "agent"
+        source=(repository_source(args.source_root, args.source_release) if args.executor != "goal"
                 else source_rules(args.source_root, args.source_release)), executor_mode=args.executor,
         conventions=None if args.no_conventions else REFERENCE_CONVENTIONS,
         model_env=model_env(args.model_env), model=args.model, start_path=args.start_path,

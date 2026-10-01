@@ -8,7 +8,8 @@ sums (3), tied extrema (1), lists (1), empty results (2), mixed requests (4), pa
 and refusal boundaries (4). API/menu metadata reuses synthetic adapter test schemas;
 records, documents, questions and expected checks are authored here.
 
-The evaluator passes only the question to the production `AgentTurnExecutor`, using
+The evaluator passes only the question to the production executor (`AgentTurnExecutor` by default, or the native
+`GoalTurnExecutor` composition with `--executor hybrid`), using
 `yudao_turn_config` and actor-bound typed tools. Expected checks stay in the evaluator.
 The browser is the existing product transport double; these timings are server turns,
 not UI end-to-end latency. Checks require all expected regex groups, exact page routes,
@@ -22,7 +23,7 @@ Paid execution is explicit:
 ```sh
 NO_PROXY='*' PYTHONPATH=src:examples/yudao/src:. \
 python -m evals.yudao.tool_loop.run --model-env .env \
-  --output .artifacts/tool-loop-dev --lane 1/2
+  --executor hybrid --output .artifacts/tool-loop-dev --lane 1/2
 ```
 
 Run the second lane with `--lane 2/2`. For comparisons, set `PYTHONPATH` to each archived
@@ -39,6 +40,12 @@ unknown charges. Fixture, metadata and runner digests bind a run. Raw output bel
 under ignored `.artifacts/`, never in Git.
 
 The previous sealed 63-case set remains separate. `evals.yudao.run_goals --executor goal`
-uses the goal baseline; `--executor agent` uses the native host's configuration and raw
-source lookup. The existing sealed taskset and judge are unchanged. Use a resettable local
+uses the goal baseline; `--executor agent` retains the generic loop for comparison; `--executor hybrid`
+uses the native host's staged business declarations and bounded raw source answers.
+The agent and hybrid modes use the deployment configuration and raw source lookup;
+the goal baseline retains compiled rules. The existing sealed taskset and judge are unchanged. Use a resettable local
 application and the sealed synthetic account, never production customer data.
+
+Latest recovery results and all paid investigation costs are recorded in
+[the recovery report](RECOVERY.zh-CN.md); earlier regression results remain in
+[the comparison report](RESULTS.zh-CN.md).
