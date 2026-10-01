@@ -171,8 +171,9 @@ class YudaoEntityReadPort:
         key = request.entity.reference
         where = self._condition(request.filters)
         try:
-            rows = self.data.rows(key, where, fields=tuple(f.reference for f in request.fields),
-                                  order=((ID, False),), limit=request.offset + request.limit)
+            rows = (self.data.rows(key, where, fields=tuple(f.reference for f in request.fields),
+                                   order=((ID, False),), limit=request.offset + request.limit)
+                    if request.fields else ())
             records = tuple(EntityRecord(
                 reference=row.id, display_id=row.id,
                 cells=tuple(self._cell(key, row, f) for f in request.fields),

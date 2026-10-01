@@ -15,6 +15,8 @@ from web_operation_agent.business.runtime import (
     BusinessToolPermissionError,
     BusinessToolRequestError,
 )
+from web_operation_agent.answer.evidence import TurnEvidence
+from web_operation_agent.answer.conclusion import Aggregate
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.state.ledger import SessionLedger
@@ -44,6 +46,17 @@ class _FakeContactsExecutor:
 
 
 class ContactsEntityReadContractTests(unittest.TestCase):
+    def test_count_only_exact_evidence_does_not_depend_on_returned_page(self):
+        entity = self.tools.execute("discover_entities", {"query": "contacts"}).content["candidates"][0]["entity_id"]
+        for offset in (0, 1, 20):
+            result = self.tools.execute("query_entity_records", {
+                "entity_id": entity, "field_ids": [], "offset": offset, "limit": 1})
+            evidence = TurnEvidence()
+            evidence.capture(result.evidence, namespace="call1")
+            aggregate = Aggregate("call1-count#1").verify(evidence)
+            self.assertEqual("2", aggregate["value"])
+            self.assertTrue(aggregate["covers_whole_scope"])
+
     def setUp(self):
         self.tools = EntityReadTools(
             _ContactsEntityReadPort(_FakeContactsExecutor()),

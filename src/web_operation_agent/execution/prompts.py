@@ -220,8 +220,10 @@ SOURCE_TOOL = {"type": "function", "function": {
                    "Returns bounded cited lines, then a fresh page. Source states release "
                    "rules, not current records or proof of a saved write.",
     "parameters": {"type": "object", "properties": {
-        "query": {"type": "string", "description": "Concrete question in English, using "
-                  "words the code would use: record, field, status, action or screen names."}},
+        "query": {"type": "string", "description": "Concrete search terms in the language "
+                  "of the source or documentation: record, field, status, action or screen "
+                  "names. Preserve the user's terms; this lexical search does not translate. "
+                  "Use code identifiers when known."}},
         "required": ["query"]}}}
 
 SOURCE_HISTORY_TOOL = {"type": "function", "function": {

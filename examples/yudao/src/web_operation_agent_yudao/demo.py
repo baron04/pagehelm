@@ -26,14 +26,17 @@ from urllib.parse import urlsplit
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
-from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecution
+from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.modeling.client import ChatModel, SpendMeter, load_env
+from web_operation_agent.modeling.egress import ProviderEgressPolicy
 
 from .application import YudaoApplication
 from .conventions import REFERENCE_CONVENTIONS
 from .client import YudaoAccount
 from .ui_source import UiSource
+from .repository import repository_source
+from .turn import yudao_turn_config
 
 _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL",
                    "AGENT_PROVIDER")
@@ -111,6 +114,11 @@ class YudaoSession:
     #: The organisation's conventions file; None runs without them.
     conventions: Path | None = REFERENCE_CONVENTIONS
     batch_id: str = ""
+    executor_mode: str = "goal"
+
+    def __post_init__(self):
+        if self.executor_mode not in {"goal", "agent"}:
+            raise ValueError("executor_mode must be goal or agent")
 
 
 def run_session(session: YudaoSession) -> dict:
@@ -119,7 +127,8 @@ def run_session(session: YudaoSession) -> dict:
     api_base = (session.api_base or session.origin).rstrip("/")
     app = YudaoApplication(session.origin, session.account, session.api_docs,
                            api_base_url=api_base, ui=session.ui, today=session.today,
-                           source=session.source, conventions=session.conventions)
+                           source=session.source if session.executor_mode == "goal" else None,
+                           conventions=session.conventions)
     bound = bind_application(app)
     if not app.health()["passed"]:
         raise RuntimeError("yudao is not reachable under this account")
@@ -131,18 +140,27 @@ def run_session(session: YudaoSession) -> dict:
                                         delegation_id="yudao-" + uuid.uuid4().hex)
     meter = SpendMeter(batch_id=session.batch_id or f"yudao-demo-{run_dir.name}")
     chat = ChatModel(meter, env=dict(session.model_env), model=session.model,
-                     max_completion_tokens=1024, timeout=int(session.turn_timeout_s))
+                     max_completion_tokens=1024, timeout=int(session.turn_timeout_s),
+                     egress_policy=ProviderEgressPolicy(
+                         session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
     holder: dict = {}
 
     def runner_factory(channel):
-        executor = GoalTurnExecutor(
+        common = dict(
             channel=channel,
-            config=AgentTurnConfig(
-                supported_scope="Read this account's available application records and open their pages.",
-                ledger_path=run_dir / "audit.jsonl", wall_budget_s=int(session.turn_timeout_s),
-                transport_timeout_s=min(30, session.turn_timeout_s), require_identity=True),
-            chat=chat, application=bound, goal_port=app.goal_port, control=ReadOnlyControl(),
+            chat=chat, application=bound, control=ReadOnlyControl(),
             run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16])
+        if session.executor_mode == "agent":
+            executor = AgentTurnExecutor(
+                **common, config=yudao_turn_config(run_dir,
+                    timeout_s=int(session.turn_timeout_s), source=session.source))
+        else:
+            executor = GoalTurnExecutor(
+                **common, config=AgentTurnConfig(
+                    supported_scope="Read this account's available application records and open their pages.",
+                    ledger_path=run_dir / "audit.jsonl", wall_budget_s=int(session.turn_timeout_s),
+                    transport_timeout_s=min(30, session.turn_timeout_s), require_identity=True),
+                goal_port=app.goal_port)
         holder["conversation"] = LiveConversationRunner(channel, executor=executor)
         return holder["conversation"]
 
@@ -315,6 +333,7 @@ def main(argv=None) -> int:
                         help="run without the deployment's reviewed conventions")
     parser.add_argument("--model-env", type=Path, help="env file holding the model provider settings")
     parser.add_argument("--model", default=None)
+    parser.add_argument("--executor", choices=("goal", "agent"), default="goal")
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--start-path", default="/index")
     parser.add_argument("--run-dir", type=Path, default=None)
@@ -328,7 +347,8 @@ def main(argv=None) -> int:
         api_docs=read_api_docs(api_base), tasks=tuple(args.task),
         run_dir=args.run_dir or Path.cwd() / ".artifacts" / f"yudao-demo-{uuid.uuid4().hex[:8]}",
         api_base=api_base, ui=ui_source(args.ui_source, args.source_root),
-        source=source_rules(args.source_root, args.source_release),
+        source=(repository_source(args.source_root, args.source_release) if args.executor == "agent"
+                else source_rules(args.source_root, args.source_release)), executor_mode=args.executor,
         conventions=None if args.no_conventions else REFERENCE_CONVENTIONS,
         model_env=model_env(args.model_env), model=args.model, start_path=args.start_path,
         turn_timeout_s=args.turn_timeout_s, headed=args.headed))

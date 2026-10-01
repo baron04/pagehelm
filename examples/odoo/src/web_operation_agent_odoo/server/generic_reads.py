@@ -302,12 +302,12 @@ class OdooEntityReadPort:
             [field.reference for field in request.fields]
             + [field.unit_field_reference for field in request.fields
                if field.unit_field_reference]))
-        rows = self._client.call(model, "search_read", [domain], {
+        rows = (self._client.call(model, "search_read", [domain], {
             "fields": read_fields,
             "limit": request.limit,
             "offset": request.offset,
             "order": "id asc",
-        })
+        }) if read_fields else [])
         if not isinstance(rows, list) or len(rows) > request.limit:
             raise BusinessToolContractError("Odoo returned an invalid entity record page")
         records = []

@@ -23,7 +23,7 @@ def repository_source(root: Path | None, release: str) -> SourceCapability:
     policy = json.loads(files("web_operation_agent_yudao").joinpath(
         "policies", "repository.json").read_text(encoding="utf-8"))
     policy["release"] = release
-    tree = SourceTree(policy, root)
+    tree = SourceTree(policy, root.resolve())
     if not tree.available():
         raise ValueError("configured repository source is unavailable")
     lookup = RepositorySourceLookup(tree, line_limit=24, char_limit=1800, overlap=4)

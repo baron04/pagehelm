@@ -21,6 +21,31 @@ from .test_goal import CONTRACTS, DOCS, MENUS, _Client, _prop
 
 
 class GenericReadTests(unittest.TestCase):
+    def test_count_only_does_not_fetch_rows_or_linked_names(self):
+        entity = self.entity("合同")
+        with patch.object(self.data, "rows", side_effect=AssertionError("unnecessary rows")):
+            result = self.tools.execute("query_entity_records", {
+                "entity_id": entity, "field_ids": []})
+        self.assertEqual([], result.content["records"])
+        count = next(e for e in result.evidence if e.evidence_id == "count#1")
+        self.assertEqual("2", count.value)
+        self.assertEqual(("query#1",), count.inputs)
+        self.assertTrue(count.covers_whole_scope)
+
+    def test_count_only_preserves_filters_and_certifies_zero_matches(self):
+        entity = self.entity("合同")
+        fields = self.fields(entity)
+        for label, value, expected in (("审批状态", "20", "1"),
+                                       ("合同名称", "not-in-this-fixture", "0")):
+            with self.subTest(label=label):
+                result = self.tools.execute("query_entity_records", {
+                    "entity_id": entity, "field_ids": [], "filters": [{
+                        "field_id": fields[label]["field_id"], "operator": "=", "value": value}]})
+                self.assertEqual(expected, result.evidence[-1].value)
+                self.assertEqual("count()", result.evidence[-1].operation)
+                self.assertTrue(result.evidence[-1].covers_whole_scope)
+
+
     def setUp(self):
         self.client = _Client()
         self.docs = deepcopy(DOCS)

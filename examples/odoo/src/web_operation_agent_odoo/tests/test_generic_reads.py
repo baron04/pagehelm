@@ -119,6 +119,16 @@ class _FakeClient:
 
 
 class GenericDiscoveryTests(unittest.TestCase):
+    def test_count_only_does_not_issue_an_empty_field_read(self):
+        client = _FakeClient()
+        tools = EntityReadTools(OdooEntityReadPort(client), application_id="odoo")
+        entity = tools.execute("discover_entities", {"query": "Transfers"}).content["candidates"][0]["entity_id"]
+        result = tools.execute("query_entity_records", {
+            "entity_id": entity, "field_ids": []})
+        self.assertEqual([], result.content["records"])
+        self.assertEqual("3", result.evidence[-1].value)
+        self.assertFalse(any(call[1] == "search_read" for call in client.calls))
+
     def test_goal_candidates_combine_odoo_entity_field_and_page_metadata(self):
         client = _FakeClient()
         entity_port = OdooEntityReadPort(client)

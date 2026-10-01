@@ -1,5 +1,6 @@
 """Raw code lookup policy and native production wiring, with synthetic source only."""
 from pathlib import Path
+import os
 import tempfile
 import unittest
 
@@ -7,6 +8,15 @@ from web_operation_agent_yudao.repository import repository_source
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_cli_relative_source_root_is_resolved_before_allowlist_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "ui/docs/owner.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("维护团队：合成团队\n")
+            source = repository_source(Path(os.path.relpath(root)), "synthetic-1")
+            self.assertTrue(source.lookup.search("维护团队"))
+
     def test_allowlist_covers_code_and_documentation_without_a_compiled_map(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

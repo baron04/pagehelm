@@ -123,10 +123,10 @@ QUERY_ENTITY_RECORDS_SCHEMA = {
             "properties": {
                 "entity_id": {"type": "string", "pattern": r"^entity_[0-9a-f]{32}$"},
                 "field_ids": {
-                    "type": "array", "minItems": 1, "maxItems": _MAX_QUERY_FIELDS,
+                    "type": "array", "minItems": 0, "maxItems": _MAX_QUERY_FIELDS,
                     "uniqueItems": True,
                     "items": {"type": "string", "pattern": r"^field_[0-9a-f]{32}$"},
-                    "description": "Fields to return, from describe_entity.",
+                    "description": "Fields to return, from describe_entity. Use [] for a count-only query; its exact count is returned as ready aggregate evidence.",
                 },
                 "filters": {
                     "type": "array", "maxItems": _MAX_FILTERS,
@@ -833,7 +833,7 @@ class EntityReadTools:
         fields = self._fields(entity_id, entity, context)
         by_id = dict(fields)
         raw_ids = args.get("field_ids")
-        if (not isinstance(raw_ids, list) or not 1 <= len(raw_ids) <= _MAX_QUERY_FIELDS
+        if (not isinstance(raw_ids, list) or not 0 <= len(raw_ids) <= _MAX_QUERY_FIELDS
                 or len(raw_ids) != len(set(raw_ids))
                 or any(not isinstance(item, str) or not _FIELD_ID.fullmatch(item)
                        or item not in by_id for item in raw_ids)):
@@ -998,6 +998,13 @@ class EntityReadTools:
             records.append({"record_id": record.display_id, "values": values,
                             **({"ui_path": record.route} if record.route else {})})
             answer_rows.append((record.display_id, *cells))
+        # The port already certified this count for the exact executed conditions.
+        # Keep its evidence in the same batch as the query. No model arithmetic,
+        # inferred user intent or additional application read is needed.
+        evidence.append(ComputationEvidence(
+            evidence_id="count#1", origin=origin, operation="count()",
+            inputs=("query#1",), value=str(page.matched_count), value_type="count",
+            covers_whole_scope=True))
         truncated = offset > 0 or len(page.records) < page.matched_count
         completeness = {
             "source_total_known": True,

@@ -111,7 +111,8 @@ COMPUTE_TOOL = {"type": "function", "function": {
 
 ANSWER_INSTRUCTIONS = """
 When a tool returns ANSWER EVIDENCE, use its current server-issued references to answer.
-Call compute for filtering, counts, totals or extrema; it is a server calculation and does
+Use a returned, fully scoped aggregate evidence reference directly when it supplies the
+requested count or total. Otherwise call compute for filtering, counts, totals or extrema; it is a server calculation and does
 not require another page observation. To list records cite a query or selection with kind
 selection and its actual field names; after a compute filter, cite the selection it returned,
 not its records' field values one by one, so the answer shows the filter it stands on. To

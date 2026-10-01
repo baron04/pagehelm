@@ -19,7 +19,13 @@ def yudao_turn_config(run_dir: Path, *, timeout_s: int,
             "deployed implementation, not current records or execution authority. "
             "Do not substitute business operation logs for Git history, or record "
             "owners for declared engineering ownership. No record mutations or "
-            "form submission are enabled."),
+            "form submission are enabled. For counts, including filtered counts, query "
+            "with field_ids=[] and bind filters to discovered fields; cite its ready "
+            "count evidence without fetching record values or computing again. "
+            "For source search, start with the user's own terms and language; this "
+            "lexical index does not translate queries. Use identifiers when known. "
+            "For a pure page-opening request, find_page_entries returns current "
+            "application paths; keep those paths relative rather than adding an origin."),
         ledger_path=run_dir / "audit.jsonl", wall_budget_s=timeout_s,
         transport_timeout_s=30, require_identity=True, source=source,
         disabled_actions=frozenset({"click", "fill", "select", "submit", "back", "apply_facet"}),

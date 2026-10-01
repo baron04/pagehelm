@@ -434,14 +434,22 @@ API or navigation authority. It cannot supply current data, missing API metadata
 history absent from the deployment. After a typed API read, the same agent receives a
 fresh page observation before another decision. Fixed currency units use the shared read
 contract, also tested with the structurally different Contacts REST application.
-This path has not been qualified against the previous real-model goal set. Source keyword
-recall, latency and tool-call count remain limitations; no accuracy-equivalence claim is made.
-Two 2026-10-01 synthetic five-question pilots used `qwen3.8-flash` on provider
-`ws-ld6klhbp5exxks76`: 41 calls, 301,034 input and 6,602 output tokens, metered CNY 0.0866
-from provider usage and registered rates. Both answered source, count and mixed questions
-and refused unavailable Git history. Calls fell from 21 to 20, while per-case times ranged
-from 8.66–24.36 to 9.57–23.85 seconds; this shows no consistent speedup. The browser was
-scripted and all data/source synthetic, so these are neither UI latency nor holdout accuracy.
+Generic counts accept `field_ids=[]` and return a ready aggregate bound to the executed
+query. Yudao and Odoo skip row reads for this request; filters, actor identity and exact
+count validation remain in force. A certified count does not prove that the model chose
+the scope the user meant. Raw source queries retain the language of source/documentation
+rather than requiring English.
+A 2026-10-01 full replay with `qwen3.8-flash` kept the prior 63-case sealed set and
+judge unchanged. The goal baseline scored 59/63; the refactored loop scored 23/63, and
+count/language fixes scored 22/63. Median attempt time was 18.79 / 32.40 / 27.45 seconds;
+the final loop's mean stayed at 36.85 seconds and P95 reached 95.60 seconds. Some failures
+come from missing count labels and internal rather than visible source citations, but real
+execution and scope failures also remain. This is not a successful qualification.
+A separate 40-case, implementation-agent-authored synthetic development set scored 30/40
+before and 37/40 after; median server-turn time was 19.05 / 13.58 seconds and calls 214 / 181.
+It uses a transport-double browser and is not independent holdout or UI latency evidence.
+An automatic-navigation variant was rejected after its live replay worsened the tail;
+its activation and core changes were removed. See the [full comparison and accounting](evals/yudao/tool_loop/RESULTS.zh-CN.md).
 The older goal demo/evaluation path remains available for comparison. Native-host writes,
 form entry and clicks (including tab selection) remain disabled.
 Assistant-requested Yudao page changes use full document navigation, letting the application's

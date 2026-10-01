@@ -34,6 +34,7 @@ from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
 from web_operation_agent_yudao.demo import (YudaoSession, model_env, read_api_docs, run_session,
                                             source_rules, ui_source, verify_browser_ready)
 from web_operation_agent_yudao.goal import YudaoGoalData
+from web_operation_agent_yudao.repository import repository_source
 
 ROOT = Path(__file__).resolve().parents[2]
 JUDGE = ROOT / "evals" / "odoo" / "goals" / "judge.py"
@@ -239,6 +240,9 @@ def run_attempt(task: dict, doc: dict, *, args, api_docs: dict, ui, env: dict,
         start_path=doc["entry_path"], turn_timeout_s=_TURN_TIMEOUT_S,
         today=date.fromisoformat(doc["reference_date"]), batch_id=f"{run_name}-{task['id']}",
         source=source, conventions=None if args.no_conventions else REFERENCE_CONVENTIONS)
+    if getattr(args, "executor", "goal") == "agent":
+        from dataclasses import replace
+        session = replace(session, executor_mode="agent")
     error, summary = _bounded(session, deadline_s=args.attempt_deadline_s), {}
     if not error:
         summary = json.loads((run_dir / "records.json").read_text())
@@ -278,6 +282,8 @@ def main() -> int:
     parser.add_argument("--ui-source", type=Path)
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--source-release", default="")
+    parser.add_argument("--executor", choices=("goal", "agent"), default="goal",
+                        help="goal baseline or native-host generic agent loop")
     parser.add_argument("--no-conventions", action="store_true",
                         help="run without the deployment's reviewed conventions (control arm)")
     parser.add_argument("--container", default="woa-yudao-mysql-1")
@@ -325,7 +331,8 @@ def main() -> int:
                           "reference_date": doc["reference_date"],
                           "model": env["AGENT_OPENAI_MODEL"]}, ensure_ascii=False))
         return 0
-    source = source_rules(args.source_root, args.source_release)
+    source = (repository_source(args.source_root, args.source_release) if args.executor == "agent"
+              else source_rules(args.source_root, args.source_release))
     run_name = f"{doc['suite_id']}-{args.output.name}"
     lane, lanes = (int(part) for part in args.lane.split("/"))
     (args.output / "attempts").mkdir(parents=True, exist_ok=True)

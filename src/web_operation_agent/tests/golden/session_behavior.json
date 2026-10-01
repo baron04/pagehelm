@@ -6534,8 +6534,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 15575,
-          "input_digest": "9b8897a90e5d1c3c86da19e24dbac3251320066db54bd29f3258fc6972226197",
+          "input_bytes": 15683,
+          "input_digest": "27721faafc237e9efc72e96b952402db91babd1693ad13360cdfff9eea7b3621",
           "message_count": 2,
           "roles": {
             "system": 1,
@@ -6626,8 +6626,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 19113,
-          "input_digest": "a6d5ec70aa12817f6a8aed4f7db792650cb0aa9f7f169898f7a939943c5a7970",
+          "input_bytes": 19221,
+          "input_digest": "92d9c0629dee49b2c3f8da10b6fa48edb0cd2dd9331d487f5365b896f157a215",
           "message_count": 4,
           "roles": {
             "assistant": 1,
@@ -10948,7 +10948,7 @@
           "parameters": {
             "properties": {
               "query": {
-                "description": "Concrete question in English, using words the code would use: record, field, status, action or screen names.",
+                "description": "Concrete search terms in the language of the source or documentation: record, field, status, action or screen names. Preserve the user's terms; this lexical search does not translate. Use code identifiers when known.",
                 "type": "string"
               }
             },
