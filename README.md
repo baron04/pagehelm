@@ -419,6 +419,9 @@ resolves a declaration itself. Odoo ships as a separate
 [`testapps/`](testapps/contacts/README.md) is internal browser/protocol test apparatus, not a
 second public reference. The experimental [Yudao adapter and resettable deployment](examples/yudao/deploy/README.md)
 provide another goal-data implementation; they are not a production readiness claim.
+Assistant-requested Yudao page changes use full document navigation, letting the application's
+Vue Router initialize its own browser history. Manual menu changes retain the application's
+normal SPA navigation; assistant page changes incur a full page load.
 Yudao keeps failed detail reads as failures, so incomplete line data cannot become a
 zero count or total. Explicit yuan/cents units from its API or line columns are retained:
 cents are normalized to yuan for facts, comparisons and totals, while a field with no

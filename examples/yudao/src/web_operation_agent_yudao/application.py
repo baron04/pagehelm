@@ -137,7 +137,10 @@ class YudaoApplication:
             goal_scopes=YudaoIdentityPort.required_scopes)
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION, application_id=APPLICATION_ID,
-            display_name="芋道管理系统", origin=self.origin, navigation_mode="spa",
+            # Vue Router owns its history entry's current/back/position fields. The
+            # generic SPA goto cannot manufacture that state: navigate a document and
+            # let the application initialize its router on the destination instead.
+            display_name="芋道管理系统", origin=self.origin, navigation_mode="document",
             page_controller_module=self.origin + PAGE_CONTROLLER_PATH,
             catalog_sha256=self.business_tools.catalog_sha256)
 

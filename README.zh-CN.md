@@ -218,7 +218,9 @@ Web Operation Agent 是一个 alpha 阶段的框架，用于在第一方 Web 应
 Odoo 作为独立的 `web-operation-agent-odoo` distribution 发布。
 [`testapps/`](testapps/contacts/README.md) 下的合成 Contacts 应用只用于内部浏览器与协议测试，
 不是第二套公开参考实现。[实验性芋道适配器与可重置部署](examples/yudao/deploy/README.md)
-提供另一套目标数据实现，不代表已具备生产上线条件。芋道明细读取失败会保留为失败，不会把不完整
+提供另一套目标数据实现，不代表已具备生产上线条件。助手打开芋道页面采用整页导航，让应用的 Vue Router
+自行初始化浏览器历史；人工菜单切换仍使用应用原有的 SPA 导航，助手跳转会产生整页加载。
+芋道明细读取失败会保留为失败，不会把不完整
 明细算成零数量或零合计。API 或明细列明确声明的元/分单位会保留；以分计价的值在事实、条件比较
 与合计中统一换算为元，未声明币种的字段不补造币种。
 

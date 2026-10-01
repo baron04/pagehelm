@@ -61,6 +61,17 @@ class NativeHostTests(unittest.TestCase):
         self.assertEqual(host.server.session_count, 1)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_bootstrap_and_renewal_leave_navigation_to_the_application_document(self):
+        host = self.host()
+        first = host.bootstrap("synthetic-a", "1", "tab-a")
+        renewed = host.bootstrap("synthetic-a-new", "1", "tab-a")
+        # A synthetic popstate with the Runtime's own state discards Vue Router's
+        # current path; its next ordinary push then falls back to origin + undefined.
+        for response in (first, renewed):
+            self.assertEqual(response["config"]["navigationMode"], "document")
+        self.assertEqual(host._sessions[("1", "1")].session.navigation_mode, "document")
+        self.chat.return_value.complete.assert_not_called()
+
     def test_actors_and_tenants_get_separate_sessions_and_tokens_never_reach_disk(self):
         host = self.host()
         responses = [host.bootstrap(token, tenant, "tab") for token, tenant in (

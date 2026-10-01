@@ -93,6 +93,13 @@ python3 seed.py
 
 ## Known application behaviour
 
+Assistant-requested page changes use document navigation so Vue Router initializes and owns
+its browser-history state. The generic SPA tool's synthetic state omits Vue Router's
+`current` field: after that navigation, an ordinary menu change can try to navigate to
+the origin with `undefined` appended. This was reproduced on the public site. Manual menu
+changes still use the application's own SPA router; opening a page through the assistant
+incurs a full page load.
+
 - CRM list endpoints apply record permissions only for the `sceneType` they are given (1 owned, 2 involved, 3 subordinates'). Without it a non-admin account reads every record: `evaluator` sees 15 contracts without `sceneType` and 2 with `sceneType=1`. The UI always sends it.
 - springdoc names schemas by simple class name, so same-named nested classes overwrite each other: the published line-item schema of ERP orders is a MES class. Line-item shapes must come from the source.
 - ERP purchase receipts and sale shipments fail with a server error unless `otherPrice` is sent; the UI always sends 0.
