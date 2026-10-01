@@ -274,7 +274,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 knowledge_router, ApplicationKnowledgePort):
             raise TypeError("knowledge_router must implement ApplicationKnowledgePort or be None")
         source_routes_enabled = bool(
-            runtime_source or source_affordance_mode == "auto" or source_contract)
+            (runtime_source and source_map is not None)
+            or source_affordance_mode == "auto" or source_contract)
         if application_routes is None and (
                 source_routes_enabled or knowledge_router is not None or allow_application_entry
                 or application_forms is not None):
@@ -308,7 +309,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         # the treatment arm an extra action vocabulary.
         self.source_affordance_mode = source_affordance_mode
         self.scope_first_policy = bool(scope_first_policy)
-        self._runtime_retriever = SourceRetriever(source_map) if runtime_source else None
+        self._runtime_retriever = (SourceRetriever(source_map)
+                                   if runtime_source and source_map is not None else None)
         self._source_view_routes: dict[tuple[str, str], set[str]] = {}
         self._source_affordances: dict[str, SourceAffordance] = {}
         self.knowledge_router = knowledge_router

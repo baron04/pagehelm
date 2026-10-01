@@ -400,6 +400,51 @@ class DeploymentSourceCapabilityReachesTheProductTurn(unittest.TestCase):
         self.assertNotIn("open_source_route", tools)
         self.assertIs(recorded["source"], capability)
 
+    def test_repository_lookup_is_available_without_compiled_navigation(self):
+        from web_operation_agent.composition.sources import SourceCapability
+        from web_operation_agent.planning.repository_source import RepositorySourceLookup
+        from web_operation_agent.planning.sourcetree import SourceTree
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "policy.py").write_text("batch_limit = 125\n")
+            lookup = RepositorySourceLookup(SourceTree({
+                "repository_id": "fixture/plain", "release": "fixture-1",
+                "allow_globs": ["*.py"], "deny_globs": []}, root))
+            capability = SourceCapability(runtime_source=True, lookup=lookup)
+            recorded, tools = self._turn(capability)
+        self.assertIn("lookup_source", tools)
+        self.assertIn("lookup_source_history", tools)
+        self.assertNotIn("open_source_route", tools)
+        self.assertNotIn("select_source_candidate", tools)
+        self.assertIs(recorded["source"], capability)
+        self.assertIsNone(capability.source_map)
+
+    def test_raw_lookup_still_cannot_arm_a_compiled_contract_or_affordance(self):
+        from web_operation_agent.composition.sources import SourceCapability
+
+        class Lookup:
+            release = "fixture-1"
+
+            def search(self, query, *, limit=8, route=None):
+                return ()
+
+        for settings in ({"source_contract": True}, {"source_affordance_mode": "auto"}):
+            with self.subTest(settings=settings), self.assertRaisesRegex(ValueError, "SourceMap"):
+                SourceCapability(runtime_source=True, lookup=Lookup(), **settings)
+
+    def test_raw_lookup_requires_a_release(self):
+        from web_operation_agent.composition.sources import SourceCapability
+
+        class Lookup:
+            release = ""
+
+            def search(self, query, *, limit=8, route=None):
+                return ()
+
+        with self.assertRaisesRegex(ValueError, "declare its release"):
+            SourceCapability(runtime_source=True, lookup=Lookup())
+
     def test_the_turn_cannot_be_handed_source_settings_any_other_way(self):
         """There is no second door: the executor takes no source keyword of its own.
 

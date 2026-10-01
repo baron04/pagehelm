@@ -73,17 +73,17 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
                            page_epoch=obs.epoch, source_digest="",
                            evidence=[], licensed_view_routes=[], **bundle.stats)
         return bundle
-    if session._runtime_retriever is None:
-        raise ValueError("runtime source lookup has no retriever")
     started = time.monotonic()
     lookup = session.source.fact_lookup()
     hits = (lookup.search(query, limit=10,
                           route=lambda identity: _source_route_path(session, identity))
             if lookup is not None else ())
     known_fact_keys = set(session._source_evidence_ids)
-    bundle = session._runtime_retriever.retrieve(
+    bundle = (session._runtime_retriever.retrieve(
         session.task.task_ref, query,
         webapps=session.served_webapps, max_requests=12, max_menu=4, max_forms=4, max_lines=70)
+        if session._runtime_retriever is not None
+        else EvidenceBundle(task_ref=session.task.task_ref))
     if hits:
         bundle.lines[:0] = [_source_line(session, hit, query) for hit in hits]
         for hit in hits:
@@ -94,7 +94,9 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
                     "lines": len(bundle.lines), "citations": len(bundle.refs),
                     "latency_ms": round((time.monotonic() - started) * 1000, 1)}
     cited = bundle.citation_keys
-    for relation in session.source_map.by_kind("request_handler"):
+    relations = (session.source_map.by_kind("request_handler")
+                 if session.source_map is not None else ())
+    for relation in relations:
         if (relation.attrs.get("event_type") != "view-only"
                 or relation.attrs.get("route_requires_context")):
             continue
@@ -104,7 +106,7 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
             session._source_view_routes.setdefault(
                 (webapp.lower(), request.rstrip("/").lower()), set()).update(keys)
     session.ledger.append("runtime_source_retrieved", query=query, page_url=obs.url,
-                       page_epoch=obs.epoch, source_digest=session.source_map.content_digest,
+                       page_epoch=obs.epoch, source_digest=session.source.content_digest,
                        evidence=list(bundle.lines),
                        licensed_view_routes=[f"{a}/{r}" for a, r in session._source_view_routes],
                        **bundle.stats)

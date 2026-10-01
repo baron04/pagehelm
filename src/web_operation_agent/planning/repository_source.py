@@ -1,8 +1,7 @@
 """Deterministic, language-neutral retrieval over an allowlisted source tree.
 
-Framework compilers remain the high-precision path for facts they understand.  This module
-is the recall path: it indexes bounded line blocks from common source and configuration
-formats without interpreting application-specific syntax.  Every returned block is cited
+This module indexes bounded line blocks from common source and configuration formats
+without requiring a compiler or interpreting application-specific syntax. Every block is cited
 through :class:`SourceTree`, so raw retrieval has the same release, line and byte-hash
 properties as compiled relations.
 """
@@ -19,7 +18,7 @@ from ..schemas import EvidenceRef
 
 
 SOURCE_SUFFIXES = frozenset({
-    ".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    ".py", ".pyi", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".vue", ".java",
     ".xml", ".html", ".htm", ".yaml", ".yml", ".sql", ".md", ".markdown",
     ".toml", ".ini", ".cfg", ".conf", ".json", ".json5", ".properties", ".csv",
 })

@@ -48,8 +48,7 @@ def _source_bases(session, args: object) -> tuple[object, tuple[str, ...]]:
             raise BusinessToolRequestError(
                 "source_basis must cite source evidence from this turn") from None
         if (not isinstance(evidence, SourceEvidence)
-                or session.source_map is None
-                or evidence.release != session.source_map.release
+                or evidence.release != session.source.release
                 or (basis["support"] not in evidence.excerpt
                     and basis["support"] not in evidence.summary)):
             raise BusinessToolRequestError(

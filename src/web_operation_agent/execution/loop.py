@@ -25,7 +25,7 @@ from .knowledge_tools import ask_user_tool, lookup_source_history_tool, lookup_s
 from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
                       CAPABILITY_SYSTEM, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
-                      FORM_SYSTEM, REACT_SOURCE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM,
+                      FORM_SYSTEM, REACT_SOURCE_SYSTEM, SOURCE_ROUTE_SYSTEM, SCOPE_FIRST_SYSTEM, SKILL_SYSTEM,
                       SKILL_FIRST_SYSTEM, SOURCE_AFFORDANCE_SYSTEM, TARGET_SYSTEM,
                       UNMATCHED_SKILL_SYSTEM,
                       _assistant_call, _tool_result, _trim)
@@ -163,6 +163,8 @@ def run_loop(session) -> RunResult:
         system += "\n" + page_answer.SYSTEM
     if session.runtime_source:
         system += "\n" + REACT_SOURCE_SYSTEM
+        if session.source_map is not None:
+            system += "\n" + SOURCE_ROUTE_SYSTEM
     if session.source_affordance_mode in ("auto", "empty"):
         system += "\n" + SOURCE_AFFORDANCE_SYSTEM
     if session.knowledge_router is not None:

@@ -68,8 +68,10 @@ class ToolSurface:
         if (session.business_tools is not None
                 or session.evidence.has_application_evidence()):
             tools += [answer_protocol.COMPUTE_TOOL]
-        tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL, SOURCE_NAV_TOOL] \
-            if session.runtime_source else []
+        if session.runtime_source:
+            tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL]
+            if session.source_map is not None:
+                tools += [SOURCE_NAV_TOOL]
         if session.source_affordance_mode in ("auto", "empty"):
             tools += [SOURCE_CANDIDATE_TOOL]
         if session.knowledge_router is not None:

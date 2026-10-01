@@ -44,6 +44,23 @@ def _write(root: Path, files: dict[str, str] = FILES) -> None:
 
 
 class LanguageNeutralRepositoryLookupTests(unittest.TestCase):
+    def test_component_and_server_source_need_no_framework_compiler(self):
+        files = {
+            "src/CustomerDetails.vue": '<el-tab-pane label="回款" />\n',
+            "src/ProjectService.java": 'throw new IllegalStateException("项目已归档");\n',
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, files)
+            tree = _tree(root)
+            lookup = RepositorySourceLookup(tree)
+            for query, path in (("客户 回款", "src/CustomerDetails.vue"),
+                                ("项目已归档", "src/ProjectService.java")):
+                with self.subTest(path=path):
+                    hit = lookup.search(query, limit=1)[0]
+                    self.assertEqual(path, hit.evidence.path)
+                    self.assertTrue(tree.verify(hit.evidence))
+
     def test_seven_source_formats_are_ranked_and_cited(self):
         queries = {
             "invoice approval denied": "src/access.py",

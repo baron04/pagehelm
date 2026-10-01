@@ -1,9 +1,8 @@
 """Source-backed knowledge a deployment may arm sessions with, and how it is produced.
 
-A compiler runs offline, once per release, against a version-bound source tree; a session
-is only ever handed the ``SourceMap`` it produced. ``SourceCapability`` keeps the four
-coupled session settings in the one value their shared owner -- this deployment's compiled
-map -- decides.
+A deployment can provide a cited repository lookup directly. Compiled maps remain optional
+for contracts and source-derived navigation; ordinary source questions require neither.
+``SourceCapability`` validates the release and the settings of that one knowledge surface.
 """
 from __future__ import annotations
 
@@ -22,9 +21,9 @@ class SourceCompiler(Protocol):
     Unlike the five ``ApplicationPorts``, a compiler has no place in a live session: it runs
     offline, once per deployment release, against a version-bound source tree, and its output
     -- a ``SourceMap`` of ``SourceRelation`` triples, each carrying a checkable citation -- is
-    what a session is later handed as ``source_map``. Every application distribution that
-    offers source-backed knowledge implements this against its own declarative shape;
-    the core Agent never reads application source itself.
+    what a session is later handed as ``source_map`` when compiled navigation is needed.
+    A distribution may instead provide a repository lookup without a compiler. The core
+    Agent consumes only the configured knowledge port, never an unrestricted filesystem.
     """
 
     def compile(self) -> SourceMap: ...
@@ -32,24 +31,19 @@ class SourceCompiler(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SourceCapability:
-    """What one deployment's compiled source lets a session do, as one value.
+    """One deployment's release-bound lookup, with optional compiled navigation knowledge.
 
-    Four session settings have always moved together and have always had one real owner --
-    whether this deployment has a compiled, version-bound ``SourceMap`` for the release it
-    is pointed at. Leaving them as four independent constructor flags invited a composition
-    to enable source-armed planning with no map, or to ship a map nothing consumes; it also
-    left them looking like experiment knobs, which two of their neighbours genuinely are.
-
-    A distribution that implements ``SourceCompiler`` builds this once per release and hands
-    it to the composition; a distribution without one returns ``SourceCapability.none()``.
+    A repository lookup answers from cited code rather than an enumerated set of compiled
+    relations. It grants no route, tool or permission. Contracts and source affordances
+    still require an explicit compiled map while their existing callers use that path.
     """
 
     source_map: SourceMap | None = None
     source_contract: bool = False
     runtime_source: bool = False
     source_affordance_mode: str = "off"
-    #: Optional alternative local search over the same release. When absent, lookup uses
-    #: the compiled map's deterministic rule index.
+    #: Direct local search over an allowlisted release. It needs no compiled map. When
+    #: absent, an explicitly provided map supplies its deterministic rule index.
     lookup: SourceLookup | None = None
     #: Optional local Git metadata bound to the same deployment release.  Its absence is
     #: explicit because an extracted container tree commonly has no ``.git`` directory.
@@ -64,17 +58,20 @@ class SourceCapability:
                 raise ValueError(f"{name} must be a boolean")
         if self.source_affordance_mode not in {"off", "empty", "auto"}:
             raise ValueError("source_affordance_mode must be off, empty or auto")
-        wants_source = (self.source_contract or self.runtime_source
-                        or self.source_affordance_mode == "auto")
-        if wants_source and self.source_map is None:
-            raise ValueError("source-backed settings require a version-bound SourceMap")
+        if (self.source_contract or self.source_affordance_mode == "auto") \
+                and self.source_map is None:
+            raise ValueError("source contracts and affordances require a version-bound SourceMap")
         if self.lookup is not None:
             if not isinstance(self.lookup, SourceLookup):
                 raise TypeError("lookup must implement SourceLookup")
             if not self.runtime_source:
                 raise ValueError("a source lookup is used only by runtime source lookup")
-            if self.lookup.release != self.source_map.release:
+            if not isinstance(self.lookup.release, str) or not self.lookup.release.strip():
+                raise ValueError("a source lookup must declare its release")
+            if self.source_map is not None and self.lookup.release != self.source_map.release:
                 raise ValueError("a source lookup must search the map's own release")
+        if self.runtime_source and self.source_map is None and self.lookup is None:
+            raise ValueError("runtime source requires a version-bound SourceMap or source lookup")
         if not isinstance(self.history_unavailable_reason, str):
             raise TypeError("history_unavailable_reason must be a string")
         if self.history is not None:
@@ -82,14 +79,26 @@ class SourceCapability:
                 raise TypeError("history must implement SourceHistoryLookup")
             if not self.runtime_source:
                 raise ValueError("source history is used only by runtime source lookup")
-            if self.history.release != self.source_map.release:
-                raise ValueError("source history must describe the map's own release")
+            if self.history.release != self.release:
+                raise ValueError("source history must describe the source lookup's own release")
             if self.history_unavailable_reason:
                 object.__setattr__(self, "history_unavailable_reason", "")
 
+    @property
+    def release(self) -> str:
+        if self.source_map is not None:
+            return self.source_map.release
+        return self.lookup.release if self.lookup is not None else ""
+
+    @property
+    def content_digest(self) -> str:
+        if self.source_map is not None:
+            return self.source_map.content_digest
+        return str(getattr(self.lookup, "surface_digest", ""))
+
     @staticmethod
     def none() -> "SourceCapability":
-        """The capability of a deployment whose application ships no source compiler."""
+        """The capability of a deployment that provides no source knowledge."""
         return SourceCapability()
 
     def fact_lookup(self) -> SourceLookup | None:

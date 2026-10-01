@@ -228,6 +228,11 @@ agent.
   provenance on the server rather than showing source excerpts in the user answer. For a
   source paraphrase, the server also checks that a short supporting span occurs in the cited
   evidence; that check does not prove the model's interpretation of the span.
+  A direct repository lookup can be configured with
+  `SourceCapability(runtime_source=True, lookup=repository_lookup)` without a SourceMap or
+  source compiler. It retrieves bounded code blocks, including Vue components and Java
+  services, under the deployment's source allowlist. Raw blocks authorize no navigation or
+  API call; page actions still need current runtime evidence and the existing policy.
   An optional local Git provider separately cites ownership, blame, commit, and version-diff
   metadata bound to the deployed commit. Source retrieval remains optional and is never a
   prerequisite for ordinary browser or API operation. A lookup that informs an operation

@@ -193,7 +193,7 @@ class GenericCurrentFormContract(unittest.TestCase):
             release="v1", sha256=hashlib.sha256(excerpt.encode()).hexdigest(),
             excerpt=excerpt, summary="confirmed companies use active state"))
         session = SimpleNamespace(evidence=evidence,
-                                  source_map=SimpleNamespace(release="v1"))
+                                  source=SimpleNamespace(release="v1"))
         value = {"field_id": "form_field_" + "a" * 32, "value": "active",
                  "source_basis": {"ref": "source#1",
                                   "support": "choose the active state"}}
@@ -214,7 +214,7 @@ class GenericCurrentFormContract(unittest.TestCase):
                     BusinessToolRequestError):
                 _source_bases(session, {**args, "values": [{**value,
                                              "source_basis": bad_basis}]})
-        session.source_map.release = "v2"
+        session.source.release = "v2"
         with self.assertRaisesRegex(BusinessToolRequestError, "deployment"):
             _source_bases(session, args)
 
