@@ -8,18 +8,22 @@
  * -- the agent opened another page, or a confirmation is waiting -- reconnects at once,
  * without being asked, since the turn cannot go on otherwise.
  *
- * Having a conversation is remembered for the whole site as well (`localStorage`): a
+ * The last session identifier is remembered for the whole site (`localStorage`): a
  * deployment may key the conversation to the person rather than the tab, and a new tab of
- * theirs then has one to show. A turn under way is this tab's alone.
+ * theirs then has one to show. It only signals history to restore; bootstrap authenticates
+ * the current actor and selects their session. A turn under way is this tab's alone.
  */
 import type {PanelSnapshot} from '../bridge/host'
 
 const KEY = 'woa.assistant.engagement.v1'
+const SESSION_KEY = 'woa.assistant.session.v1'
 
 export type Engagement = 'none' | 'engaged' | 'active'
 
 export interface EngagementRecord {
   read(): Engagement
+  sessionId(): string
+  remember(sessionId: string): void
   /** Update the record from what the panel shows; a tab never goes back to `none`. */
   note(snapshot: PanelSnapshot, connected: boolean): void
 }
@@ -39,20 +43,27 @@ export function engagementOf(snapshot: PanelSnapshot, connected: boolean,
 export function engagementRecord(storage: Storage | null = storageOrNull('sessionStorage'),
                                  site: Storage | null = storageOrNull('localStorage')): EngagementRecord {
   let current: Engagement = 'none'
+  let session = ''
   try {
+    session = site?.getItem(SESSION_KEY) || storage?.getItem(SESSION_KEY) || ''
     const stored = storage?.getItem(KEY)
-    if (stored === 'engaged' || stored === 'active') current = stored
-    else if (site?.getItem(KEY) === 'engaged') current = 'engaged'
+    if (session) current = stored === 'active' ? 'active' : 'engaged'
   } catch { /* a profile that blocks site data simply starts from nothing each time */ }
   return {
     read: () => current,
+    sessionId: () => session,
+    remember(sessionId) {
+      session = sessionId
+      if (current === 'none') current = 'engaged'
+      try { storage?.setItem(SESSION_KEY, session) } catch { /* this page's copy holds */ }
+      try { site?.setItem(SESSION_KEY, session) } catch { /* this page's copy holds */ }
+    },
     note(snapshot, connected) {
       const next = engagementOf(snapshot, connected, current)
       if (next === current) return
       current = next
       try {
         storage?.setItem(KEY, next)
-        site?.setItem(KEY, 'engaged')
       } catch { /* as above */ }
     },
   }

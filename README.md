@@ -376,6 +376,11 @@ agent.
   minutes. A session whose sign-in lapsed, that the page left idle, or that a host restart
   ended comes back unannounced with the next message; why a session could not be started
   is said in the panel, with Retry.
+  The Runtime remembers the last session ID in local storage: with one, opening the panel
+  restores the current actor's server history before showing the conversation; without one,
+  it shows the default greeting immediately. A failed history fetch offers Retry rather than
+  presenting an empty conversation. The ID grants no authority; bootstrap still authenticates
+  the application's current sign-in.
 - One session can be open on several pages at once, as when a host keys it to the person
   rather than the tab. Every page follows the same conversation and may ask; a turn runs on
   the page that asked it, and only that page is handed its page commands and its card

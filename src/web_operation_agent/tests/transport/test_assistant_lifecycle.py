@@ -226,7 +226,8 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         return self.start_notice(page).text_content()
 
     #: What a page the agent opened in the middle of a turn finds in this tab's storage.
-    TURN_UNDER_WAY = {"woa.assistant.engagement.v1": "active"}
+    TURN_UNDER_WAY = {"woa.assistant.engagement.v1": "active",
+                      "woa.assistant.session.v1": "lifecycle-1"}
 
     def send(self, page, text: str = "列出所有待开票的销售订单") -> None:
         """What the person does: open the panel if it is not, type, and press Enter."""
@@ -332,7 +333,7 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
     def test_a_tab_with_a_conversation_connects_when_the_panel_is_opened(self):
         """A conversation this tab has, with nothing under way, is fetched when the panel is
         opened to show it -- not on every page the person visits."""
-        page, errors = self.open(session_storage={"woa.assistant.engagement.v1": "engaged"})
+        page, errors = self.open(session_storage={"woa.assistant.session.v1": "lifecycle-1"})
         self.launcher(page).wait_for(timeout=8000)
         page.wait_for_timeout(2500)
         self.assertEqual(self.host.bootstraps, 0)

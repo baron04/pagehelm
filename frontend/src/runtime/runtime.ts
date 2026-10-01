@@ -304,9 +304,16 @@ export class EmbeddedWebRuntime {
       stopping: this.stored.cancellationPending,
       online: typeof navigator === 'undefined' || navigator.onLine !== false,
     })
+    // A connected transport does not mean an empty conversation. Restore its history
+    // before releasing the loading state; a failed fetch is not a new chat.
+    try {
+      await this._refreshTimeline()
+    } catch (error) {
+      this._raise(error, 'reconnecting')
+      throw error
+    }
     this._panelState(resultDeferred ? 'reconnecting'
       : (this.stored.cancellationPending ? 'stopping' : 'ready'))
-    await this._refreshTimeline().catch(() => {})
     if (this.stored.cancellationPending) {
       detach('resume stop', this.cancelTask({retry: true}))
     }

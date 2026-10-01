@@ -405,7 +405,11 @@ export function autoBoot(win: Window = window): Supervisor | null {
     examples => shell.host.offerExamples(examples))
   const supervisor: Supervisor = new Supervisor({
     source,
-    start: config => startEmbeddedRuntime(config, shell),
+    start: async config => {
+      const runtime = await startEmbeddedRuntime(config, shell)
+      if (runtime) engagement.remember(config.sessionId)
+      return runtime
+    },
     status: panelStartStatus(shell.host),
     eager,
     onRunning: runtime => {
@@ -440,7 +444,9 @@ export function autoBoot(win: Window = window): Supervisor | null {
     if (eager() && (kind === 'retrying' || kind === 'unavailable')) supervisor.retry()
   })
   if (!eager()) {
-    shell.host.rest()
+    // This identifier hints at history; the server still authenticates the current actor.
+    // Keep the greeting hidden until that actor's timeline has arrived.
+    if (!engagement.sessionId()) shell.host.rest()
     return supervisor
   }
   if (win.document.readyState === 'loading') {

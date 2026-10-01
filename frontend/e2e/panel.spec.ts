@@ -114,8 +114,18 @@ test.describe('the default state', () => {
     expect(widths[2]).toBeGreaterThan(widths[1]!)
     // The composer is there throughout: the person can start writing while it loads.
     await expect(page.locator('#woa-composer-input')).toBeEnabled()
+    // Losing the history request does not turn the conversation into a new greeting.
+    await panel.set({connection: {state: 'error', busy: false, stopping: false, online: true},
+      notice: {code: 'start_failed', retryable: true, message: '连接失败，请重试。'}})
+    await expect(page.locator('.woa-empty')).toHaveCount(0)
+    await expect(page.locator('.woa-skeleton')).toHaveCount(0)
+    await expect(page.locator('.woa-inline-error')).toBeVisible()
+    await panel.set({connection: {state: 'reconnecting', busy: false, stopping: false, online: true}})
+    await expect(page.locator('.woa-empty')).toHaveCount(0)
+    await expect(page.locator('.woa-skeleton')).toHaveCount(1, {timeout: 2000})
     await panel.set({
       connection: {state: 'ready', busy: false, stopping: false, online: true},
+      notice: null,
       entries: [entry('e1', 'goal', '列出订单'), entry('e2', 'result', '三张。', {panel_state: 'success'})]})
     await expect(page.locator('.woa-skeleton')).toHaveCount(0)
     await expect(page.locator('.woa-user')).toHaveText('列出订单')

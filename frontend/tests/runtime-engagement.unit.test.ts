@@ -38,6 +38,7 @@ describe('how far a tab has gone with the assistant', () => {
       setItem: (key: string, value: string) => { store.set(key, value) },
     } as unknown as Storage
     const first = engagementRecord(storage, null)
+    first.remember('session-1')
     first.note(snapshot({}, {busy: true}), true)
     expect(engagementRecord(storage, null).read()).toBe('active')
 
@@ -60,8 +61,20 @@ describe('how far a tab has gone with the assistant', () => {
       } as unknown as Storage
     }
     const site = make()
-    engagementRecord(make(), site).note(snapshot({}, {busy: true}), true)
+    const first = engagementRecord(make(), site)
+    first.remember('session-1')
+    first.note(snapshot({}, {busy: true}), true)
     expect(engagementRecord(make(), site).read()).toBe('engaged')
+    expect(engagementRecord(make(), site).sessionId()).toBe('session-1')
     expect(engagementRecord(make(), make()).read()).toBe('none')
+  })
+
+  it('ignores an old engagement flag when there is no saved session identifier', () => {
+    const storage = {getItem: () => 'engaged'} as unknown as Storage
+    // Only the engagement key exists in this pre-upgrade store.
+    const legacy = {getItem: (key: string) => key.includes('engagement')
+      ? storage.getItem(key) : null} as unknown as Storage
+    expect(engagementRecord(legacy, legacy).read()).toBe('none')
+    expect(engagementRecord(legacy, legacy).sessionId()).toBe('')
   })
 })
