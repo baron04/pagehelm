@@ -1,5 +1,8 @@
 # Frozen v7 and model qualification
 
+The completed first-use and three-model results, limitations, paid accounting,
+and independent semantic review are recorded in [RESULTS.zh-CN.md](RESULTS.zh-CN.md).
+
 The product baseline is `420eed3a`. This experiment adds evaluation code and
 synthetic application surfaces; it does not change the product algorithm or
 the installed model. The question author did not inspect old task files or
