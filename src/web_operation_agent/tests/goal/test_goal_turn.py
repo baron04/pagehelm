@@ -324,6 +324,29 @@ class GoalTurnTests(unittest.TestCase):
             self.assertIn(name, kinds)
         self.assertEqual(port.specs[0].deliverables[0].record, "S00006")
 
+    def test_mixed_count_fact_and_page_survive_a_scope_that_misses_two_kinds(self):
+        from web_operation_agent.goal.ports import Aggregate
+        execution, channel, chat, port, _events = self._run(
+            [("declare_scope", {"parts": [{"kind": "aggregate", "entity": "order"}]}),
+             ("declare_goal", {"deliverables": [
+                 {"kind": "aggregate", "entity": "order", "metric": {"op": "count"}},
+                 {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Total"]},
+                 {"kind": "page", "entity": "order", "record": "S00006", "section": "Other Info"}]})],
+            [Resolved(kind="aggregate", aggregate=Aggregate("订单", 7)),
+             Resolved(kind="fact", facts=(Fact("S00006", "Total", "193.31"),)),
+             Resolved(kind="page", page=PagePlan(url="/orders/6", label="S00006 · Other Info",
+                                                expected_path="/orders/6", section="Other Info"))],
+            staged=True, text="统计全部订单数量，查 S00006 的总金额，并打开它的其他信息页签")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("7", execution.user_answer)
+        self.assertIn("193.31", execution.user_answer)
+        self.assertIn("已打开", execution.user_answer)
+        self.assertEqual([d.kind for d in port.specs[-1].deliverables],
+                         ["aggregate", "fact", "page"])
+        self.assertEqual(len(chat.messages), 3)
+        self.assertEqual(len(channel.approvals), 1)
+        self.assertEqual(_Browser.instances[0].selected, ["Other Info"])
+
     def test_a_repairable_problem_gets_one_second_declaration(self):
         port_first = Resolved(kind="fact", problem="no field 'Validity' on Order",
                               repair="'Validity' is not a field of Order; its fields are: Expiration")

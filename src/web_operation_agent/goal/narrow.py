@@ -226,11 +226,17 @@ def summaries(index: ApplicationIndex, request: str,
 
     The compact directory lets the model select a semantically related entity whose
     label did not share the request's words. It is still bounded; unlike the detailed
-    candidates, it carries no fields, controls, aliases or page breadcrumbs.
+    candidates, it carries no fields, controls, aliases or page breadcrumbs. Page
+    breadcrumbs identify entities here; page keys belong to the detailed index,
+    unless the person explicitly writes a key in the request.
     """
     pages_of: dict[str, list[str]] = {}
     for page in index.pages:
-        pages_of.setdefault(page.entity, []).append(f"{page.key} {page.breadcrumb}")
+        pages = pages_of.setdefault(page.entity, [])
+        explicit = bool(page.key and page.key.casefold() in request.casefold())
+        text = f"{page.key} {page.breadcrumb}" if explicit else page.breadcrumb
+        if text not in pages:
+            pages.append(text)
     lines = ["ENTITIES (key: label [aliases] | pages)"]
     named = {k.entity: k for k in known}
     ranked = ranked_entities(index, request, known)

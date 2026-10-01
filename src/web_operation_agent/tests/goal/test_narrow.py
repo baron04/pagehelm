@@ -123,10 +123,31 @@ class RankingTests(unittest.TestCase):
         self.assertEqual(len(ranked), len(index.entities))
         text = summaries(index, "S00006 的客户是谁", known)
         self.assertTrue(text.startswith("ENTITIES"))
-        self.assertIn("order: Sales Order [销售订单, 报价单] | named in request: S00006 | pages: p1 Sales / Quotations", text)
+        self.assertIn("order: Sales Order [销售订单, 报价单] | named in request: S00006 | pages: Sales / Quotations", text)
         self.assertIn("line: Sales Order Line [订单行] (lines of Sales Order)", text)
         self.assertIn("KNOWN REFERENCES", text)
         self.assertLess(len(text), 1200)
+
+    def test_scope_keeps_distinct_paths_controls_and_links_without_page_identifiers(self):
+        index = _index()
+        order = replace(index.entities[0], actions=("Confirm", "Send by Email"))
+        pages = tuple(IndexPage(key=f"technical-page-{n}", label=path.split(" / ")[-1],
+                                breadcrumb=path, entity="order")
+                      for n, path in enumerate(("Sales / Quotations",) * 8
+                                               + ("Sales / Orders",)))
+        index = replace(index, entities=(order,) + index.entities[1:], pages=pages)
+        text = summaries(index, "Confirm S00006 and count orders", ())
+        self.assertIn("pages: Sales / Quotations; Sales / Orders", text)
+        self.assertIn("controls: Confirm, Send by Email", text)
+        self.assertIn("[销售订单, 报价单]", text)
+        self.assertIn("(lines of Sales Order)", text)
+        self.assertNotIn("technical-page-", text)
+        # The next step retains exact page identities, including duplicate paths.
+        detail = neighbourhood(index, ("order",), rules=False).render()
+        for page in pages:
+            self.assertIn(page.key, detail)
+        explicit = summaries(index, "Open technical-page-8", ())
+        self.assertIn("technical-page-8 Sales / Orders", explicit)
 
     def test_large_index_retrieves_named_pages_fields_references_and_conventions(self):
         from web_operation_agent.goal.index import IndexConvention

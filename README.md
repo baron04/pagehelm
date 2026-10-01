@@ -98,6 +98,11 @@ agent.
   `declaration_cache=False` disables this optimization for comparisons. Declaration
   instructions avoid repeating tool-field explanations, and scope/repair JSON is compact;
   the staged request still appears at both ends of its message.
+  Every declaration field, description, kind, enum and constraint remains available,
+  including mixed goals and repairs. The scope step never removes
+  schema branches based on its predicted kinds. Scope summaries retain entity keys,
+  aliases, controls, owner links and distinct page breadcrumbs; page keys appear there
+  only when explicitly written in the request; detailed-index page keys are unchanged.
   Yudao's actor-local complete-list/detail cache stays at 15 seconds, starts its lifetime
   after a successful read, and holds at most 128 entries. A cached complete list can serve
   narrower local filters under the same required parent scope; credential renewal
@@ -116,6 +121,17 @@ agent.
   unchanged fixture; this is not UI end-to-end latency. The full comparison and rechecks
   used 478 calls (1,517,136 input and 142,386 output tokens), metered at CNY 0.862724 from
   provider-reported usage and registered rates, rather than a provider invoice.
+  A subsequent scope-summary comparison on the same seen set scored 60/63 before and
+  61/63 after; one new raw failure counted the correct 104 lines but lacked the judge's
+  expected label. Median scope input fell from 11,457 to 10,331 serialized bytes (9.8%).
+  Observed cold median time was 19.30 vs 17.26 seconds, but calls rose from 199 to 209
+  and total input tokens from 604,532 to 616,745; this is not a general latency or token
+  reduction claim. A variant rewriting tool descriptions scored 59/63 and repeatedly
+  refused a previously answered condition; that variant was rejected and the original
+  descriptions retained. Mixed count/fact/page requests and explicit page keys were
+  checked in both versions; supplemental amount checks required adjudicating a thousands
+  separator. The sealed judge was unchanged. These small fixture runs do not prove
+  general accuracy equivalence.
   For an index larger than 60 entities, actor-visible labels, pages
   and fields retrieve up to 60 detailed candidates; the other entities keep only their
   key and label in a compact directory, with a roughly 12,000-character first-step budget.
