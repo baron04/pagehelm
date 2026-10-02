@@ -64,7 +64,7 @@ class FormBrowser:
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action=""):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
         FormBrowser.submit_after_scroll = submit_after_scroll
@@ -83,7 +83,7 @@ class GoalFormsTests(unittest.TestCase):
             chat = _Chat([("declare_goal", {"write_intent": True,
                            "deliverables": [*declarations, *extras]})])
             if batch:
-                declarations = [{"kind": "handoff", "entity": "contacts", "field_values":
+                declarations = [{"kind": "handoff", "entity": "contacts", "action": batch_action, "field_values":
                                  [{"field": label, "value": value} for label, value in values]}]
                 chat = _Chat([("declare_goal", {"write_intent": True,
                                "deliverables": [*declarations, *extras]})])
@@ -128,6 +128,12 @@ class GoalFormsTests(unittest.TestCase):
                                          "text": "填写 Name 和 Email，尚不提交"})
             events = [json.loads(line) for line in audit.read_text().splitlines()]
             return result, FormBrowser.instances[-1], channel, chat, events
+
+    def test_batch_cannot_ignore_an_unreviewed_business_action(self):
+        result, browser, _, _, _ = self.run_goal(batch=True, batch_action="Delete")
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertNotIn("fill", browser.actions)
+        self.assertNotIn("handoff_form", browser.actions)
 
     def test_unobserved_submit_is_scrolled_before_values_and_still_verified(self):
         result, browser, _, _, _ = self.run_goal(batch=True, submit_after_scroll=1)

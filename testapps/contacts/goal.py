@@ -140,6 +140,8 @@ class ContactsGoalPort:
         if d.section:
             return Resolved(kind=d.kind, problem="this page has no sections")
         if self._form_prefill and d.kind == "handoff" and not d.record and (d.value or d.field_values):
+            if d.field_values and _norm(d.action) not in {"", "create", "new"}:
+                return Resolved(kind=d.kind, problem="this batch needs the new-contact form entry")
             requested = d.field_values or ((d.action, d.value),)
             values = tuple((self._field(label), value) for label, value in requested)
             if (any(key not in {"name", "email"} for key, _ in values)

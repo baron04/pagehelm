@@ -197,9 +197,8 @@ class Deliverable:
             if label.casefold() in {k.casefold() for k, _ in pairs}:
                 raise ValueError("form field labels must be unique")
             pairs.append((label, text))
-        if pairs and (kind != "handoff" or value.get("value")
-                      or _text(value.get("action"), "action").casefold() not in ("", "create", "new")):
-            raise ValueError("field_values belongs to one form handoff, without a single-field value or action")
+        if pairs and (kind != "handoff" or value.get("value")):
+            raise ValueError("field_values belongs to one form handoff, without a single-field value")
         metric = value.get("metric")
         limit = value.get("limit", 0) or 0
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0 or limit > 50:
@@ -400,11 +399,11 @@ DECLARE_GOAL_TOOL = {
                             "section": {"type": "string",
                                         "description": "section (tab) name on the record's page"},
                             "action": {"type": "string",
-                                       "description": "handoff: the button name from the index for a business action, the label of the field the person wants to change, or New for creating a record"},
+                                       "description": "handoff: indexed business button, single-field label, or create for a new record. With field_values: empty or reviewed form edit/create entry, never a field label or submission action"},
                             "rules": {"type": "array", "items": {"type": "string"},
                                       "description": "ids from RULES (r12) that answer a question about why a control is shown or hidden, what it opens, when a field can be changed, what an action refuses, or what a field means; kind fact, entity set, record when one is named. Name the rules closest to the question even when they answer only part of it; the rules of the same control or action come along"},
                             "field_values": {"type": "array", "maxItems": 20,
-                                "description": "handoff: all explicitly requested values for ONE form target; one slot for the entire form. Use indexed field labels and exact user values; no single-field action/value alongside this batch. Never invent missing values.",
+                                "description": "handoff: all explicitly requested values for ONE form target; one slot for the entire form. Use indexed field labels and exact user values; no single-field value alongside this batch. Omit action for an existing form or name its reviewed edit entry; new forms use create. Never invent missing values.",
                                 "items": {"type": "object", "properties": {
                                     "field": {"type": "string", "maxLength": 120},
                                     "value": {"type": "string", "maxLength": 4000}},

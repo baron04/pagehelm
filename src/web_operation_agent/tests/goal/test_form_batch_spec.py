@@ -20,8 +20,12 @@ class FormBatchSpecTests(unittest.TestCase):
         self.assertEqual(GoalSpec.from_json(spec.to_json()), spec)
         self.assertFalse(spec.differences(GoalSpec.from_json(spec.to_json())))
 
+    def test_batch_entry_action_remains_for_application_review(self):
+        for action in ("edit", "create", "Reviewed entry", "Delete"):
+            self.assertEqual(self.spec(action=action).deliverables[0].action, action)
+
     def test_malformed_batch_is_rejected_without_clipping_requested_work(self):
-        cases = [{"kind": "fact"}, {"value": "other"}, {"action": "Delete"},
+        cases = [{"kind": "fact"}, {"value": "other"},
                  {"field_values": "bad"}, {"field_values": [{"field":"Name","value":False}]},
                  {"field_values": [{"field":"Note","value":"x" * 4001}]},
                  {"field_values": [{"field":"Name","value":"a"},{"field":" name ","value":"b"}]},

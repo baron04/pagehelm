@@ -154,6 +154,12 @@ class EntryTests(unittest.TestCase):
                 action="",value="",field_values=(("合成备注","Draft"),))))
             self.assertEqual(port.resolve(batch,context=self.context).deliverables[1].page.form.values,
                              (("remark","Draft"),))
+            for action in ("edit", "编辑", "修改"):
+                edited = replace(batch, deliverables=(batch.deliverables[0], replace(batch.deliverables[1], action=action)))
+                self.assertEqual(port.resolve(edited, context=self.context).deliverables[1].page.form.values, (("remark", "Draft"),))
+            for action in ("删除", "提交", "Delete", "合成备注"):
+                forbidden = replace(batch, deliverables=(batch.deliverables[0], replace(batch.deliverables[1], action=action)))
+                self.assertTrue(port.resolve(forbidden, context=self.context).deliverables[1].problem)
             wrong = replace(spec,deliverables=(spec.deliverables[0],replace(spec.deliverables[1],action="Unsupported")))
             self.assertTrue(port.resolve(wrong,context=self.context).deliverables[1].problem)
 

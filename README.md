@@ -136,7 +136,9 @@ agent.
   fixed draft executor and shared deadline, adds no new tool or per-field model calls,
   and only admits transient forms. A handoff can declare up to twenty explicit field/value
   pairs in `field_values`, keeping the four-deliverable limit; read-only staged requests
-  omit that batch property from their tool schema.
+  omit that batch property from their tool schema. Batch entry actions remain subject to
+  application review: an existing form may omit the action or name its reviewed editor;
+  a new form uses its reviewed creation entry. A batch never authorizes submission.
   Before any value is prepared, an unobserved submit control on an application-verified
   transient form permits at most three fixed read-only scrolls. Each fresh descriptor
   must bind the same entry; ambiguous or disabled buttons remain refusals.

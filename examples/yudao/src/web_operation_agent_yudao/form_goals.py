@@ -56,7 +56,7 @@ class NativeFormsGoalPort(DataGoalPort):
         for i in indices:
             d, resolved = spec.deliverables[i], out[i]
             entity = index.entity(d.entity)
-            entry = next((e for e in self._entries if e[1] == d.entity and not d.record and d.action in {"create", "new"} and spec.write_intent
+            entry = next((e for e in self._entries if e[1] == d.entity and not d.record and d.action.casefold() in {"create", "new"} and spec.write_intent
                           and (not d.page.key or d.page.key == e[2])), None)
             component = entry[6] if entry else REVIEWED_FILES[1]
             form_source = self._form_source.read(component)
@@ -73,7 +73,8 @@ class NativeFormsGoalPort(DataGoalPort):
                     d.section or d.via or d.metric or page.fill or page.highlight)):
                 out[i] = replace(resolved, kind="handoff", page=replace(page,
                     form=FormPlan(entry[0],tuple((f.key,v) for f,v in mapped),open_entry=True)))
-            elif (not self._updates or d.entity != "crm/customer" or d.via or d.metric or not match or not mapped or len({field.key for field, _ in mapped if field}) != len(mapped) or any(not field or field.key not in fields for field, _ in mapped) or d.section or not d.record
+            elif ((d.field_values and d.action.casefold() not in {"", "edit", "update", "编辑", "修改"})
+                  or not self._updates or d.entity != "crm/customer" or d.via or d.metric or not match or not mapped or len({field.key for field, _ in mapped if field}) != len(mapped) or any(not field or field.key not in fields for field, _ in mapped) or d.section or not d.record
                   or page.fill or page.highlight):
                 out[i] = Resolved(kind="handoff", problem="this reviewed editor does not offer the requested field or target")
             else:
