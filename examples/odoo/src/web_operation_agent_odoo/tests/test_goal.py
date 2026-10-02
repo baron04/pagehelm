@@ -827,6 +827,16 @@ class OdooGoalPortConditionTests(unittest.TestCase):
     def _last_domain(self):
         return self.client.domains[-1]
 
+    def test_date_exclusion_reaches_rpc_as_a_known_date_and_negated_period(self):
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "metric": {
+            "op": "count", "filters": [{"field": "Order Date", "op": "!=", "values": ["2026-09"]}]}})
+        domain = self._last_domain()
+        self.assertIn(["date_order", "!=", False], domain)
+        self.assertIn("!", domain)
+        # The acting user's Asia/Shanghai month is translated to UTC by the adapter.
+        self.assertIn(["date_order", ">=", "2026-08-31 16:00:00"], domain)
+        self.assertIn(["date_order", "<", "2026-09-30 16:00:00"], domain)
+
     def test_a_record_a_line_links_to_is_the_lines_own_condition(self):
         # "S00004 订单里 [FURN_8888] Office Lamp 那行": the code's digits do not make the
         # product a document the line belongs to, even where another model finds the

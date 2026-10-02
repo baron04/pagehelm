@@ -42,8 +42,9 @@ agent.
   customer invoice", "the 31,750 credit note") is picked out by its conditions within the
   declared page's scope, or beyond the page's defaults when they hide it; only exactly one
   match is acted on, and none or several is said so, with the candidates. A name condition
-  that exactly matches one record and prefixes another asks which record the person means,
-  even when only one of them remains inside the declared scope. A named record
+  that matches several records can bind the sole candidate in the actor's complete,
+  fully specified scope. Incomplete reads or unusable conditions cannot prove uniqueness.
+  A named record
   that does not exist is never turned into a creation; a creation opens the page declared
   for the entity, else its widest page. A list that finds exactly one record binds a
   later deliverable of the same turn that names none. The declaration is made knowing the
@@ -89,6 +90,10 @@ agent.
   to the reconciliation path. A tie between an answer and a clarification that offers
   that answer may keep the answer. These extra readings and the bounded repairs add
   model calls, latency and spend; this is not a one-call turn.
+  A valid zero count or empty filtered list is an answer, not evidence that a competing
+  positive interpretation is correct. Date exclusion selects known dates outside the
+  half-open period and excludes missing dates; adapters apply the user's time zone.
+  Query results may carry page links, but only a declared page or handoff goal navigates.
   Parsed read-only declarations have an executor-local, 128-entry cache with a
   120-second lifetime. Keys bind the principal, model/options, source digest and exact
   prompt context (including history, date, scope and candidate values). The two initial

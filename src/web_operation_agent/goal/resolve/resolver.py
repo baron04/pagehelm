@@ -26,6 +26,7 @@ from .words import foreign, norm, period, tokens
 
 #: Deliverable kinds answered by reading records; one may be answered as another.
 _READS = frozenset({"fact", "list", "aggregate"})
+_LINK_SCOPE_LIMIT = 200
 
 
 class Ambiguous(tuple):
@@ -409,11 +410,18 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
                 hits.append((found, view.label_of(links[0])))
         return hits[0] if len(hits) == 1 else None
 
-    def _links_within(self, model: str, field: str, domain: list) -> list[tuple[str, str]]:
+    def _links_within(self, model: str, field: str, domain: list, *,
+                      complete: bool = False) -> list[tuple[str, str]]:
         """The distinct records a link field points to among the records `domain`
         describes, as (id, display name)."""
         try:
-            rows = self._rows(model, domain, fields=(field,), limit=200)
+            count = self._count(model, domain) if complete else None
+            if count is not None and count > _LINK_SCOPE_LIMIT:
+                return []
+            rows = self._rows(model, domain, fields=(field,), limit=_LINK_SCOPE_LIMIT)
+            if count is not None and len(rows) != count:
+                # A truncated or changing list cannot prove a unique related record.
+                return []
         except DataRefused:
             return []
         links: dict[str, str] = {}

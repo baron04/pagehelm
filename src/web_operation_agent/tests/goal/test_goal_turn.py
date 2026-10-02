@@ -324,6 +324,42 @@ class GoalTurnTests(unittest.TestCase):
             self.assertIn(name, kinds)
         self.assertEqual(port.specs[0].deliverables[0].record, "S00006")
 
+    def test_a_query_keeps_its_page_link_without_navigation_or_operation_confirmation(self):
+        from web_operation_agent.goal.ports import Aggregate
+        execution, channel, _chat, _port, _events = self._run(
+            [_declaration(kind="list", entity="order")],
+            [Resolved(kind="list", page=PagePlan("/orders", "Orders"),
+                      aggregate=Aggregate("Orders", 0, records=(), complete=True))],
+            text="List orders")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("0", execution.user_answer)
+        self.assertEqual(_Browser.instances[0].actions, [])
+        self.assertEqual(channel.approvals, [])
+
+    def test_zero_is_not_discarded_when_another_reading_returns_a_positive_count(self):
+        from web_operation_agent.goal.ports import Aggregate
+
+        class ByStatus(_Port):
+            def resolve(self, spec, *, context=None, current_path=""):
+                self.specs.append(spec)
+                value = spec.deliverables[0].metric.filters[0].values[0]
+                return Resolution(deliverables=(Resolved(kind="aggregate",
+                    aggregate=Aggregate(value, 0 if value == "Quotation" else 7)),))
+
+        def count(status):
+            return _declaration(kind="aggregate", entity="order", metric={"op": "count",
+                "filters": [{"field": "Status", "values": [status]}]})
+
+        zero, positive = count("Quotation"), count("Sales Order")
+        execution, _channel, chat, _port, events = self._run(
+            [zero, positive, zero, zero], [], text="Count quotations", port=ByStatus([]))
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("Quotation", execution.user_answer)
+        self.assertIn("0", execution.user_answer)
+        self.assertEqual(len(chat.messages), 4)
+        self.assertFalse(any(e["event"] == "goal_readings_one_finds" for e in events))
+        self.assertTrue(any(e["event"] == "goal_readings_majority" for e in events))
+
     def test_mixed_count_fact_and_page_survive_a_scope_that_misses_two_kinds(self):
         from web_operation_agent.goal.ports import Aggregate
         execution, channel, chat, port, _events = self._run(
@@ -1545,6 +1581,9 @@ class GoalTurnTests(unittest.TestCase):
             def resolve(self, spec, *, context=None, current_path=""):
                 self.specs.append(spec)
                 field = spec.deliverables[0].metric.filters[0].field
+                if field != "Customer":
+                    return Resolution(deliverables=(Resolved(kind="aggregate",
+                        problem="Salesperson is not a field of this entity"),))
                 count = 2 if field == "Customer" else 0
                 return Resolution(deliverables=(Resolved(kind="aggregate", aggregate=Aggregate(
                     subject=f"Orders · {field} = Joel", count=count,

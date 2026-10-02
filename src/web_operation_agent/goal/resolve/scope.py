@@ -198,21 +198,19 @@ class ScopeMixin:
                 # them is among the records the rest of the declaration describes.
                 held, named_field = self._held_by, view.field_by_label(condition.field)
                 scope = list(domain)
+                complete_scope = condition.op != "!="
                 for other in metric.filters:
                     if other is condition or not says(other):
                         continue
                     other_clause, _ = self._condition(view, other.field, other.values,
                                                       op=other.op, today=today)
+                    complete_scope = complete_scope and other_clause is not None
                     scope += other_clause or []
-                present = [(rid, name) for rid, name in self._links_within(model, named_field, scope)
-                           if name in held]
-                # A name that is one record's exactly while longer names hold it ("X" beside
-                # "X 二期") is asked about whatever the other conditions leave: the person
-                # may mean either, as for the record a request is about (owner, 2026-09-29).
-                exact_among_longer = bool(held) and any(
-                    norm(self._own_name(held[0])) == norm(self._own_name(v))
-                    for v in condition.values)
-                if len(present) != 1 or exact_among_longer:
+                present = []
+                if complete_scope:
+                    present = [(rid, name) for rid, name in self._links_within(
+                        model, named_field, scope, complete=True) if name in held]
+                if len(present) != 1:
                     return Resolved(kind=d.kind, problem=text, candidates=tuple(
                         name for _rid, name in present) if len(present) > 1 else held)
                 rid, name = present[0]
@@ -305,8 +303,8 @@ class ScopeMixin:
             total = self._count(model, domain)
             if len(rows) == 1:
                 self._found_one = (model, rows[0].id, rows[0].display)
-            # The list is the deliverable; the page it opens afterwards carries no facets,
-            # whose failure would otherwise mark a correct answer as unfinished.
+            # Keep a link to the list page; a separate page declaration, when requested,
+            # owns navigation and facet verification.
             bare = PageSpec(key=d.page.key if page is not None else "")
             plan = self._list_page(Deliverable(kind="page", entity=model, page=bare)) \
                 if (page is not None or self._default_page(model) is not None) else None
@@ -316,10 +314,6 @@ class ScopeMixin:
                 return Resolved(kind="list", page=page_plan,
                                 aggregate=Aggregate(subject=" · ".join(described), count=0,
                                                     records=(), complete=True))
-            if not names:
-                return Resolved(kind="list", page=page_plan,
-                                problem=f"no {view.label} matches "
-                                        + (repr(d.page.search) if d.page.search else "these conditions"))
             return Resolved(kind="list", page=page_plan,
                             aggregate=Aggregate(subject=" · ".join(described), count=int(total),
                                                 records=tuple(names), complete=len(rows) <= limit))
@@ -538,6 +532,10 @@ class ScopeMixin:
             clauses.append(Compare(key, "ge", start))
         if end is not None:
             clauses.append(Compare(key, "lt", end))
+        if op == "!=":
+            # An absent date is not a known date outside the requested period.
+            # Keep this explicit so SQL and in-memory adapters agree on NULL.
+            return [Compare(key, "set"), Not(all_of(*clauses))], text
         return clauses, text
 
 

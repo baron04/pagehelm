@@ -140,6 +140,34 @@ class _Client:
 
 
 class YudaoGoalDataTests(unittest.TestCase):
+    def test_date_exclusion_counts_outside_the_month_and_returns_the_same_records(self):
+        declaration = {"kind": "aggregate", "entity": "crm/contract", "metric": {
+            "op": "count", "filters": [{"field": "下单日期", "op": "!=", "values": ["2026-09"]}]}}
+        counted = self.ask(declaration)
+        self.assertFalse(counted.problem)
+        self.assertEqual(counted.aggregate.count, 1)
+        listed = self.ask({**declaration, "kind": "list"})
+        self.assertEqual(listed.aggregate.count, 1)
+        self.assertIn("瑞达实施服务合同", listed.aggregate.records[0])
+
+    def test_known_amount_keeps_zero_and_negative_values_in_counts_lists_and_sum(self):
+        class AmountClient(_Client):
+            def get(self, path, **params):
+                if path == "crm/contract/page":
+                    rows = [dict(CONTRACTS[1][0], id=100+i, name=f"Synthetic {i}", totalPrice=amount)
+                            for i, amount in enumerate((100, 0, -30, None))]
+                    return {"list": rows, "total": len(rows)}
+                return super().get(path, **params)
+        port = DataGoalPort(YudaoGoalData(AmountClient(), DOCS))
+        def ask(kind, op="count"):
+            return port.resolve(GoalSpec.from_json({"deliverables": [{"kind": kind,
+                "entity": "crm/contract", "metric": {"op": op, "field": "合同金额",
+                    "filters": [{"field": "合同金额", "op": "!=", "values": []}]}}]})).deliverables[0]
+        counted, listed, summed = ask("aggregate"), ask("list"), ask("aggregate", "sum")
+        self.assertEqual([r.aggregate.count for r in (counted, listed, summed)], [3, 3, 3])
+        self.assertEqual(len(listed.aggregate.records), 3)
+        self.assertIn("70.00", summed.aggregate.sums[0][1])
+
     def test_total_refuses_missing_values_but_keeps_numeric_zero(self):
         for value in (None, "", float("nan"), float("inf")):
             rows = deepcopy(CONTRACTS[1] + CONTRACTS[2])
@@ -394,7 +422,8 @@ class DeclarationRepairTests(unittest.TestCase):
         suppliers = self.ask({"kind": "list", "entity": "crm/contract", "metric": {
             "op": "count", "filters": [{"field": "负责人", "values": ["评测员"]},
                                        {"field": "审批状态", "values": ["未提交"]}]}})
-        self.assertTrue(suppliers.problem)  # conditions that fit nothing may be a misreading
+        self.assertFalse(suppliers.problem)
+        self.assertEqual((suppliers.aggregate.count, suppliers.aggregate.records), (0, ()))
 
     def test_words_before_a_name_are_not_part_of_it(self):
         fact = self.ask({"kind": "fact", "entity": "crm/contract", "record": "我的云帆企业版合同",
@@ -611,14 +640,53 @@ class _BranchClient(_Client):
         return super().get(path, **params)
 
 
+class _ScopedBranchClient(_BranchClient):
+    def get(self, path, **params):
+        result = deepcopy(super().get(path, **params))
+        if path == "crm/contract/page":
+            for row in result["list"]:
+                if row.get("customerId") == 5:
+                    row["customerName"] = "云帆科技有限公司"
+        return result
+
+
 class ExactAmongLongerTests(unittest.TestCase):
-    def test_a_condition_naming_one_record_exactly_among_longer_names_asks_which(self):
-        port = DataGoalPort(YudaoGoalData(_BranchClient(), DOCS))
+    def test_a_name_condition_binds_the_only_candidate_in_the_complete_scope(self):
+        port = DataGoalPort(YudaoGoalData(_ScopedBranchClient(), DOCS))
         resolved = port.resolve(GoalSpec.from_json({"deliverables": [{
             "kind": "list", "entity": "crm/contract", "metric": {
                 "op": "count", "filters": [{"field": "客户", "values": ["云帆科技有限公司"]}]}}]})).deliverables[0]
-        # The branch has no contract, and is still offered: the person may mean either.
-        self.assertEqual(list(resolved.candidates), ["云帆科技有限公司", "云帆科技有限公司杭州分公司"])
+        # The branch has no contract in the actor's complete scope.
+        self.assertEqual(resolved.candidates, ())
+        self.assertEqual(resolved.aggregate.count, 1)
+        self.assertIn("云帆企业版合同", resolved.aggregate.records[0])
+
+    def test_truncated_or_inconsistent_scope_cannot_prove_uniqueness(self):
+        data = YudaoGoalData(_ScopedBranchClient(), DOCS)
+        port = DataGoalPort(data)
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "crm/contract",
+            "metric": {"op": "count", "filters": [{"field": "客户", "values": ["云帆科技有限公司"]}]}}]})
+        for count in (3, 201):
+            with self.subTest(count=count), patch.object(data, "count", return_value=count):
+                resolved = port.resolve(spec).deliverables[0]
+                self.assertEqual(len(resolved.candidates), 2)
+
+    def test_an_unusable_other_condition_cannot_be_discarded_to_prove_uniqueness(self):
+        port = DataGoalPort(YudaoGoalData(_ScopedBranchClient(), DOCS))
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "crm/contract",
+            "metric": {"op": "count", "filters": [
+                {"field": "客户", "values": ["云帆科技有限公司"]},
+                {"field": "Unknown Field", "values": ["Only one"]}]}}]})
+        resolved = port.resolve(spec).deliverables[0]
+        self.assertEqual(len(resolved.candidates), 2)
+
+    def test_a_negated_ambiguous_name_is_not_rewritten_as_a_positive_binding(self):
+        port = DataGoalPort(YudaoGoalData(_ScopedBranchClient(), DOCS))
+        resolved = port.resolve(GoalSpec.from_json({"deliverables": [{"kind": "list",
+            "entity": "crm/contract", "metric": {"op": "count", "filters": [
+                {"field": "客户", "op": "!=", "values": ["云帆科技有限公司"]}]}}]})).deliverables[0]
+        self.assertEqual(len(resolved.candidates), 2)
+        self.assertIsNone(resolved.aggregate)
 
 
 class _TwinClient(_Client):

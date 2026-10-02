@@ -265,7 +265,7 @@ def _finds(resolution: Resolution) -> bool:
     several records a description fits (which the person can be asked to choose from)."""
     return bool(resolution.deliverables) and all(
         (not r.problem and (bool(r.facts) or r.page is not None
-                            or (r.aggregate is not None and r.aggregate.count > 0)))
+                            or r.aggregate is not None))
         or len(r.candidates) >= 2 or bool(r.denied)
         for r in resolution.deliverables)
 
@@ -1175,12 +1175,13 @@ class GoalTurnExecutor:
         resolution = self._which_amount(s, spec, resolution)
         resolution = self._not_chosen_for(s, spec, resolution)
         outcomes: list[_PageOutcome | None] = []
-        if any(r.page is not None for r in resolution.deliverables):
+        if any(d.kind in ("page", "handoff") and r.page is not None
+               for d, r in zip(spec.deliverables, resolution.deliverables, strict=True)):
             # The declarations took their time; the page has gone on rendering meanwhile
             # and the observation the turn holds may be stale. Look once before acting.
             self._dispatch(s, "observe", {})
         for declared, resolved in zip(spec.deliverables, resolution.deliverables, strict=True):
-            if resolved.page is None:
+            if resolved.page is None or declared.kind not in ("page", "handoff"):
                 outcomes.append(None)
                 continue
             if s.terminal_reason:
@@ -1345,9 +1346,8 @@ class GoalTurnExecutor:
             s.ledger.append("goal_readings_resolve_alike", step=s.step)
             return first
         if pair is not None and _finds(pair[0]) != _finds(pair[1]):
-            # One reading finds what it describes, the other finds nothing (no record by
-            # that name, a count of none): a request is about things that are there, and
-            # the reading that finds them is the one taken, without a third.
+            # Prefer a resolved deliverable over a missing/invalid one. Zero counts
+            # and empty lists are resolved answers, so this does not prefer positives.
             chosen = first if _finds(pair[0]) else second
             s.ledger.append("goal_readings_one_finds", step=s.step,
                             taken="first" if chosen is first else "second")

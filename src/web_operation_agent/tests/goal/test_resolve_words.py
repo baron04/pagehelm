@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from datetime import date
 
-from web_operation_agent.goal.data import EntitySchema, FieldSchema
+from web_operation_agent.goal.data import EntitySchema, FieldSchema, Row, all_of, matches
 from web_operation_agent.goal.resolve.phrases import Phrases
 from web_operation_agent.goal.resolve.view import EntityView
 from web_operation_agent.goal.resolve.words import period, worded
@@ -101,6 +101,25 @@ class FixedDayTests(unittest.TestCase):
         from web_operation_agent.goal.resolve.resolver import Resolver
         resolver = Resolver(None, None, None, today=date(2026, 9, 28))
         self.assertEqual(resolver.today(), date(2026, 9, 28))
+
+    def test_date_exclusion_keeps_known_dates_outside_the_half_open_period(self):
+        from web_operation_agent.goal.resolve.resolver import Resolver
+        resolver = Resolver(None, None, None, today=date(2026, 9, 28))
+        view = EntityView(EntitySchema(key="item", label="Item", fields=(
+            FieldSchema("day", "Date", "date"),)))
+        cases = (
+            ("2026-09-12", ("2026-09-11", "2026-09-13"), ("2026-09-12",)),
+            ("2026-09", ("2026-08-31", "2026-10-01"), ("2026-09-01", "2026-09-30")),
+            ("last quarter", ("2026-03-31", "2026-07-01"), ("2026-04-01", "2026-06-30")),
+            ("overdue", ("2026-09-28", "2026-09-29"), ("2026-09-27",)),
+        )
+        for period_name, outside, inside in cases:
+            clauses, _ = resolver._condition(view, "Date", (period_name,), op="!=")
+            cond = all_of(*clauses)
+            for value in outside:
+                self.assertTrue(matches(cond, Row("1", "Item", {"day": value})), (period_name, value))
+            for value in (*inside, None, ""):
+                self.assertFalse(matches(cond, Row("1", "Item", {"day": value})), (period_name, value))
 
 
 if __name__ == "__main__":
