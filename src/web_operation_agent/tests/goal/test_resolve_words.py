@@ -114,7 +114,12 @@ class FixedDayTests(unittest.TestCase):
             ("overdue", ("2026-09-28", "2026-09-29"), ("2026-09-27",)),
         )
         for period_name, outside, inside in cases:
-            clauses, _ = resolver._condition(view, "Date", (period_name,), op="!=")
+            clauses, text = resolver._condition(view, "Date", (period_name,), op="!=")
+            self.assertEqual(text, f"Date != {period_name}")
+            zh = Resolver(None, None, None, today=date(2026, 9, 28))
+            zh.say = Phrases("zh")
+            _, caption = zh._condition(view, "Date", (period_name,), op="!=")
+            self.assertIn("不在", caption)
             cond = all_of(*clauses)
             for value in outside:
                 self.assertTrue(matches(cond, Row("1", "Item", {"day": value})), (period_name, value))

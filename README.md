@@ -93,6 +93,7 @@ agent.
   A valid zero count or empty filtered list is an answer, not evidence that a competing
   positive interpretation is correct. Date exclusion selects known dates outside the
   half-open period and excludes missing dates; adapters apply the user's time zone.
+  Date exclusion headings retain the exclusion operator in both languages.
   Query results may carry page links, but only a declared page or handoff goal navigates.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
   make a turn complete. Goal stages share one deadline and model-request limit (each

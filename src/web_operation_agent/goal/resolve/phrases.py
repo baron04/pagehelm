@@ -86,7 +86,7 @@ class Phrases:
     def during(self, label: str, op: str, value: str) -> str:
         if not self.zh:
             return f"{label} {op or 'in'} {value}"
-        verb = {"": "在", "<": "早于", "<=": "不晚于", ">": "晚于", ">=": "不早于"}.get(op, "在")
+        verb = {"": "在", "!=": "不在", "<": "早于", "<=": "不晚于", ">": "晚于", ">=": "不早于"}.get(op, "在")
         return _join(label, verb, self._value(value))
 
     def between(self, label: str, first: str, second: str) -> str:
