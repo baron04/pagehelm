@@ -10,6 +10,7 @@ from ..answer.evidence import EvidenceUnknown, SourceEvidence
 from ..business.errors import (BusinessToolError, BusinessToolPermissionError,
                                BusinessToolRequestError)
 from ..business.runtime import FormDraft
+from ..business.tools.contracts import matches_form_control, form_control_unavailable
 from ..schemas import PageObservation
 from .routes import observation_is_at_route
 from .runstate import _Next, _Turn
@@ -169,6 +170,12 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
             else "Filled as you confirmed and not saved yet. Check it on the page and "
                  "save it yourself; leaving this page lets the application save these "
                  "changes.")
+    elif draft.submit_label:
+        turn.result.agent_said = (
+            f"表单已填写，尚未提交。请检查后手动点击页面高亮的‘{draft.submit_label}’。"
+            if chinese else
+            f"The form is filled and has not been submitted. Review it, then manually "
+            f"click the highlighted '{draft.submit_label}' on the page.")
     else:
         turn.result.agent_said = (
             "表单已预填，尚未提交。请检查或修改后由你继续。"
@@ -223,6 +230,8 @@ def apply_form_draft(
     receipt for the actual values and release of the read-only window.
     """
     current = observation
+    if current.render_state in {"pending", "blocked"}:
+        return current, "agent_refused", "the current form page is not ready"
     #: The error code the last dispatched command came back with, so the caller can
     #: tell "the page moved while we were aiming" from a real refusal.
     last_code = ""
@@ -282,6 +291,11 @@ def apply_form_draft(
         after = receipt.observation
         if not observation_is_at_route(after, draft.route):
             return after, "agent_refused", "the application left the issued form route"
+        if after.render_state == "blocked":
+            return after, "agent_refused", "the form page became unavailable"
+        if (action != "goto" and before.record_route
+                and after.record_route != before.record_route):
+            return after, "agent_refused", "the application changed the form record"
         return after, "", ""
 
     for action, args, field in actions:
@@ -289,10 +303,27 @@ def apply_form_draft(
         if reason:
             return current, reason, detail
 
+    def matching(binding):
+        return [element for element in current.elements if matches_form_control(
+            element, field=binding.field, label=binding.label, control=binding.control,
+            binding=binding.binding, scope=draft.control_scope)]
+
+    def ready():
+        nonlocal current
+        for wait_ms in (100, 250, 500):
+            if current.render_state != "pending":
+                return "", ""
+            current, reason, detail = dispatch("wait_for", {"ms": wait_ms}, "", current)
+            if reason:
+                return reason, detail
+        return (("agent_refused", "the form page is still loading")
+                if current.render_state == "pending" else ("", ""))
+
     for binding in draft.fields:
-        matches = [element for element in current.elements
-                   if element.role == binding.control
-                   and element.attrs.get("field") == binding.field]
+        reason, detail = ready()
+        if reason:
+            return current, reason, detail
+        matches = matching(binding)
         # A SPA may commit its URL before the component tree for the new route is ready.
         # Do not let a stale first observation turn an issued draft into an arbitrary
         # selector fallback. Re-observe after bounded, short waits and keep requiring the
@@ -304,9 +335,11 @@ def apply_form_draft(
                 "wait_for", {"ms": wait_ms}, "", current)
             if reason:
                 return current, reason, detail
-            matches = [element for element in current.elements
-                       if element.role == binding.control
-                       and element.attrs.get("field") == binding.field]
+            matches = matching(binding)
+        reason, detail = ready()
+        if reason:
+            return current, reason, detail
+        matches = matching(binding)
         if len(matches) != 1:
             session.ledger.append(
                 "form_prefill_field_refused", step=step, field=binding.field,
@@ -337,9 +370,10 @@ def apply_form_draft(
             current, reason, detail = dispatch("observe", {}, "", current)
             if reason:
                 return current, reason, detail
-            matches = [element for element in current.elements
-                       if element.role == binding.control
-                       and element.attrs.get("field") == binding.field]
+            reason, detail = ready()
+            if reason:
+                return current, reason, detail
+            matches = matching(binding)
             if len(matches) != 1:
                 session.ledger.append(
                     "form_prefill_field_refused", step=step, field=binding.field,
@@ -347,13 +381,28 @@ def apply_form_draft(
                 return current, "agent_refused", (
                     f"the current form did not expose one exact {binding.field} field")
     handoff_fields = []
+    reason, detail = ready()
+    if reason:
+        return current, reason, detail
     for binding in draft.fields:
-        matches = [element for element in current.elements
-                   if element.role == binding.control
-                   and element.attrs.get("field") == binding.field]
+        matches = matching(binding)
         if len(matches) != 1:
             return current, "agent_refused", (
                 f"the current form no longer exposes one exact {binding.field} field")
         handoff_fields.append({"ref": matches[0].ref, "field": binding.field,
-                               "control": binding.control, "value": binding.value})
-    return dispatch("handoff_form", {"fields": handoff_fields}, "", current)
+                               "control": binding.control, "value": binding.value,
+                               **({"binding": "label", "label": binding.label}
+                                  if binding.binding == "label" else {}),
+                               **({"scope": draft.control_scope}
+                                  if draft.control_scope else {})})
+    args = {"fields": handoff_fields}
+    if draft.submit_label:
+        buttons = [element for element in current.elements
+                   if element.role == "button" and element.name == draft.submit_label
+                   and element.attrs.get("form_scope") == draft.control_scope
+                   and not form_control_unavailable(element.attrs)]
+        if len(buttons) != 1:
+            return current, "agent_refused", "the form has no unique enabled submit control"
+        args["submit"] = {"ref": buttons[0].ref, "label": draft.submit_label,
+                          "scope": draft.control_scope}
+    return dispatch("handoff_form", args, "", current)

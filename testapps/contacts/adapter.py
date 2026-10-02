@@ -582,6 +582,7 @@ class _ContactsFormPort:
                     required=True),
             ),
             scope="fields writable by the current actor on the new-contact page",
+            control_scope="form:contact-create", submit_label="Save contact",
         )
 
     def prepare_form(self, form, values: tuple[ApplicationFormValue, ...], *,
@@ -604,6 +605,7 @@ class _ContactsFormPort:
                 item.field.reference, item.field.label,
                 normalized[item.field.reference], item.control)
                 for item in values),
+            control_scope=form.control_scope, submit_label=form.submit_label,
         )
 
 

@@ -146,6 +146,35 @@ class ChannelTests(unittest.TestCase):
                                      page_epoch=current.page_epoch)
         self.assertEqual(channel.enqueue_action(issued).kind, "action")
 
+    def test_scoped_handoff_cannot_be_silently_accepted_by_an_older_runtime(self):
+        from web_operation_agent.schemas.browser import SCOPED_FORM_HANDOFF_CAPABILITY
+        for args in (
+            {"fields": [{"ref": "e1", "field": "name", "value": "new",
+                         "control": "textbox", "scope": "form:editor"}]},
+            {"fields": [{"ref": "e1", "field": "name", "value": "new",
+                         "control": "textbox", "binding": "label", "label": "Name"}]},
+            {"fields": [], "submit": {"ref": "e2", "label": "Save", "scope": "form:editor"}},
+        ):
+            with self.subTest(args=args):
+                for supported in (False, True):
+                    registry = RemoteSessionRegistry()
+                    grant, channel = registry.create(allowed_origins=[ORIGIN])
+                    advertised = hello(grant.session_id)
+                    caps = advertised.capabilities + ("page.handoff_form",)
+                    if supported:
+                        caps += (SCOPED_FORM_HANDOFF_CAPABILITY,)
+                    reply = channel.accept_hello(dataclasses.replace(advertised, capabilities=caps))
+                    current = observation(grant.session_id, 1)
+                    channel.accept_observation(current, lease_id=reply["lease_id"])
+                    command = ActionCommand("scoped", "handoff_form", args)
+                    action = dataclasses.replace(action_for(grant.session_id, current, action_id="scoped"),
+                        command=command, command_digest=command.content_digest)
+                    if supported:
+                        self.assertEqual(channel.enqueue_action(action).kind, "action")
+                    else:
+                        with self.assertRaisesRegex(RemoteProtocolError, SCOPED_FORM_HANDOFF_CAPABILITY):
+                            channel.enqueue_action(action)
+
     def test_principal_bound_session_requires_exact_runtime_binding(self):
         now = int(time.time() * 1000)
         expected = principal(now)

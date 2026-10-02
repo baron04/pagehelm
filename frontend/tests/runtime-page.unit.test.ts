@@ -138,6 +138,39 @@ describe('Page.describe bounds an observation before it crosses the browser boun
 })
 
 describe('Page refuses controls that are not writable at execution time', () => {
+  it('checks a scoped unnamed input and its native submit button without clicking', () => {
+    const form = document.createElement('form')
+    form.id = 'native-editor'
+    form.innerHTML = '<label for="n">Name</label><input id="n"><button type="submit">Confirm</button>'
+    document.body.append(form)
+    try {
+      const input = form.querySelector('input')!, button = form.querySelector('button')!
+      input.value = 'Draft'
+      const clicked = vi.fn(); button.addEventListener('click', clicked)
+      const page = new Page(controller(), (_map, index) => index === 1 ? input : button, createRedactor())
+      const observed = [
+        {ref: 'e1', role: 'textbox', name: '', tag: 'input', epoch: 1,
+          attrs: {field_label: 'Name', form_scope: 'form:native-editor'}},
+        {ref: 'e2', role: 'button', name: 'Confirm', tag: 'button', epoch: 1,
+          attrs: {form_scope: 'form:native-editor'}},
+      ]
+      const fields = [{ref: 'e1', field: 'name', label: 'Name', binding: 'label',
+        scope: 'form:native-editor', control: 'textbox', value: 'Draft'}]
+      const submit = {ref: 'e2', label: 'Confirm', scope: 'form:native-editor'}
+      expect(page.verifyFormFields(fields, observed)).toBe(true)
+      expect(page.verifyFormSubmit(submit, fields, observed)).toBe(true)
+      expect(clicked).not.toHaveBeenCalled()
+      input.name = 'different'
+      expect(page.verifyFormFields(fields, observed)).toBe(false)
+      input.removeAttribute('name')
+      button.disabled = true
+      expect(page.verifyFormSubmit(submit, fields, observed)).toBe(false)
+      button.disabled = false
+      expect(page.verifyFormSubmit(submit, fields, [...observed, {...observed[1]!, ref: 'e3'}])).toBe(false)
+      form.id = 'replaced'
+      expect(page.verifyFormFields(fields, observed)).toBe(false)
+    } finally { form.remove() }
+  })
   it('refuses a forged field identity inherited from the HTML form name', () => {
     const form = document.createElement('form')
     form.name = 'customer'

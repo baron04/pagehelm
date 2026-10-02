@@ -41,6 +41,9 @@ declares its own two create fields while Odoo translates its actor-scoped action
 DOM selector to the Agent. The test application also serves a writer-only `/contacts/new`
 screen so the real-browser qualification can prove prefill stops before the human-owned
 submit endpoint.
+Its adapter binds the create form by its DOM identity and names `Save contact` as the
+manual submit target. The scripted real-browser qualification fills both fields, highlights
+that button, and checks that no submit request or record creation occurred.
 
 To use the product as an ordinary signed-in user, without Playwright or browser injection:
 

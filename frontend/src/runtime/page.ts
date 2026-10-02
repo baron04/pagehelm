@@ -10,7 +10,7 @@
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateButtonFacts, hydrateFormFacts,
   hydrateLinkFacts, hydrateRevealFacts, hydrateSelectionFacts, formFieldName,
-  isSensitiveFormControl, refIndex,
+  formControlLabel, formControlScope, isSensitiveFormControl, refIndex,
   revealable, type ElementLike, type ElementLookup,
 } from './pageModel'
 import {canonicalUrl} from './navigation'
@@ -58,7 +58,18 @@ export type PageRecordRouteReader = () => unknown
 export type PageBlockerReader = () => unknown
 export type ActiveViewReader = () => unknown
 export interface PageHighlight { clear(): void; active(): boolean }
-export interface FormHandoffField {ref: string; field: string; control: string; value: string}
+export interface FormHandoffField {
+  ref: string; field: string; control: string; value: string
+  binding?: string; label?: string; scope?: string
+}
+export interface FormSubmitTarget {ref: string; label: string; scope: string}
+
+export function formFieldMatches(element: ElementRef, binding: FormHandoffField): boolean {
+  return element.role === binding.control && (!binding.scope ||
+    element.attrs.form_scope === binding.scope) && (binding.binding === 'label'
+      ? !element.attrs.field && element.attrs.field_label === binding.label
+      : element.attrs.field === binding.field)
+}
 
 /** What one observation of the page found, before the session numbers and wraps it. */
 export interface PageReading {
@@ -176,21 +187,45 @@ export class Page {
       const binding = item as FormHandoffField
       if (typeof binding.ref !== 'string' || typeof binding.field !== 'string' ||
           typeof binding.value !== 'string' ||
+          !['field', 'label'].includes(binding.binding || 'field') ||
+          (binding.binding === 'label' && (!binding.label || !binding.scope)) ||
           !['textbox', 'combobox', 'select'].includes(binding.control) ||
           seen.has(binding.field)) return false
       seen.add(binding.field)
-      const matches = observed.filter(element => element.ref === binding.ref &&
-        element.role === binding.control && element.attrs.field === binding.field)
-      if (matches.length !== 1) return false
+      const matches = observed.filter(element => formFieldMatches(element, binding))
+      if (matches.length !== 1 || matches[0]!.ref !== binding.ref) return false
       let live: ElementLike | null | undefined
       try { live = this.element(binding.ref) } catch { return false }
       if (!live || live.isConnected === false || live.disabled || live.readOnly) return false
-      if (formFieldName(live) !== binding.field) return false
+      if (binding.scope && formControlScope(live) !== binding.scope) return false
+      if (isSensitiveFormControl(live, this.redactor)) return false
+      if (binding.binding === 'label') {
+        if (formFieldName(live) || formControlLabel(live) !== binding.label) return false
+      } else if (formFieldName(live) !== binding.field) return false
       if (binding.control === 'select' && String(live.tagName || '').toLowerCase() !== 'select') {
         return false
       }
       return String(live.value ?? '') === binding.value
     })
+  }
+
+  /** Verify one server-owned submit target; highlighting never activates it. */
+  verifyFormSubmit(target: unknown, fields: unknown, observed: ElementRef[]): target is FormSubmitTarget {
+    if (!target || typeof target !== 'object' || !Array.isArray(fields)) return false
+    const candidate = target as FormSubmitTarget
+    if (typeof candidate.ref !== 'string' || typeof candidate.label !== 'string' ||
+        !candidate.label || candidate.label.length > browserContract.form_handoff.max_label_chars || !candidate.scope ||
+        fields.some(field => !field || field.scope !== candidate.scope)) return false
+    const matches = observed.filter(element => element.role === 'button' &&
+      element.name === candidate.label && element.attrs.form_scope === candidate.scope)
+    if (matches.length !== 1 || matches[0]!.ref !== candidate.ref) return false
+    let live: ElementLike | null | undefined
+    try { live = this.element(candidate.ref) } catch { return false }
+    if (!live || live.isConnected === false || live.disabled || live.readOnly ||
+        String(live.tagName || '').toLowerCase() !== 'button' ||
+        formControlScope(live) !== candidate.scope) return false
+    const label = String(live.textContent || '').replace(/\s+/g, ' ').trim()
+    return label === candidate.label
   }
 
   /** Mark one observed control without focusing, clicking, or covering its hit target. */

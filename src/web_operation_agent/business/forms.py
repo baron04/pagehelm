@@ -22,8 +22,10 @@ from urllib.parse import urlsplit
 from .errors import (BusinessToolContractError, BusinessToolIdentityError,
                      BusinessToolPermissionError, BusinessToolRequestError)
 from .tools.contracts import (APPLICATION_SAVES_ON_LEAVE, FORM_PERSISTENCE,
-                              FormDraft, FormDraftField)
+                              FormDraft, FormDraftField, matches_form_control,
+                              validate_form_scope, form_control_unavailable)
 from ..schemas import PageObservation
+from ..schemas.browser import MAX_FORM_LABEL_CHARS
 from ..state.identity import OperationContext, PrincipalError
 
 
@@ -142,15 +144,18 @@ class ApplicationFormField:
     controls: tuple[str, ...] = ("textbox",)
     required: bool = False
     choices: tuple[FormChoice, ...] = ()
+    binding: str = "field"
 
     def __post_init__(self) -> None:
         if (not isinstance(self.reference, str)
                 or not _FIELD_REFERENCE.fullmatch(self.reference)
                 or _SENSITIVE.search(self.reference)):
             raise ValueError("application form field reference is invalid")
-        object.__setattr__(self, "label", _text(self.label, "form field label", 120))
+        object.__setattr__(self, "label", _text(self.label, "form field label", MAX_FORM_LABEL_CHARS))
         if self.kind not in _KINDS:
             raise ValueError("application form field kind is invalid")
+        if self.binding not in {"field", "label"}:
+            raise ValueError("application form binding is invalid")
         if (not isinstance(self.controls, tuple) or not self.controls
                 or len(self.controls) != len(set(self.controls))
                 or any(item not in _CONTROLS for item in self.controls)):
@@ -180,6 +185,8 @@ class ApplicationFormDescriptor:
     persistence: str = "transient_until_submit"
     effect: str = ""
     targets: tuple[str, ...] = ()
+    control_scope: str = ""
+    submit_label: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "reference", _text(
@@ -197,6 +204,9 @@ class ApplicationFormDescriptor:
                 or any(not isinstance(item, ApplicationFormField) for item in self.fields)
                 or len({item.reference for item in self.fields}) != len(self.fields)):
             raise ValueError("application form fields are invalid or repeated")
+        labels = [item.label for item in self.fields if item.binding == "label"]
+        if len(labels) != len(set(labels)):
+            raise ValueError("application label bindings must be unique within the form")
         if not isinstance(self.persistence, str) or self.persistence not in FORM_PERSISTENCE:
             raise ValueError("application form persistence is invalid")
         if not isinstance(self.effect, str) or not isinstance(self.targets, tuple):
@@ -210,6 +220,10 @@ class ApplicationFormDescriptor:
                 raise ValueError("application form targets are invalid")
         elif self.effect or self.targets:
             raise ValueError("a transient application form states no effect or targets")
+        validate_form_scope(self.control_scope, self.submit_label,
+                            label_binding=any(item.binding == "label" for item in self.fields))
+        if self.submit_label and self.persistence != "transient_until_submit":
+            raise ValueError("submit highlighting requires a transient form")
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +308,8 @@ class ApplicationFormTools:
 
     def _descriptor(self, observation: PageObservation,
                     context: OperationContext | None) -> ApplicationFormDescriptor | None:
+        if observation.render_state in {"pending", "blocked"}:
+            raise BusinessToolRequestError("the current form page is not ready")
         if context is None and self._required_scopes:
             raise BusinessToolIdentityError(
                 "generic forms require a verified application identity")
@@ -334,9 +350,11 @@ class ApplicationFormTools:
             "reference": form.reference, "title": form.title, "route": form.route,
             "scope": form.scope, "persistence": form.persistence,
             "effect": form.effect, "targets": list(form.targets),
+            "control_scope": form.control_scope, "submit_label": form.submit_label,
             "fields": [{
                 "reference": field.reference, "label": field.label, "kind": field.kind,
                 "controls": list(field.controls), "required": field.required,
+                "binding": field.binding,
                 "choices": [{"value": item.value, "label": item.label}
                             for item in field.choices],
             } for field in form.fields],
@@ -364,8 +382,9 @@ class ApplicationFormTools:
         visible = []
         for field in form.fields:
             matches = [element for element in observation.elements
-                       if element.attrs.get("field") == field.reference
-                       and element.role in field.controls
+                       if any(matches_form_control(element, field=field.reference,
+                           label=field.label, control=control, binding=field.binding,
+                           scope=form.control_scope) for control in field.controls)
                        and not self._unavailable(element.attrs)]
             if len(matches) == 1:
                 visible.append(_VisibleField(field, matches[0].role))
@@ -377,14 +396,7 @@ class ApplicationFormTools:
     @staticmethod
     def _unavailable(attrs: dict) -> bool:
         """Whether current observation facts say a control cannot be written."""
-        for name in ("disabled", "readonly", "read-only"):
-            if name not in attrs:
-                continue
-            value = attrs[name]
-            if value is True or (isinstance(value, str)
-                                 and value.casefold() not in {"", "0", "false", "no", "off"}):
-                return True
-        return False
+        return form_control_unavailable(attrs)
 
     @staticmethod
     def _validate_value(field: ApplicationFormField, value: str) -> None:
@@ -526,11 +538,15 @@ class ApplicationFormTools:
                 "the application returned an invalid form draft") from exc
         if not isinstance(draft, FormDraft):
             raise BusinessToolContractError("the application returned an invalid form draft")
-        expected = {(item.field.reference, item.control) for item in selected}
-        actual = {(item.field, item.control) for item in draft.fields}
+        expected = {(item.field.reference, item.field.label, item.control,
+                     item.field.binding) for item in selected}
+        actual = {(item.field, item.label, item.control, item.binding)
+                  for item in draft.fields}
         if (draft.route != form.route or expected != actual
                 or draft.persistence != form.persistence
-                or draft.effect != form.effect or draft.targets != form.targets):
+                or draft.effect != form.effect or draft.targets != form.targets
+                or draft.control_scope != form.control_scope
+                or draft.submit_label != form.submit_label):
             raise BusinessToolContractError(
                 "the application form draft exceeds the current descriptor")
         return draft, {

@@ -695,6 +695,10 @@ class NativeContactsBrowserTests(unittest.TestCase):
                                      "margaret@example.test")
                     self.assertEqual(host.application.write_requests, 0)
                     self.assertEqual(host.application.records_created, 0)
+                    submit = page.get_by_role("button", name="Save contact", exact=True)
+                    self.assertTrue(submit.is_enabled())
+                    self.assertTrue(submit.evaluate("e => !!e.style.outline"))
+                    self.assertIn("highlighted 'Save contact'", outcome.result.user_answer)
                     self.assertIn("describe_form", chat.seen[0])
                     self.assertIn("prepare_form", chat.seen[0])
                     # Offered from the first call so the tool list never changes mid-turn; the

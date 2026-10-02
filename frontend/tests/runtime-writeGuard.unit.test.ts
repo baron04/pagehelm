@@ -262,6 +262,52 @@ describe('a page action in an application that names a write guard', () => {
       .toEqual(['/woa/page-guard/begin'])
   })
 
+  it.each(['ready', 'button-disabled', 'field-reset', 'scope-replaced', 'release-refused'])(
+    'hands over a scoped form with a highlight only when %s', async mode => {
+      const form = document.createElement('form')
+      form.id = 'handoff-editor'
+      form.innerHTML = '<label for="draft-name">Name</label><input id="draft-name">' +
+        '<button type="submit">Confirm</button>'
+      document.body.append(form)
+      const input = form.querySelector('input')!, button = form.querySelector('button')!
+      input.value = 'Draft'
+      button.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
+      const clicked = vi.fn(); button.addEventListener('click', clicked)
+      try {
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+          if (url.endsWith('/begin')) return reply(200, {active: true, expires_at: Date.now() / 1000 + 120})
+          if (mode === 'release-refused') return reply(503, {})
+          if (mode === 'button-disabled') button.disabled = true
+          if (mode === 'field-reset') input.value = ''
+          if (mode === 'scope-replaced') form.id = 'different'
+          return reply(200, {active: false})
+        }))
+        const {runtime, posts, action} = actingRuntime('/woa/page-guard')
+        const state = runtime as unknown as Record<string, unknown>
+        state.controller = {selectorMap: {}, getBrowserState: vi.fn(), clickElement: vi.fn(),
+          inputText: vi.fn(), selectOption: vi.fn(), scroll: vi.fn(), dispose: vi.fn()}
+        state.getElementByIndex = (_map: unknown, index: number) => index === 1 ? input : button
+        const read = () => runtime.page.describe({url: 'https://app.test/odoo/sales', title: 'Editor',
+          content: '[1]<input type=text />\n[2]<button>Confirm />'}, 1).observation
+        state.currentObservation = {session_id: 's', observation_id: 'o-1', page_epoch: 1,
+          observation: {...read(), render_state: 'ready'}}
+        state.observe = async (actionId: string) => ({session_id: 's', observation_id: 'o-2',
+          page_epoch: 2, caused_by_action_id: actionId, observation: {...read(), render_state: 'ready'}})
+        state._execute = EmbeddedWebRuntime.prototype._execute.bind(runtime)
+        action.command.action = 'handoff_form'
+        ;(action.command as {args: Record<string, unknown>}).args = {fields: [{ref: 'e1',
+          field: 'name', label: 'Name', binding: 'label', scope: 'form:handoff-editor',
+          control: 'textbox', value: 'Draft'}],
+          submit: {ref: 'e2', label: 'Confirm', scope: 'form:handoff-editor'}}
+        await runtime._handleAction(action as never)
+        expect((posts[1]?.body.receipt as Record<string, unknown>).ok).toBe(mode === 'ready')
+        expect(button.style.outline !== '').toBe(mode === 'ready')
+        expect(state.handoffGranted === true).toBe(mode === 'ready')
+        expect(clicked).not.toHaveBeenCalled()
+        if (mode === 'ready') (state.highlightHandle as {clear(): void}).clear()
+      } finally { form.remove() }
+    })
+
   it('rejects an old action after the person takes control', async () => {
     const {runtime, executed, posts, action} = actingRuntime()
     const state = runtime as unknown as Record<string, unknown>

@@ -12,5 +12,9 @@
   },
   "scroll": {
     "max_pages": 3
+  },
+  "form_handoff": {
+    "scoped_capability": "page.scoped_form_handoff",
+    "max_label_chars": 120
   }
 }

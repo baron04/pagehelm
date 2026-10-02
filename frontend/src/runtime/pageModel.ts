@@ -64,7 +64,10 @@ export interface ElementLike {
   isConnected?: boolean
   className?: string | {baseVal?: string}
   options?: ArrayLike<{value?: string; textContent?: string | null; disabled?: boolean; selected?: boolean}>
-  form?: {action?: string; method?: string; target?: string} | null
+  labels?: ArrayLike<ElementLike> | null
+  action?: string
+  method?: string
+  form?: ElementLike | null
   ownerDocument?: Document | null
   hasAttribute?(name: string): boolean
   getAttribute?(name: string): string | null
@@ -100,11 +103,62 @@ export function formFieldName(element: ElementLike | null | undefined): string |
     ? owner : element, 'name')
 }
 
+function uniqueId(document: Document | null | undefined, id: string): Element | null {
+  if (!document || !/^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(id)) return null
+  const matches = document.querySelectorAll(`[id="${id}"]`)
+  return matches.length === 1 ? matches[0]! : null
+}
+
+/** Exactly one associated label, never a placeholder or arbitrary nearby text. */
+export function formControlLabel(element: ElementLike | null | undefined): string | null {
+  if (!element) return null
+  const names: string[] = []
+  const labels = Array.from(element.labels || [])
+  if (labels.length > 1) return null
+  if (labels.length === 1) names.push(String(labels[0]?.textContent || ''))
+  const labelledby = explicitAttribute(element, 'aria-labelledby')
+  if (labelledby !== null) {
+    const ids = labelledby.trim().split(/\s+/)
+    if (!ids.length || ids.length > 4 || new Set(ids).size !== ids.length) return null
+    const nodes = ids.map(id => uniqueId(element.ownerDocument, id))
+    if (nodes.some(node => !node)) return null
+    names.push(nodes.map(node => node!.textContent || '').join(' '))
+  }
+  const ariaLabel = explicitAttribute(element, 'aria-label')
+  if (ariaLabel !== null) names.push(ariaLabel)
+  const normalized = names.map(name => name.replace(/\s+/g, ' ').trim())
+  if (!normalized.length || normalized.some(name => !name ||
+      name.length > browserContract.form_handoff.max_label_chars)
+      || new Set(normalized).size !== 1) return null
+  return normalized[0]!
+}
+
+/** The one DOM-owned dialog/form identity; missing or duplicate IDs establish no scope. */
+export function formControlScope(element: ElementLike | null | undefined): string | null {
+  if (!element) return null
+  const dialog = element.closest?.('[role="dialog"],dialog')
+  if (dialog) {
+    const id = explicitAttribute(dialog, 'id')
+    if (id && uniqueId(element.ownerDocument, id) === dialog) return `dialog:${id}`
+    for (const association of ['labelledby', 'describedby']) {
+      const id = explicitAttribute(dialog, `aria-${association}`)
+      if (id && uniqueId(element.ownerDocument, id)
+          && dialog.querySelectorAll?.(`[id="${id}"]`).length === 1
+          && element.ownerDocument?.querySelectorAll(`[role="dialog"][aria-${association}="${id}"],dialog[aria-${association}="${id}"]`)
+            .length === 1) return `dialog_${association}:${id}`
+    }
+    return null
+  }
+  const form = element.form || element.closest?.('form')
+  const id = explicitAttribute(form, 'id')
+  return id && uniqueId(element.ownerDocument, id) === form ? `form:${id}` : null
+}
+
 /** Live identity can reveal a sensitive input that the controller summary left unnamed. */
 export function isSensitiveFormControl(element: ElementLike | null | undefined,
                                        redactor: Redactor): boolean {
   return String(element?.type || '').toLowerCase() === 'password'
-    || [formFieldName(element), element?.name, element?.id,
+    || [formFieldName(element), formControlLabel(element), element?.name, element?.id,
       explicitAttribute(element, 'autocomplete')].some(value =>
       value != null && redactor.isSensitiveName(String(value)))
 }
@@ -129,6 +183,10 @@ export function actionElementFingerprint(element: ElementLike | null | undefined
     type: String(element.type || ''),
     name: String(element.name || ''),
     field: formFieldName(element),
+    fieldLabel: formControlLabel(element),
+    formScope: formControlScope(element),
+    dialogTitle: formControlLabel(element.closest?.('[role="dialog"],dialog')),
+    dialogText: String(element.closest?.('[role="dialog"],dialog')?.textContent || '').slice(0, 1600),
     id: String(element.id || ''),
     role: String(element.getAttribute?.('role') || element.role || ''),
     ariaSelected: explicitAttribute(element, 'aria-selected'),
@@ -306,14 +364,20 @@ export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unkno
 export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
                                  getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {
   for (const item of elements) {
-    if (!['textbox', 'combobox', 'select'].includes(item.role)) continue
+    if (!['textbox', 'combobox', 'select', 'button'].includes(item.role)) continue
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
+      delete item.attrs.form_scope
+      delete item.attrs.field_label
+      delete item.attrs.field
       // These are live DOM facts rather than hints parsed from PageController's text.
       // They let the server omit an unavailable field up front; Page.input/select still
       // recheck the live element at execution time because the DOM may change afterwards.
       if (element?.disabled) item.attrs.disabled = 'true'
       if (element?.readOnly) item.attrs.readonly = 'true'
+      const scope = formControlScope(element)
+      if (scope && !redactor.isSensitiveName(scope)) item.attrs.form_scope = scope
+      if (item.role === 'button') continue
       const rawField = formFieldName(element)
       const sensitive = isSensitiveFormControl(element, redactor)
       // Parsed summary attributes can predate a DOM change or omit a wrapper's name.
@@ -321,8 +385,13 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       if (sensitive) {
         delete item.attrs.value
         delete item.attrs.field
+        delete item.attrs.field_label
         item.name = ''
         continue
+      }
+      const label = formControlLabel(element)
+      if (scope && !rawField && label && redactor.redactString(label) === label) {
+        item.attrs.field_label = label
       }
       // What a text field currently shows, so the server can check a value it entered
       // before handing the form to the person. Redacted like any other observed text,

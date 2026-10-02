@@ -2,10 +2,87 @@ import {describe, expect, it} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, explicitAttribute, hydrateButtonFacts, hydrateFormFacts,
-  hydrateLinkFacts, hydrateRevealFacts, hydrateSelectionFacts, refIndex, revealable, type ElementLike,
+  hydrateLinkFacts, hydrateRevealFacts, hydrateSelectionFacts, formControlLabel, formControlScope,
+  refIndex, revealable, type ElementLike,
 } from '../src/runtime/pageModel'
 
 const redactor = createRedactor()
+
+describe('observable form labels and scopes', () => {
+  it('uses the unique ARIA body association when a custom header omits its title ID', () => {
+    const dialog = document.createElement('section')
+    dialog.setAttribute('role', 'dialog')
+    dialog.setAttribute('aria-labelledby', 'missing-title')
+    dialog.setAttribute('aria-describedby', 'editor-body')
+    dialog.innerHTML = '<header>Create</header><section id="editor-body"><input aria-label="Name"></section>'
+    document.body.append(dialog)
+    try {
+      const input = dialog.querySelector('input')!
+      expect(formControlScope(input)).toBe('dialog_describedby:editor-body')
+      const before = actionElementFingerprint(input)
+      dialog.querySelector('header')!.textContent = 'Update'
+      expect(actionElementFingerprint(input)).not.toBe(before)
+      const duplicate = document.createElement('section')
+      duplicate.id = 'editor-body'; dialog.append(duplicate)
+      expect(formControlScope(input)).toBeNull()
+    } finally { dialog.remove() }
+  })
+  it('associates label/for inputs and the dialog footer through the same ARIA dialog', () => {
+    const dialog = document.createElement('section')
+    dialog.setAttribute('role', 'dialog')
+    dialog.setAttribute('aria-labelledby', 'editor-title')
+    dialog.innerHTML = '<h2 id="editor-title">Create</h2><form><label for="native-name">Name</label>' +
+      '<input id="native-name"></form><button type="button">Confirm</button>'
+    document.body.append(dialog)
+    try {
+      const input = dialog.querySelector('input')!, button = dialog.querySelector('button')!
+      expect(formControlLabel(input)).toBe('Name')
+      expect(formControlScope(input)).toBe('dialog_labelledby:editor-title')
+      expect(formControlScope(button)).toBe(formControlScope(input))
+      const elements = elementsFrom('[0]<input type=text />\n[1]<button>Confirm />', 1, redactor)
+      hydrateFormFacts(elements, {}, (_map, index) => [input, button][index], redactor)
+      expect(elements[0]?.attrs).toMatchObject({field_label: 'Name', form_scope: 'dialog_labelledby:editor-title'})
+      expect(elements[1]?.attrs.form_scope).toBe('dialog_labelledby:editor-title')
+      const before = actionElementFingerprint(input)
+      dialog.querySelector('h2')!.textContent = 'Update'
+      expect(actionElementFingerprint(input)).not.toBe(before)
+    } finally { dialog.remove() }
+  })
+
+  it('refuses duplicate identities and conflicting accessible labels', () => {
+    const form = document.createElement('form')
+    form.id = 'editor'
+    form.innerHTML = '<label for="n">Name</label><input id="n" aria-label="Other">'
+    document.body.append(form)
+    const duplicate = document.createElement('form')
+    duplicate.id = 'editor'
+    document.body.append(duplicate)
+    try {
+      const input = form.querySelector('input')!
+      expect(formControlLabel(input)).toBeNull()
+      expect(formControlScope(input)).toBeNull()
+      duplicate.remove()
+      input.removeAttribute('aria-label')
+      expect(formControlLabel(input)).toBe('Name')
+      expect(formControlScope(input)).toBe('form:editor')
+      input.setAttribute('aria-labelledby', 'missing')
+      expect(formControlLabel(input)).toBeNull()
+    } finally { form.remove(); duplicate.remove() }
+  })
+
+  it('reads ARIA labels without treating placeholders as field bindings', () => {
+    const form = document.createElement('form')
+    form.id = 'editor'
+    form.innerHTML = '<span id="label">Full name</span><input aria-labelledby="label">' +
+      '<input placeholder="Name">'
+    document.body.append(form)
+    try {
+      const inputs = form.querySelectorAll('input')
+      expect(formControlLabel(inputs[0])).toBe('Full name')
+      expect(formControlLabel(inputs[1])).toBeNull()
+    } finally { form.remove() }
+  })
+})
 
 describe('boundIndexedContent limits the live control surface without cutting a record', () => {
   it('retains the first bounded records and reports omitted controls', () => {

@@ -306,6 +306,10 @@ agent.
   A named field wrapper may identify its input; a containing HTML form's name cannot.
   The Runtime rechecks that binding at handoff and refuses an action if the wrapper changes.
   Live credential identities also redact the control's text and value projections.
+  An adapter may instead issue an exact associated-label binding inside one DOM-owned form
+  or dialog scope. A reviewed submit label in that scope is highlighted at handoff;
+  fields, button, and guard release are rechecked before the server asks the person to submit.
+  Duplicate labels or buttons and explicit conflicting field names are refused.
   A failed handoff does not claim the form is ready; some fields may already contain the
   draft. Odoo and Contacts translate different metadata sources to the same contract.
   An optional source lookup can inform a value for an existing field; a source-derived

@@ -33,8 +33,10 @@ class ContactsGenericFormTests(unittest.TestCase):
             schema_version=1, epoch=7,
             url="http://127.0.0.1:1/contacts/new", title="New contact",
             landmarks=[], content="New contact form", elements=[
-                ElementRef("e1", "textbox", "Name", "input", 7, {"field": "name"}),
-                ElementRef("e2", "textbox", "Email", "input", 7, {"field": "email"}),
+                ElementRef("e1", "textbox", "Name", "input", 7,
+                           {"field": "name", "form_scope": "form:contact-create"}),
+                ElementRef("e2", "textbox", "Email", "input", 7,
+                           {"field": "email", "form_scope": "form:contact-create"}),
             ])
         assert_current_form_contract(
             self, adapter.ports.forms, application_id=APPLICATION_ID,

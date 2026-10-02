@@ -14,6 +14,7 @@
  * seams the conformance tests reach through, so they stay methods on the instance.
  */
 import {contained, detach, later, listen, sleep, soon, type Cancel} from './contain'
+import browserContract from '@contract/browser_contract.json'
 import {
   executeCommand, mayNavigate, navigationExpectation, waitForNavigation,
   type CommandOutcome, type NavigationExpectation,
@@ -21,7 +22,8 @@ import {
 import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, navigationWal, recoveryProvesNavigation,
 } from './navigation'
-import {Page, loadPageController, type PageControllerApi, type PageFacetReader,
+import {Page, loadPageController, formFieldMatches, type FormHandoffField,
+  type FormSubmitTarget, type PageControllerApi, type PageFacetReader,
   type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
   type ActiveViewReader, type FacetCandidateReader, type FacetApplier} from './page'
 import type {ElementLookup} from './pageModel'
@@ -45,6 +47,7 @@ const CAPABILITIES = [
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
   'page.goto', 'page.back', 'page.scroll', 'page.wait', 'page.apply_facet',
   'page.highlight', 'page.handoff_form', 'page.reveal',
+  browserContract.form_handoff.scoped_capability,
 ]
 
 /** Used where a Runtime was assembled without its constructor -- in conformance tests. */
@@ -853,6 +856,13 @@ export class EmbeddedWebRuntime {
           return {fresh: false, reason: 'a form field changed after the last observation'}
         }
       }
+      const submit = command.args?.submit as FormSubmitTarget | undefined
+      if (submit) {
+        const expected = this.observationFingerprints.get(submit.ref)
+        if (expected === undefined || this.page.fingerprint(submit.ref) !== expected) {
+          return {fresh: false, reason: 'the form submit control changed after observation'}
+        }
+      }
       return {fresh: true, reason: ''}
     }
     if (!['click', 'fill', 'select', 'submit', 'highlight', 'reveal'].includes(command?.action)) {
@@ -1085,21 +1095,32 @@ export class EmbeddedWebRuntime {
     if (executing.command.action === 'handoff_form' && outcome.ok) {
       const fields = executing.command.args?.fields
       const rebound = Array.isArray(fields) ? fields.map((field: unknown) => {
-        const binding = field as {field: string; control: string; value: string}
+        const binding = field as FormHandoffField
         const matches = observation.observation.elements.filter(element =>
-          element.attrs.field === binding.field && element.role === binding.control)
+          formFieldMatches(element, binding))
         return matches.length === 1 ? {...binding, ref: matches[0]!.ref} : null
       }) : []
+      const submit = executing.command.args?.submit as FormSubmitTarget | undefined
+      const buttons = submit ? observation.observation.elements.filter(element =>
+        element.role === 'button' && element.name === submit.label &&
+        element.attrs.form_scope === submit.scope) : []
+      const submitReady = !submit || (buttons.length === 1 &&
+        this.highlightHandle?.active() && this.page.verifyFormSubmit(
+          {...submit, ref: buttons[0]!.ref}, rebound, observation.observation.elements))
       if (this.userIntervened || before.observation.url !== observation.observation.url ||
           before.observation.record_route !== observation.observation.record_route ||
           observation.observation.render_state !== 'ready' ||
-          rebound.some(field => field === null) ||
+          rebound.some(field => field === null) || !submitReady ||
           !this.page.verifyFormFields(rebound, observation.observation.elements)) {
         outcome = {ok: false, code: this.userIntervened ? 'user_intervened' : 'stale_observation',
           detail: 'the form fields were no longer ready at handoff'}
       } else {
         this.handoffGranted = true
       }
+    }
+    if (executing.command.action === 'handoff_form' && !outcome.ok) {
+      this._clearHighlight()
+      this.handoffGranted = false
     }
     // `navigated` is a change in the observed top-level URL. A child-frame commit satisfies
     // the action guard, and its new content travels in the fresh observation instead.
@@ -1124,6 +1145,14 @@ export class EmbeddedWebRuntime {
       if (!this.currentObservation || !this.page.verifyFormFields(
         command.args?.fields, this.currentObservation.observation.elements)) {
         throw new Error('bad_arguments: form fields do not match the current page')
+      }
+      if (command.args?.submit) {
+        if (!this.page.verifyFormSubmit(command.args.submit, command.args.fields,
+          this.currentObservation.observation.elements)) {
+          throw new Error('bad_arguments: form submit control does not match the current page')
+        }
+        this._clearHighlight()
+        this.highlightHandle = this.page.highlight(command.args.submit.ref)
       }
       return Promise.resolve({success: true, message: 'form fields verified for handoff'})
     }

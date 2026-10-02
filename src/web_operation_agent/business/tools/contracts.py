@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from ...answer.answering import StructuredQueryAnswer
 from ...answer.evidence import RecordEvidence
 from ...state.identity import OperationContext
+from ...schemas.browser import MAX_FORM_LABEL_CHARS
 
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -247,14 +248,17 @@ class FormDraftField:
     label: str
     value: str
     control: str = "textbox"
+    binding: str = "field"
 
     def __post_init__(self) -> None:
         if not isinstance(self.field, str) or not _FORM_FIELD.fullmatch(self.field):
             raise ValueError("form draft field identifier is invalid")
         if self.control not in {"textbox", "combobox", "select"}:
             raise ValueError("form draft control must be textbox, combobox or select")
+        if self.binding not in {"field", "label"}:
+            raise ValueError("form draft binding must be field or label")
         for name, value, maximum, allow_empty in (
-                ("label", self.label, 120, False),
+                ("label", self.label, MAX_FORM_LABEL_CHARS, False),
                 ("value", self.value, 4_000, True)):
             if (not isinstance(value, str) or (not allow_empty and not value.strip())
                     or len(value) > maximum
@@ -265,7 +269,8 @@ class FormDraftField:
 
     def to_json(self) -> dict:
         return {"field": self.field, "label": self.label,
-                "value": self.value, "control": self.control}
+                "value": self.value, "control": self.control,
+                **({"binding": self.binding} if self.binding != "field" else {})}
 
 
 #: A form the application leaves alone until its own submit control is used.
@@ -297,6 +302,8 @@ class FormDraft:
     #: words, and the records it names. Written by the adapter, never by the model.
     effect: str = ""
     targets: tuple[str, ...] = ()
+    control_scope: str = ""
+    submit_label: str = ""
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.route) if isinstance(self.route, str) else None
@@ -324,6 +331,10 @@ class FormDraft:
                 raise ValueError("a saving form draft must name 1-24 targets")
         elif self.effect or self.targets:
             raise ValueError("a transient form draft states no effect or targets")
+        validate_form_scope(self.control_scope, self.submit_label,
+                            label_binding=any(item.binding == "label" for item in self.fields))
+        if self.submit_label and self.persistence != TRANSIENT_UNTIL_SUBMIT:
+            raise ValueError("submit highlighting requires a transient form")
 
     @property
     def needs_confirmation(self) -> bool:
@@ -333,13 +344,17 @@ class FormDraft:
         """What the audit ledger keeps: the shape of the handoff, never the typed values."""
         return {"route": self.route, "persistence": self.persistence,
                 "fields": [item.field for item in self.fields],
-                "effect": self.effect, "targets": list(self.targets)}
+                "effect": self.effect, "targets": list(self.targets),
+                **({"control_scope": self.control_scope} if self.control_scope else {}),
+                **({"submit_label": self.submit_label} if self.submit_label else {})}
 
     def to_json(self) -> dict:
         return {"route": self.route,
                 "fields": [item.to_json() for item in self.fields],
                 "persistence": self.persistence,
                 "submission": "user_only",
+                **({"control_scope": self.control_scope} if self.control_scope else {}),
+                **({"submit_label": self.submit_label} if self.submit_label else {}),
                 **({"effect": self.effect, "targets": list(self.targets)}
                    if self.persistence == APPLICATION_SAVES_ON_LEAVE else {})}
 
@@ -348,6 +363,37 @@ class FormDraft:
         raw = json.dumps(self.to_json(), ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), allow_nan=False).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
+
+
+def validate_form_scope(scope: str, submit_label: str, *, label_binding: bool) -> None:
+    if not isinstance(scope, str) or (scope and not re.fullmatch(
+            r"(?:form|dialog|dialog_labelledby|dialog_describedby):[A-Za-z][A-Za-z0-9_:.-]{0,199}", scope)):
+        raise ValueError("form control scope is invalid")
+    if (not isinstance(submit_label, str) or len(submit_label) > MAX_FORM_LABEL_CHARS
+            or re.search(r"[\x00-\x1f\x7f]", submit_label)
+            or (submit_label and not submit_label.strip())):
+        raise ValueError("form submit label is invalid")
+    if (label_binding or submit_label) and not scope:
+        raise ValueError("label bindings and submit highlighting require a form control scope")
+
+
+def matches_form_control(element, *, field: str, label: str, control: str,
+                         binding: str, scope: str = "") -> bool:
+    if element.role != control or (scope and element.attrs.get("form_scope") != scope):
+        return False
+    if binding == "label":
+        return (not element.attrs.get("field")
+                and element.attrs.get("field_label") == label)
+    return element.attrs.get("field") == field
+
+
+def form_control_unavailable(attrs: dict) -> bool:
+    for name in ("disabled", "readonly", "read-only"):
+        value = attrs.get(name)
+        if value is True or (isinstance(value, str)
+                and value.casefold() not in {"", "0", "false", "no", "off"}):
+            return True
+    return False
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,7 @@ import time
 
 from ..schemas import (ActionEnvelope, ActionResultEnvelope, ApprovalDecision,
                        ApprovalRequest, ClientHello, ObservationEnvelope, TaskEvent)
+from ..schemas.browser import SCOPED_FORM_HANDOFF_CAPABILITY
 from .channel_state import TURN_PAGE_EVENTS
 from .panel_view import action_target
 from .protocol import (RemoteProtocolError, _copy_json, _copy_wire, _event_sequence,
@@ -37,6 +38,12 @@ class ChannelServer:
                 "apply_facet": "page.apply_facet", "highlight": "page.highlight",
                 "handoff_form": "page.handoff_form", "reveal": "page.reveal",
             }[action.command.action]
+            form_fields = action.command.args.get("fields")
+            if action.command.action == "handoff_form" and (
+                    "submit" in action.command.args or (isinstance(form_fields, list) and any(
+                        isinstance(item, dict) and ("scope" in item or item.get("binding") == "label")
+                        for item in form_fields))):
+                capability = SCOPED_FORM_HANDOFF_CAPABILITY
             if capability not in self._hello.capabilities:
                 raise RemoteProtocolError(
                     f"embedded runtime does not advertise {capability}",
