@@ -94,6 +94,8 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         sent back for repair instead of ending the deliverable."""
         problem = f"the application refused a read: {exc}"[:200]
         refused = exc.reason
+        if exc.permission_denied:
+            return Resolved(kind=d.kind, problem=problem, refused=refused, denied="read")
         filters = d.metric.filters if d.metric else ()
         if len(filters) < 2:
             return Resolved(kind=d.kind, problem=problem, refused=refused)

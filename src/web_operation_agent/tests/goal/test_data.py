@@ -14,6 +14,25 @@ def _row(**values) -> Row:
 
 
 class CombinationTests(unittest.TestCase):
+    def test_permission_refusal_is_typed_and_never_inferred_from_error_text(self):
+        from web_operation_agent.goal.data import DataRefused
+        from web_operation_agent.goal.spec import Deliverable, Filter, Metric
+        from web_operation_agent.goal.resolve.resolver import Resolver
+        from unittest.mock import Mock
+        resolver = Resolver.__new__(Resolver)
+        resolver._resolve_one = Mock()
+        requested = Deliverable(kind="aggregate", entity="restricted", metric=Metric(
+            op="count", filters=(Filter("a", ("x",)), Filter("b", ("y",)))))
+        refused = resolver._refused_read(requested, DataRefused(
+            "opaque application denial", permission_denied=True))
+        self.assertEqual(refused.denied, "read")
+        resolver._resolve_one.assert_not_called()
+        # Transient failures and even permission-looking prose carry no authority.
+        refused = resolver._refused_read(Deliverable(kind="aggregate"), DataRefused("403 permission denied"))
+        self.assertEqual(refused.denied, "")
+        with self.assertRaises(TypeError):
+            DataRefused("bad flag", permission_denied="yes")
+
     def test_all_of_flattens_and_drops_everything(self):
         a, b = Compare("state", "eq", "sale"), Compare("total", "gt", 10)
         self.assertEqual(all_of(EVERYTHING, a, None, all_of(b)), All((a, b)))

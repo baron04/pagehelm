@@ -2331,3 +2331,27 @@ class HalfSupportedRequestTests(unittest.TestCase):
                                    True), "无法完成这一项。")
         self.assertEqual(_not_done(Resolved(kind="list", problem="x", refused="pick a period"),
                                    False), "This part was not done: pick a period.")
+
+    def test_denied_read_is_named_while_other_reads_remain_visible(self):
+        declared = ("declare_goal", {"deliverables": [
+            {"kind": "aggregate", "entity": "order", "metric": {"op": "count"}},
+            {"kind": "aggregate", "entity": "order", "metric": {"op": "count"}}]})
+        execution, *_ = self._run([declared], [
+            Resolved(kind="aggregate", problem="403 opaque", denied="read"),
+            Resolved(kind="aggregate", aggregate=Aggregate(subject="Visible orders", count=10))],
+            text="受限订单有几条？同时统计可读订单。", offers=OPTIONAL)
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("没有读取销售订单的权限", execution.user_answer)
+        self.assertIn("10", execution.user_answer)
+        self.assertNotIn("403", execution.user_answer)
+
+    def test_missing_requested_fields_keep_the_explanation_and_available_answer(self):
+        declared = ("declare_goal", {"deliverables": [
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]}],
+            "unsupported": "没有提供联系电话字段，无法查询。"})
+        execution, _ = self._run([declared], [Resolved(kind="fact", facts=(
+            Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户名称和联系电话是什么？", offers=OPTIONAL)
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertIn("没有提供联系电话字段", execution.user_answer)

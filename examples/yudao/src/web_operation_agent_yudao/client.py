@@ -24,7 +24,8 @@ _UNAUTHORIZED = 401
 class YudaoReadRefused(DataRefused):
     """Preserve the application's response code across the legacy and generic readers."""
     def __init__(self, message: str, *, code, reason: str = ""):
-        super().__init__(message, reason=reason)
+        super().__init__(message, reason=reason,
+                         permission_denied=type(code) is int and code == 403)
         self.code = code
 
 

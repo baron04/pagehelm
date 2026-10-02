@@ -632,6 +632,7 @@ class _TurnState:
     focus: tuple = ()
     source_answer: str = ""
     source_complete: bool = True
+    unsupported: str = ""
 
 
 
@@ -1226,6 +1227,7 @@ class GoalTurnExecutor:
             if not accepted:
                 break
             spec, resolution = repaired, second
+        s.unsupported = spec.unsupported
         resolution = self._which_amount(s, spec, resolution)
         resolution = self._not_chosen_for(s, spec, resolution)
         outcomes: list[_PageOutcome | None] = [None] * len(resolution.deliverables)
@@ -1273,7 +1275,7 @@ class GoalTurnExecutor:
             for i in form_indices:
                 outcomes[i] = outcome
         if not s.terminal_reason:
-            achieved = all(_achieved(r, o) for r, o in
+            achieved = not s.unsupported and all(_achieved(r, o) for r, o in
                            zip(resolution.deliverables, outcomes, strict=True))
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
             unsure = next((r for r in resolution.deliverables
@@ -2249,6 +2251,8 @@ class GoalTurnExecutor:
                     continue
                 rendered_forms.add(id(outcome))
             lines.extend(_render(resolved, outcome, zh, request, name))
+        if s.unsupported:
+            lines.append(("未完成的部分：" if zh else "Parts not completed: ") + s.unsupported)
         # A turn stopped by the person, or by an unanswered card, says so in the line of
         # the deliverable it stopped; the internal detail behind it is not the person's.
         if s.terminal_reason not in ("agent_finished", "agent_refused", "needs_clarification") + _STOPPED:
@@ -2823,7 +2827,8 @@ _OFFER_EN = {"facets": "page filters and groups", "sections": "tabs", "lines": "
 
 
 #: The operations an adapter may report as denied, as a person would name them.
-_DENIED = {"delete": ("删除", "delete"), "create": ("新建", "create"), "write": ("修改", "change")}
+_DENIED = {"delete": ("删除", "delete"), "create": ("新建", "create"),
+           "write": ("修改", "change"), "read": ("读取", "read")}
 
 
 def _cannot(request: str, why: str, zh: bool) -> str:
@@ -2858,6 +2863,10 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -
         # The account's own rights, not the assistant, stand in the way; nothing was done.
         # A new record is not "this record": it is records of this kind.
         zh_op, en_op = _DENIED.get(resolved.denied, (resolved.denied, resolved.denied))
+        if resolved.denied == "read":
+            zh_what, en_what = (name or "这类记录"), (name or "these records")
+            return (f"你的账号没有读取{zh_what}的权限，这一项没有完成。" if zh
+                    else f"Your account has no permission to read {en_what}; this part was not done.")
         zh_what, en_what = (("这类记录", "records of this kind") if resolved.denied == "create"
                             else ("这条记录", "this record"))
         if name:
