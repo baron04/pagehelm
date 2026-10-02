@@ -1,0 +1,22 @@
+{
+  "suite": "yudao-v7.1-seen-regression",
+  "parent_suite": "yudao-v7-first-use",
+  "cases": 64,
+  "as_of": "2026-09-30T12:00:00+08:00",
+  "fixture_release": "synthetic-v7-1",
+  "parent_manifest_sha256": "00f8778f7683813cdac34130bfa8cc0a8762ec8368e4b5c7aaf9f5673df19583",
+  "files": {
+    "fixture.py": "6d91beb9f2845d19100fd4553aaea8977a41a5ba4405726e880b6f80d321021c",
+    "judge.py": "db695bfcf73c12ede669872f30c08e34bb2c81ad87fb763b4fd66d12963b878e",
+    "regrade.py": "e5949def2d7f747d8d93063133e8ee1825ffb6803bd33223ebbf3d17684d77b7",
+    "test_judge.py": "56f8c595d395fbe7e6ba687697c3a2ad35014dbacca95785d7e25968659dcd32",
+    "README.md": "5eb21532dbca57d23cd2a2cb3b2c1acd0518d562dc9c5c7b1a3ab2ac80190dfe"
+  },
+  "changes": [
+    "unasked amount display removed from case19",
+    "exact known record sets, maximum with units and rendered-page checks",
+    "scoped absence accepted after a read without navigation",
+    "typed contract read refusal in restricted synthetic actor"
+  ],
+  "limitations": "Seen tasks; deterministic screening with residual semantic-review requirements; old source and application data unchanged."
+}

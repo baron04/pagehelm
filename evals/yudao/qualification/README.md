@@ -26,6 +26,12 @@ Failures and exceptions stay in the denominator. Existing output bindings must
 match before a run can resume; paid interrupted attempts must not be relabelled
 as untouched first attempts.
 
+The original fixture and judge remain available. Versioned known grading and
+permission-fixture corrections are in [`../v7_1/README.md`](../v7_1/README.md).
+Use the explicit corrected fixture and `--judge-version v7.1` together. Offline
+regrading retains old answers and scores and makes no model calls; corrected
+fixture behavior requires a separately labelled fresh run.
+
 The reported first-use qualification retained the then-current Qwen thinking
 budget. Reproduce it from `60c3721c`; `--profile production` reads the current
 product options, which may have changed since that archive. The separate
