@@ -392,7 +392,7 @@ DECLARE_GOAL_TOOL = {
                 "about_assistant": {"type": "boolean",
                                     "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- or about what the application as a whole offers (its modules, menus, functions), rather than about records or one page"},
                 "unsupported": {"type": "string",
-                                "description": "which requested parts cannot be declared and why, also when other deliverables are available: name missing data or unsupported rules in the person's language; no neighbouring field substitutes for what is missing. With empty deliverables, explains why the whole request cannot be answered"}},
+                                "description": "why nothing can be declared, when deliverables is empty: the request needs data the index does not hold (an external system, a bank, a source not listed), which no related entity may stand in for; or it asks about a rule, policy or limit and RULES holds no such rule -- then say the deployed source has no rule about it; written in the person's language, naming what is missing"}},
             "required": ["deliverables"]}}}
 
 

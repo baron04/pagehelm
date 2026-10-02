@@ -1226,8 +1226,15 @@ class GoalTurnExecutor:
                                               if second is not None else None))
             if not accepted:
                 break
+            if repaired.unsupported and any(
+                    set(before.fields) - set(after.fields)
+                    for before, after in zip(spec.deliverables, repaired.deliverables)):
+                # An accepted field repair may remove unavailable requested fields.
+                # Preserve that loss. Arbitrary prose in an otherwise fulfilled
+                # first declaration is not a typed unmet outcome (a null value is
+                # still a valid answer; source parts have separate settlement).
+                s.unsupported = repaired.unsupported
             spec, resolution = repaired, second
-        s.unsupported = spec.unsupported
         resolution = self._which_amount(s, spec, resolution)
         resolution = self._not_chosen_for(s, spec, resolution)
         outcomes: list[_PageOutcome | None] = [None] * len(resolution.deliverables)

@@ -113,8 +113,8 @@ agent.
   application reads, including when repository answers are enabled.
   An adapter-classified permission denial names the unreadable record type while
   retaining other answers; it is not inferred from exception text or a failed service.
-  Unsupported requested parts also remain visible beside available answers, and the
-  turn does not report complete success for them.
+  When an accepted repair removes unavailable requested fields, its explanation
+  remains beside available answers and the turn does not report complete success.
   Goal stages share one deadline and model-request limit (each
   request or retry uses one step; cache hits use none). Fixed browser and read substeps
   check the same deadline and cancellation. Browser commands use the smaller of the

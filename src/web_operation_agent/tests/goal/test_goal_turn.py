@@ -2275,14 +2275,14 @@ class HalfSupportedRequestTests(unittest.TestCase):
         self.patcher.stop()
         self.tmp.cleanup()
 
-    def _run(self, script, resolved, *, offers, text):
+    def _run(self, script, resolved, *, offers, text, resolved_then=None, staged=True, readings=2):
         channel = _Channel(page_url="http://127.0.0.1:8080/home")
         executor = GoalTurnExecutor(
             channel=channel,
             config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
             chat=_AgreeingChat(script), application=bind_application(_Adapter()),
-            goal_port=_Port(resolved, offers=offers), control=ReadOnlyControl(),
-            run_id_factory=lambda _m: "goal-run")
+            goal_port=_Port(resolved, then=resolved_then, offers=offers), control=ReadOnlyControl(),
+            run_id_factory=lambda _m: "goal-run", staged=staged, readings=readings)
         execution = executor.execute({"message_id": "m1", "text": text,
                                       "page_url": "http://127.0.0.1:8080/home"})
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
@@ -2346,12 +2346,26 @@ class HalfSupportedRequestTests(unittest.TestCase):
         self.assertNotIn("403", execution.user_answer)
 
     def test_missing_requested_fields_keep_the_explanation_and_available_answer(self):
+        initial = _declaration(kind="fact", entity="order", record="S00006",
+                               fields=["Customer", "Phone"])
         declared = ("declare_goal", {"deliverables": [
             {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]}],
             "unsupported": "没有提供联系电话字段，无法查询。"})
-        execution, _ = self._run([declared], [Resolved(kind="fact", facts=(
-            Fact("S00006", "Customer", "Lumber Inc"),))],
-            text="S00006 的客户名称和联系电话是什么？", offers=OPTIONAL)
+        execution, _ = self._run([initial, declared], [Resolved(kind="fact",
+            problem="Phone is not an available field", repair="Phone is not an available field")],
+            resolved_then=[Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))],
+            text="S00006 的客户名称和联系电话是什么？", offers=OPTIONAL, staged=False, readings=1)
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
         self.assertIn("Lumber Inc", execution.user_answer)
         self.assertIn("没有提供联系电话字段", execution.user_answer)
+
+    def test_null_answer_is_complete_despite_unstructured_model_commentary(self):
+        declared = ("declare_goal", {"deliverables": [
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]}],
+            "unsupported": "Empty value is not a customer name"})
+        execution, _ = self._run([declared], [Resolved(kind="fact", facts=(
+            Fact("S00006", "Customer", "（空）"),))],
+            text="S00006 的客户是什么？", offers=OPTIONAL)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("（空）", execution.user_answer)
+        self.assertNotIn("Empty value", execution.user_answer)
