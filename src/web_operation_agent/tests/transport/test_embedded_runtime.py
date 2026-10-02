@@ -54,6 +54,47 @@ def _panel_configuration_js() -> str:
 
 
 class EmbeddedRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_real_linked_tab_panel_must_be_visible_unique_and_not_busy(self):
+        from playwright.sync_api import sync_playwright
+        if not RUNTIME.is_file():
+            self.skipTest("assistant.js is not built; run scripts/build_runtime.py")
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(allowed_origins=[app.origin])
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(app.origin + "/tabs")
+                remote = RemoteBrowserClient(channel, timeout_s=8)
+                remote.start()
+                def payments():
+                    receipt = remote.execute("observe", {})
+                    self.assertTrue(receipt.ok, receipt.error_detail)
+                    return next(e for e in receipt.observation.elements if e.role == "tab" and e.name == "Payments")
+                self.assertEqual(payments().attrs["panel_ready"], "false")
+                page.get_by_role("tab", name="Payments", exact=True).click()
+                self.assertEqual(payments().attrs["panel_ready"], "true", page.locator("#payments-panel").evaluate(
+                    "e => ({html:e.outerHTML,rects:e.getClientRects().length,tab:document.querySelector('#payments-tab').outerHTML})"))
+                page.locator("#payments-panel").evaluate("e => e.setAttribute('aria-busy', 'true')")
+                self.assertEqual(payments().attrs["panel_ready"], "false")
+                page.locator("#payments-panel").evaluate("e => e.removeAttribute('aria-busy')")
+                page.locator("#payments-panel").evaluate("e => e.hidden = true")
+                self.assertEqual(payments().attrs["panel_ready"], "false")
+                page.locator("#payments-panel").evaluate("e => {e.hidden=false; e.insertAdjacentHTML('afterend', e.outerHTML)}")
+                self.assertEqual(payments().attrs["panel_ready"], "false")
+                browser.close()
+        finally:
+            gateway.close()
+            app.close()
+
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute DOM freshness tests")
     def test_action_fingerprint_rejects_target_or_route_changes_only(self):
         source = _runtime_module_url()
@@ -1800,6 +1841,16 @@ class _FixtureApplication:
             def do_GET(self):
                 if self.path == "/page-controller.js":
                     return self.reply(controller_path.read_bytes(), "text/javascript")
+                if self.path == "/tabs":
+                    return self.page('''
+                      <div role="tablist">
+                        <button id="basic-tab" role="tab" aria-controls="basic-panel" aria-selected="true">Basic</button>
+                        <button id="payments-tab" role="tab" aria-controls="payments-panel" aria-selected="false"
+                          onclick="this.setAttribute('aria-selected','true');document.querySelector('#payments-panel').hidden=false">Payments</button>
+                      </div>
+                      <section id="basic-panel" role="tabpanel" aria-labelledby="basic-tab">Synthetic customer</section>
+                      <section id="payments-panel" role="tabpanel" aria-labelledby="payments-tab" style="min-height:20px" hidden></section>
+                    ''')
                 if self.path == "/page1":
                     return self.page("""
                       <h1>Orders</h1>

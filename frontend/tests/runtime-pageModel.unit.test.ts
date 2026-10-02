@@ -248,6 +248,34 @@ describe('hydrateButtonFacts adds a bounded live method identifier', () => {
 describe('hydrateSelectionFacts says which tab is current when the page says it by class', () => {
   const tabs = (content: string) => elementsFrom(content, 1, redactor)
 
+  it('checks the live linked panel even when aria-selected is already declared', () => {
+    const fixture = document.createElement('div')
+    fixture.innerHTML = '<button id="t" role="tab" aria-controls="p" aria-selected="true">Sales</button>' +
+      '<section id="p" role="tabpanel" aria-labelledby="t"></section>'
+    document.body.append(fixture)
+    const tab = fixture.querySelector('button')!
+    const panel = fixture.querySelector('section')!
+    Object.defineProperty(panel, 'getClientRects', {value: () => [{width: 100, height: 50}]})
+    const ready = () => {
+      const elements = tabs('[0]<button role=tab aria-selected=true>Sales />')
+      hydrateSelectionFacts(elements, {}, () => tab)
+      return elements[0]?.attrs.panel_ready
+    }
+    expect(ready()).toBe('true') // An empty panel is still a valid panel.
+    panel.setAttribute('aria-busy', 'true')
+    expect(ready()).toBe('false')
+    panel.removeAttribute('aria-busy')
+    panel.hidden = true
+    expect(ready()).toBe('false')
+    panel.hidden = false
+    panel.setAttribute('aria-labelledby', 'another-tab')
+    expect(ready()).toBe('false')
+    panel.setAttribute('aria-labelledby', 't')
+    panel.insertAdjacentHTML('afterend', panel.outerHTML)
+    expect(ready()).toBe('false') // Duplicate panel IDs cannot establish association.
+    fixture.remove()
+  })
+
   it('marks the tab whose live element carries the current-state class', () => {
     const elements = tabs('[0]<a role=tab>General />\n[1]<a role=tab>Sales />')
     const live = [{className: 'nav-link'}, {className: 'nav-link active'}]

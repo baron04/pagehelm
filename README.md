@@ -101,6 +101,11 @@ agent.
   stage times, request counts and serialized input bytes without prompt or result content;
   overlapping intervals are counted once within a stage and for total model occupancy.
   Token and cost totals come from the spend meter; unavailable usage remains unknown.
+  Tab selection refuses duplicate exact names and ambiguous partial names. When a tab
+  declares an ARIA panel relationship, arrival also requires a unique visible panel
+  linked back to that tab, without a declared busy state or progress bar. This does not
+  detect loading that the application leaves unmarked; tabs without that relationship
+  retain the selected-control check.
   In the tool loop, a previously rejected deterministic request is warned and then stopped
   even if other rejected requests intervene. Changed page state or a successful business
   read invalidates that refusal; authentication, permission and transient failures are

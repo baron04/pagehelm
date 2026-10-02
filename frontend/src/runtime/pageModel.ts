@@ -226,6 +226,28 @@ export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unkno
                                       getByIndex: ElementLookup): ElementRef[] {
   for (const item of elements) {
     if (item.role !== 'tab' && item.role !== 'button') continue
+    if (item.role === 'tab') {
+      try {
+        const element = getByIndex(selectorMap, refIndex(item.ref))
+        const controls = explicitAttribute(element, 'aria-controls')
+        if (controls) {
+          // Read the declared relationship, never infer a panel from its text.
+          item.attrs.panel_ready = 'false'
+          const panels = Array.from(element?.ownerDocument?.querySelectorAll('[role="tabpanel"]') || [])
+            .filter(panel => panel.id === controls)
+          if (panels.length === 1) {
+            const panel = panels[0] as HTMLElement
+            const labelledBy = (panel.getAttribute('aria-labelledby') || '').split(/\s+/)
+            const id = explicitAttribute(element, 'id')
+            const visible = !panel.closest('[hidden], [aria-hidden="true"]') && panel.getClientRects().length > 0
+            const busy = panel.matches('[aria-busy="true"]') || panel.querySelector('[aria-busy="true"], [role="progressbar"]')
+            item.attrs.panel_ready = String(Boolean(id && labelledBy.includes(id) && visible && !busy))
+          }
+        }
+      } catch {
+        item.attrs.panel_ready = 'false'
+      }
+    }
     if (item.attrs['aria-selected'] !== undefined || item.attrs['aria-pressed'] !== undefined) continue
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))

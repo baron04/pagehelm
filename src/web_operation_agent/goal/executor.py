@@ -1878,22 +1878,26 @@ class GoalTurnExecutor:
 
     @staticmethod
     def _tab(obs: PageObservation, wanted: str):
-        tab = next((e for e in obs.elements if _is_tab(e) and _norm(e.name) == wanted),
-                   None)
-        if tab is None:
-            tab = next((e for e in obs.elements
-                        if _is_tab(e) and wanted and wanted in _norm(e.name)), None)
-        return tab
+        exact = [e for e in obs.elements if _is_tab(e) and _norm(e.name) == wanted]
+        if exact:
+            return exact[0] if len(exact) == 1 else None
+        partial = [e for e in obs.elements if _is_tab(e) and wanted and wanted in _norm(e.name)]
+        return partial[0] if len(partial) == 1 else None
 
     @staticmethod
     def _tab_selected(obs: PageObservation, wanted: str) -> bool:
-        if any(_norm(c) == wanted for c in obs.selected_controls):
-            return True
-        for element in obs.elements:
-            if _is_tab(element) and _norm(element.name) == wanted:
-                return any(str(element.attrs.get(attr, "")).lower() == "true"
-                           for attr in _SELECTED_ATTRS)
-        return False
+        matching = [e for e in obs.elements if _is_tab(e) and _norm(e.name) == wanted]
+        if len(matching) > 1:
+            return False
+        selected = any(_norm(c) == wanted for c in obs.selected_controls)
+        if not matching:
+            return selected
+        element = matching[0]
+        # ARIA-linked panels must be visible, correctly associated and no longer busy.
+        if str(element.attrs.get("panel_ready", "true")).lower() != "true":
+            return False
+        return selected or any(str(element.attrs.get(attr, "")).lower() == "true"
+                               for attr in _SELECTED_ATTRS)
 
     def _select_tab(self, s: _TurnState, section: str) -> bool:
         wanted = _norm(section)

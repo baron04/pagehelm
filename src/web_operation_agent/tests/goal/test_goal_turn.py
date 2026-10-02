@@ -239,6 +239,18 @@ class _AgreeingChat(_Chat):
 
 
 class GoalTurnTests(unittest.TestCase):
+    def test_tab_selection_requires_an_unambiguous_live_control_and_ready_panel(self):
+        duplicate = _obs(1, "http://app.test/record", tabs=("回款", "回款"), selected=("回款",))
+        self.assertIsNone(GoalTurnExecutor._tab(duplicate, "回款"))
+        self.assertFalse(GoalTurnExecutor._tab_selected(duplicate, "回款"))
+        partial = _obs(1, "http://app.test/record", tabs=("回款记录", "回款计划"))
+        self.assertIsNone(GoalTurnExecutor._tab(partial, "回款"))
+        page = _obs(1, "http://app.test/record", tabs=("回款",), selected=("回款",))
+        page.elements[0] = replace(page.elements[0], attrs={"aria-selected": "true", "panel_ready": "false"})
+        self.assertFalse(GoalTurnExecutor._tab_selected(page, "回款"))
+        page.elements[0] = replace(page.elements[0], attrs={"aria-selected": "true", "panel_ready": "true"})
+        self.assertTrue(GoalTurnExecutor._tab_selected(page, "回款"))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.ledger = Path(self.tmp.name) / "audit.jsonl"
