@@ -69,7 +69,7 @@ agent.
   deliverable kinds and condition types, all read-only RPC). Odoo implements the full
   reference index and resolver; the structurally different Contacts REST test application
   implements the same core port for actor-scoped facts, counts, lists and basic pages, and
-  explicitly refuses unsupported page controls and handoffs. The port contract has two
+  explicitly refuses unsupported page controls. The port contract has two
   levels: the required index, records, facts, counts, lists and page addresses, and
   optional capabilities a port declares by name (page filters and groups, tabs, embedded
   lines, controls to point at, value entry, page search, source rules); a deliverable
@@ -102,6 +102,16 @@ agent.
   A form fill is complete only after the exact requested or application-normalized value
   is observed on the same ready page and record. Failed selection never tries an alternate
   value; only a pre-dispatch stale-observation refusal can retry the same value.
+  An adapter may resolve a manual-submit handoff to a server-only `FormPlan`, requiring
+  `fill` and `handoffs` capabilities and `allow_form_prefill=True`. The current form port
+  must confirm its exact entry reference and every requested field before input. Goals
+  for the same entry combine at most twenty fields into one consumed draft and one
+  verified handoff; conflicting values or different entries are refused. Other page work
+  runs first, and the form handoff runs last. The server replies with the fields entered
+  and the highlighted manual-submit button; it never submits. This path uses the existing
+  fixed draft executor and shared deadline, adds no model schema or per-field model calls,
+  and only admits transient forms. The Contacts goal demo opts in; Yudao's default native
+  host still lacks a production entry verifier and keeps form entry disabled.
   The `goal_run_receipt` audit event records
   stage times, request counts and serialized input bytes without prompt or result content;
   overlapping intervals are counted once within a stage and for total model occupancy.

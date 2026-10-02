@@ -44,6 +44,11 @@ submit endpoint.
 Its adapter binds the create form by its DOM identity and names `Save contact` as the
 manual submit target. The scripted real-browser qualification fills both fields, highlights
 that button, and checks that no submit request or record creation occurred.
+The goal demo also resolves explicit new-form Name and Email handoffs through this
+contract. Multiple field deliverables combine into one final form handoff, retaining any
+data answers from the same turn. Its real-browser scripted test verifies both normalized
+values and the highlighted Save contact button, with zero submit requests or creations.
+This is fixed-declaration integration evidence, not a real-model accuracy result.
 
 To use the product as an ordinary signed-in user, without Playwright or browser injection:
 

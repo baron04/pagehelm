@@ -297,6 +297,30 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertTrue(any(e["event"] == "goal_page_settled" and e["reached"] for e in events))
         self.assertFalse(any(e["event"] == "business_tool_result" for e in events))
 
+    def test_goal_batch_fills_two_fields_and_highlights_manual_submit_in_real_browser(self):
+        script = (("declare_goal", {"write_intent": True, "deliverables": [
+            {"kind": "handoff", "entity": "contacts", "action": "Name", "value": "  Ada   Byron  "},
+            {"kind": "handoff", "entity": "contacts", "action": "Email", "value": "NEW@example.test"}]}),)
+        def probe(page):
+            return {
+                "name_exact": page.locator('#contact-create input[name=name]').input_value() == "Ada Byron",
+                "email_exact": page.locator('#contact-create input[name=email]').input_value() == "new@example.test",
+                "submit_highlighted": page.get_by_role("button", name="Save contact", exact=True).evaluate(
+                    "e => e.style.outline.includes('3px') && !e.disabled && e.getBoundingClientRect().width > 0"),
+            }
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(tasks=("在新建联系人表单填写 Name 和 Email，不提交。",),
+                start_path="/contacts/new", headless=True, goal_turns=True,
+                output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=30, final_page_probe=probe))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        self.assertEqual(summary["turns"][0]["status"], "finished")
+        self.assertIn("Save contact", summary["turns"][0]["answer"])
+        self.assertTrue(all(summary["panel"]["final_page_probe"].values()))
+        self.assertEqual(summary["application_state"]["write_requests"], 0)
+        self.assertEqual(summary["application_state"]["records_created"], 0)
+        self.assertTrue(next(e for e in events if e["event"] == "goal_form_handoff")["complete"])
+
     def test_a_delete_handoff_opens_the_record_menu_and_marks_delete_in_the_real_browser(self):
         # "Delete" is an item of the record's collapsed "More" menu, as many applications
         # keep a record's operations. The turn opens the record, opens the one menu the page
@@ -999,8 +1023,8 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
         script = (
             ("load_skill", {"skill_id": "minimal.contacts.query"}),
             ("list_contacts", {}),
-            # The model tries the page next. It may go there, and what it sees there cannot
-            # become a fact in the answer.
+            # The model tries the page next. A refused application read blocks this
+            # navigation; a fresh observation cannot become answer evidence either.
             ("goto", {"url": "/contacts/grace-hopper"}),
             ("wait_for", {"ms": 500}),
             ("finish", {"outcome": "acted"}),
@@ -1023,11 +1047,14 @@ class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
                     # nothing to answer from and ends on the refusal, as it did before.
                     self.assertEqual(turn["terminal_reason"], "permission_denied")
                     self.assertIn("not permitted", turn["answer"])
-                    # Its goto is refused before dispatch; the one page action the script
-                    # still takes is the wait after it, and nothing was opened.
+                    # The refused read refreshes the observation before the next decision.
+                    # Its goto is refused before dispatch; only the later wait executes.
                     receipts = [row for row in events if row["event"] == "action_receipt"]
-                    self.assertEqual([row["tool"] for row in receipts], ["wait_for"])
-                    self.assertFalse(any(row["navigated"] for row in receipts))
+                    self.assertEqual([row["tool"] for row in receipts], ["observe", "wait_for"])
+                    self.assertEqual(receipts[0]["after_tool"], "list_contacts")
+                    self.assertTrue(receipts[0]["ok"])
+                    self.assertTrue(receipts[0]["fresh_observation"])
+                    self.assertFalse(receipts[1]["navigated"])
                 else:
                     # The principal is narrower than the application, which still shows this
                     # person its own pages. The turn reports what it did and states the part

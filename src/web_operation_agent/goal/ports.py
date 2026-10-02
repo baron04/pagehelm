@@ -59,6 +59,27 @@ class Aggregate:
 
 
 @dataclass(frozen=True)
+class FormPlan:
+    """Exact server-resolved entry and field values for one manual-submit handoff.
+
+    References belong to the application form port, not model or DOM selectors.
+    The live descriptor must agree before any field is entered.
+    """
+    reference: str
+    values: tuple[tuple[str, str], ...]
+
+    def __post_init__(self):
+        if (not isinstance(self.reference, str) or not self.reference.strip()
+                or len(self.reference) > 300 or not isinstance(self.values, tuple)
+                or not 1 <= len(self.values) <= 20
+                or any(not isinstance(item, tuple) or len(item) != 2
+                       or any(not isinstance(v, str) for v in item)
+                       or not item[0] for item in self.values)
+                or len({item[0] for item in self.values}) != len(self.values)):
+            raise ValueError("form plan requires an entry and 1-20 unique field values")
+
+
+@dataclass(frozen=True)
 class PagePlan:
     """A page state to reach, in terms the runtime can act on and the core can check."""
     #: Same-origin path to open. Empty when the current page is meant.
@@ -91,6 +112,8 @@ class PagePlan:
     #: input (a form's inputs are often unlabelled in the accessible tree; their field
     #: identifier is what tells them apart).
     fill_field: str = ""
+    #: Opt-in application-form contract; supersedes the legacy single-field fill.
+    form: FormPlan | None = None
 
 
 @dataclass(frozen=True)
@@ -181,5 +204,5 @@ def capabilities_of(port) -> frozenset[str]:
     return frozenset(str(name) for name in method()) & OPTIONAL
 
 
-__all__ = ["Aggregate", "Candidate", "Fact", "GoalPort", "OPTIONAL", "PagePlan", "REQUIRED", "Resolution",
+__all__ = ["Aggregate", "Candidate", "Fact", "FormPlan", "GoalPort", "OPTIONAL", "PagePlan", "REQUIRED", "Resolution",
            "Resolved", "capabilities_of"]

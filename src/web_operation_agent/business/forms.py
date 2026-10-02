@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from .errors import (BusinessToolContractError, BusinessToolIdentityError,
                      BusinessToolPermissionError, BusinessToolRequestError)
 from .tools.contracts import (APPLICATION_SAVES_ON_LEAVE, FORM_PERSISTENCE,
+                              TRANSIENT_UNTIL_SUBMIT,
                               FormDraft, FormDraftField, matches_form_control,
                               validate_form_scope, form_control_unavailable)
 from ..schemas import PageObservation
@@ -596,6 +597,43 @@ class ApplicationFormTools:
             "persistence": draft.persistence,
             "submission": "user_only",
         }
+
+    def prepare_current(self, observation: PageObservation, *, reference: str,
+                        values: tuple[tuple[str, str], ...],
+                        context: OperationContext | None = None) -> tuple[FormDraft, dict]:
+        """Server-only goal binding to exact adapter field references, never a model tool.
+
+        Reuse the opaque preparation contract, including a second fresh descriptor read.
+        This path qualifies only forms that remain transient until manual submission.
+        """
+        self._prepared = None
+        if (not isinstance(values, tuple) or not 1 <= len(values) <= 20
+                or any(not isinstance(item, tuple) or len(item) != 2
+                       or any(not isinstance(v, str) for v in item) for item in values)
+                or len({item[0] for item in values}) != len(values)):
+            raise BusinessToolRequestError("current form needs 1-20 unique field/value pairs")
+        form = self._descriptor(observation, context)
+        if form is None or form.reference != reference:
+            raise BusinessToolRequestError("the planned form entry is absent or changed")
+        if form.persistence != TRANSIENT_UNTIL_SUBMIT:
+            raise BusinessToolRequestError("this goal form requires manual submission")
+        buttons = [element for element in observation.elements
+                   if element.role == "button" and element.name == form.submit_label
+                   and element.attrs.get("form_scope") == form.control_scope
+                   and not self._unavailable(element.attrs)]
+        if not form.submit_label or not form.control_scope or len(buttons) != 1:
+            raise BusinessToolRequestError("the planned form has no unique enabled submit target")
+        binding = self._binding(form, observation, context)
+        visible = {item.descriptor.reference: item for item in self._visible(form, observation)}
+        raw = []
+        for field, value in values:
+            item = visible.get(field)
+            if item is None:
+                raise BusinessToolRequestError("a planned field is not available in this form")
+            raw.append({"field_id": self._opaque("form_field_", binding, field, item.control),
+                        "value": value})
+        return self.prepare(observation, {"form_id": self._opaque("form_", binding),
+                                         "values": raw}, context=context)
 
 
 __all__ = [

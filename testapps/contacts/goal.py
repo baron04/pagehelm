@@ -10,7 +10,7 @@ import hashlib
 
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
                                              IndexPage)
-from web_operation_agent.goal.ports import (Aggregate, Candidate, Fact, PagePlan, Resolution,
+from web_operation_agent.goal.ports import (Aggregate, Candidate, Fact, FormPlan, PagePlan, Resolution,
                                             Resolved)
 from web_operation_agent.goal.spec import Deliverable, GoalSpec
 from web_operation_agent.state.identity import OperationContext, PrincipalError
@@ -31,7 +31,10 @@ _DESK_SECTIONS = ("Overview", "Terms")
 class ContactsGoalPort:
     """Resolve a small, real REST application's goals under its delegated actor."""
 
-    def __init__(self, adapter: MinimalContactsAdapter):
+    def __init__(self, adapter: MinimalContactsAdapter, *, form_prefill: bool = False):
+        if not isinstance(form_prefill, bool):
+            raise TypeError("form_prefill must be boolean")
+        self._form_prefill = form_prefill
         self._adapter = adapter
         self._executor = adapter.business_tools._executor
 
@@ -77,7 +80,7 @@ class ContactsGoalPort:
         """Beyond the required level this application offers tabs on its vendor desks,
         the creation handoff and candidate values (its contacts); it has no page filters,
         search box or lines."""
-        return frozenset({"sections", "handoffs", "values"})
+        return frozenset({"sections", "handoffs", "values"} | ({"fill"} if self._form_prefill else set()))
 
     def candidates(self, *, entities: tuple[str, ...] = (), known: tuple = (),
                    dates: tuple[str, ...] = (), context: OperationContext | None = None):
@@ -136,6 +139,14 @@ class ContactsGoalPort:
                 label=f"{label} · {section}" if section else label, section=section))
         if d.section:
             return Resolved(kind=d.kind, problem="this page has no sections")
+        if self._form_prefill and d.kind == "handoff" and not d.record and d.value:
+            field = self._field(d.action)
+            if field not in {"name", "email"} or d.page.key not in {"", "contacts"}:
+                return Resolved(kind=d.kind, problem="field is not in the new-contact form")
+            if not can_create:
+                return Resolved(kind=d.kind, problem="creation is not available to this actor", denied="create")
+            return Resolved(kind=d.kind, page=PagePlan(url="/contacts/new", expected_path="/contacts/new",
+                label="New contact", form=FormPlan("contacts-create-v1", ((field, d.value),))))
         if d.kind == "handoff" and _norm(d.action) == "create":
             if d.page.key and _norm(d.page.key) != "contacts":
                 return Resolved(kind=d.kind, problem="page is not in the index")

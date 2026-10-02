@@ -83,6 +83,18 @@ route or persistence contract. The no-argument `prefill_form` appears only while
 server-retained draft exists. Form scopes are checked before adapter metadata is read, and an
 actor missing them does not receive the generic form tools.
 
+For the Goal executor, an adapter may return `PagePlan(form=FormPlan(reference, values))`
+for a declared handoff, with exact form and field references resolved by the application.
+Declare the existing `fill` and `handoffs` capabilities and enable `allow_form_prefill`.
+The live form descriptor must match that reference, admit all requested fields and expose
+one enabled, scoped manual-submit button. This route supports only `transient_until_submit`.
+The server combines compatible field deliverables into one draft (at most twenty fields),
+rejects conflicting values or distinct entries, and schedules this handoff after other page
+work. It uses the same fixed executor and shared budget as ordinary prefill; no model or
+browser payload chooses native references, selectors or submission. The reply lists the
+fields entered and asks the person to click the highlighted button. Qualification of the
+port does not establish that a model correctly declares those field deliverables.
+
 The server consumes the draft once, resolves every field uniquely from a fresh page observation, fills or selects the adapter-issued value, and stops before click or submit. The adapter is asserting that editing these fields persists nothing by itself. Do not issue a draft for onchange handlers that write, forms that save as they are edited, credential fields, uploads, or any control whose edit can persist or trigger an external effect; use the ordinary confirmed mutation path for those cases. A form the application saves when its page is left (Odoo 18 does) is acceptable only because the assistant asks before it leaves any page and the prefill answer tells the user that leaving may save or discard the input. Test the claim against the deployed application, including a post-run API or database check that no record was created.
 
 Source lookup can explain a field, validation rule, or workflow before preparation and may

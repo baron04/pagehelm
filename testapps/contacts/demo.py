@@ -540,8 +540,8 @@ def run_demo(config: DemoConfig) -> dict:
                         step_budget=config.step_budget,
                         wall_budget_s=max(1, int(config.turn_timeout_s)),
                         transport_timeout_s=min(30, config.turn_timeout_s),
-                        require_identity=True, source=config.source),
-                    chat=chat, application=bound, goal_port=ContactsGoalPort(adapter),
+                        require_identity=True, source=config.source, allow_form_prefill=True),
+                    chat=chat, application=bound, goal_port=ContactsGoalPort(adapter, form_prefill=True),
                     control=ReadOnlyControl(),
                     run_id_factory=lambda _message: "minimal-" + uuid.uuid4().hex[:16],
                     # A scripted apparatus declares once against the whole index; a

@@ -335,6 +335,11 @@ def apply_form_draft(
             return before, ("wall_clock_budget" if exc.kind == "wall_budget" else exc.kind), str(exc)
         except TransportError as exc:
             return before, "transport_error", str(exc)
+        except BusinessToolError as exc:
+            session.ledger.append("form_dispatch_refused", step=step, tool=action,
+                                  error_code=exc.code, dispatched=False)
+            return before, ("permission_denied" if isinstance(exc, BusinessToolPermissionError)
+                            else "agent_refused"), str(exc)
         if action not in ("observe", "wait_for"):
             session._approvals.settle_operation()
         if action not in ("observe", "handoff_form"):

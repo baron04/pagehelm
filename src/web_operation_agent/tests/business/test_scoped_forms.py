@@ -244,6 +244,24 @@ class ScopedForms(unittest.TestCase):
         with self.assertRaises(BusinessToolRequestError):
             check.check(replace(draft, fields=(replace(draft.fields[0], value="Other"),)), obs)
 
+    def test_server_current_form_binding_rejects_wrong_entry_fields_values_and_persistence(self):
+        for reference, values in (("other", (("name", "Draft"),)),
+                                  ("create-v1", (("absent", "Draft"),)),
+                                  ("create-v1", (("name", "Draft"), ("name", "Other"))),
+                                  ("create-v1", (("name", "x"*4001),))):
+            with self.subTest(reference=reference, fields=len(values)), self.assertRaises(BusinessToolRequestError):
+                self.tools().prepare_current(observation(), reference=reference, values=values)
+        class Saving(LabelForms):
+            def describe_form(self, obs, *, context=None):
+                return replace(super().describe_form(obs), persistence="application_saves_on_leave",
+                               effect="Change name", targets=("Record",), submit_label="")
+        with self.assertRaises(BusinessToolRequestError):
+            self.tools(Saving()).prepare_current(observation(), reference="create-v1", values=(("name", "Draft"),))
+        missing_button = observation()
+        missing_button.elements = [e for e in missing_button.elements if e.ref != "e2"]
+        with self.assertRaises(BusinessToolRequestError):
+            self.tools().prepare_current(missing_button, reference="create-v1", values=(("name", "Draft"),))
+
     def test_same_url_entry_change_during_approval_or_after_input_stops_the_flow(self):
         class Changing(LabelForms):
             revision = 1

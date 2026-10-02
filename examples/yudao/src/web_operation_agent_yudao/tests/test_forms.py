@@ -163,6 +163,56 @@ class FormsTests(unittest.TestCase):
         draft, _ = self.tools.prepare(self.obs, self.args(self.describe(), "😀"*15+"x"), context=self.context)
         self.assertEqual(draft.fields[0].value, "😀"*15+"x")
 
+    def test_goal_handoff_uses_source_labels_and_the_same_live_entry_verification(self):
+        from types import SimpleNamespace
+        from web_operation_agent.execution.budget import TurnBudget
+        from web_operation_agent.execution.receipt import TurnReceipt
+        from web_operation_agent.goal.forms import handoff_form
+        from web_operation_agent.goal.ports import FormPlan, PagePlan
+        from web_operation_agent.schemas import ActionReceipt
+        calls, entered = [], {}
+        def execute(action, args, **kwargs):
+            calls.append(action)
+            if action == "fill":
+                entered[args["ref"]] = args["value"]
+            if action == "handoff_form":
+                self.assertEqual(len(args["fields"]), 2)
+                self.assertEqual(args["submit"]["scope"], self.state.control_scope)
+                self.assertEqual(args["submit"]["label"], "确定")
+                for field in args["fields"]:
+                    self.assertEqual(entered[field["ref"]], field["value"])
+            epoch = len(calls)+1
+            after = replace(self.obs, epoch=epoch,
+                elements=[replace(e, epoch=epoch, attrs={**e.attrs,
+                    **({"value": entered[e.ref]} if e.ref in entered else {})}) for e in self.obs.elements])
+            return ActionReceipt(1, str(len(calls)), action, {}, True, observation=after)
+        class Port:
+            def capabilities(self):
+                return frozenset({"fill", "handoffs"})
+        state = SimpleNamespace(obs=self.obs, cancelled=lambda: False, step=1, page_actions=0,
+            budget=TurnBudget(steps=1, seconds=10), receipt=TurnReceipt(),
+            approvals=SimpleNamespace(context=lambda *a: self.context,
+                confirm_operation=lambda *a, **k: ("", ""), settle_operation=lambda: None),
+            ledger=SimpleNamespace(append=lambda *a, **kw: None),
+            writes=SimpleNamespace(expect_decision=lambda *a: None,
+                write_outcome=lambda *a, **kw: {"state": "not_written"}, settle_write=lambda *a: ("", "")),
+            browser=SimpleNamespace(execute_with_budget=execute))
+        form = self.port.describe_form(self.obs, context=self.context)
+        executor = SimpleNamespace(config=SimpleNamespace(allow_form_prefill=True),
+            disabled_page_actions=frozenset(), goal_port=Port(),
+            application=SimpleNamespace(ports=SimpleNamespace(forms=self.port),
+                                         descriptor=SimpleNamespace(application_id="yudao")))
+        plan = PagePlan("/records", "合成表单", form=FormPlan(form.reference,
+            (("name", "合成名称值"), ("description", "合成描述值"))))
+        result = handoff_form(executor, state, plan)
+        self.assertTrue(result.complete)
+        self.assertEqual(calls, ["fill", "fill", "handoff_form"])
+        self.assertEqual(result.fields, ("合成名称", "合成描述"))
+        self.assertEqual(state.budget.used, 0)
+        self.verifier.state = replace(self.state, entry_id="other")
+        self.assertFalse(handoff_form(executor, state, plan).complete)
+        self.assertEqual(len(calls), 3)
+
     def test_handlers_and_conditional_fields_are_not_silently_admitted(self):
         self.path.write_text(_SOURCE.replace('v-model="formData.name"', 'v-model="formData.name" @change="save"'))
         self.verifier.state = replace(self.state, source_digest=self.reader.read(_PATH).binding_digest)

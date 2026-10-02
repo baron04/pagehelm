@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from ..business.approvals import PAGE_OPERATIONS, ApprovalWatch, OperationPlan
 from ..business.control import ApprovalGate, ApprovalGrant
+from ..business.errors import BusinessToolRequestError
 from ..business.writes import WriteWatch
 from ..business.tools.contracts import form_control_unavailable
 from ..answer.conclusion import ConclusionRefused
@@ -51,6 +52,7 @@ from .index import conventions_named
 from .narrow import (correct_records, locate, locate_names, neighbourhood, references,
                      summaries)
 from .declaration_cache import DeclarationCache
+from .forms import combine_forms, handoff_form
 from .understand import understand, understand_scope
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -571,6 +573,10 @@ class _PageOutcome:
     #: When the control to point at is not on the page: the deployment's source rule of
     #: when it shows, with its citation, read from the index (knowledge, not an action).
     rule: str = ""
+    form_requested: bool = False
+    form_complete: bool = False
+    form_fields: tuple[str, ...] = ()
+    form_submit: str = ""
 
 
 @dataclass
@@ -1216,18 +1222,35 @@ class GoalTurnExecutor:
             spec, resolution = repaired, second
         resolution = self._which_amount(s, spec, resolution)
         resolution = self._not_chosen_for(s, spec, resolution)
-        outcomes: list[_PageOutcome | None] = []
+        outcomes: list[_PageOutcome | None] = [None] * len(resolution.deliverables)
         if any(d.kind in ("page", "handoff") and r.page is not None
                for d, r in zip(spec.deliverables, resolution.deliverables, strict=True)):
             # The declarations took their time; the page has gone on rendering meanwhile
             # and the observation the turn holds may be stale. Look once before acting.
             self._dispatch(s, "observe", {})
-        for declared, resolved in zip(spec.deliverables, resolution.deliverables, strict=True):
+        form_indices = [i for i, r in enumerate(resolution.deliverables)
+                        if r.page is not None and r.page.form is not None]
+        form_plan = None
+        if form_indices:
+            try:
+                if any(spec.deliverables[i].kind != "handoff" for i in form_indices):
+                    raise BusinessToolRequestError("only a requested handoff can fill a form")
+                if any(resolution.deliverables[i].problem or resolution.deliverables[i].denied
+                       or resolution.deliverables[i].unoffered for i in form_indices):
+                    raise BusinessToolRequestError("an unresolved handoff cannot issue a form")
+                form_plan = combine_forms([resolution.deliverables[i].page for i in form_indices])
+            except BusinessToolRequestError as exc:
+                s.ledger.append("goal_form_plan_refused", error_code=exc.code, dispatched=False)
+                refused = _PageOutcome(reached=False, form_requested=True)
+                for i in form_indices:
+                    outcomes[i] = refused
+        for i, (declared, resolved) in enumerate(zip(spec.deliverables, resolution.deliverables, strict=True)):
             if resolved.page is None or declared.kind not in ("page", "handoff"):
-                outcomes.append(None)
+                continue
+            if i in form_indices:
                 continue
             if s.terminal_reason:
-                outcomes.append(_PageOutcome(reached=False, unmet=[_Unmet("not_attempted")]))
+                outcomes[i] = _PageOutcome(reached=False, unmet=[_Unmet("not_attempted")])
                 continue
             outcome = self._reach(s, resolved.page)
             if any(u.kind == "control" for u in outcome.unmet):
@@ -1235,7 +1258,14 @@ class GoalTurnExecutor:
                 if outcome.rule:
                     s.ledger.append("goal_control_rule_cited", step=s.step,
                                     control=resolved.page.highlight)
-            outcomes.append(outcome)
+            outcomes[i] = outcome
+        # A handoff releases the browser's read window; no subsequent page work may
+        # leave or replace that draft. Reads have already resolved, so mixed answers stay.
+        if form_plan is not None:
+            outcome = (self._reach(s, form_plan) if not s.terminal_reason else
+                       _PageOutcome(reached=False, form_requested=True))
+            for i in form_indices:
+                outcomes[i] = outcome
         if not s.terminal_reason:
             achieved = all(_achieved(r, o) for r, o in
                            zip(resolution.deliverables, outcomes, strict=True))
@@ -1821,7 +1851,15 @@ class GoalTurnExecutor:
                 out.unmet.append(_Unmet("filter_off", name))
         if plan.section and not self._select_tab(s, plan.section):
             out.unmet.append(_Unmet("section", plan.section))
-        if plan.highlight and plan.fill:
+        if plan.form is not None:
+            out.form_requested = True
+            if not out.unmet:
+                prepared = handoff_form(self, s, plan)
+                out.form_complete, out.form_fields, out.form_submit = (
+                    prepared.complete, prepared.fields, prepared.submit_label)
+                if prepared.reason:
+                    s.terminal_reason, s.detail = prepared.reason, prepared.detail
+        elif plan.highlight and plan.fill:
             # The value goes in first, so the highlight marks a field already showing it.
             element = self._find_input(s, plan)
             if element is not None:
@@ -2180,6 +2218,7 @@ class GoalTurnExecutor:
     # -- the reply --------------------------------------------------------------------
     def _reply(self, s: _TurnState, deliverables, outcomes, declared=()) -> str:
         lines = []
+        rendered_forms = set()
         zh = s.chinese
         # A request asking one thing is quoted when that thing was not done, so the
         # person sees in their own words what was not done.
@@ -2187,6 +2226,10 @@ class GoalTurnExecutor:
         names = [_kind_name(s.full_index, d.entity, zh) for d in declared] \
             if len(declared) == len(deliverables) else [""] * len(deliverables)
         for resolved, outcome, name in zip(deliverables, outcomes, names):
+            if outcome is not None and outcome.form_requested:
+                if id(outcome) in rendered_forms:
+                    continue
+                rendered_forms.add(id(outcome))
             lines.extend(_render(resolved, outcome, zh, request, name))
         # A turn stopped by the person, or by an unanswered card, says so in the line of
         # the deliverable it stopped; the internal detail behind it is not the person's.
@@ -2403,6 +2446,7 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
         return True
     if outcome is not None:
         return (outcome.reached and not outcome.unmet
+                and (not resolved.page or not resolved.page.form or outcome.form_complete)
                 and (not resolved.page or not resolved.page.fill
                      or bool(outcome.filled and outcome.fill_verified)))
     return False
@@ -2619,6 +2663,19 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
         return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
+        if plan.form is not None:
+            if outcome.form_complete:
+                fields = ("、" if zh else ", ").join(outcome.form_fields)
+                submit = outcome.form_submit
+                lines.append((f"已填写：{fields}，尚未提交。请核对后手动点击页面高亮的‘{submit}’。"
+                              if submit else f"已填写：{fields}，尚未提交。请核对后自行提交。") if zh else
+                             (f"Filled: {fields}. The form has not been submitted. Review it, then "
+                              + (f"manually click the highlighted '{submit}'." if submit else "submit it yourself.")))
+            else:
+                lines.append("表单填写或交接未完成；部分字段可能已输入。请核对当前页面，助手没有提交。" if zh else
+                             "Form entry or handoff did not complete; some fields may have been entered. "
+                             "Check the current page. The assistant did not submit.")
+            return lines
         if resolved.kind == "handoff":
             if outcome.highlighted and outcome.filled and not outcome.fill_verified:
                 lines.append((f"已打开 {plan.label} 并标出「{outcome.highlighted}」。"
