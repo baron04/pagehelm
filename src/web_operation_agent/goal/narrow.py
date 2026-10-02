@@ -80,7 +80,10 @@ def correct_records(spec, request: str, known: tuple[KnownReference, ...],
     out = []
     for d in spec.deliverables:
         record = (d.record or "").strip()
-        if record and _CODE.fullmatch(record) and _norm_ref(record) not in asked:
+        explicitly_written = bool(record and re.search(
+            r"(?<![A-Za-z0-9_/])" + re.escape(record) + r"(?![A-Za-z0-9_/.-])",
+            request, re.IGNORECASE))
+        if record and _CODE.fullmatch(record) and _norm_ref(record) not in asked and not explicitly_written:
             # A code stands for a code: a located customer's name never replaces one.
             same = ({k.name for k in known if k.entity == d.entity}
                     or {k.name for k in known if _CODE.fullmatch(k.name.strip())})

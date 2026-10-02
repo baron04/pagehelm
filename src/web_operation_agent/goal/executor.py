@@ -577,6 +577,7 @@ class _PageOutcome:
     form_complete: bool = False
     form_fields: tuple[str, ...] = ()
     form_submit: str = ""
+    form_input_dispatched: bool = False
 
 
 @dataclass
@@ -1903,6 +1904,7 @@ class GoalTurnExecutor:
                 prepared = handoff_form(self, s, plan)
                 out.form_complete, out.form_fields, out.form_submit = (
                     prepared.complete, prepared.fields, prepared.submit_label)
+                out.form_input_dispatched = prepared.input_dispatched
                 if prepared.reason:
                     s.terminal_reason, s.detail = prepared.reason, prepared.detail
         elif plan.highlight and plan.fill:
@@ -2732,6 +2734,9 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                               if submit else f"已填写：{fields}，尚未提交。请核对后自行提交。") if zh else
                              (f"Filled: {fields}. The form has not been submitted. Review it, then "
                               + (f"manually click the highlighted '{submit}'." if submit else "submit it yourself.")))
+            elif not outcome.form_input_dispatched:
+                lines.append("表单操作未完成，没有填写或提交。" if zh else
+                             "The form operation did not complete. No values were entered or submitted.")
             else:
                 lines.append("表单填写或交接未完成；部分字段可能已输入。请核对当前页面，助手没有提交。" if zh else
                              "Form entry or handoff did not complete; some fields may have been entered. "

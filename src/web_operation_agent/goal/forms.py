@@ -36,11 +36,13 @@ class FormOutcome:
     submit_label: str = ""
     reason: str = ""
     detail: str = ""
+    input_dispatched: bool = False
 
 
 class _FormBrowser:
     def __init__(self, executor, state):
         self.executor, self.state = executor, state
+        self.input_dispatched = False
 
     def execute_with_budget(self, action, args, *, timeout_s):
         if action in self.executor.disabled_page_actions:
@@ -49,6 +51,8 @@ class _FormBrowser:
         s.step += 1
         s.writes.expect_decision(False)
         with s.receipt.stage("wait" if action == "wait_for" else "ui"):
+            if action in ("fill", "select"):
+                self.input_dispatched = True
             return s.browser.execute_with_budget(action, args, timeout_s=timeout_s)
 
 
@@ -114,9 +118,10 @@ def handoff_form(executor, state, plan):
                         dispatched=False, submitted=False)
         return FormOutcome(reason=("permission_denied" if isinstance(exc, BusinessToolPermissionError)
                                    else "agent_refused"), detail=str(exc))
+    browser = _FormBrowser(executor, s)
     session = SimpleNamespace(_cancel_requested=s.cancelled, _browser_attempts=0,
         page_actions=0, _approvals=s.approvals, _writes=s.writes, ledger=s.ledger,
-        browser=_FormBrowser(executor, s))
+        browser=browser)
     final, reason, detail = apply_form_draft(session, draft, s.obs, s.step,
         budget=s.budget, verify=lambda obs: verification.check(draft, obs,
             context=s.approvals.context(s.step, "prefill_form")))
@@ -126,6 +131,7 @@ def handoff_form(executor, state, plan):
     s.ledger.append("goal_form_handoff", step=s.step, complete=not reason,
         fields=len(draft.fields), submitted=False, persisted=False,
         terminal_reason=reason, detail=redact_sensitive_assignments(redact_session_handoffs(detail))[:200],
-        browser_attempts=session._browser_attempts)
+        browser_attempts=session._browser_attempts, input_dispatched=browser.input_dispatched)
     return FormOutcome(not reason, tuple(described["fields"]), draft.submit_label,
-                       "wall_budget" if reason == "wall_clock_budget" else reason, detail)
+                       "wall_budget" if reason == "wall_clock_budget" else reason, detail,
+                       browser.input_dispatched)

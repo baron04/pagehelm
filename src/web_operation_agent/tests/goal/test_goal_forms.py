@@ -135,6 +135,17 @@ class GoalFormsTests(unittest.TestCase):
         self.assertNotIn("fill", browser.actions)
         self.assertNotIn("handoff_form", browser.actions)
 
+    def test_declined_batch_reports_no_input_but_uncertain_fill_keeps_its_warning(self):
+        result, browser, _, _, _ = self.run_goal(batch=True, decision="denied")
+        self.assertEqual(result.status, AgentTurnStatus.CANCELLED)
+        self.assertNotIn("fill", browser.actions)
+        self.assertIn("没有填写或提交", result.user_answer)
+        self.assertNotIn("部分字段可能", result.user_answer)
+        result, browser, _, _, events = self.run_goal(batch=True, fail="fill")
+        self.assertEqual(browser.actions.count("fill"), 1)
+        self.assertIn("部分字段可能", result.user_answer)
+        self.assertTrue(any(e['event']=='goal_form_handoff' and e['input_dispatched'] for e in events))
+
     def test_unobserved_submit_is_scrolled_before_values_and_still_verified(self):
         result, browser, _, _, _ = self.run_goal(batch=True, submit_after_scroll=1)
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)

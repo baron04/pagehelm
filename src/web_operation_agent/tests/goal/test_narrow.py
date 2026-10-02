@@ -282,6 +282,19 @@ class RankingTests(unittest.TestCase):
                                          ("RINV/2026/00002",))[1], ())
         self.assertEqual(correct_records(spec, "Azure 那张两万的退款", partner)[1], ())
 
+    def test_explicit_code_adjacent_to_chinese_is_never_replaced_by_another_target(self):
+        known = (KnownReference(text="DOC-1001", entity="invoice", name="DOC-1001"),)
+        spec = GoalSpec.from_json({"deliverables": [
+            {"kind":"fact","entity":"invoice","record":"DOC-9999","fields":["Amount"]},
+            {"kind":"fact","entity":"invoice","record":"DOC-1001","fields":["Amount"]}]})
+        for request in ("告诉我DOC-9999的金额和DOC-1001的金额", "查询doc-9999的金额；以及DOC-1001"):
+            fixed, corrections = correct_records(spec, request, known)
+            self.assertEqual(fixed, spec)
+            self.assertEqual(corrections, ())
+        # An embedded identifier or prefix of a different code is not the exact target.
+        for request in ("查询DOC-99990，另查DOC-1001", "prefixDOC-9999的金额，另查DOC-1001"):
+            self.assertEqual(correct_records(spec, request, known)[1], (("DOC-9999","DOC-1001"),))
+
     def test_a_data_question_carries_no_rules(self):
         rules = (IndexRule(id="r1", kind="visibility", about="Request Cancel", text="t"),)
         index = ApplicationIndex(entities=(
