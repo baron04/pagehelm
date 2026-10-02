@@ -257,6 +257,17 @@ class SpendMeter:
         i = token_count(usage.get("prompt_tokens"), "prompt_tokens")
         o = token_count(usage.get("completion_tokens"), "completion_tokens")
         c = token_count(prompt_details.get("cached_tokens"), "cached_tokens")
+        # DeepSeek-compatible replies may expose cache accounting at top level.
+        # Validate both forms rather than silently overwriting conflicting counts.
+        if "prompt_cache_hit_tokens" in usage:
+            hits = token_count(usage["prompt_cache_hit_tokens"], "prompt_cache_hit_tokens")
+            if "cached_tokens" in prompt_details and c != hits:
+                raise ValueError("conflicting provider cached token counts")
+            c = hits
+        if "prompt_cache_miss_tokens" in usage:
+            misses = token_count(usage["prompt_cache_miss_tokens"], "prompt_cache_miss_tokens")
+            if misses + c != i:
+                raise ValueError("provider cache hits and misses must sum to prompt tokens")
         # Reasoning is billed inside the completion count, so the cost is already right, but
         # it is worth its own column: on a reasoning model most of a planning call can be
         # thought rather than answer, and the source arm makes an extra planning call the

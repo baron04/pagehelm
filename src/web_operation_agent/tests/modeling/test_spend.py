@@ -192,6 +192,22 @@ class Ledger(unittest.TestCase):
                         "prompt_tokens_details": {"cached_tokens": 40}})
         self.assertEqual(m.total_cached, 40)
 
+    def test_deepseek_top_level_cache_is_metered_without_losing_hits(self):
+        m = self._meter()
+        result = m.record(provider="deepseek", model="deepseek-flash", run_id="r1",
+                          usage={"prompt_tokens": 100, "completion_tokens": 2,
+                                 "prompt_cache_hit_tokens": 80, "prompt_cache_miss_tokens": 20})
+        self.assertEqual(result["cached"], 80)
+        self.assertEqual(m.total_cached, 80)
+
+    def test_cache_formats_must_agree_and_counts_must_balance(self):
+        for fields in ({"prompt_cache_hit_tokens": 80, "prompt_tokens_details": {"cached_tokens": 40}},
+                       {"prompt_cache_hit_tokens": 80, "prompt_cache_miss_tokens": 30},
+                       {"prompt_cache_hit_tokens": True}, {"prompt_cache_hit_tokens": 101}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                self._meter().record(provider="deepseek", model="deepseek-flash", run_id="r1",
+                                     usage={"prompt_tokens": 100, "completion_tokens": 2, **fields})
+
     def test_the_per_run_token_ceiling_stops_that_run(self):
         m = self._meter(run_input_token_abort=150)
         m.record(provider="p", model="m", run_id="r1",
