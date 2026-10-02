@@ -118,10 +118,13 @@ class SourceTree:
     def resolve(self, rel: str) -> Path:
         candidate = (self.root / rel).resolve()
         try:
-            candidate.relative_to(self.root)
+            canonical = candidate.relative_to(self.root).as_posix()
         except ValueError:
             raise AccessDenied(f"outside the source root: {rel!r}")
-        if not self.permits(rel):
+        # A permitted alias must not launder a denied target inside the repository.
+        # Check both names: otherwise views/Foo.vue -> ../secrets/Foo.vue bypasses
+        # deny globs despite realpath staying below the root.
+        if not self.permits(rel) or not self.permits(canonical):
             raise AccessDenied(f"not permitted by the allowlist: {rel!r}")
         return candidate
 

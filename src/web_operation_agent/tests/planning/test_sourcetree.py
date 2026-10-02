@@ -66,6 +66,28 @@ class Policy(unittest.TestCase):
             with self.assertRaises(AccessDenied):
                 t.resolve("app/escape.xml")
 
+    def test_allowed_alias_cannot_read_a_denied_target_inside_the_tree(self):
+        with tempfile.TemporaryDirectory() as d:
+            t = _tree(Path(d), {"allow_globs": ["app/**/*.xml"]})
+            target = t.root / "app/secrets/private.xml"
+            target.parent.mkdir(parents=True)
+            target.write_text("<private/>")
+            alias = t.root / "app/public.xml"
+            alias.symlink_to(target)
+            with self.assertRaises(AccessDenied):
+                t.read_text("app/public.xml")
+            self.assertNotIn("app/public.xml", t.files())
+
+    def test_allowed_alias_cannot_read_an_unallowlisted_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            t = _tree(Path(d))
+            target = t.root / "local.xml"
+            target.write_text("<local/>")
+            (t.root / "app").mkdir()
+            (t.root / "app/public.xml").symlink_to(target)
+            with self.assertRaises(AccessDenied):
+                t.read_text("app/public.xml")
+
     def test_source_root_is_a_required_keyword_only_argument(self):
         with self.assertRaises(TypeError):
             SourceTree.load("anything")  # type: ignore[call-arg]

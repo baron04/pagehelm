@@ -115,7 +115,8 @@ Web Operation Agent 是一个 alpha 阶段的框架，用于在第一方 Web 应
   简短支持片段确实出现在引证证据中；这不能证明模型对片段的解释一定正确。
   可通过 `SourceCapability(runtime_source=True, lookup=repository_lookup)` 直接接入源码检索，
   无需 SourceMap 或源码编译器。检索仅返回部署 allowlist 内的有界代码片段，支持 Vue 组件和
-  Java 服务。原始代码片段不授权跳转或 API 调用，页面操作仍需当前运行时证据并遵守既有策略。
+  Java 服务。源码读取同时校验请求路径与解析后的实际目标是否符合 allow/deny 策略，
+  仓库内软链接也不能绕过限制。原始代码片段不授权跳转或 API 调用，页面操作仍需当前运行时证据并遵守既有策略。
   可选的本地 Git Provider 把所有权、blame、commit 与版本差异元数据单独绑定到部署 commit。
   源码检索仍是可选能力，不是普通浏览器或 API 操作的前置条件。为操作检索源码不会
   自动把该操作变成源码问答：操作结果只依据浏览器实际观察的回执；源码问答仍需校验支持证据。

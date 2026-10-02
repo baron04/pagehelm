@@ -470,7 +470,9 @@ tool history. Applications may opt into this path with `repository_answers=True`
 staged `GoalTurnExecutor`; existing goal callers keep their prior behavior by default.
 Optional repository search indexes allowlisted code and documentation once at host
 startup, without a SourceMap or rule compiler. Matched windows include bounded adjacent
-lines so a guard is not separated from its refusal. Source answers first use small
+lines so a guard is not separated from its refusal. Source access checks both the requested
+path and its resolved target against the allow/deny policy, including symlinks within the
+repository. Source answers first use small
 matched summaries to select relevant primary evidence or locate an implementation,
 then select server-numbered literal spans from bounded evidence. They verify exact
 release bytes, display selected citations, and allow one shared declaration repair
