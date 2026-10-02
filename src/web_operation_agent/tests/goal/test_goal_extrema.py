@@ -3,6 +3,7 @@ import unittest
 
 from web_operation_agent.goal.data import Row
 from web_operation_agent.goal.executor import _render
+from web_operation_agent.goal.ports import Resolved
 from web_operation_agent.goal.resolve.extrema import resolve_extreme
 from web_operation_agent.goal.spec import Metric
 
@@ -53,6 +54,13 @@ class ExtremeTests(unittest.TestCase):
     def test_model_contract_accepts_min_max(self):
         for op in ("min", "max"):
             self.assertEqual(Metric.from_json({"op": op, "field": "Amount"}).op, op)
+
+    def test_empty_scope_is_reported_without_claiming_a_missing_capability(self):
+        result = Resolved(kind="fact", problem="no matches", no_matches="Contracts · name = Synthetic")
+        for zh, words in ((True, "没有找到符合"), (False, "No record matches")):
+            answer = "\n".join(_render(result, None, zh))
+            self.assertIn(words, answer)
+            self.assertNotIn("Could not do", answer)
 
 
 if __name__ == "__main__":

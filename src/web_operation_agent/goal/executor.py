@@ -1205,7 +1205,7 @@ class GoalTurnExecutor:
             kept = len(repaired.deliverables) == len(spec.deliverables) and all(
                 after.kind in (before.kind, "handoff")
                 and (before.metric is None or before.metric.op not in ("min", "max")
-                     or (after.kind == "aggregate" and after.metric is not None
+                     or (after.kind in ("aggregate", "list") and after.metric is not None
                          and after.metric.op == before.metric.op))
                 for before, after in zip(spec.deliverables, repaired.deliverables))
             # A kind of record the person named ("这个客户") is the one they mean: a repair
@@ -2375,7 +2375,7 @@ def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
         gaps.append(f"the request says {ref!r} but the declaration does not use it; put it "
                     "where it belongs (a record, a condition's value, a search)")
     for day in days(text, today):
-        if day not in covered and day[5:] not in covered:
+        if day not in declared and day[5:] not in declared:
             gaps.append(f"the request names the day {day} but the declaration has no "
                         "condition on it")
     return tuple(gaps[:4])
@@ -2796,7 +2796,7 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
     if resolved.missing and not (resolved.facts or resolved.aggregate or resolved.page):
         lines.append((f"没有找到名为「{resolved.missing}」的记录。") if zh
                      else f"Nothing named \"{resolved.missing}\" was found.")
-    elif resolved.problem and not (resolved.facts or resolved.aggregate or resolved.page):
+    elif (resolved.problem or resolved.no_matches) and not (resolved.facts or resolved.aggregate or resolved.page):
         lines.append(_not_done(resolved, zh, request, name))
     return lines
 
@@ -2839,6 +2839,9 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -
     reason ("filter 'p262' is not usable here") is written for the declarer, in the
     index's terms, and stays in the audit and the repair; the person hears that it was
     not done and, when several records fit, which ones."""
+    if resolved.no_matches:
+        return (f"在当前账号可见范围内，没有找到符合「{resolved.no_matches}」的记录。" if zh
+                else f"No record matches {resolved.no_matches} within this account's visible scope.")
     if resolved.denied:
         # The account's own rights, not the assistant, stand in the way; nothing was done.
         # A new record is not "this record": it is records of this kind.

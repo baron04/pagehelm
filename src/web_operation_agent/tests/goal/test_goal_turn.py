@@ -712,6 +712,15 @@ class GoalTurnTests(unittest.TestCase):
         self.assertFalse(repaired["accepted"])
         self.assertIn("你指的是哪一个", execution.user_answer)
 
+    def test_candidate_date_does_not_replace_a_declared_date_condition(self):
+        from web_operation_agent.goal.executor import _coverage_gaps
+        from web_operation_agent.goal.ports import Candidate
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "fact", "entity": "order",
+                                                   "record": "Contract", "fields": ["Total"]}]})
+        candidates = (Candidate(kind="record", entity="order", display="Contract",
+                                detail="Date 2026-09-15; amount 3500"),)
+        self.assertTrue(_coverage_gaps(spec, [], "2026-09-15 的 Contract 金额", "2026-09-30", candidates))
+
     def test_repair_cannot_replace_an_extreme_with_a_count(self):
         execution, _channel, _chat, _port, events = self._run(
             [_declaration(kind="aggregate", entity="order", metric={"op": "max", "field": "Unknown"}),

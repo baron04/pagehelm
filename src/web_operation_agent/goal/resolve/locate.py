@@ -57,6 +57,7 @@ class LocateMixin:
             names = self._names_repair(model) if any(
                 foreign(v) for c in (d.metric.filters if d.metric else ()) for v in c.values) else ""
             return Resolved(kind=d.kind, problem=f"no {view.label} matches {subject}",
+                            no_matches=subject,
                             repair=(f"no {view.label} matches {subject}; re-read the request: "
                                     "another page scope (invoices versus bills, quotations "
                                     "versus orders), field or value may be meant"

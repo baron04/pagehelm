@@ -280,15 +280,15 @@ class ScopeMixin:
         domain, described, default_clauses = scope.domain, scope.described, scope.default_clauses
         metric = d.metric or Metric(op="count")
         subject = " · ".join(described)
-        if metric.op in ("min", "max") and (d.kind != "aggregate" or metric.group_by or metric.top):
-            return Resolved(kind=d.kind, problem="Numeric extremes require an aggregate without grouping or top-N.")
+        if metric.op in ("min", "max") and (metric.group_by or metric.top):
+            return Resolved(kind=d.kind, problem="Numeric extremes cannot use grouping or top-N.")
         if d.kind == "list" and default_clauses and not self._count(model, domain):
             # The page's own default filters hid every match; the person asked about the
             # page's entity, so the answer says so and looks past the defaults.
             for clause in default_clauses:
                 domain.remove(clause)
             described.append(self.say.beyond_defaults())
-        if d.kind == "list":
+        if d.kind == "list" and metric.op not in ("min", "max"):
             columns = list(dict.fromkeys(f for f in (view.field_by_label(label) for label in d.fields) if f))
             limit = d.limit or _RECORD_LIMIT
             order = ()

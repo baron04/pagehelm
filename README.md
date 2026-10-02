@@ -95,12 +95,14 @@ agent.
   half-open period and excludes missing dates; adapters apply the user's time zone.
   Date exclusion headings retain the exclusion operator in both languages.
   Query results may carry page links, but only a declared page or handoff goal navigates.
-  Numeric minimum/maximum queries return every tied record in a complete scope of at
+  Numeric minimum/maximum aggregates and lists return every tied record in a complete scope of at
   most 4,000 records. Missing values are excluded; zero and negative values remain.
   Incomplete reads, invalid numbers and differing or unknown currencies are refused;
   native field units are retained when the application declares no currency. No currency
   conversion is inferred. Counts checked before and after the read detect count changes,
   but do not provide a database snapshot across those reads.
+  A candidate's displayed date does not replace a declared date condition. An empty
+  scoped lookup states that no matching record was found under the current account.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
   make a turn complete. Goal stages share one deadline and model-request limit (each
   request or retry uses one step; cache hits use none). Fixed browser and read substeps

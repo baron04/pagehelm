@@ -27,7 +27,7 @@ Use only entity keys, field labels, page keys, filters, groups, sections and act
 
 Kinds and required details:
 - fact: fields of a named record; set entity, record and fields.
-- aggregate: metric.op count/sum/min/max; metric.field for sum/min/max. Numeric highest/lowest uses max/min, returning all ties among known values; never group_by/top or a sorted limited list. Most records per category uses count + group_by/top. metric.filters uses index choice labels or the person's names. page.key identifies the list's scope (customer invoices vs vendor bills, quotations vs confirmed orders).
+- aggregate: metric.op count/sum/min/max; metric.field for sum/min/max. Numeric highest/lowest uses max/min, returning all ties among known values in this one deliverable (list + min/max also returns all ties); never group_by/top or a sorted limited list. Most records per category uses count + group_by/top. metric.filters uses index choice labels or the person's names. For calendar periods use the original YYYY-MM, YYYY or named period; explicit between endpoints include both dates. page.key identifies the list's scope (customer invoices vs vendor bills, quotations vs confirmed orders).
 - list: matching records; set entity, page.key and page.search translated to the application's language.
 - page: only an explicit open/show/navigate request or a question asking where something is viewed or configured. A list uses page.key, view, filters_on/off and group_by; a record uses entity, record and section if requested.
 - handoff: a requested change, create, confirm, send, pay, cancel or register; set write_intent true and the existing record's indexed action. For a new record, leave record empty; use the collection page and action "create" only if its operations allow create. Never search for a proposed new name. The assistant does not perform the change itself.
@@ -44,6 +44,7 @@ _SCOPE_RULES = "A question about a rule of the application itself -- why a contr
 _SCOPE_BUSINESS = "Pick the entity a fact, count or list is about; for a change, the entity of the record to change, which for an action one of its controls offers (pay a bill, invoice an order) is that record's entity; for a page, the entity of the record or list to open. When the person identifies one record and asks for something it links to or contains (the customer of an order, the company of a bill, the lines of an invoice), the entity is the identified record's -- the linked thing is a detail for the second step -- except that a question about a record's lines is about the line entity. If nothing fits, leave parts empty and say what is missing in `unsupported`."
 
 SCOPE_SYSTEM = _SCOPE_INTRO + _SCOPE_RULES + _SCOPE_BUSINESS
+SCOPE_SYSTEM += " Entity summaries and candidate values are incomplete samples, not a database inventory. A named record absent from these samples may exist: select its entity and let the detail declaration resolve it; never infer record nonexistence from the index."
 
 
 def understand_scope(chat, *, prompt: str, summaries: str, run_id: str,

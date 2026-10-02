@@ -151,8 +151,10 @@ class YudaoGoalDataTests(unittest.TestCase):
                 self.assertEqual(result.aggregate.records, names)
             self.assertTrue(self.ask({"kind": "aggregate", "entity": "crm/contract",
                                      "metric": {"op": "max", "field": "合同金额", "group_by": "合同金额"}}).problem)
-            self.assertTrue(self.ask({"kind": "list", "entity": "crm/contract",
-                                     "metric": {"op": "max", "field": "合同金额"}}).problem)
+            result = self.ask({"kind": "list", "entity": "crm/contract", "limit": 1,
+                               "metric": {"op": "max", "field": "合同金额"}})
+            self.assertFalse(result.problem)
+            self.assertEqual(result.aggregate.records, ("Synthetic 3", "Synthetic 5"))
 
     def test_extreme_refuses_truncation_and_scope_above_the_bound(self):
         with patch.object(self.data, "count", return_value=4001), patch.object(self.data, "rows") as read:
@@ -164,6 +166,12 @@ class YudaoGoalDataTests(unittest.TestCase):
             result = self.ask({"kind": "aggregate", "entity": "crm/contract",
                                "metric": {"op": "max", "field": "合同金额"}})
             self.assertTrue(result.problem)
+
+    def test_named_condition_that_matches_nothing_retains_the_scoped_result(self):
+        result = self.ask({"kind": "fact", "entity": "crm/contract", "fields": ["合同金额"],
+                           "metric": {"op": "count", "filters": [
+                               {"field": "合同名称", "op": "=", "values": ["Synthetic absent contract"]}]}})
+        self.assertTrue(result.no_matches)
 
     def test_date_exclusion_counts_outside_the_month_and_returns_the_same_records(self):
         declaration = {"kind": "aggregate", "entity": "crm/contract", "metric": {
