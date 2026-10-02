@@ -3,6 +3,7 @@ describe, and the counts, totals, groups and lists over them."""
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from dataclasses import dataclass, field
 
 from ..data import (EVERYTHING, NAME, Compare, Cond, Native, Not, PageSchema, Via,
@@ -524,6 +525,31 @@ class ScopeMixin:
 
     def _date_condition(self, view: EntityView, key: str, values: tuple[str, ...], op: str, today):
         label = view.label_of(key)
+        # A timestamp is a local instant, not a calendar-day period. Adapters own
+        # conversion to their storage zone, just as they do for date boundaries.
+        instants = tuple(values)
+        if len(instants) == 1 and ".." in instants[0]:
+            instants = tuple(instants[0].split(".."))
+        if any(re.match(r"\d{4}-\d{2}-\d{2}[ T]\d", value) for value in instants):
+            if view.info(key).kind != "datetime":
+                return None, f"{label!r} does not support time-of-day precision"
+            try:
+                if not all(re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?", v)
+                           for v in instants):
+                    raise ValueError("unsupported timestamp format")
+                moments = tuple(datetime.fromisoformat(value) for value in instants)
+            except ValueError:
+                return None, f"invalid local timestamp for {label!r}"
+            text = self.say.compare(label, op, values)
+            if op == "between" and len(moments) == 2 and moments[0] <= moments[1]:
+                return [Compare(key, "ge", moments[0]), Compare(key, "le", moments[1])], text
+            operation = {"": "eq", "=": "eq", "!=": "ne", "<": "lt", "<=": "le", ">": "gt", ">=": "ge"}.get(op)
+            if len(moments) == 1 and operation:
+                clauses = [Compare(key, operation, moments[0])]
+                if operation == "ne":
+                    clauses.insert(0, Compare(key, "set"))
+                return clauses, text
+            return None, f"invalid timestamp comparison for {label!r}"
         if op == "between" and len(values) >= 2:
             first, second = period(values[0], today), period(values[1], today)
             if first is None or second is None or first[0] is None or second[1] is None:

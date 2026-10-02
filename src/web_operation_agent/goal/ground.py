@@ -23,6 +23,7 @@ _ID = re.compile(r"^\s*\[?(v\d{1,3})\]?\s*$")
 _MONTHS = {m: i for i, m in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), start=1)}
 _ISO = re.compile(r"(?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)")
+_CLOCK = re.compile(r"(?<!\d)(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?!\d)")
 _MONTH_DAY = re.compile(r"(?:(\d{4})\s*年\s*)?(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]")
 _SLASH = re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})(?![\d/])")
 _NAMED = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b", re.I)
@@ -59,7 +60,7 @@ def without_days(text: str) -> str:
     for amounts or codes."""
     for pattern in (_ISO, _MONTH_DAY, _SLASH, _NAMED, _CJK_MONTH_DAY):
         text = pattern.sub(" ", text or "")
-    return text
+    return _CLOCK.sub(" ", text)
 
 
 def ground(port, *, entities: tuple[str, ...], known, dates: tuple[str, ...] = (),

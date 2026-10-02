@@ -103,6 +103,9 @@ agent.
   but do not provide a database snapshot across those reads.
   A candidate's displayed date does not replace a declared date condition. An empty
   scoped lookup states that no matching record was found under the current account.
+  Explicit local timestamps compare instants on datetime fields, with storage-zone
+  conversion owned by the adapter; date-only fields do not accept time precision.
+  Clock components are excluded from amount and record-number grounding.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
   make a turn complete. Goal stages share one deadline and model-request limit (each
   request or retry uses one step; cache hits use none). Fixed browser and read substeps

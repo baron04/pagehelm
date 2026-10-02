@@ -721,6 +721,13 @@ class GoalTurnTests(unittest.TestCase):
                                 detail="Date 2026-09-15; amount 3500"),)
         self.assertTrue(_coverage_gaps(spec, [], "2026-09-15 的 Contract 金额", "2026-09-30", candidates))
 
+    def test_clock_components_are_not_interpreted_as_amounts_or_record_numbers(self):
+        from web_operation_agent.goal.executor import _coverage_gaps
+        spec = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "order",
+            "metric": {"op": "count", "filters": [{"field": "Date", "op": "=",
+                                                       "values": ["2026-09-30"]}]}}]})
+        self.assertEqual(_coverage_gaps(spec, [], "列出2026-09-30全天记录，别漏掉23:59:59的记录", "2026-09-30"), ())
+
     def test_repair_cannot_replace_an_extreme_with_a_count(self):
         execution, _channel, _chat, _port, events = self._run(
             [_declaration(kind="aggregate", entity="order", metric={"op": "max", "field": "Unknown"}),

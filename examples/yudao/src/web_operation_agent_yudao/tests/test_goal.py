@@ -140,6 +140,22 @@ class _Client:
 
 
 class YudaoGoalDataTests(unittest.TestCase):
+    def test_exact_local_timestamp_does_not_expand_to_a_day(self):
+        rows = [dict(CONTRACTS[1][0], id=100+i, name=f"Synthetic {i}", orderDate=moment)
+                for i, moment in enumerate(("2026-09-30T23:59:59", "2026-09-30T12:00:00", "2026-10-01T00:00:00", None))]
+        with patch.object(self.data, "_matching", wraps=self.data._matching), patch.object(self.data, "_fetch", return_value=rows):
+            for op, values, expected in (("=", ["2026-09-30 23:59:59"], 1),
+                                         ("!=", ["2026-09-30 23:59:59"], 2),
+                                         ("between", ["2026-09-30 12:00:00", "2026-09-30 23:59:59"], 2),
+                                         ("=", ["2026-09-30 25:00:00"], None)):
+                result = self.ask({"kind": "aggregate", "entity": "crm/contract", "metric": {
+                    "op": "count", "filters": [{"field": "下单日期", "op": op, "values": values}]}})
+                if expected is None:
+                    self.assertTrue(result.problem)
+                else:
+                    self.assertFalse(result.problem)
+                    self.assertEqual(result.aggregate.count, expected)
+
     def test_extreme_returns_all_ties_and_not_the_most_frequent_amount(self):
         rows = [dict(CONTRACTS[1][0], id=100+i, name=f"Synthetic {i}", totalPrice=amount)
                 for i, amount in enumerate((0, 0, 0, 8000, 3500, 8000, None, -30))]

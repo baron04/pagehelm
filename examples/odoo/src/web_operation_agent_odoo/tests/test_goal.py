@@ -187,6 +187,11 @@ _TRANSLATIONS = OdooTranslations(
 
 
 class OdooGoalPortTests(unittest.TestCase):
+    def test_exact_local_timestamp_is_converted_to_utc_by_the_orm_adapter(self):
+        self._resolve({"kind": "aggregate", "entity": "sale.order", "metric": {
+            "op": "count", "filters": [{"field": "Order Date", "op": "=",
+                                           "values": ["2026-09-30 23:59:59"]}]}})
+        self.assertIn(["date_order", "=", "2026-09-30 15:59:59"], self.client.domains[-1])
     def test_extreme_uses_the_same_complete_query_contract_over_orm(self):
         class Client(_Client):
             currencies = ([1, "USD"],) * 5
