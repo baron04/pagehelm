@@ -107,7 +107,11 @@ agent.
   conversion owned by the adapter; date-only fields do not accept time precision.
   Clock components are excluded from amount and record-number grounding.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
-  make a turn complete. Goal stages share one deadline and model-request limit (each
+  make a turn complete. When one part needs a record choice, the reply keeps the other
+  parts' resolved answers and limitations alongside the clarification. Entity summaries
+  describe types and incomplete samples; names absent from them remain unresolved until
+  application reads, including when repository answers are enabled.
+  Goal stages share one deadline and model-request limit (each
   request or retry uses one step; cache hits use none). Fixed browser and read substeps
   check the same deadline and cancellation. Browser commands use the smaller of the
   configured action timeout and remaining turn time; late receipts remain in the audit.

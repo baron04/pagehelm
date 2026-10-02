@@ -388,8 +388,7 @@ def answer(chat, *, source, requests, retrieved, evidence, run_id, cancelled,
             tool, name, max_tokens = focus_tool(active), "declare_source_queries", 700
         else:
             system = _SYSTEM + ("\n用简体中文回答。先写明确结论，例如不能删除或允许修改，再解释依据。条件使用简短字段标签加原始运算符和值，例如状态=3；不要在字段标签和运算符之间插入英文代码。没有证据的枚举含义不要猜。" if chinese else "")
-            body = {"REQUEST": prompt, "questions": active, "untrusted_page": page(),
-                    "required_completeness_fields": {f"complete_{q['question_id']}": False for q in active}}
+            body = {"REQUEST": prompt, "questions": active, "untrusted_page": page()}
             tool, name, max_tokens = answer_tool(active), "answer_sources", 2600
         if feedback:
             body["repair"] = feedback

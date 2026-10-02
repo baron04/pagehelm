@@ -94,6 +94,36 @@ class RepositoryAnswerTests(unittest.TestCase):
         self.assertFalse(any(e["event"] == "goal_resolved" for e in events))
         self.assertEqual(0, result.agent.page_actions)
 
+    def test_source_completeness_is_a_required_decision_not_a_prefilled_answer(self):
+        result, chat, _, _ = self.run_turn([
+            scope([{"kind": "aggregate", "entity": "order"}]), source_reply(),
+            ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+                                                 "metric": {"op": "count"}}]})],
+            [Resolved(kind="aggregate", aggregate=Aggregate("All orders", 17))])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("17", result.user_answer)
+        self.assertIn("Aurora team", result.user_answer)
+        messages = next(m for m in chat.messages if m[0]["content"].startswith("Call answer_sources"))
+        body = json.loads(messages[1]["content"])
+        self.assertNotIn("required_completeness_fields", body)
+        from web_operation_agent.goal.source_answers import answer_tool
+        self.assertIn("complete_0", answer_tool(body["questions"])["function"]["parameters"]["required"])
+        self.assertIn("questions", body)
+        self.assertNotIn("complete", body["questions"][0])
+
+    def test_source_aware_scope_does_not_assume_unlisted_records_are_resolved(self):
+        from web_operation_agent.goal.understand import understand_scope
+        for repository in (False, True):
+            payload = ({"kind_0": "fact", "entity_0": "order"} if repository else
+                       {"parts": [{"kind": "fact", "entity": "order"}]})
+            chat = _Chat([("declare_scope", payload)])
+            parts, *_ = understand_scope(chat, prompt="未列出的订单金额是多少？",
+                summaries="order: Orders", run_id="unlisted", repository_source=repository)
+            self.assertEqual(parts[0]["entity"], "order")
+            system = chat.messages[0][0]["content"]
+            self.assertIn("Only records explicitly listed under KNOWN REFERENCES", system)
+            self.assertIn("cannot establish record nonexistence", system)
+
     def test_repository_answers_are_explicit_so_existing_single_goal_mode_still_works(self):
         result, chat, _, _ = self.run_turn([
             ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",

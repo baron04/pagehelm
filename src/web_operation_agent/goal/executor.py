@@ -1287,7 +1287,12 @@ class GoalTurnExecutor:
                 s.clarification = _clarification(s, unsure.candidates)
                 s.ledger.append("goal_clarification_asked", step=s.step,
                                 choices=len(s.clarification["choices"]))
-                return s.clarification["question"]
+                others = [(r, o, d) for r, o, d in zip(
+                    resolution.deliverables, outcomes, spec.deliverables, strict=True)
+                    if r is not unsure]
+                delivered = self._reply(s, [r for r, _, _ in others],
+                                        [o for _, o, _ in others], [d for _, _, d in others])
+                return "\n\n".join(part for part in (delivered, s.clarification["question"]) if part)
         # Reaching a read-only page cannot settle a request to mutate the application.
         # A declared handoff has its own explicit "you must act" reply; a page/fact-only
         # declaration for a write must also state that the requested change did not happen.
@@ -1616,10 +1621,17 @@ class GoalTurnExecutor:
             s.scope_parts and all(p.get("kind") == "fact" for p in s.scope_parts))
         for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
             agg = r.aggregate
+            if d.metric is not None and d.metric.op in ("min", "max"):
+                # An extreme explicitly requests its complete tied set.
+                continue
             if d.metric is not None and d.metric.total:
                 # The declaration says the person asked for the total over all of them.
                 continue
-            if (one and d.kind == "list" and agg is not None and not r.problem
+            scope_kinds = {part.get("kind") for part in s.scope_parts
+                           if part.get("entity") == d.entity}
+            one_list = one and not ("list" in scope_kinds
+                                    and scope_kinds <= {"list", "aggregate"})
+            if (one_list and d.kind == "list" and agg is not None and not r.problem
                     and 2 <= len(agg.records) <= _MAX_AMOUNT_CHOICES):
                 # "Open that refund of Azure's in August" and two fit: which one.
                 s.ledger.append("goal_one_record_ambiguous", step=s.step, count=agg.count)
@@ -2239,7 +2251,7 @@ class GoalTurnExecutor:
             lines.extend(_render(resolved, outcome, zh, request, name))
         # A turn stopped by the person, or by an unanswered card, says so in the line of
         # the deliverable it stopped; the internal detail behind it is not the person's.
-        if s.terminal_reason not in ("agent_finished", "agent_refused") + _STOPPED:
+        if s.terminal_reason not in ("agent_finished", "agent_refused", "needs_clarification") + _STOPPED:
             detail = s.detail or s.terminal_reason
             if zh and not re.search(r"[\u3400-\u9fff]", detail):
                 lines.append("这次操作没有完成。")

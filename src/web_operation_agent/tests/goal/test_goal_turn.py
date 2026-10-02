@@ -1813,6 +1813,38 @@ class GoalTurnTests(unittest.TestCase):
             [Resolved(kind="list", aggregate=one)], text="Azure 八月的退款都有哪些？")
         self.assertIn("共 1 条：RINV/2026/00001", execution.user_answer)
 
+    def test_count_and_scoped_list_include_the_named_member_without_asking_which(self):
+        scope = ("declare_scope", {"parts": [
+            {"kind": "aggregate", "entity": "order", "about": "refund count"},
+            {"kind": "list", "entity": "order", "about": "refund names"}]})
+        declared = ("declare_goal", {"deliverables": [
+            {"kind": "aggregate", "entity": "order", "metric": {"op": "count"}},
+            {"kind": "list", "entity": "order", "metric": {"op": "count"}}]})
+        two = Aggregate(subject="Refunds", count=2, records=("Refund", "Refund supplement"))
+        execution, *_ = self._run([scope, declared], [
+            Resolved(kind="aggregate", aggregate=replace(two, records=())),
+            Resolved(kind="list", aggregate=two)],
+            text="有多少条退款？把补充那条也列出来。", staged=True, readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertIn("共 2 条", execution.user_answer)
+        self.assertIn("Refund supplement", execution.user_answer)
+
+    def test_mixed_clarification_keeps_settled_count_and_other_limitations(self):
+        declared = ("declare_goal", {"deliverables": [
+            {"kind": "aggregate", "entity": "order", "metric": {"op": "count"}},
+            {"kind": "fact", "entity": "order", "record": "unclear", "fields": ["Total"]},
+            {"kind": "list", "entity": "order"}]})
+        execution, *_ = self._run([declared] * 3, [
+            Resolved(kind="aggregate", aggregate=Aggregate(subject="Orders", count=7)),
+            Resolved(kind="fact", problem="ambiguous", candidates=("First order", "Second order")),
+            Resolved(kind="list", problem="the related lines could not be read")],
+            text="How many orders? What is that order's amount? List its lines.", readings=1)
+        self.assertEqual(execution.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("7", execution.user_answer)
+        self.assertIn("Could not do this part", execution.user_answer)
+        self.assertIn("Which one", execution.user_answer)
+        self.assertIn("First order", execution.user_answer)
+
     def test_a_name_several_records_hold_is_asked_about_whichever_the_model_picked(self):
         # The request writes "Office Chair"; the model picked one of the two records that
         # hold it, by the code the candidate values carry. The pick is the model's.
