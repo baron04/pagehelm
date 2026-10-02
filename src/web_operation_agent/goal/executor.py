@@ -845,7 +845,8 @@ class GoalTurnExecutor:
                             remaining_s=s.budget.remaining, budget=s.budget,
                             stopped=s.model_stop.is_set)
         s.budget.check()
-        index = self.goal_port.index(context=s.approvals.context(0, "index"))
+        with s.receipt.stage("business"):
+            index = self.goal_port.index(context=s.approvals.context(0, "index"))
         s.index = s.full_index = index
         s.conventions = conventions_named(index.conventions, s.message.text)
         s.ledger.append("goal_index_ready", entities=len(index.entities),
@@ -955,9 +956,10 @@ class GoalTurnExecutor:
             named = tuple(n for n in dict.fromkeys(n for p in parts for n in p.get("names", ()))
                           if n not in seen)
             if named:
-                found = locate_names(self.goal_port, named,
-                                     entities=tuple(dict.fromkeys(p["entity"] for p in parts)),
-                                     context=s.approvals.context(s.step, "locate"))
+                with s.receipt.stage("business"):
+                    found = locate_names(self.goal_port, named,
+                                         entities=tuple(dict.fromkeys(p["entity"] for p in parts)),
+                                         context=s.approvals.context(s.step, "locate"))
                 s.ledger.append("goal_names", step=s.step, names=list(named)[:8],
                                 found=[{"text": k.text, "entity": k.entity, "name": k.name}
                                        for k in found][:8])
@@ -992,10 +994,11 @@ class GoalTurnExecutor:
         candidates = ()
         if self.staged and self.values and "values" in capabilities_of(self.goal_port):
             try:
-                candidates = ground(self.goal_port,
-                                    entities=tuple(dict.fromkeys(p["entity"] for p in scope_parts)),
-                                    known=known, dates=days(lookup, today_text),
-                                    context=s.approvals.context(s.step, "candidates"))
+                with s.receipt.stage("business"):
+                    candidates = ground(self.goal_port,
+                                        entities=tuple(dict.fromkeys(p["entity"] for p in scope_parts)),
+                                        known=known, dates=days(lookup, today_text),
+                                        context=s.approvals.context(s.step, "candidates"))
             except Exception as exc:  # noqa: BLE001 -- grounding helps; its absence is not a failure
                 s.ledger.append("goal_values_failed", step=s.step,
                                 detail=f"{type(exc).__name__}: {exc}"[:200])

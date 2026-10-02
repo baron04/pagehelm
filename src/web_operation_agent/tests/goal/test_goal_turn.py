@@ -337,6 +337,43 @@ class GoalTurnTests(unittest.TestCase):
         self.assertEqual(receipt["model_requests"], 0)
         self.assertEqual(receipt["budget"]["model_requests_used"], 0)
 
+    def test_business_receipt_includes_index_names_and_candidates_without_model_time(self):
+        from web_operation_agent.execution.receipt import TurnReceipt
+        clock = [0.0]
+        original_init = TurnReceipt.__init__
+
+        def init(receipt):
+            original_init(receipt, clock=lambda: clock[0])
+
+        class TimedPort(_Port):
+            def index(self, *, context=None):
+                clock[0] += 2.0
+                return super().index(context=context)
+
+            def locate_names(self, names, *, entities=(), context=None):
+                clock[0] += 3.0
+                return ()
+
+            def candidates(self, *, entities, known, dates, context=None):
+                clock[0] += 5.0
+                return ()
+
+        port = TimedPort([Resolved("fact", facts=(Fact("甲客户", "Customer", "甲客户"),))])
+        with patch.object(TurnReceipt, "__init__", init):
+            result, _, chat, _, events = self._run([
+                ("declare_scope", {"parts": [{"kind": "fact", "entity": "order",
+                    "names": ["甲客户"]}]}),
+                ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "order",
+                    "record": "甲客户", "fields": ["Customer"]}]})],
+                [], port=port, text="甲客户的销售订单客户是谁？", staged=True, readings=1)
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(len(chat.messages), 2)
+        receipt = next(e for e in events if e["event"] == "goal_run_receipt")
+        self.assertEqual(receipt["stages"]["business"]["occupied_seconds"], 10.0)
+        self.assertEqual(receipt["model_occupied_seconds"], 0.0)
+        self.assertEqual(receipt["model_requests"], 2)
+        self.assertFalse(receipt["contains_raw_payload"])
+
     def test_a_fact_and_a_page_are_answered_from_one_model_call(self):
         execution, channel, chat, port, events = self._run(
             [("declare_goal", {"deliverables": [

@@ -120,6 +120,7 @@ agent.
   not real-model understanding, creation or complex controls.
   The `goal_run_receipt` audit event records
   stage times, request counts and serialized input bytes without prompt or result content;
+  Business timing includes index preparation, name lookup and candidate reads;
   overlapping intervals are counted once within a stage and for total model occupancy.
   Token and cost totals come from the spend meter; unavailable usage remains unknown.
   Tab selection refuses duplicate exact names and ambiguous partial names. When a tab
