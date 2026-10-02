@@ -50,6 +50,42 @@ class RepeatGuard:
         self._fingerprint = ""
         self._repeats = 0
         self._warned = False
+        self._refused: dict[str, bool] = {}
+        self._scope = ""
+
+    def bind_scope(self, scope: str) -> None:
+        if scope != self._scope:
+            self.reset()
+            self._scope = scope
+
+    def facts_changed(self) -> None:
+        """A successful business result may refresh metadata; old refusals no longer bind."""
+        self._refused.clear()
+
+    def refused(self, name: str, args: object, observation: PageObservation) -> None:
+        """Remember only a caller-proven request/policy refusal with no possible effect.
+
+        Authentication, permission, availability and uncertain write errors must never
+        enter here. Only the current turn retains these digests.
+        """
+        if self._limit is not None:
+            key = self._refusal_key(name, args, observation)
+            if key:
+                self._refused.setdefault(key, False)
+
+    def _refusal_key(self, name, args, observation):
+        page = observation.to_json()
+        page.pop("epoch", None)
+        for element in page.get("elements", ()):
+            element.pop("epoch", None)
+            element.pop("ref", None)
+        try:
+            raw = json.dumps({"scope": self._scope, "tool": name, "args": args, "page": page},
+                             sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+                             allow_nan=False).encode()
+        except (TypeError, ValueError):
+            return ""  # An uncanonicalizable decision is not cached.
+        return hashlib.sha256(raw).hexdigest()
 
     @property
     def repeats(self) -> int:
@@ -60,12 +96,19 @@ class RepeatGuard:
         self._fingerprint = ""
         self._repeats = 0
         self._warned = False
+        self._refused.clear()
 
     def decide(self, name: str, args: object, observation: PageObservation) -> str:
         """`""` to carry on, `"warn"` to say so once, `"end"` to stop the turn."""
         if self._limit is None or name in {"finish", "ask_user"}:
             self.reset()
             return ""
+        rejected = self._refusal_key(name, args, observation)
+        if rejected and rejected in self._refused:
+            warned = self._refused[rejected]
+            self._refused[rejected] = True
+            self._repeats = 3 if warned else 2
+            return "end" if warned else "warn"
         fingerprint = self._fingerprint_of(name, args, observation)
         if fingerprint != self._fingerprint:
             self._fingerprint = fingerprint

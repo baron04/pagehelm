@@ -35,6 +35,30 @@ class AProgressFeedSaysWhatIsHappening(unittest.TestCase):
 
 
 class ARepeatGuardEndsATurnThatIsNotMoving(unittest.TestCase):
+    def test_a_refused_a_b_a_loop_warns_then_stops_without_dispatching_a(self):
+        guard = RepeatGuard(2)
+        guard.bind_scope("session:actor-a:turn-a")
+        guard.decide("read", {"field": "bad"}, _page())
+        guard.refused("read", {"field": "bad"}, _page())
+        guard.decide("read", {"field": "other bad"}, _page(epoch=2))
+        guard.refused("read", {"field": "other bad"}, _page(epoch=2))
+        self.assertEqual(guard.decide("read", {"field": "bad"}, _page(epoch=3)), "warn")
+        guard.decide("observe", {}, _page(epoch=4))
+        self.assertEqual(guard.decide("read", {"field": "bad"}, _page(epoch=5)), "end")
+
+    def test_a_changed_page_successful_read_or_new_actor_invalidates_refusals(self):
+        for changed in ("page", "facts", "actor"):
+            with self.subTest(changed=changed):
+                guard = RepeatGuard(2)
+                guard.bind_scope("session:actor-a:turn-a")
+                guard.refused("read", {"field": "bad"}, _page())
+                page = _page(content="Changed") if changed == "page" else _page()
+                if changed == "facts":
+                    guard.facts_changed()
+                if changed == "actor":
+                    guard.bind_scope("session:actor-b:turn-b")
+                self.assertEqual(guard.decide("read", {"field": "bad"}, page), "")
+
     def test_the_same_decision_on_the_same_page_warns_once_then_ends_it(self):
         guard = RepeatGuard(2)
         self.assertEqual(guard.decide("click", {"ref": "e1"}, _page()), "")

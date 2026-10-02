@@ -292,6 +292,9 @@ class GoalTurnTests(unittest.TestCase):
         hits = [event for event in events if event.get("cache_hit")]
         self.assertEqual(len(hits), 6)
         self.assertTrue(all(event["attempts"] == 0 for event in hits))
+        receipt = [e for e in events if e["event"] == "goal_run_receipt"][-1]
+        self.assertEqual(receipt["model_requests"], 0)
+        self.assertEqual(receipt["budget"]["model_requests_used"], 0)
 
     def test_a_fact_and_a_page_are_answered_from_one_model_call(self):
         execution, channel, chat, port, events = self._run(
@@ -629,6 +632,56 @@ class GoalTurnTests(unittest.TestCase):
         repaired = next(e for e in events if e["event"] == "goal_repaired")
         self.assertFalse(repaired["accepted"])
         self.assertIn("你指的是哪一个", execution.user_answer)
+
+    def test_repair_cannot_finish_by_dropping_an_unresolved_part(self):
+        two = ("declare_goal", {"deliverables": [
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]},
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Unknown"]}]})
+        one = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"])
+        fact = Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),))
+        execution, _channel, _chat, _port, events = self._run(
+            [two, one], [fact, Resolved(kind="fact", problem="Unknown field",
+                repair="Use an indexed field for the second question")],
+            resolved_then=[fact], readings=1,
+            text="S00006 的客户与付款条款分别是什么？")
+        self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertIn("无法完成这一项", execution.user_answer)
+        self.assertFalse(next(e for e in events if e["event"] == "goal_repaired")["accepted"])
+
+    def test_an_unused_parallel_reading_is_cancelled_before_final_accounting(self):
+        import threading
+        from web_operation_agent.modeling.provider import ProviderError
+        class FailedFirst:
+            model = "synthetic"
+            def __init__(self):
+                self.entered = threading.Event()
+                self.stopped = threading.Event()
+            def complete(self, *args, **kwargs):
+                raise AssertionError("must use cancellable completion")
+            def complete_cancellable(self, messages, tools, run_id, *, cancelled, **kwargs):
+                if threading.current_thread() is threading.main_thread():
+                    self.entered.wait(2)
+                    raise ProviderError("first reading failed", retryable=False)
+                self.entered.set()
+                while not cancelled():
+                    self.stopped.wait(.001)
+                self.stopped.set()
+                raise ProviderError("secondary reading stopped", retryable=False)
+        channel = _Channel(page_url="http://127.0.0.1:8080/home")
+        chat = FailedFirst()
+        executor = GoalTurnExecutor(channel=channel,
+            config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            chat=chat, application=bind_application(_Adapter()), goal_port=_Port([]),
+            control=ReadOnlyControl(), staged=False, run_id_factory=lambda _m: "parallel-run")
+        result = executor.execute({"message_id": "m1", "text": "Count orders",
+                                   "page_url": "http://127.0.0.1:8080/home"})
+        self.assertTrue(chat.stopped.is_set())
+        self.assertEqual(result.status, AgentTurnStatus.FAILED)
+        events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
+        receipt = next(e for e in events if e["event"] == "goal_run_receipt")
+        self.assertEqual(receipt["model_inflight"], 0)
+        self.assertEqual(receipt["model_outcomes"], {"failed": 2})
 
     def test_without_page_search_the_words_searched_for_name_the_record(self):
         _execution, _channel, _chat, port, _events = self._run(

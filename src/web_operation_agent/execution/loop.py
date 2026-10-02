@@ -133,6 +133,9 @@ def _complete_once_more_if_transient(session, messages: list, step: int, t0: flo
 def run_loop(session) -> RunResult:
     t0 = time.time()
     session._approvals.start_turn(int((t0 + session.wall_budget_s) * 1000))
+    principal = session._approvals.principal
+    session._repeats.bind_scope(session.run_id + ":" + (
+        principal.binding_digest if principal is not None else "anonymous"))
     result = RunResult(run_id=session.run_id, task_ref=session.task.task_ref, arm=session.arm,
                        terminal_reason="agent_finished",
                        contract_digest=session.contract.content_digest,

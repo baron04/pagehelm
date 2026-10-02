@@ -73,6 +73,55 @@ class ProductReadAndNavigationTests(unittest.TestCase):
     def setUp(self):
         _RemoteBrowser.instances.clear()
 
+    def test_alternating_invalid_requests_are_not_dispatched_again(self):
+        from web_operation_agent.business.errors import BusinessToolRequestError
+        class InvalidRequest(_Executor):
+            @staticmethod
+            def execute(name, args, *, context=None):
+                raise BusinessToolRequestError("synthetic invalid field")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root / "query.json")
+            a, b = {"unknown": "A"}, {"unknown": "B"}
+            chat = _Chat([("query_companies", args) for args in (a, b, a, b, a)])
+            channel = _Channel()
+            channel.latest_observation_envelope.observation.render_state = "ready"
+            executor = AgentTurnExecutor(channel=channel, chat=chat, control=ReadOnlyControl(),
+                run_id_factory=lambda _m: "refused-loop",
+                business_tools=BusinessToolRuntime((skill,), InvalidRequest()),
+                config=AgentTurnConfig(supported_scope="Read companies.",
+                    ledger_path=root/"audit.jsonl", plain_business_answer_min_page_actions=0))
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
+                result = executor.run_once(_message())
+            events = [json.loads(line) for line in (root/"audit.jsonl").read_text().splitlines()]
+            self.assertEqual(result.agent.terminal_reason, "no_progress")
+            self.assertEqual(sum(e["event"] == "business_tool_rejected" for e in events), 2)
+            self.assertEqual(sum(e["event"] == "no_progress_detected" for e in events), 2)
+
+    def test_a_transient_business_failure_is_not_cached_as_a_request_refusal(self):
+        from web_operation_agent.business.errors import BusinessToolUnavailableError
+        class Unavailable(_Executor):
+            calls = 0
+            @classmethod
+            def execute(cls, name, args, *, context=None):
+                cls.calls += 1
+                raise BusinessToolUnavailableError("synthetic temporary outage")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = _skill(root/"query.json")
+            chat = _Chat([("query_companies", {}), ("observe", {}),
+                          ("query_companies", {}), ("finish", {"outcome": "unable"})])
+            executor = AgentTurnExecutor(channel=_Channel(), chat=chat, control=ReadOnlyControl(),
+                run_id_factory=lambda _m: "temporary-outage",
+                business_tools=BusinessToolRuntime((skill,), Unavailable()),
+                config=AgentTurnConfig(supported_scope="Read companies.",
+                    ledger_path=root/"audit.jsonl", plain_business_answer_min_page_actions=0))
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
+                executor.run_once(_message())
+            self.assertEqual(Unavailable.calls, 2)
+            events = [json.loads(line) for line in (root/"audit.jsonl").read_text().splitlines()]
+            self.assertFalse(any(e["event"] == "no_progress_detected" for e in events))
+
     def test_business_read_refreshes_page_before_the_next_model_decision(self):
         class ChangedAfterRead(_RemoteBrowser):
             def execute(self, action, args=None, expect_navigation=False):

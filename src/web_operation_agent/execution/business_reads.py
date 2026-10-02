@@ -6,7 +6,7 @@ import re
 
 from ..answer import answer_protocol
 from ..transport.browser import TransportError, TurnCancelled
-from ..business.errors import BusinessToolError, BusinessToolPermissionError
+from ..business.errors import BusinessToolError, BusinessToolPermissionError, BusinessToolRequestError
 from ..business.entities import QUERY_ENTITY_RECORDS_TOOL
 from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
 from .knowledge_tools import finish_with_clarification
@@ -34,6 +34,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
         tool_result = session.business_tools.execute(
             name, args, session._loaded_business_skill_ids,
             context=operation_context)
+        session._repeats.facts_changed()
         session.ledger.append(
             "business_tool_result", step=step, tool=name,
             result_digest=tool_result.content_digest,
@@ -288,6 +289,8 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
             "state what you could not read as an undetermined conclusion. If you "
             "have read nothing, finish with outcome=unable.")
     except BusinessToolError as exc:
+        if isinstance(exc, BusinessToolRequestError):
+            session._repeats.refused(name, args, obs)
         session.latest_business_tool_result = None
         session._form_draft = None
         session._latest_business_routes = set()

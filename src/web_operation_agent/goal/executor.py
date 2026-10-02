@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 import functools
 import json
 import re
+import threading
 import time
 from typing import Callable, NamedTuple
 from urllib.parse import urlsplit
@@ -28,9 +29,12 @@ from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnEr
                                  AgentTurnExecution, AgentTurnMessage, AgentTurnStatus,
                                  render_neutral_user_answer)
 from ..execution.runstate import RunResult
+from ..execution.receipt import MeasuredChat, TurnReceipt
+from ..execution.budget import TurnBudget
 from ..modeling.chat import require_chat_port
 from ..modeling.egress import AuditedChat
 from ..modeling.provider import ProviderError
+from ..modeling.spend import BudgetExhausted
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..schemas.browser import PageObservation
 from ..transport.protocol import RemoteProtocolError
@@ -578,6 +582,10 @@ class _TurnState:
     approvals: ApprovalWatch
     obs: PageObservation
     started_at: float
+    receipt: TurnReceipt = field(default_factory=TurnReceipt)
+    budget: TurnBudget | None = None
+    model_stop: threading.Event = field(default_factory=threading.Event)
+    model_futures: list = field(default_factory=list)
     step: int = 0
     page_actions: int = 0
     terminal_reason: str = ""
@@ -777,10 +785,22 @@ class GoalTurnExecutor:
                            obs=current.observation, started_at=started_at,
                            chinese=bool(_CJK.search(turn_message.text)),
                            cancelled=cancelled, chosen=chosen)
+        state.receipt.started -= max(0.0, time.time() - started_at)
+        state.budget = TurnBudget(steps=self.config.step_budget, seconds=self.config.wall_budget_s,
+                                  cancelled=cancelled)
+        state.budget.started -= max(0.0, time.time() - started_at)
         self.channel.publish("progress", {"state": "agent_started"},
                              turn_id=turn_message.message_id)
         try:
             text = self._run(state)
+        except TurnCancelled:
+            state.terminal_reason = "user_cancelled"
+            text = "操作已停止。" if state.chinese else "The task was stopped."
+        except BudgetExhausted as exc:
+            state.terminal_reason = exc.kind if exc.kind in {
+                "token_budget", "wall_budget", "step_budget"} else "batch_cost_stop"
+            state.detail = str(exc)[:200]
+            text = "本次任务已达到模型使用限额，未继续执行。" if state.chinese else "The model budget was reached; the task did not continue."
         except AgentTurnError:
             raise
         except Exception as exc:
@@ -789,6 +809,16 @@ class GoalTurnExecutor:
             raise AgentTurnError(AgentTurnErrorCode.EXECUTION_FAILED,
                                  "the goal turn failed before it produced a terminal result",
                                  retryable=False, run_id=run_id) from exc
+        finally:
+            # Unused parallel readings are cancelled and joined before the terminal
+            # receipt, so a failed first reading cannot leave a paid task running.
+            state.model_stop.set()
+            for future in state.model_futures:
+                try:
+                    future.result(timeout=max(1.0, state.budget.remaining()))
+                except Exception:
+                    # The observed failure is already accounted by MeasuredChat.
+                    pass
         return self._settle(state, current, text)
 
     # -- the turn ---------------------------------------------------------------------
@@ -803,7 +833,10 @@ class GoalTurnExecutor:
                              else "The turn could not start.")
         s.ledger.append("observation", epoch=s.obs.epoch, url=s.obs.url,
                         elements=len(s.obs.elements), digest=s.obs.content_digest)
-        chat = AuditedChat(self.chat, s.ledger)
+        chat = MeasuredChat(AuditedChat(self.chat, s.ledger), s.receipt,
+                            remaining_s=s.budget.remaining, budget=s.budget,
+                            stopped=s.model_stop.is_set)
+        s.budget.check()
         index = self.goal_port.index(context=s.approvals.context(0, "index"))
         s.index = s.full_index = index
         s.conventions = conventions_named(index.conventions, s.message.text)
@@ -829,21 +862,23 @@ class GoalTurnExecutor:
         lookup = (before + " " + s.message.text).strip()
         parts = None
         if self.staged:
-            known = locate(self.goal_port, lookup,
-                           context=s.approvals.context(s.step, "locate"))
+            with s.receipt.stage("business"):
+                known = locate(self.goal_port, lookup,
+                               context=s.approvals.context(s.step, "locate"))
             s.references = tuple(known)
             s.ledger.append("goal_references", step=s.step,
                             references=[{"text": k.text, "entity": k.entity, "name": k.name}
                                         for k in known][:8])
             try:
-                (parts, write_intent, unsupported, about_assistant,
-                 projection) = understand_scope(
-                    chat, prompt=s.message.text,
-                    summaries=summaries(index, lookup, known), run_id=s.run_id,
-                    timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
-                    cancelled=s.cancelled, today=today_text, earlier=earlier,
-                    cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"),
-                    repository_source=self.repository_answers)
+                with s.receipt.stage("scope"):
+                    (parts, write_intent, unsupported, about_assistant,
+                     projection) = understand_scope(
+                        chat, prompt=s.message.text,
+                        summaries=summaries(index, lookup, known), run_id=s.run_id,
+                        timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
+                        cancelled=s.cancelled, today=today_text, earlier=earlier,
+                        cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"),
+                        repository_source=self.repository_answers)
             except ValueError as exc:
                 # The first step's answer could not be read, twice: the turn goes on as a
                 # single declaration against the whole index rather than refusing.
@@ -867,20 +902,22 @@ class GoalTurnExecutor:
                 from .source_answers import answer, retrieve
                 s.write_intent = write_intent
                 try:
-                    retrieved, evidence = retrieve(self.config.source, sources, s.ledger)
+                    with s.receipt.stage("source"):
+                        retrieved, evidence = retrieve(self.config.source, sources, s.ledger)
                     self._dispatch(s, "observe", {})
                     if s.terminal_reason:
                         return ""
-                    result = answer(chat, source=self.config.source, requests=sources,
-                        retrieved=retrieved, evidence=evidence, run_id=s.run_id,
-                        cancelled=s.cancelled, chinese=s.chinese, ledger=s.ledger,
-                        prompt=s.message.text,
-                        page=lambda: {"path": urlsplit(s.obs.url).path, "epoch": s.obs.epoch,
-                                      "render_state": s.obs.render_state,
-                                      "active_view": s.obs.active_view[:120]},
-                        refresh=lambda: bool(self._dispatch(s, "observe", {}) is not None
-                                             and not s.terminal_reason),
-                        timeout_s=max(1.0, self.config.wall_budget_s - (time.time() - s.started_at)))
+                    with s.receipt.stage("source"):
+                        result = answer(chat, source=self.config.source, requests=sources,
+                            retrieved=retrieved, evidence=evidence, run_id=s.run_id,
+                            cancelled=s.cancelled, chinese=s.chinese, ledger=s.ledger,
+                            prompt=s.message.text,
+                            page=lambda: {"path": urlsplit(s.obs.url).path, "epoch": s.obs.epoch,
+                                          "render_state": s.obs.render_state,
+                                          "active_view": s.obs.active_view[:120]},
+                            refresh=lambda: bool(self._dispatch(s, "observe", {}) is not None
+                                                 and not s.terminal_reason),
+                            timeout_s=max(1.0, self.config.wall_budget_s - (time.time() - s.started_at)))
                     s.source_answer, s.source_complete = result.text, result.complete
                 except ProviderError as exc:
                     s.terminal_reason = "provider_error"
@@ -965,13 +1002,15 @@ class GoalTurnExecutor:
             today=today_text, scope=scope_text, values=render_values(candidates),
             earlier=earlier)
 
-        def read(*, cache_slot=None, **kwargs):
+        def read(*, cache_slot=None, stage=None, **kwargs):
             # Every reading -- the first, the second, the deciding one, the repair --
             # sees the same scope and values, and has its value ids bound to the exact
             # names before it is compared or resolved.
-            spec, projection = unbound(
-                cache=self.declaration_cache if cache_slot is not None else None,
-                cache_namespace=(cache_owner, cache_slot), **kwargs)
+            name = stage or ("repair" if kwargs.get("previous") is not None else "interpret")
+            with s.receipt.stage(name):
+                spec, projection = unbound(
+                    cache=self.declaration_cache if cache_slot is not None else None,
+                    cache_namespace=(cache_owner, cache_slot), **kwargs)
             if candidates:
                 spec, bound, unknown = bind(spec, candidates)
                 projection = {**projection, "values_bound": bound,
@@ -985,6 +1024,7 @@ class GoalTurnExecutor:
         if self.readings > 1:
             pool = ThreadPoolExecutor(max_workers=1)
             second_reading = pool.submit(read, cache_slot="second")
+            s.model_futures.append(second_reading)
             pool.shutdown(wait=False)
         try:
             spec, projection = read(cache_slot="first")
@@ -1151,7 +1191,7 @@ class GoalTurnExecutor:
             # A repair corrects names, fields and conditions; what the person asked
             # for -- a record to open, a list, a value -- stays what the readings said,
             # except a change asked for, which the repair may make a handoff.
-            kept = len(repaired.deliverables) != len(spec.deliverables) or all(
+            kept = len(repaired.deliverables) == len(spec.deliverables) and all(
                 after.kind in (before.kind, "handoff")
                 for before, after in zip(spec.deliverables, repaired.deliverables))
             # A kind of record the person named ("这个客户") is the one they mean: a repair
@@ -1367,7 +1407,7 @@ class GoalTurnExecutor:
         s.step += 1
         elapsed = time.time() - s.started_at
         try:
-            third, projection = s.read(previous=first, problems=problems)
+            third, projection = s.read(previous=first, problems=problems, stage="reconcile")
         except (ValueError, ProviderError) as exc:
             s.ledger.append("goal_readings_unreconciled", step=s.step, detail=str(exc)[:200])
             return first
@@ -1405,7 +1445,7 @@ class GoalTurnExecutor:
         to, when that answer finds what it describes and at least two agree on it alone;
         None otherwise, and the deciding reading settles it."""
         with ThreadPoolExecutor(max_workers=_MORE_READINGS) as pool:
-            futures = [pool.submit(s.read) for _ in range(_MORE_READINGS)]
+            futures = [pool.submit(s.read, stage="vote") for _ in range(_MORE_READINGS)]
         readings = [(first, pair[0]), (second, pair[1])]
         for future in futures:
             try:
@@ -1464,6 +1504,11 @@ class GoalTurnExecutor:
         return readings[best[0]][0]
 
     def _resolve(self, s: _TurnState, spec: GoalSpec, *, quiet: bool = False) -> Resolution:
+        s.budget.check()
+        with s.receipt.stage("business"):
+            return self._resolve_declared(s, spec, quiet=quiet)
+
+    def _resolve_declared(self, s: _TurnState, spec: GoalSpec, *, quiet: bool = False) -> Resolution:
         # A deliverable that needs something this application's port does not offer is
         # answered here, plainly; the port sees only what it can resolve.
         offered = capabilities_of(self.goal_port)
@@ -1637,6 +1682,9 @@ class GoalTurnExecutor:
     # -- pages ------------------------------------------------------------------------
     def _dispatch(self, s: _TurnState, action: str, args: dict, *, navigating: bool = False):
         """One page command under write control, with its receipt on the record."""
+        if s.terminal_reason:
+            return None
+        s.budget.check()
         if action in self.disabled_page_actions:
             s.terminal_reason, s.detail = "agent_refused", "the deployment disabled this page action"
             s.ledger.append("goal_action_disabled", action=action)
@@ -1648,11 +1696,14 @@ class GoalTurnExecutor:
             if reason:
                 s.terminal_reason, s.detail = reason, detail
                 return None
+        # Approval may have waited long enough to exhaust the shared deadline.
+        s.budget.check()
         s.step += 1
         s.ledger.append("tool_call", step=s.step, tool=action, args=dict(args))
         s.writes.expect_decision(False)
         try:
-            receipt = s.browser.execute(action, args, expect_navigation=navigating)
+            with s.receipt.stage("wait" if action == "wait_for" else "ui"):
+                receipt = s.browser.execute(action, args, expect_navigation=navigating)
         except TurnCancelled as exc:
             s.terminal_reason, s.detail = "user_cancelled", str(exc)[:200]
             return None
@@ -2118,6 +2169,13 @@ class GoalTurnExecutor:
 
     # -- settlement -------------------------------------------------------------------
     def _settle(self, s: _TurnState, current, text: str) -> AgentTurnExecution:
+        exhausted = s.budget.projection()["terminal_reason"]
+        if exhausted:
+            s.terminal_reason = exhausted
+            text = "本次任务已达到执行限额，未继续执行。" if s.chinese else "The turn budget was reached; execution stopped."
+        if s.cancelled():
+            s.terminal_reason = "user_cancelled"
+            text = "操作已停止。" if s.chinese else "The task was stopped."
         if s.source_answer:
             text = "\n\n".join(part for part in (text, s.source_answer) if part)
             if not s.source_complete and s.terminal_reason in ("", "agent_finished"):
@@ -2171,6 +2229,8 @@ class GoalTurnExecutor:
         s.ledger.append("product_turn_finished", status=status.value,
                         terminal_reason=terminal, answer_fallback_used=fallback,
                         business_result_digest="")
+        s.ledger.append("goal_run_receipt", budget=s.budget.projection(),
+                        **s.receipt.report(self.chat, s.run_id))
         try:
             self.channel.publish("progress", {
                 "state": status.value, "terminal_reason": terminal, "message": user_answer,

@@ -94,6 +94,17 @@ agent.
   positive interpretation is correct. Date exclusion selects known dates outside the
   half-open period and excludes missing dates; adapters apply the user's time zone.
   Query results may carry page links, but only a declared page or handoff goal navigates.
+  A repair must retain every declared deliverable; dropping an unresolved part cannot
+  make a turn complete. Goal stages share one deadline and model-request limit (each
+  request or retry uses one step; cache hits use none). Fixed browser and read substeps
+  check the same deadline and cancellation. The `goal_run_receipt` audit event records
+  stage times, request counts and serialized input bytes without prompt or result content;
+  overlapping intervals are counted once within a stage and for total model occupancy.
+  Token and cost totals come from the spend meter; unavailable usage remains unknown.
+  In the tool loop, a previously rejected deterministic request is warned and then stopped
+  even if other rejected requests intervene. Changed page state or a successful business
+  read invalidates that refusal; authentication, permission and transient failures are
+  not remembered this way.
   Parsed read-only declarations have an executor-local, 128-entry cache with a
   120-second lifetime. Keys bind the principal, model/options, source digest and exact
   prompt context (including history, date, scope and candidate values). The two initial

@@ -146,6 +146,8 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         # the decisive fact that the browser never received it.  The real receipt is
         # for the fresh observe that follows the refusal.
         session.policy_blocks += 1
+        if name != "click" or session.click_policy is None:
+            session._repeats.refused(name, args, obs)
         prior_epoch = obs.epoch
         session.ledger.append("action_policy_blocked", step=step, tool=name,
                            args=_safe(args, session.session_handoffs), dispatched=False,
