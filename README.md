@@ -612,7 +612,11 @@ optional.
 
 The server's `policies/model_options.json` disables reasoning by default for
 `qwen3.8-flash` with `enable_thinking=false`; planner answer-budget growth does not
-enable it again. The selected model still comes from `AGENT_OPENAI_MODEL`. This
+enable it again. For `deepseek-flash`, it sends `thinking={"type":"disabled"}`
+using the [DeepSeek thinking-mode contract](https://api-docs.deepseek.com/guides/thinking_mode/).
+Its registered CNY rates use the published peak rates as a conservative fixed estimate;
+off-peak charges can be lower, so this is not an invoice or time-dependent billing.
+The selected model still comes from `AGENT_OPENAI_MODEL`. This
 latency preference does not guarantee unchanged accuracy; see the
 [frozen model comparison](evals/yudao/qualification/RESULTS.zh-CN.md).
 Policy changes require restarting a source-installed server, or rebuilding and

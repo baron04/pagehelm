@@ -20,5 +20,12 @@
     "cache_read_per_m": 0.1,
     "currency": "CNY",
     "taken": "2026-09-07, help.aliyun.com/zh/model-studio/qwen3-8-flash, Beijing region list price"
+  },
+  "deepseek-flash": {
+    "input_per_m": 2.0,
+    "output_per_m": 8.0,
+    "cache_read_per_m": 0.04,
+    "currency": "CNY",
+    "taken": "2026-10-02, https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ ; CNY peak list rates used as a conservative fixed estimate. Off-peak list rates are half; this is not time-dependent billing or the account invoice."
   }
 }

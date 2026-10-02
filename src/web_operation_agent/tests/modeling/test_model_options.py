@@ -150,25 +150,36 @@ class NativeCompletionTransport(unittest.TestCase):
 
     def test_default_flash_reasoning_stays_off_on_a_planner_request(self):
         from web_operation_agent.planning.contract import thinking_options
-        with tempfile.TemporaryDirectory() as directory:
-            chat = M.ChatModel(M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
-                               env=self.ENV)
-            captured = []
-            payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                       "choices": [{"finish_reason": "stop", "message": {"content": "done"}}]}
+        for model in ("qwen3.8-flash", "deepseek-flash"):
+            with self.subTest(model=model), tempfile.TemporaryDirectory() as directory:
+                chat = M.ChatModel(M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                                   env={**self.ENV, "AGENT_OPENAI_MODEL": model})
+                captured = []
+                payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                           "choices": [{"finish_reason": "stop", "message": {"content": "done"}}]}
 
-            def respond(request, timeout):
-                captured.append(json.loads(request.data))
-                return self._response(payload)
+                def respond(request, timeout):
+                    captured.append(json.loads(request.data))
+                    return self._response(payload)
 
-            with patch.object(M.urllib.request, "urlopen", side_effect=respond):
-                chat.complete([{"role": "user", "content": "synthetic planning request"}],
-                              None, "planner-run", max_tokens=8192,
-                              options=thinking_options(chat, 8))
-            self.assertIs(captured[0]["enable_thinking"], False)
-            self.assertNotIn("thinking_budget", captured[0])
-            self.assertIs(captured[0]["parallel_tool_calls"], False)
-            self.assertEqual(captured[0]["max_tokens"], 8192)
+                with patch.object(M.urllib.request, "urlopen", side_effect=respond):
+                    chat.complete([{"role": "user", "content": "synthetic planning request"}],
+                                  None, "planner-run", max_tokens=8192,
+                                  options=thinking_options(chat, 8))
+                body = captured[0]
+                self.assertEqual(body["model"], model)
+                self.assertEqual(chat.meter.price, M.PRICES[model])
+                self.assertNotIn("thinking_budget", body)
+                self.assertNotIn("reasoning_effort", body)
+                self.assertEqual(body["max_tokens"], 8192)
+                if model == "deepseek-flash":
+                    self.assertEqual(body["thinking"], {"type": "disabled"})
+                    self.assertNotIn("enable_thinking", body)
+                    self.assertNotIn("parallel_tool_calls", body)
+                else:
+                    self.assertIs(body["enable_thinking"], False)
+                    self.assertIs(body["parallel_tool_calls"], False)
+                    self.assertNotIn("thinking", body)
 
     def test_shared_quota_refuses_before_http_and_spend(self):
         from web_operation_agent.state import SQLiteProviderQuota, SQLiteSessionStore

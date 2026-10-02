@@ -1,8 +1,18 @@
 {
   "_note": "Extra chat-completion body fields, per model. No vendor behaviour is hard-coded in the code path: a model with no entry here gets nothing extra, because an option a provider does not understand is a 400, so absence must mean 'send nothing', never a guess. Swapping models is an edit here, not an edit to model.py.",
   "_why_thinking_budget": "For reasoning-enabled models, max_tokens bounds the answer channel but does not reliably bound reasoning. An explicit thinking_budget keeps each browser decision within a predictable reasoning budget and is applied consistently across planning modes.",
-  "_why_non_thinking": "qwen3.8-flash uses enable_thinking=false by default after the owner's latency review. It has no thinking_budget, so planner budget growth does not add a reasoning allowance. This is a speed preference, not a guarantee of unchanged accuracy.",
+  "_why_non_thinking": "Qwen Flash uses enable_thinking=false and DeepSeek Flash uses thinking.type=disabled by default after the owner latency review. Neither has thinking_budget, so planner budget growth does not add a reasoning allowance. This is a speed preference, not a guarantee of unchanged accuracy.",
   "_why_parallel_tool_calls": "The ReAct runtime permits exactly one action followed by one receipt and a fresh observation. Parallel tool calls are disabled for models that support this request option, and the runtime rejects any multi-call reply before dispatch.",
-  "qwen3.8-flash": {"enable_thinking": false, "parallel_tool_calls": false},
-  "qwen3.8-max": {"thinking_budget": 1024}
+  "qwen3.8-flash": {
+    "enable_thinking": false,
+    "parallel_tool_calls": false
+  },
+  "qwen3.8-max": {
+    "thinking_budget": 1024
+  },
+  "deepseek-flash": {
+    "thinking": {
+      "type": "disabled"
+    }
+  }
 }

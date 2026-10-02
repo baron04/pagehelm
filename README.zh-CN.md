@@ -350,6 +350,9 @@ Odoo 装置的 `provision` 命令会打印准确的 Odoo 配置值。脚本模�
 
 服务端 `policies/model_options.json` 对 `qwen3.8-flash` 默认发送
 `enable_thinking=false` 关闭推理，规划器扩大回答预算时也不会重新开启。
+对 `deepseek-flash` 按[官方推理开关](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)发送
+`thinking={"type":"disabled"}`。其人民币登记费率采用官方高峰单价作保守固定估算；
+空闲时段实际费用可能更低，这不是发票或按时段动态计费。
 模型仍由 `AGENT_OPENAI_MODEL` 选择。这项延迟偏好不保证准确率不变，详见
 [冻结模型对照](evals/yudao/qualification/RESULTS.zh-CN.md)。
 源码安装的服务需要重启；wheel 或容器安装需要重新构建并部署才能生效。
