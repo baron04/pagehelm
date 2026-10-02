@@ -42,6 +42,7 @@ Read `README.md`, then inspect the modules and tests that define the behavior yo
 
 ## Keep changes focused
 
+- Keep `docs/` for public documentation. Store internal Q&A, research, reviews, and implementation plans in the Git-ignored `.workbench/`; do not commit these materials or link to them from public documentation.
 - Prefer small modules with explicit protocols and immutable configuration at trust boundaries.
 - Preserve typed errors and terminal states across layers; do not recover behavior by matching exception text.
 - Avoid application names, fixture paths, evaluator logic, and local absolute paths in reusable package code.
