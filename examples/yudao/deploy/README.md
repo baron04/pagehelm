@@ -139,6 +139,12 @@ without these flags the ordinary read tools still work. An explicitly missing ro
 release fails startup. Static ownership requires a declaration in code or documentation;
 business record owners are not engineering owners. Snapshot-only deployments explicitly
 refuse Git-history questions rather than substitute application operation logs.
+`SourceFormReader` is an adapter-owned, on-demand raw Vue template reader for scalar
+field labels, bindings and literal length limits. It reads only an already located,
+allowlisted component, keeps exact-byte citations and rechecks source bytes before reusing
+its bounded parse cache. Conditional fields and declared handlers remain explicit facts;
+the reader does not execute scripts, establish side-effect freedom, authorize typing,
+identify the current create/update target, or enable native form entry in the host.
 Source questions use one small retrieval declaration and one answer declaration, with
 at most one shared format repair. Answers include selected release-bound citations. Literal support checks establish attribution, not semantic correctness.
 Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.

@@ -15,9 +15,8 @@ from web_operation_agent.planning.repository_source import RepositorySourceLooku
 from web_operation_agent.planning.sourcetree import SourceTree
 
 
-def repository_source(root: Path | None, release: str) -> SourceCapability:
-    if root is None:
-        return SourceCapability.none()
+def repository_tree(root: Path, release: str) -> SourceTree:
+    """The same release/allowlist boundary for search and on-demand compilation."""
     if not release.strip():
         raise ValueError("repository source requires the deployed release")
     policy = json.loads(files("web_operation_agent_yudao").joinpath(
@@ -26,6 +25,13 @@ def repository_source(root: Path | None, release: str) -> SourceCapability:
     tree = SourceTree(policy, root.resolve())
     if not tree.available():
         raise ValueError("configured repository source is unavailable")
+    return tree
+
+
+def repository_source(root: Path | None, release: str) -> SourceCapability:
+    if root is None:
+        return SourceCapability.none()
+    tree = repository_tree(root, release)
     lookup = RepositorySourceLookup(tree, line_limit=24, char_limit=1800, overlap=4)
     return SourceCapability(
         runtime_source=True, lookup=lookup,
@@ -34,4 +40,4 @@ def repository_source(root: Path | None, release: str) -> SourceCapability:
             "application operation logs do not identify code changes"))
 
 
-__all__ = ["repository_source"]
+__all__ = ["repository_source", "repository_tree"]
