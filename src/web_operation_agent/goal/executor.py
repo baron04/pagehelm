@@ -1893,6 +1893,8 @@ class GoalTurnExecutor:
 
     @staticmethod
     def _tab_selected(obs: PageObservation, wanted: str) -> bool:
+        if obs.render_state in {"pending", "blocked"}:
+            return False
         matching = [e for e in obs.elements if _is_tab(e) and _norm(e.name) == wanted]
         if len(matching) > 1:
             return False

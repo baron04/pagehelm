@@ -250,6 +250,9 @@ class GoalTurnTests(unittest.TestCase):
         self.assertFalse(GoalTurnExecutor._tab_selected(page, "回款"))
         page.elements[0] = replace(page.elements[0], attrs={"aria-selected": "true", "panel_ready": "true"})
         self.assertTrue(GoalTurnExecutor._tab_selected(page, "回款"))
+        for state in ("pending", "blocked"):
+            with self.subTest(state=state):
+                self.assertFalse(GoalTurnExecutor._tab_selected(replace(page, render_state=state), "回款"))
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
