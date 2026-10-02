@@ -52,17 +52,18 @@ def main(argv=None):
     ap.add_argument('--case',action='append',default=[])
     ap.add_argument('--options',type=Path)
     ap.add_argument('--fixture',default='evals.yudao.v7.fixture')
-    ap.add_argument('--judge-version', choices=('legacy', 'v7.1'), default='legacy')
+    ap.add_argument('--judge-version', choices=('legacy', 'v7.1', 'v7.1.1'), default='legacy')
     ap.add_argument('--model')
     ap.add_argument('--profile',choices=('production','fast'),default='production')
     ap.add_argument('--executor', choices=('agent', 'hybrid'), default='hybrid')
     args=ap.parse_args(argv);args.output.mkdir(parents=True,exist_ok=True)
     fixture=importlib.import_module(args.fixture)
     selected_grade = grade
-    if args.judge_version == 'v7.1':
+    if args.judge_version in ('v7.1', 'v7.1.1'):
         if getattr(fixture, 'EVALUATION_VERSION', '') != 'v7.1':
             ap.error('--judge-version v7.1 requires evals.yudao.v7_1.fixture')
-        from evals.yudao.v7_1.judge import grade as selected_grade
+        selected_grade = importlib.import_module(
+            'evals.yudao.' + ('v7_1' if args.judge_version == 'v7.1' else 'v7_1_1') + '.judge').grade
     elif getattr(fixture, 'EVALUATION_VERSION', '') == 'v7.1':
         ap.error('the corrected fixture requires --judge-version v7.1')
     lane,lanes=map(int,args.lane.split('/'))
@@ -85,8 +86,8 @@ def main(argv=None):
         'judge_version': args.judge_version,
         'judge_sha256': hashlib.sha256(Path(importlib.import_module(selected_grade.__module__).__file__).read_bytes()).hexdigest(),
         'evaluation_manifest_sha256': (hashlib.sha256(
-            Path(fixture.__file__).with_name('manifest.json').read_bytes()).hexdigest()
-            if args.judge_version == 'v7.1' else None),
+            Path(importlib.import_module(selected_grade.__module__).__file__).with_name('manifest.json').read_bytes()).hexdigest()
+            if args.judge_version != 'legacy' else None),
         'authorship':getattr(fixture,'AUTHORSHIP','independent agent-authored; see AUTHORS disclosure'),
         'cases':len(fixture.CASES),'model':chat.model,'provider':chat.provider,
         'scope':'synthetic data/source, transport-double browser','options':options,
@@ -131,7 +132,7 @@ def main(argv=None):
             source_events=[e for e in audit if e['event']=='goal_source_answer_verified']
             status=result.status.value if result else 'harness_error'
             page_actions=result.agent.page_actions if result else 0
-            grading_context = {'api_reads': [c[0] for c in client.calls], 'audit': audit} if args.judge_version == 'v7.1' else {}
+            grading_context = {'api_reads': [c[0] for c in client.calls], 'audit': audit} if args.judge_version != 'legacy' else {}
             judgment=selected_grade(fixture,cid,kind,checks,answer=answer,status=status,
                            url=Browser.instances[-1].url,page_actions=page_actions,
                            source_events=source_events,writes=writes, **grading_context)

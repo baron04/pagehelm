@@ -31,6 +31,9 @@ permission-fixture corrections are in [`../v7_1/README.md`](../v7_1/README.md).
 Use the explicit corrected fixture and `--judge-version v7.1` together. Offline
 regrading retains old answers and scores and makes no model calls; corrected
 fixture behavior requires a separately labelled fresh run.
+The subsequent [`v7.1.1`](../v7_1_1/README.md) patch additionally checks explicit
+contract permission explanations and customer-bound counts. Select it with the same
+corrected fixture and `--judge-version v7.1.1`; earlier graders remain reproducible.
 
 The reported first-use qualification retained the then-current Qwen thinking
 budget. Reproduce it from `60c3721c`; `--profile production` reads the current
