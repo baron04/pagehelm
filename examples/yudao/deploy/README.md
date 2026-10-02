@@ -145,6 +145,15 @@ allowlisted component, keeps exact-byte citations and rechecks source bytes befo
 its bounded parse cache. Conditional fields and declared handlers remain explicit facts;
 the reader does not execute scripts, establish side-effect freedom, authorize typing,
 identify the current create/update target, or enable native form entry in the host.
+`YudaoFormPort` translates those facts through the existing `ApplicationFormPort` contract,
+using a server-owned `NativeFormVerifier` that must revalidate the actor, session/turn,
+entry instance, exact create/update record, dialog scope and reviewed transient component
+bytes. It refuses missing or changed attestations and source, excludes conditional or
+handler-bearing fields, and checks literal length limits in UTF-16 units before issuing
+a draft. `YudaoApplication(forms=..., page_write_guard=...)` permits explicit composition;
+the native host does not install a verifier or enable form actions by default. A verifier
+must come from application-owned live entry verification, never model output or a browser
+claim. The complete Goal entry/approval/form flow remains unqualified.
 Source questions use one small retrieval declaration and one answer declaration, with
 at most one shared format repair. Answers include selected release-bound citations. Literal support checks establish attribution, not semantic correctness.
 Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.

@@ -14,6 +14,7 @@ import urllib.error
 import urllib.request
 
 from web_operation_agent.business.runtime import BusinessToolRuntime
+from web_operation_agent.business.forms import ApplicationFormPort, NoApplicationForms
 from web_operation_agent.composition.descriptor import (APPLICATION_ADAPTER_VERSION,
                                                         ApplicationDescriptor)
 from web_operation_agent.composition.ports import (ApplicationPorts, ConservativeMutationReconciler,
@@ -98,9 +99,12 @@ class YudaoApplication:
                  api_base_url: str = "", ui: UiSource | None = None,
                  time_zone: str = "Asia/Shanghai", today: date | None = None, source=None,
                  conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None,
-                 native_tabs: bool = False, page_write_guard: str = ""):
+                 native_tabs: bool = False, page_write_guard: str = "",
+                 forms: ApplicationFormPort | None = None):
         if not isinstance(native_tabs, bool) or (native_tabs and not page_write_guard):
             raise ValueError("native tabs require an explicitly configured page write guard")
+        if forms is not None and not page_write_guard:
+            raise ValueError("native forms require an explicitly configured page write guard")
         self.origin = origin.rstrip("/")
         api_base = (api_base_url or self.origin).rstrip("/")
         # A client of its own account, or the one given (a person's own token).
@@ -138,7 +142,8 @@ class YudaoApplication:
         self.ports = ApplicationPorts(
             identity=self.identity, routes=routes, postconditions=postconditions,
             reconciliation=ConservativeMutationReconciler(), data=data,
-            goal_scopes=YudaoIdentityPort.required_scopes)
+            goal_scopes=YudaoIdentityPort.required_scopes,
+            forms=forms if forms is not None else NoApplicationForms())
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION, application_id=APPLICATION_ID,
             # Vue Router owns its history entry's current/back/position fields. The

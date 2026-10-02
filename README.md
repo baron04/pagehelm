@@ -470,6 +470,12 @@ Its app-owned controller binds CRM detail response IDs to visible record headers
 keeps pending or failed panel reads blocked. It needs an early facts module; late
 installation or opaque response envelopes fail closed. Form entry and submission remain
 disabled. Full native-page qualification is pending.
+The adapter also provides an opt-in `YudaoFormPort` that translates on-demand raw-source
+scalars through the existing form contract. It requires an application-owned live verifier
+for the actor, turn, entry instance, create/update target, dialog scope and reviewed
+component bytes. Changed entry or source invalidates the draft; literal input limits use
+UTF-16 units as the native controls do. The native host installs no such verifier by default;
+this port does not yet qualify the full Goal form-entry flow.
 One scope declaration
 preserves every business and static-source part of a mixed request; business details use
 the existing paired readings and deterministic resolver, rather than a growing generic
