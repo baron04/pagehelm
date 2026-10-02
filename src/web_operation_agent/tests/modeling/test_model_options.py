@@ -22,8 +22,10 @@ class Policy(unittest.TestCase):
         """An option a provider does not understand is a 400, so absence means silence."""
         self.assertEqual(M.options_for("some-model-we-have-never-run"), {})
 
-    def test_a_configured_model_carries_its_reasoning_allowance(self):
-        self.assertTrue(M.options_for("qwen3.8-flash")["thinking_budget"] > 0)
+    def test_the_default_flash_model_disables_reasoning_without_an_allowance(self):
+        options = M.options_for("qwen3.8-flash")
+        self.assertIs(options["enable_thinking"], False)
+        self.assertNotIn("thinking_budget", options)
 
     def test_the_react_model_disables_parallel_tool_calls(self):
         self.assertIs(M.options_for("qwen3.8-flash")["parallel_tool_calls"], False)
@@ -72,14 +74,14 @@ class _Recorder:
 
 
 class TheRequestBody(unittest.TestCase):
-    def test_the_models_allowance_is_sent_on_an_ordinary_call(self):
+    def test_the_models_non_thinking_option_is_sent_on_an_ordinary_call(self):
         c = _Recorder("qwen3.8-flash")
         c.complete([], None, "r")
-        self.assertEqual(c.body["thinking_budget"],
-                         M.options_for("qwen3.8-flash")["thinking_budget"])
+        self.assertIs(c.body["enable_thinking"], False)
+        self.assertNotIn("thinking_budget", c.body)
 
     def test_a_caller_may_ask_for_more_thinking_for_one_call(self):
-        c = _Recorder("qwen3.8-flash")
+        c = _Recorder("thinking-model", options={"thinking_budget": 1024})
         c.complete([], None, "r", options={"thinking_budget": 8192})
         self.assertEqual(c.body["thinking_budget"], 8192)
 
@@ -145,6 +147,28 @@ class NativeCompletionTransport(unittest.TestCase):
         response.__enter__ = lambda stream=response: stream
         response.__exit__ = lambda stream=response, *_args: None
         return response
+
+    def test_default_flash_reasoning_stays_off_on_a_planner_request(self):
+        from web_operation_agent.planning.contract import thinking_options
+        with tempfile.TemporaryDirectory() as directory:
+            chat = M.ChatModel(M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
+                               env=self.ENV)
+            captured = []
+            payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                       "choices": [{"finish_reason": "stop", "message": {"content": "done"}}]}
+
+            def respond(request, timeout):
+                captured.append(json.loads(request.data))
+                return self._response(payload)
+
+            with patch.object(M.urllib.request, "urlopen", side_effect=respond):
+                chat.complete([{"role": "user", "content": "synthetic planning request"}],
+                              None, "planner-run", max_tokens=8192,
+                              options=thinking_options(chat, 8))
+            self.assertIs(captured[0]["enable_thinking"], False)
+            self.assertNotIn("thinking_budget", captured[0])
+            self.assertIs(captured[0]["parallel_tool_calls"], False)
+            self.assertEqual(captured[0]["max_tokens"], 8192)
 
     def test_shared_quota_refuses_before_http_and_spend(self):
         from web_operation_agent.state import SQLiteProviderQuota, SQLiteSessionStore
@@ -637,14 +661,14 @@ class ProviderRuntimeProtection(unittest.TestCase):
 class PlannerAllowance(unittest.TestCase):
     def test_the_planner_asks_for_a_multiple_of_what_the_model_declares(self):
         from web_operation_agent.planning.contract import PLANNER_THINKING_FACTOR, thinking_options
-        c = _Recorder("qwen3.8-flash")
+        c = _Recorder("thinking-model", options={"thinking_budget": 1024})
         base = c.options["thinking_budget"]
         self.assertEqual(thinking_options(c, PLANNER_THINKING_FACTOR),
                          {"thinking_budget": base * PLANNER_THINKING_FACTOR})
 
     def test_it_grows_with_the_answer_budget(self):
         from web_operation_agent.planning.contract import thinking_options
-        c = _Recorder("qwen3.8-flash")
+        c = _Recorder("thinking-model", options={"thinking_budget": 1024})
         first = thinking_options(c, 4 * 2 ** 0)["thinking_budget"]
         second = thinking_options(c, 4 * 2 ** 1)["thinking_budget"]
         self.assertEqual(second, 2 * first)

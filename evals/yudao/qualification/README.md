@@ -26,7 +26,9 @@ Failures and exceptions stay in the denominator. Existing output bindings must
 match before a run can resume; paid interrupted attempts must not be relabelled
 as untouched first attempts.
 
-First-use qualification retains the current Qwen thinking budget. The separate
+The reported first-use qualification retained the then-current Qwen thinking
+budget. Reproduce it from `60c3721c`; `--profile production` reads the current
+product options, which may have changed since that archive. The separate
 three-model comparison uses reviewed non-thinking profiles and identical
 product messages, tools, token ceilings and deadlines. It tests this candidate
 configuration, not vendors' unrestricted defaults. Five-question blocks rotate

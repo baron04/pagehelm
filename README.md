@@ -532,6 +532,14 @@ no credentials. The Odoo fixture's `provision` command prints the exact Odoo val
 Scripted runs need no model settings, and the source and resettable-fixture sections are
 optional.
 
+The server's `policies/model_options.json` disables reasoning by default for
+`qwen3.8-flash` with `enable_thinking=false`; planner answer-budget growth does not
+enable it again. The selected model still comes from `AGENT_OPENAI_MODEL`. This
+latency preference does not guarantee unchanged accuracy; see the
+[frozen model comparison](evals/yudao/qualification/RESULTS.zh-CN.md).
+Policy changes require restarting a source-installed server, or rebuilding and
+redeploying a wheel/container installation.
+
 Build the browser assets. The assistant script the gateway serves and the trace replay page
 are generated, not committed; a checkout without them has no assistant in the browser, and
 the browser-backed tests and the one replay-page test fail or skip until they are built:

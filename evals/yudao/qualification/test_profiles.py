@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.modeling.client import PRICES
+from web_operation_agent.modeling.client import PRICES, options_for
 from .profiles import EvaluationMeter, off_peak, register_profile
 
 
@@ -15,7 +15,7 @@ class ProfileTests(unittest.TestCase):
         with patch.dict(PRICES):
             self.assertEqual({'thinking': {'type': 'disabled'}}, register_profile('deepseek-flash', 'fast'))
             self.assertEqual(False, register_profile('qwen3.8-flash', 'fast')['enable_thinking'])
-            self.assertEqual(1024, register_profile('qwen3.8-flash', 'production')['thinking_budget'])
+            self.assertEqual(options_for('qwen3.8-flash'), register_profile('qwen3.8-flash', 'production'))
             with self.assertRaises(ValueError):
                 register_profile('unreviewed', 'fast')
 
