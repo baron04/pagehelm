@@ -471,7 +471,9 @@ The proxy fences earlier requests, blocks unreviewed requests during page operat
 and preserves uncertain mutation admission and acknowledged windows across restart. It is an HTTP admission
 boundary, not a database sandbox; it pauses other browser sessions of the same actor.
 Its app-owned controller binds CRM detail response IDs to visible record headers and
-keeps pending or failed panel reads blocked. It needs an early facts module; late
+keeps pending or failed panel reads blocked. A same-route detail read for another record,
+or a missing or repeated ID parameter, invalidates that record binding until the latest
+exact read succeeds and concurrent reads finish. It needs an early facts module; late
 installation or opaque response envelopes fail closed. Form entry and submission remain
 disabled. Full native-page qualification is pending.
 The adapter also provides an opt-in `YudaoFormPort` that translates on-demand raw-source

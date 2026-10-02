@@ -12,6 +12,10 @@ export default [
     languageOptions: {globals: {process: 'readonly'}},
   },
   {
+    files: ['src/integrations/**/*.js'],
+    languageOptions: {globals: {window: 'readonly', document: 'readonly', URL: 'readonly'}},
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsparser,

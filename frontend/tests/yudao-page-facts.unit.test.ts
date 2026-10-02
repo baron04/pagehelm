@@ -1,6 +1,6 @@
 import {afterAll, beforeEach, describe, expect, it} from 'vitest'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, disposeInstalledPageFacts} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -39,6 +39,63 @@ describe('native Yudao record and read completion facts', () => {
       facts.begin('/admin-api/crm/customer/get?id=6')!(200, {code: 0, data})
       expect(facts.readPageRecordRoute()).toBeUndefined()
     }
+  })
+  it('invalidates the current record when another record is read on the same route', () => {
+    for (const url of ['/admin-api/crm/customer/get?id=7',
+      '/admin-api/crm/customer/get', '/admin-api/crm/customer/get?id=6&id=7',
+      '/admin-api/crm/customer/get?id=6&id=6']) {
+      const facts = createPageFacts(); ready(facts)
+      const settle = facts.begin(url)!
+      expect(facts.readPageBlocker()).toBe(true)
+      expect(facts.readPageRecordRoute()).toBeUndefined()
+      // Even a response carrying the displayed record cannot repair a conflicting request.
+      settle(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+      expect(facts.readPageRecordRoute()).toBeUndefined()
+      ready(facts)
+      expect(facts.readPageRecordRoute()).toBe('/crm/customer/detail/6')
+    }
+  })
+  it('lets the latest exact read settle only after concurrent conflicting reads finish', () => {
+    const facts = createPageFacts(); ready(facts)
+    const wrong = facts.begin('/admin-api/crm/customer/get?id=7')!
+    const latest = facts.begin('/admin-api/crm/customer/get?id=6')!
+    latest(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+    wrong(200, {code: 0, data: {id: 7, name: 'Other Customer'}})
+    expect(facts.readPageRecordRoute()).toBe('/crm/customer/detail/6')
+    const old = facts.begin('/admin-api/crm/customer/get?id=6')!
+    const conflict = facts.begin('/admin-api/crm/customer/get?id=7')!
+    conflict(200, {code: 0, data: {id: 7, name: 'Other Customer'}})
+    old(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+  })
+  it('does not let XHR normalization turn duplicate IDs into an exact read', () => {
+    class Request extends EventTarget {
+      responseType = 'json'
+      response = {code: 0, data: {id: 6, name: 'Synthetic Customer'}}
+      status = 200
+      open() {}
+      send() { this.dispatchEvent(new Event('loadend')) }
+    }
+    const view = {location: window.location, fetch: window.fetch, XMLHttpRequest: Request}
+    const originalOpen = Request.prototype.open
+    const facts = installPageFacts(view, document)
+    try {
+      for (const query of ['id=6&id=7', 'id=6&id=6', 'id=7', '']) {
+        ready(facts)
+        const request = new Request()
+        // @ts-expect-error The fake receives browser arguments through the installed wrapper.
+        request.open('GET', '/admin-api/crm/customer/get?' + query)
+        request.send()
+        expect(facts.readPageRecordRoute()).toBeUndefined()
+      }
+      const exact = new Request()
+      // @ts-expect-error The fake receives browser arguments through the installed wrapper.
+      exact.open('GET', '/admin-api/crm/customer/get?id=6')
+      exact.send()
+      expect(facts.readPageRecordRoute()).toBe('/crm/customer/detail/6')
+    } finally { facts.dispose() }
+    expect(Request.prototype.open).toBe(originalOpen)
   })
   it('retains a lazy read failure after the visible toast disappears, until a fresh successful read', () => {
     const facts = createPageFacts(); ready(facts)

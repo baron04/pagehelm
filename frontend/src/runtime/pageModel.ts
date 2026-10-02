@@ -160,7 +160,7 @@ export function isSensitiveFormControl(element: ElementLike | null | undefined,
   return String(element?.type || '').toLowerCase() === 'password'
     || [formFieldName(element), formControlLabel(element), element?.name, element?.id,
       explicitAttribute(element, 'autocomplete')].some(value =>
-      value != null && redactor.isSensitiveName(String(value)))
+      value !== null && value !== undefined && redactor.isSensitiveName(String(value)))
 }
 
 /**

@@ -22,7 +22,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
     const detail = /^\/crm\/(customer|contract|business)\/detail\/([0-9]+)$/.exec(route)
     if (!detail) return null
     const isRecord = url.pathname === `/admin-api/crm/${detail[1]}/get`
-    if (isRecord && url.searchParams.get('id') !== detail[2]) return null
+    const ids = url.searchParams.getAll('id')
+    const matchesRecord = !isRecord || ids.length === 1 && ids[0] === detail[2]
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]'))
       .filter(visible)
     const panel = selected.length === 1 ? selected[0].getAttribute('aria-controls') || '' : ''
@@ -45,7 +46,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
       latest.pending = Math.max(0, latest.pending - 1)
       // Concurrent older completions cannot overwrite the newest request's verdict.
       if (latest.serial !== serial) return
-      const ok = status >= 200 && status < 300 && body?.code === 0
+      const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
       latest.failed = !ok
       if (isRecord && ok) {
         const id = body?.data?.id, name = body?.data?.name
@@ -101,7 +102,8 @@ export function installPageFacts(view = window, doc = document) {
     try {
       const target = new URL(String(url), view.location.href)
       if (target.origin === view.location.origin && target.pathname.startsWith('/admin-api/crm/')) {
-        const id = target.searchParams.get('id') || ''
+        const ids = target.searchParams.getAll('id')
+        const id = ids.length === 1 ? ids[0] : ''
         requests.set(this, {method, path: target.pathname,
           id: /^[0-9]{1,20}$/.test(id) ? id : ''})
       }
