@@ -34,6 +34,8 @@ fixture behavior requires a separately labelled fresh run.
 The subsequent [`v7.1.1`](../v7_1_1/README.md) patch additionally checks explicit
 contract permission explanations and customer-bound counts. Select it with the same
 corrected fixture and `--judge-version v7.1.1`; earlier graders remain reproducible.
+[`v7.1.2`](../v7_1_2/README.md) corrects the distinct count and explicitly requested
+resubmission list in task29; use `--judge-version v7.1.2` with the same corrected fixture.
 
 The reported first-use qualification retained the then-current Qwen thinking
 budget. Reproduce it from `60c3721c`; `--profile production` reads the current

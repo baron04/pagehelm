@@ -52,18 +52,18 @@ def main(argv=None):
     ap.add_argument('--case',action='append',default=[])
     ap.add_argument('--options',type=Path)
     ap.add_argument('--fixture',default='evals.yudao.v7.fixture')
-    ap.add_argument('--judge-version', choices=('legacy', 'v7.1', 'v7.1.1'), default='legacy')
+    ap.add_argument('--judge-version', choices=('legacy', 'v7.1', 'v7.1.1', 'v7.1.2'), default='legacy')
     ap.add_argument('--model')
     ap.add_argument('--profile',choices=('production','fast'),default='production')
     ap.add_argument('--executor', choices=('agent', 'hybrid'), default='hybrid')
     args=ap.parse_args(argv);args.output.mkdir(parents=True,exist_ok=True)
     fixture=importlib.import_module(args.fixture)
     selected_grade = grade
-    if args.judge_version in ('v7.1', 'v7.1.1'):
+    if args.judge_version != 'legacy':
         if getattr(fixture, 'EVALUATION_VERSION', '') != 'v7.1':
             ap.error('--judge-version v7.1 requires evals.yudao.v7_1.fixture')
         selected_grade = importlib.import_module(
-            'evals.yudao.' + ('v7_1' if args.judge_version == 'v7.1' else 'v7_1_1') + '.judge').grade
+            'evals.yudao.' + args.judge_version.replace('.', '_') + '.judge').grade
     elif getattr(fixture, 'EVALUATION_VERSION', '') == 'v7.1':
         ap.error('the corrected fixture requires --judge-version v7.1')
     lane,lanes=map(int,args.lane.split('/'))
