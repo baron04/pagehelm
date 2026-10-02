@@ -38,6 +38,7 @@ _PAGE_ROUTES = (r"/[a-z0-9][a-z0-9/_-]*",)
 SESSION_HANDOFF_KEYS = frozenset({"token", "access_token", "accessToken", "refresh_token"})
 #: Where the deployment serves the pinned page controller, same-origin.
 PAGE_CONTROLLER_PATH = "/woa/page-controller.js"
+NATIVE_PAGE_CONTROLLER_PATH = "/woa/yudao-page-controller.js"
 
 
 class YudaoIdentityPort:
@@ -145,7 +146,7 @@ class YudaoApplication:
             # let the application initialize its router on the destination instead.
             display_name="芋道管理系统", origin=self.origin, navigation_mode="document",
             page_write_guard=page_write_guard,
-            page_controller_module=self.origin + PAGE_CONTROLLER_PATH,
+            page_controller_module=self.origin + (NATIVE_PAGE_CONTROLLER_PATH if native_tabs else PAGE_CONTROLLER_PATH),
             catalog_sha256=self.business_tools.catalog_sha256)
 
     def health(self) -> dict:

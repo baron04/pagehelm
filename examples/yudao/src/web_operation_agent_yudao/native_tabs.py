@@ -10,6 +10,8 @@ class NativeTabPolicy:
 
     def decide(self, observation, element):
         path = urlsplit(observation.url).path
+        if observation.render_state != "ready" or observation.record_route != path:
+            return "the application has not verified this rendered record"
         if not any(route.fullmatch(path) for route in self._routes):
             return "this is not a deployed record detail page"
         if (element.role != "tab" or not element.attrs.get("aria-controls")

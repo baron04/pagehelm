@@ -151,6 +151,9 @@ class NativeGuardProxy:
                 path = urlsplit(self.path).path
                 if not self.path.startswith("/admin-api/") or "#" in self.path:
                     raise GuardRefused("route_refused")
+                visit = self.headers.get("visit-tenant-id", "")
+                if visit and visit != self.headers.get("tenant-id", ""):
+                    raise GuardRefused("native_visit_tenant_unsupported")
                 body = self.body()
                 # Public authentication is still upstream-verified. A request carrying
                 # a bearer is always actor-bound, even if its route also accepts guests.

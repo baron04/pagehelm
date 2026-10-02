@@ -9,7 +9,8 @@ class NativeTabPolicyTests(unittest.TestCase):
         policy = NativeTabPolicy(("/crm/customer/detail/{id}",))
         page = PageObservation(schema_version=1, epoch=1,
             url="https://fixture.test/crm/customer/detail/1", title="Customer",
-            landmarks=[], elements=[], content="Synthetic customer")
+            landmarks=[], elements=[], content="Synthetic customer", render_state="ready",
+            record_route="/crm/customer/detail/1")
         tab = ElementRef(ref="e1", role="tab", name="回款", tag="div", epoch=1,
                          attrs={"id": "tab-payments", "aria-controls": "pane-payments"})
         self.assertEqual(policy.decide(page, tab), "")
@@ -17,6 +18,8 @@ class NativeTabPolicyTests(unittest.TestCase):
         self.assertTrue(policy.decide(page, replace(tab, role="button", name="确定")))
         self.assertTrue(policy.decide(page, replace(tab, attrs={"aria-disabled": "true"})))
         self.assertTrue(policy.decide(page, replace(tab, attrs={})))
+        self.assertTrue(policy.decide(replace(page, record_route="/crm/customer/detail/2"), tab))
+        self.assertTrue(policy.decide(replace(page, render_state="blocked"), tab))
         page.url = "https://fixture.test/crm/customer"
         self.assertTrue(policy.decide(page, tab))
 

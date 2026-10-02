@@ -61,12 +61,14 @@ class GuardProxyTests(unittest.TestCase):
         self.proxy.close(); self.app.shutdown(); self.app.server_close(); self.worker.join(3)
         self.tmp.cleanup()
 
-    def request(self, method, path, *, token="synthetic-a", cookie=None, origin=None, body=b"{}"):
+    def request(self, method, path, *, token="synthetic-a", cookie=None, origin=None, body=b"{}", visit_tenant=""):
         connection = http.client.HTTPConnection("127.0.0.1", self.proxy.http.server_port, timeout=3)
         headers = {"tenant-id": "1", "Origin": origin or self.origin,
                    "Content-Type": "application/json"}
         if token:
             headers["Authorization"] = "Bearer " + token
+        if visit_tenant:
+            headers["visit-tenant-id"] = visit_tenant
         selected = self.cookie if cookie is None else cookie
         if selected:
             headers["Cookie"] = selected
@@ -158,6 +160,13 @@ class GuardProxyTests(unittest.TestCase):
         self.assertEqual(self.request("GET", READ, token="")[0], 401)
         self.assertEqual(self.request("POST", "/admin-api/crm/customer/update", token="")[0], 401)
         self.assertEqual(len(self.calls), count)
+
+    def test_unsupported_visit_tenant_context_is_not_silently_read_as_the_primary_tenant(self):
+        status, body, _ = self.request("GET", READ, visit_tenant="2")
+        self.assertEqual(status, 403)
+        self.assertEqual(body["error"], "native_visit_tenant_unsupported")
+        self.assertFalse(self.calls)
+        self.assertEqual(self.request("GET", READ, visit_tenant="1")[0], 200)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,10 @@ for f in "$JAR" "$YUDAO_CACHE/ui/dist-cloud/index.html" "$YUDAO_CACHE/woa/page-c
   [ -f "$f" ] || { echo "missing build artifact: $f" >&2; exit 1; }
 done
 REPO=$(cd "$DEPLOY/../../.." && pwd)
+for f in "$REPO/frontend/src/integrations/yudao/page-facts.js" \
+         "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js"; do
+  [ -f "$f" ] || { echo "missing native page artifact: $f" >&2; exit 1; }
+done
 WHEELS=$(mktemp -d)
 trap 'rm -rf "$WHEELS"' EXIT
 # The assistant host: the core and the yudao adapter, as wheels the host builds its image from.
@@ -49,6 +53,8 @@ rsync -az "$YUDAO_CACHE/business-schema.sql" "$DEPLOY/compose.yaml" "$DEPLOY/com
 rsync -az --delete "$YUDAO_CACHE/ui/dist-cloud/" "$TARGET:$DIR/ui/"
 rsync -az --delete "$YUDAO_CACHE/woa/" "$TARGET:$DIR/woa/"
 rsync -az "$HERE/yudao-loader.js" "$TARGET:$DIR/woa/"
+rsync -az "$REPO/frontend/src/integrations/yudao/page-facts.js" \
+  "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js" "$TARGET:$DIR/woa/"
 rsync -az "$WHEELS/" "$TARGET:$DIR/agent/wheels/"
 rsync -az "$HERE/agent.Dockerfile" "$TARGET:$DIR/agent/"
 # The source the assistant compiles its rules from and reads the UI's lists and tables in:

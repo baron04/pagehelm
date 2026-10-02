@@ -148,6 +148,7 @@ class NativeHostTests(unittest.TestCase):
             proxy.return_value.start.return_value.verify_ingress.assert_called_once()
             result = host.bootstrap("synthetic-a", "1", "native-tab")
             self.assertEqual(result["config"]["pageWriteGuard"], GUARD_PATH)
+            self.assertTrue(result["config"]["pageControllerModule"].endswith("/woa/yudao-page-controller.js"))
             session = host._sessions[("1", "1")].session
             executor = session.runner.executor
             self.assertIsNotNone(executor.config.click_policy)

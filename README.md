@@ -452,7 +452,10 @@ read policy, deployed UI routes and verified API ingress through its page-guard 
 The proxy fences earlier requests, blocks unreviewed requests during page operations,
 and preserves uncertain mutation admission and acknowledged windows across restart. It is an HTTP admission
 boundary, not a database sandbox; it pauses other browser sessions of the same actor.
-Form entry and submission remain disabled. Full native-page qualification is pending.
+Its app-owned controller binds CRM detail response IDs to visible record headers and
+keeps pending or failed panel reads blocked. It needs an early facts module; late
+installation or opaque response envelopes fail closed. Form entry and submission remain
+disabled. Full native-page qualification is pending.
 One scope declaration
 preserves every business and static-source part of a mixed request; business details use
 the existing paired readings and deterministic resolver, rather than a growing generic

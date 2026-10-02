@@ -158,6 +158,11 @@ Route **all browser admin API traffic** and `/woa/page-guard/` through that prox
 starting the host with the option. The optional nginx locations are in
 [`cloud/nginx.native-guard.locations.conf`](cloud/nginx.native-guard.locations.conf);
 include them inside the HTTPS server and publish the container's proxy port on loopback.
+Also include `cloud/nginx.native-facts.filter.conf` inside the existing `location /`,
+alongside its loader filter. That location overrides server-level substitution filters.
+The deployment copies the app-owned `page-facts.js` and `yudao-page-controller.js`
+from `frontend/src/integrations/yudao/` into `/woa/`; the early facts module must execute
+before the application entry, otherwise record arrival fails closed.
 They supersede the ordinary API regex and disable alternative app API and websocket
 ingress on this origin. A nonce probe checks both public routes before the host offers
 native tabs; a failed probe aborts startup. The ordinary deployment is unchanged unless
@@ -174,7 +179,16 @@ the upstream still authorizes each forwarded request. Window cookies are HttpOnl
 never forwarded upstream. Other browser sessions of that actor also pause writes.
 Direct upstream access, background jobs and external services are outside the boundary.
 The proxy has isolated HTTP/SQLite tests; complete native application qualification is
-pending. Tabs use live ARIA controls, not a site-wide prompt catalog. New/Edit buttons,
+pending. Tabs use live ARIA controls, not a site-wide prompt catalog. The optional controller
+observes same-origin CRM GET completion without retaining headers, credentials, queries
+or result bodies. A detail read must bind its response ID to the route and its bounded
+title to one visible header. Current-panel pending and failed reads block completion;
+a failed lazy read stays failed after its toast disappears until a new successful read.
+Native clicks require that verified record route. Local customer details are qualified
+for these facts; other CRM detail structures still need their own qualification, and
+opaque/encrypted response envelopes are refused. Cross-tenant visit context is not
+qualified: a different `visit-tenant-id` is refused rather than silently reading the
+primary tenant. New/Edit buttons,
 field entry and submit remain disabled until their separate form qualification.
 
 - The schema is compiled under the acting account from its menus and button permissions, the API documentation (`/v3/api-docs`, reachable only from the server side in the public deployment) and the dictionaries. Every module the account's menus reach is considered. A page becomes an entity only when its source or menu identifies a documented list of records; a dashboard or settings page without one is not claimed as a record list. A page whose own address names a documented list is that list even when no permission names it: the resource may be several words deep (`fms/voucher/statistics`) and the endpoint a `/list` rather than a `/page`, and the menu is the evidence the account may open the page. The response must describe its items, so a page whose endpoint the documentation leaves shapeless is not claimed.
