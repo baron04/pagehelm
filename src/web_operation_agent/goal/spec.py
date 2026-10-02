@@ -166,6 +166,8 @@ class Deliverable:
     action: str = ""
     #: For a handoff on a field: the new value the person gave, in the field's form.
     value: str = ""
+    #: One requested form target, with up to twenty indexed field labels and values.
+    field_values: tuple[tuple[str, str], ...] = ()
     #: Ids of RULES entries that answer a question about why a control shows, why a
     #: field cannot be changed, what an action refuses or what a field means.
     rules: tuple[str, ...] = ()
@@ -181,6 +183,23 @@ class Deliverable:
         kind = _text(value.get("kind"), "kind").lower()
         if kind not in KINDS:
             raise ValueError(f"deliverable kind must be one of {', '.join(KINDS)}")
+        batch = value.get("field_values", [])
+        if not isinstance(batch, list) or len(batch) > 20:
+            raise ValueError("field_values must be an array of at most twenty fields")
+        pairs = []
+        for item in batch:
+            if not isinstance(item, dict) or set(item) != {"field", "value"}:
+                raise ValueError("each field value needs exactly field and value")
+            label = _text(item["field"], "field value label", allow_empty=False)
+            text = item["value"]
+            if not isinstance(text, str) or len(text) > 4000:
+                raise ValueError("a form value must be a string of at most 4000 characters")
+            if label.casefold() in {k.casefold() for k, _ in pairs}:
+                raise ValueError("form field labels must be unique")
+            pairs.append((label, text))
+        if pairs and (kind != "handoff" or value.get("value")
+                      or _text(value.get("action"), "action").casefold() not in ("", "create", "new")):
+            raise ValueError("field_values belongs to one form handoff, without a single-field value or action")
         metric = value.get("metric")
         limit = value.get("limit", 0) or 0
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0 or limit > 50:
@@ -195,6 +214,7 @@ class Deliverable:
                    section=_text(value.get("section"), "section"),
                    action=_text(value.get("action"), "action"),
                    value=_text(value.get("value"), "value"),
+                   field_values=tuple(pairs),
                    # A model that names every rule in sight is clipped, not refused: the
                    # first ones named are the ones it found most relevant.
                    rules=_texts(value.get("rules"), "rules", limit=8, clip=True),
@@ -206,6 +226,8 @@ class Deliverable:
         for name in ("entity", "record", "via", "section", "action", "value"):
             if getattr(self, name):
                 out[name] = getattr(self, name)
+        if self.field_values:
+            out["field_values"] = [{"field": k, "value": v} for k, v in self.field_values]
         if self.fields:
             out["fields"] = list(self.fields)
         if self.rules:
@@ -381,6 +403,12 @@ DECLARE_GOAL_TOOL = {
                                        "description": "handoff: the button name from the index for a business action, the label of the field the person wants to change, or New for creating a record"},
                             "rules": {"type": "array", "items": {"type": "string"},
                                       "description": "ids from RULES (r12) that answer a question about why a control is shown or hidden, what it opens, when a field can be changed, what an action refuses, or what a field means; kind fact, entity set, record when one is named. Name the rules closest to the question even when they answer only part of it; the rules of the same control or action come along"},
+                            "field_values": {"type": "array", "maxItems": 20,
+                                "description": "handoff: all explicitly requested values for ONE form target; one slot for the entire form. Use indexed field labels and exact user values; no single-field action/value alongside this batch. Never invent missing values.",
+                                "items": {"type": "object", "properties": {
+                                    "field": {"type": "string", "maxLength": 120},
+                                    "value": {"type": "string", "maxLength": 4000}},
+                                    "required": ["field", "value"], "additionalProperties": False}},
                             "value": {"type": "string",
                                       "description": "handoff on a field: the new value the person gave, in the field's own form (a date as 2026-10-31, a number, a choice label from the index, a record's name); empty when the person gave no value"},
                             "sort": {"type": "string",

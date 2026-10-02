@@ -630,6 +630,7 @@ class _TurnState:
     today: str = ""
     #: The entities and words the neighbourhood was built from (staged path only).
     focus: tuple = ()
+    source_requests: tuple = ()
     source_answer: str = ""
     source_complete: bool = True
     unsupported: str = ""
@@ -830,6 +831,41 @@ class GoalTurnExecutor:
                     pass
         return self._settle(state, current, text)
 
+    def _complete_sources(self, s: _TurnState, chat, *, current_facts=()) -> None:
+        from .source_answers import answer, retrieve
+        try:
+            with s.receipt.stage("source"):
+                retrieved, evidence = retrieve(self.config.source, s.source_requests, s.ledger)
+            self._dispatch(s, "observe", {})
+            if s.terminal_reason:
+                return
+            # Bounds match the goal's four slots and twelve fields; redact again at
+            # this new model boundary rather than forwarding unrestricted row data.
+            safe_facts = tuple({k: redact_sensitive_assignments(redact_session_handoffs(str(v)))[:400]
+                                for k, v in f.items()} for f in current_facts[:48])
+            with s.receipt.stage("source"):
+                result = answer(chat, source=self.config.source, requests=s.source_requests,
+                    retrieved=retrieved, evidence=evidence, run_id=s.run_id,
+                    cancelled=s.cancelled, chinese=s.chinese, ledger=s.ledger,
+                    prompt=s.message.text, current_facts=safe_facts,
+                    page=lambda: {"path": urlsplit(s.obs.url).path, "epoch": s.obs.epoch,
+                                  "render_state": s.obs.render_state,
+                                  "active_view": s.obs.active_view[:120]},
+                    refresh=lambda: bool(self._dispatch(s, "observe", {}) is not None
+                                         and not s.terminal_reason),
+                    timeout_s=max(1.0, self.config.wall_budget_s - (time.time() - s.started_at)))
+            s.source_answer, s.source_complete = result.text, result.complete
+        except ProviderError as exc:
+            s.terminal_reason = "provider_error"
+            s.source_complete = False
+            s.source_answer = _provider_failed(exc, s.chinese)
+        except (ValueError, ConclusionRefused) as exc:
+            s.source_complete = False
+            s.source_answer = ("源码回答未通过证据核验。" if s.chinese
+                               else "The source answer did not pass evidence verification.")
+            s.ledger.append("goal_source_answer_refused", error_type=type(exc).__name__,
+                            detail=str(exc)[:200])
+
     # -- the turn ---------------------------------------------------------------------
     def _run(self, s: _TurnState) -> str:
         s.approvals.start_turn(int((s.started_at + self.config.wall_budget_s) * 1000))
@@ -908,41 +944,13 @@ class GoalTurnExecutor:
                             write_intent=write_intent, unsupported=unsupported,
                             about_assistant=about_assistant, **projection)
             sources = projection.get("source_requests", ())
-            if sources:
-                from .source_answers import answer, retrieve
+            s.source_requests = tuple(sources)
+            if sources and not parts:
                 s.write_intent = write_intent
-                try:
-                    with s.receipt.stage("source"):
-                        retrieved, evidence = retrieve(self.config.source, sources, s.ledger)
-                    self._dispatch(s, "observe", {})
-                    if s.terminal_reason:
-                        return ""
-                    with s.receipt.stage("source"):
-                        result = answer(chat, source=self.config.source, requests=sources,
-                            retrieved=retrieved, evidence=evidence, run_id=s.run_id,
-                            cancelled=s.cancelled, chinese=s.chinese, ledger=s.ledger,
-                            prompt=s.message.text,
-                            page=lambda: {"path": urlsplit(s.obs.url).path, "epoch": s.obs.epoch,
-                                          "render_state": s.obs.render_state,
-                                          "active_view": s.obs.active_view[:120]},
-                            refresh=lambda: bool(self._dispatch(s, "observe", {}) is not None
-                                                 and not s.terminal_reason),
-                            timeout_s=max(1.0, self.config.wall_budget_s - (time.time() - s.started_at)))
-                    s.source_answer, s.source_complete = result.text, result.complete
-                except ProviderError as exc:
-                    s.terminal_reason = "provider_error"
-                    return self._say(s, _provider_failed(exc, s.chinese))
-                except (ValueError, ConclusionRefused) as exc:
-                    s.source_complete = False
-                    s.source_answer = ("源码回答未通过证据核验。" if s.chinese
-                                       else "The source answer did not pass evidence verification.")
-                    s.ledger.append("goal_source_answer_refused", error_type=type(exc).__name__,
-                                    detail=str(exc)[:200])
-                if s.terminal_reason:
-                    return ""
-                if not parts:
+                self._complete_sources(s, chat)
+                if not s.terminal_reason:
                     s.terminal_reason = "agent_finished" if s.source_complete and not write_intent else "agent_refused"
-                    return ""
+                return ""
             if not parts and about_assistant:
                 return self._say(s, assistant_answer(capabilities_of(self.goal_port),
                     chinese=s.chinese, areas=_areas(s.full_index),
@@ -1009,10 +1017,11 @@ class GoalTurnExecutor:
         unbound = functools.partial(
             understand, chat, prompt=(s.message.text + (
                 "\n\nStatic questions are answered separately; declare EVERY business data/page part only."
-                if s.source_answer else "")), index=index, run_id=s.run_id,
+                if s.source_requests else "")), index=index, run_id=s.run_id,
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
             today=today_text, scope=scope_text, values=render_values(candidates),
-            earlier=earlier)
+            earlier=earlier, form_values=(not scope_parts or write_intent
+                or any(p.get("kind") == "handoff" for p in scope_parts)))
 
         def read(*, cache_slot=None, stage=None, **kwargs):
             # Every reading -- the first, the second, the deciding one, the repair --
@@ -1205,6 +1214,7 @@ class GoalTurnExecutor:
             # except a change asked for, which the repair may make a handoff.
             kept = len(repaired.deliverables) == len(spec.deliverables) and all(
                 after.kind in (before.kind, "handoff")
+                and (not before.field_values or before.field_values == after.field_values)
                 and (before.metric is None or before.metric.op not in ("min", "max")
                      or (after.kind in ("aggregate", "list") and after.metric is not None
                          and after.metric.op == before.metric.op))
@@ -1237,6 +1247,15 @@ class GoalTurnExecutor:
             spec, resolution = repaired, second
         resolution = self._which_amount(s, spec, resolution)
         resolution = self._not_chosen_for(s, spec, resolution)
+        if s.source_requests:
+            # Mixed source questions may ask whether a rule permits this record now.
+            # Read first, then answer with only these actor-bound facts. Complete all
+            # reads before a form handoff releases the browser's observation window.
+            facts = tuple({"subject": f.subject, "label": f.label, "value": f.value,
+                           **({"field_key": f.field_key, "native_value": f.native_value}
+                              if f.native_value else {})}
+                          for r in resolution.deliverables for f in r.facts)
+            self._complete_sources(s, chat, current_facts=facts)
         outcomes: list[_PageOutcome | None] = [None] * len(resolution.deliverables)
         if any(d.kind in ("page", "handoff") and r.page is not None
                for d, r in zip(spec.deliverables, resolution.deliverables, strict=True)):
@@ -2866,6 +2885,10 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -
     if resolved.no_matches:
         return (f"在当前账号可见范围内，没有找到符合「{resolved.no_matches}」的记录。" if zh
                 else f"No record matches {resolved.no_matches} within this account's visible scope.")
+    if resolved.missing_fields:
+        labels = "、".join(resolved.missing_fields) if zh else ", ".join(resolved.missing_fields)
+        return (f"当前可查询的字段中没有「{labels}」，这一项没有完成。" if zh
+                else f"The available fields do not include {labels}; this part was not done.")
     if resolved.denied:
         # The account's own rights, not the assistant, stand in the way; nothing was done.
         # A new record is not "this record": it is records of this kind.

@@ -852,6 +852,12 @@ export class EmbeddedWebRuntime {
       }
       for (const field of fields) {
         const ref = String((field as {ref?: unknown})?.ref || '')
+        if (!ref) {
+          if (!this.page.verifyFormFields([field], this.currentObservation?.observation.elements || [])) {
+            return {fresh: false, reason: 'an entered form control changed or lost its current instance'}
+          }
+          continue
+        }
         const expected = this.observationFingerprints.get(ref)
         if (expected === undefined || this.page.fingerprint(ref) !== expected) {
           return {fresh: false, reason: 'a form field changed after the last observation'}
@@ -1099,7 +1105,8 @@ export class EmbeddedWebRuntime {
         const binding = field as FormHandoffField
         const matches = observation.observation.elements.filter(element =>
           formFieldMatches(element, binding))
-        return matches.length === 1 ? {...binding, ref: matches[0]!.ref} : null
+        return matches.length === 1 ? {...binding, ref: matches[0]!.ref}
+          : matches.length === 0 ? {...binding, ref: undefined} : null
       }) : []
       const submit = executing.command.args?.submit as FormSubmitTarget | undefined
       const buttons = submit ? observation.observation.elements.filter(element =>

@@ -26,6 +26,7 @@ from web_operation_agent.tests.support.business import _Chat
 class FormBrowser:
     instances = []
     fail = ""
+    submit_after_scroll = 0
 
     def __init__(self, channel, **kwargs):
         self.url = channel.latest_observation_envelope.observation.url
@@ -52,6 +53,8 @@ class FormBrowser:
                     ElementRef("e3", "button", "Save contact", "button", self.epoch,
                     {"form_scope": scope}),
                     ElementRef("e4", "button", "Prepare contact", "button", self.epoch)]
+        if self.actions.count("scroll") < self.submit_after_scroll:
+            elements = [e for e in elements if e.ref != "e3"]
         obs = PageObservation(1, self.epoch, self.url, "New contact", [], elements,
                               "synthetic form", render_state="ready")
         return ActionReceipt(1, str(len(self.actions)), action, dict(args), action != self.fail,
@@ -61,9 +64,11 @@ class FormBrowser:
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
+        FormBrowser.submit_after_scroll = submit_after_scroll
+        self.addCleanup(setattr, FormBrowser, "submit_after_scroll", 0)
         self.addCleanup(setattr, FormBrowser, "fail", "")
         with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
             actor = ACTORS_BY_ID[actor_id]
@@ -77,6 +82,11 @@ class GoalFormsTests(unittest.TestCase):
                              "value": value} for field, value in values]
             chat = _Chat([("declare_goal", {"write_intent": True,
                            "deliverables": [*declarations, *extras]})])
+            if batch:
+                declarations = [{"kind": "handoff", "entity": "contacts", "field_values":
+                                 [{"field": label, "value": value} for label, value in values]}]
+                chat = _Chat([("declare_goal", {"write_intent": True,
+                               "deliverables": [*declarations, *extras]})])
             audit = Path(tmp) / "audit.jsonl"
             bound = bind_application(adapter)
             goal_port = ContactsGoalPort(adapter, form_prefill=True)
@@ -119,6 +129,21 @@ class GoalFormsTests(unittest.TestCase):
             events = [json.loads(line) for line in audit.read_text().splitlines()]
             return result, FormBrowser.instances[-1], channel, chat, events
 
+    def test_unobserved_submit_is_scrolled_before_values_and_still_verified(self):
+        result, browser, _, _, _ = self.run_goal(batch=True, submit_after_scroll=1)
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(browser.actions.count("scroll"), 1)
+        self.assertLess(browser.actions.index("scroll"), browser.actions.index("fill"))
+        self.assertEqual(browser.actions.count("handoff_form"), 1)
+
+    def test_submit_scroll_is_bounded_and_never_fills_without_observed_submit(self):
+        result, browser, _, _, events = self.run_goal(batch=True, submit_after_scroll=4)
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertEqual(browser.actions.count("scroll"), 3)
+        self.assertNotIn("fill", browser.actions)
+        self.assertNotIn("handoff_form", browser.actions)
+        self.assertTrue(any(e["event"] == "goal_form_preparation_refused" for e in events))
+
     def test_two_fields_are_normalized_prepared_once_and_handed_over_once(self):
         result, browser, channel, chat, events = self.run_goal()
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
@@ -130,6 +155,17 @@ class GoalFormsTests(unittest.TestCase):
         self.assertEqual(result.user_answer.count("尚未提交"), 1)
         self.assertIn("Save contact", result.user_answer)
         self.assertTrue(next(e for e in events if e["event"] == "goal_form_handoff")["complete"])
+
+    def test_one_form_slot_keeps_all_fields_and_three_other_targets(self):
+        result, browser, channel, chat, _ = self.run_goal(batch=True, extras=(
+            {"kind": "fact", "entity": "contacts", "record": "Grace Hopper", "fields": ["Email"]},
+            {"kind": "aggregate", "entity": "contacts", "metric": {"op": "count"}},
+            {"kind": "page", "entity": "contacts", "page": {"key": "desk-partner"}}))
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(browser.values, {"name": "Ada Byron", "email": "new@example.test"})
+        self.assertEqual(len(chat.messages), 1)
+        self.assertEqual(browser.actions.count("handoff_form"), 1)
+        self.assertIn("grace@example.test", result.user_answer)
 
     def test_mixed_fact_is_retained_and_page_work_precedes_final_handoff(self):
         result, browser, *_ = self.run_goal(extras=(

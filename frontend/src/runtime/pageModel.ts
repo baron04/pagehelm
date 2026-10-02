@@ -464,6 +464,15 @@ export function hydrateButtonFacts(elements: ElementRef[], selectorMap: unknown,
     if (item.role !== 'button') continue
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
+      // Some controllers emit no text for buttons containing icons and spans.
+      // Recover only an already indexed native button's live visible name.
+      if (!item.name && element instanceof HTMLButtonElement &&
+          !isSensitiveFormControl(element, redactor)) {
+        const raw = (explicitAttribute(element, 'aria-label') || element.innerText || '').replace(/\s+/g, ' ').trim()
+        if (raw && raw.length <= 120 && !redactor.isSensitiveName(raw)) {
+          item.name = redactor.redactString(raw)
+        }
+      }
       const method = explicitAttribute(element, 'name')
       if (method !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(method)
           && !redactor.isSensitiveName(method)) item.attrs.action_name = method

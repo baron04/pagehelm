@@ -30,6 +30,10 @@ from ..schemas.browser import MAX_FORM_LABEL_CHARS
 from ..state.identity import OperationContext, PrincipalError
 
 
+class FormSubmitUnobserved(BusinessToolRequestError):
+    """A verified transient form has no observed submit control yet; no input occurred."""
+
+
 DESCRIBE_FORM_TOOL = "describe_form"
 PREPARE_FORM_TOOL = "prepare_form"
 FORM_TOOLS = frozenset({DESCRIBE_FORM_TOOL, PREPARE_FORM_TOOL})
@@ -649,6 +653,10 @@ class ApplicationFormTools:
                    if element.role == "button" and element.name == form.submit_label
                    and element.attrs.get("form_scope") == form.control_scope
                    and not self._unavailable(element.attrs)]
+        if (form.submit_label and form.control_scope and not buttons and not any(
+                e.role == "button" and e.name == form.submit_label
+                and e.attrs.get("form_scope") == form.control_scope for e in observation.elements)):
+            raise FormSubmitUnobserved("the verified form submit control is not observed")
         if not form.submit_label or not form.control_scope or len(buttons) != 1:
             raise BusinessToolRequestError("the planned form has no unique enabled submit target")
         binding = self._binding(form, observation, context)

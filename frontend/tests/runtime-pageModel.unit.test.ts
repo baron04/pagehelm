@@ -357,6 +357,23 @@ describe('hydrateButtonFacts adds a bounded live method identifier', () => {
     expect(elements[0]?.attrs.action_name).toBe('action_register_payment')
   })
 
+  it('recovers an indexed blank native button name from visible text without widening observation', () => {
+    const button = document.createElement('button')
+    button.innerHTML = '<svg aria-hidden="true"></svg><span>新增</span>'
+    Object.defineProperty(button, 'innerText', {value: '新增'})
+    const elements = elementsFrom('[0]<button type=button />', 1, redactor)
+    hydrateButtonFacts(elements, {}, () => button, redactor)
+    expect(elements[0]?.name).toBe('新增')
+    expect(elements).toHaveLength(1)
+    const named = elementsFrom('[0]<button>Reviewed name />', 1, redactor)
+    hydrateButtonFacts(named, {}, () => button, redactor)
+    expect(named[0]?.name).toBe('Reviewed name')
+    button.setAttribute('name', 'password')
+    const sensitive = elementsFrom('[0]<button />', 1, redactor)
+    hydrateButtonFacts(sensitive, {}, () => button, redactor)
+    expect(sensitive[0]?.name).toBe('')
+  })
+
   it('omits credential-shaped and malformed method names', () => {
     const elements = elementsFrom('[0]<button>Pay />', 1, redactor)
     hydrateButtonFacts(elements, {}, () => ({hasAttribute: () => true,

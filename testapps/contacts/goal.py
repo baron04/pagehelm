@@ -139,14 +139,19 @@ class ContactsGoalPort:
                 label=f"{label} · {section}" if section else label, section=section))
         if d.section:
             return Resolved(kind=d.kind, problem="this page has no sections")
-        if self._form_prefill and d.kind == "handoff" and not d.record and d.value:
-            field = self._field(d.action)
-            if field not in {"name", "email"} or d.page.key not in {"", "contacts"}:
+        if self._form_prefill and d.kind == "handoff" and not d.record and (d.value or d.field_values):
+            requested = d.field_values or ((d.action, d.value),)
+            values = tuple((self._field(label), value) for label, value in requested)
+            if (any(key not in {"name", "email"} for key, _ in values)
+                    or len({key for key, _ in values}) != len(values)
+                    or d.page.key not in {"", "contacts"}):
                 return Resolved(kind=d.kind, problem="field is not in the new-contact form")
             if not can_create:
                 return Resolved(kind=d.kind, problem="creation is not available to this actor", denied="create")
             return Resolved(kind=d.kind, page=PagePlan(url="/contacts/new", expected_path="/contacts/new",
-                label="New contact", form=FormPlan("contacts-create-v1", ((field, d.value),))))
+                label="New contact", form=FormPlan("contacts-create-v1", values)))
+        if d.field_values:
+            return Resolved(kind=d.kind, unoffered="fill", problem="this target does not offer a reviewed form batch")
         if d.kind == "handoff" and _norm(d.action) == "create":
             if d.page.key and _norm(d.page.key) != "contacts":
                 return Resolved(kind=d.kind, problem="page is not in the index")

@@ -30,7 +30,7 @@ Kinds and required details:
 - aggregate: metric.op count/sum/min/max; metric.field for sum/min/max. Numeric highest/lowest uses max/min, returning all ties among known values in this one deliverable (list + min/max also returns all ties); never group_by/top or a sorted limited list. Most records per category uses count + group_by/top. metric.filters uses index choice labels or the person's names. For calendar periods use the original YYYY-MM, YYYY or named period; explicit between endpoints include both dates. page.key identifies the list's scope (customer invoices vs vendor bills, quotations vs confirmed orders).
 - list: matching records; set entity and metric.filters for data conditions. Use page.search only for an explicitly requested page-search interaction, not for a data name/contains condition.
 - page: only an explicit open/show/navigate request or a question asking where something is viewed or configured. A list uses page.key, view, filters_on/off and group_by; a record uses entity, record and section if requested.
-- handoff: a requested change, create, confirm, send, pay, cancel or register; set write_intent true and the existing record's indexed action. For a new record, leave record empty; use the collection page and action "create" only if its operations allow create. Never search for a proposed new name. The assistant does not perform the change itself.
+- handoff: a requested change, create, confirm, send, pay, cancel or register; set write_intent true and the existing record's indexed action. For a new record, leave record empty; use the collection page and action "create" only if its operations allow create. Never search for a proposed new name. For several fields of one form, use one handoff with field_values; copy only values the user explicitly gave. The assistant does not submit the change itself.
 
 For a linked record, entity and record identify the record the person named, via is its link field, and fields belong to the linked entity. "Show the customer's profile" and "what are the linked payment terms' rules" are page deliverables with via. Record lines are their own entity, as the tool describes.
 
@@ -116,7 +116,8 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
                timeout_s: float | None = None, cancelled=None, today: str = "",
                previous: GoalSpec | None = None,
                problems: tuple[str, ...] = (), scope: str = "",
-               values: str = "", earlier: str = "", cache=None, cache_namespace="") -> tuple[GoalSpec, dict]:
+               values: str = "", earlier: str = "", cache=None, cache_namespace="",
+               form_values: bool = True) -> tuple[GoalSpec, dict]:
     """Ask once. Returns the parsed declaration and a bounded audit projection.
 
     `today` is the application's current date, so that a month or day the person says
@@ -156,7 +157,11 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
     # Repairs must remain new readings, even if an identical repair was seen before.
     if previous is not None or problems:
         cache = None
-    key, held = cached_read(cache, cache_namespace, chat, messages, [DECLARE_GOAL_TOOL], cancelled)
+    tool = DECLARE_GOAL_TOOL
+    if not form_values:
+        tool = deepcopy(tool)
+        tool["function"]["parameters"]["properties"]["deliverables"]["items"]["properties"].pop("field_values")
+    key, held = cached_read(cache, cache_namespace, chat, messages, [tool], cancelled)
     if held is not None:
         return held
     kwargs = {"max_tokens": 1_500, "timeout_s": timeout_s}
@@ -165,10 +170,10 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
         attempts += 1
         try:
             if cancelled is not None:
-                reply = chat.complete_cancellable(messages, [DECLARE_GOAL_TOOL], run_id,
+                reply = chat.complete_cancellable(messages, [tool], run_id,
                                                   cancelled=cancelled, **kwargs)
             else:
-                reply = chat.complete(messages, [DECLARE_GOAL_TOOL], run_id, **kwargs)
+                reply = chat.complete(messages, [tool], run_id, **kwargs)
             payload, source = _declaration_from(reply)
             spec = GoalSpec.from_json(payload)
             break

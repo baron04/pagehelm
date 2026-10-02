@@ -1,6 +1,6 @@
 """Reviewed customer editor admission, issued by the server after an exact click receipt.
 
-This distribution slice supports customer update only. File hashes attest reviewed
+Explicit policies admit customer updates and named creation entries. File hashes attest reviewed
 entry/persistence semantics; live APIs attest the actor's authority. DOM tokens attest
 only lifetime. None of those facts alone authorizes filling or submission.
 """
@@ -59,6 +59,9 @@ class NativeFormReview:
 
 class NativeCustomerEntryVerifier:
     def __init__(self, tree, review, client):
+        if type(self) is NativeCustomerEntryVerifier and (
+                type(review) is not NativeFormReview or {p for p, _ in review.hashes} != set(REVIEWED_FILES)):
+            raise TypeError("customer updates require their own complete source review")
         self.tree, self.review, self.client = tree, review, client
         self.source = SourceFormReader(tree)
         self._planned = None
@@ -110,7 +113,7 @@ class NativeCustomerEntryVerifier:
         if len(controls) != 1:
             raise BusinessToolRequestError("the reviewed editor opener is not unique and enabled")
         entry = ApplicationFormEntry(reference, controls[0])
-        self._planned = entry, context.principal.binding_digest, context.session_id, context.turn_id, route
+        self._planned = entry, context.principal.binding_digest, context.session_id, context.turn_id, route, route
         return entry
 
     @staticmethod
@@ -134,7 +137,7 @@ class NativeCustomerEntryVerifier:
                 or not receipt.write_guard_held
                 or receipt.args_echo != {"ref": entry.control.ref, "epoch": before.epoch}
                 or observation.epoch <= before.epoch or observation.render_state != "ready"
-                or observation.record_route != planned[4]
+                or observation.record_route != planned[5]
                 or urlsplit(observation.url).path != planned[4] or urlsplit(observation.url).query):
             raise BusinessToolRequestError("the editor receipt did not bind this entry")
         scope, instance = self._scope(observation)
@@ -158,7 +161,7 @@ class NativeCustomerEntryVerifier:
             return None
         try:
             scope, instance = self._scope(observation)
-            if (observation.render_state != "ready" or observation.record_route != state.route
+            if (observation.render_state != "ready" or observation.record_route != (state.route if state.mode == "update" else "")
                     or urlsplit(observation.url).path != state.route or urlsplit(observation.url).query
                     or (scope, instance) != (state.control_scope, state.entry_id)):
                 self._current = None
@@ -185,10 +188,157 @@ class NativeCustomerEntryVerifier:
         return True
 
 
+# Explicit application distributions qualify each opener and persistence contract.
+# These declarations stay on the server; no app-specific schema enters the Agent.
+CREATE_ENTRIES = {
+    "customer-create": ("crm/customer", "/crm/customer", "新增", "crm:customer:create",
+        "ui/src/views/crm/customer/index.vue", REVIEWED_FILES[1]),
+    "project-create": ("pms/pm/project", "/pms/pm/project/list", "新建项目", "pms:pm:project:create",
+        "ui/src/views/pms/pm/project/list/index.vue",
+        "ui/src/views/pms/pm/project/components/ProjectForm.vue"),
+}
+
+
+@dataclass(frozen=True)
+class NativeCreateReview(NativeFormReview):
+    reference: str
+
+    @classmethod
+    def load(cls, payload, tree):
+        if (not isinstance(payload, dict) or set(payload) != {"schema_version", "release", "hashes", "reference"}
+                or type(payload["schema_version"]) is not int or payload["schema_version"] != 1
+                or payload["release"] != tree.release or not isinstance(payload["reference"], str)
+                or payload["reference"] not in CREATE_ENTRIES
+                or not isinstance(payload["hashes"], dict)):
+            raise ValueError("native creation needs a named reviewed entry")
+        entry = CREATE_ENTRIES[payload["reference"]]
+        required = {entry[4], entry[5], REVIEWED_FILES[2]}
+        if (set(payload["hashes"]) != required or any(not isinstance(v,str)
+                or not re.fullmatch(r"[0-9a-f]{64}",v) for v in payload["hashes"].values())):
+            raise ValueError("native creation must pin its own opener, form and dialog")
+        review = cls(payload["release"], tuple(sorted(payload["hashes"].items())), payload["reference"])
+        if not review.matches(tree):
+            raise ValueError("native creation review does not match current source")
+        return review
+
+
+class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
+    def __init__(self, tree, review, client):
+        if not isinstance(review, NativeCreateReview) or review.reference not in CREATE_ENTRIES:
+            raise TypeError("creation cannot use a customer update review")
+        super().__init__(tree, review, client)
+        self.goal_entries = ((review.reference, *CREATE_ENTRIES[review.reference]),)
+
+    def _authorize(self, record, context):
+        context.require_live(application_id="yudao", required_scope="yudao.read")
+        if record or not self.review.matches(self.tree):
+            raise BusinessToolRequestError("the reviewed creation target changed")
+        try:
+            identity = self.client.get("system/auth/get-permission-info")
+        except DataRefused:
+            raise BusinessToolPermissionError("the application refused creation authority") from None
+        except (OSError, TimeoutError):
+            raise BusinessToolUnavailableError("creation authority is unavailable") from None
+        user = identity.get("user") if isinstance(identity, dict) else None
+        permissions = identity.get("permissions") if isinstance(identity, dict) else None
+        if (not isinstance(user, dict) or str(user.get("id")) != context.principal.actor_id
+                or str(self.client.tenant) != context.principal.tenant_id):
+            raise BusinessToolIdentityError("the creation actor changed")
+        required = CREATE_ENTRIES[self.review.reference][3]
+        if (not isinstance(permissions,list) or any(not isinstance(p,str) for p in permissions)
+                or not {required,"*:*:*"}.intersection(permissions)):
+            raise BusinessToolPermissionError("this actor cannot create this entity")
+
+    def plan_entry(self, reference, observation, *, context):
+        self._planned = self._current = None
+        if reference != self.review.reference:
+            raise BusinessToolRequestError("this creation entry is not reviewed")
+        _, route, label, *_ = CREATE_ENTRIES[reference]
+        if (observation.render_state != "ready" or observation.record_route
+                or urlsplit(observation.url).path != route or urlsplit(observation.url).query
+                or any(str(e.attrs.get("form_scope", "")).startswith("dialog") for e in observation.elements)):
+            raise BusinessToolRequestError("the exact collection must be ready without an editor")
+        self._authorize("",context)
+        controls = [e for e in observation.elements if e.role == "button" and e.name == label
+                    and not e.attrs.get("form_scope") and not form_control_unavailable(e.attrs)]
+        if len(controls) != 1:
+            raise BusinessToolRequestError("the reviewed creation opener is not unique and enabled")
+        entry = ApplicationFormEntry(reference,controls[0])
+        self._planned = entry,context.principal.binding_digest,context.session_id,context.turn_id,route,""
+        return entry
+
+    def accept_entry(self, entry, before, receipt, observation, *, context):
+        planned,self._planned = self._planned,None
+        if (planned is None or planned[:4] != (entry,context.principal.binding_digest,context.session_id,context.turn_id)
+                or entry.control not in before.elements or not receipt.ok or receipt.action != "click"
+                or receipt.navigated or not receipt.write_guard_held
+                or receipt.args_echo != {"ref":entry.control.ref,"epoch":before.epoch}
+                or observation.epoch <= before.epoch or observation.render_state != "ready"
+                or observation.record_route or urlsplit(observation.url).path != planned[4]
+                or urlsplit(observation.url).query):
+            raise BusinessToolRequestError("the creation receipt did not bind this entry")
+        scope,instance = self._scope(observation)
+        self._authorize("",context)
+        component = CREATE_ENTRIES[entry.reference][5]
+        source = self.source.read(component)
+        if source is None:
+            raise BusinessToolRequestError("the reviewed creation source is unavailable")
+        self._current = NativeFormState(context.principal.actor_authority_digest,context.session_id,
+            context.turn_id,instance,"create","",planned[4],scope,component,source.binding_digest,"新建草稿","确 定")
+        return "native-" + self._current.digest
+
+
+class NativeEntryVerifiers:
+    """One current entry among explicitly installed application-owned policies."""
+    def __init__(self, *verifiers):
+        if not verifiers or any(not isinstance(v,NativeCustomerEntryVerifier) for v in verifiers):
+            raise TypeError("native entries require reviewed application verifiers")
+        bindings = {(v.tree.root, v.tree.release, v.tree.repository_id) for v in verifiers}
+        references = [v.review.reference if isinstance(v, NativeCreateEntryVerifier)
+                      else "customer-update" for v in verifiers]
+        if len(bindings) != 1 or len(set(references)) != len(references):
+            raise ValueError("native policies must share one source binding and unique targets")
+        self.goal_updates = "customer-update" in references
+        self.verifiers, self.active = tuple(verifiers), None
+        self.source = verifiers[0].source
+        self.goal_entries = tuple(e for v in verifiers for e in getattr(v,"goal_entries",()))
+
+    @property
+    def _planned(self):
+        return self.active._planned if self.active else None
+
+    def plan_entry(self, reference, observation, *, context):
+        self.active = None
+        for verifier in self.verifiers:
+            verifier._planned = verifier._current = None
+        candidates = [v for v in self.verifiers if (isinstance(v,NativeCreateEntryVerifier)
+            and reference == v.review.reference) or (not isinstance(v,NativeCreateEntryVerifier) and _TARGET.fullmatch(reference))]
+        if len(candidates) != 1:
+            raise BusinessToolRequestError("the requested native entry is unavailable or ambiguous")
+        self.active = candidates[0]
+        return self.active.plan_entry(reference,observation,context=context)
+
+    def accept_entry(self, *args, **kwargs):
+        if self.active is None: raise BusinessToolRequestError("no native entry was planned")
+        return self.active.accept_entry(*args,**kwargs)
+
+    def discard_entry(self, *args, **kwargs):
+        if self.active: self.active.discard_entry(*args,**kwargs)
+
+    def current(self, *args, **kwargs):
+        return self.active.current(*args,**kwargs) if self.active else None
+
+    def validate(self, *args, **kwargs):
+        return self.active.validate(*args,**kwargs) if self.active else False
+
+
 class NativeEntryFormPort(YudaoFormPort):
     def __init__(self, verifier):
         super().__init__(verifier.source, verifier)
         self.goal_source = verifier.source
+        self.goal_entries = getattr(verifier,"goal_entries",())
+        self.goal_updates = getattr(verifier, "goal_updates",
+            not isinstance(verifier, NativeCreateEntryVerifier))
 
     def click_policy(self, tabs):
         return NativeEntryClickPolicy(self._verifier, tabs)
@@ -212,7 +362,7 @@ class NativeEntryClickPolicy:
         planned = self.verifier._planned
         if (planned is not None and element == planned[0].control
                 and element.epoch == observation.epoch and observation.render_state == "ready"
-                and observation.record_route == planned[4]
+                and observation.record_route == planned[5]
                 and urlsplit(observation.url).path == planned[4]):
             return ""
         return self.tabs.decide(observation, element) if self.tabs else "only a reviewed current form entry is allowed"

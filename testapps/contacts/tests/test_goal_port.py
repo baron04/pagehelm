@@ -27,9 +27,10 @@ class ContactsGoalPortTests(unittest.TestCase):
         with MinimalContactsApplication() as application, tempfile.TemporaryDirectory() as tmp:
             adapter, principal, _ = self._bound(application, "ada-lovelace")
             chat = _Chat([
-                scope([{"kind": "fact", "entity": "contacts", "about": "Grace Hopper"}]), ("declare_source_queries", {"queries_0": []}), source_reply(),
+                scope([{"kind": "fact", "entity": "contacts", "about": "Grace Hopper"}]),
                 ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "contacts",
-                    "record": "Grace Hopper", "fields": ["Email"]}]})])
+                    "record": "Grace Hopper", "fields": ["Email"]}]}),
+                ("declare_source_queries", {"queries_0": []}), source_reply()])
             executor = GoalTurnExecutor(
                 channel=_Channel(page_url=application.origin + "/contacts", principal=principal),
                 config=AgentTurnConfig(supported_scope="read", require_identity=True,

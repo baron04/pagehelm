@@ -2235,6 +2235,15 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(_index().entity("销售订单").key, "order")
         self.assertEqual(_index().entities[0].field_by_label("status").key, "state")
 
+    def test_read_only_tool_omits_form_batch_without_mutating_default_schema(self):
+        for enabled in (False, True, False):
+            chat = _Chat([("declare_goal", {"deliverables": [{"kind": "fact", "entity": "order", "record": "S1", "fields": ["Total"]}]})])
+            with patch.object(chat, "complete", wraps=chat.complete) as complete:
+                understand(chat, prompt="S1 多少钱", index=_index(), run_id="r", form_values=enabled)
+            properties = complete.call_args.args[1][0]["function"]["parameters"]["properties"]["deliverables"]["items"]["properties"]
+            self.assertEqual("field_values" in properties, enabled)
+        self.assertIn("field_values", DECLARE_GOAL_TOOL["function"]["parameters"]["properties"]["deliverables"]["items"]["properties"])
+
     def test_understand_accepts_a_tool_call_or_json_content(self):
         chat = _Chat([("declare_goal", {"deliverables": [{"kind": "fact", "entity": "order",
                                                           "record": "S1", "fields": ["Total"]}]})])

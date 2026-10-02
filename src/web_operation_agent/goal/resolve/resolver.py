@@ -161,6 +161,11 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
     # -- one deliverable -------------------------------------------------------------------
     def _resolve_one(self, d: Deliverable) -> Resolved:
         index = self.index
+        if d.field_values:
+            # Only an integration's reviewed form port can translate a batch; the
+            # ordinary data resolver must not silently turn it into navigation.
+            return Resolved(kind=d.kind, unoffered="fill",
+                            problem="this application does not offer a reviewed form batch")
         d = self._line_record_from_conditions(d)
         if isinstance(d, Resolved):
             return d
@@ -235,6 +240,21 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
             return Resolved(kind=d.kind, problem="the entity named is not in the index",
                             repair=("entity must be one of the index's entity keys: "
                                     + ", ".join(e.key for e in index.entities[:30])))
+        if d.kind == "fact" and d.fields and not d.record and not d.rules:
+            view = self.view(entity.key)
+            if d.via and view is not None:
+                link = view.link_by_label(d.via)
+                if link is not None:
+                    view = self.view(view.info(link).relation)
+            # A missing field cannot be resolved by asking which unrelated record
+            # the person meant. Keep embedded-line fallback for parent schemas.
+            if view is not None and not any(f.kind == "lines" for f in view.fields.values()):
+                missing = tuple(label for label in d.fields if view.field_by_label(label) is None)
+                if len(missing) == len(d.fields):
+                    return Resolved(kind="fact", missing_fields=missing,
+                        problem="none of the fields asked for exist in this actor-visible schema",
+                        repair=f"{view.label} has no requested fields: {', '.join(missing)}; "
+                               "do not choose unrelated records or substitute neighbouring fields")
         if d.kind == "handoff" and not described and (
                 not d.record or norm(d.action) in ("new", "create")):
             # A creation names no existing record; the name given, if any, is the new
@@ -562,6 +582,7 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
             if lines is not None:
                 return lines
             return Resolved(kind="fact",
+                            missing_fields=tuple(missing),
                             problem="none of the fields asked for exist on this record",
                             repair=(f"{view.label} has no field named "
                                     + ", ".join(repr(m) for m in missing)
@@ -569,7 +590,11 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
                                                               or ", ".join(f.label for f in
                                                                            view.schema.fields[:30]))))
         row = self._read(model, rid, fields)
-        facts = tuple(Fact(subject=name, label=view.label_of(f), value=str(row.shown.get(f, "(empty)")))
+        facts = tuple(Fact(subject=name, label=view.label_of(f), value=str(row.shown.get(f, "(empty)")),
+                           field_key=f,
+                           native_value=(str(row.values[f]) if view.info(f).kind == "choice"
+                               and type(row.values.get(f)) in (str, int)
+                               and any(c.key == str(row.values[f]) for c in view.info(f).choices) else ""))
                       for f in fields)
         problem = "not on this record: " + ", ".join(missing) if missing else ""
         empty = tuple(view.label_of(f) for f in fields if row.values.get(f) in (None, ""))
@@ -593,7 +618,8 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
                 repair = (f"{name}: {', '.join(empty)} holds no value on this record; its fields "
                           f"that hold one are: {', '.join(filled)}. When one of them answers "
                           "what the person asked, add it to the fields, keeping those asked for")
-        return Resolved(kind="fact", facts=facts, problem=problem, empty=empty, repair=repair)
+        return Resolved(kind="fact", facts=facts, problem=problem, empty=empty, repair=repair,
+                        missing_fields=tuple(missing))
 
     # -- pages -----------------------------------------------------------------------------
     def _default_page(self, model: str) -> IndexPage | None:

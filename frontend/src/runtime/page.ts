@@ -18,6 +18,7 @@ import {selectedControlsFromPage} from './pageSelection'
 import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
+import {formInstance} from './formInstance'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
@@ -59,7 +60,7 @@ export type PageBlockerReader = () => unknown
 export type ActiveViewReader = () => unknown
 export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {
-  ref: string; field: string; control: string; value: string
+  ref?: string; field: string; control: string; value: string
   binding?: string; label?: string; scope?: string
 }
 export interface FormSubmitTarget {ref: string; label: string; scope: string}
@@ -79,6 +80,42 @@ export interface PageReading {
 }
 
 export class Page {
+  // Browser-only identities of at most twenty controls this Page actually entered.
+  // No requested values, plans, permissions or persisted state are held here.
+  private readonly enteredControls = new Map<string, {element: Element; instance: string; url: string}>()
+
+  private enteredKey(field: string, label: string, scope: string): string {
+    return JSON.stringify([field, label, scope])
+  }
+  private rememberEntered(element: ElementLike): void {
+    if (!(element instanceof Element) || isSensitiveFormControl(element, this.redactor)) return
+    const field = formFieldName(element) || '', label = field ? '' : formControlLabel(element) || ''
+    const scope = formControlScope(element), instance = formInstance(element)
+    if ((!field && !label) || !scope || !instance) return
+    const held = this.enteredControls.values().next().value
+    if (held && (held.instance !== instance || held.url !== canonicalUrl(location.href))) this.enteredControls.clear()
+    const key = this.enteredKey(field, label, scope)
+    const prior = this.enteredControls.get(key)
+    if (prior && prior.element !== element && prior.element.isConnected) {
+      this.enteredControls.delete(key)
+      return
+    }
+    if (!prior && this.enteredControls.size >= 20) this.enteredControls.clear()
+    this.enteredControls.set(key, {element, instance, url: canonicalUrl(location.href)})
+  }
+  private enteredControl(binding: FormHandoffField, observed: ElementRef[]): ElementLike | null {
+    if (!binding.scope) return null
+    const key = this.enteredKey(binding.binding === 'label' ? '' : binding.field,
+      binding.binding === 'label' ? binding.label || '' : '', binding.scope)
+    const entry = this.enteredControls.get(key)
+    if (!entry || entry.url !== canonicalUrl(location.href) || !entry.element.isConnected ||
+        formInstance(entry.element) !== entry.instance || !observed.some(e =>
+          e.attrs.form_scope === binding.scope && e.attrs.form_instance === entry.instance)) return null
+    const rect = entry.element.getBoundingClientRect(), style = getComputedStyle(entry.element)
+    if (!rect.width || !rect.height || style.display === 'none' || style.visibility === 'hidden' ||
+        entry.element.closest('[hidden],[aria-hidden="true"]')) return null
+    return entry.element as ElementLike
+  }
   constructor(private readonly controller: PageControllerApi,
               private readonly lookup: ElementLookup,
               private readonly redactor: Redactor,
@@ -147,7 +184,10 @@ export class Page {
     if (element.disabled || element.readOnly) {
       throw new Error('bad_arguments: fill target is disabled or read-only')
     }
-    return this.controller.inputText(refIndex(ref), text)
+    return Promise.resolve(this.controller.inputText(refIndex(ref), text)).then(result => {
+      if (result && (result as {success?: unknown}).success === true) this.rememberEntered(element)
+      return result
+    })
   }
   select(ref: unknown, text: string): Promise<unknown> {
     const element = this.element(ref)
@@ -175,7 +215,10 @@ export class Page {
       String(option.textContent ?? '').trim() === label).length !== 1) {
       throw new Error('bad_arguments: select label is absent or ambiguous')
     }
-    return this.controller.selectOption(refIndex(ref), label)
+    return Promise.resolve(this.controller.selectOption(refIndex(ref), label)).then(result => {
+      if (result && (result as {success?: unknown}).success === true) this.rememberEntered(element)
+      return result
+    })
   }
   scroll(down: boolean, pages: number): Promise<unknown> {
     return this.controller.scroll({down, numPages: pages})
@@ -188,7 +231,7 @@ export class Page {
     return fields.every((item: unknown) => {
       if (!item || typeof item !== 'object') return false
       const binding = item as FormHandoffField
-      if (typeof binding.ref !== 'string' || typeof binding.field !== 'string' ||
+      if ((binding.ref !== undefined && typeof binding.ref !== 'string') || typeof binding.field !== 'string' ||
           typeof binding.value !== 'string' ||
           !['field', 'label'].includes(binding.binding || 'field') ||
           (binding.binding === 'label' && (!binding.label || !binding.scope)) ||
@@ -196,16 +239,24 @@ export class Page {
           seen.has(binding.field)) return false
       seen.add(binding.field)
       const matches = observed.filter(element => formFieldMatches(element, binding))
-      if (matches.length !== 1 || matches[0]!.ref !== binding.ref) return false
       let live: ElementLike | null | undefined
-      try { live = this.element(binding.ref) } catch { return false }
+      if (binding.ref) {
+        if (matches.length !== 1 || matches[0]!.ref !== binding.ref) return false
+        try { live = this.element(binding.ref) } catch { return false }
+      } else {
+        if (matches.length > 1) return false
+        live = this.enteredControl(binding, observed)
+      }
       if (!live || live.isConnected === false || live.disabled || live.readOnly) return false
       if (binding.scope && formControlScope(live) !== binding.scope) return false
       if (isSensitiveFormControl(live, this.redactor)) return false
       if (binding.binding === 'label') {
         if (formFieldName(live) || formControlLabel(live) !== binding.label) return false
       } else if (formFieldName(live) !== binding.field) return false
-      if (binding.control === 'select' && String(live.tagName || '').toLowerCase() !== 'select') {
+      const tag = String(live.tagName || '').toLowerCase()
+      const control = tag === 'select' ? 'select' : live.getAttribute?.('role') === 'combobox' ? 'combobox' : 'textbox'
+      if (!binding.ref && (!['input', 'textarea', 'select'].includes(tag) || control !== binding.control)) return false
+      if (binding.control === 'select' && tag !== 'select') {
         return false
       }
       return String(live.value ?? '') === binding.value

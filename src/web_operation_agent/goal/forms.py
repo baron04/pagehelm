@@ -4,9 +4,10 @@ from types import SimpleNamespace
 
 from ..business.errors import (BusinessToolError, BusinessToolIdentityError,
                                BusinessToolPermissionError, BusinessToolRequestError)
-from ..business.forms import ApplicationFormTools, ApplicationFormEntryPort, ApplicationFormEntry
+from ..business.forms import ApplicationFormTools, ApplicationFormEntryPort, ApplicationFormEntry, FormSubmitUnobserved
 from ..execution.form_tools import apply_form_draft
 from ..state.identity import PrincipalError
+from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from .ports import capabilities_of
 
 
@@ -89,14 +90,27 @@ def handoff_form(executor, state, plan):
                 port.discard_entry(entry, context=s.approvals.context(s.step, "form_entry_release"))
             if not isinstance(reference, str) or not reference:
                 raise BusinessToolRequestError("the application did not bind the opened form")
-        with s.receipt.stage("business"):
-            draft, described = forms.prepare_current(s.obs, reference=reference,
-                values=plan.form.values, context=s.approvals.context(s.step, "prepare_form"))
-            verification = forms.take_verification(draft)
+        for attempt in range(4):
+            try:
+                with s.receipt.stage("business"):
+                    draft, described = forms.prepare_current(s.obs, reference=reference,
+                        values=plan.form.values, context=s.approvals.context(s.step, "prepare_form"))
+                    verification = forms.take_verification(draft)
+                break
+            except FormSubmitUnobserved:
+                if attempt == 3:
+                    raise
+                # Fixed read-only scroll, before preparing or entering any value.
+                # The next descriptor must still verify the same application entry.
+                receipt = executor._dispatch(s, "scroll", {"direction": "down", "pages": 1})
+                if receipt is None or not receipt.ok or s.terminal_reason:
+                    return FormOutcome(reason=s.terminal_reason or "agent_refused",
+                                       detail="the form submit control could not be observed")
     except (BusinessToolError, PrincipalError) as exc:
         s.ledger.append("goal_form_preparation_refused", step=s.step,
                         error_code=(BusinessToolIdentityError.code if isinstance(exc, PrincipalError)
                                     else exc.code),
+                        detail=redact_sensitive_assignments(redact_session_handoffs(str(exc)))[:200],
                         dispatched=False, submitted=False)
         return FormOutcome(reason=("permission_denied" if isinstance(exc, BusinessToolPermissionError)
                                    else "agent_refused"), detail=str(exc))
@@ -111,6 +125,7 @@ def handoff_form(executor, state, plan):
     s.page_actions += session.page_actions
     s.ledger.append("goal_form_handoff", step=s.step, complete=not reason,
         fields=len(draft.fields), submitted=False, persisted=False,
+        terminal_reason=reason, detail=redact_sensitive_assignments(redact_session_handoffs(detail))[:200],
         browser_attempts=session._browser_attempts)
     return FormOutcome(not reason, tuple(described["fields"]), draft.submit_label,
                        "wall_budget" if reason == "wall_clock_budget" else reason, detail)

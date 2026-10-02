@@ -299,8 +299,9 @@ class MinimalDemoBrowserTests(unittest.TestCase):
 
     def test_goal_batch_fills_two_fields_and_highlights_manual_submit_in_real_browser(self):
         script = (("declare_goal", {"write_intent": True, "deliverables": [
-            {"kind": "handoff", "entity": "contacts", "action": "Name", "value": "  Ada   Byron  "},
-            {"kind": "handoff", "entity": "contacts", "action": "Email", "value": "NEW@example.test"}]}),)
+            {"kind": "handoff", "entity": "contacts", "field_values": [
+                {"field": "Name", "value": "  Ada   Byron  "},
+                {"field": "Email", "value": "NEW@example.test"}]}]}),)
         def probe(page):
             return {
                 "name_exact": page.locator('#contact-create input[name=name]').input_value() == "Ada Byron",

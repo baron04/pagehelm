@@ -22,6 +22,10 @@ class Fact:
     subject: str
     label: str
     value: str
+    #: Optional adapter schema key and exact coded choice read under this actor.
+    #: Text/credentials are not copied into a second native-value channel.
+    field_key: str = ""
+    native_value: str = ""
 
 
 @dataclass(frozen=True)
@@ -132,6 +136,8 @@ class Resolved:
     #: what it needs ("请选择时间范围"): the reply says it, so the person knows what the
     #: page asks for before it shows anything.
     refused: str = ""
+    #: Requested labels absent from the actor-visible schema; never guessed from errors.
+    missing_fields: tuple[str, ...] = ()
     #: Candidate names when a reference was ambiguous, so the reply can ask.
     candidates: tuple[str, ...] = ()
     #: The reference the person gave that names no record here ("S00998"), so the

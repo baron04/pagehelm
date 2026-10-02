@@ -12,7 +12,7 @@ from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStatus
 from web_operation_agent.goal import executor as goal_executor
 from web_operation_agent.goal.executor import GoalTurnExecutor
-from web_operation_agent.goal.ports import Aggregate, Resolved
+from web_operation_agent.goal.ports import Aggregate, Fact, Resolved
 from web_operation_agent.goal.ports import PagePlan
 from web_operation_agent.planning.source_facts import SourceHit
 from web_operation_agent.schemas import EvidenceRef
@@ -96,9 +96,9 @@ class RepositoryAnswerTests(unittest.TestCase):
 
     def test_source_completeness_is_a_required_decision_not_a_prefilled_answer(self):
         result, chat, _, _ = self.run_turn([
-            scope([{"kind": "aggregate", "entity": "order"}]), source_reply(),
+            scope([{"kind": "aggregate", "entity": "order"}]),
             ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
-                                                 "metric": {"op": "count"}}]})],
+                                                 "metric": {"op": "count"}}]}), source_reply()],
             [Resolved(kind="aggregate", aggregate=Aggregate("All orders", 17))])
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertIn("17", result.user_answer)
@@ -156,13 +156,29 @@ class RepositoryAnswerTests(unittest.TestCase):
 
     def test_mixed_source_and_count_preserve_both_results(self):
         result, _, _, _ = self.run_turn([
-            scope([{"kind": "aggregate", "entity": "order"}]), source_reply(),
+            scope([{"kind": "aggregate", "entity": "order"}]),
             ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
-                                               "metric": {"op": "count"}}]})],
+                                               "metric": {"op": "count"}}]}), source_reply()],
             [Resolved(kind="aggregate", aggregate=Aggregate("All orders", 17))])
         self.assertEqual(AgentTurnStatus.FINISHED, result.status)
         self.assertIn("17", result.user_answer)
         self.assertIn("Aurora team", result.user_answer)
+
+    def test_mixed_source_receives_only_observed_choice_code_after_business_read(self):
+        result, chat, _, events = self.run_turn([
+            scope([{"kind": "fact", "entity": "order"}]),
+            ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "order",
+                "record": "SO1", "fields": ["Status"]}]}), source_reply()],
+            [Resolved(kind="fact", facts=(Fact("SO1", "Status", "In review", "state", "1"),))])
+        body = json.loads(next(m for m in chat.messages
+            if m[0]["content"].startswith("Call answer_sources"))[1]["content"])
+        self.assertEqual(body["CURRENT_FACTS"], [{"subject": "SO1", "label": "Status",
+            "value": "In review", "field_key": "state", "native_value": "1"}])
+        order = [e["event"] for e in events]
+        self.assertLess(order.index("goal_resolved"), order.index("goal_source_retrieved"))
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("In review", result.user_answer)
+        self.assertEqual(result.agent.page_actions, 0)
 
     def test_wrong_or_nonliteral_support_has_only_one_repair_and_still_fails_closed(self):
         for reply in (source_reply(reference="source#99"), source_reply(reference="source#1.999")):

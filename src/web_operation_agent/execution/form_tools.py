@@ -472,10 +472,13 @@ def apply_form_draft(
         return current, reason, detail
     for binding in draft.fields:
         matches = matching(binding)
-        if len(matches) != 1:
+        if len(matches) > 1 or (not matches and not draft.control_scope):
             return current, "agent_refused", (
                 f"the current form no longer exposes one exact {binding.field} field")
-        handoff_fields.append({"ref": matches[0].ref, "field": binding.field,
+        # An earlier exact fill may leave the viewport when the form scrolls. The
+        # Runtime can recheck only its own entered DOM control in the same live
+        # form instance; this is never a selector search or permission fallback.
+        handoff_fields.append({**({"ref": matches[0].ref} if matches else {}), "field": binding.field,
                                "control": binding.control, "value": binding.value,
                                **({"binding": "label", "label": binding.label}
                                   if binding.binding == "label" else {}),

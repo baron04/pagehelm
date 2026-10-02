@@ -15,7 +15,8 @@ from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.schemas import ElementRef, PageObservation, ActionReceipt
 from web_operation_agent.state.identity import PrincipalContext, OperationContext
 from web_operation_agent_yudao.form_entries import (NativeFormReview, NativeCustomerEntryVerifier,
-    NativeEntryFormPort, NativeEntryClickPolicy, REVIEWED_FILES)
+    NativeEntryFormPort, NativeEntryClickPolicy, REVIEWED_FILES, CREATE_ENTRIES,
+    NativeCreateReview, NativeCreateEntryVerifier, NativeEntryVerifiers)
 from web_operation_agent_yudao.form_goals import NativeFormsGoalPort
 from web_operation_agent_yudao.repository import repository_tree
 
@@ -139,18 +140,115 @@ class EntryTests(unittest.TestCase):
     def test_form_goals_keep_facts_and_refuse_unsupported_fields(self):
         data = object()
         port = NativeFormsGoalPort(data,self.verifier.source)
-        index = ApplicationIndex(entities=(IndexEntity("customers","Customers", fields=(IndexField("remark","合成备注","text"),)),))
+        index = ApplicationIndex(entities=(IndexEntity("crm/customer","Customers", fields=(IndexField("remark","合成备注","text"),)),))
         spec = GoalSpec.from_json({"write_intent":True,"deliverables":[
-            {"kind":"fact","entity":"customers","record":"Synthetic customer","fields":["合成备注"]},
-            {"kind":"handoff","entity":"customers","record":"Synthetic customer","action":"合成备注","value":"Draft"}]})
+            {"kind":"fact","entity":"crm/customer","record":"Synthetic customer","fields":["合成备注"]},
+            {"kind":"handoff","entity":"crm/customer","record":"Synthetic customer","action":"合成备注","value":"Draft"}]})
         page = PagePlan(self.route,"Synthetic customer",expected_path=self.route)
         result = Resolution((Resolved("fact",facts=(Fact("Synthetic customer","合成备注","Old"),)),Resolved("page",page=page)))
         with patch.object(DataGoalPort,"resolve",return_value=result), patch.object(port,"index",return_value=index):
             resolved = port.resolve(spec,context=self.context)
             self.assertEqual(resolved.deliverables[0],result.deliverables[0])
             self.assertTrue(resolved.deliverables[1].page.form.open_entry)
+            batch = replace(spec,deliverables=(spec.deliverables[0],replace(spec.deliverables[1],
+                action="",value="",field_values=(("合成备注","Draft"),))))
+            self.assertEqual(port.resolve(batch,context=self.context).deliverables[1].page.form.values,
+                             (("remark","Draft"),))
             wrong = replace(spec,deliverables=(spec.deliverables[0],replace(spec.deliverables[1],action="Unsupported")))
             self.assertTrue(port.resolve(wrong,context=self.context).deliverables[1].problem)
+
+
+class CreationEntryTests(unittest.TestCase):
+    setUp = EntryTests.setUp
+
+    def creation(self, reference="customer-create"):
+        entry = CREATE_ENTRIES[reference]
+        for relative in (entry[4], entry[5]):
+            path = self.tree.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('<template><el-form :model="formData"><el-form-item label="合成备注" prop="remark">'
+                            '<el-input v-model="formData.remark" /></el-form-item></el-form></template>')
+        files = (entry[4], entry[5], REVIEWED_FILES[2])
+        payload = {"schema_version": 1, "release": self.tree.release, "reference": reference,
+                   "hashes": {p: hashlib.sha256(self.tree.read_text(p).encode()).hexdigest() for p in files}}
+        review = NativeCreateReview.load(payload, self.tree)
+        client = Client(); client.permission = entry[3]
+        verifier = NativeCreateEntryVerifier(self.tree, review, client)
+        before = replace(self.before, url="https://synthetic.test" + entry[1], record_route="",
+                         elements=[replace(self.before.elements[0], name=entry[2])])
+        after = replace(self.after, url=before.url, record_route="")
+        return payload, client, verifier, before, after
+
+    def test_separate_creation_policies_bind_exact_receipt_and_no_record(self):
+        for reference in CREATE_ENTRIES:
+            with self.subTest(reference=reference):
+                _, client, verifier, before, after = self.creation(reference)
+                port = NativeEntryFormPort(verifier)
+                entry = port.plan_entry(reference, before, context=self.context)
+                ref = port.accept_entry(entry, before, self.receipt, after, context=self.context)
+                draft, _ = ApplicationFormTools(port, application_id="yudao").prepare_current(
+                    after, reference=ref, values=(("remark", "Draft"),), context=self.context)
+                self.assertEqual(draft.fields[0].value, "Draft")
+                self.assertEqual(verifier._current.mode, "create")
+                self.assertEqual(verifier._current.record_id, "")
+                client.permission = "crm:customer:update"
+                with self.assertRaises(BusinessToolPermissionError):
+                    verifier.validate(verifier._current, context=self.context)
+
+    def test_creation_cannot_borrow_update_review_or_other_entry_authority(self):
+        with self.assertRaises(TypeError):
+            NativeCreateEntryVerifier(self.tree, self.review, self.client)
+        payload, client, verifier, before, after = self.creation()
+        for reference in ([], {}, "project-create"):
+            with self.subTest(reference=reference), self.assertRaises(ValueError):
+                NativeCreateReview.load({**payload, "reference": reference}, self.tree)
+        for obs in (replace(before, record_route="/crm/customer/detail/12"),
+                    replace(before, url=before.url + "?id=12"), after):
+            with self.assertRaises(BusinessToolRequestError):
+                verifier.plan_entry("customer-create", obs, context=self.context)
+        client.actor = 3
+        with self.assertRaises(BusinessToolIdentityError):
+            verifier.plan_entry("customer-create", before, context=self.context)
+        client.actor = 2
+        entry = verifier.plan_entry("customer-create", before, context=self.context)
+        with self.assertRaises(BusinessToolRequestError):
+            verifier.accept_entry(entry, before, replace(self.receipt, ok=False), after, context=self.context)
+        with self.assertRaises(BusinessToolRequestError):
+            verifier.accept_entry(entry, before, self.receipt, after, context=self.context)
+        self.tree.resolve(CREATE_ENTRIES["customer-create"][4]).write_text("changed opener")
+        with self.assertRaises(BusinessToolRequestError):
+            verifier.plan_entry("customer-create", before, context=self.context)
+
+    def test_composite_rejects_duplicate_or_differently_bound_source_policies(self):
+        _, _, verifier, before, after = self.creation()
+        combined = NativeEntryVerifiers(self.verifier, verifier)
+        self.assertTrue(combined.goal_updates)
+        self.assertFalse(NativeEntryFormPort(verifier).goal_updates)
+        entry = combined.plan_entry("customer-create", before, context=self.context)
+        combined.accept_entry(entry, before, self.receipt, after, context=self.context)
+        self.assertEqual(combined.current(after, context=self.context).mode, "create")
+        with self.assertRaises(ValueError):
+            NativeEntryVerifiers(verifier, verifier)
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        other_tree = repository_tree(Path(tmp.name), "other-release")
+        other = NativeCustomerEntryVerifier(other_tree, self.review, self.client)
+        with self.assertRaises(ValueError):
+            NativeEntryVerifiers(verifier, other)
+
+    def test_creation_batch_requires_explicit_creation_and_never_selects_existing_record(self):
+        _, _, verifier, _, _ = self.creation()
+        port = NativeFormsGoalPort(object(), verifier.source, entries=verifier.goal_entries, updates=False)
+        index = ApplicationIndex(entities=(IndexEntity("crm/customer", "Customers",
+                    fields=(IndexField("remark", "合成备注", "text"),)),))
+        spec = GoalSpec.from_json({"write_intent": True, "deliverables": [{"kind": "handoff",
+            "entity": "crm/customer", "action": "create", "field_values": [{"field": "合成备注", "value": "Draft"}]}]})
+        page = PagePlan("/crm/customer", "Customers", expected_path="/crm/customer")
+        result = Resolution((Resolved("page", page=page),))
+        with patch.object(DataGoalPort, "resolve", return_value=result), patch.object(port, "index", return_value=index):
+            resolved = port.resolve(spec, context=self.context)
+            self.assertEqual(resolved.deliverables[0].page.form.reference, "customer-create")
+            unknown = replace(spec, deliverables=(replace(spec.deliverables[0], action=""),))
+            self.assertTrue(port.resolve(unknown, context=self.context).deliverables[0].problem)
 
 
 if __name__ == "__main__":

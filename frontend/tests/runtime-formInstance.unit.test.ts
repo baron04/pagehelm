@@ -17,6 +17,29 @@ describe('current form instance is a DOM lifetime fact', () => {
     } finally { form.remove() }
   })
 
+  it('keeps validation/counter text changes but invalidates field and entry names', () => {
+    const form = document.createElement('form')
+    form.innerHTML = '<label>Name</label><input><span>0</span>'
+    document.body.append(form)
+    try {
+      const input = form.querySelector('input')!, token = formInstance(input)
+      form.querySelector('span')!.textContent = '12'
+      expect(formInstance(input)).toBe(token)
+      const note = document.createElement('div');note.textContent = 'Validation status'
+      form.append(note)
+      expect(formInstance(input)).toBe(token)
+      form.querySelector('label')!.textContent = 'Different field'
+      expect(formInstance(input)).not.toBe(token)
+      const second = formInstance(input)
+      // Layout helpers may create and remove a measurement input synchronously.
+      const measurement = document.createElement('textarea')
+      note.append(measurement); measurement.remove()
+      expect(formInstance(input)).toBe(second)
+      note.append(document.createElement('input'))
+      expect(formInstance(input)).not.toBe(second)
+    } finally {form.remove()}
+  })
+
   it('invalidates close/reopen and same-ID replacement before the next action', () => {
     const overlay = document.createElement('section')
     overlay.innerHTML = '<div role="dialog" id="editor"><input name="name"></div>'

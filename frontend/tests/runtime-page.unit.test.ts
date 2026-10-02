@@ -2,6 +2,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {Page, pageControllerOptions, type BrowserState, type PageControllerApi}
   from '../src/runtime/page'
 import {createRedactor} from '../src/runtime/redaction'
+import {formInstance} from '../src/runtime/formInstance'
 import {EmbeddedWebRuntime} from '../src/runtime/runtime'
 
 function controller(): PageControllerApi {
@@ -183,6 +184,41 @@ describe('Page refuses controls that are not writable at execution time', () => 
       expect(page.verifyFormFields(fields, observed)).toBe(false)
     } finally { form.remove() }
   })
+  it('rechecks only actually entered controls outside the viewport in the same live form', async () => {
+    const form = document.createElement('form')
+    form.id = 'entered-editor'
+    form.innerHTML = '<label for="off">Name</label><input id="off"><button type="submit">Save</button>'
+    document.body.append(form)
+    try {
+      const input = form.querySelector('input')!
+      vi.spyOn(input, 'getBoundingClientRect').mockReturnValue({width: 20, height: 20} as DOMRect)
+      const api = controller()
+      api.inputText = vi.fn(async (_i, value) => {input.value = value; return {success: true}})
+      const page = new Page(api, () => input, createRedactor())
+      const binding = [{field: 'name', label: 'Name', binding: 'label',
+        scope: 'form:entered-editor', control: 'textbox', value: 'Draft'}]
+      const observed = () => [{ref: 'e3', role: 'button', name: 'Save', tag: 'button', epoch: 4,
+        attrs: {form_scope: 'form:entered-editor', form_instance: formInstance(input)!}}]
+      expect(page.verifyFormFields(binding, observed())).toBe(false)
+      await page.input('e1', 'Draft')
+      expect(page.verifyFormFields(binding, observed())).toBe(true)
+      expect(page.verifyFormFields(binding, [])).toBe(false)
+      input.value = 'Changed'
+      expect(page.verifyFormFields(binding, observed())).toBe(false)
+      input.value = 'Draft'; input.disabled = true
+      expect(page.verifyFormFields(binding, observed())).toBe(false)
+      input.disabled = false; input.hidden = true
+      expect(page.verifyFormFields(binding, observed())).toBe(false)
+      input.hidden = false
+      form.setAttribute('hidden', ''); form.removeAttribute('hidden')
+      expect(page.verifyFormFields(binding, observed())).toBe(false)
+      await page.input('e1', 'Draft')
+      expect(page.verifyFormFields(binding, observed())).toBe(true)
+      input.remove()
+      expect(page.verifyFormFields(binding, observed())).toBe(false)
+    } finally {form.remove()}
+  })
+
   it('refuses a forged field identity inherited from the HTML form name', () => {
     const form = document.createElement('form')
     form.name = 'customer'

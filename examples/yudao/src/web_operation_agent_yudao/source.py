@@ -22,6 +22,8 @@ modules.
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
+from threading import RLock
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -91,6 +93,12 @@ class _Refusal:
 class YudaoSource:
     """The rules of one deployed release of yudao's server and admin UI."""
 
+    # Pure Java parsing only. Actor schemas, permissions, reads and UI observations
+    # are never cached here. Every access rehashes the exact current source inputs.
+    _server_cache = OrderedDict()
+    _server_cache_lock = RLock()
+    _ui_cache = OrderedDict()
+
     def __init__(self, root: Path | str, *, release: str, modules: tuple[str, ...] = ()):
         # Resolved once: this class compares the tree it was handed with paths it resolves
         # itself, and a root that passes through a symlink (macOS `/tmp`, a `current`
@@ -102,10 +110,18 @@ class YudaoSource:
             p.name.removeprefix("yudao-module-") for p in (self.root / "server").glob("yudao-module-*")
             if p.is_dir()))
         self._lines: dict[str, list[bytes]] = {}
+        self._server_snapshot = None
+        self._ui_cache_complete = True
 
     # -- citations ------------------------------------------------------------------------
     def _read(self, relative: str) -> str:
-        raw = (self.root / relative).read_bytes()
+        path = self.root / relative
+        if path.resolve() != path or not path.is_relative_to(self.root):
+            raise ValueError("source files must stay inside the supplied tree without links")
+        if self._server_snapshot is not None and relative not in self._server_snapshot:
+            self._ui_cache_complete = False
+        raw = (self._server_snapshot[relative] if self._server_snapshot is not None
+               and relative in self._server_snapshot else path.read_bytes())
         self._lines[relative] = raw.splitlines(keepends=True)
         return raw.decode("utf-8")
 
@@ -119,6 +135,10 @@ class YudaoSource:
 
     # -- server ---------------------------------------------------------------------------
     def _java_files(self, suffix: str):
+        if self._server_snapshot is not None:
+            yield from (self.root / p for p in self._server_snapshot
+                        if p.startswith("server/") and p.endswith(suffix))
+            return
         for module in self.modules:
             base = self.root / "server" / f"yudao-module-{module}" / "src" / "main" / "java"
             if base.is_dir():
@@ -190,6 +210,8 @@ class YudaoSource:
 
     # -- admin UI -------------------------------------------------------------------------
     def _api_url(self, module_path: str, function: str) -> str:
+        if module_path.split("/", 1)[0] not in self.modules:
+            self._ui_cache_complete = False
         for candidate in (f"ui/src/api/{module_path}.ts", f"ui/src/api/{module_path}/index.ts"):
             if (self.root / candidate).is_file():
                 found = re.search(_API_URL.format(name=re.escape(function)), self._read(candidate))
@@ -278,13 +300,83 @@ class YudaoSource:
                     end = page.count("\n", 0, match.end()) + 1
                     yield relative, label.group(1), disabled.group(1), start, end
 
+    def _server_rules(self):
+        paths = set()
+        suffixes = ("ErrorCodeConstants.java", "Enum.java", "Controller.java", "ServiceImpl.java")
+        for module in self.modules:
+            base = self.root / "server" / f"yudao-module-{module}" / "src" / "main" / "java"
+            if base.is_dir():
+                paths.update(p for p in base.rglob("*.java") if p.name.endswith(suffixes))
+        paths = sorted(paths)
+        snapshot = {}
+        for path in paths:
+            if path.resolve() != path or not path.is_relative_to(self.root):
+                raise ValueError("source files must stay inside the supplied tree without links")
+            snapshot[self._relative(path)] = path.read_bytes()
+        inputs = tuple((path, hashlib.sha256(raw).hexdigest()) for path, raw in snapshot.items())
+        key = (str(self.root), self.release, self.modules, inputs)
+        with self._server_cache_lock:
+            cached = self._server_cache.get(key)
+            if cached is not None:
+                self._server_cache.move_to_end(key)
+                # Service citation hashes are still made from current, checked bytes.
+                self._lines.update({p: raw.splitlines(keepends=True) for p, raw in snapshot.items()})
+                return cached
+            self._server_snapshot = snapshot
+            try:
+                operations = self._operations()
+                refusals = {k: tuple(v) for k, v in self._refusals(self._messages()).items()}
+            finally:
+                self._server_snapshot = None
+            result = operations, refusals
+            self._server_cache[key] = result
+            while len(self._server_cache) > 4:
+                self._server_cache.popitem(last=False)
+            return result
+
+    def _ui_rules(self):
+        paths = set()
+        for module in self.modules:
+            for directory, suffix in (("views", ".vue"), ("api", ".ts")):
+                base = self.root / "ui" / "src" / directory / module
+                if base.is_dir():
+                    paths.update(base.rglob("*" + suffix))
+                flat = base.with_suffix(suffix)
+                if flat.is_file():
+                    paths.add(flat)
+        snapshot = {}
+        for path in sorted(paths):
+            if path.resolve() != path or not path.is_relative_to(self.root):
+                raise ValueError("source files must stay inside the supplied tree without links")
+            snapshot[self._relative(path)] = path.read_bytes()
+        inputs = tuple((path, hashlib.sha256(raw).hexdigest()) for path, raw in snapshot.items())
+        key = (str(self.root), self.release, self.modules, inputs)
+        with self._server_cache_lock:
+            cached = self._ui_cache.get(key)
+            if cached is not None:
+                self._ui_cache.move_to_end(key)
+                self._lines.update({p: raw.splitlines(keepends=True) for p, raw in snapshot.items()})
+                return cached
+            self._server_snapshot = snapshot
+            self._ui_cache_complete = True
+            try:
+                result = tuple(self._buttons()), tuple(self._form_fields())
+            finally:
+                self._server_snapshot = None
+            # Imports outside the offered modules do not have a complete change
+            # manifest (including previously absent candidates). Do not cache them.
+            if self._ui_cache_complete:
+                self._ui_cache[key] = result
+                while len(self._ui_cache) > 4:
+                    self._ui_cache.popitem(last=False)
+            return result
+
     # -- rules ----------------------------------------------------------------------------
     def rules(self, entities: tuple[EntitySource, ...]) -> tuple[dict[str, tuple[IndexRule, ...]],
                                                                   dict[str, tuple[str, ...]]]:
         """(entity key -> its rules, entity key -> the controls its pages show)."""
-        messages = self._messages()
-        operations = self._operations()
-        refusals = self._refusals(messages)
+        operations, refusals = self._server_rules()
+        buttons, form_fields = self._ui_rules()
         by_dir = sorted(entities, key=lambda e: -len(e.component_dir))
         out: dict[str, list[IndexRule]] = {e.key: [] for e in entities}
         controls: dict[str, list[str]] = {e.key: [] for e in entities}
@@ -296,7 +388,7 @@ class YudaoSource:
             counter += 1
             return f"r{counter}"
 
-        for relative, label, condition, permission, url, start, end in self._buttons():
+        for relative, label, condition, permission, url, start, end in buttons:
             page_dir = relative.removeprefix("ui/src/views/").rsplit("/", 1)[0]
             owner = next((e for e in by_dir if page_dir == e.component_dir
                           or page_dir.startswith(e.component_dir + "/")), None)
@@ -316,7 +408,7 @@ class YudaoSource:
             out[owner.key].append(IndexRule(
                 id=next_id(), kind="visibility", about=label, text="；".join(parts),
                 citation=self._cite(relative, start, end), subject=url, place=_place(relative)))
-        for relative, label, condition, start, end in self._form_fields():
+        for relative, label, condition, start, end in form_fields:
             page_dir = relative.removeprefix("ui/src/views/").rsplit("/", 1)[0]
             owner = next((e for e in by_dir if page_dir == e.component_dir
                           or page_dir.startswith(e.component_dir + "/")), None)

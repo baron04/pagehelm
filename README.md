@@ -115,6 +115,10 @@ agent.
   retaining other answers; it is not inferred from exception text or a failed service.
   When an accepted repair removes unavailable requested fields, its explanation
   remains beside available answers and the turn does not report complete success.
+  A request containing only unavailable fields returns that scoped limitation without
+  offering unrelated record candidates. Mixed repository/current-data questions resolve
+  actor-bound reads first, then supply only those requested facts and known choice codes
+  to the source answer; rule application is an inference, never proof of execution.
   Goal stages share one deadline and model-request limit (each
   request or retry uses one step; cache hits use none). Fixed browser and read substeps
   check the same deadline and cancellation. Browser commands use the smaller of the
@@ -129,15 +133,26 @@ agent.
   verified handoff; conflicting values or different entries are refused. Other page work
   runs first, and the form handoff runs last. The server replies with the fields entered
   and the highlighted manual-submit button; it never submits. This path uses the existing
-  fixed draft executor and shared deadline, adds no model schema or per-field model calls,
-  and only admits transient forms. A reviewed opener may use `open_entry=True` and an
+  fixed draft executor and shared deadline, adds no new tool or per-field model calls,
+  and only admits transient forms. A handoff can declare up to twenty explicit field/value
+  pairs in `field_values`, keeping the four-deliverable limit; read-only staged requests
+  omit that batch property from their tool schema.
+  Before any value is prepared, an unobserved submit control on an application-verified
+  transient form permits at most three fixed read-only scrolls. Each fresh descriptor
+  must bind the same entry; ambiguous or disabled buttons remain refusals.
+  A reviewed opener may use `open_entry=True` and an
   application-owned entry port: the server clicks the exact observed control under the
   ordinary page approval, then binds its successful receipt to the fresh form before
   preparing values. DOM instance tokens invalidate replaced or reopened forms; they grant
   no authority. The Contacts goal demo opts in. Yudao keeps forms disabled by default;
   its explicit reviewed-policy prototype supports customer update scalars with live actor,
-  record and permission checks. A scripted isolated-browser turn has qualified this path,
-  not real-model understanding, creation or complex controls.
+  record and permission checks. An isolated native browser has qualified all eight customer
+  scalars in one declaration, with a visible approval, exact live values, a highlighted
+  manual-submit button and unchanged business tables. Creation needs its own reviewed
+  opener/component policy and create permission; project and complex control qualification
+  remains separate. Defaults stay closed. Final handoff can recheck this Runtime's own
+  entered controls outside the viewport in the same live form instance; it never fills an
+  unobserved or hidden control.
   The `goal_run_receipt` audit event records
   stage times, request counts and serialized input bytes without prompt or result content;
   Business timing includes index preparation, name lookup and candidate reads;
@@ -163,7 +178,8 @@ agent.
   the staged request still appears at both ends of its message.
   Every declaration field, description, kind, enum and constraint remains available,
   including mixed goals and repairs. The scope step never removes
-  schema branches based on its predicted kinds. Scope summaries retain entity keys,
+  schema branches based on its predicted kinds, apart from omitting the optional form
+  batch property for staged read-only requests. Scope summaries retain entity keys,
   aliases, controls, owner links and distinct page breadcrumbs; page keys appear there
   only when explicitly written in the request; detailed-index page keys are unchanged.
   Yudao's actor-local complete-list/detail cache stays at 15 seconds, starts its lifetime
@@ -758,6 +774,12 @@ The second Chinese goal holdout is frozen with 84 normal goals and 10 honest-lim
 The frozen `v6-rules` set adds 40 source-rule questions bound to deployment release `18.0-20260909`. Its evaluator checks cited source bytes and reports answer and citation matches separately; this is evaluation support, not a completed three-arm experiment. See [the citation contract](evals/odoo/README.md#source-rule-holdout).
 
 On two single-turn Chinese holdouts written to the v7 specification by an author blind to the implementation, the goal-directed turn (qwen3.8-flash, the ordinary reader, one pass each, 2026-09-27) answered 87/100 (v7-C, trustworthiness 88.3%, 3 false claims) and 86/100 (v7-D, 89.0%, 3 false claims), with no writes; the earlier v7-A and v7-B first runs score 78 and 80 under the same judge. The remaining failures are mostly rule questions whose cited source line is not the one that states the rule, readings that differ between runs, and model-service timeouts. These are two 100-task samples of one reference deployment, with about ±5 points of run-to-run variation; they do not establish 90% accuracy.
+
+The Yudao rule compiler may reuse bounded pure Java/Vue parse results after rehashing
+all current inputs. Actor labels and choices are assembled anew; permissions, live page
+state and business reads are outside that cache. Missing, added, changed or linked source
+inputs invalidate reuse. Source retrieval remains optional.
+
 
 ## License
 

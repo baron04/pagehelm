@@ -5,6 +5,7 @@ import hashlib
 import re
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from web_operation_agent_yudao.source import EntitySource, YudaoSource
@@ -207,6 +208,63 @@ class YudaoSourceTests(unittest.TestCase):
         locked = {r.about: r.text for r in self.rules["crm/contract"] if r.kind == "editability"}
         self.assertEqual(locked, {"负责人": "不可修改条件：修改已有记录时（只在新建时可填）",
                                   "客户签约人": "不可修改条件：未填客户"})
+
+    def test_java_cache_rehashes_bytes_additions_deletions_and_does_not_cache_ui_labels(self):
+        entity=EntitySource("crm/contract","crm/contract","crm/contract", labels={"auditStatus":"New label"})
+        with patch.object(YudaoSource,"_refusals",side_effect=AssertionError("unexpected parse")):
+            cached,_=YudaoSource(self.root,release="v2026.08").rules((entity,))
+        self.assertTrue(any("New label" in r.text for r in cached[entity.key]))
+        path=self.root/f"{_JAVA}/enums/ErrorCodeConstants.java"
+        path.write_text(path.read_text().replace("没处在未提交状态","状态不是草稿"))
+        changed,_=YudaoSource(self.root,release="v2026.08").rules((entity,))
+        self.assertTrue(any("状态不是草稿" in r.text for r in changed[entity.key]))
+        added=self.root/f"{_JAVA}/enums/ExtraEnum.java";added.write_text("enum ExtraEnum { ONE(1, \"one\") }")
+        original_parse = YudaoSource._refusals
+        with patch.object(YudaoSource,"_refusals",autospec=True,side_effect=original_parse) as parse:
+            YudaoSource(self.root,release="v2026.08").rules((entity,))
+            self.assertEqual(parse.call_count,1)
+        added.unlink()
+        with patch.object(YudaoSource,"_refusals",side_effect=AssertionError("unchanged earlier bytes")):
+            YudaoSource(self.root,release="v2026.08").rules((entity,))
+        path.unlink()
+        removed,_=YudaoSource(self.root,release="v2026.08").rules((entity,))
+        self.assertFalse(any("状态不是草稿" in r.text for r in removed[entity.key]))
+
+    def test_ui_cache_rehashes_current_controls_and_keeps_actor_labels_fresh(self):
+        entity = EntitySource("crm/contract", "crm/contract", "crm/contract", labels={"auditStatus": "Actor label"})
+        with patch.object(YudaoSource, "_buttons", side_effect=AssertionError("unchanged UI parsed")):
+            rules, _ = YudaoSource(self.root, release="v2026.08").rules((entity,))
+        self.assertTrue(any("Actor label" in r.text for r in rules[entity.key]))
+        path = self.root / "ui/src/views/crm/contract/index.vue"
+        path.write_text(path.read_text().replace("提交审核", "申请审核"))
+        rules, controls = YudaoSource(self.root, release="v2026.08").rules((entity,))
+        self.assertIn("申请审核", controls[entity.key])
+        self.assertNotIn("提交审核", controls[entity.key])
+        path.unlink()
+        _, controls = YudaoSource(self.root, release="v2026.08").rules((entity,))
+        self.assertNotIn("申请审核", controls.get(entity.key, ()))
+
+    def test_out_of_module_import_is_never_cached_even_when_api_file_does_not_exist(self):
+        path = self.root / "ui/src/views/crm/contract/index.vue"
+        path.write_text(path.read_text().replace("@/api/crm/contract", "@/api/other/contract"))
+        entity = EntitySource("crm/contract", "crm/contract", "crm/contract")
+        source = YudaoSource(self.root, release="v2026.08", modules=("crm",))
+        source.rules((entity,))
+        self.assertFalse(source._ui_cache_complete)
+        api = self.root / "ui/src/api/other/contract/index.ts"
+        api.parent.mkdir(parents=True, exist_ok=True)
+        original = next(text for name, text in _FILES.items() if name.startswith("ui/src/api/"))
+        api.write_text(original)
+        source = YudaoSource(self.root, release="v2026.08", modules=("crm",))
+        rules, _ = source.rules((entity,))
+        self.assertFalse(source._ui_cache_complete)
+        self.assertTrue(any(r.subject == "crm/contract/submit" for r in rules[entity.key]))
+
+    def test_cached_java_input_cannot_be_replaced_with_a_symlink(self):
+        original=self.root/f"{_JAVA}/enums/ErrorCodeConstants.java"
+        other=self.root/"private.java";other.write_text(original.read_text())
+        original.unlink();original.symlink_to(other)
+        with self.assertRaises(ValueError): YudaoSource(self.root,release="v2026.08").rules(())
 
     def test_every_citation_hashes_the_lines_it_names(self):
         for rule in self.rules["crm/contract"]:
