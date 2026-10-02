@@ -101,6 +101,8 @@ class YudaoHostConfig:
     turn_timeout_s: int = 180
     model: str | None = None
     model_env: dict = field(default_factory=dict)
+    native_read_policy: Path | None = None
+    native_guard_port: int = 48093
 
 
 @dataclass
@@ -119,6 +121,28 @@ class YudaoHost:
         self.api_docs = _api_docs(config.api_base)
         self.ui = UiSource.read(config.ui_source) if config.ui_source else None
         self.source = repository_source(config.source_root, config.source_release)
+        self.native_proxy = None
+        if config.native_read_policy is not None:
+            from .guard_identity import GuardIdentity
+            from .guard_proxy import NativeGuardProxy
+            from .page_guard import NativePageGuard
+            policy = json.loads(config.native_read_policy.read_text())
+            if (not isinstance(policy, dict) or set(policy) != {"schema_version", "release", "read_paths"}
+                    or policy["schema_version"] != 1 or not config.source_release
+                    or policy["release"] != config.source_release or not self.ui or not self.ui.records
+                    or not isinstance(policy["read_paths"], list)):
+                raise ValueError("native read policy must match the deployment and its UI routes")
+            self.native_proxy = NativeGuardProxy(
+                upstream=config.api_base, origin=config.public_origin,
+                guard=NativePageGuard(frozenset(policy["read_paths"]),
+                                      journal=config.state_dir / "native-guard.sqlite3"),
+                resolve_actor=GuardIdentity(config.api_base), host=config.bootstrap_host,
+                port=config.native_guard_port).start()
+            try:
+                self.native_proxy.verify_ingress()
+            except Exception:
+                self.native_proxy.close()
+                raise
         self.store = SQLiteSessionStore(config.state_dir / "session-store.sqlite3")
         self.server = LiveProductServer(
             max_sessions=config.max_sessions, max_sessions_per_actor=1,
@@ -174,9 +198,12 @@ class YudaoHost:
             return self._browser_bootstrap(session)
 
     def _application(self, client: YudaoClient) -> YudaoApplication:
+        from .guard_proxy import GUARD_PATH
         return YudaoApplication(self.config.public_origin, None, self.api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
-                                conventions=REFERENCE_CONVENTIONS, client=client)
+                                conventions=REFERENCE_CONVENTIONS, client=client,
+                                native_tabs=self.native_proxy is not None,
+                                page_write_guard=GUARD_PATH if self.native_proxy is not None else "")
 
     def _open(self, app: YudaoApplication, principal, key):
         bound = bind_application(app)
@@ -200,7 +227,7 @@ class YudaoHost:
 
         def runner_factory(channel):
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
-                                           source=self.source)
+                                           source=self.source, click_policy=app.native_tab_policy)
             executor = GoalTurnExecutor(
                 channel=channel,
                 config=turn_config, disabled_page_actions=turn_config.disabled_actions,
@@ -216,6 +243,7 @@ class YudaoHost:
             page_controller_module=bound.descriptor.page_controller_module,
             runner_factory=runner_factory, session_id=session_id,
             navigation_mode=bound.descriptor.navigation_mode,
+            page_write_guard=bound.descriptor.page_write_guard,
             sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
             principal=principal).start()
 
@@ -227,6 +255,7 @@ class YudaoHost:
                 "config": self.server.gateway.bootstrap_config(
                     session.grant, page_controller_module=session.page_controller_module,
                     navigation_mode=session.navigation_mode,
+                    page_write_guard=session.page_write_guard,
                     sensitive_query_keys=session.sensitive_query_keys)}
 
     def forget_closed(self) -> None:
@@ -239,6 +268,8 @@ class YudaoHost:
 
     def close(self) -> None:
         self.server.close()
+        if self.native_proxy is not None:
+            self.native_proxy.close()
 
 
 def _handler(host: YudaoHost):
@@ -295,6 +326,8 @@ def main(argv=None) -> int:
     ap.add_argument("--source-release", default="")
     ap.add_argument("--gateway-port", type=int, default=48091)
     ap.add_argument("--bootstrap-port", type=int, default=48092)
+    ap.add_argument("--native-read-policy", type=Path)
+    ap.add_argument("--native-guard-port", type=int, default=48093)
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,
@@ -309,6 +342,7 @@ def main(argv=None) -> int:
         state_dir=a.state_dir, ui_source=a.ui_source, source_root=a.source_root,
         source_release=a.source_release, gateway_port=a.gateway_port,
         bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
+        native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))
     host.server.start()

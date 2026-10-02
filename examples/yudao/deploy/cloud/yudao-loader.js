@@ -40,6 +40,9 @@
   };
 
   const fetch = window.fetch.bind(window);
+  // The server supplies the guard endpoint. Its identity is browser-only; credentials
+  // are attached only to begin/end POSTs at that same-origin endpoint.
+  let guardPath = "";
   const tenant = () => stored("tenantId") || "1";
   let renewing = null;
   // One renewal at a time, whoever asks: two would each retire the other's new token.
@@ -74,10 +77,24 @@
     } catch {
       return fetch(input, init);
     }
-    if (url.origin !== location.origin || url.pathname !== BOOTSTRAP) return fetch(input, init);
-    const response = await fetch(input, withIdentity(init));
-    if (response.status !== 401 || !(await renew())) return response;
-    return fetch(input, withIdentity(init));
+    if (url.origin !== location.origin) return fetch(input, init);
+    const method = String(init.method || (typeof input === "string" ? "GET" : input.method || "GET")).toUpperCase();
+    if (guardPath && method === "POST" && !url.search && !url.hash &&
+        (url.pathname === guardPath + "/begin" || url.pathname === guardPath + "/end")) {
+      return fetch(input, withIdentity(init));
+    }
+    if (url.pathname !== BOOTSTRAP) return fetch(input, init);
+    let response = await fetch(input, withIdentity(init));
+    if (response.status === 401 && await renew()) response = await fetch(input, withIdentity(init));
+    if (response.ok) {
+      try {
+        const config = (await response.clone().json()).config;
+        const value = config && config.pageWriteGuard;
+        const target = typeof value === "string" && value.startsWith("/") ? new URL(value, location.href) : null;
+        guardPath = target && target.origin === location.origin && !target.search && !target.hash ? target.pathname : "";
+      } catch { guardPath = ""; }
+    }
+    return response;
   };
 
   const start = () => {

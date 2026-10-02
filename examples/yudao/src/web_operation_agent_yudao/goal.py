@@ -71,7 +71,10 @@ _MONEY = re.compile(r"金额|价格|单价|总价|费用|工资|薪|price|amount
 class YudaoGoalData:
     def __init__(self, client: YudaoClient, api_docs: dict, *, ui: UiSource | None = None,
                  modules: tuple[str, ...] = MODULES, time_zone: str = "Asia/Shanghai",
-                 max_rows: int = _MAX_ROWS):
+                 max_rows: int = _MAX_ROWS, native_sections: bool = False):
+        if not isinstance(native_sections, bool):
+            raise TypeError("native sections must be explicitly enabled")
+        self._native_sections = native_sections
         self._client, self._docs = client, api_docs
         self._ui = ui or UiSource.none()
         self._modules, self._zone_name, self._max_rows = tuple(modules), time_zone, max_rows
@@ -107,7 +110,8 @@ class YudaoGoalData:
 
     def capabilities(self) -> frozenset[str]:
         # Candidate values are records found by name, which every entity here offers.
-        return frozenset({"values", "lines"} | ({"source"} if self._source is not None else set()))
+        return frozenset({"values", "lines"} | ({"sections"} if self._native_sections else set())
+                         | ({"source"} if self._source is not None else set()))
 
     def index(self, *, context=None) -> ApplicationIndex:
         schema = self.schema()

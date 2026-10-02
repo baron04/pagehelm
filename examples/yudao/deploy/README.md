@@ -144,7 +144,38 @@ at most one shared format repair. Answers include selected release-bound citatio
 Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.
 See the [recovery qualification](../../../evals/yudao/tool_loop/RECOVERY.zh-CN.md) for
 real-model results and remaining limits. Writes, form entry and clicks, including
-tab selection, are disabled in the native host.
+tab selection, are disabled in the native host by default.
+
+The optional **native-tab prototype** starts with `--native-read-policy <private-policy.json>`
+and `--native-guard-port 48093`, together with `--ui-source` and `--source-release`.
+The policy is a reviewed deployment configuration, never model context: it has exactly
+`schema_version: 1`, `release` matching `--source-release`, and `read_paths`, an array
+of exact `/admin-api/...` GET paths whose handlers have been checked for persistence
+and asynchronous effects. This repository does not supply a production read allowlist.
+Do not derive that authority from a GET verb or an OpenAPI schema alone.
+
+Route **all browser admin API traffic** and `/woa/page-guard/` through that proxy before
+starting the host with the option. The optional nginx locations are in
+[`cloud/nginx.native-guard.locations.conf`](cloud/nginx.native-guard.locations.conf);
+include them inside the HTTPS server and publish the container's proxy port on loopback.
+They supersede the ordinary API regex and disable alternative app API and websocket
+ingress on this origin. A nonce probe checks both public routes before the host offers
+native tabs; a failed probe aborts startup. The ordinary deployment is unchanged unless
+the option and ingress are installed together.
+
+During a window, only reviewed GETs reach the upstream. Begin waits for earlier admitted
+requests; end acknowledges only when no actor window remains. Lost mutation responses
+persist as uncertain admission in `native-guard.sqlite3`; acknowledged windows are also
+recorded before the browser operates. Restart treats remaining windows as uncertain
+because their monotonic deadlines cannot be safely reconstructed; restarting does not clear them,
+and an operator must reconcile the upstream state rather than replay or delete the journal
+to recover. Identity cache entries contain credential digests and expire within 60 seconds;
+the upstream still authorizes each forwarded request. Window cookies are HttpOnly and
+never forwarded upstream. Other browser sessions of that actor also pause writes.
+Direct upstream access, background jobs and external services are outside the boundary.
+The proxy has isolated HTTP/SQLite tests; complete native application qualification is
+pending. Tabs use live ARIA controls, not a site-wide prompt catalog. New/Edit buttons,
+field entry and submit remain disabled until their separate form qualification.
 
 - The schema is compiled under the acting account from its menus and button permissions, the API documentation (`/v3/api-docs`, reachable only from the server side in the public deployment) and the dictionaries. Every module the account's menus reach is considered. A page becomes an entity only when its source or menu identifies a documented list of records; a dashboard or settings page without one is not claimed as a record list. A page whose own address names a documented list is that list even when no permission names it: the resource may be several words deep (`fms/voucher/statistics`) and the endpoint a `/list` rather than a `/page`, and the menu is the evidence the account may open the page. The response must describe its items, so a page whose endpoint the documentation leaves shapeless is not claimed.
 - Lists filter only by the parameters each page defines, so a read pushes down the conditions a parameter narrows without losing a match, reads every page up to 4,000 records, and filters the rest in memory with the core's `matches`. Beyond the bound the read is refused rather than answered from part of the records. A list whose endpoint requires a parent the question did not name is read under that parent when the account can read exactly one such record (`mp/user`'s official account, `fms/voucher`'s account set, the payroll record of a month) — the parent the application itself shows. Several candidates stay the person's choice, and the read refuses with the parameter it needs.

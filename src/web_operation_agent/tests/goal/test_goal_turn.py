@@ -263,20 +263,42 @@ class GoalTurnTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run(self, script, resolved, *, decision="approved", text="S00006 的客户是谁？看看其他信息",
-             resolved_then=None, offers=OPTIONAL, staged=False, readings=2, port=None):
+             resolved_then=None, offers=OPTIONAL, staged=False, readings=2, port=None,
+             click_policy=None, disabled_pages=frozenset()):
         channel = _Channel(page_url="http://127.0.0.1:8080/home", decision=decision)
         chat = _AgreeingChat(script)
         port = port or _Port(resolved, resolved_then, offers)
         executor = GoalTurnExecutor(
             channel=channel,
-            config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+            config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger,
+                disabled_actions=frozenset({"click"}) if click_policy is not None else frozenset(),
+                click_policy=click_policy),
             chat=chat, application=bind_application(_Adapter()), goal_port=port,
             control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run", staged=staged,
-            readings=readings)
+            readings=readings, disabled_page_actions=disabled_pages)
         execution = executor.execute({"message_id": "m1", "text": text,
                                       "page_url": "http://127.0.0.1:8080/home"})
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
         return execution, channel, chat, port, events
+
+    def test_goal_uses_the_same_narrow_click_policy_as_the_tool_loop(self):
+        class Policy:
+            def __init__(self, allow): self.allow = allow
+            def decide(self, observation, element):
+                return "" if self.allow and element.role == "tab" else "not a reviewed tab"
+        goal = _declaration(kind="page", entity="order", record="S00006", section="Other Info")
+        resolved = [Resolved(kind="page", page=PagePlan(url="/orders/6", label="S00006",
+            expected_path="/orders/6", section="Other Info"))]
+        for allowed in (False, True):
+            self.ledger.unlink(missing_ok=True)
+            with self.subTest(allowed=allowed):
+                result, _, _, _, events = self._run([goal], resolved,
+                    click_policy=Policy(allowed), disabled_pages=frozenset({"click"}))
+                decision = next(e for e in events if e["event"] == "click_policy_decision")
+                self.assertEqual(decision["allowed"], allowed)
+                clicks = [a for a, _ in _Browser.instances[-1].actions if a == "click"]
+                self.assertEqual(len(clicks), int(allowed))
+                self.assertEqual(result.status, AgentTurnStatus.FINISHED if allowed else AgentTurnStatus.REFUSED)
 
     def test_warm_declarations_save_three_calls_but_resolve_changed_business_data(self):
         scope = ("declare_scope", {"parts": [{"kind": "fact", "entity": "order"}]})

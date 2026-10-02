@@ -31,6 +31,7 @@ from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnEr
 from ..execution.runstate import RunResult
 from ..execution.receipt import MeasuredChat, TurnReceipt
 from ..execution.budget import TurnBudget
+from ..execution.click_policy import click_policy_refusal
 from ..modeling.chat import require_chat_port
 from ..modeling.egress import AuditedChat
 from ..modeling.provider import ProviderError
@@ -1685,7 +1686,13 @@ class GoalTurnExecutor:
         if s.terminal_reason:
             return None
         s.budget.check()
-        if action in self.disabled_page_actions:
+        click_refusal = ""
+        if action == "click" and action in self.disabled_page_actions and self.config.click_policy is not None:
+            click_refusal = click_policy_refusal(self.config.click_policy, s.obs, args.get("ref"))
+            s.ledger.append("click_policy_decision", step=s.step, allowed=not click_refusal,
+                            reason=click_refusal[:200])
+        if action in self.disabled_page_actions and not (
+                action == "click" and self.config.click_policy is not None and not click_refusal):
             s.terminal_reason, s.detail = "agent_refused", "the deployment disabled this page action"
             s.ledger.append("goal_action_disabled", action=action)
             return None

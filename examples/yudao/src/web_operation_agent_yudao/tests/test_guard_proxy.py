@@ -1,0 +1,164 @@
+"""Exercise HTTP admission against an isolated SQLite-backed fake application."""
+import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import sqlite3
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+from web_operation_agent_yudao.guard_proxy import GUARD_PATH, NativeGuardProxy
+from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
+
+
+READ = "/admin-api/crm/customer/get"
+
+
+class GuardProxyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "synthetic.sqlite3"
+        with sqlite3.connect(self.db) as connection:
+            connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT)")
+            connection.execute("INSERT INTO records VALUES (1, 'Synthetic customer')")
+        self.calls = []
+        self.entered, self.release = threading.Event(), threading.Event()
+        owner = self
+        class Application(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+            def handle_api(self):
+                owner.calls.append((self.command, self.path, self.headers.get("Cookie")))
+                if self.path.endswith("/slow-update"):
+                    owner.entered.set()
+                    owner.release.wait(3)
+                with sqlite3.connect(owner.db) as connection:
+                    if self.command != "GET" or self.path.endswith("/unsafe-get"):
+                        connection.execute("UPDATE records SET name = 'Changed'")
+                    name = connection.execute("SELECT name FROM records WHERE id=1").fetchone()[0]
+                payload = json.dumps({"name": name}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers(); self.wfile.write(payload)
+            do_GET = do_POST = handle_api
+        self.app = ThreadingHTTPServer(("127.0.0.1", 0), Application)
+        self.worker = threading.Thread(target=self.app.serve_forever, daemon=True)
+        self.worker.start()
+        self.origin = "http://fixture.test"
+        self.guard = NativePageGuard(frozenset({READ}))
+        def identity(token, tenant):
+            if tenant != "1" or token not in {"synthetic-a", "synthetic-b"}:
+                raise GuardRefused("identity_required")
+            return ("a" if token.endswith("a") else "b") * 64
+        self.proxy = NativeGuardProxy(upstream=f"http://127.0.0.1:{self.app.server_port}",
+            origin=self.origin, guard=self.guard, resolve_actor=identity).start()
+        self.cookie = ""
+
+    def tearDown(self):
+        self.release.set()
+        self.proxy.close(); self.app.shutdown(); self.app.server_close(); self.worker.join(3)
+        self.tmp.cleanup()
+
+    def request(self, method, path, *, token="synthetic-a", cookie=None, origin=None, body=b"{}"):
+        connection = http.client.HTTPConnection("127.0.0.1", self.proxy.http.server_port, timeout=3)
+        headers = {"tenant-id": "1", "Origin": origin or self.origin,
+                   "Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        selected = self.cookie if cookie is None else cookie
+        if selected:
+            headers["Cookie"] = selected
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+        new_cookie = response.getheader("Set-Cookie")
+        status = response.status
+        connection.close()
+        return status, payload, new_cookie
+
+    def begin(self):
+        status, payload, cookie = self.request("POST", GUARD_PATH + "/begin")
+        self.assertEqual(status, 200); self.assertTrue(payload["active"])
+        self.assertIn("HttpOnly", cookie); self.assertIn("SameSite=Strict", cookie)
+        self.cookie = cookie.split(";", 1)[0]
+
+    def test_guarded_fill_cannot_persist_even_if_the_page_requests_a_write(self):
+        self.begin()
+        for method, path in (("POST", "/admin-api/crm/customer/update"),
+                             ("GET", "/admin-api/crm/customer/unsafe-get")):
+            status, body, _ = self.request(method, path)
+            self.assertEqual(status, 403)
+            self.assertEqual(body["error"], "page_write_blocked")
+        status, body, _ = self.request("GET", READ + "?id=1")
+        self.assertEqual(status, 200); self.assertEqual(body["name"], "Synthetic customer")
+        self.assertEqual(len(self.calls), 1)
+        self.assertIsNone(self.calls[0][2]) # No window cookie is forwarded upstream.
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(connection.execute("SELECT name FROM records").fetchone()[0], "Synthetic customer")
+        status, body, _ = self.request("POST", GUARD_PATH + "/end")
+        self.assertEqual(status, 200); self.assertFalse(body["active"])
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 200)
+
+    def test_begin_acknowledges_only_after_the_prior_mutation_response(self):
+        results = {}
+        prior = threading.Thread(target=lambda: results.update(prior=self.request(
+            "POST", "/admin-api/crm/customer/slow-update")))
+        prior.start(); self.assertTrue(self.entered.wait(2))
+        begin = threading.Thread(target=lambda: results.update(begin=self.request("POST", GUARD_PATH + "/begin")))
+        begin.start()
+        with self.guard._condition:
+            self.assertTrue(self.guard._condition.wait_for(
+                lambda: self.guard._actors["a" * 64].opening > 0, timeout=2))
+        self.assertNotIn("begin", results)
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
+        self.release.set(); prior.join(3); begin.join(3)
+        self.assertFalse(prior.is_alive()); self.assertFalse(begin.is_alive())
+        self.assertEqual(results["prior"][0], 200); self.assertTrue(results["begin"][1]["active"])
+
+    def test_bad_identity_origin_or_cookie_cannot_open_or_release_a_window(self):
+        for kwargs in ({"token": ""}, {"token": "unknown"}, {"origin": "http://other.test"},
+                       {"cookie": "woa_native_window=bad"}):
+            self.assertIn(self.request("POST", GUARD_PATH + "/begin", **kwargs)[0], {401, 403})
+        self.begin()
+        self.assertEqual(self.request("POST", GUARD_PATH + "/end", cookie="")[0], 403)
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
+
+    def test_ending_one_browser_does_not_release_another_browser_window(self):
+        self.begin()
+        _, _, other_cookie = self.request("POST", GUARD_PATH + "/begin", cookie="")
+        _, body, _ = self.request("POST", GUARD_PATH + "/end")
+        self.assertTrue(body["active"])
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
+        _, body, _ = self.request("POST", GUARD_PATH + "/end", cookie=other_cookie.split(";", 1)[0])
+        self.assertFalse(body["active"])
+
+    def test_another_actor_is_not_given_the_first_actors_window(self):
+        self.begin()
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update", token="synthetic-b")[0], 200)
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
+
+    def test_ingress_probe_checks_both_routes_and_never_reaches_the_upstream(self):
+        self.proxy.origin = self.proxy.url
+        self.proxy.verify_ingress()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.request("GET", "/admin-api/woa-native-guard/probe")[0], 403)
+        self.proxy.origin = f"http://127.0.0.1:{self.app.server_port}"
+        with self.assertRaises(GuardRefused) as failed:
+            self.proxy.verify_ingress()
+        self.assertEqual(failed.exception.code, "guard_ingress_unverified")
+
+    def test_anonymous_login_support_does_not_allow_anonymous_business_requests(self):
+        for method, path in (("POST", "/admin-api/system/captcha/get"),
+                             ("POST", "/admin-api/system/captcha/check"),
+                             ("GET", "/admin-api/system/tenant/get-by-website?website=fixture.test")):
+            self.assertEqual(self.request(method, path, token="")[0], 200)
+        count = len(self.calls)
+        self.assertEqual(self.request("GET", READ, token="")[0], 401)
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update", token="")[0], 401)
+        self.assertEqual(len(self.calls), count)
+
+
+if __name__ == "__main__":
+    unittest.main()

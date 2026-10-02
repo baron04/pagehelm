@@ -446,7 +446,14 @@ resolves a declaration itself. Odoo ships as a separate
 second public reference. The experimental [Yudao adapter and resettable deployment](examples/yudao/deploy/README.md)
 provide another goal-data implementation; they are not a production readiness claim.
 The Yudao native host uses staged goal declarations for actor-bound business reads and
-page requests, with bounded raw repository answers beside them. One scope declaration
+page requests, with bounded raw repository answers beside them. Its optional native-tab
+prototype requires a release-matched reviewed
+read policy, deployed UI routes and verified API ingress through its page-guard proxy.
+The proxy fences earlier requests, blocks unreviewed requests during page operations,
+and preserves uncertain mutation admission and acknowledged windows across restart. It is an HTTP admission
+boundary, not a database sandbox; it pauses other browser sessions of the same actor.
+Form entry and submission remain disabled. Full native-page qualification is pending.
+One scope declaration
 preserves every business and static-source part of a mixed request; business details use
 the existing paired readings and deterministic resolver, rather than a growing generic
 tool history. Applications may opt into this path with `repository_answers=True` on a

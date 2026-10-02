@@ -96,12 +96,18 @@ class YudaoApplication:
     def __init__(self, origin: str, account: YudaoAccount | None, api_docs: dict, *,
                  api_base_url: str = "", ui: UiSource | None = None,
                  time_zone: str = "Asia/Shanghai", today: date | None = None, source=None,
-                 conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None):
+                 conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None,
+                 native_tabs: bool = False, page_write_guard: str = ""):
+        if not isinstance(native_tabs, bool) or (native_tabs and not page_write_guard):
+            raise ValueError("native tabs require an explicitly configured page write guard")
         self.origin = origin.rstrip("/")
         api_base = (api_base_url or self.origin).rstrip("/")
         # A client of its own account, or the one given (a person's own token).
         self.client = client if client is not None else YudaoClient(api_base, account)
-        self.goal_data = YudaoGoalData(self.client, api_docs, ui=ui, time_zone=time_zone)
+        self.goal_data = YudaoGoalData(self.client, api_docs, ui=ui, time_zone=time_zone,
+                                      native_sections=native_tabs)
+        from .native_tabs import NativeTabPolicy
+        self.native_tab_policy = NativeTabPolicy((ui or UiSource.none()).records.values()) if native_tabs else None
         if source is not None:
             # The deployment's source rules: when a control shows, what an operation refuses.
             self.goal_data.attach_source(source)
@@ -138,6 +144,7 @@ class YudaoApplication:
             # generic SPA goto cannot manufacture that state: navigate a document and
             # let the application initialize its router on the destination instead.
             display_name="芋道管理系统", origin=self.origin, navigation_mode="document",
+            page_write_guard=page_write_guard,
             page_controller_module=self.origin + PAGE_CONTROLLER_PATH,
             catalog_sha256=self.business_tools.catalog_sha256)
 

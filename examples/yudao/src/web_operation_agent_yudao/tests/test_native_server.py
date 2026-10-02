@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 from web_operation_agent.schemas import ClientHello
@@ -131,6 +132,45 @@ class NativeHostTests(unittest.TestCase):
                 host.bootstrap(token, tenant, instance)
         self.assertEqual(host.server.session_count, 0)
         self.chat.assert_not_called()
+
+    def test_native_tabs_require_verified_ingress_and_reach_runtime_configuration(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.guard_proxy import GUARD_PATH
+        policy = Path(self.tmp.name) / "reviewed-reads.json"
+        policy.write_text(json.dumps({"schema_version": 1, "release": "fixture-release",
+            "read_paths": ["/admin-api/crm/customer/get"]}))
+        self.config = replace(self.config, native_read_policy=policy, native_guard_port=0,
+            ui_source=Path(self.tmp.name), source_release="fixture-release")
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+                records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
+                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+            host = self.host()
+            proxy.return_value.start.return_value.verify_ingress.assert_called_once()
+            result = host.bootstrap("synthetic-a", "1", "native-tab")
+            self.assertEqual(result["config"]["pageWriteGuard"], GUARD_PATH)
+            session = host._sessions[("1", "1")].session
+            executor = session.runner.executor
+            self.assertIsNotNone(executor.config.click_policy)
+            self.assertEqual(executor.application.descriptor.page_write_guard, GUARD_PATH)
+            self.assertIn("click", executor.disabled_page_actions)
+            self.assertIn("submit", executor.disabled_page_actions)
+            self.assertIn("fill", executor.disabled_page_actions)
+
+    def test_failed_native_ingress_probe_prevents_host_startup(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.page_guard import GuardRefused
+        policy = Path(self.tmp.name) / "reviewed-reads.json"
+        policy.write_text(json.dumps({"schema_version": 1, "release": "fixture-release",
+            "read_paths": ["/admin-api/crm/customer/get"]}))
+        self.config = replace(self.config, native_read_policy=policy, native_guard_port=0,
+            ui_source=Path(self.tmp.name), source_release="fixture-release")
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+                records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
+                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+            proxy.return_value.start.return_value.verify_ingress.side_effect = GuardRefused("guard_ingress_unverified")
+            with self.assertRaises(GuardRefused): self.host()
+            proxy.return_value.start.return_value.close.assert_called_once()
+            self.chat.assert_not_called()
 
 
 if __name__ == "__main__":
