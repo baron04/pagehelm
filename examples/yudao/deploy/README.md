@@ -153,7 +153,8 @@ handler-bearing fields, and checks literal length limits in UTF-16 units before 
 a draft. `YudaoApplication(forms=..., page_write_guard=...)` permits explicit composition;
 the native host does not install a verifier or enable form actions by default. A verifier
 must come from application-owned live entry verification, never model output or a browser
-claim. The complete Goal entry/approval/form flow remains unqualified.
+claim. The optional customer-update prototype below has a complete scripted browser
+qualification; that does not establish real-model accuracy or general form coverage.
 Source questions use one small retrieval declaration and one answer declaration, with
 at most one shared format repair. Answers include selected release-bound citations. Literal support checks establish attribution, not semantic correctness.
 Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.
@@ -168,6 +169,29 @@ The policy is a reviewed deployment configuration, never model context: it has e
 of exact `/admin-api/...` GET paths whose handlers have been checked for persistence
 and asynchronous effects. This repository does not supply a production read allowlist.
 Do not derive that authority from a GET verb or an OpenAPI schema alone.
+
+The optional customer-editor prototype additionally accepts `--native-form-policy
+<private-review.json>` and requires the guard configuration, `--source-root`, `--ui-source`
+and matching `--source-release`. The review has exactly `schema_version: 1`, `release`,
+and `hashes`, mapping these relative source paths to their reviewed full-file SHA-256:
+
+- `ui/src/views/crm/customer/detail/index.vue`
+- `ui/src/views/crm/customer/CustomerForm.vue`
+- `ui/src/components/Dialog/src/Dialog.vue`
+- `ui/src/views/crm/permission/components/PermissionList.vue`
+
+Those bytes must have been reviewed for the exact update opener and transient editor
+behavior; generating hashes alone establishes neither. No production policy is supplied.
+The server checks the acting API identity, `crm:customer:update` (or the application's
+wildcard), the exact customer's read and its actor-scoped owner/write membership. It
+issues only the unique enabled Edit button on that verified detail route, consumes its
+successful guarded receipt and binds the fresh dialog instance. Permission, source,
+record or instance changes invalidate the draft. Customer scalar fields use the existing
+form port; unsupported fields, creation and complex controls are refused. The Goal stage
+never presses Confirm or invokes update APIs. Its isolated scripted browser qualification
+opened the editor through the assistant, consumed a visible page approval, filled two
+fields and highlighted Confirm, with zero business write requests and unchanged CRM
+tables. This prototype is not enabled by default and is not a real-model accuracy result.
 
 Route **all browser admin API traffic** and `/woa/page-guard/` through that proxy before
 starting the host with the option. The optional nginx locations are in

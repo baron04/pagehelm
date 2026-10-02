@@ -110,8 +110,14 @@ agent.
   runs first, and the form handoff runs last. The server replies with the fields entered
   and the highlighted manual-submit button; it never submits. This path uses the existing
   fixed draft executor and shared deadline, adds no model schema or per-field model calls,
-  and only admits transient forms. The Contacts goal demo opts in; Yudao's default native
-  host still lacks a production entry verifier and keeps form entry disabled.
+  and only admits transient forms. A reviewed opener may use `open_entry=True` and an
+  application-owned entry port: the server clicks the exact observed control under the
+  ordinary page approval, then binds its successful receipt to the fresh form before
+  preparing values. DOM instance tokens invalidate replaced or reopened forms; they grant
+  no authority. The Contacts goal demo opts in. Yudao keeps forms disabled by default;
+  its explicit reviewed-policy prototype supports customer update scalars with live actor,
+  record and permission checks. A scripted isolated-browser turn has qualified this path,
+  not real-model understanding, creation or complex controls.
   The `goal_run_receipt` audit event records
   stage times, request counts and serialized input bytes without prompt or result content;
   overlapping intervals are counted once within a stage and for total model occupancy.

@@ -25,7 +25,7 @@ from .tools.contracts import (APPLICATION_SAVES_ON_LEAVE, FORM_PERSISTENCE,
                               TRANSIENT_UNTIL_SUBMIT,
                               FormDraft, FormDraftField, matches_form_control,
                               validate_form_scope, form_control_unavailable)
-from ..schemas import PageObservation
+from ..schemas import PageObservation, ElementRef, ActionReceipt
 from ..schemas.browser import MAX_FORM_LABEL_CHARS
 from ..state.identity import OperationContext, PrincipalError
 
@@ -33,6 +33,34 @@ from ..state.identity import OperationContext, PrincipalError
 DESCRIBE_FORM_TOOL = "describe_form"
 PREPARE_FORM_TOOL = "prepare_form"
 FORM_TOOLS = frozenset({DESCRIBE_FORM_TOOL, PREPARE_FORM_TOOL})
+
+
+@dataclass(frozen=True)
+class ApplicationFormEntry:
+    """Server-issued exact observed control for a reviewed transient form opener."""
+    reference: str
+    control: ElementRef
+
+    def __post_init__(self):
+        if (not isinstance(self.reference, str) or not self.reference.strip()
+                or len(self.reference) > 300 or not isinstance(self.control, ElementRef)):
+            raise ValueError("form entry requires a reference and exact observed control")
+
+
+@runtime_checkable
+class ApplicationFormEntryPort(Protocol):
+    def plan_entry(self, reference: str, observation: PageObservation, *,
+                   context: OperationContext) -> ApplicationFormEntry: ...
+
+    def accept_entry(self, entry: ApplicationFormEntry, before: PageObservation,
+                     receipt: ActionReceipt, observation: PageObservation, *,
+                     context: OperationContext) -> str:
+        """Bind a successful exact opener receipt to the current form's reference."""
+        ...
+
+    def discard_entry(self, entry: ApplicationFormEntry, *, context: OperationContext) -> None:
+        """Release unconsumed server admission after every opener attempt, including loss."""
+        ...
 _FIELD_REFERENCE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,79}$")
 _OPAQUE_FORM = re.compile(r"^form_[0-9a-f]{32}$")
 _OPAQUE_FIELD = re.compile(r"^form_field_[0-9a-f]{32}$")
@@ -637,6 +665,7 @@ class ApplicationFormTools:
 
 
 __all__ = [
+    "ApplicationFormEntry", "ApplicationFormEntryPort",
     "ApplicationFormDescriptor", "ApplicationFormField", "ApplicationFormPort",
     "ApplicationFormTools", "ApplicationFormValue", "DESCRIBE_FORM_SCHEMA",
     "DESCRIBE_FORM_TOOL", "FORM_TOOL_SCHEMAS", "FORM_TOOLS", "FormChoice",

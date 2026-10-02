@@ -120,6 +120,12 @@ class YudaoApplication:
             # What this organisation means by some words, as its owner reviewed them.
             self.goal_data.attach_conventions(load_conventions(conventions))
         self.goal_port = DataGoalPort(self.goal_data, today=today, reference_workers=4)
+        from .form_entries import NativeEntryFormPort
+        if isinstance(forms, NativeEntryFormPort):
+            from .form_goals import NativeFormsGoalPort
+            self.goal_port = NativeFormsGoalPort(self.goal_data, forms.goal_source,
+                                                 today=today, reference_workers=4)
+            self.native_tab_policy = forms.click_policy(self.native_tab_policy)
         reads = YudaoReadTools(self.goal_data, application_id=APPLICATION_ID)
         names = tuple(reads.tool_effects())
         classes = {

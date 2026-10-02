@@ -95,6 +95,18 @@ browser payload chooses native references, selectors or submission. The reply li
 fields entered and asks the person to click the highlighted button. Qualification of the
 port does not establish that a model correctly declares those field deliverables.
 
+An adapter that also implements `ApplicationFormEntryPort` may return a form plan with
+`open_entry=True`. Its `plan_entry` issues an `ApplicationFormEntry` containing one exact
+current observed button. The server uses the established click policy and page approval,
+checks the successful receipt and fresh readiness, and calls `accept_entry` to obtain the
+opened form's reference. The port must bind the actor, target and current instance and
+consume the issued entry once; a missing, failed, navigated or uncertain receipt never
+replays the opener. The server calls `discard_entry` after every attempt to release any
+unconsumed admission, including denial, cancellation and transport loss. This is server
+cleanup, never rollback. The browser's `form_instance` is only a DOM lifetime fact. Replacing
+controls or changing a form/ancestor's visibility invalidates it and the action fingerprint;
+the application must still authorize the exact target independently.
+
 The server consumes the draft once, resolves every field uniquely from a fresh page observation, fills or selects the adapter-issued value, and stops before click or submit. The adapter is asserting that editing these fields persists nothing by itself. Do not issue a draft for onchange handlers that write, forms that save as they are edited, credential fields, uploads, or any control whose edit can persist or trigger an external effect; use the ordinary confirmed mutation path for those cases. A form the application saves when its page is left (Odoo 18 does) is acceptable only because the assistant asks before it leaves any page and the prefill answer tells the user that leaving may save or discard the input. Test the claim against the deployed application, including a post-run API or database check that no record was created.
 
 Source lookup can explain a field, validation rule, or workflow before preparation and may

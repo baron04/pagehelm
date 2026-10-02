@@ -67,9 +67,10 @@ class FormPlan:
     """
     reference: str
     values: tuple[tuple[str, str], ...]
+    open_entry: bool = False
 
     def __post_init__(self):
-        if (not isinstance(self.reference, str) or not self.reference.strip()
+        if (not isinstance(self.open_entry, bool) or not isinstance(self.reference, str) or not self.reference.strip()
                 or len(self.reference) > 300 or not isinstance(self.values, tuple)
                 or not 1 <= len(self.values) <= 20
                 or any(not isinstance(item, tuple) or len(item) != 2

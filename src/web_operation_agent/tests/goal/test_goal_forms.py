@@ -11,6 +11,7 @@ from testapps.contacts.app import ACTORS_BY_ID, DEMO_SESSION_COOKIE, MinimalCont
 from testapps.contacts.goal import ContactsGoalPort
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.business.errors import BusinessToolRequestError
+from web_operation_agent.business.forms import ApplicationFormEntry
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStatus
 from web_operation_agent.goal import executor as module
@@ -49,17 +50,18 @@ class FormBrowser:
                     ElementRef("e2", "textbox", "Email", "input", self.epoch,
                     {"field": "email", "form_scope": scope, "value": self.values["email"]}),
                     ElementRef("e3", "button", "Save contact", "button", self.epoch,
-                    {"form_scope": scope})]
+                    {"form_scope": scope}),
+                    ElementRef("e4", "button", "Prepare contact", "button", self.epoch)]
         obs = PageObservation(1, self.epoch, self.url, "New contact", [], elements,
                               "synthetic form", render_state="ready")
-        return ActionReceipt(1, str(len(self.actions)), action, {}, action != self.fail,
+        return ActionReceipt(1, str(len(self.actions)), action, dict(args), action != self.fail,
                              error_code="navigation_timeout" if action == self.fail else "",
                              observation=obs)
 
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace"):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
         self.addCleanup(setattr, FormBrowser, "fail", "")
@@ -76,10 +78,39 @@ class GoalFormsTests(unittest.TestCase):
             chat = _Chat([("declare_goal", {"write_intent": True,
                            "deliverables": [*declarations, *extras]})])
             audit = Path(tmp) / "audit.jsonl"
+            bound = bind_application(adapter)
+            goal_port = ContactsGoalPort(adapter, form_prefill=True)
+            if open_entry:
+                delegate = bound.ports.forms
+                class EntryPort:
+                    required_scopes = delegate.required_scopes
+                    opened = False
+                    def describe_form(self, *args, **kwargs):
+                        return delegate.describe_form(*args, **kwargs) if self.opened else None
+                    def prepare_form(self, *args, **kwargs):
+                        return delegate.prepare_form(*args, **kwargs)
+                    def plan_entry(self, reference, obs, *, context):
+                        return ApplicationFormEntry(reference, next(e for e in obs.elements if e.name == "Prepare contact"))
+                    def accept_entry(self, entry, before, receipt, obs, *, context):
+                        if (not receipt.ok or receipt.action != "click"
+                                or receipt.args_echo != {"ref": entry.control.ref, "epoch": before.epoch}):
+                            raise BusinessToolRequestError("the contact entry receipt failed")
+                        self.opened = True
+                        return "contacts-create-v1"
+                    def discard_entry(self, entry, *, context):
+                        return None
+                class EntryGoals(ContactsGoalPort):
+                    def resolve(self, *args, **kwargs):
+                        result = super().resolve(*args, **kwargs)
+                        return replace(result, deliverables=tuple(replace(r, page=replace(r.page,
+                            form=replace(r.page.form, reference="contact-entry", open_entry=True)))
+                            if r.page and r.page.form else r for r in result.deliverables))
+                bound = replace(bound, ports=replace(bound.ports, forms=EntryPort()))
+                goal_port = EntryGoals(adapter, form_prefill=True)
             runner = GoalTurnExecutor(channel=channel,
                 config=AgentTurnConfig(supported_scope="read and prepare", require_identity=True,
                     allow_form_prefill=enabled, ledger_path=audit), chat=chat,
-                application=bind_application(adapter), goal_port=ContactsGoalPort(adapter, form_prefill=True),
+                application=bound, goal_port=goal_port,
                 control=ReadOnlyControl(), run_id_factory=lambda _: "goal-form", readings=1,
                 staged=False, disabled_page_actions=disabled)
             with patch.object(module, "RemoteBrowserClient", FormBrowser):
@@ -109,6 +140,20 @@ class GoalFormsTests(unittest.TestCase):
         self.assertIn("Partner desk", result.user_answer)
         self.assertEqual(browser.actions[-1], "handoff_form")
         self.assertEqual(browser.actions.count("handoff_form"), 1)
+
+    def test_named_rest_form_entry_consumes_one_exact_click_before_batch(self):
+        result, browser, channel, chat, _ = self.run_goal(open_entry=True)
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual([a for a in browser.actions if a not in {"observe", "wait_for"}],
+                         ["click", "fill", "fill", "handoff_form"])
+        self.assertEqual(len(chat.messages), 1)
+        self.assertEqual(len(channel.approvals), 1)
+        for args in ({"fail":"click"}, {"disabled":frozenset({"click"})}, {"decision":"denied"}):
+            with self.subTest(args=args):
+                result, browser, *_ = self.run_goal(open_entry=True, **args)
+                self.assertNotEqual(result.status, AgentTurnStatus.FINISHED)
+                self.assertFalse({"fill", "handoff_form"} & set(browser.actions))
+                self.assertLessEqual(browser.actions.count("click"), 1)
 
     def test_conflicting_field_values_refuse_the_entire_batch_before_input(self):
         result, browser, *_ = self.run_goal(values=(("Name", "A"), ("Name", "B")))

@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 from ..business.errors import (BusinessToolError, BusinessToolIdentityError,
                                BusinessToolPermissionError, BusinessToolRequestError)
-from ..business.forms import ApplicationFormTools
+from ..business.forms import ApplicationFormTools, ApplicationFormEntryPort, ApplicationFormEntry
 from ..execution.form_tools import apply_form_draft
 from ..state.identity import PrincipalError
-from .ports import FormPlan, capabilities_of
+from .ports import capabilities_of
 
 
 def combine_forms(plans):
@@ -16,7 +16,8 @@ def combine_forms(plans):
     base = replace(first, form=None)
     values = {}
     for plan in plans:
-        if replace(plan, form=None) != base or plan.form.reference != first.form.reference:
+        if (replace(plan, form=None) != base or plan.form.reference != first.form.reference
+                or plan.form.open_entry != first.form.open_entry):
             raise BusinessToolRequestError("one turn can hand off only one exact form entry")
         for field, value in plan.form.values:
             if field in values and values[field] != value:
@@ -24,7 +25,7 @@ def combine_forms(plans):
             values[field] = value
     if len(values) > 20:
         raise BusinessToolRequestError("a form handoff supports at most twenty fields")
-    return replace(first, form=FormPlan(first.form.reference, tuple(values.items())))
+    return replace(first, form=replace(first.form, values=tuple(values.items())))
 
 
 @dataclass(frozen=True)
@@ -62,8 +63,34 @@ def handoff_form(executor, state, plan):
                 application_id=executor.application.descriptor.application_id)
     s.budget.check()
     try:
+        reference = plan.form.reference
+        if plan.form.open_entry:
+            port = executor.application.ports.forms
+            if not isinstance(port, ApplicationFormEntryPort):
+                raise BusinessToolRequestError("this application does not expose reviewed form entries")
+            before = s.obs
+            with s.receipt.stage("business"):
+                entry = port.plan_entry(reference, before,
+                                       context=s.approvals.context(s.step, "form_entry"))
+            if (not isinstance(entry, ApplicationFormEntry) or entry.reference != reference
+                    or entry.control.role != "button" or entry.control not in before.elements
+                    or entry.control.epoch != before.epoch):
+                raise BusinessToolRequestError("the form entry is not an exact current control")
+            try:
+                receipt = executor._dispatch(s, "click", {"ref": entry.control.ref, "epoch": before.epoch})
+                if receipt is None or not receipt.ok or receipt.navigated:
+                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry did not complete")
+                if not executor._wait_ready(s, plan.expected_path, record=bool(before.record_route)):
+                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry is not ready")
+                with s.receipt.stage("business"):
+                    reference = port.accept_entry(entry, before, receipt, s.obs,
+                                        context=s.approvals.context(s.step, "form_entry_receipt"))
+            finally:
+                port.discard_entry(entry, context=s.approvals.context(s.step, "form_entry_release"))
+            if not isinstance(reference, str) or not reference:
+                raise BusinessToolRequestError("the application did not bind the opened form")
         with s.receipt.stage("business"):
-            draft, described = forms.prepare_current(s.obs, reference=plan.form.reference,
+            draft, described = forms.prepare_current(s.obs, reference=reference,
                 values=plan.form.values, context=s.approvals.context(s.step, "prepare_form"))
             verification = forms.take_verification(draft)
     except (BusinessToolError, PrincipalError) as exc:

@@ -10,6 +10,7 @@
 import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
+import {formInstance} from './formInstance'
 
 /** Maximum live controls one observation may expose across the browser boundary. */
 export const MAX_OBSERVATION_ELEMENTS = browserContract.observation.max_elements
@@ -185,6 +186,7 @@ export function actionElementFingerprint(element: ElementLike | null | undefined
     field: formFieldName(element),
     fieldLabel: formControlLabel(element),
     formScope: formControlScope(element),
+    formInstance: formInstance(element as Element | null),
     dialogTitle: formControlLabel(element.closest?.('[role="dialog"],dialog')),
     dialogText: String(element.closest?.('[role="dialog"],dialog')?.textContent || '').slice(0, 1600),
     id: String(element.id || ''),
@@ -368,6 +370,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
       delete item.attrs.form_scope
+      delete item.attrs.form_instance
       delete item.attrs.field_label
       delete item.attrs.field
       // These are live DOM facts rather than hints parsed from PageController's text.
@@ -377,6 +380,8 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       if (element?.readOnly) item.attrs.readonly = 'true'
       const scope = formControlScope(element)
       if (scope && !redactor.isSensitiveName(scope)) item.attrs.form_scope = scope
+      const instance = scope ? formInstance(element as Element | null) : null
+      if (instance) item.attrs.form_instance = instance
       if (item.role === 'button') continue
       const rawField = formFieldName(element)
       const sensitive = isSensitiveFormControl(element, redactor)

@@ -102,6 +102,7 @@ class YudaoHostConfig:
     model: str | None = None
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
+    native_form_policy: Path | None = None
     native_guard_port: int = 48093
 
 
@@ -122,6 +123,15 @@ class YudaoHost:
         self.ui = UiSource.read(config.ui_source) if config.ui_source else None
         self.source = repository_source(config.source_root, config.source_release)
         self.native_proxy = None
+        self.form_review = None
+        self.form_tree = None
+        if config.native_form_policy is not None:
+            if config.native_read_policy is None or config.source_root is None:
+                raise ValueError("native forms require the verified guard and reviewed raw source")
+            from .repository import repository_tree
+            from .form_entries import NativeFormReview
+            self.form_tree = repository_tree(config.source_root, config.source_release)
+            self.form_review = NativeFormReview.load(json.loads(config.native_form_policy.read_text()), self.form_tree)
         if config.native_read_policy is not None:
             from .guard_identity import GuardIdentity
             from .guard_proxy import NativeGuardProxy
@@ -199,10 +209,15 @@ class YudaoHost:
 
     def _application(self, client: YudaoClient) -> YudaoApplication:
         from .guard_proxy import GUARD_PATH
+        forms = None
+        if self.form_review is not None:
+            from .form_entries import NativeCustomerEntryVerifier, NativeEntryFormPort
+            forms = NativeEntryFormPort(NativeCustomerEntryVerifier(self.form_tree, self.form_review, client))
         return YudaoApplication(self.config.public_origin, None, self.api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
                                 native_tabs=self.native_proxy is not None,
+                                forms=forms,
                                 page_write_guard=GUARD_PATH if self.native_proxy is not None else "")
 
     def _open(self, app: YudaoApplication, principal, key):
@@ -227,7 +242,8 @@ class YudaoHost:
 
         def runner_factory(channel):
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
-                                           source=self.source, click_policy=app.native_tab_policy)
+                                           source=self.source, click_policy=app.native_tab_policy,
+                                           form_prefill=self.form_review is not None)
             executor = GoalTurnExecutor(
                 channel=channel,
                 config=turn_config, disabled_page_actions=turn_config.disabled_actions,
@@ -327,6 +343,7 @@ def main(argv=None) -> int:
     ap.add_argument("--gateway-port", type=int, default=48091)
     ap.add_argument("--bootstrap-port", type=int, default=48092)
     ap.add_argument("--native-read-policy", type=Path)
+    ap.add_argument("--native-form-policy", type=Path)
     ap.add_argument("--native-guard-port", type=int, default=48093)
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
@@ -343,6 +360,7 @@ def main(argv=None) -> int:
         source_release=a.source_release, gateway_port=a.gateway_port,
         bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
         native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
+        native_form_policy=a.native_form_policy,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))
     host.server.start()

@@ -6,7 +6,7 @@ from web_operation_agent.execution.product import AgentTurnConfig
 
 
 def yudao_turn_config(run_dir: Path, *, timeout_s: int,
-                      source: SourceCapability, click_policy=None) -> AgentTurnConfig:
+                      source: SourceCapability, click_policy=None, form_prefill: bool = False) -> AgentTurnConfig:
     return AgentTurnConfig(
         supported_scope=(
             "Answer source and documentation questions from cited repository evidence; "
@@ -28,7 +28,9 @@ def yudao_turn_config(run_dir: Path, *, timeout_s: int,
             "application paths; keep those paths relative rather than adding an origin."),
         ledger_path=run_dir / "audit.jsonl", wall_budget_s=timeout_s,
         transport_timeout_s=30, require_identity=True, source=source,
-        disabled_actions=frozenset({"click", "fill", "select", "submit", "back", "apply_facet"}),
+        disabled_actions=frozenset({"click", "select", "submit", "back", "apply_facet"}
+                                  | (set() if form_prefill else {"fill"})),
+        allow_form_prefill=form_prefill,
         click_policy=click_policy,
         plain_business_answer_min_page_actions=0, time_zone="Asia/Shanghai", step_budget=12)
 
