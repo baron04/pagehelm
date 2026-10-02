@@ -92,6 +92,23 @@ export function refIndex(ref: unknown): number {
   return Number(match[1])
 }
 
+/** A field wrapper may name its input; a form's name identifies the form, not its fields. */
+export function formFieldName(element: ElementLike | null | undefined): string | null {
+  if (!element) return null
+  const owner = typeof element.closest === 'function' ? element.closest('[name]') : null
+  return explicitAttribute(owner && String(owner.tagName || '').toUpperCase() !== 'FORM'
+    ? owner : element, 'name')
+}
+
+/** Live identity can reveal a sensitive input that the controller summary left unnamed. */
+export function isSensitiveFormControl(element: ElementLike | null | undefined,
+                                       redactor: Redactor): boolean {
+  return String(element?.type || '').toLowerCase() === 'password'
+    || [formFieldName(element), element?.name, element?.id,
+      explicitAttribute(element, 'autocomplete')].some(value =>
+      value != null && redactor.isSensitiveName(String(value)))
+}
+
 /**
  * Everything about an element that an action's meaning depends on.
  *
@@ -111,6 +128,7 @@ export function actionElementFingerprint(element: ElementLike | null | undefined
     tag: String(element.tagName || '').toUpperCase(),
     type: String(element.type || ''),
     name: String(element.name || ''),
+    field: formFieldName(element),
     id: String(element.id || ''),
     role: String(element.getAttribute?.('role') || element.role || ''),
     ariaSelected: explicitAttribute(element, 'aria-selected'),
@@ -296,15 +314,22 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // recheck the live element at execution time because the DOM may change afterwards.
       if (element?.disabled) item.attrs.disabled = 'true'
       if (element?.readOnly) item.attrs.readonly = 'true'
+      const rawField = formFieldName(element)
+      const sensitive = isSensitiveFormControl(element, redactor)
+      // Parsed summary attributes can predate a DOM change or omit a wrapper's name.
+      // Never leave their value behind when the live control is sensitive.
+      if (sensitive) {
+        delete item.attrs.value
+        delete item.attrs.field
+        item.name = ''
+        continue
+      }
       // What a text field currently shows, so the server can check a value it entered
       // before handing the form to the person. Redacted like any other observed text,
       // bounded, and never for a field whose name marks it sensitive.
-      if (item.role !== 'select' && typeof element?.value === 'string' && element.value
-          && !redactor.isSensitiveName(String(element.name || ''))) {
+      if (item.role !== 'select' && typeof element?.value === 'string' && element.value) {
         item.attrs.value = redactor.redactString(element.value).slice(0, 120)
       }
-      const owner = typeof element?.closest === 'function' ? element.closest('[name]') : null
-      const rawField = explicitAttribute(owner || element, 'name')
       if (rawField !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(rawField)
           && !redactor.isSensitiveName(rawField)) {
         item.attrs.field = rawField

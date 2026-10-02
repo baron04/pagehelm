@@ -28,6 +28,23 @@ describe('the product PageController extraction policy', () => {
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {
+  it('removes wrapper-identified credentials from both text and element projections', () => {
+    const wrapper = document.createElement('div')
+    wrapper.setAttribute('name', 'api_key')
+    wrapper.innerHTML = '<input>'
+    document.body.append(wrapper)
+    try {
+      const input = wrapper.querySelector('input')!
+      input.value = 'private-credential'
+      const page = new Page(controller(), () => input, createRedactor())
+      const reading = page.describe({url: 'https://app.test/form', title: 'Form',
+        content: '[2]<input type=text value=private-credential>private-credential />'}, 1)
+      expect(JSON.stringify(reading.observation)).not.toContain('private-credential')
+      expect(reading.observation.elements[0]?.role).toBe('password')
+      expect(input.value).toBe('private-credential')
+    } finally { wrapper.remove() }
+  })
+
   it('accepts a bounded application-reported rendered view without a switch control', () => {
     const read = (value: unknown) => new Page(controller(), () => null, createRedactor(),
       undefined, undefined, undefined, undefined, undefined, () => value).describe({
@@ -121,6 +138,23 @@ describe('Page.describe bounds an observation before it crosses the browser boun
 })
 
 describe('Page refuses controls that are not writable at execution time', () => {
+  it('refuses a forged field identity inherited from the HTML form name', () => {
+    const form = document.createElement('form')
+    form.name = 'customer'
+    form.innerHTML = '<input>'
+    document.body.append(form)
+    try {
+      const input = form.querySelector('input')!
+      input.value = 'draft'
+      const page = new Page(controller(), () => input, createRedactor())
+      expect(page.verifyFormFields(
+        [{ref: 'e2', field: 'customer', control: 'textbox', value: 'draft'}],
+        [{ref: 'e2', role: 'textbox', name: '', tag: 'input', epoch: 4,
+          attrs: {field: 'customer'}}],
+      )).toBe(false)
+    } finally { form.remove() }
+  })
+
   it('verifies an exact live form value without returning that value in a receipt', () => {
     const input = document.createElement('input')
     input.name = 'phone'

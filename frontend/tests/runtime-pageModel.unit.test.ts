@@ -169,6 +169,52 @@ describe('hydrateLinkFacts replaces the lossy display href/target with the live 
 })
 
 describe('hydrateFormFacts adds a bounded application field identifier', () => {
+  it('does not turn a named HTML form into the identity of an unnamed field', () => {
+    const fixture = document.createElement('form')
+    fixture.name = 'customer'
+    fixture.innerHTML = '<input><input name="email">'
+    document.body.append(fixture)
+    try {
+      const inputs = fixture.querySelectorAll('input')
+      const elements = elementsFrom('[0]<input type=text />\n[1]<input type=text name=email />', 1, redactor)
+      hydrateFormFacts(elements, {}, (_map, index) => inputs[index], redactor)
+      expect(elements[0]?.attrs.field).toBeUndefined()
+      expect(elements[1]?.attrs.field).toBe('email')
+    } finally { fixture.remove() }
+  })
+
+  it('invalidates an action when its named field wrapper changes', () => {
+    const wrapper = document.createElement('div')
+    wrapper.setAttribute('name', 'email')
+    wrapper.innerHTML = '<input>'
+    document.body.append(wrapper)
+    try {
+      const input = wrapper.querySelector('input')!
+      const before = actionElementFingerprint(input)
+      wrapper.setAttribute('name', 'telephone')
+      expect(actionElementFingerprint(input)).not.toBe(before)
+    } finally { wrapper.remove() }
+  })
+
+  it.each(['wrapper', 'type', 'autocomplete', 'id'])('removes even a parsed value for sensitive %s facts', source => {
+    const wrapper = document.createElement('div')
+    wrapper.innerHTML = '<input>'
+    document.body.append(wrapper)
+    try {
+      const input = wrapper.querySelector('input')!
+      input.value = 'private-credential'
+      if (source === 'wrapper') wrapper.setAttribute('name', 'api_key')
+      if (source === 'type') input.type = 'password'
+      if (source === 'autocomplete') input.autocomplete = 'current-password'
+      if (source === 'id') input.id = 'secret'
+      const elements = elementsFrom('[0]<input type=text value=private-credential />', 1, redactor)
+      hydrateFormFacts(elements, {}, () => input, redactor)
+      expect(elements[0]?.attrs.value).toBeUndefined()
+      expect(elements[0]?.attrs.field).toBeUndefined()
+      expect(elements[0]?.name).toBe('')
+    } finally { wrapper.remove() }
+  })
+
   it('reads name from the nearest [name] ancestor when the input itself has none', () => {
     const elements = elementsFrom('[0]<input type=text value=x />', 1, redactor)
     elements[0]!.role = 'textbox'

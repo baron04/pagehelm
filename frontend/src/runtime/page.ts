@@ -9,7 +9,8 @@
  */
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, hydrateButtonFacts, hydrateFormFacts,
-  hydrateLinkFacts, hydrateRevealFacts, hydrateSelectionFacts, explicitAttribute, refIndex,
+  hydrateLinkFacts, hydrateRevealFacts, hydrateSelectionFacts, formFieldName,
+  isSensitiveFormControl, refIndex,
   revealable, type ElementLike, type ElementLookup,
 } from './pageModel'
 import {canonicalUrl} from './navigation'
@@ -184,8 +185,7 @@ export class Page {
       let live: ElementLike | null | undefined
       try { live = this.element(binding.ref) } catch { return false }
       if (!live || live.isConnected === false || live.disabled || live.readOnly) return false
-      const owner = typeof live.closest === 'function' ? live.closest('[name]') : null
-      if (explicitAttribute(owner || live, 'name') !== binding.field) return false
+      if (formFieldName(live) !== binding.field) return false
       if (binding.control === 'select' && String(live.tagName || '').toLowerCase() !== 'select') {
         return false
       }
@@ -260,8 +260,19 @@ export class Page {
     const boundedBody = boundIndexedContent(charBoundedBody)
     // Keep PageController's scroll hints even when its body was bounded. Without the footer
     // the Agent cannot distinguish a short page from one that needs another observation.
-    const content = `${header}\n${boundedBody.content}\n${footer}`
     const map = this.controller.selectorMap
+    // A component wrapper's credential identity may not appear in the controller text.
+    // Remove that entire indexed control record before either projection leaves the page.
+    const content = `${header}\n${boundedBody.content}\n${footer}`.replace(
+      /(?:^|\n)\s*\*?\[(\d+)]<(input|textarea|select)\b[\s\S]*?\s*\/>?(?=\n|$)/g,
+      (record, index: string) => {
+        try {
+          if (isSensitiveFormControl(this.lookup(map, Number(index)), this.redactor)) {
+            return `${record.startsWith('\n') ? '\n' : ''}[${index}]<input type=password />`
+          }
+        } catch { /* The ordinary summary redactor still applies to stale records. */ }
+        return record
+      })
     const elements: ElementRef[] = hydrateRevealFacts(hydrateSelectionFacts(hydrateButtonFacts(
       hydrateFormFacts(hydrateLinkFacts(elementsFrom(content, epoch, this.redactor), map,
         this.lookup, this.redactor), map, this.lookup, this.redactor), map, this.lookup,
