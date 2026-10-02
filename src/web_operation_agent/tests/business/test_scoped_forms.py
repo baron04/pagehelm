@@ -53,6 +53,7 @@ class LabelForms:
 
 def session_for(execute):
     return SimpleNamespace(
+        _form_draft_verification=None,
         _cancel_requested=lambda: False, _browser_attempts=0, page_actions=0,
         _approvals=SimpleNamespace(confirm_operation=lambda *a, **k: ("", ""),
                                    settle_operation=lambda: None),
@@ -220,6 +221,96 @@ class ScopedForms(unittest.TestCase):
         self.assertEqual(outcome.finished.terminal_reason, "wall_clock_budget")
         self.assertIsNone(session._form_draft)
         self.assertIn("助手没有执行提交", result.agent_said)
+
+    def prepared(self, port=None):
+        tools = self.tools(port)
+        described = tools.describe(observation(), {})
+        draft, _ = tools.prepare(observation(), {"form_id": described["form_id"],
+            "values": [{"field_id": described["fields"][0]["field_id"], "value": "Draft"}]})
+        return draft, tools.take_verification(draft)
+
+    def test_verification_is_consumed_and_never_serialized_with_values(self):
+        tools = self.tools()
+        described = tools.describe(observation(), {})
+        draft, _ = tools.prepare(observation(), {"form_id": described["form_id"],
+            "values": [{"field_id": described["fields"][0]["field_id"], "value": "Draft"}]})
+        check = tools.take_verification(draft)
+        with self.assertRaises(BusinessToolContractError):
+            tools.take_verification(draft)
+        obs = observation(2)
+        obs.elements[0].attrs["value"] = "Draft"
+        check.check(draft, obs)  # Entered values and epochs may change.
+        self.assertNotIn("verification", draft.to_json())
+        with self.assertRaises(BusinessToolRequestError):
+            check.check(replace(draft, fields=(replace(draft.fields[0], value="Other"),)), obs)
+
+    def test_same_url_entry_change_during_approval_or_after_input_stops_the_flow(self):
+        class Changing(LabelForms):
+            revision = 1
+            def describe_form(self, obs, *, context=None):
+                return replace(super().describe_form(obs), reference=f"entry-{self.revision}")
+        for change_at in ("approval", "fill", "handoff_form"):
+            with self.subTest(change_at=change_at):
+                port, calls, events = Changing(), [], []
+                draft, check = self.prepared(port)
+                def execute(action, args):
+                    calls.append(action)
+                    if action == change_at:
+                        port.revision += 1
+                    return ActionReceipt(schema_version=1, command_id=str(len(calls)),
+                        action=action, args_echo={}, ok=True, observation=observation(len(calls)+1))
+                session = session_for(execute)
+                session.ledger.append = lambda event, **kwargs: events.append((event, kwargs))
+                if change_at == "approval":
+                    def approve(*a, **kw):
+                        port.revision += 1
+                        return "", ""
+                    session._approvals.confirm_operation = approve
+                _, reason, _ = apply_form_draft(session, draft, observation(), 1,
+                    verify=lambda obs: check.check(draft, obs))
+                self.assertEqual(reason, "agent_refused")
+                expected = {"approval": [], "fill": ["fill"], "handoff_form": ["fill", "handoff_form"]}
+                self.assertEqual(calls, expected[change_at])
+                self.assertTrue(any(event == "form_entry_verification_refused" for event, _ in events))
+
+    def test_loading_only_waits_and_revalidates_after_ready_without_retyping(self):
+        draft, check = self.prepared()
+        calls, verified_epochs = [], []
+        def execute(action, args):
+            calls.append(action)
+            obs = observation(len(calls)+1)
+            obs.render_state = "pending" if action == "fill" else "ready"
+            return ActionReceipt(schema_version=1, command_id=str(len(calls)), action=action,
+                                 args_echo={}, ok=True, observation=obs)
+        def verify(obs):
+            self.assertNotEqual(obs.render_state, "pending")
+            verified_epochs.append(obs.epoch)
+            check.check(draft, obs)
+        _, reason, _ = apply_form_draft(session_for(execute), draft, observation(), 1, verify=verify)
+        self.assertEqual(reason, "")
+        self.assertEqual(calls, ["fill", "wait_for", "handoff_form"])
+        self.assertIn(3, verified_epochs)
+
+    def test_permission_loss_is_terminal_and_preserves_the_typed_audit_code(self):
+        from web_operation_agent.business.errors import BusinessToolPermissionError
+        draft, _ = self.prepared()
+        calls, events = [], []
+        session = session_for(lambda *args: calls.append(args))
+        session.ledger.append = lambda event, **kw: events.append((event, kw))
+        def refuse(obs):
+            raise BusinessToolPermissionError("synthetic permission removed")
+        _, reason, _ = apply_form_draft(session, draft, observation(), 1, verify=refuse)
+        self.assertEqual((reason, calls), ("permission_denied", []))
+        self.assertEqual(events[-1][1]["error_code"], "business_permission_denied")
+
+    def test_malformed_verification_verdict_never_dispatches(self):
+        draft, _ = self.prepared()
+        for verdict in (False, True, {}, "yes"):
+            with self.subTest(verdict=verdict):
+                calls = []
+                _, reason, _ = apply_form_draft(session_for(lambda *a: calls.append(a)),
+                    draft, observation(), 1, verify=lambda obs: verdict)
+                self.assertEqual((reason, calls), ("agent_refused", []))
 
 
 if __name__ == "__main__":

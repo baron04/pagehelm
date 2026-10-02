@@ -310,6 +310,10 @@ agent.
   It never clicks or submits the form.
   Fixed prefill steps inherit elapsed turn time, recheck cancellation after approval,
   and stop after a late receipt without replaying entered fields or issuing the next step.
+  Drafts prepared through this contract retain a server-only check of the actor, turn and
+  full application form descriptor. It runs after approval and after fresh ready receipts;
+  a changed entry stops the remaining fields and handoff. Loading permits only bounded
+  waits before revalidation. Source or entry checks do not add model requests.
   A named field wrapper may identify its input; a containing HTML form's name cannot.
   The Runtime rechecks that binding at handoff and refuses an action if the wrapper changes.
   Live credential identities also redact the control's text and value projections.

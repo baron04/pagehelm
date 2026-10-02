@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from web_operation_agent.business.forms import ApplicationFormTools
+from web_operation_agent.business.errors import BusinessToolIdentityError
 
 
 def assert_current_form_contract(case, port, *, application_id: str, observation,
@@ -29,6 +31,13 @@ def assert_current_form_contract(case, port, *, application_id: str, observation
     case.assertEqual(draft.fields[0].field, native_field)
     case.assertEqual(draft.fields[0].value,
                      value if expected_value is None else expected_value)
+    verification = tools.take_verification(draft)
+    fresh = replace(observation, epoch=observation.epoch + 1,
+                    elements=[replace(e, epoch=observation.epoch + 1) for e in observation.elements])
+    verification.check(draft, fresh, context=context)
+    if context is not None:
+        with case.assertRaises(BusinessToolIdentityError):
+            verification.check(draft, fresh, context=replace(context, turn_id="other-turn"))
 
 
 __all__ = ["assert_current_form_contract"]

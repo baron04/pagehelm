@@ -113,6 +113,30 @@ class FormsTests(unittest.TestCase):
                 with self.assertRaises(BusinessToolRequestError):
                     self.tools.prepare(self.obs, self.args(result), context=self.context)
 
+    def test_prepared_verification_rechecks_mode_record_and_entry_after_typing(self):
+        for changes in ({"entry_id": "entry-2"}, {"record_id": "13"},
+                        {"mode": "create", "record_id": ""}):
+            with self.subTest(changes=changes):
+                self.verifier.state = self.state
+                draft, _ = self.tools.prepare(self.obs, self.args(self.describe()), context=self.context)
+                check = self.tools.take_verification(draft)
+                after = replace(self.obs, epoch=2,
+                                elements=[replace(e, epoch=2) for e in self.obs.elements])
+                check.check(draft, after, context=self.context)
+                self.verifier.state = replace(self.state, **changes)
+                with self.assertRaises(BusinessToolRequestError):
+                    check.check(draft, after, context=self.context)
+
+    def test_prepared_verification_rejects_a_different_actor_session_or_turn(self):
+        from web_operation_agent.business.errors import BusinessToolIdentityError
+        draft, _ = self.tools.prepare(self.obs, self.args(self.describe()), context=self.context)
+        check = self.tools.take_verification(draft)
+        for context in (None, replace(self.context, session_id="other"),
+                        replace(self.context, turn_id="other"),
+                        replace(self.context, principal=replace(self.principal, actor_id="other"))):
+            with self.subTest(context_none=context is None), self.assertRaises(BusinessToolIdentityError):
+                check.check(draft, self.obs, context=context)
+
     def test_permission_loss_or_entry_switch_during_prepare_is_not_a_draft(self):
         result = self.describe()
         original = self.verifier.validate

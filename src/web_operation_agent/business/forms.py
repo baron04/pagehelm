@@ -279,6 +279,34 @@ class _VisibleField:
     control: str
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedFormVerification:
+    """Server-only current-entry check retained beside one prepared draft.
+
+    Values may change during typing; application metadata and the actor/turn may not.
+    This object is never serialized into model context or browser commands.
+    """
+    tools: ApplicationFormTools
+    form: ApplicationFormDescriptor
+    draft_digest: str
+    context: OperationContext | None
+
+    def check(self, draft: FormDraft, observation: PageObservation, *,
+              context: OperationContext | None = None) -> None:
+        if draft.content_digest != self.draft_digest:
+            raise BusinessToolRequestError("the prepared form draft changed")
+        if (self.context is None) != (context is None):
+            raise BusinessToolIdentityError("the prepared form identity changed")
+        if self.context is not None:
+            if (context.principal.binding_digest != self.context.principal.binding_digest
+                    or context.session_id != self.context.session_id
+                    or context.turn_id != self.context.turn_id):
+                raise BusinessToolIdentityError("the prepared form actor or turn changed")
+        current = self.tools._descriptor(observation, context)
+        if current != self.form:
+            raise BusinessToolRequestError("the application changed the prepared form entry")
+
+
 class ApplicationFormTools:
     """Create and revalidate opaque bindings for the current page's writable fields."""
 
@@ -301,6 +329,14 @@ class ApplicationFormTools:
                        for item in scopes)):
             raise TypeError("application form required_scopes are invalid")
         self._required_scopes = scopes
+        self._prepared: PreparedFormVerification | None = None
+
+    def take_verification(self, draft: FormDraft) -> PreparedFormVerification:
+        """Consume the server check issued by the immediately preceding preparation."""
+        verification, self._prepared = self._prepared, None
+        if verification is None or verification.draft_digest != draft.content_digest:
+            raise BusinessToolContractError("no verification was issued for this form draft")
+        return verification
 
     @staticmethod
     def tool_schemas() -> tuple[dict, ...]:
@@ -442,6 +478,7 @@ class ApplicationFormTools:
 
     def describe(self, observation: PageObservation, args: object, *,
                  context: OperationContext | None = None) -> dict:
+        self._prepared = None
         if not isinstance(args, dict) or set(args) - {"field_query", "limit"}:
             raise BusinessToolRequestError(
                 "describe_form accepts only field_query and limit")
@@ -488,6 +525,7 @@ class ApplicationFormTools:
 
     def prepare(self, observation: PageObservation, args: object, *,
                 context: OperationContext | None = None) -> tuple[FormDraft, dict]:
+        self._prepared = None
         if not isinstance(args, dict) or set(args) != {"form_id", "values"}:
             raise BusinessToolRequestError("prepare_form requires form_id and values")
         form_id, raw_values = args.get("form_id"), args.get("values")
@@ -549,6 +587,7 @@ class ApplicationFormTools:
                 or draft.submit_label != form.submit_label):
             raise BusinessToolContractError(
                 "the application form draft exceeds the current descriptor")
+        self._prepared = PreparedFormVerification(self, form, draft.content_digest, context)
         return draft, {
             "draft_ready": True,
             "title": form.title,
@@ -564,4 +603,5 @@ __all__ = [
     "ApplicationFormTools", "ApplicationFormValue", "DESCRIBE_FORM_SCHEMA",
     "DESCRIBE_FORM_TOOL", "FORM_TOOL_SCHEMAS", "FORM_TOOLS", "FormChoice",
     "NoApplicationForms", "PREPARE_FORM_SCHEMA", "PREPARE_FORM_TOOL",
+    "PreparedFormVerification",
 ]

@@ -122,6 +122,7 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
     session._business_routes.update(tool_result.allowed_routes)
     session.latest_business_tool_result = tool_result
     session._form_draft = None
+    session._form_draft_verification = None
     # A successful write invalidates values read before it. The receipt
     # remains authoritative even when this adapter supplies no new fields.
     session.evidence = TurnEvidence()

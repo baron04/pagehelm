@@ -54,6 +54,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
         session.latest_business_tool_result = tool_result
         session._form_draft = (
             tool_result.form_draft if session.allow_form_prefill else None)
+        session._form_draft_verification = None
         recorded_refs = session._answers.collect_evidence(
             tool_result, step=step, read_tool=name)
         goal_metric_refs = materialize_goal_metrics(
@@ -278,6 +279,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
         session.evidence.discard_pages()
         session._page_answer_digest = ""
         session._form_draft = None
+        session._form_draft_verification = None
         session._latest_business_routes = set()
         session._clarification_choices = {}
         session._clarification_feedback = ""
@@ -293,6 +295,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
             session._repeats.refused(name, args, obs)
         session.latest_business_tool_result = None
         session._form_draft = None
+        session._form_draft_verification = None
         session._latest_business_routes = set()
         session._clarification_choices = {}
         session._clarification_feedback = ""

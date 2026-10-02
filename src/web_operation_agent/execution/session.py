@@ -525,6 +525,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         # browser protocol as authority: the model can request application of the current
         # draft but cannot provide or alter any route, field or value.
         self._form_draft: FormDraft | None = None
+        self._form_draft_verification = None
         if not isinstance(page_answer_evidence, bool):
             raise ValueError("page_answer_evidence must be a boolean")
         self.page_answer_evidence = page_answer_evidence

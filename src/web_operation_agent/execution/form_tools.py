@@ -9,7 +9,8 @@ import time
 from ..transport.browser import TransportError, TurnCancelled
 from ..answer.evidence import EvidenceUnknown, SourceEvidence
 from ..business.errors import (BusinessToolError, BusinessToolPermissionError,
-                               BusinessToolRequestError)
+                               BusinessToolRequestError, BusinessToolContractError,
+                               BusinessToolIdentityError)
 from ..business.runtime import FormDraft
 from ..business.tools.contracts import matches_form_control, form_control_unavailable
 from ..schemas import PageObservation
@@ -17,6 +18,7 @@ from .routes import observation_is_at_route
 from .runstate import _Next, _Turn
 from .budget import TurnBudget
 from ..modeling.spend import BudgetExhausted
+from ..state.identity import PrincipalError
 
 
 def _form_identity(session, step: int, tool: str) -> tuple[object, dict]:
@@ -66,6 +68,7 @@ def _source_bases(session, args: object) -> tuple[object, tuple[str, ...]]:
 def describe_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Describe only the writable fields proven by both the page and the adapter."""
     session._form_draft = None
+    session._form_draft_verification = None
     context, identity = _form_identity(session, turn.step, name)
     try:
         content = session._application_form_tools.describe(
@@ -96,11 +99,13 @@ def describe_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
 def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Mint one exact adapter-validated draft from fresh opaque form bindings."""
     session._form_draft = None
+    session._form_draft_verification = None
     context, identity = _form_identity(session, turn.step, name)
     try:
         form_args, source_refs = _source_bases(session, args)
         draft, content = session._application_form_tools.prepare(
             turn.obs, form_args, context=context)
+        verification = session._application_form_tools.take_verification(draft)
     except BusinessToolPermissionError as exc:
         return _Next(session._permission_denied(
             turn.result, turn.started_at, turn.step, name, exc,
@@ -113,6 +118,7 @@ def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
             dispatched=False, side_effect_possible=False, identity=identity)
         return session._reply(turn, call, "FORM PREPARATION REFUSED: " + str(exc)[:500])
     session._form_draft = draft
+    session._form_draft_verification = verification
     encoded = json.dumps(content, ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), allow_nan=False)
     session.ledger.append(
@@ -138,10 +144,12 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
                            "prefill_form accepts no arguments; route, fields and values "
                            "come only from the current application-issued draft.")
     draft = session._form_draft
+    verification = session._form_draft_verification
     # Consume before dispatch. Even though the application contract says these fields do
     # not persist until user submission, repeating a partially applied draft after
     # transport loss would be surprising and could retrigger onchange.
     session._form_draft = None
+    session._form_draft_verification = None
     if draft is None:
         return session._reply(turn, call,
                            "No current application-issued form draft is available.")
@@ -158,7 +166,10 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
     budget.started -= max(0.0, time.time() - turn.started_at
                           - session._approvals.waited_ms / 1000)
     prefilled, reason, detail = apply_form_draft(
-        session, draft, turn.obs, turn.step, budget=budget)
+        session, draft, turn.obs, turn.step, budget=budget,
+        verify=(lambda obs: verification.check(draft, obs,
+                context=session._approvals.context(turn.step, "prefill_form")))
+               if verification is not None else None)
     if prefilled is not None:
         turn.obs = prefilled
     chinese = bool(re.search(r"[\u3400-\u9fff]", session.task.prompt))
@@ -232,7 +243,7 @@ def observe_after_business_mutation(session, obs: PageObservation, step: int,
 
 def apply_form_draft(
         session, draft: FormDraft, observation: PageObservation,
-        step: int, *, budget: TurnBudget | None = None
+        step: int, *, budget: TurnBudget | None = None, verify=None
         ) -> tuple[PageObservation | None, str, str]:
     """Apply one adapter-issued transient draft without exposing its bindings to choice.
 
@@ -242,6 +253,25 @@ def apply_form_draft(
     receipt for the actual values and release of the read-only window.
     """
     current = observation
+
+    def verified(before):
+        if verify is None or before.render_state == "pending":
+            return "", ""
+        try:
+            if verify(before) is not None:
+                raise BusinessToolContractError("form verification returned an invalid verdict")
+        except PrincipalError as exc:
+            session.ledger.append("form_entry_verification_refused", step=step,
+                                  error_code=BusinessToolIdentityError.code, dispatched=False,
+                                  submitted=False, persisted=False)
+            return "agent_refused", str(exc)
+        except BusinessToolError as exc:
+            session.ledger.append("form_entry_verification_refused", step=step,
+                                  error_code=exc.code, dispatched=False,
+                                  submitted=False, persisted=False)
+            return ("permission_denied" if isinstance(exc, BusinessToolPermissionError)
+                    else "agent_refused"), str(exc)
+        return "", ""
 
     def stopped():
         try:
@@ -260,6 +290,9 @@ def apply_form_draft(
         return current, reason, detail
     if current.render_state in {"pending", "blocked"}:
         return current, "agent_refused", "the current form page is not ready"
+    reason, detail = verified(current)
+    if reason:
+        return current, reason, detail
     #: The error code the last dispatched command came back with, so the caller can
     #: tell "the page moved while we were aiming" from a real refusal.
     last_code = ""
@@ -283,6 +316,9 @@ def apply_form_draft(
                 return before, reason, detail
         # Permission may have waited. Recheck before dispatch, not only before asking.
         reason, detail = stopped()
+        if reason:
+            return before, reason, detail
+        reason, detail = verified(before)
         if reason:
             return before, reason, detail
         prior_epoch = before.epoch
@@ -338,6 +374,9 @@ def apply_form_draft(
         if (action != "goto" and before.record_route
                 and after.record_route != before.record_route):
             return after, "agent_refused", "the application changed the form record"
+        reason, detail = verified(after)
+        if reason:
+            return after, reason, detail
         return after, "", ""
 
     for action, args, field in actions:
