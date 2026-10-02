@@ -100,7 +100,7 @@ describe('native Yudao record and read completion facts', () => {
   it('retains a lazy read failure after the visible toast disappears, until a fresh successful read', () => {
     const facts = createPageFacts(); ready(facts)
     const settle = facts.begin('/admin-api/crm/contact/page-by-customer?customerId=6')!
-    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageBlocker()).toBe('pending')
     settle(403, {error: 'page_write_blocked'})
     expect(facts.readPageBlocker()).toBe(true)
     // No toast or body text is needed to preserve the failed read.
@@ -123,17 +123,45 @@ describe('native Yudao record and read completion facts', () => {
     old(200, {code: 0, data: {list: []}})
     expect(facts.readPageBlocker()).toBe(true)
   })
-  it('rejects loading overlays and duplicate visible record titles', () => {
+  it('reports loading as pending but rejects duplicate visible record titles', () => {
     const facts = createPageFacts(); ready(facts)
     const overlay = document.createElement('div'); overlay.className = 'el-loading-mask'
     overlay.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
     document.body.append(overlay)
-    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageBlocker()).toBe('pending')
     overlay.remove()
     const second = document.querySelector('span')!.cloneNode(true) as HTMLElement
     second.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
     document.body.append(second)
     expect(facts.readPageRecordRoute()).toBeUndefined()
+  })
+  it('withholds record identity during an exact pending read, then settles or blocks', () => {
+    const facts = createPageFacts(); ready(facts)
+    const settle = facts.begin('/admin-api/crm/customer/get?id=6')!
+    expect(facts.readPageBlocker()).toBe('pending')
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+    settle(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageBlocker()).toBe(false)
+    expect(facts.readPageRecordRoute()).toBe('/crm/customer/detail/6')
+    facts.begin('/admin-api/crm/customer/get?id=6')!(403, null)
+    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+  })
+  it('never calls a concurrent conflicting record read normal loading', () => {
+    const facts = createPageFacts(); ready(facts)
+    const wrong = facts.begin('/admin-api/crm/customer/get?id=7')!
+    const exact = facts.begin('/admin-api/crm/customer/get?id=6')!
+    expect(facts.readPageBlocker()).toBe(true)
+    wrong(200, {code: 0, data: {id: 7, name: 'Other Customer'}})
+    expect(facts.readPageBlocker()).toBe('pending')
+    exact(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageBlocker()).toBe(false)
+    const late = facts.begin('/admin-api/crm/customer/get?id=6')!
+    document.body.insertAdjacentHTML('beforeend', '<div class="el-message--error">Error</div>')
+    document.querySelector('.el-message--error')!.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    expect(facts.readPageBlocker()).toBe(true)
+    late(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageBlocker()).toBe(true)
   })
   it('ignores an old route completion and other origins or non-CRM requests', () => {
     const facts = createPageFacts()

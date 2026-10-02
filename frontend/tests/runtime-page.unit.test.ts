@@ -17,6 +17,18 @@ function controller(): PageControllerApi {
 }
 
 describe('the product PageController extraction policy', () => {
+  it('accepts explicit application loading while unknown blocker values fail closed', () => {
+    const read = (value: unknown) => new Page(controller(), () => null, createRedactor(),
+      undefined, undefined, undefined, undefined, () => value).readiness()
+    expect(read('pending')).toEqual({blocked: false, pending: true})
+    expect(read(false)).toEqual({blocked: false, pending: false})
+    for (const value of [true, null, undefined, 'ready', 0, {}]) {
+      expect(read(value)).toEqual({blocked: true, pending: false})
+    }
+    const failed = new Page(controller(), () => null, createRedactor(),
+      undefined, undefined, undefined, undefined, () => { throw new Error('unavailable') })
+    expect(failed.readiness()).toEqual({blocked: true, pending: false})
+  })
   it('observes only the current viewport', () => {
     expect(pageControllerOptions([]).viewportExpansion).toBe(0)
   })

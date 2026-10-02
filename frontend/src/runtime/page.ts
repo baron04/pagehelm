@@ -89,10 +89,13 @@ export class Page {
               private readonly readPageBlocker?: PageBlockerReader,
               private readonly readActiveView?: ActiveViewReader) {}
 
-  /** The application, not the generic Runtime, identifies a blocking error screen. */
-  blocked(): boolean {
-    if (!this.readPageBlocker) return false
-    try { return this.readPageBlocker() !== false } catch { return true }
+  /** App-owned loading is distinct from an error; unknown values remain blocking. */
+  readiness(): {blocked: boolean; pending: boolean} {
+    if (!this.readPageBlocker) return {blocked: false, pending: false}
+    try {
+      const state = this.readPageBlocker()
+      return {blocked: state !== false && state !== 'pending', pending: state === 'pending'}
+    } catch { return {blocked: true, pending: false} }
   }
 
   applyFacet(ref: unknown, active: unknown): Promise<unknown> {

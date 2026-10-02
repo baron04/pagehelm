@@ -392,7 +392,8 @@ agent.
   a single-page application has changed its URL but still exposes the prior page projection,
   the embedded Runtime marks rendering pending and the server does not report arrival; a
   later observation must show the replacement view. An application adapter may also report
-  a blocking page error; that state cannot settle a page target. When the target matches a
+  a blocking page error; that state cannot settle a page target. Application-reported loading
+  also keeps rendering pending when the URL and projection have not changed. When the target matches a
   ready observation, the server reports the reached state. An explicit request for a conventional
   List, Kanban, Calendar, Pivot, or Graph view also requires that view to be observed,
   even if the Agent declared only a path. An application may report its actually rendered

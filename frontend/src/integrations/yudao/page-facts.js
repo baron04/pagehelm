@@ -32,6 +32,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (!reads.has(key) && reads.size >= 64) { reads.set('overflow', {pending: 0, failed: true, panel: '*'}); return null }
     const prior = reads.get(key)
     const state = {pending: (prior?.pending || 0) + 1, failed: prior?.failed || false,
+      conflicts: (prior?.conflicts || 0) + Number(!matchesRecord),
       panel: isRecord ? '*' : panel, serial: (prior?.serial || 0) + 1}
     reads.set(key, state)
     const serial = state.serial
@@ -44,6 +45,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
       const latest = reads.get(key)
       if (!latest) return
       latest.pending = Math.max(0, latest.pending - 1)
+      latest.conflicts = Math.max(0, (latest.conflicts || 0) - Number(!matchesRecord))
       // Concurrent older completions cannot overwrite the newest request's verdict.
       if (latest.serial !== serial) return
       const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
@@ -60,15 +62,18 @@ export function createPageFacts({view = window, doc = document} = {}) {
   function readPageBlocker() {
     current()
     if (!/^\/crm\/(customer|contract|business)\/detail\/[0-9]+$/.test(route)) return false
-    if (!record) return true
     const titles = Array.from(doc.querySelectorAll('.text-xl.font-bold')).filter(visible)
-    if (titles.length !== 1 || titles[0].textContent?.trim() !== record.name) return true
-    if (Array.from(doc.querySelectorAll('.el-loading-mask, .el-message--error, .el-notification--error')).some(visible)) return true
+    if (titles.length !== 1 || record && titles[0].textContent?.trim() !== record.name) return true
+    if (Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).some(visible)) return true
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]')).filter(visible)
     if (selected.length !== 1) return true
     const panel = selected[0].getAttribute('aria-controls') || ''
-    return Array.from(reads.values()).some(s => (s.panel === '*' || !s.panel || s.panel === panel)
-      && (s.pending || s.failed))
+    const relevant = Array.from(reads.values()).filter(s => s.panel === '*' || !s.panel || s.panel === panel)
+    if (relevant.some(s => s.failed || s.conflicts)) return true
+    if (relevant.some(s => s.pending)) return 'pending'
+    if (!record) return true
+    if (Array.from(doc.querySelectorAll('.el-loading-mask')).some(visible)) return 'pending'
+    return false
   }
   function readPageRecordRoute() {
     current()

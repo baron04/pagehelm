@@ -38,4 +38,11 @@ describe('page render state across SPA routes', () => {
     expect(renderState(before, failed, null, true).state).toBe('blocked')
     expect(renderState(failed, failed, null, false).state).toBe('ready')
   })
+
+  it('waits for same-route application loading and retains blocked precedence', () => {
+    const current = page('https://app.test/editor', 'Editor controls')
+    expect(renderState(current, current, null, false, true).state).toBe('pending')
+    expect(renderState(current, current, null, true, true).state).toBe('blocked')
+    expect(renderState(current, current, null, false, false).state).toBe('ready')
+  })
 })

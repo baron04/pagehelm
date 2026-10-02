@@ -801,8 +801,9 @@ export class EmbeddedWebRuntime {
     const epoch = ++this.stored.epoch
     this._save()
     const reading = page.describe(state, epoch)
+    const applicationState = page.readiness()
     const readiness = renderState(this.currentObservation?.observation ?? null,
-      reading.observation, this.pendingView, page.blocked())
+      reading.observation, this.pendingView, applicationState.blocked, applicationState.pending)
     this.pendingView = readiness.pendingView
     reading.observation.render_state = readiness.state
     const envelope: ObservationEnvelope = {

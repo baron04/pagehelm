@@ -199,6 +199,9 @@ starting the host with the option. The optional nginx locations are in
 include them inside the HTTPS server and publish the container's proxy port on loopback.
 Also include `cloud/nginx.native-facts.filter.conf` inside the existing `location /`,
 alongside its loader filter. That location overrides server-level substitution filters.
+
+Normal detail/editor loading is reported as pending, including on an unchanged URL. Failed reads, conflicting record identities and visible error messages remain blocking; loading does not grant a verified record route. The Runtime waits for readiness before checking the editor instance and entering values.
+
 The deployment copies the app-owned `page-facts.js` and `yudao-page-controller.js`
 from `frontend/src/integrations/yudao/` into `/woa/`; the early facts module must execute
 before the application entry, otherwise record arrival fails closed.
