@@ -47,10 +47,12 @@ class TurnBudget:
             failed = self._failure
         if failed is not None:
             raise BudgetExhausted(*failed)
-        if self.remaining() <= 0:
+        remaining = self.remaining()
+        if remaining <= 0:
             exc = BudgetExhausted("wall_budget", "the shared turn deadline elapsed")
             self.fail(exc)
             raise exc
+        return remaining
 
     def reserve(self):
         self.check()

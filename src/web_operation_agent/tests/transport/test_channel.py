@@ -755,6 +755,40 @@ class ChannelTests(unittest.TestCase):
         self.assertNotIn("error", answer)
         self.assertEqual(answer["receipt"].observation.url, ORIGIN + "/next")
 
+    def test_action_deadline_and_wait_use_the_remaining_turn_budget(self):
+        browser = RemoteBrowserClient(self.channel, timeout_s=2)
+        browser.start()
+        before_ms = int(time.time() * 1000)
+        with mock.patch.object(self.channel, "wait_for_result", side_effect=TimeoutError) as wait:
+            with self.assertRaises(TransportError):
+                browser.execute_with_budget("fill", {"ref": "e0", "value": "Draft"},
+                                            timeout_s=0.25)
+        envelope = self.channel.pending_action
+        self.assertIsNotNone(envelope)
+        self.assertGreaterEqual(envelope.deadline, before_ms + 250)
+        self.assertLessEqual(envelope.deadline, int(time.time() * 1000) + 250)
+        self.assertEqual(wait.call_args.kwargs["timeout_s"], 0.25)
+        self.assertEqual(browser.timeout_s, 2)
+        self.assertEqual(browser.command_count, 1)
+
+    def test_turn_budget_cannot_extend_the_configured_action_timeout(self):
+        browser = RemoteBrowserClient(self.channel, timeout_s=0.5)
+        browser.start()
+        with mock.patch.object(self.channel, "wait_for_result", side_effect=TimeoutError) as wait:
+            with self.assertRaises(TransportError):
+                browser.execute_with_budget("observe", {}, timeout_s=10)
+        self.assertEqual(wait.call_args.kwargs["timeout_s"], 0.5)
+
+    def test_invalid_action_budgets_never_enqueue(self):
+        browser = RemoteBrowserClient(self.channel, timeout_s=2)
+        browser.start()
+        for invalid in (0, -1, float("nan"), float("inf"), True, "1"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                browser.execute_with_budget("fill", {"ref": "e0", "value": "Draft"},
+                                            timeout_s=invalid)
+        self.assertEqual(browser.command_count, 0)
+        self.assertIsNone(self.channel.pending_action)
+
     def test_async_observation_is_feedback_not_a_ref_rebinding(self):
         browser = RemoteBrowserClient(self.channel, timeout_s=2)
         self.assertEqual(browser.start()["url"], self.first.observation.url)

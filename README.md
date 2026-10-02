@@ -97,7 +97,12 @@ agent.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
   make a turn complete. Goal stages share one deadline and model-request limit (each
   request or retry uses one step; cache hits use none). Fixed browser and read substeps
-  check the same deadline and cancellation. The `goal_run_receipt` audit event records
+  check the same deadline and cancellation. Browser commands use the smaller of the
+  configured action timeout and remaining turn time; late receipts remain in the audit.
+  A form fill is complete only after the exact requested or application-normalized value
+  is observed on the same ready page and record. Failed selection never tries an alternate
+  value; only a pre-dispatch stale-observation refusal can retry the same value.
+  The `goal_run_receipt` audit event records
   stage times, request counts and serialized input bytes without prompt or result content;
   overlapping intervals are counted once within a stage and for total model occupancy.
   Token and cost totals come from the spend meter; unavailable usage remains unknown.
@@ -303,6 +308,8 @@ agent.
   types that draft, checks the live field values and, where an application declares a
   read-only window, requires its acknowledgement of release before ending the turn.
   It never clicks or submits the form.
+  Fixed prefill steps inherit elapsed turn time, recheck cancellation after approval,
+  and stop after a late receipt without replaying entered fields or issuing the next step.
   A named field wrapper may identify its input; a containing HTML form's name cannot.
   The Runtime rechecks that binding at handoff and refuses an action if the wrapper changes.
   Live credential identities also redact the control's text and value projections.

@@ -149,6 +149,10 @@ class _Browser:
     def start(self):
         return {"ok": True}
 
+    def execute_with_budget(self, action, args=None, *, timeout_s,
+                            expect_navigation=False):
+        return self.execute(action, args, expect_navigation=expect_navigation)
+
     def _observation(self):
         candidates = [{"ref": "fc_1", "kind": "filter", "name": "My Orders",
                        "active": any(f["name"] == "My Orders" for f in self.facets)},
@@ -521,7 +525,8 @@ class GoalTurnTests(unittest.TestCase):
                                                     fill_field="customer"))],
             text="S00005 的客户换成 Nobody")
         self.assertEqual(_Browser.instances[0].fields["Customer"], "Gemini Furniture")
-        self.assertIn("没能填入「Nobody」", execution.user_answer)
+        self.assertIn("未能核验「Nobody」的填写结果", execution.user_answer)
+        self.assertIn("部分值可能已输入", execution.user_answer)
         self.assertIn("标出「Customer」", execution.user_answer)
 
     def test_two_readings_that_differ_are_decided_by_a_third(self):

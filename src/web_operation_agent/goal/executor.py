@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from ..business.approvals import PAGE_OPERATIONS, ApprovalWatch, OperationPlan
 from ..business.control import ApprovalGate, ApprovalGrant
 from ..business.writes import WriteWatch
+from ..business.tools.contracts import form_control_unavailable
 from ..answer.conclusion import ConclusionRefused
 from ..composition.binding import BoundApplication
 from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnErrorCode,
@@ -1710,7 +1711,9 @@ class GoalTurnExecutor:
         s.writes.expect_decision(False)
         try:
             with s.receipt.stage("wait" if action == "wait_for" else "ui"):
-                receipt = s.browser.execute(action, args, expect_navigation=navigating)
+                receipt = s.browser.execute_with_budget(
+                    action, args, timeout_s=s.budget.check(),
+                    expect_navigation=navigating)
         except TurnCancelled as exc:
             s.terminal_reason, s.detail = "user_cancelled", str(exc)[:200]
             return None
@@ -1729,6 +1732,7 @@ class GoalTurnExecutor:
             s.page_actions += 1
         if receipt.observation is not None:
             s.obs = receipt.observation
+        s.budget.check()
         return receipt
 
     def _wait_ready(self, s: _TurnState, expected_path: str, *, record: bool) -> bool:
@@ -1934,23 +1938,38 @@ class GoalTurnExecutor:
         write guard holds throughout, and saving is the person's.
         """
         shown = plan.fill_label or plan.fill
+        path, record = _path_of(s.obs.url), s.obs.record_route
+
+        def enter(action, value):
+            current = element
+            for attempt in range(3):
+                before = s.obs.epoch
+                receipt = self._dispatch(s, action, {"ref": current.ref, "epoch": before,
+                                                      "value": value})
+                if receipt is None:
+                    return False
+                if receipt.ok:
+                    return (receipt.observation is not None and s.obs.epoch > before
+                            and _path_of(s.obs.url) == path
+                            and s.obs.record_route == record)
+                # Only this typed pre-dispatch refusal proves that nothing was entered.
+                # Acknowledged errors and missing/unknown outcomes never change value
+                # and retry: onchange may already have run.
+                if receipt.error_code != "stale_observation" or attempt == 2:
+                    return False
+                if (_path_of(s.obs.url) != path or s.obs.record_route != record
+                        or s.obs.render_state in {"pending", "blocked"}):
+                    return False
+                current = self._find_input(s, plan)
+                if current is None:
+                    return False
+            return False
+
         if plan.fill_kind == "choice":
-            receipt = self._dispatch(s, "select", {"ref": element.ref, "epoch": s.obs.epoch,
-                                                   "value": plan.fill})
-            if receipt is None or not receipt.ok:
-                if s.terminal_reason:
-                    return "", False
-                again = self._find_input(s, plan)
-                if again is None:
-                    return "", False
-                receipt = self._dispatch(s, "select", {"ref": again.ref, "epoch": s.obs.epoch,
-                                                       "value": plan.fill_label})
-                if receipt is None or not receipt.ok:
-                    return "", False
+            if not enter("select", plan.fill):
+                return "", False
         else:
-            receipt = self._dispatch(s, "fill", {"ref": element.ref, "epoch": s.obs.epoch,
-                                                 "value": plan.fill})
-            if receipt is None or not receipt.ok:
+            if not enter("fill", plan.fill):
                 return "", False
             if plan.fill_kind == "link":
                 self._dispatch(s, "wait_for", {"ms": 600})
@@ -1959,10 +1978,6 @@ class GoalTurnExecutor:
                 wanted = _norm(plan.fill)
                 options = [e for e in s.obs.elements
                            if e.role in _SUGGESTION_ROLES and e.name and _norm(e.name) == wanted]
-                if not options:
-                    options = [e for e in s.obs.elements
-                               if e.role in _SUGGESTION_ROLES and e.name
-                               and _norm(e.name).startswith(wanted)]
                 if len(options) != 1:
                     s.ledger.append("goal_fill_suggestion_missing", step=s.step,
                                     suggestions=len(options))
@@ -1975,9 +1990,9 @@ class GoalTurnExecutor:
             return "", False
         current = self._find_input(s, plan)
         value = str((current.attrs.get("value") if current is not None else "") or "")
-        verified = bool(value) and (_norm(value) == _norm(shown)
-                                    or set(re.findall(r"\d+", shown)) <= set(re.findall(r"\d+", value))
-                                    and bool(re.findall(r"\d+", shown)))
+        verified = (current is not None and value in {plan.fill, shown}
+                    and s.obs.render_state == "ready" and _path_of(s.obs.url) == path
+                    and s.obs.record_route == record)
         s.ledger.append("goal_field_filled", step=s.step, control=plan.highlight,
                         kind=plan.fill_kind, verified=verified, shown=bool(value))
         return shown, verified
@@ -2063,9 +2078,16 @@ class GoalTurnExecutor:
         if plan.fill_field:
             inputs = [e for e in s.obs.elements if e.role in _INPUT_ROLES
                       and str(e.attrs.get("field") or "") == plan.fill_field]
-            if len(inputs) == 1:
-                return inputs[0]
-        return self._find_control(s, plan.highlight, input=True)
+            if inputs:
+                return (inputs[0] if len(inputs) == 1
+                        and not form_control_unavailable(inputs[0].attrs) else None)
+        # A missing semantic field is not permission to type into a differently named
+        # one. A label-only page may still bind one exact unnamed, available input.
+        inputs = [e for e in s.obs.elements if e.role in _INPUT_ROLES
+                  and not form_control_unavailable(e.attrs)
+                  and (not plan.fill_field or not e.attrs.get("field"))
+                  and _norm(str(e.attrs.get("field_label") or e.name)) == _norm(plan.highlight)]
+        return inputs[0] if len(inputs) == 1 else None
 
     def _find_control(self, s: _TurnState, control: str, *, input: bool = False,
                       among=None, in_menu: bool = False, exact: bool = False):
@@ -2380,7 +2402,9 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
     if resolved.kind in ("aggregate", "list") and resolved.aggregate is not None:
         return True
     if outcome is not None:
-        return outcome.reached and not outcome.unmet
+        return (outcome.reached and not outcome.unmet
+                and (not resolved.page or not resolved.page.fill
+                     or bool(outcome.filled and outcome.fill_verified)))
     return False
 
 
@@ -2596,25 +2620,32 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
         if resolved.kind == "handoff":
-            if outcome.highlighted and outcome.filled:
+            if outcome.highlighted and outcome.filled and not outcome.fill_verified:
+                lines.append((f"已打开 {plan.label} 并标出「{outcome.highlighted}」。"
+                              f"尝试输入「{outcome.filled}」，但未能核验页面中的完整值；"
+                              "请检查当前字段后自行保存，助手没有提交。") if zh else
+                             (f"Opened {plan.label} and highlighted “{outcome.highlighted}”. "
+                              f"Attempted to enter “{outcome.filled}”, but could not verify "
+                              "the complete value on the page. Check the field and save "
+                              "it yourself; the assistant did not submit."))
+            elif outcome.highlighted and outcome.filled:
                 # The field holds the value; saving is the person's. A form that saves
                 # itself on leaving the page needs a deliberate discard when unwanted.
-                check = "" if outcome.fill_verified else ("（页面未回显，请核对）" if zh
-                                                          else " (not shown back by the page; please check)")
                 lines.append((f"已打开 {plan.label}，已在「{outcome.highlighted}」填入"
-                              f"「{outcome.filled}」{check}并标出，请你核对后自行保存；"
+                              f"「{outcome.filled}」并标出，请你核对后自行保存；"
                               "助手只做准备，提交由你完成。不需要这次修改就点放弃。") if zh else
                              (f"Opened {plan.label} and entered “{outcome.filled}” in "
-                              f"“{outcome.highlighted}”{check}; please check it and save it "
+                              f"“{outcome.highlighted}”; please check it and save it "
                               "yourself. The assistant prepares, you submit. Discard it if "
                               "the change is not wanted."))
             elif outcome.highlighted and outcome.fill_failed:
                 lines.append((f"已打开 {plan.label} 并在页面上标出「{outcome.highlighted}」，"
-                              f"但没能填入「{outcome.fill_failed}」，请你自行填写并保存；"
+                              f"但未能核验「{outcome.fill_failed}」的填写结果，部分值可能已输入；请检查后自行保存；"
                               "助手只做准备，提交由你完成。") if zh else
                              (f"Opened {plan.label} and highlighted “{outcome.highlighted}”, "
-                              f"but could not enter “{outcome.fill_failed}”; please enter and "
-                              "save it yourself. The assistant prepares, you submit."))
+                              f"but could not verify entry of “{outcome.fill_failed}”; some "
+                              "values may have been entered. Check the page and save it "
+                              "yourself. The assistant prepares, you submit."))
             elif outcome.highlighted and outcome.menu:
                 # The control is an item of a menu the turn opened; the page may close the
                 # menu when the person clicks elsewhere, so the reply says where it is.

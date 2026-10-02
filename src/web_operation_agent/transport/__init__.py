@@ -7,6 +7,7 @@ browser client are the embedded shipping implementation behind that contract.
 #: name -> submodule, resolved on first access; see the note in ``state/__init__``.
 _EXPORTS = {
     "BrowserExecutor": "browser",
+    "DeadlineBrowserExecutor": "browser",
     "RemoteBrowserClient": "browser",
     "TransportError": "browser",
     "TurnCancelled": "browser",

@@ -8,6 +8,7 @@ and typed transport outcomes prevents a second browser engine from silently dive
 from __future__ import annotations
 
 import uuid
+import math
 
 from typing import Protocol, runtime_checkable
 
@@ -34,6 +35,14 @@ class BrowserExecutor(Protocol):
                 expect_navigation: bool = False) -> ActionReceipt: ...
 
     def console(self) -> list[str]: ...
+
+
+class DeadlineBrowserExecutor(BrowserExecutor, Protocol):
+    """Server transport that also bounds an action by the remaining turn time."""
+
+    def execute_with_budget(self, action: str, args: dict | None = None, *,
+                            timeout_s: float,
+                            expect_navigation: bool = False) -> ActionReceipt: ...
 
 
 class RemoteBrowserClient:
@@ -93,6 +102,20 @@ class RemoteBrowserClient:
 
     def execute(self, action: str, args: dict | None = None, *,
                 expect_navigation: bool = False) -> ActionReceipt:
+        return self._execute(action, args, expect_navigation=expect_navigation,
+                             timeout_s=self.timeout_s)
+
+    def execute_with_budget(self, action: str, args: dict | None = None, *,
+                            timeout_s: float,
+                            expect_navigation: bool = False) -> ActionReceipt:
+        if (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or timeout_s <= 0):
+            raise ValueError("action time budget must be positive and finite")
+        return self._execute(action, args, expect_navigation=expect_navigation,
+                             timeout_s=min(self.timeout_s, timeout_s))
+
+    def _execute(self, action: str, args: dict | None, *,
+                 timeout_s: float, expect_navigation: bool) -> ActionReceipt:
         observation = self._delivered_observation
         if observation is None:
             raise TransportError("no page observation has been delivered to the server Agent")
@@ -108,7 +131,7 @@ class RemoteBrowserClient:
             action_id=action_id,
             based_on_observation_id=observation.observation_id,
             page_epoch=observation.page_epoch,
-            deadline=_now_ms() + int(self.timeout_s * 1000),
+            deadline=_now_ms() + int(timeout_s * 1000),
             command_digest=command.content_digest,
             command=command,
         )
@@ -121,7 +144,7 @@ class RemoteBrowserClient:
                 before=observation, fresh=latest)
         try:
             self.channel.enqueue_action(envelope)
-            result = self.channel.wait_for_result(action_id, timeout_s=self.timeout_s)
+            result = self.channel.wait_for_result(action_id, timeout_s=timeout_s)
         except (TimeoutError, RemoteProtocolError) as exc:
             if isinstance(exc, RemoteProtocolError) and exc.code == "turn_cancelled":
                 raise TurnCancelled(str(exc)) from exc

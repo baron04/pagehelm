@@ -201,6 +201,10 @@ class _Browser:
     def console():
         return []
 
+    def execute_with_budget(self, action, args=None, *, timeout_s,
+                            expect_navigation=False):
+        return self.execute(action, args, expect_navigation=expect_navigation)
+
 
 class _Chat(CancellableChatDouble):
     def __init__(self, script):

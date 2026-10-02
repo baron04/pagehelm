@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 
 from ..transport.browser import TransportError, TurnCancelled
 from ..answer.evidence import EvidenceUnknown, SourceEvidence
@@ -14,6 +15,8 @@ from ..business.tools.contracts import matches_form_control, form_control_unavai
 from ..schemas import PageObservation
 from .routes import observation_is_at_route
 from .runstate import _Next, _Turn
+from .budget import TurnBudget
+from ..modeling.spend import BudgetExhausted
 
 
 def _form_identity(session, step: int, tool: str) -> tuple[object, dict]:
@@ -147,7 +150,15 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
         if reason:
             return _Next(session._finish(turn.result, turn.started_at, reason, detail,
                                       steps=turn.step))
-    prefilled, reason, detail = apply_form_draft(session, draft, turn.obs, turn.step)
+    # Inherit the loop's elapsed time rather than starting a new form deadline. The
+    # generic loop excludes user approval waits, so this clock keeps that same policy.
+    budget = TurnBudget(steps=1, seconds=session.wall_budget_s,
+                        cancelled=session._cancel_requested,
+                        clock=lambda: time.monotonic() - session._approvals.waited_ms / 1000)
+    budget.started -= max(0.0, time.time() - turn.started_at
+                          - session._approvals.waited_ms / 1000)
+    prefilled, reason, detail = apply_form_draft(
+        session, draft, turn.obs, turn.step, budget=budget)
     if prefilled is not None:
         turn.obs = prefilled
     chinese = bool(re.search(r"[\u3400-\u9fff]", session.task.prompt))
@@ -221,7 +232,8 @@ def observe_after_business_mutation(session, obs: PageObservation, step: int,
 
 def apply_form_draft(
         session, draft: FormDraft, observation: PageObservation,
-        step: int) -> tuple[PageObservation | None, str, str]:
+        step: int, *, budget: TurnBudget | None = None
+        ) -> tuple[PageObservation | None, str, str]:
     """Apply one adapter-issued transient draft without exposing its bindings to choice.
 
     The application has attested the persistence behavior of these exact fields. This
@@ -230,6 +242,22 @@ def apply_form_draft(
     receipt for the actual values and release of the read-only window.
     """
     current = observation
+
+    def stopped():
+        try:
+            if session._cancel_requested():
+                raise TurnCancelled("the user stopped before form preparation")
+            if budget is not None:
+                budget.check()
+        except TurnCancelled as exc:
+            return "user_cancelled", str(exc)
+        except BudgetExhausted as exc:
+            return ("wall_clock_budget" if exc.kind == "wall_budget" else exc.kind), str(exc)
+        return "", ""
+
+    reason, detail = stopped()
+    if reason:
+        return current, reason, detail
     if current.render_state in {"pending", "blocked"}:
         return current, "agent_refused", "the current form page is not ready"
     #: The error code the last dispatched command came back with, so the caller can
@@ -241,8 +269,9 @@ def apply_form_draft(
 
     def dispatch(action: str, args: dict, field: str,
                  before: PageObservation) -> tuple[PageObservation | None, str, str]:
-        if session._cancel_requested():
-            return before, "user_cancelled", "the user stopped before form preparation"
+        reason, detail = stopped()
+        if reason:
+            return before, reason, detail
         # Opening and filling the form is working the page, like any other operation --
         # except the typing into a form the application saves by itself, which that form's
         # own confirmation already covered, field by field.
@@ -252,14 +281,22 @@ def apply_form_draft(
                 url=args.get("url", "") if action == "goto" else "")
             if reason:
                 return before, reason, detail
+        # Permission may have waited. Recheck before dispatch, not only before asking.
+        reason, detail = stopped()
+        if reason:
+            return before, reason, detail
         prior_epoch = before.epoch
         nonlocal last_code
         last_code = ""
         try:
             session._browser_attempts += 1
-            receipt = session.browser.execute(action, args)
+            receipt = (session.browser.execute_with_budget(
+                action, args, timeout_s=budget.check()) if budget is not None
+                else session.browser.execute(action, args))
         except TurnCancelled as exc:
             return before, "user_cancelled", str(exc)
+        except BudgetExhausted as exc:
+            return before, ("wall_clock_budget" if exc.kind == "wall_budget" else exc.kind), str(exc)
         except TransportError as exc:
             return before, "transport_error", str(exc)
         if action not in ("observe", "wait_for"):
@@ -284,6 +321,11 @@ def apply_form_draft(
         last_code = str(receipt.error_code or "")
         if receipt.error_code == "user_intervened":
             return receipt.observation or before, "user_cancelled", "the person took control"
+        # Record the acknowledgement and write attribution before reporting a deadline.
+        # A late receipt must never be discarded or invite replay of entered fields.
+        reason, detail = stopped()
+        if reason:
+            return receipt.observation or before, reason, detail
         if (not receipt.ok or receipt.observation is None
                 or receipt.observation.epoch <= prior_epoch):
             return (receipt.observation or before, "agent_refused",
