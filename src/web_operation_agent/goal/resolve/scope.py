@@ -11,6 +11,7 @@ from ..index import IndexPage
 from ..ports import Aggregate, Resolved
 from ..spec import Deliverable, Filter, Metric, PageSpec
 from .view import EntityView
+from .extrema import EXTREME_READ_LIMIT, resolve_extreme
 from .words import EMPTY, NOT_EMPTY, norm, period, worded
 
 _RECORD_LIMIT = 40
@@ -279,6 +280,8 @@ class ScopeMixin:
         domain, described, default_clauses = scope.domain, scope.described, scope.default_clauses
         metric = d.metric or Metric(op="count")
         subject = " · ".join(described)
+        if metric.op in ("min", "max") and (d.kind != "aggregate" or metric.group_by or metric.top):
+            return Resolved(kind=d.kind, problem="Numeric extremes require an aggregate without grouping or top-N.")
         if d.kind == "list" and default_clauses and not self._count(model, domain):
             # The page's own default filters hid every match; the person asked about the
             # page's entity, so the answer says so and looks past the defaults.
@@ -331,6 +334,17 @@ class ScopeMixin:
             page_parts = parts(action.scope)
             widened = self._count(model, [c for c in domain if c not in page_parts])
         sums: list[tuple[str, str]] = []
+        if metric.op in ("min", "max"):
+            key = view.field_by_label(metric.field) if metric.field else None
+            info = view.info(key)
+            if info is None or info.kind not in ("money", "number"):
+                return Resolved(kind=d.kind, problem=f"{metric.field!r} cannot be compared numerically")
+            if count > EXTREME_READ_LIMIT:
+                return Resolved(kind=d.kind, problem="Scope exceeds the complete numeric comparison limit.")
+            rows = self._rows(model, domain, fields=(key,), limit=count + 1)
+            return resolve_extreme(operation=metric.op, label=info.label, key=key,
+                                   subject=" · ".join(described), count=count,
+                                   after=self._count(model, domain), rows=rows)
         if metric.op == "sum":
             key = view.field_by_label(metric.field) if metric.field else None
             info = view.info(key)

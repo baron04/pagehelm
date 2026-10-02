@@ -712,6 +712,16 @@ class GoalTurnTests(unittest.TestCase):
         self.assertFalse(repaired["accepted"])
         self.assertIn("你指的是哪一个", execution.user_answer)
 
+    def test_repair_cannot_replace_an_extreme_with_a_count(self):
+        execution, _channel, _chat, _port, events = self._run(
+            [_declaration(kind="aggregate", entity="order", metric={"op": "max", "field": "Unknown"}),
+             _declaration(kind="aggregate", entity="order", metric={"op": "count"})],
+            [Resolved(kind="aggregate", problem="Cannot compare Unknown", repair="Use the indexed Total")],
+            resolved_then=[Resolved(kind="aggregate", aggregate=Aggregate(subject="Orders", count=13))],
+            text="金额最高的订单有哪些？", readings=1)
+        self.assertFalse(next(e for e in events if e["event"] == "goal_repaired")["accepted"])
+        self.assertNotEqual(execution.status, AgentTurnStatus.FINISHED)
+
     def test_repair_cannot_finish_by_dropping_an_unresolved_part(self):
         two = ("declare_goal", {"deliverables": [
             {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]},

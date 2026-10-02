@@ -187,6 +187,33 @@ _TRANSLATIONS = OdooTranslations(
 
 
 class OdooGoalPortTests(unittest.TestCase):
+    def test_extreme_uses_the_same_complete_query_contract_over_orm(self):
+        class Client(_Client):
+            currencies = ([1, "USD"],) * 5
+            def call(self, model, method, args=None, kwargs=None):
+                if model == "sale.order" and method == "search_count":
+                    return 5
+                if model == "sale.order" and method == "search_read":
+                    return [{"id": i+1, "display_name": f"Order {i}", "amount_total": value,
+                             "currency_id": self.currencies[i]}
+                            for i, value in enumerate((0, 750, 750, False, -30))]
+                return super().call(model, method, args, kwargs)
+        port = DataGoalPort(OdooGoalData(Client(), translations=_TRANSLATIONS))
+        for op, names in (("max", ("Order 1", "Order 2")), ("min", ("Order 4",))):
+            result = port.resolve(GoalSpec.from_json({"deliverables": [{"kind": "aggregate",
+                "entity": "sale.order", "metric": {"op": op, "field": "Total"}}]})).deliverables[0]
+            self.assertFalse(result.problem)
+            self.assertEqual(result.aggregate.records, names)
+            self.assertIn("USD", result.aggregate.extreme[2])
+        for currencies in (([1, "USD"], [2, "EUR"], [1, "USD"], False, [1, "USD"]),
+                           ([1, "USD"], False, [1, "USD"], False, [1, "USD"])):
+            client = Client()
+            client.currencies = currencies
+            result = DataGoalPort(OdooGoalData(client, translations=_TRANSLATIONS)).resolve(
+                GoalSpec.from_json({"deliverables": [{"kind": "aggregate", "entity": "sale.order",
+                    "metric": {"op": "max", "field": "Total"}}]})).deliverables[0]
+            self.assertTrue(result.problem)
+
     def setUp(self):
         self.client = _Client()
         self.data = OdooGoalData(self.client, translations=_TRANSLATIONS)

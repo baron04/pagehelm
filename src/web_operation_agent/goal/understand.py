@@ -27,7 +27,7 @@ Use only entity keys, field labels, page keys, filters, groups, sections and act
 
 Kinds and required details:
 - fact: fields of a named record; set entity, record and fields.
-- aggregate: count or sum with metric.op, metric.field for sum, and metric.filters using index choice labels or the person's names. page.key identifies the list's scope (customer invoices vs vendor bills, quotations vs confirmed orders). Use metric.group_by and top for "which X has the most".
+- aggregate: metric.op count/sum/min/max; metric.field for sum/min/max. Numeric highest/lowest uses max/min, returning all ties among known values; never group_by/top or a sorted limited list. Most records per category uses count + group_by/top. metric.filters uses index choice labels or the person's names. page.key identifies the list's scope (customer invoices vs vendor bills, quotations vs confirmed orders).
 - list: matching records; set entity, page.key and page.search translated to the application's language.
 - page: only an explicit open/show/navigate request or a question asking where something is viewed or configured. A list uses page.key, view, filters_on/off and group_by; a record uses entity, record and section if requested.
 - handoff: a requested change, create, confirm, send, pay, cancel or register; set write_intent true and the existing record's indexed action. For a new record, leave record empty; use the collection page and action "create" only if its operations allow create. Never search for a proposed new name. The assistant does not perform the change itself.

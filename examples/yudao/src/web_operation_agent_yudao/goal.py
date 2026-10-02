@@ -609,7 +609,8 @@ class YudaoGoalData:
             rows.sort(key=lambda r: _sortable(r.id if field == ID else r.display if field == NAME
                                               else r.values.get(field)), reverse=descending)
         return tuple(Row(r.id, r.display, {k: v for k, v in r.values.items() if k in fields},
-                         {k: v for k, v in r.shown.items() if k in fields}) for r in rows[:limit])
+                         {k: v for k, v in r.shown.items() if k in fields},
+                         {k: v for k, v in r.units.items() if k in fields}) for r in rows[:limit])
 
     def total(self, entity: str, where: Cond, field: str) -> tuple[float, str]:
         amount = Decimal(0)
@@ -923,7 +924,7 @@ class YudaoGoalData:
     def _row(self, entity: str, row: dict, fields) -> Row:
         schema = self.schema().entity(entity)
         spec = self._entities.get(entity)
-        values, shown = {}, {}
+        values, shown, units = {}, {}, {}
         for key in fields:
             if key in (NAME, ID):
                 continue
@@ -935,7 +936,11 @@ class YudaoGoalData:
             value, text = self._value(info, raw, row, spec,
                                       money_unit=self._money_for(entity, key))
             values[key], shown[key] = value, text
-        return Row(id=str(row.get("id")), display=self._display(entity, row), values=values, shown=shown)
+            if info.kind == "money":
+                unit = self._money_for(entity, key)
+                units[key] = "元" if unit in ("元", "分") else unit
+        return Row(id=str(row.get("id")), display=self._display(entity, row),
+                   values=values, shown=shown, units=units)
 
     def _money_for(self, entity: str, key: str) -> str:
         spec = self._entities.get(entity) or self._lines.get(entity)

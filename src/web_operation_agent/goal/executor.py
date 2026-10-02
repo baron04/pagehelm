@@ -1204,6 +1204,9 @@ class GoalTurnExecutor:
             # except a change asked for, which the repair may make a handoff.
             kept = len(repaired.deliverables) == len(spec.deliverables) and all(
                 after.kind in (before.kind, "handoff")
+                and (before.metric is None or before.metric.op not in ("min", "max")
+                     or (after.kind == "aggregate" and after.metric is not None
+                         and after.metric.op == before.metric.op))
                 for before, after in zip(spec.deliverables, repaired.deliverables))
             # A kind of record the person named ("这个客户") is the one they mean: a repair
             # may not answer from another entity's record of the same name instead.
@@ -2617,9 +2620,22 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                          + "\n" + "\n".join(resolved.citations))
     agg = resolved.aggregate
     if agg is not None:
+        if agg.extreme is not None:
+            operation, label, value = agg.extreme
+            adjective = ("最高" if operation == "max" else "最低") if zh else (
+                "maximum" if operation == "max" else "minimum")
+            head = f"**{agg.subject} · {label} {adjective}**：" if zh else f"**{agg.subject} · {label} {adjective}**: "
+            if value is None:
+                head += "没有已知数值。" if zh else "No known numeric values."
+            else:
+                head += value + (f"；全部并列记录（{len(agg.records)} 条）：" if zh
+                                 else f"; all tied records ({len(agg.records)}):")
+                head += "".join(f"\n{n}. {' '.join(str(record).split())}"
+                                for n, record in enumerate(agg.records, 1))
+            lines.append(head)
         # Records listed are shown as a list, whichever kind asked for them (a fact
         # about some lines is answered with those lines).
-        if resolved.kind == "list" or agg.records:
+        elif resolved.kind == "list" or agg.records:
             # A record's name may carry a line break (a product's description under its
             # name); one record reads as one line.
             records = [" ".join(str(r).split()) for r in agg.records]

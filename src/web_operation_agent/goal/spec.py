@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import json
 
 KINDS = ("fact", "aggregate", "list", "page", "handoff")
-METRIC_OPS = ("count", "sum")
+METRIC_OPS = ("count", "sum", "min", "max")
 _MAX_DELIVERABLES = 4
 _MAX_TEXT = 120
 _MAX_REASON = 400
@@ -87,7 +87,7 @@ class Filter:
 @dataclass(frozen=True)
 class Metric:
     op: str
-    #: The field summed, for `sum`; empty for a count.
+    #: The numeric field for sum/min/max; empty for a count.
     field: str = ""
     filters: tuple[Filter, ...] = ()
     #: Page filters, by name, whose scope applies (e.g. "To pay").
@@ -105,7 +105,7 @@ class Metric:
             raise ValueError("metric must be an object")
         op = _text(value.get("op"), "metric op").lower() or "count"
         if op not in METRIC_OPS:
-            raise ValueError("metric op must be count or sum")
+            raise ValueError("metric op must be count, sum, min or max")
         top = value.get("top", 0) or 0
         if isinstance(top, bool) or not isinstance(top, int) or top < 0 or top > 20:
             raise ValueError("metric top must be an integer from 0 to 20")
@@ -341,7 +341,7 @@ DECLARE_GOAL_TOOL = {
                                        "description": "field labels asked about (fact), or columns to show (list). The lines of an order or invoice are a list of the line entity with a condition on its link field to the record, not a page section."},
                             "metric": {
                                 "type": "object",
-                                "description": "what to count or sum, or the conditions (customer, amount, status, date) that pick out the one record a fact, page or handoff is about",
+                                "description": "count, sum, numeric min/max (all tied records), or conditions identifying a record",
                                 "properties": {
                                     "op": {"type": "string", "enum": list(METRIC_OPS)},
                                     "field": {"type": "string"},

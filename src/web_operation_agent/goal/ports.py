@@ -56,6 +56,8 @@ class Aggregate:
     complete: bool = True
     #: A qualification the reply must carry, e.g. the wider count when the scope is empty.
     note: str = ""
+    #: (operation, field label, displayed value); None value means no known values.
+    extreme: tuple[str, str, str | None] | None = None
 
 
 @dataclass(frozen=True)

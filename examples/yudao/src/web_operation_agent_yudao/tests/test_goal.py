@@ -140,6 +140,31 @@ class _Client:
 
 
 class YudaoGoalDataTests(unittest.TestCase):
+    def test_extreme_returns_all_ties_and_not_the_most_frequent_amount(self):
+        rows = [dict(CONTRACTS[1][0], id=100+i, name=f"Synthetic {i}", totalPrice=amount)
+                for i, amount in enumerate((0, 0, 0, 8000, 3500, 8000, None, -30))]
+        with patch.object(self.data, "_matching", return_value=rows):
+            for op, names in (("max", ("Synthetic 3", "Synthetic 5")), ("min", ("Synthetic 7",))):
+                result = self.ask({"kind": "aggregate", "entity": "crm/contract",
+                                   "metric": {"op": op, "field": "合同金额"}})
+                self.assertFalse(result.problem)
+                self.assertEqual(result.aggregate.records, names)
+            self.assertTrue(self.ask({"kind": "aggregate", "entity": "crm/contract",
+                                     "metric": {"op": "max", "field": "合同金额", "group_by": "合同金额"}}).problem)
+            self.assertTrue(self.ask({"kind": "list", "entity": "crm/contract",
+                                     "metric": {"op": "max", "field": "合同金额"}}).problem)
+
+    def test_extreme_refuses_truncation_and_scope_above_the_bound(self):
+        with patch.object(self.data, "count", return_value=4001), patch.object(self.data, "rows") as read:
+            result = self.ask({"kind": "aggregate", "entity": "crm/contract",
+                               "metric": {"op": "max", "field": "合同金额"}})
+            self.assertTrue(result.problem)
+            read.assert_not_called()
+        with patch.object(self.data, "rows", return_value=()):
+            result = self.ask({"kind": "aggregate", "entity": "crm/contract",
+                               "metric": {"op": "max", "field": "合同金额"}})
+            self.assertTrue(result.problem)
+
     def test_date_exclusion_counts_outside_the_month_and_returns_the_same_records(self):
         declaration = {"kind": "aggregate", "entity": "crm/contract", "metric": {
             "op": "count", "filters": [{"field": "下单日期", "op": "!=", "values": ["2026-09"]}]}}

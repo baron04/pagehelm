@@ -16,7 +16,7 @@ agent.
 - A goal-directed turn asks the model to declare the request against the application's index (entities,
   fields, pages, views, filters, groups, sections and controls, compiled by the adapter
   under the acting user). The server resolves each declaration deterministically: records by the application's own name search,
-  field values by typed reads, counts and sums by scoped queries, pages by reviewed action
+  field values by typed reads, counts, sums and numeric extremes by scoped queries, pages by reviewed action
   routes, tabs by their visible name, filters and groups by the page's own facet state, and
   a requested change by highlighting its control for the person. Working the page still takes
   the turn's one leave, every page command runs under the application's page write control, and no
@@ -95,6 +95,12 @@ agent.
   half-open period and excludes missing dates; adapters apply the user's time zone.
   Date exclusion headings retain the exclusion operator in both languages.
   Query results may carry page links, but only a declared page or handoff goal navigates.
+  Numeric minimum/maximum queries return every tied record in a complete scope of at
+  most 4,000 records. Missing values are excluded; zero and negative values remain.
+  Incomplete reads, invalid numbers and differing or unknown currencies are refused;
+  native field units are retained when the application declares no currency. No currency
+  conversion is inferred. Counts checked before and after the read detect count changes,
+  but do not provide a database snapshot across those reads.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
   make a turn complete. Goal stages share one deadline and model-request limit (each
   request or retry uses one step; cache hits use none). Fixed browser and read substeps

@@ -349,12 +349,15 @@ class _OdooData:
     @staticmethod
     def _read_fields(meta: _ModelMeta, fields) -> list[str]:
         out = [f for f in fields if f in meta.fields]
-        if any(meta.fields[f].get("type") == "monetary" for f in out) and "currency_id" in meta.fields:
-            out.append("currency_id")
+        for f in tuple(out):
+            if meta.fields[f].get("type") == "monetary":
+                currency = meta.fields[f].get("currency_field") or "currency_id"
+                if currency in meta.fields:
+                    out.append(currency)
         return list(dict.fromkeys(out))
 
     def _row(self, meta: _ModelMeta, row: dict, fields) -> Row:
-        values, shown = {}, {}
+        values, shown, units = {}, {}, {}
         for field in fields:
             info = meta.fields.get(field)
             if info is None:
@@ -367,8 +370,12 @@ class _OdooData:
             else:
                 values[field] = raw
             shown[field] = self._display(raw, info, row)
+            if info.get("type") == "monetary":
+                currency = row.get(info.get("currency_field") or "currency_id")
+                units[field] = (f"currency:{currency[0]}" if isinstance(currency, (list, tuple))
+                                and len(currency) > 1 else "unknown-currency")
         return Row(id=str(row.get("id", "")), display=str(row.get("display_name") or ""),
-                   values=values, shown=shown)
+                   values=values, shown=shown, units=units)
 
 
 def _native(payload, label: str, domain) -> Cond:

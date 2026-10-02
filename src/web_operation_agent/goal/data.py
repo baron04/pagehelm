@@ -300,6 +300,9 @@ class Row:
     values: dict = field(default_factory=dict)
     #: field key -> the value as the application shows it ("1,250.00 EUR", "Posted").
     shown: dict = field(default_factory=dict)
+    #: Comparable unit identity for numeric fields, supplied by the adapter (e.g.
+    #: currency record ID). Empty means native field units, never an inferred currency.
+    units: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
