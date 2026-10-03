@@ -24,6 +24,7 @@ from .spec import DECLARE_GOAL_TOOL, DECLARE_SCOPE_TOOL, GoalSpec, scope_from_js
 UNDERSTAND_SYSTEM = """Translate the request into the application's vocabulary; call declare_goal exactly once. Follow the tool's field descriptions.
 
 Use only entity keys, field labels, page keys, filters, groups, sections and actions in APPLICATION INDEX. Translate the person's language to those names; copy record numbers and names exactly. Record names come from the request or candidates and need not appear in this schema index; only application reads can establish nonexistence. If no capability fits, leave deliverables empty and explain unsupported in the person's language. Never invent an index name or substitute a neighbouring field for missing data.
+Preserve explicit owner and exclusion conditions. A similar name or a shared prefix must not replace the exact scope the person specifies; use the application-provided candidate names in a repair, without choosing for the person.
 
 Kinds and required details:
 - fact: fields of a record; set entity, record if named, and fields. Preserve supplied date/amount/owner conditions in metric.filters even with record; candidate details do not replace filters. Datetime fields accept exact local YYYY-MM-DD HH:MM:SS instants.

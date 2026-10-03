@@ -214,7 +214,12 @@ class ScopeMixin:
                         model, named_field, scope, complete=True) if name in held]
                 if len(present) != 1:
                     return Resolved(kind=d.kind, problem=text, candidates=tuple(
-                        name for _rid, name in present) if len(present) > 1 else held)
+                        name for _rid, name in present) if len(present) > 1 else held,
+                        repair=(f"{condition.field!r} matches several exact candidate names: "
+                                + ", ".join(repr(name) for name in held)
+                                + ". Preserve any owner or exclusion the request explicitly gives "
+                                "as additional conditions using these exact names. If it gives none, "
+                                "leave the candidates for the person; never guess or drop a condition."))
                 rid, name = present[0]
                 clause, text = [Compare(named_field, "eq", rid)], self.say.compare(condition.field, "=", (name,))
             if clause is None:

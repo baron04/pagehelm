@@ -700,6 +700,23 @@ class _ScopedBranchClient(_BranchClient):
 
 
 class ExactAmongLongerTests(unittest.TestCase):
+    def test_an_ambiguous_link_offers_exact_names_for_repair_without_choosing(self):
+        port = DataGoalPort(YudaoGoalData(_BranchClient(), DOCS))
+        declaration = {"kind": "list", "entity": "crm/contract", "metric": {
+            "op": "count", "filters": [{"field": "客户", "values": ["云帆科技有限公司"]}]}}
+        unresolved = port.resolve(GoalSpec.from_json({"deliverables": [declaration]})).deliverables[0]
+        self.assertIsNone(unresolved.aggregate)
+        self.assertEqual(len(unresolved.candidates), 2)
+        self.assertIn("exclusion", unresolved.repair)
+        self.assertTrue(all(name in unresolved.repair for name in unresolved.candidates))
+        # An explicit user-given exclusion can narrow the existing complete scope.
+        excluded = next(name for name in unresolved.candidates if name != "云帆科技有限公司")
+        declaration["metric"]["filters"].append({"field": "客户", "op": "!=", "values": [excluded]})
+        port = DataGoalPort(YudaoGoalData(_ScopedBranchClient(), DOCS))
+        result = port.resolve(GoalSpec.from_json({"deliverables": [declaration]})).deliverables[0]
+        self.assertIsNotNone(result.aggregate)
+        self.assertFalse(result.candidates)
+
     def test_a_name_condition_binds_the_only_candidate_in_the_complete_scope(self):
         port = DataGoalPort(YudaoGoalData(_ScopedBranchClient(), DOCS))
         resolved = port.resolve(GoalSpec.from_json({"deliverables": [{

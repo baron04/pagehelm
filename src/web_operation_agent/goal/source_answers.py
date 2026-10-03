@@ -27,6 +27,9 @@ of a mixed request. Business record owners are not engineering owners; operation
 are not Git history. Mark commit/blame/change-history questions history_N=true.
 Conditional instructions on reporting a failed business read are requirements on that
 read, not additional source questions; a source slot needs a static knowledge question.
+Keep a follow-up about what that source proves with its original topic: whether
+documented ownership proves my permission is an evidence-limit question, not a new
+question asking for all permission-check implementations. Do not widen the request.
 Set history_N=false for present engineering ownership or maintenance teams: these
 can be documented in code, CODEOWNERS or repository documentation without Git history.
 Only an explicit question about commits, past changes or blame needs history_N=true.
@@ -185,6 +188,9 @@ invent enforcement for the remainder. If the request explicitly asks what code i
 or enforces, documentation alone is insufficient for that implementation claim.
 For implementation behavior use the actual guard; a constant or interface is insufficient.
 Code says how the deployed release behaves; it does not prove current data or execution.
+Missing code in retrieved evidence never proves the repository has no implementation
+or constraint. Say that the retrieved implementation does not establish that part;
+never turn search absence into a claim that a rule is not implemented anywhere.
 CURRENT_FACTS contains only requested values actually read under the current actor.
 For a current rule question, compare an exact native_value and field_key with the cited
 predicate. A single established blocking guard suffices to refuse an action; permission

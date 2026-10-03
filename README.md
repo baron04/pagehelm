@@ -107,7 +107,9 @@ agent.
   conversion owned by the adapter; date-only fields do not accept time precision.
   Clock components are excluded from amount and record-number grounding.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
-  make a turn complete. When one part needs a record choice, the reply keeps the other
+  make a turn complete. Ambiguous linked names expose exact candidates for a bounded
+  repair that preserves the user's explicit owner or exclusion conditions; they do not
+  authorize choosing a candidate. When one part needs a record choice, the reply keeps the other
   parts' resolved answers and limitations alongside the clarification. Entity summaries
   describe types and incomplete samples; names absent from them remain unresolved until
   application reads, including when repository answers are enabled.
@@ -563,6 +565,8 @@ then select server-numbered literal spans from bounded evidence. They verify exa
 release bytes. Summary ranking retains the original question's terms; an exact
 allowlisted filename can refine retrieval. Documented constraints must be identified
 as documented, while claims about enforced behavior need implementation evidence.
+Missing implementation evidence does not establish that a rule is absent from the repository.
+Follow-ups about what the original evidence proves retain that topic.
 They display selected citations and allow one shared declaration repair across stages.
 This verifies attribution, not semantic entailment of the model's
 paraphrase. Source never grants API, navigation or write authority, and cannot supply
