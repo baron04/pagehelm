@@ -32,7 +32,10 @@ documented ownership proves my permission is an evidence-limit question, not a n
 question asking for all permission-check implementations. Do not widen the request.
 Likewise a question limited to one rule dimension, such as state or amount, is not
 a request for button visibility, permissions or proof that the whole action can proceed.
-Keep that limitation in the topic phrase.
+Keep that limitation in the topic phrase. For comparing a named record's current fields
+against a rule, set current_N=true on the source slot AND declare a separate fact slot
+for its current fields, preserving the record name. A source question cannot read records.
+Pure static rules, hypothetical values, ownership and evidence-limit questions use current_N=false.
 Set history_N=false for present engineering ownership or maintenance teams: these
 can be documented in code, CODEOWNERS or repository documentation without Git history.
 Only an explicit question about commits, past changes or blame needs history_N=true.
@@ -74,6 +77,8 @@ def source_scope_tool(tool: dict) -> dict:
             f"history_{number}": {"type": "boolean", "description": "Needs Git history."}})
         properties[f"basis_{number}"] = {"type": "string", "enum": ["repository", "implementation"],
             "description": "Source only: repository=rules/meanings/ownership, including source-based allows/refuses questions; implementation=explicit actual-code/path/markup proof. Default repository."}
+        properties[f"current_{number}"] = {"type": "boolean",
+            "description": "Source only: compares current record fields with a rule; also declare a fact slot to read them. False for static/hypothetical/evidence-limit questions."}
     tool["function"]["description"] = ("Declare up to four deliverables in consecutive flat slots. "
         "Kinds: source=static code/documentation/rules; fact/aggregate/list=live data; "
         "page=explicit navigation; handoff=requested change; none=no further deliverable.")
@@ -88,7 +93,7 @@ def split_source_scope(payload):
         raise ValueError("source-aware scope must be an object")
     allowed = {"write_intent", "about_assistant", "unsupported"} | {
         f"{key}_{i}" for i in range(_MAX_DELIVERABLES)
-        for key in ("kind", "entity", "about", "names", "terms", "history", "basis")}
+        for key in ("kind", "entity", "about", "names", "terms", "history", "basis", "current")}
     if set(payload) - allowed or "kind_0" not in payload:
         raise ValueError("declare_scope requires flat kind_0/entity_0/about_0/terms_0 slots, not parts")
     parts, static, ended = [], [], False
@@ -96,7 +101,7 @@ def split_source_scope(payload):
         kind = payload.get(f"kind_{number}", "none")
         if kind == "none":
             ended = True
-            if any(payload.get(f"{key}_{number}") for key in ("entity", "about", "names", "terms", "history", "basis")):
+            if any(payload.get(f"{key}_{number}") for key in ("entity", "about", "names", "terms", "history", "basis", "current")):
                 raise ValueError("an empty scope slot cannot contain a deliverable")
             continue
         if ended:
@@ -110,11 +115,14 @@ def split_source_scope(payload):
         if kind == "source":
             static.append({"question": item.get("about"), "queries": item.get("terms"),
                            "history": item.get("history", False), "entity": item.get("entity", ""),
-                           "basis": payload.get(f"basis_{number}", "repository")})
+                           "basis": payload.get(f"basis_{number}", "repository"),
+                           "current": payload.get(f"current_{number}", False)})
         else:
-            if f"basis_{number}" in payload:
-                raise ValueError("source evidence basis belongs only to a source slot")
+            if f"basis_{number}" in payload or f"current_{number}" in payload:
+                raise ValueError("source evidence requirements belong only to a source slot")
             parts.append(item)
+    if any(s["current"] for s in static) and not any(p["kind"] == "fact" for p in parts):
+        raise ValueError("current source comparison needs a separate fact slot for the requested record fields")
     return {**{k: payload[k] for k in ("write_intent", "about_assistant", "unsupported") if k in payload},
             "parts": parts}, source_requests({"sources": static})
 
@@ -143,8 +151,11 @@ def source_requests(payload: dict) -> tuple[dict, ...]:
         basis = item.get("basis", "repository")
         if basis not in ("repository", "implementation"):
             raise ValueError("source evidence basis must be repository or implementation")
+        current = item.get("current", False)
+        if not isinstance(current, bool):
+            raise ValueError("current source comparison must be a boolean")
         result.append({"question": question.strip(), "entity": entity, "queries": tuple(dict.fromkeys(queries)),
-                       "history": item.get("history", False), "basis": basis})
+                       "history": item.get("history", False), "basis": basis, "current": current})
     return tuple(result)
 
 
@@ -160,10 +171,17 @@ def answer_tool(active):
             "references_" + suffix: {"type": "array", "maxItems": 4,
                 "items": {"type": "string", "enum": [span["id"] for ref in question["evidence"] for span in ref["supports"] if len(span["text"]) >= 8]}, "description": "Pre-numbered supports satisfying this question's basis; documentation for documented claims, actual guards/markup for implementation claims."},
         })
+        if question.get("current"):
+            properties["assessment_" + suffix] = {"type": "string",
+                "enum": ["meets", "does_not_meet", "insufficient"],
+                "description": "Explicit comparison of observed fields against only the requested rule dimensions; never execution or full permission."}
+            properties["fact_indices_" + suffix] = {"type": "array", "maxItems": 48,
+                "items": {"type": "integer", "minimum": 0},
+                "description": "Zero-based indices of CURRENT_FACTS used in this comparison. Required nonempty for a complete comparison."}
     return {"type": "function", "function": {"name": "answer_sources",
         "description": "Answer each source question using only cited evidence; fields have its question ID as suffix.",
         "parameters": {"type": "object", "properties": properties,
-                       "required": [k for k in properties if k.startswith(("statement_", "complete_"))],
+                       "required": [k for k in properties if k.startswith(("statement_", "complete_", "assessment_", "fact_indices_"))],
                        "additionalProperties": False}}}
 
 
@@ -194,6 +212,9 @@ For yes/no questions name the action and allowed/refused cases explicitly. Remov
 blocking reference does not establish permission when other guards exist. Missing retrieved
 code does not prove absence from the repository; identify what this evidence cannot establish.
 Never infer engineering owners from business record owners or logs.
+For current=true, declare assessment and CURRENT_FACTS indices used. Explicitly say whether
+those observed fields meet the requested rule dimensions; merely repeating the rule is not
+a comparison. With missing observations or evidence use insufficient and complete=false.
 complete=true only when selected excerpts establish the requested answer within its limits.
 Otherwise use complete=false with empty statement/references; do not offer provisional claims.
 statement_N is concise plain prose, at most 800 characters, without paths, hashes, code blocks,
@@ -284,9 +305,11 @@ def retrieve(source, requests: tuple[dict, ...], ledger) -> tuple[dict, TurnEvid
         questions.append({"question_id": qid, "question": request["question"],
                           "subject": request.get("entity", ""),
                           "basis": request.get("basis", "repository"),
+                          "current": request.get("current", False),
                           "evidence": refs})
         ledger.append("goal_source_retrieved", question_id=qid,
                       basis=request.get("basis", "repository"),
+                      current=request.get("current", False),
                       queries=list(request["queries"]), source_digest=source.content_digest,
                       references=[{"id": r["reference"], "path": r["path"],
                                    "start_line": r["start_line"],
@@ -301,7 +324,7 @@ def _array(value):
     return json.loads(value) if isinstance(value, str) else value
 
 
-def _verify_answers(payload, active, evidence):
+def _verify_answers(payload, active, evidence, current_facts=()):
     if not isinstance(payload, dict):
         raise ValueError("source answer must be an object")
     expected = answer_tool(active)["function"]["parameters"]["properties"]
@@ -326,6 +349,15 @@ def _verify_answers(payload, active, evidence):
             # are accepted only by the separate focus declaration.
             replies[qid] = {"complete": False, "claims": []}
             continue
+        assessment, indices = "", []
+        if question.get("current"):
+            assessment = payload["assessment_" + suffix]
+            indices = _array(payload["fact_indices_" + suffix])
+            if (assessment not in ("meets", "does_not_meet") or not isinstance(indices, list)
+                    or not indices or len(indices) > 48 or any(
+                        isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(current_facts)
+                        for i in indices)):
+                raise ValueError("complete current comparison needs an explicit assessment and observed fact indices")
         verified = []
         for support_id in dict.fromkeys(refs):
             if not isinstance(support_id, str) or support_id not in allowed:
@@ -333,7 +365,8 @@ def _verify_answers(payload, active, evidence):
             name, span = allowed[support_id]
             checked = SourceExcerpt(name, statement, span["text"]).verify(evidence)
             verified.append({"reference": name, "support_lines": [span["start"], span["end"]], **checked})
-        replies[qid] = {"complete": complete and bool(verified), "claims": verified}
+        replies[qid] = {"complete": complete and bool(verified), "claims": verified,
+                        "assessment": assessment, "fact_indices": list(dict.fromkeys(indices))}
     return replies
 
 
@@ -365,7 +398,8 @@ def focus_preview(question, queries):
             "end_line": ref["end_line"], "matched_text": "\n".join(spans[i]["text"] for i in chosen)})
     return {"question_id": question["question_id"], "question": question["question"],
             "subject": question.get("subject", ""),
-            "basis": question.get("basis", "repository"), "matches": refs}
+            "basis": question.get("basis", "repository"),
+            "current": question.get("current", False), "matches": refs}
 
 
 def answer(chat, *, source, requests, retrieved, evidence, run_id, cancelled,
@@ -449,7 +483,7 @@ def answer(chat, *, source, requests, retrieved, evidence, run_id, cancelled,
                               queries={str(k): v for k, v in focused.items()},
                               kept={str(k): v for k, v in kept.items()})
             else:
-                replies = _verify_answers(payload, active, evidence)
+                replies = _verify_answers(payload, active, evidence, current_facts)
         except (ValueError, ConclusionRefused) as exc:
             ledger.append("goal_source_answer_invalid", phase=phase,
                           error_type=type(exc).__name__, detail=str(exc)[:200])
@@ -493,11 +527,18 @@ def answer(chat, *, source, requests, retrieved, evidence, run_id, cancelled,
                 f"{c['citation']}@{c['release']} sha256:{c['sha256']}" for c in claims))
             content = list(dict.fromkeys(c["statement"] for c in claims))
             ok = result["complete"]
+            if ok and result.get("assessment"):
+                labels = ({"meets": "满足", "does_not_meet": "不满足"} if chinese else
+                          {"meets": "Meets", "does_not_meet": "Does not meet"})
+                content.insert(0, (("所请求规则维度的比对（推断）：" + labels[result["assessment"]] + "要求。")
+                    if chinese else labels[result["assessment"]] + " the requested rule dimensions (inference)."))
             if not ok:
                 content.append("检索到的源码不足以完整回答此项。" if chinese else
                                "Retrieved source does not fully establish this answer.")
             text = "\n".join(content + citations)
             ledger.append("goal_source_answer_verified", question_id=qid, complete=ok,
+                **({"assessment": result["assessment"], "fact_indices": result["fact_indices"]}
+                   if result.get("assessment") else {}),
                 claims=[{"reference": c["reference"], "support_lines": c["support_lines"],
                     "statement": redact_sensitive_assignments(redact_session_handoffs(c["statement"]))}
                     for c in claims],

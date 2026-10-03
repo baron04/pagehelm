@@ -320,17 +320,39 @@ class GoalSpec:
         two readings spell differently counts as a difference, since the resolver would
         treat them differently too.
         """
-        if len(self.deliverables) != len(other.deliverables):
-            return [f"{len(self.deliverables)} deliverables versus {len(other.deliverables)}"]
+        first_parts, second_parts = self._comparison_parts(), other._comparison_parts()
+        if len(first_parts) != len(second_parts):
+            return [f"{len(first_parts)} deliverables versus {len(second_parts)}"]
         out = []
         if self.write_intent != other.write_intent:
             out.append(f"write_intent {self.write_intent} versus {other.write_intent}")
-        for i, (a, b) in enumerate(zip(self.deliverables, other.deliverables), start=1):
-            first, second = a.to_json(), b.to_json()
+        for i, (first, second) in enumerate(zip(first_parts, second_parts), start=1):
             for key in sorted(set(first) | set(second)):
                 if first.get(key) != second.get(key):
                     out.append(f"deliverable {i} {key}: {json.dumps(first.get(key), ensure_ascii=False)} "
                                f"versus {json.dumps(second.get(key), ensure_ascii=False)}")
+        return out
+
+    def _comparison_parts(self) -> list[dict]:
+        """Adjacent field reads in exactly the same scope differ only in grouping.
+
+        This is a comparison projection, never a rewritten goal. Operations, rules,
+        conditions, target names and intervening deliverables retain their identity.
+        """
+        out, previous_context = [], None
+        for d in self.deliverables:
+            part = d.to_json()
+            if d.kind == "fact" and d.fields and not d.rules:
+                context = {k: v for k, v in part.items() if k != "fields"}
+                labels = set(d.fields)
+                if context == previous_context:
+                    out[-1]["fields"] = sorted(set(out[-1]["fields"]) | labels)
+                else:
+                    out.append({**context, "fields": sorted(labels)})
+                previous_context = context
+            else:
+                out.append(part)
+                previous_context = None
         return out
 
 

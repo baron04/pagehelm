@@ -90,6 +90,10 @@ agent.
   to the reconciliation path. A tie between an answer and a clarification that offers
   that answer may keep the answer. These extra readings and the bounded repairs add
   model calls, latency and spend; this is not a one-call turn.
+  Adjacent field reads with exactly the same entity, record, link and query context
+  agree whether grouped into one fact or split across facts. Field order and duplicate
+  labels do not create a vote; the original declaration and display order are retained.
+  Conditions, rule requests and intervening operations are not collapsed.
   A valid zero count or empty filtered list is an answer, not evidence that a competing
   positive interpretation is correct. Date exclusion selects known dates outside the
   half-open period and excludes missing dates; adapters apply the user's time zone.
@@ -575,6 +579,13 @@ proof is required, and carries that distinction through retrieval and answering 
 another model stage. Ordinary repository answers can cite explicit documentation;
 implementation claims still require actual code or markup. This distinction is model
 declared; byte-level citation verification does not prove its semantic correctness.
+Current record-field comparisons declare an explicit live-read dependency. A dependency
+without a separate fact scope is rejected for bounded declaration repair. Unrepaired
+repository-aware scope failures refuse the turn rather than falling back to a business-only
+declaration that could omit static work. Completed
+comparisons supply an assessment and indices into actor-read facts; the server displays
+the limited inference. This validates structure and provenance, not the model's selection
+of the needed fields or semantic comparison. The dependency itself remains model declared.
 A comparison explicitly limited to one documented rule dimension states that limit;
 it does not establish permission for the whole action.
 They display selected citations and allow one shared declaration repair across stages.

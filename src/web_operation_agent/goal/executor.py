@@ -927,10 +927,16 @@ class GoalTurnExecutor:
                         cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"),
                         repository_source=self.repository_answers)
             except ValueError as exc:
-                # The first step's answer could not be read, twice: the turn goes on as a
-                # single declaration against the whole index rather than refusing.
+                # A legacy full-index declaration can recover business scope, but
+                # cannot carry repository questions or their live-read dependencies.
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
                 s.ledger.append("goal_scope_unread", step=s.step)
+                if self.repository_answers:
+                    s.terminal_reason = "agent_refused"
+                    return self._say(s, _cannot(s.message.text,
+                        "未能完整识别本次查询与源码问答的范围，请补充要查询的记录或字段。" if s.chinese else
+                        "The data and repository scope could not be declared completely; clarify the requested record or fields.",
+                        s.chinese))
                 parts = None
             except ProviderError as exc:
                 s.ledger.append("provider_failed", step=s.step,

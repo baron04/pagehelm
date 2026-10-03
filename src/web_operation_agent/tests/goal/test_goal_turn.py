@@ -681,6 +681,21 @@ class GoalTurnTests(unittest.TestCase):
         self.assertFalse(any(e.get("reconciled") for e in events if e["event"] == "goal_declared"))
         self.assertIn("Lumber Inc", execution.user_answer)
 
+    def test_identical_scope_fields_split_across_readings_do_not_vote_or_probe(self):
+        combined = _declaration(kind="fact", entity="order", record="S00006", fields=["Customer", "Total"])
+        split = ("declare_goal", {"deliverables": [
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Total"]},
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Customer"]}]})
+        execution, _, chat, port, events = self._run([combined, split],
+            [Resolved(kind="fact", facts=(Fact("S00006", "Customer", "Lumber Inc"),
+                                         Fact("S00006", "Total", "12")))],
+            text="S00006 的客户和金额是多少？")
+        self.assertEqual(len(chat.messages), 2)
+        self.assertEqual(len(port.specs), 1)
+        self.assertFalse(any(e["event"] in ("goal_readings_voted", "goal_readings_resolve_alike") for e in events))
+        self.assertIn("Lumber Inc", execution.user_answer)
+        self.assertIn("12", execution.user_answer)
+
     def test_a_port_without_an_optional_capability_gets_a_plain_answer_not_a_call(self):
         # A port offering only the required level: the fact is resolved by it, the tab
         # is not asked of it, and the reply says what this application does not offer.

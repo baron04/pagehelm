@@ -59,6 +59,67 @@ def source_reply(*, reference="source#1.1"):
 
 
 class RepositoryAnswerTests(unittest.TestCase):
+    def test_current_comparison_scope_requires_business_read_and_can_repair_once(self):
+        from web_operation_agent.goal.understand import understand_scope
+        source = {"kind": "source", "about": "ticket status rule comparison",
+                  "terms": ["ticket status"], "current": True}
+        bad = flat_scope([source])
+        good = flat_scope([{"kind": "fact", "entity": "ticket", "names": ["T1"]}, source])
+        chat = _Chat([bad, good])
+        parts, _, _, _, projection = understand_scope(chat, prompt="Read T1 status and compare it to the rule",
+            summaries="ticket: Ticket", run_id="current", repository_source=True)
+        self.assertEqual(len(chat.messages), 2)
+        self.assertEqual(parts[0]["names"], ["T1"])
+        self.assertTrue(projection["source_requests"][0]["current"])
+
+    def test_current_comparison_rejects_invalid_types_and_business_flags(self):
+        from web_operation_agent.goal.source_answers import split_source_scope
+        for payload in ({"kind_0": "fact", "entity_0": "ticket", "current_0": False},
+                        {**scope([{"kind": "fact", "entity": "ticket"}])[1], "current_1": "yes"},
+                        {"kind_0": "none", "current_0": True}):
+            with self.assertRaises(ValueError):
+                split_source_scope(payload)
+
+    def test_invalid_repository_scope_cannot_fall_back_and_drop_static_work(self):
+        bad = flat_scope([{"kind": "source", "about": "current ticket status rule",
+            "terms": ["ticket status"], "current": True}])
+        result, chat, _, events = self.run_turn([bad, bad])
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertEqual(len(chat.messages), 2)
+        self.assertFalse(any(e['event'] in ('goal_resolved', 'goal_source_retrieved') for e in events))
+
+    def test_comparison_renders_explicit_inference_bound_to_observed_facts(self):
+        class RuleLookup(Lookup):
+            def __init__(self):
+                super().__init__()
+                text = "Signing date must be present.\n"
+                self.hit = SourceHit(EvidenceRef(repository_id="synthetic", release=self.release,
+                    path="docs/rules.md", start_line=1, end_line=1, excerpt=text,
+                    sha256=hashlib.sha256(text.encode()).hexdigest()), text=text)
+        declared = flat_scope([{"kind": "fact", "entity": "order", "names": ["SO1"]},
+            {"kind": "source", "about": "signing date rule comparison", "terms": ["signing date"], "current": True}])
+        reply = ("answer_sources", {"complete_0": True, "statement_0": "The observed signing date is empty.",
+            "references_0": ["source#1.1"], "assessment_0": "does_not_meet", "fact_indices_0": [0]})
+        result, chat, _, events = self.run_turn([declared,
+            ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "order", "record": "SO1",
+                "fields": ["Signing date"]}]}), reply],
+            [Resolved(kind="fact", facts=(Fact("SO1", "Signing date", "(empty)"),))], lookup=RuleLookup())
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("Does not meet the requested rule dimensions", result.user_answer)
+        event = next(e for e in events if e['event'] == 'goal_source_answer_verified')
+        self.assertEqual(event['fact_indices'], [0])
+        self.assertEqual(event['assessment'], 'does_not_meet')
+        self.assertEqual(len(chat.messages), 4)
+
+    def test_complete_comparison_cannot_bind_invented_or_missing_observations(self):
+        from web_operation_agent.goal.source_answers import _verify_answers
+        q = {"question_id": 0, "current": True, "evidence": []}
+        base = {"complete_0": True, "statement_0": "A rule", "references_0": [], "assessment_0": "meets"}
+        for indices, facts in (([], ({"value": "0"},)), ([0], ()), ([1], ({"value": "0"},)),
+                               ([True], ({"value": "0"},)), ([0.0], ({"value": "0"},))):
+            with self.assertRaises(ValueError):
+                _verify_answers({**base, "fact_indices_0": indices}, [q], None, facts)
+
     def test_source_basis_is_typed_and_preserved_without_an_extra_model_stage(self):
         from web_operation_agent.goal.source_answers import split_source_scope
         for basis in ("repository", "implementation"):
