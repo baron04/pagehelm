@@ -833,6 +833,15 @@ the operation. Ambiguous module workflows are distinguished rather than treated 
 application path. Native Yudao hosts can compose separately reviewed update and creation
 entry policies; undeclared entries remain unavailable and submissions stay manual.
 
+An optional server-side product-knowledge index groups original, release-bound source
+excerpts into draft workflow guides and retains raw-source fallback. Derived summaries
+reach retrieval and answering as untrusted aids; only original numbered excerpts can
+be cited. Source changes invalidate affected guides, and guide text participates in
+the declaration-cache digest. Yudao's opt-in `repository_source(..., workflow_knowledge=True)`
+extracts literal Vue form labels, tabs, related components and bounded validation/save
+code. It does not prove complete backend rules or current permissions. The native host
+keeps this prototype disabled; broader model and browser qualification remains necessary.
+
 ## License
 
 See [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md).

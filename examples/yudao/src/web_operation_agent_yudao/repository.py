@@ -28,11 +28,15 @@ def repository_tree(root: Path, release: str) -> SourceTree:
     return tree
 
 
-def repository_source(root: Path | None, release: str) -> SourceCapability:
+def repository_source(root: Path | None, release: str, *, workflow_knowledge: bool = False) -> SourceCapability:
     if root is None:
         return SourceCapability.none()
     tree = repository_tree(root, release)
     lookup = RepositorySourceLookup(tree, line_limit=24, char_limit=1800, overlap=4)
+    if workflow_knowledge:
+        from web_operation_agent.planning.product_knowledge import ProductKnowledgeLookup
+        from .workflow_knowledge import compile_workflow_guides
+        lookup = ProductKnowledgeLookup(tree, compile_workflow_guides(tree), fallback=lookup)
     return SourceCapability(
         runtime_source=True, lookup=lookup,
         history_unavailable_reason=(
