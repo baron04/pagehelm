@@ -11,6 +11,8 @@ from web_operation_agent.business.errors import (BusinessToolContractError, Busi
                                                  BusinessToolAuthenticationError)
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.goal.data import DataRefused
+from web_operation_agent.goal.resolve.service import DataGoalPort
+from web_operation_agent.goal.spec import GoalSpec
 from web_operation_agent.tests.support.entity_read_contract import assert_entity_read_contract
 from web_operation_agent_yudao.application import YudaoApplication
 from web_operation_agent_yudao.client import YudaoReadRefused
@@ -21,6 +23,99 @@ from .test_goal import CONTRACTS, DOCS, MENUS, _Client, _prop
 
 
 class GenericReadTests(unittest.TestCase):
+    def test_actor_menu_non_list_page_and_wrapper_survive_without_source_or_entity(self):
+        menus = deepcopy(MENUS) + [{"name": "Support workspace", "path": "/support",
+            "component": "ParentView", "children": [
+                {"name": "Help", "path": "help", "component": "support/help/overview"}]}]
+        with patch("web_operation_agent_yudao.tests.test_goal.MENUS", menus):
+            pages = self.tools.execute("find_page_entries", {"query": "Help"})
+            wrapper = self.tools.execute("find_page_entries", {"query": "Support workspace", "limit": 1})
+            index = self.data.index()
+            self.assertEqual("", index.page("/support/help").entity)
+            self.assertIsNone(index.entity("/support/help"))
+            self.assertEqual(("/support/help",), pages.allowed_routes)
+            self.assertTrue(pages.content["catalog_complete"])
+            self.assertEqual((), wrapper.allowed_routes)
+            self.assertFalse(wrapper.content["candidates"][0]["openable"])
+            self.assertEqual("not_standalone_page", wrapper.content["candidates"][0]["unavailable_reason"])
+            # The existing data page retains its actor-readable entity and list view.
+            self.assertEqual("crm/contract", index.page("/crm/contract").entity)
+            self.assertEqual(("list",), index.page("/crm/contract").views)
+            port = DataGoalPort(self.data)
+            with patch.object(self.data, "count", side_effect=AssertionError("not a data page")), \
+                 patch.object(self.data, "rows", side_effect=AssertionError("not a data page")), \
+                 patch.object(self.data, "find", side_effect=AssertionError("not a data page")):
+                spec = GoalSpec.from_json({"deliverables": [{"kind": "page", "page": {"key": "/support/help"}}]})
+                self.assertEqual("/support/help", port.resolve(spec).deliverables[0].page.url)
+                for declaration in ({"kind": "aggregate", "metric": {"op": "count"}},
+                                    {"kind": "list"}, {"kind": "fact", "fields": ["Name"]},
+                                    {"kind": "page", "page": {"filters_on": ["Mine"]}},
+                                    {"kind": "handoff", "action": "create"}):
+                    spec = GoalSpec.from_json({"deliverables": [{**declaration,
+                        "page": {"key": "/support/help", **declaration.get("page", {})}}]})
+                    result = port.resolve(spec)
+                    self.assertEqual("refused", result.deliverables[0].read_failure)
+                    self.assertIsNone(result.deliverables[0].page)
+                    self.assertEqual((), result.reads)
+
+    def test_page_catalog_rechecks_generation_and_source_hints_never_add_routes(self):
+        menus = deepcopy(MENUS) + [{"name": "Help", "path": "/help", "component": "support/help/overview"}]
+        self.data._ui = UiSource(records={"/source-only": "/source-only/detail/{id}"})
+        with patch("web_operation_agent_yudao.tests.test_goal.MENUS", menus):
+            found = self.tools.execute("find_page_entries", {"query": "Help"})
+            self.assertEqual(("/help",), found.allowed_routes)
+        self.assertEqual((), self.tools.execute("find_page_entries", {"query": "source-only"}).allowed_routes)
+        with self.assertRaises(DataRefused):
+            self.data.page_address("/source-only")
+        self.client.read_generation = 1
+        removed = self.tools.execute("find_page_entries", {"query": "Help"})
+        self.assertEqual([], removed.content["candidates"])
+        self.assertEqual((), removed.allowed_routes)
+        with self.assertRaises(DataRefused):
+            self.data.page_address("/help")
+
+    def test_catalog_reports_restricted_coverage_and_refuses_invalid_menu_payloads(self):
+        restricted = YudaoReadTools(YudaoGoalData(self.client, self.docs, modules=("crm",)), application_id="yudao")
+        self.assertFalse(restricted.execute("find_page_entries", {"query": "合同"}).content["catalog_complete"])
+        with patch("web_operation_agent_yudao.tests.test_goal.MENUS", deepcopy(MENUS) + [{"name": "Malformed"}]):
+            data = YudaoGoalData(_Client(), self.docs)
+            with self.assertRaises(DataRefused):
+                data.page_entries()
+            self.assertIsNone(data._schema)
+            self.assertFalse(data._menu_entries)
+
+    def test_catalog_binding_cannot_mix_credential_generations(self):
+        pages = self.tools.pages._port
+        binding = pages.entities._binding
+
+        def changed(context):
+            self.client.read_generation = 1
+            return binding(context)
+
+        with patch.object(pages.entities, "_binding", side_effect=changed):
+            with self.assertRaises(BusinessToolUnavailableError):
+                self.tools.execute("find_page_entries", {"query": "合同"})
+
+    def test_context_only_external_fragment_and_duplicate_menu_paths_fail_closed(self):
+        unqualified = [{"name": "Context record", "path": "/customer/:id", "component": "customer/detail"},
+                       {"name": "External page", "path": "https://example.test/help", "component": "help"},
+                       {"name": "Protocol relative", "path": "//example.test/help", "component": "help"},
+                       {"name": "Fragment page", "path": "/help#details", "component": "help"}]
+        with patch("web_operation_agent_yudao.tests.test_goal.MENUS", unqualified):
+            for query in ("Context record", "External page", "Protocol relative", "Fragment page"):
+                found = self.tools.execute("find_page_entries", {"query": query})
+                self.assertEqual((), found.allowed_routes)
+                self.assertFalse(found.content["candidates"][0]["openable"])
+            self.assertEqual((), self.data.schema().pages)
+        duplicate = [{"name": "Help A", "path": "/help", "component": "help"},
+                     {"name": "Help B", "path": "/help", "component": "help"}]
+        with patch("web_operation_agent_yudao.tests.test_goal.MENUS", duplicate):
+            data = YudaoGoalData(_Client(), self.docs)
+            with self.assertRaises(DataRefused):
+                data.page_entries()
+            self.assertIsNone(data._schema)
+            self.assertFalse(data._menu_entries)
+
     def test_count_only_does_not_fetch_rows_or_linked_names(self):
         entity = self.entity("合同")
         with patch.object(self.data, "rows", side_effect=AssertionError("unnecessary rows")):

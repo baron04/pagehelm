@@ -109,6 +109,63 @@ def _obs(epoch: int, url: str, *, tabs=(), selected=(), facets=None, candidates=
 
 
 class PageReadinessTests(unittest.TestCase):
+    def test_required_page_identity_refuses_header_only_wrong_old_missing_and_error_pages(self):
+        for page_route, state_name, content in (("", "ready", "header only"),
+                ("", "ready", "404 destination unavailable"),
+                ("/old-page", "ready", "old component"),
+                ("/other-page", "ready", "wrong component"),
+                ("/help", "unknown", "unqualified state"),
+                ("/help", "pending", "loading"), ("/help", "blocked", "error")):
+            with self.subTest(route=page_route, state=state_name, content=content):
+                executor = GoalTurnExecutor.__new__(GoalTurnExecutor)
+                state = SimpleNamespace(obs=replace(
+                    _obs(1, "https://app.test/help", buttons=("Header menu",), facets=[]),
+                    active_view="List", page_route=page_route, render_state=state_name,
+                    content=content), terminal_reason="")
+                def dispatch(s, action, args):
+                    s.obs = replace(s.obs, epoch=s.obs.epoch + 1,
+                        elements=[replace(e, epoch=s.obs.epoch + 1) for e in s.obs.elements])
+                    return object()
+                executor._dispatch = dispatch
+                with patch.object(executor_module, "_READY_WAITS", 3):
+                    outcome = executor._reach(state, PagePlan("/help", "Help", "/help",
+                                                             requires_page_route=True))
+                self.assertFalse(outcome.reached)
+                reason = "error_dialog" if state_name == "blocked" else "page_unverified"
+                self.assertEqual([reason], [u.kind for u in outcome.unmet])
+                if reason == "page_unverified":
+                    self.assertIn("无法确认", outcome.unmet[0].said(True))
+                    self.assertIn("could not be verified", outcome.unmet[0].said(False))
+
+    def test_required_page_identity_needs_two_fresh_ready_observations(self):
+        executor = GoalTurnExecutor.__new__(GoalTurnExecutor)
+        good = replace(_obs(1, "https://app.test/help"), page_route="/help")
+        for epochs in ((1, 1, 1), (1, 0, 1), (1, 2)):
+            with self.subTest(epochs=epochs):
+                state = SimpleNamespace(obs=replace(good, epoch=epochs[0]))
+                iterator = iter(epochs[1:])
+                def dispatch(s, action, args):
+                    s.obs = replace(s.obs, epoch=next(iterator, epochs[-1]))
+                    return object()
+                executor._dispatch = dispatch
+                with patch.object(executor_module, "_READY_WAITS", len(epochs)):
+                    self.assertEqual(epochs == (1, 2), executor._wait_ready(
+                        state, "/help", record=False, requires_page_route=True))
+
+    def test_interrupted_required_page_identity_does_not_count_as_consecutive(self):
+        executor = GoalTurnExecutor.__new__(GoalTurnExecutor)
+        state = SimpleNamespace(obs=replace(_obs(1, "https://app.test/help"), page_route="/help"))
+        def dispatch(s, action, args):
+            epoch = s.obs.epoch + 1
+            s.obs = replace(s.obs, epoch=epoch, page_route="" if epoch == 2 else "/help")
+            return object()
+        executor._dispatch = dispatch
+        with patch.object(executor_module, "_READY_WAITS", 3):
+            self.assertFalse(executor._wait_ready(state, "/help", record=False,
+                                                 requires_page_route=True))
+        self.assertTrue(executor._wait_ready(state, "/help", record=False,
+                                            requires_page_route=True))
+
     def test_ready_route_without_rendered_page_evidence_does_not_settle(self):
         executor = GoalTurnExecutor.__new__(GoalTurnExecutor)
         state = SimpleNamespace(obs=_obs(1, "https://app.test/orders"))

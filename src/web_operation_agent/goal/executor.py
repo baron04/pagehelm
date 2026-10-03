@@ -533,6 +533,7 @@ class _Unmet(NamedTuple):
         return {"not_attempted": "not attempted",
                 "not_confirmed": "working the page not confirmed",
                 "not_opened": "page did not open",
+                "page_unverified": "rendered destination not verified",
                 "error_dialog": "the application reported an error dialog",
                 "filter_on": f"filter {self.name}", "filter_off": f"filter {self.name} off",
                 "section": f"section {self.name}", "control": f"control {self.name}",
@@ -543,6 +544,7 @@ class _Unmet(NamedTuple):
         if zh:
             return {"not_attempted": "没有执行", "not_confirmed": "没有得到操作页面的同意",
                     "not_opened": "页面没有打开", "error_dialog": "应用弹出了错误提示",
+                    "page_unverified": "无法确认目标页面已经加载",
                     "filter_on": f"筛选「{self.name}」没有生效",
                     "filter_off": f"筛选「{self.name}」没有取消",
                     "section": f"没有找到页签「{self.name}」",
@@ -550,6 +552,7 @@ class _Unmet(NamedTuple):
                     "view": f"没有切换到 {self.name} 视图"}[self.kind]
         return {"not_attempted": "not attempted", "not_confirmed": "working the page was not agreed",
                 "not_opened": "the page did not open",
+                "page_unverified": "the rendered destination could not be verified",
                 "error_dialog": "the application showed an error",
                 "filter_on": f"filter “{self.name}” not applied",
                 "filter_off": f"filter “{self.name}” not removed",
@@ -631,6 +634,9 @@ class _TurnState:
     today: str = ""
     #: The entities and words the neighbourhood was built from (staged path only).
     focus: tuple = ()
+    #: Exact actor-index page selections survive entity narrowing and repair. A
+    #: configuration page may have no record entity at all.
+    page_keys: tuple[str, ...] = ()
     source_requests: tuple = ()
     source_answer: str = ""
     source_complete: bool = True
@@ -833,7 +839,8 @@ class GoalTurnExecutor:
         return self._settle(state, current, text)
 
     def _complete_sources(self, s: _TurnState, chat, *, current_facts=()) -> None:
-        from .source_answers import answer, retrieve
+        from ..privacy import SessionHandoffPolicy
+        from .source_answers import answer, page_context, retrieve
         try:
             with s.receipt.stage("source"):
                 retrieved, evidence = retrieve(self.config.source, s.source_requests, s.ledger)
@@ -842,16 +849,17 @@ class GoalTurnExecutor:
                 return
             # Bounds match the goal's four slots and twelve fields; redact again at
             # this new model boundary rather than forwarding unrestricted row data.
-            safe_facts = tuple({k: redact_sensitive_assignments(redact_session_handoffs(str(v)))[:400]
+            handoffs = SessionHandoffPolicy.extending(
+                self.application.ports.routes.session_handoff_query_keys)
+            safe_facts = tuple({k: redact_sensitive_assignments(handoffs.redact(str(v)))[:400]
                                 for k, v in f.items()} for f in current_facts[:48])
             with s.receipt.stage("source"):
                 result = answer(chat, source=self.config.source, requests=s.source_requests,
                     retrieved=retrieved, evidence=evidence, run_id=s.run_id,
                     cancelled=s.cancelled, chinese=s.chinese, ledger=s.ledger,
                     prompt=s.message.text, current_facts=safe_facts,
-                    page=lambda: {"path": urlsplit(s.obs.url).path, "epoch": s.obs.epoch,
-                                  "render_state": s.obs.render_state,
-                                  "active_view": s.obs.active_view[:120]},
+                    conversation=self.conversation_state.model_context(), handoffs=handoffs,
+                    page=lambda: page_context(s.obs, handoffs=handoffs),
                     refresh=lambda: bool(self._dispatch(s, "observe", {}) is not None
                                          and not s.terminal_reason),
                     timeout_s=max(1.0, self.config.wall_budget_s - (time.time() - s.started_at)))
@@ -869,6 +877,17 @@ class GoalTurnExecutor:
 
     # -- the turn ---------------------------------------------------------------------
     def _run(self, s: _TurnState) -> str:
+        from ..privacy import SessionHandoffPolicy
+        from .context import page_context
+
+        handoffs = SessionHandoffPolicy.extending(
+            self.application.ports.routes.session_handoff_query_keys)
+
+        def current_page():
+            # Model reference hints come only from the current server observation.
+            # The resolver and dispatch still establish actor scope and authority.
+            return page_context(s.obs, handoffs=handoffs)
+
         s.approvals.start_turn(int((s.started_at + self.config.wall_budget_s) * 1000))
         try:
             s.writes.begin_control()
@@ -925,7 +944,8 @@ class GoalTurnExecutor:
                         timeout_s=max(1.0, self.config.wall_budget_s - elapsed),
                         cancelled=s.cancelled, today=today_text, earlier=earlier,
                         cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"),
-                        repository_source=self.repository_answers)
+                        repository_source=self.repository_answers,
+                        current_page=current_page())
             except ValueError as exc:
                 # A legacy full-index declaration can recover business scope, but
                 # cannot carry repository questions or their live-read dependencies.
@@ -947,6 +967,7 @@ class GoalTurnExecutor:
             scope_parts = parts
             scope_unsupported = unsupported
             s.scope_parts = list(parts)
+            s.page_keys = tuple(dict.fromkeys(p["page"] for p in parts if p.get("page")))
             s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
                             write_intent=write_intent, unsupported=unsupported,
                             about_assistant=about_assistant, **projection)
@@ -974,7 +995,7 @@ class GoalTurnExecutor:
             if named:
                 with s.receipt.stage("business"):
                     found = locate_names(self.goal_port, named,
-                                         entities=tuple(dict.fromkeys(p["entity"] for p in parts)),
+                                         entities=tuple(dict.fromkeys(p["entity"] for p in parts if p.get("entity"))),
                                          context=s.approvals.context(s.step, "locate"))
                 s.ledger.append("goal_names", step=s.step, names=list(named)[:8],
                                 found=[{"text": k.text, "entity": k.entity, "name": k.name}
@@ -992,10 +1013,11 @@ class GoalTurnExecutor:
             # So is the entity of a record the request names by its number (S00020), which
             # the first step may have passed over for an entity that record relates to.
             focus = (tuple(dict.fromkeys(
-                [p["entity"] for p in parts] + [c.entity for c in s.conventions]
+                [p["entity"] for p in parts if p.get("entity")] + [c.entity for c in s.conventions]
                 + [k.entity for k in known if re.search(r"\d", k.text)])),
                 (s.message.text + " " + terms).strip())
             index = neighbourhood(index, focus[0], request=focus[1],
+                                  page_keys=s.page_keys,
                                   rules=any(p.get("rules") for p in parts))
             s.index, s.focus = index, focus
             s.ledger.append("goal_neighbourhood", step=s.step,
@@ -1012,7 +1034,7 @@ class GoalTurnExecutor:
             try:
                 with s.receipt.stage("business"):
                     candidates = ground(self.goal_port,
-                                        entities=tuple(dict.fromkeys(p["entity"] for p in scope_parts)),
+                                        entities=tuple(dict.fromkeys(p["entity"] for p in scope_parts if p.get("entity"))),
                                         known=known, dates=days(lookup, today_text),
                                         context=s.approvals.context(s.step, "candidates"))
             except Exception as exc:  # noqa: BLE001 -- grounding helps; its absence is not a failure
@@ -1038,7 +1060,8 @@ class GoalTurnExecutor:
             with s.receipt.stage(name):
                 spec, projection = unbound(
                     cache=self.declaration_cache if cache_slot is not None else None,
-                    cache_namespace=(cache_owner, cache_slot), **kwargs)
+                    cache_namespace=(cache_owner, cache_slot),
+                    current_page=current_page(), **kwargs)
             if candidates:
                 spec, bound, unknown = bind(spec, candidates)
                 projection = {**projection, "values_bound": bound,
@@ -1198,7 +1221,8 @@ class GoalTurnExecutor:
                 + [d.entity for d in spec.deliverables if d.entity]))
             seen = {e.key for e in s.index.entities} if s.index is not None else set()
             wider = ({"index": neighbourhood(s.full_index, tuple(dict.fromkeys(s.focus[0] + beyond)),
-                                             request=s.focus[1], rules=False)}
+                                             request=s.focus[1], rules=False,
+                                             page_keys=s.page_keys)}
                      if any(k not in seen for k in beyond) and s.focus and s.full_index is not None
                      else {})
             try:
@@ -1360,7 +1384,7 @@ class GoalTurnExecutor:
         contract's payment plans): the request is read once more with those in front of
         the model. Its declaration stands only when it declares something."""
         held = neighbourhood(s.full_index, s.focus[0], request=s.focus[1], rules=False,
-                             held=True, inbound=True)
+                             held=True, inbound=True, page_keys=s.page_keys)
         fields = [f"{e.label}.{f.label}" for e in held.entities for f in e.held]
         seen = {e.key for e in s.index.entities} if s.index is not None else set()
         joined = [e.key for e in held.entities if e.key not in seen]
@@ -1841,14 +1865,16 @@ class GoalTurnExecutor:
         s.budget.check()
         return receipt
 
-    def _wait_ready(self, s: _TurnState, expected_path: str, *, record: bool) -> bool:
+    def _wait_ready(self, s: _TurnState, expected_path: str, *, record: bool,
+                    requires_page_route: bool = False) -> bool:
         """Wait until the page shows the destination, not merely its address.
 
         A single-page application changes the URL first and renders later; an observation
         taken between the two still lists the previous page's controls. The page counts
         as ready when its path is the expected one, the runtime does not report it
         pending or blocked, the application reports the rendered record or view, and
-        two consecutive observations agree.
+        two consecutive observations agree. A plan requiring main-page identity must
+        instead have that exact application fact in two fresh ready observations.
         """
         confirmed = 0
         last_confirmed_epoch = -1
@@ -1864,14 +1890,22 @@ class GoalTurnExecutor:
             markers = bool(obs.record_route) or bool(obs.active_view) or obs.page_facets is not None
             rendered = ((bool(obs.record_route) if record else bool(obs.active_view))
                         or obs.page_facets is not None) if markers else bool(obs.elements)
+            ready = obs.render_state != "pending"
+            if requires_page_route:
+                # Destination identity comes from the application's rendered main page.
+                # Neither its current URL nor unrelated controls establish that identity.
+                markers = True
+                rendered = bool(expected_path) and obs.page_route == expected_path
+                ready = obs.render_state == "ready"
             names = frozenset(e.name for e in obs.elements)
             if obs.render_state == "blocked":
                 return False
-            if path_ok and obs.render_state != "pending" and rendered:
+            if path_ok and ready and rendered:
                 # Seen rendered twice, half a second apart: the header controls and tabs
                 # of a form arrive a beat after its route does.
-                if obs.epoch != last_confirmed_epoch and (markers or names == last_names
-                                                          or last_names is None):
+                fresh = (obs.epoch > last_confirmed_epoch if requires_page_route
+                         else obs.epoch != last_confirmed_epoch)
+                if fresh and (markers or names == last_names or last_names is None):
                     confirmed += 1
                     last_confirmed_epoch = obs.epoch
                 last_names = names
@@ -1910,13 +1944,15 @@ class GoalTurnExecutor:
                 return out
         if not self._wait_ready(s, plan.expected_path,
                                 record=bool(plan.section or plan.highlight
-                                            or re.search(r"/\d+$", plan.expected_path))):
+                                            or re.search(r"/\d+$", plan.expected_path)),
+                                requires_page_route=plan.requires_page_route):
             if s.terminal_reason:
                 out.reached = False
                 return out
             out.reached = False
-            out.unmet.append(_Unmet("not_opened" if s.obs.render_state != "blocked"
-                                    else "error_dialog"))
+            out.unmet.append(_Unmet("error_dialog" if s.obs.render_state == "blocked"
+                                    else "page_unverified" if plan.requires_page_route
+                                    else "not_opened"))
             out.url = s.obs.url
             return out
         for name in plan.facets_on:
@@ -1953,10 +1989,15 @@ class GoalTurnExecutor:
             out.unmet.append(_Unmet("view", plan.view))
         out.url = s.obs.url
         out.reached = _path_of(s.obs.url) == (plan.expected_path or _path_of(s.obs.url))
+        if plan.requires_page_route and (s.obs.page_route != plan.expected_path
+                                         or s.obs.render_state != "ready"):
+            out.reached = False
+            out.unmet.append(_Unmet("page_unverified"))
         s.ledger.append("goal_page_settled", step=s.step, reached=out.reached,
                         unmet=[str(u) for u in out.unmet], url=s.obs.url,
                         render_state=s.obs.render_state, active_view=s.obs.active_view,
                         record_route=s.obs.record_route,
+                        page_route=s.obs.page_route,
                         selected_controls=list(s.obs.selected_controls)[:8],
                         facets=[str(f.get("name", "")) for f in (s.obs.page_facets or [])][:8],
                         elements=len(s.obs.elements),

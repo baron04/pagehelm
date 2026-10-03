@@ -79,6 +79,21 @@ describe('Page.describe bounds an observation before it crosses the browser boun
       '/items/4#tab', '/items/4 password']) expect(make(bad)).toBeUndefined()
     expect(make(null)).toBeUndefined()
   })
+  it('publishes only an explicit bounded application main-page identity', () => {
+    const read = (hook?: () => unknown) => new Page(controller(), () => null,
+      createRedactor(), undefined, undefined, undefined, undefined, undefined, undefined,
+      hook).describe({url: 'https://app.test/help', title: 'Help',
+        content: '[1]<a href=/contacts>Header menu />'}, 1).observation
+    expect(read(() => '/help').page_route).toBe('/help')
+    expect(read(() => '/old-page').page_route).toBe('/old-page')
+    expect(read().page_route).toBeUndefined()
+    expect(read(() => { throw new Error('unavailable') }).page_route).toBeUndefined()
+    for (const route of [null, 1, '', '//other.test/help', '/help?token=x', '/a/../help',
+      '/help#tab', '/a\\b', '/a b', '/' + 'x'.repeat(1000)]) {
+      expect(read(() => route).page_route).toBeUndefined()
+    }
+    expect(read(() => '/help').record_route).toBeUndefined()
+  })
   it('publishes only bounded, valid, non-sensitive application facet choices', () => {
     const choices = [
       {ref: 'fc_1', kind: 'group', name: 'Salesperson', active: false},

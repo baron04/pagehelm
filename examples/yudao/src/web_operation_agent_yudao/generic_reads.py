@@ -26,7 +26,7 @@ from web_operation_agent.business.goal_candidates import (
     RESOLVE_GOAL_CANDIDATES_SCHEMA, RESOLVE_GOAL_CANDIDATES_TOOL, GoalCandidateTools,
 )
 from web_operation_agent.business.page_entries import (
-    FIND_PAGE_ENTRIES_SCHEMA, FIND_PAGE_ENTRIES_TOOL, PageEntry, PageEntryCatalog,
+    FIND_PAGE_ENTRIES_SCHEMA, FIND_PAGE_ENTRIES_TOOL, PageEntryCatalog,
     PageEntryTools, PagePart,
 )
 from web_operation_agent.goal.data import EVERYTHING, ID, NAME, Compare, DataRefused, LinkValue, all_of
@@ -218,13 +218,12 @@ class YudaoPageEntryPort:
 
     def catalog(self, *, context=None):
         data = self.entities.data
-        schema = data.schema()
-        entries = tuple(PageEntry(reference=p.key, label=p.label,
-                                  search_text=f"{p.label} {p.key} {schema.entity(p.entity).label}",
-                                  subject_reference=p.entity, route=data.page_address(p.key))
-                        for p in schema.pages)
-        return PageEntryCatalog(binding_digest=self.entities._binding(context), entries=entries,
-                                complete=True, scope="当前账号可访问的应用页面")
+        entries, complete = data.page_entries()
+        binding = self.entities._binding(context)
+        if entries is not data.page_entries()[0]:
+            raise DataRefused("credentials changed while binding the actor menu catalog")
+        return PageEntryCatalog(binding_digest=binding, entries=entries,
+                                complete=complete, scope="当前账号的应用菜单；只有经过路由验证的页面可打开")
 
     def parts(self, entry, *, context=None):
         del context

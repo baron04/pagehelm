@@ -208,3 +208,148 @@ describe('native Yudao record and read completion facts', () => {
     expect(facts.readPageBlocker()).toBe('pending')
   })
 })
+
+/** The native AppView / RouterView / KeepAlive shape, without importing Vue or
+ * changing the host application. Route records hold public component proxies. */
+type ComponentType = {name: string}
+interface NativeVNode {
+  type?: string | ComponentType
+  el?: Element
+  component?: NativeInstance
+  children?: NativeVNode[]
+  suspense?: {pendingBranch: object}
+  key?: string
+}
+interface NativeInstance {
+  type: ComponentType
+  parent: NativeInstance | null
+  isMounted?: boolean
+  isUnmounted: boolean
+  isDeactivated: boolean
+  appContext: {app: NativeApp}
+  subTree: NativeVNode
+  vnode?: NativeVNode
+}
+interface NativeMatch {
+  path: string
+  components: {default: ComponentType}
+  instances?: {default: {$: NativeInstance}}
+}
+interface NativeRoute {
+  path: string
+  fullPath: string
+  matched: NativeMatch[]
+  meta: {title: string}
+}
+interface NativeApp {
+  config: {globalProperties: {$router?: {currentRoute: {value: NativeRoute}}}}
+}
+function mountedPage(path = '/system/role', componentName = 'SystemRole') {
+  window.history.replaceState({}, '', path)
+  document.body.innerHTML = '<div id="app"><header><button>Global menu</button></header>'
+    + '<section><div id="destination">Mounted page</div></section></div>'
+  for (const element of document.querySelectorAll('*')) {
+    element.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+  }
+  const section = document.querySelector('section')!, element = document.querySelector('#destination')!
+  const component = {name: componentName}
+  const app: NativeApp = {config: {globalProperties: {}}}
+  const internal = (name: string, parent: NativeInstance | null = null): NativeInstance => ({type: {name}, parent,
+    isMounted: true, isUnmounted: false, isDeactivated: false, appContext: {app}, subTree: {}})
+  const appView = internal('AppView')
+  appView.subTree = {type: 'section', el: section, children: []}
+  const routerView = internal('RouterView', appView)
+  const keepAlive = internal('KeepAlive', routerView)
+  const instance: NativeInstance & {vnode: NativeVNode} = {...internal(componentName, keepAlive), type: component,
+    subTree: {type: 'div', el: element, children: []}, vnode: {type: component, key: path, el: element}}
+  instance.vnode.component = instance
+  keepAlive.subTree = instance.vnode
+  routerView.subTree = {type: keepAlive.type, component: keepAlive}
+  const matched: NativeMatch = {path, components: {default: component}, instances: {default: {$: instance}}}
+  const active: NativeRoute = {path, fullPath: path, matched: [matched], meta: {title: 'Source menu title'}}
+  app.config.globalProperties.$router = {currentRoute: {value: active}}
+  Object.assign(document.querySelector('#app')!, {__vue_app__: app})
+  return {app, active, matched, instance, routerView, appView, keepAlive, component, element, section}
+}
+
+describe('native Yudao mounted navigation identity', () => {
+  it('does not grant a route from source, currentRoute, metadata, menu or header alone', () => {
+    const state = mountedPage()
+    delete state.matched.instances
+    state.element.remove()
+    expect(createPageFacts().readPageRoute()).toBeUndefined()
+  })
+  it('proves the exact visible component mounted inside the active AppView', () => {
+    const state = mountedPage()
+    const facts = createPageFacts()
+    expect(facts.readPageRoute()).toBe('/system/role')
+    // AppView may have a fragment root when its optional footer is enabled.
+    state.appView.subTree = {children: [{type: 'section', el: state.section}, {type: 'footer'}]}
+    expect(facts.readPageRoute()).toBe('/system/role')
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+    facts.dispose()
+    expect(facts.readPageRoute()).toBeUndefined()
+  })
+  it('refuses the old component while the URL or current route changes', () => {
+    const state = mountedPage()
+    const facts = createPageFacts()
+    window.history.replaceState({}, '', '/system/post')
+    expect(facts.readPageRoute()).toBeUndefined()
+    state.active.path = '/system/post'; state.active.fullPath = '/system/post'
+    state.matched.path = '/system/post'
+    expect(facts.readPageRoute()).toBeUndefined()
+    state.instance.vnode.key = '/system/post'
+    state.matched.components.default = {name: 'SystemPost'}
+    expect(facts.readPageRoute()).toBeUndefined()
+  })
+  it('refuses cached, detached, unmounted and header-only component instances', () => {
+    for (const change of [
+      (state: ReturnType<typeof mountedPage>) => {state.instance.isDeactivated = true},
+      (state: ReturnType<typeof mountedPage>) => {state.instance.isMounted = false},
+      (state: ReturnType<typeof mountedPage>) => {state.instance.isUnmounted = true},
+      (state: ReturnType<typeof mountedPage>) => {state.element.remove()},
+      (state: ReturnType<typeof mountedPage>) => {document.querySelector('header')!.append(state.element)},
+      (state: ReturnType<typeof mountedPage>) => {state.keepAlive.subTree = {type: 'div', el: state.element}},
+      (state: ReturnType<typeof mountedPage>) => {state.appView.type.name = 'ToolHeader'},
+    ]) {
+      const state = mountedPage(); change(state)
+      expect(createPageFacts().readPageRoute()).toBeUndefined()
+    }
+  })
+  it('refuses wildcard 404, concrete error and nested error component renders', () => {
+    const wildcard = mountedPage('/help', 'Error404')
+    wildcard.matched.path = '/:pathMatch(.*)*'
+    expect(createPageFacts().readPageRoute()).toBeUndefined()
+    for (const name of ['Error403', 'Error404', 'Error500', 'Error', 'NoFound', 'NoAccess']) {
+      mountedPage('/help', name)
+      expect(createPageFacts().readPageRoute()).toBeUndefined()
+    }
+    const state = mountedPage()
+    state.instance.subTree.children = [{component: {...state.instance, type: {name: 'Error'}}}]
+    expect(createPageFacts().readPageRoute()).toBeUndefined()
+  })
+  it('withholds a mounted route while loading or displaying a blocking error', () => {
+    for (const markup of ['<div class="el-loading-mask"></div>', '<div class="el-message--error">Failed</div>',
+      '<div class="el-notification--error">Failed</div>', '<div aria-busy="true"></div>']) {
+      mountedPage()
+      document.body.insertAdjacentHTML('beforeend', markup)
+      const blocker = document.body.lastElementChild!
+      blocker.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+      const facts = createPageFacts()
+      expect(facts.readPageRoute()).toBeUndefined()
+      blocker.setAttribute('hidden', '')
+      expect(facts.readPageRoute()).toBe('/system/role')
+    }
+  })
+  it('refuses custom keys, pending suspense, missing mount state and oversized render trees', () => {
+    for (const change of [
+      (state: ReturnType<typeof mountedPage>) => {state.instance.vnode.key = 'shared-view-key'},
+      (state: ReturnType<typeof mountedPage>) => {state.routerView.subTree.suspense = {pendingBranch: {}}},
+      (state: ReturnType<typeof mountedPage>) => {delete state.instance.isMounted},
+      (state: ReturnType<typeof mountedPage>) => {state.instance.subTree.children = Array.from({length: 4096}, () => ({type: 'div'}))},
+    ]) {
+      const state = mountedPage(); change(state)
+      expect(createPageFacts().readPageRoute()).toBeUndefined()
+    }
+  })
+})

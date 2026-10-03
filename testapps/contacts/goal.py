@@ -13,6 +13,7 @@ from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, Index
 from web_operation_agent.goal.ports import (Aggregate, Candidate, Fact, FormPlan, PagePlan, Resolution,
                                             Resolved)
 from web_operation_agent.goal.spec import Deliverable, GoalSpec
+from web_operation_agent.goal.resolve.resolver import navigation_only, navigation_refused
 from web_operation_agent.state.identity import OperationContext, PrincipalError
 
 from .adapter import APPLICATION_ID, MinimalContactsAdapter
@@ -55,26 +56,26 @@ class ContactsGoalPort:
 
     def index(self, *, context: OperationContext | None = None) -> ApplicationIndex:
         permissions = self._require_actor(context)
+        return self._index(context, permissions)[0]
+
+    def _index(self, context, permissions):
         assert context is not None
-        digest = hashlib.sha256(("contacts-goal-v1\0"
-                                 + context.principal.actor_authority_digest).encode()).hexdigest()
+        catalog = self._executor._page_entries._port.catalog(context=context)
+        digest = hashlib.sha256(("contacts-goal-v2\0" + catalog.binding_digest).encode()).hexdigest()
+        pages = tuple(IndexPage(key=entry.reference, label=entry.label,
+            breadcrumb=" / ".join(entry.breadcrumbs) or entry.label,
+            entity="contacts" if entry.subject_reference == "contact" else "",
+            views=entry.views, sections=_DESK_SECTIONS if entry.reference in _DESKS else (),
+            operations=("create",) if entry.reference == "contacts" and "contacts:write" in permissions else ())
+            for entry in catalog.entries if entry.route)
         return ApplicationIndex(
             entities=(IndexEntity(
                 key="contacts", label="Contacts", aliases=("联系人", "通讯录"),
                 fields=(IndexField("id", "Identifier", "text"),
                         IndexField("name", "Name", "text"),
                         IndexField("email", "Email", "text"))),),
-            pages=(IndexPage(key="contacts", label="Contacts", breadcrumb="Contacts",
-                             entity="contacts", views=("list",),
-                             operations=(("create",) if "contacts:write" in permissions
-                                         else ())),
-                   IndexPage(key="desk-partner", label="Partner desk",
-                             breadcrumb="Vendor workspaces / Partner desk", entity="contacts",
-                             sections=_DESK_SECTIONS),
-                   IndexPage(key="desk-supplier", label="Supplier desk",
-                             breadcrumb="Vendor workspaces / Supplier desk", entity="contacts",
-                             sections=_DESK_SECTIONS)),
-            source_digest=digest)
+            pages=pages, complete=catalog.complete, source_digest=digest), {
+                entry.reference: entry.route for entry in catalog.entries if entry.route}
 
     def capabilities(self) -> frozenset[str]:
         """Beyond the required level this application offers tabs on its vendor desks,
@@ -97,12 +98,17 @@ class ContactsGoalPort:
     def resolve(self, spec: GoalSpec, *, context: OperationContext | None = None,
                 current_path: str = "") -> Resolution:
         permissions = self._require_actor(context)
-        rows = self._executor._contact_rows()
+        index, page_routes = self._index(context, permissions)
+        needs_records = any((not d.page.key or (p := index.page(d.page.key)) is not None and p.entity)
+                            and (d.kind in {"fact", "aggregate", "list"} or d.record or d.via or d.page.search)
+                            for d in spec.deliverables)
+        rows = self._executor._contact_rows() if needs_records else []
         return Resolution(
             deliverables=tuple(self._resolve_one(
-                d, rows, can_create="contacts:write" in permissions)
+                d, rows, index=index, page_routes=page_routes,
+                can_create="contacts:write" in permissions)
                 for d in spec.deliverables),
-            reads=(("GET", "/api/contacts"),))
+            reads=(("GET", "/api/contacts"),) if needs_records else ())
 
     @staticmethod
     def _field(label: str) -> str:
@@ -122,7 +128,17 @@ class ContactsGoalPort:
         return None, ("record reference is ambiguous" if partial else
                       "record is not visible to this actor")
 
-    def _resolve_one(self, d: Deliverable, rows: list[dict], *, can_create: bool) -> Resolved:
+    def _resolve_one(self, d: Deliverable, rows: list[dict], *, index: ApplicationIndex,
+                     page_routes: dict[str, str], can_create: bool) -> Resolved:
+        page = index.page(d.page.key) if d.page.key else None
+        if page is not None and not page.entity:
+            if not navigation_only(d):
+                return navigation_refused(d, page)
+            path = page_routes[page.key]
+            return Resolved(kind="page", page=PagePlan(url=path, expected_path=path,
+                label=page.label, requires_page_route=True))
+        if d.page.key and page is None:
+            return Resolved(kind=d.kind, problem="page is not in this actor's current index")
         if _norm(d.entity) not in {"", "contacts", "contact", "联系人", "通讯录"}:
             return Resolved(kind=d.kind, problem="entity is not in this application's index")
         if d.via or d.page.filters_on or d.page.filters_off or d.page.group_by:

@@ -79,7 +79,18 @@ agent.
   plus guiding a change, entering a value or explaining a rule only when the port
   declares them. The Contacts application declares tabs and handoffs and takes
   goal turns in its demo. A turn is marked complete only when every declared deliverable
-  settles. Yudao can extract literal record-tab labels from deployed Vue components
+  settles. An actor-index page may also offer navigation without a record entity;
+  it cannot declare data reads, filters or form operations. Explicit page selections
+  survive entity narrowing. Such navigation requires a fresh application-owned
+  `page_route` observation proving the rendered destination; the URL, title or global
+  navigation controls alone cannot establish success. Missing or mismatched proof
+  leaves the navigation unverified. Large navigation directories expose a bounded ranked
+  sample, with space reserved ahead of entity summaries; omitted entries are not proof
+  of absence. Goal declarations receive a redacted visible-page reference projection
+  of at most 4 KiB, without selectors, input attributes or action references. Changing
+  visible context invalidates the declaration cache; an observation epoch alone does
+  not. Runtime checks still establish permissions and action targets.
+  Yudao can extract literal record-tab labels from deployed Vue components
   when native sections are enabled; dynamic labels remain unresolved. Source labels
   do not replace live visibility or selected-tab verification. The declaration is staged by default: the request's hard references (document
   numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the
@@ -579,6 +590,11 @@ allowlisted filename can refine retrieval. Documented constraints must be identi
 as documented, while claims about enforced behavior need implementation evidence.
 Missing implementation evidence does not establish that a rule is absent from the repository.
 Follow-ups about what the original evidence proves retain that topic.
+Source decisions receive bounded redacted prior dialogue (at most four turns and 8 KiB)
+and fresh visible-page reference context (at most 4 KiB). Neither supplies source proof,
+current values or permissions. Retrieval refinement retains original caller/template
+evidence alongside new helper matches, deduplicated and renumbered per question, within
+12 references and 64 KiB of whole excerpts; omitted evidence is explicitly marked.
 Source scope declares whether qualified repository evidence or actual implementation
 proof is required, and carries that distinction through retrieval and answering without
 another model stage. Ordinary repository answers can cite explicit documentation;

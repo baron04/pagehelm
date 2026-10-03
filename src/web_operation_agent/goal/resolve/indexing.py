@@ -36,7 +36,7 @@ def index_from_schema(schema: Schema, *, breadcrumbs: dict[str, str] | None = No
                                     lines_of=owner.label if owner is not None else "",
                                     rules=tuple(rules.get(entity.key, ()))))
     pages = tuple(IndexPage(key=p.key, label=p.label, breadcrumb=breadcrumbs.get(p.key, p.label),
-                            entity=p.entity, views=("list",),
+                            entity=p.entity, views=("list",) if p.entity else (),
                             filters=tuple(f.label for f in p.filters if f.usable),
                             operations=p.operations, aliases=aliases.get(p.key, ()))
                   for p in schema.pages)

@@ -129,7 +129,8 @@ class IndexPage:
     label: str
     #: Where the application's own navigation shows it, e.g. "Sales / Orders / Quotations".
     breadcrumb: str
-    entity: str
+    #: Empty only for a navigation-only page, which has no record or form vocabulary.
+    entity: str = ""
     views: tuple[str, ...] = ()
     filters: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
@@ -150,7 +151,13 @@ class IndexPage:
         object.__setattr__(self, "key", _label(self.key, "page key"))
         object.__setattr__(self, "label", _label(self.label, "page label"))
         object.__setattr__(self, "breadcrumb", _label(self.breadcrumb, "breadcrumb"))
-        object.__setattr__(self, "entity", _label(self.entity, "page entity"))
+        if not isinstance(self.entity, str):
+            raise ValueError("page entity must be a string")
+        object.__setattr__(self, "entity", _label(self.entity, "page entity")
+                           if self.entity.strip() else "")
+        if not self.entity and any((self.views, self.filters, self.groups, self.operations,
+                                    self.filters_as, self.sections, self.scope)):
+            raise ValueError("a navigation-only page cannot declare record or form metadata")
         object.__setattr__(self, "views", tuple(_label(v, "view") for v in self.views)[:8])
         object.__setattr__(self, "filters", tuple(_label(f, "filter") for f in self.filters)[:24])
         object.__setattr__(self, "groups", tuple(_label(g, "group") for g in self.groups)[:24])
@@ -325,7 +332,7 @@ class ApplicationIndex:
         for page in self.pages:
             parts = [f"{page.key}: {page.breadcrumb}"
                      + (f" [{', '.join(page.aliases)}]" if page.aliases else ""),
-                     f"entity {page.entity}"]
+                     f"entity {page.entity}" if page.entity else "navigation only (no records)"]
             if page.views:
                 parts.append("views: " + ", ".join(page.views))
             if page.filters:

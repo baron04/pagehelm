@@ -66,6 +66,8 @@ export interface PageObservation {
   facet_candidates?: Array<{ref: string; kind: 'filter' | 'group'; name: string; active: boolean}>
   /** Application-owned route of the form record actually rendered, not a navigation grant. */
   record_route?: string
+  /** Application-owned main-page identity actually rendered, not a navigation grant. */
+  page_route?: string
 }
 
 export interface ObservationEnvelope {

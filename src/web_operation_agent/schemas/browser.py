@@ -39,6 +39,7 @@ MAX_OBSERVATION_ELEMENTS = int(_BROWSER_CONTRACT["observation"]["max_elements"])
 MAX_SELECTED_CONTROLS = int(_BROWSER_CONTRACT["observation"]["max_selected_controls"])
 MAX_SELECTED_CONTROL_CHARS = int(_BROWSER_CONTRACT["observation"]["max_selected_control_chars"])
 MAX_PAGE_FACETS = int(_BROWSER_CONTRACT["observation"]["max_page_facets"])
+MAX_PAGE_ROUTE_CHARS = int(_BROWSER_CONTRACT["observation"]["max_page_route_chars"])
 MAX_FACET_CANDIDATES = int(_BROWSER_CONTRACT["observation"]["max_facet_candidates"])
 MAX_OBSERVATION_CONTENT_CHARS = int(
     _BROWSER_CONTRACT["observation"]["max_content_chars"])
@@ -46,7 +47,7 @@ MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
 SCOPED_FORM_HANDOFF_CAPABILITY = _BROWSER_CONTRACT["form_handoff"]["scoped_capability"]
 MAX_FORM_LABEL_CHARS = int(_BROWSER_CONTRACT["form_handoff"]["max_label_chars"])
 if min(MAX_OBSERVATION_ELEMENTS, MAX_OBSERVATION_CONTENT_CHARS, MAX_SCROLL_PAGES,
-       MAX_PAGE_FACETS, MAX_FACET_CANDIDATES) < 1:
+       MAX_PAGE_FACETS, MAX_FACET_CANDIDATES, MAX_PAGE_ROUTE_CHARS) < 1:
     raise ValueError("browser contract bounds must be positive integers")
 POTENTIALLY_WRITING_ACTIONS = BROWSER_ACTIONS - INTRINSICALLY_READ_ONLY_ACTIONS
 
@@ -154,6 +155,9 @@ class PageObservation:
     # Application-owned identity of the form record actually rendered. This is an
     # observation, never authority to navigate to that path.
     record_route: str = ""
+    # Application-owned identity of the main page actually rendered. This fact can
+    # verify arrival at an already authorized destination; it grants no route authority.
+    page_route: str = ""
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
@@ -226,6 +230,14 @@ class PageObservation:
                      and not re.search(r"[\x00-\x20\x7f]", self.record_route)
                      and not any(part in {".", ".."} for part in self.record_route.split("/")),
                      "record_route must be a plain application path")
+        _require(isinstance(self.page_route, str) and len(self.page_route) <= MAX_PAGE_ROUTE_CHARS,
+                 "page_route must be a bounded application path")
+        if self.page_route:
+            _require(self.page_route.startswith("/") and not self.page_route.startswith("//")
+                     and not any(char in self.page_route for char in "?#\\")
+                     and not re.search(r"[\x00-\x20\x7f]", self.page_route)
+                     and not any(part in {".", ".."} for part in self.page_route.split("/")),
+                     "page_route must be a plain application path")
         self.landmarks = copy.deepcopy(self.landmarks)
         self.elements = copy.deepcopy(self.elements)
         self.messages = copy.deepcopy(self.messages)
@@ -252,6 +264,8 @@ class PageObservation:
             out["facet_candidates"] = copy.deepcopy(self.facet_candidates)
         if self.record_route:
             out["record_route"] = self.record_route
+        if self.page_route:
+            out["page_route"] = self.page_route
         return out
 
     @staticmethod
@@ -259,7 +273,7 @@ class PageObservation:
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
                    "content", "messages", "truncated", "render_state", "selected_controls",
                    "active_view",
-                   "page_facets", "facet_candidates", "record_route"}
+                   "page_facets", "facet_candidates", "record_route", "page_route"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
@@ -278,7 +292,8 @@ class PageObservation:
                                active_view=d.get("active_view", ""),
                                page_facets=copy.deepcopy(d.get("page_facets")),
                                facet_candidates=copy.deepcopy(d.get("facet_candidates")),
-                               record_route=d.get("record_route", ""))
+                               record_route=d.get("record_route", ""),
+                               page_route=d.get("page_route", ""))
 
     @property
     def content_digest(self) -> str:

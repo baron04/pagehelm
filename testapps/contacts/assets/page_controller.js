@@ -45,6 +45,14 @@ export function readActiveView() {
   return document.querySelector('main#app')?.getAttribute('data-active-view') || undefined
 }
 
+// The application puts a route on the main content it actually rendered. The URL
+// or shared header does not create this fact; replacing that content removes it.
+export function readPageRoute() {
+  const pages = Array.from(document.querySelectorAll('main#app [data-page-route]'))
+    .filter(element => visible(element) && !element.closest('[hidden],[aria-hidden="true"]'))
+  return pages.length === 1 ? pages[0].getAttribute('data-page-route') || undefined : undefined
+}
+
 // The record the app has rendered, once it has: its own route while it shows a record.
 export function readPageRecordRoute() {
   const view = document.querySelector('main#app')?.getAttribute('data-active-view')

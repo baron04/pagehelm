@@ -525,28 +525,62 @@ class _ContactsEntityReadPort:
 
 
 class _ContactsPageEntryPort:
-    """The synthetic app's ordinary contact list, without an ORM action table."""
+    """The application's current actor menu, without an ORM action table or source."""
+
+    _PAGES = {"contacts": ("/contacts", "contact"), "help": ("/contacts/help", ""),
+              "workflows": ("/contacts/workflows", ""),
+              "desk-partner": ("/contacts/workflows/partner", "contact"),
+              "desk-supplier": ("/contacts/workflows/supplier", "contact")}
 
     def __init__(self, executor: _ContactsToolExecutor):
         self._executor = executor
 
     def catalog(self, *, context=None) -> PageEntryCatalog:
         actor_binding = _ContactsEntityReadPort._actor_binding(context)
+        request = urllib.request.Request(self._executor.origin + "/api/pages",
+            headers={"Authorization": f"Bearer {self._executor._api_token}"})
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                raise BusinessToolAuthenticationError("the delegated credential was refused") from exc
+            if exc.code == 403:
+                raise BusinessToolPermissionError("the application does not let this actor read pages") from exc
+            raise BusinessToolError("the page catalog is unavailable") from exc
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            raise BusinessToolError("the page catalog is unavailable") from exc
+        if (not isinstance(payload, dict) or not isinstance(payload.get("pages"), list)
+                or not isinstance(payload.get("complete"), bool)):
+            raise BusinessToolContractError("the application returned an invalid page catalog")
+        principal = getattr(context, "principal", None)
+        if principal is not None and (payload.get("actor") != principal.actor_id
+                                     or payload.get("workspace") != principal.workspace_id):
+            raise BusinessToolPermissionError("the page catalog actor differs from the bound actor")
+        entries = []
+        for item in payload["pages"]:
+            if (not isinstance(item, dict) or set(item) != {"key", "label", "path"}
+                    or any(not isinstance(value, str) or not value.strip() for value in item.values())):
+                raise BusinessToolContractError("the application returned an invalid page entry")
+            reviewed = self._PAGES.get(item["key"])
+            route = item["path"] if reviewed is not None and item["path"] == reviewed[0] else ""
+            subject = reviewed[1] if route else ""
+            entries.append(PageEntry(reference=item["key"], label=item["label"],
+                search_text=item["label"] + (" address book people 联系人 通讯录" if item["key"] == "contacts" else ""),
+                subject_reference=subject, breadcrumbs=(item["label"],),
+                views=("list",) if item["key"] == "contacts" else (), route=route,
+                unavailable_reason="" if route else "unreviewed_route"))
         digest = hashlib.sha256(
-            ("contacts-page-entries-v1\0" + actor_binding).encode()).hexdigest()
+            ("contacts-page-entries-v2\0" + actor_binding + "\0"
+             + json.dumps(payload, sort_keys=True)).encode()).hexdigest()
         return PageEntryCatalog(
             binding_digest=digest,
-            entries=(PageEntry(
-                reference="contacts-list", label="Contacts",
-                search_text="address book people 联系人 通讯录",
-                subject_reference="contact",
-                breadcrumbs=("Contacts",), views=("list",), route="/contacts"),),
-            complete=True,
-            scope=self._executor._scope(context) + "; reviewed page entry",
+            entries=tuple(entries), complete=payload["complete"],
+            scope=self._executor._scope(context) + "; current actor menu",
         )
 
     def parts(self, entry: PageEntry, *, context=None) -> tuple[PagePart, ...]:
-        if entry.reference != "contacts-list":
+        if entry.reference != "contacts":
             return ()
         return (PagePart(reference="name", label="Name", kind="field",
                          search_text="contact name 姓名"),
@@ -760,7 +794,8 @@ class MinimalContactsAdapter:
             if allow_mutations else ())
         routes = DeclaredRoutePort(
             application_id=APPLICATION_ID,
-            tool_route_patterns=(r"/contacts", r"/contacts/new", r"/contacts/[a-z0-9-]+"),
+            tool_route_patterns=(r"/contacts", r"/contacts/new", r"/contacts/[a-z0-9-]+",
+                                 r"/contacts/workflows/(?:partner|supplier)"),
         )
         self.business_tools = BusinessToolRuntime(
             tuple(skills), executor, application_id=APPLICATION_ID,

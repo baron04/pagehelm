@@ -121,6 +121,15 @@ class PagePlan:
     fill_field: str = ""
     #: Opt-in application-form contract; supersedes the legacy single-field fill.
     form: FormPlan | None = None
+    #: Require the application's rendered main-page identity to match expected_path.
+    #: Header controls and the address alone cannot verify such a destination.
+    requires_page_route: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.requires_page_route, bool):
+            raise ValueError("requires_page_route must be a boolean")
+        if self.requires_page_route and not self.expected_path:
+            raise ValueError("a required page route needs an expected path")
 
 
 @dataclass(frozen=True)

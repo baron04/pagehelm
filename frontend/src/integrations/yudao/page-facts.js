@@ -1,6 +1,7 @@
 /** App-owned page facts. Load before the application's module entry.
  * Observes only same-origin CRM GET completion; retains no credentials, queries,
  * bodies or business values except the current detail's bounded visible title.
+ * A navigation fact additionally requires the deployed AppView's live Vue mount.
  * This is observation, never the application's API write fence.
  */
 export function createPageFacts({view = window, doc = document} = {}) {
@@ -85,7 +86,81 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (readPageBlocker() || record?.route !== route) return undefined
     return route
   }
-  return {begin, readPageBlocker, readPageRecordRoute, dispose() {disposed = true; reads.clear(); record = null}}
+  function readPageRoute() {
+    if (disposed) return undefined
+    current()
+    try {
+      const app = doc.querySelector('#app')?.__vue_app__
+      const active = app?.config?.globalProperties?.$router?.currentRoute?.value
+      const matched = active?.matched?.at(-1)
+      // A wildcard, parameter template, redirect or source/menu entry is not a
+      // concrete rendered destination. RouterView stores a public Vue proxy.
+      if (!matched || active.path !== route || matched.path !== route || matched.redirect) return undefined
+      const instance = matched.instances?.default?.$
+      const component = matched.components?.default
+      const mounted = item => item?.isMounted === true && item.isUnmounted === false && item.isDeactivated === false
+      const name = item => item?.type?.name || item?.type?.__name || ''
+      const errorComponent = item => /^(Error(?:403|404|500)?|NoFound|NoAccess)$/.test(name(item))
+      if (!mounted(instance) || !component || instance.type !== component
+          || instance.vnode?.type !== component || instance.vnode?.component !== instance
+          || instance.appContext?.app !== app || errorComponent(instance)
+          // The reviewed AppView keys its destination by fullPath unless a
+          // custom viewKey overrides it. An unrelated key cannot prove arrival.
+          || instance.vnode.key !== active.fullPath) return undefined
+      let routerView, appView, ancestor = instance.parent
+      for (let depth = 0; ancestor && depth < 24; depth++, ancestor = ancestor.parent) {
+        if (!mounted(ancestor) || errorComponent(ancestor)) return undefined
+        if (!routerView && name(ancestor) === 'RouterView') routerView = ancestor
+        if (routerView && name(ancestor) === 'AppView') { appView = ancestor; break }
+      }
+      if (!routerView || !appView) return undefined
+      // Search only the active VNode branch, never KeepAlive's cached instances.
+      // Unknown/oversized trees fail closed, without retaining component state.
+      const stack = [routerView.subTree], seen = new Set()
+      let found = false
+      while (stack.length && seen.size < 64) {
+        const node = stack.pop()
+        if (!node || seen.has(node)) continue
+        seen.add(node)
+        if (node.component === instance) { found = true; break }
+        if (node.suspense?.pendingBranch) return undefined
+        if (node.component) stack.push(node.component.subTree)
+        if (Array.isArray(node.children)) {
+          if (node.children.length + stack.length > 64) return undefined
+          stack.push(...node.children)
+        }
+      }
+      if (!found) return undefined
+      const roots = appView.subTree?.type === 'section' ? [appView.subTree]
+        : Array.isArray(appView.subTree?.children) ? appView.subTree.children : []
+      const sections = roots.filter(node => node?.type === 'section' && node.el?.isConnected && visible(node.el))
+      if (sections.length !== 1) return undefined
+      const main = sections[0].el
+      const render = [instance.subTree], rendered = new Set()
+      let content = false
+      // Bound element wrappers and child components together; truncation must
+      // not drop a blocking error and still grant arrival.
+      while (render.length && rendered.size < 4096) {
+        const node = render.pop()
+        if (!node || rendered.has(node)) continue
+        rendered.add(node)
+        if (node.suspense?.pendingBranch || node.component &&
+            (!mounted(node.component) || errorComponent(node.component))) return undefined
+        if (node.el?.nodeType === 1 && node.el.isConnected && main.contains(node.el) && visible(node.el)) content = true
+        if (node.component) render.push(node.component.subTree)
+        if (Array.isArray(node.children)) {
+          if (node.children.length + render.length > 4096) return undefined
+          render.push(...node.children)
+        }
+      }
+      if (render.length || !content || Array.from(doc.querySelectorAll(
+        '.el-loading-mask,.el-message--error,.el-notification--error,[aria-busy="true"]')).some(visible)
+          || readPageBlocker()) return undefined
+      return route
+    } catch { return undefined }
+  }
+  return {begin, readPageBlocker, readPageRecordRoute, readPageRoute,
+    dispose() {disposed = true; reads.clear(); record = null}}
 }
 
 export function installPageFacts(view = window, doc = document) {
@@ -144,4 +219,5 @@ export function installPageFacts(view = window, doc = document) {
 const installed = typeof window === 'undefined' ? null : installPageFacts()
 export const readPageBlocker = () => installed ? installed.readPageBlocker() : true
 export const readPageRecordRoute = () => installed?.readPageRecordRoute()
+export const readPageRoute = () => installed?.readPageRoute()
 export const disposeInstalledPageFacts = () => installed?.dispose()

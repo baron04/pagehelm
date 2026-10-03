@@ -26,6 +26,7 @@ from decimal import Decimal
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from web_operation_agent.business.page_entries import PageEntry
 from web_operation_agent.goal.data import (EVERYTHING, ID, NAME, Choice, Compare, Cond,
                                             DataRefused, EntitySchema, FieldSchema, Group,
                                             LinkValue, PageSchema, Ref, Row, Schema, as_bool,
@@ -84,6 +85,8 @@ class YudaoGoalData:
         self._conventions: tuple = ()
         self._source = None
         self._actor = ""
+        self._menu_entries: tuple[PageEntry, ...] = ()
+        self._menu_complete = False
         #: line entity key -> its line table.
         self._lines: dict[str, _Lines] = {}
         #: entity key -> its endpoints, query parameters and field bookkeeping.
@@ -128,7 +131,20 @@ class YudaoGoalData:
                     schema, breadcrumbs=self._breadcrumbs, aliases=self._aliases,
                     conventions=self._conventions, rules=rules, source_digest=digest,
                     actor=self._actor)
+                self._index = replace(self._index, complete=self._menu_complete)
             return self._index
+
+    def page_entries(self) -> tuple[tuple[PageEntry, ...], bool]:
+        """The current actor's menu catalog, independent of readable list endpoints.
+
+        Menu groups and unqualified paths remain information. Source-derived labels
+        and detail templates never contribute navigation authority to this catalog.
+        """
+        self.schema()
+        with self._lock:
+            if self._schema_generation != getattr(self._client, "read_generation", 0):
+                raise DataRefused("credentials changed while reading the actor menu catalog")
+            return self._menu_entries, self._menu_complete
 
     def _entity_sources(self, schema: Schema):
         from .source import EntitySource
@@ -155,12 +171,14 @@ class YudaoGoalData:
                 self._lines.clear()
                 self._read.clear()
                 self._shown.clear()
+                self._menu_entries, self._menu_complete = (), False
                 self._read_generation = generation
                 self._schema_generation = generation
             if self._schema is None:
                 self._schema = self._compile()
                 if generation != getattr(self._client, "read_generation", 0):
                     self._schema = None
+                    self._menu_entries, self._menu_complete = (), False
                     raise DataRefused("credentials changed while reading application metadata")
             return self._schema
 
@@ -182,27 +200,56 @@ class YudaoGoalData:
         except DataRefused:
             pass
         self._breadcrumbs, self._aliases = {}, {}
-        found: list[tuple[dict, str, str, list[str]]] = []
-        for menu, trail in _leaves(info.get("menus") or ()):
+        menus = info.get("menus")
+        if not isinstance(menus, (list, tuple)):
+            raise DataRefused("the application did not return its actor menu catalog")
+        if not _valid_menus(menus):
+            raise DataRefused("the application returned an invalid actor menu catalog")
+        found, entries = [], []
+        complete = True
+        paths = set()
+        for position, (menu, trail) in enumerate(_menu_nodes(menus)):
             path = "/" + "/".join(trail[1])
             module = trail[1][0] if trail[1] else ""
             if self._modules and module not in self._modules:
+                complete = False
                 continue
-            listing = self._listing(module, trail[1][1:], str(menu.get("component") or ""), permissions)
-            if listing is None:
-                continue
-            found.append((menu, path, listing, trail[0]))
+            label = str(menu.get("name") or "").strip()
+            component = str(menu.get("component") or "")
+            standalone = bool(component and component not in {"Layout", "ParentView", "BaseLayout"})
+            qualified = (standalone and not str(menu.get("path") or "").startswith("//")
+                         and bool(re.fullmatch(r"/[a-z0-9][a-z0-9/_-]*", path)))
+            if qualified and path in paths:
+                raise DataRefused("the actor menu catalog contains duplicate page paths")
+            if qualified:
+                paths.add(path)
+            listing = (self._listing(module, trail[1][1:], component, permissions)
+                       if qualified else None)
+            entries.append(PageEntry(
+                reference=path if qualified else f"menu:{position}:{path}", label=label,
+                search_text=" ".join((*trail[0], path)), breadcrumbs=tuple(trail[0]),
+                subject_reference=listing[0] if listing else "",
+                views=("list",) if listing else (), route=path if qualified else "",
+                unavailable_reason="" if qualified else "not_standalone_page"))
+            if qualified:
+                found.append((menu, path, listing, trail[0]))
+        self._menu_entries, self._menu_complete = tuple(entries), complete
         entities, pages = {}, []
         labels = {}
-        for menu, path, (key, list_path), names in found:
+        for menu, path, listing, names in found:
+            self._breadcrumbs[path] = " / ".join(names)
+            self._aliases[path] = ()
+            if listing is None:
+                pages.append(PageSchema(key=path, entity="", label=str(menu["name"]),
+                                        opens_records=False))
+                continue
+            key, list_path = listing
             if key not in self._entities:
                 self._entities[key] = self._entity(key, list_path, str(menu.get("component") or ""),
                                                    permissions, str(menu["name"]))
             labels.setdefault(key, []).append(str(menu["name"]))
             ops = (("create",) if f"{key.replace('/', ':')}:create" in permissions else ())
             pages.append(PageSchema(key=path, entity=key, label=str(menu["name"]), operations=ops))
-            self._breadcrumbs[path] = " / ".join(names)
-            self._aliases[path] = ()
         # A label shared by entities of several modules ("客户" in CRM and ERP) keeps its
         # module's name so that it names one of them.
         plain = {k: e.label for k, e in self._entities.items()}
@@ -664,6 +711,8 @@ class YudaoGoalData:
         return tuple(Group(key=k, label=l, count=n) for (k, l), n in ordered)
 
     def page_address(self, page: str, *, view: str = "") -> str:
+        if self.schema().page(page) is None:
+            raise DataRefused("the page is not in the actor's current menu catalog")
         return page
 
     def record_address(self, entity: str, id: str) -> str:
@@ -1057,18 +1106,28 @@ class _Entity:
             setattr(self, k, v)
 
 
-def _leaves(menus, names=(), path=()):
-    """(menu, (menu names from the top, path words from the top)) for each page menu."""
+def _menu_nodes(menus, names=(), path=()):
+    """Actor-visible menu entries, including informational wrappers and non-list pages."""
     for menu in menus:
-        words = tuple(w for w in str(menu.get("path") or "").strip("/").split("/") if w)
-        if str(menu.get("path") or "").startswith("http"):
+        if not isinstance(menu, dict) or menu.get("visible") is False:
             continue
-        here = (names + (str(menu.get("name") or ""),), path + words)
+        words = tuple(w for w in str(menu.get("path") or "").strip("/").split("/") if w)
+        route = str(menu.get("path") or "")
+        here = (names + (str(menu.get("name") or ""),),
+                words if route.startswith("/") else path + words)
+        yield menu, here
         children = menu.get("children") or []
         if children:
-            yield from _leaves(children, *here)
-        elif str(menu.get("component") or "").endswith("index"):
-            yield menu, here
+            yield from _menu_nodes(children, *here)
+
+
+def _valid_menus(menus) -> bool:
+    """A malformed or omitted entry cannot prove a complete actor menu directory."""
+    return isinstance(menus, (list, tuple)) and all(
+        isinstance(menu, dict) and isinstance(menu.get("name"), str) and bool(menu["name"].strip())
+        and isinstance(menu.get("path"), str)
+        and (menu.get("component") is None or isinstance(menu.get("component"), str))
+        and _valid_menus(menu.get("children") or ()) for menu in menus)
 
 
 def _dict_label(name: str) -> str:

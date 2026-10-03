@@ -167,6 +167,11 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
     # -- one deliverable -------------------------------------------------------------------
     def _resolve_one(self, d: Deliverable) -> Resolved:
         index = self.index
+        page = index.page(d.page.key) if d.page.key else None
+        if page is not None and not page.entity:
+            if not navigation_only(d):
+                return navigation_refused(d, page)
+            return self._list_page(d)
         if d.field_values:
             # Only an integration's reviewed form port can translate a batch; the
             # ordinary data resolver must not silently turn it into navigation.
@@ -767,7 +772,7 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         return Resolved(kind="page", problem=problem, page=PagePlan(
             url=url, label=page.breadcrumb, expected_path=expected, view=view,
             facets_on=tuple(dict.fromkeys(on)), facets_off=tuple(dict.fromkeys(off)),
-            missing_view=d.page.view if problem else ""))
+            missing_view=d.page.view if problem else "", requires_page_route=not page.entity))
 
     def _names_repair(self, model: str) -> str:
         """Every name of a small entity, for a request that describes one of them in
@@ -807,6 +812,20 @@ def _proper(found) -> bool:
 def _describes_record(d: Deliverable) -> bool:
     """The deliverable carries conditions that can pick a record out without its name."""
     return bool((d.metric is not None and d.metric.filters) or d.page.filters_on or d.page.search)
+
+
+def navigation_only(d: Deliverable) -> bool:
+    """A direct page request carries no record, data, facet or form declaration."""
+    return d.kind == "page" and not any((d.entity, d.record, d.via, d.fields, d.metric,
+        d.page.view, d.page.filters_on, d.page.filters_off, d.page.group_by, d.page.search,
+        d.section, d.action, d.value, d.field_values, d.sort, d.rules))
+
+
+def navigation_refused(d: Deliverable, page: IndexPage) -> Resolved:
+    """Typed refusal shared by data and application-owned goal resolvers."""
+    return Resolved(kind=d.kind, problem=f"{page.label} offers navigation only; it has no records or form operations",
+                    read_failure="refused", read_operation=d.kind,
+                    read_fields=d.fields or ((d.metric.field,) if d.metric and d.metric.field else ()))
 
 
 def _fields_of(index: ApplicationIndex, model: str) -> str:
@@ -866,4 +885,4 @@ def _mapped_fields(labels, source: EntityView, target: EntityView) -> tuple[str,
     return tuple(dict.fromkeys(out))
 
 
-__all__ = ["Ambiguous", "Found", "Resolver"]
+__all__ = ["Ambiguous", "Found", "Resolver", "navigation_only", "navigation_refused"]

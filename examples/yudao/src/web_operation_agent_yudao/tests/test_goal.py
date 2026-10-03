@@ -273,15 +273,17 @@ class YudaoGoalDataTests(unittest.TestCase):
 
     def test_pages_become_entities_only_where_the_account_may_query_a_documented_list(self):
         schema = self.data.schema()
-        self.assertEqual([p.key for p in schema.pages], ["/crm/contract", "/crm/customer", "/erp/purchase/supplier",
+        self.assertEqual([p.key for p in schema.pages if p.entity], ["/crm/contract", "/crm/customer", "/erp/purchase/supplier",
                                                          "/bpm/task/my"])
         # A page that reads another list than its path's ("my-page") is that list, named
         # as its menu is.
         self.assertEqual(schema.page("/bpm/task/my").entity, "bpm/process-instance/my")
         self.assertEqual(schema.entity("bpm/process-instance/my").label, "我的流程")
         self.assertEqual(self.data.count("bpm/process-instance/my", all_of()), 1)
-        # The pool page has no endpoint of its own; the supplier page's resource is its
+        # The actor still reaches the pool page, but it offers no records without a
+        # documented readable endpoint; the supplier page's resource is its
         # last word, not its whole path.
+        self.assertEqual("", schema.page("/crm/customer/pool").entity)
         self.assertEqual(schema.page("/erp/purchase/supplier").entity, "erp/supplier")
         self.assertEqual(schema.page("/crm/contract").operations, ("create",))
         index = self.port.index()

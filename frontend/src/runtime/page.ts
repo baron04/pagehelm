@@ -50,6 +50,7 @@ interface PageControllerModule {
   readPageRecordRoute?: () => unknown
   readPageBlocker?: () => unknown
   readActiveView?: () => unknown
+  readPageRoute?: () => unknown
 }
 
 export type PageFacetReader = () => unknown
@@ -58,6 +59,7 @@ export type FacetApplier = (ref: string, active: boolean) => Promise<unknown> | 
 export type PageRecordRouteReader = () => unknown
 export type PageBlockerReader = () => unknown
 export type ActiveViewReader = () => unknown
+export type PageRouteReader = () => unknown
 export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {
   ref?: string; field: string; control: string; value: string
@@ -124,7 +126,8 @@ export class Page {
               private readonly applyPageFacet?: FacetApplier,
               private readonly readPageRecordRoute?: PageRecordRouteReader,
               private readonly readPageBlocker?: PageBlockerReader,
-              private readonly readActiveView?: ActiveViewReader) {}
+              private readonly readActiveView?: ActiveViewReader,
+              private readonly readPageRoute?: PageRouteReader) {}
 
   /** App-owned loading is distinct from an error; unknown values remain blocking. */
   readiness(): {blocked: boolean; pending: boolean} {
@@ -372,6 +375,7 @@ export class Page {
     const candidates = this.readFacetCandidates ? this.boundedCandidates() : undefined
     const recordRoute = this.boundedRecordRoute()
     const activeView = this.boundedActiveView()
+    const pageRoute = this.boundedPageRoute()
     return {
       observation: {
         schema_version: WIRE_VERSION,
@@ -388,6 +392,7 @@ export class Page {
         ...(facets === undefined ? {} : {page_facets: facets}),
         ...(candidates === undefined ? {} : {facet_candidates: candidates}),
         ...(recordRoute === undefined ? {} : {record_route: recordRoute}),
+        ...(pageRoute === undefined ? {} : {page_route: pageRoute}),
       },
       fingerprints,
       canonicalUrl: canonicalUrl(state.url),
@@ -399,6 +404,17 @@ export class Page {
     try { raw = this.readPageRecordRoute?.() } catch { return undefined }
     if (typeof raw !== 'string' || raw.length > 1000 || !raw.startsWith('/') ||
         raw.startsWith('//') || /[?#\\]/.test(raw) ||
+        Array.from(raw).some(char => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127) ||
+        raw.split('/').some(part => part === '.' || part === '..')) return undefined
+    const safe = this.redactor.redactString(raw)
+    return safe === raw ? raw : undefined
+  }
+
+  private boundedPageRoute(): string | undefined {
+    let raw: unknown
+    try { raw = this.readPageRoute?.() } catch { return undefined }
+    if (typeof raw !== 'string' || raw.length > browserContract.observation.max_page_route_chars ||
+        !raw.startsWith('/') || raw.startsWith('//') || /[?#\\]/.test(raw) ||
         Array.from(raw).some(char => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127) ||
         raw.split('/').some(part => part === '.' || part === '..')) return undefined
     const safe = this.redactor.redactString(raw)
@@ -483,6 +499,7 @@ export interface LoadedPageController {
   readPageRecordRoute?: PageRecordRouteReader
   readPageBlocker?: PageBlockerReader
   readActiveView?: ActiveViewReader
+  readPageRoute?: PageRouteReader
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -534,5 +551,7 @@ export async function loadPageController(moduleUrl: string | undefined,
     ...(typeof module.readPageBlocker === 'function'
       ? {readPageBlocker: module.readPageBlocker} : {}),
     ...(typeof module.readActiveView === 'function'
-      ? {readActiveView: module.readActiveView} : {})}
+      ? {readActiveView: module.readActiveView} : {}),
+    ...(typeof module.readPageRoute === 'function'
+      ? {readPageRoute: module.readPageRoute} : {})}
 }

@@ -31,6 +31,8 @@ _MAX_REFERENCES = 8
 #: index or permission bound.
 _MAX_SCOPE_CHARS = 12_000
 _MAX_SCOPE_ENTITIES = 60
+_MAX_SCOPE_NAV_PAGES = 20
+_MAX_SCOPE_NAV_CHARS = 2_400
 
 
 @dataclass(frozen=True)
@@ -230,8 +232,9 @@ def summaries(index: ApplicationIndex, request: str,
     The compact directory lets the model select a semantically related entity whose
     label did not share the request's words. It is still bounded; unlike the detailed
     candidates, it carries no fields, controls, aliases or page breadcrumbs. Page
-    breadcrumbs identify entities here; page keys belong to the detailed index,
-    unless the person explicitly writes a key in the request.
+    breadcrumbs identify record entities here; their page keys belong to the detailed
+    index unless the person explicitly writes a key. Navigation-only pages carry their
+    own keys in a separately bounded directory, so no record entity is fabricated.
     """
     pages_of: dict[str, list[str]] = {}
     for page in index.pages:
@@ -240,13 +243,35 @@ def summaries(index: ApplicationIndex, request: str,
         text = f"{page.key} {page.breadcrumb}" if explicit else page.breadcrumb
         if text not in pages:
             pages.append(text)
-    lines = ["ENTITIES (key: label [aliases] | pages)"]
+    tail = []
+    if known:
+        tail = ["", "KNOWN REFERENCES (text -> entity: record)"]
+        tail.extend(f"{k.text} -> {k.entity}: {k.name}" for k in known)
+    tail += render_conventions([c for c in index.conventions if c.named_in(request)])
+    budget = max(0, _MAX_SCOPE_CHARS - len("\n".join(tail)) - bool(tail))
+    lines = []
+    navigation = [p for p in index.pages if not p.entity]
+    if navigation:
+        words = _tokens(request)
+        ranked_pages = sorted(enumerate(navigation), key=lambda item: (
+            -max(_overlap(label, request, words)
+                 for label in (item[1].key, item[1].label, item[1].breadcrumb,
+                               *item[1].aliases)), item[0]))
+        selected = []
+        for _, page in ranked_pages[:_MAX_SCOPE_NAV_PAGES]:
+            line = f"{page.key}: {page.breadcrumb}"
+            if len("\n".join(selected)) + len(line) + 1 > min(_MAX_SCOPE_NAV_CHARS, budget):
+                break
+            selected.append(line)
+        lines = [f"NAVIGATION PAGES (page key: breadcrumb; no records or forms; {len(selected)} of {len(navigation)} shown)",
+                 *selected, ""]
+    lines.append("ENTITIES (key: label [aliases] | pages)")
     named = {k.entity: k for k in known}
     ranked = ranked_entities(index, request, known)
     large = len(index.entities) > _MAX_SCOPE_ENTITIES
     if large:
         ranked = candidate_entities(index, request, known)
-        lines[0] = "LIKELY ENTITIES (key: label [aliases] | pages)"
+        lines[-1] = "LIKELY ENTITIES (key: label [aliases] | pages)"
     shown = set()
     for entity in ranked:
         parts = [f"{entity.key}: {entity.label}"
@@ -263,26 +288,23 @@ def summaries(index: ApplicationIndex, request: str,
         if pages:
             parts.append("pages: " + "; ".join(pages[:6]))
         line = " | ".join(parts)
-        if large and len("\n".join(lines)) + len(line) > _MAX_SCOPE_CHARS \
+        if large and len("\n".join(lines)) + len(line) + 1 > budget \
                 and entity.key not in named:
             continue
         lines.append(line)
         shown.add(entity.key)
     if large:
-        lines.append("OTHER ENTITIES (key: label; also selectable)")
+        heading = "OTHER ENTITIES (key: label; also selectable)"
+        if len("\n".join(lines)) + len(heading) + 1 <= budget:
+            lines.append(heading)
         for entity in index.entities:
             if entity.key in shown:
                 continue
             line = f"{entity.key}: {entity.label}"
-            if len("\n".join(lines)) + len(line) > _MAX_SCOPE_CHARS:
+            if len("\n".join(lines)) + len(line) + 1 > budget:
                 break
             lines.append(line)
-    if known:
-        lines.append("")
-        lines.append("KNOWN REFERENCES (text -> entity: record)")
-        for k in known:
-            lines.append(f"{k.text} -> {k.entity}: {k.name}")
-    lines += render_conventions([c for c in index.conventions if c.named_in(request)])
+    lines += tail
     return "\n".join(lines)
 
 
@@ -387,7 +409,7 @@ def _cjk(ch: str) -> bool:
 
 def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
                   request: str = "", *, rules: bool = True, held: bool = False,
-                  inbound: bool = False) -> ApplicationIndex:
+                  inbound: bool = False, page_keys: tuple[str, ...] = ()) -> ApplicationIndex:
     """The chosen entities with what a declaration about them may need to name: the
     entities their link fields point to, their lines, the records that own them, and
     every page that shows any of these. Rendered like the full index, only smaller.
@@ -465,9 +487,10 @@ def neighbourhood(index: ApplicationIndex, keys: tuple[str, ...],
                      for e in index.entities if e.key in wanted)
     # Every page of a chosen entity; of a neighbour, the first few (its main pages).
     per_neighbour: dict[str, int] = {}
+    selected_pages = {p.key for key in page_keys if (p := index.page(key)) is not None}
     pages = []
     for page in index.pages:
-        if page.entity in chosen:
+        if page.key in selected_pages or page.entity in chosen:
             pages.append(page)
         elif page.entity in wanted and per_neighbour.get(page.entity, 0) < _MAX_NEIGHBOUR_PAGES:
             per_neighbour[page.entity] = per_neighbour.get(page.entity, 0) + 1

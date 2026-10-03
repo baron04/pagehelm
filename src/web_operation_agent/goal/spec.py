@@ -375,7 +375,7 @@ DECLARE_GOAL_TOOL = {
                             "kind": {"type": "string", "enum": list(KINDS),
                                      "description": "a question (what is, how many, how much, which ones, list) is answered: fact, aggregate or list. page only when asked to open, show or find where something is. handoff when asked to change something."},
                             "entity": {"type": "string",
-                                       "description": "entity key from the index (a record's lines are their own entity)"},
+                                       "description": "entity key from the index (a record's lines are their own entity); omit for a navigation-only page"},
                             "record": {"type": "string",
                                        "description": "the existing record named by the person, in their words (a number, a name), or its id from VALUES (v3) when listed there; empty when a new record is to be created. When the person describes the record instead of naming it (the quotation sent to X, last month's invoice, the 31,750 credit note, the order still to invoice), leave record empty and put the description in metric.filters, with page.key for the scope"},
                             "via": {"type": "string",
@@ -411,7 +411,7 @@ DECLARE_GOAL_TOOL = {
                                 "type": "object",
                                 "properties": {
                                     "key": {"type": "string",
-                                            "description": "page key from the index, only when the person means that page's own scope (customers, vendors, quotations are scopes); empty when every record of the entity is meant, or when the record's own page is meant"},
+                                            "description": "page key from the index for a navigation-only page, or when the person means that data page's own scope (customers, vendors, quotations are scopes); empty when every record of the entity is meant, or when the record's own page is meant"},
                                     "view": {"type": "string"},
                                     "filters_on": {"type": "array", "items": {"type": "string"}},
                                     "filters_off": {"type": "array", "items": {"type": "string"}},
@@ -466,7 +466,9 @@ DECLARE_SCOPE_TOOL = {
                             "kind": {"type": "string", "enum": list(KINDS),
                                      "description": "a question (what is, how many, which ones, list, the lines of) is answered: fact, aggregate or list. page only when asked to open, show or find where something is. handoff when asked to change, confirm, send, pay, cancel or create something."},
                             "entity": {"type": "string",
-                                       "description": "entity key from the list. A question about a record's lines, items or products is about the line entity (marked 'lines of X'), not X"},
+                                       "description": "entity key from the list; omit for a navigation-only page. A question about a record's lines, items or products is about the line entity (marked 'lines of X'), not X"},
+                            "page": {"type": "string",
+                                     "description": "page key from NAVIGATION PAGES when kind is page and the requested page has no entity; do not invent an entity for it"},
                             "about": {"type": "string",
                                       "description": "the record or records meant, in the person's words (a number, a name, a description), or empty"},
                             "names": {"type": "array", "maxItems": 4, "items": {"type": "string"},
@@ -475,7 +477,7 @@ DECLARE_SCOPE_TOOL = {
                                       "description": "one to three words in the application's language (the index's) naming what this part is about -- a control, a field, an action, a product -- as the application would write them"},
                             "rules": {"type": "boolean",
                                       "description": "true when this part asks how the application itself behaves -- why a control is shown or hidden, what it opens, when a field can be changed, what an action refuses or requires, what a field means -- rather than about the data in its records"}},
-                        "required": ["kind", "entity"]}},
+                        "required": ["kind"]}},
                 "write_intent": {"type": "boolean"},
                 "about_assistant": {"type": "boolean",
                                     "description": "true, with nothing else declared, when the request asks about this assistant itself -- what it can do, how to use it, what to ask it -- or about what the application as a whole offers (its modules, menus, functions), rather than about records or one page"},
@@ -516,6 +518,8 @@ def scope_from_json(payload: object) -> tuple[list[dict], bool, str, bool]:
             raise ValueError(f"part kind must be one of {', '.join(KINDS)}")
         part = {"kind": kind, "entity": _text(item.get("entity"), "entity"),
                 "about": _text(item.get("about"), "about")}
+        if item.get("page") is not None:
+            part["page"] = _text(item.get("page"), "scope page")
         if item.get("rules") is True:
             part["rules"] = True
         names = item.get("names")

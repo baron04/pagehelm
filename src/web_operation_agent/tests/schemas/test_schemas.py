@@ -65,6 +65,18 @@ def _reasons_emitted_by(*classes) -> set[str]:
 
 
 class WireTypes(unittest.TestCase):
+    def test_rendered_page_route_round_trips_without_changing_absent_wire_shape(self):
+        base = dict(schema_version=1, epoch=1, url="https://app.test/help",
+                    title="Help", landmarks=[], elements=[])
+        self.assertNotIn("page_route", S.PageObservation(**base).to_json())
+        page = S.PageObservation(**base, page_route="/help")
+        self.assertEqual("/help", S.PageObservation.from_json(page.to_json()).page_route)
+        self.assertNotIn("record_route", page.to_json())
+        for bad in (None, 4, "//other.test/help", "https://other.test/help", "/help?x=1",
+                    "/help#tab", "/a\\b", "/a/../help", "/a b", "/" + "x" * 1000):
+            with self.subTest(route=bad), self.assertRaises(S.SchemaError):
+                S.PageObservation(**base, page_route=bad)
+
     def test_active_view_is_optional_bounded_and_round_trips(self):
         base = dict(schema_version=1, epoch=1, url="https://app.test/orders",
                     title="Orders", landmarks=[], elements=[])

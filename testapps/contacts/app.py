@@ -78,6 +78,13 @@ DEMO_ACTORS = (
               "token-hedy-northstar", ()),
 )
 ACTORS_BY_ID = {item.actor: item for item in DEMO_ACTORS}
+PAGE_MENUS = (
+    {"key": "contacts", "label": "Contacts", "path": "/contacts"},
+    {"key": "workflows", "label": "Vendor workspaces", "path": "/contacts/workflows"},
+    {"key": "desk-partner", "label": "Partner desk", "path": "/contacts/workflows/partner"},
+    {"key": "desk-supplier", "label": "Supplier desk", "path": "/contacts/workflows/supplier"},
+    {"key": "help", "label": "Help", "path": "/contacts/help"},
+)
 _MODEL_ENV_KEYS = (
     "AGENT_OPENAI_BASE_URL",
     "AGENT_OPENAI_API_KEY",
@@ -105,9 +112,12 @@ def _assistant_tag(script_url: str | None) -> str:
 
 def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
           can_write: bool = False, assistant_script: str | None = None,
-          adversarial_form_fixture: bool = False) -> bytes:
+          adversarial_form_fixture: bool = False, visible_pages: Sequence[str] | None = None) -> bytes:
     contacts = json.dumps(source_contacts, ensure_ascii=False).replace("</", "<\\/")
     title = html.escape(workspace.title())
+    menu = " ".join(f'<a href="{item["path"]}" data-route>{item["label"]}</a>'
+                    for item in PAGE_MENUS if item["key"] in {"contacts", "workflows", "help"}
+                    and (visible_pages is None or item["key"] in visible_pages))
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -122,6 +132,8 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       color: white; background: #172554; box-shadow: 0 1px 12px #0f172a24; }}
     header strong {{ font-size: 17px; letter-spacing: .01em; }}
     header span {{ color: #bfdbfe; font-size: 13px; }}
+    header nav {{ margin-left: auto; display: flex; gap: 16px; }}
+    header a {{ color: #bfdbfe; text-decoration: none; }}
     main {{ width: min(900px, calc(100% - 48px)); margin: 44px auto; }}
     .eyebrow {{ color: #2563eb; font-size: 12px; font-weight: 750; letter-spacing: .12em;
       text-transform: uppercase; }}
@@ -155,7 +167,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
   </style>
 </head>
 <body>
-  <header><strong>{title} Contacts</strong><span>Synthetic local workspace</span></header>
+  <header><strong>{title} Contacts</strong><span>Synthetic local workspace</span><nav>{menu}</nav></header>
   <main id="app"></main>
   <script>
     // Server-rendered for the first paint, then refetched on every navigation. A snapshot
@@ -174,6 +186,14 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     }}
     function render() {{
       app.removeAttribute('data-active-view');
+      if (location.pathname === '/contacts/help') {{
+        app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
+          <section class="record" data-page-route="/contacts/help"><div class="eyebrow">Workspace help</div><h1>Help</h1>
+          <p class="lede">Open a contact to read its email. Contact changes need a workspace editor.</p>
+          <a class="back" href="/contacts/workflows" data-route>Vendor workspaces</a></section>`;
+        document.title = 'Help · Minimal Contacts';
+        return;
+      }}
       if ({str(adversarial_form_fixture).lower()} &&
           location.pathname === '/contacts/adversarial') {{
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
@@ -225,7 +245,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
           <div class="eyebrow">Read-only workspace</div><h1>Vendor workspaces</h1>
           <p class="lede">Choose a desk to inspect its current terms.</p>
-          <section class="grid"><a class="card" href="/contacts/workflows/partner" data-route>
+          <section class="grid" data-page-route="/contacts/workflows"><a class="card" href="/contacts/workflows/partner" data-route>
             <span class="name">Partner desk</span></a>
           <a class="card" href="/contacts/workflows/supplier" data-route>
             <span class="name">Supplier desk</span></a></section>`;
@@ -378,6 +398,8 @@ class MinimalContactsApplication:
         if not isinstance(adversarial_form_fixture, bool):
             raise ValueError("adversarial_form_fixture must be a boolean")
         self.adversarial_form_fixture = adversarial_form_fixture
+        #: Application-owned menu revocation; tests can remove a page for one actor.
+        self.hidden_pages: dict[str, set[str]] = {}
         self.write_fault = write_fault
         #: Every POST this application received, refused or not.
         self.write_requests = 0
@@ -661,6 +683,18 @@ class MinimalContactsApplication:
                     return
                 if path == "/healthz":
                     self._reply(200, _json_bytes({"ready": True}), "application/json")
+                elif path == "/api/pages":
+                    if resolved is None:
+                        self._reply(401, _json_bytes({"error": "unauthenticated"}), "application/json")
+                        return
+                    actor = resolved[0]
+                    if "contacts:read" not in actor.permissions:
+                        self._reply(403, _json_bytes({"error": "forbidden"}), "application/json")
+                        return
+                    hidden = owner.hidden_pages.get(actor.actor, set())
+                    self._reply(200, _json_bytes({"actor": actor.actor, "workspace": actor.workspace,
+                        "pages": [dict(item) for item in PAGE_MENUS if item["key"] not in hidden],
+                        "complete": True}), "application/json")
                 elif path == "/api/contacts":
                     if resolved is None:
                         self._reply(401, _json_bytes({"error": "unauthenticated"}),
@@ -698,6 +732,11 @@ class MinimalContactsApplication:
                                     "text/html; charset=utf-8")
                         return
                     actor = resolved[0]
+                    menu = next((item for item in PAGE_MENUS if item["path"] == path), None)
+                    if menu is not None and menu["key"] in owner.hidden_pages.get(actor.actor, set()):
+                        self._reply(403, b"<!doctype html><title>Forbidden</title><h1>Not permitted</h1>\n",
+                                    "text/html; charset=utf-8")
+                        return
                     if "contacts:read" not in actor.permissions:
                         self._reply(403, b"<!doctype html><title>Forbidden</title>"
                                          b"<h1>Not permitted</h1>\n",
@@ -709,6 +748,8 @@ class MinimalContactsApplication:
                         records, actor.workspace,
                         can_write="contacts:write" in actor.permissions,
                         assistant_script=owner._assistant_script,
+                        visible_pages=tuple(item["key"] for item in PAGE_MENUS
+                            if item["key"] not in owner.hidden_pages.get(actor.actor, set())),
                         adversarial_form_fixture=owner.adversarial_form_fixture),
                                 "text/html; charset=utf-8")
                 elif path == "/":

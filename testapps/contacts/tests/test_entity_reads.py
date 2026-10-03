@@ -91,17 +91,18 @@ class ContactsEntityReadContractTests(unittest.TestCase):
             self.assertEqual(result.allowed_routes, ("/contacts/grace-hopper",))
 
     def test_page_entry_contract_uses_the_rest_application_not_odoo_actions(self):
-        adapter = MinimalContactsAdapter("http://127.0.0.1:1", api_token="delegated")
-        result = adapter.business_tools._executor._page_entries.execute({
-            "query": "联系人"})
-        self.assertEqual(result.content["candidates"][0]["ui_path"], "/contacts")
-        self.assertEqual(result.allowed_routes, ("/contacts",))
-        self.assertEqual(adapter.ports.routes.validate_tool_route("/contacts"),
-                         "/contacts")
-        detail = adapter.business_tools._executor._page_entries.execute({
-            "query": "Contacts", "detail_query": "Email"})
-        self.assertEqual(detail.content["candidates"][0]["part_matches"][0]["label"],
-                         "Email")
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
+            result = adapter.business_tools._executor._page_entries.execute({
+                "query": "联系人"})
+            self.assertEqual(result.content["candidates"][0]["ui_path"], "/contacts")
+            self.assertEqual(result.allowed_routes, ("/contacts",))
+            self.assertEqual(adapter.ports.routes.validate_tool_route("/contacts"),
+                             "/contacts")
+            detail = adapter.business_tools._executor._page_entries.execute({
+                "query": "Contacts", "detail_query": "Email"})
+            self.assertEqual(detail.content["candidates"][0]["part_matches"][0]["label"],
+                             "Email")
 
     def test_goal_candidates_combine_rest_record_field_and_page_metadata(self):
         with MinimalContactsApplication() as application:

@@ -24,6 +24,7 @@ from web_operation_agent.composition.live import LiveConversationRunner, LivePro
 from web_operation_agent.business.mutation import MemoryMutationJournal, SQLiteMutationJournal
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
 from web_operation_agent.tests.support.adapter_contract import assert_adapter_contract
+from web_operation_agent.goal import executor as goal_executor
 
 
 def _classify_woa_outcome(*, terminal_reason: str, events=(), boundary_error_code=None):
@@ -296,6 +297,64 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertTrue(summary["panel"]["final_page_probe"]["terms_tab_active"])
         self.assertTrue(any(e["event"] == "goal_page_settled" and e["reached"] for e in events))
         self.assertFalse(any(e["event"] == "business_tool_result" for e in events))
+
+    def test_goal_opens_entityless_help_in_real_browser_without_repository(self):
+        script = (("declare_goal", {"deliverables": [
+            {"kind": "page", "page": {"key": "help"}}]}),)
+
+        def probe(page) -> dict[str, bool]:
+            return {"help_visible": page.locator("main h1").inner_text() == "Help",
+                    "help_route": page.evaluate("location.pathname === '/contacts/help'")}
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)):
+            summary = run_demo(DemoConfig(
+                tasks=("Open Help",), headless=True, goal_turns=True,
+                scripted=False, output_dir=Path(directory), keep_open_seconds=0,
+                turn_timeout_s=30, final_page_probe=probe))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        self.assertEqual("finished", summary["turns"][0]["status"])
+        self.assertIn("Help", summary["turns"][0]["answer"])
+        self.assertTrue(all(summary["panel"]["final_page_probe"].values()))
+        self.assertTrue(any(e["event"] == "goal_page_settled" and e["reached"] for e in events))
+        self.assertFalse(any(e["event"].startswith("goal_source") for e in events))
+        self.assertFalse(any(e["event"] == "business_tool_result" for e in events))
+        settled = next(e for e in events if e["event"] == "goal_page_settled")
+        self.assertEqual("/contacts/help", settled["page_route"])
+
+    def test_entityless_navigation_refuses_wrong_main_content_at_the_correct_url(self):
+        from testapps.contacts import app
+        original = app._html
+        script = (("declare_goal", {"deliverables": [
+            {"kind": "page", "page": {"key": "help"}}]}),)
+        cases = (
+            ("header only", "app.innerHTML = '';"),
+            ("404", "app.innerHTML = '<h1>404 — destination unavailable</h1>';"),
+            ("old page", "app.innerHTML = '<section data-page-route=\"/contacts/workflows\"><h1>Vendor workspaces</h1></section>';"),
+            ("revoked identity", "app.querySelector('[data-page-route]').removeAttribute('data-page-route');"),
+        )
+        for label, replacement in cases:
+            with self.subTest(page=label):
+                def html(*args, **kwargs):
+                    result = original(*args, **kwargs).decode("utf-8")
+                    target = "document.title = 'Help · Minimal Contacts';"
+                    self.assertIn(target, result)
+                    return result.replace(target, replacement + target).encode("utf-8")
+                def probe(page):
+                    return {"expected_url": page.evaluate("location.pathname === '/contacts/help'"),
+                            "header_retained": page.locator("header nav a").count() == 3}
+                with tempfile.TemporaryDirectory() as directory, patch.object(app, "_html", html), patch(
+                        "testapps.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)), patch.object(
+                        goal_executor, "_READY_WAITS", 2):
+                    summary = run_demo(DemoConfig(tasks=("Open Help",), headless=True, goal_turns=True,
+                        scripted=False, output_dir=Path(directory), keep_open_seconds=0,
+                        turn_timeout_s=30, final_page_probe=probe))
+                    events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+                self.assertTrue(all(summary["panel"]["final_page_probe"].values()))
+                self.assertEqual("refused", summary["turns"][0]["status"])
+                self.assertNotIn("Opened:", summary["turns"][0]["answer"])
+                self.assertFalse(any(e["event"] == "goal_page_settled" and e["reached"] for e in events))
+                self.assertEqual(0, summary["model_usage"]["provider_calls"])
 
     def test_goal_batch_fills_two_fields_and_highlights_manual_submit_in_real_browser(self):
         script = (("declare_goal", {"write_intent": True, "deliverables": [

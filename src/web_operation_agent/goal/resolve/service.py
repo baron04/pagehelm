@@ -71,7 +71,7 @@ class DataGoalPort:
         if not text.strip() or re.fullmatch(r"[\d.,/-]+", text.strip()):
             return ()
         index = self.index(context=context)
-        entities = tuple(dict.fromkeys(p.entity for p in index.pages))
+        entities = tuple(dict.fromkeys(p.entity for p in index.pages if p.entity))
         serial_resolver = self._resolver(index) if self.reference_workers == 1 else None
 
         def find(entity):
