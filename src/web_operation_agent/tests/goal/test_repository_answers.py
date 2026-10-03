@@ -59,6 +59,17 @@ def source_reply(*, reference="source#1.1"):
 
 
 class RepositoryAnswerTests(unittest.TestCase):
+    def test_focus_preserves_original_question_terms_within_the_same_span_budget(self):
+        from web_operation_agent.goal.source_answers import focus_preview
+        spans = [{"text": "archive implementation filler", "id": "s1"},
+                 {"text": "archive implementation more filler", "id": "s2"},
+                 {"text": "deadline cannot precede signing date", "id": "s3"}]
+        preview = focus_preview({"question_id": 0, "question": "deadline signing date constraints",
+            "evidence": [{"reference": "source#1", "path": "docs/constraints.md", "start_line": 1,
+                          "end_line": 3, "supports": spans}]}, ["archive implementation"])
+        self.assertIn("deadline cannot precede signing date", preview["matches"][0]["matched_text"])
+        self.assertEqual(len(preview["matches"][0]["matched_text"].splitlines()), 2)
+
     def run_turn(self, scripts, resolved=(), *, disabled=frozenset(), repository_answers=True,
                  staged=True, history=None, lookup=None):
         with tempfile.TemporaryDirectory() as tmp:

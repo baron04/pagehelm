@@ -243,6 +243,51 @@ class _AgreeingChat(_Chat):
 
 
 class GoalTurnTests(unittest.TestCase):
+    def test_a_port_cannot_replace_declared_groups_with_a_positive_total(self):
+        for count, expected in ((4, AgentTurnStatus.REFUSED), (0, AgentTurnStatus.FINISHED)):
+            with self.subTest(count=count):
+                script = [("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+                           "metric": {"op": "count", "group_by": "Status"}}]})]
+                result, _, _, _, _ = self._run(script, [Resolved(kind="aggregate",
+                    aggregate=Aggregate("Sales Order", count))], readings=1, text="Sales Order group by Status.")
+                self.assertEqual(result.status, expected)
+                if count:
+                    self.assertIn("were not resolved", result.user_answer)
+
+    def test_unrepaired_grouping_never_returns_a_total_and_keeps_other_facts(self):
+        class Counts(_Port):
+            def resolve(self, spec, **kwargs):
+                self.specs.append(spec)
+                return Resolution(deliverables=tuple(
+                    Resolved(kind="fact", facts=(Fact("S00006", "Total", "42"),)) if d.kind == "fact" else
+                    Resolved(kind="aggregate", aggregate=Aggregate("Sales Order", 4, groups=(("Quotation", 3), ("Sales Order", 1))))
+                    for d in spec.deliverables))
+        declaration = ("declare_goal", {"deliverables": [
+            {"kind": "aggregate", "entity": "order", "metric": {"op": "count"}},
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Total"]}]})
+        result, _, _, port, _ = self._run([declaration], [], port=Counts([]), readings=1,
+            text="Sales Order group by Status. Also tell me S00006 Total.")
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIn("Counts grouped by Status were not resolved", result.user_answer)
+        self.assertIn("42", result.user_answer)
+        self.assertTrue(all(all(d.kind == "fact" for d in s.deliverables) for s in port.specs))
+
+    def test_grouping_repair_uses_the_existing_bounded_declaration_path(self):
+        class Counts(_Port):
+            def resolve(self, spec, **kwargs):
+                self.specs.append(spec)
+                return Resolution(deliverables=tuple(Resolved(kind=d.kind, aggregate=Aggregate(
+                    "Sales Order", 4, groups=(("Quotation", 3), ("Sales Order", 1)))) for d in spec.deliverables))
+        scripts = [("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+                      "metric": {"op": "count"}}]}),
+                   ("declare_goal", {"deliverables": [{"kind": "aggregate", "entity": "order",
+                      "metric": {"op": "count", "group_by": "Status"}}]})]
+        result, _, _, port, _ = self._run(scripts, [], port=Counts([]), readings=1,
+            text="Sales Order group by Status.")
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("Quotation", result.user_answer)
+        self.assertEqual(port.specs[-1].deliverables[0].metric.group_by, "Status")
+
     def test_tab_selection_requires_an_unambiguous_live_control_and_ready_panel(self):
         duplicate = _obs(1, "http://app.test/record", tabs=("回款", "回款"), selected=("回款",))
         self.assertIsNone(GoalTurnExecutor._tab(duplicate, "回款"))

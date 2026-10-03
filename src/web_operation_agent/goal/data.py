@@ -439,14 +439,19 @@ class DataRefused(RuntimeError):
     and the code, for the audit and the repair.
     """
 
-    def __init__(self, message: str, *, reason: str = "", permission_denied: bool = False) -> None:
+    def __init__(self, message: str, *, reason: str = "", permission_denied: bool = False,
+                 read_failed: bool = False) -> None:
         if type(permission_denied) is not bool:
             raise TypeError("permission_denied must be a boolean")
+        if type(read_failed) is not bool:
+            raise TypeError("read_failed must be a boolean")
         super().__init__(message)
         self.reason = reason
         # The adapter classifies its typed refusal; core never parses provider codes
         # or guesses permissions from error prose. Unavailable reads remain distinct.
         self.permission_denied = permission_denied
+        # An operational failure cannot be diagnosed by dropping query conditions.
+        self.read_failed = read_failed
 
 
 class DataPort(Protocol):

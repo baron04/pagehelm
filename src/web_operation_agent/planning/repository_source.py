@@ -185,6 +185,7 @@ class RepositorySourceLookup:
         # A model may refine using a path seen in source. A named allowlisted file
         # must outrank incidental matches on its generic directory words.
         paths = tuple(re.findall(r"[\w.-]+(?:/[\w.-]+){2,}", query))
+        filenames = set(re.findall(r"(?<![\w/.-])([\w.-]+\.[A-Za-z0-9]+)(?![\w/.-])", query))
         identifiers = _symbols(query)
         for index, block in enumerate(self._blocks):
             shared = wanted & block.document.keys()
@@ -201,7 +202,7 @@ class RepositorySourceLookup:
                 basename = ref.path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
                 if any(ref.path == p or ref.path.endswith("/" + p) for p in paths):
                     score += 10_000
-                elif basename in identifiers:
+                elif basename in identifiers or ref.path.rsplit("/", 1)[-1] in filenames:
                     score += 1000
                 # Preserve exact symbols when a refined query names a guard/error.
                 # Tokenization splits identifiers for multilingual matching; those

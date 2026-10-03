@@ -756,6 +756,29 @@ class _TwinClient(_Client):
 
 
 class SameNameTests(unittest.TestCase):
+    def test_condition_candidates_keep_owners_and_round_trip_to_exact_records(self):
+        data = YudaoGoalData(_TwinClient(), DOCS)
+        port = DataGoalPort(data)
+        result = port.resolve(GoalSpec.from_json({"deliverables": [{"kind": "fact",
+            "entity": "crm/contract", "fields": ["合同金额"], "metric": {"op": "count",
+            "filters": [{"field": "合同名称", "values": ["云帆企业版合同"]}]}}]})).deliverables[0]
+        self.assertEqual(len(result.candidates), 2)
+        self.assertEqual([data.find("crm/contract", name)[0].id for name in result.candidates], ["11", "13"])
+        self.assertTrue(all("（" in name for name in result.candidates))
+
+    def test_identical_names_and_owners_use_exact_actor_visible_ids(self):
+        data = YudaoGoalData(_TwinClient(), DOCS)
+        data.schema()
+        rows = [{"id": 11, "name": "Twin", "customerName": "Same"},
+                {"id": 13, "name": "Twin", "customerName": "Same"}]
+        with patch.object(data, "_fetch", return_value=rows):
+            names = [r.display for r in data.find("crm/contract", "Twin", limit=1)]
+            self.assertEqual(names, ["Twin（Same；ID=11）"])
+            chosen = data.find("crm/contract", "Twin（Same；ID=13）")
+            self.assertEqual([r.id for r in chosen], ["13"])
+            found = data.rows("crm/contract", all_of())
+            self.assertEqual([r.display for r in found], ["Twin（Same；ID=11）", "Twin（Same；ID=13）"])
+
     def test_records_of_one_name_are_told_apart_by_whose_they_are(self):
         data = YudaoGoalData(_TwinClient(), DOCS)
         data.schema()
@@ -924,6 +947,38 @@ class ParentSelectionTests(unittest.TestCase):
 
 
 class RefusalReasonTests(unittest.TestCase):
+    def test_transport_failures_are_classified_without_reading_error_bodies(self):
+        import urllib.error
+        from web_operation_agent_yudao.client import YudaoClient
+        client = YudaoClient.for_token("http://synthetic.invalid", "synthetic-token", "1")
+        errors = (urllib.error.HTTPError("http://synthetic.invalid", 503, "private body", {}, None),
+                  urllib.error.URLError("private transport details"), TimeoutError())
+        for error in errors:
+            with self.subTest(type=type(error)), patch("urllib.request.urlopen", side_effect=error), \
+                    self.assertRaises(DataRefused) as caught:
+                client.get("synthetic/read")
+            self.assertTrue(caught.exception.read_failed)
+            self.assertFalse(caught.exception.permission_denied)
+            self.assertNotIn("private", str(caught.exception))
+
+    def test_response_codes_distinguish_service_denial_and_business_validation(self):
+        from web_operation_agent_yudao.client import YudaoClient
+        for code, denied, failed in ((403, True, False), (503, False, True), (400, False, False),
+                                    (1020007001, False, False)):
+            with self.subTest(code=code), self.assertRaises(DataRefused) as caught:
+                YudaoClient._data("synthetic", code, {"msg": "opaque"})
+            self.assertEqual(caught.exception.permission_denied, denied)
+            self.assertEqual(caught.exception.read_failed, failed)
+
+    def test_operational_detail_failure_is_not_hidden_by_a_cached_list(self):
+        data = YudaoGoalData(_Client(), DOCS)
+        data.schema()
+        with patch.object(data._client, "get", side_effect=DataRefused("offline", read_failed=True)), \
+             patch.object(data, "_all") as listing:
+            with self.assertRaises(DataRefused):
+                data.read("crm/contract", "11", ("totalPrice",))
+            listing.assert_not_called()
+
     def test_a_refused_read_carries_the_application_s_own_sentence(self):
         # The application's own words ("请选择时间范围") are what a person can act on; the
         # endpoint and the code stay in the message for the audit.

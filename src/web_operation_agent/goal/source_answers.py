@@ -25,6 +25,8 @@ Do not duplicate a source slot as a business slot. Current record values, counts
 lists and requested page operations remain in business slots. Preserve EVERY requested part
 of a mixed request. Business record owners are not engineering owners; operation logs
 are not Git history. Mark commit/blame/change-history questions history_N=true.
+Conditional instructions on reporting a failed business read are requirements on that
+read, not additional source questions; a source slot needs a static knowledge question.
 Set history_N=false for present engineering ownership or maintenance teams: these
 can be documented in code, CODEOWNERS or repository documentation without Git history.
 Only an explicit question about commits, past changes or blame needs history_N=true.
@@ -174,9 +176,13 @@ button visibility use the actual page markup and its permission checks. If these
 retrieved, set complete=false.
 Do not include a provisional answer when evidence is insufficient. A message constant or
 interface alone does not establish the actual guard: retrieve its implementation.
-An explicit documentation statement can establish a documented meaning, ownership or
-deployment convention. Cite it and identify it as documented; do not require an
+An explicit documentation statement can establish a documented meaning, field constraint,
+ownership or deployment convention. Cite it and identify it as documented; do not require an
 implementation for a documentation answer or claim that documentation proves execution.
+When documented constraints answer a static question and code establishes only part,
+state the documented constraints and distinguish the code-supported subset. Do not
+invent enforcement for the remainder. If the request explicitly asks what code implements
+or enforces, documentation alone is insufficient for that implementation claim.
 For implementation behavior use the actual guard; a constant or interface is insufficient.
 Code says how the deployed release behaves; it does not prove current data or execution.
 CURRENT_FACTS contains only requested values actually read under the current actor.
@@ -340,7 +346,7 @@ def focus_tool(active):
 def focus_preview(question, queries):
     """Only matched lines and neighbours enter the retrieval decision."""
     from ..planning.source_facts import terms
-    wanted = set(terms(" ".join(queries)))
+    wanted = set(terms(" ".join((question["question"], question.get("subject", ""), *queries))))
     refs = []
     for ref in question["evidence"]:
         spans = ref["supports"]
@@ -382,7 +388,7 @@ def answer(chat, *, source, requests, retrieved, evidence, run_id, cancelled,
                 "An error constant or interface is not the rule; a submit method is not an update method. "
                 "For button visibility retrieve the indexed page's template and permission check. "
                 "An explicit repository document can already establish a documented definition, "
-                "maintenance team or deployment rule: use queries_N=[] for that question. "
+                "field constraint, maintenance team or deployment rule: use queries_N=[] for that question. "
                 "Then use keep_N to select the smallest sufficient primary matches by reference ID; "
                 "do not include unrelated explanations or attack-example documents. "
                 "Preserve the language of matching source or documentation; do not replace "

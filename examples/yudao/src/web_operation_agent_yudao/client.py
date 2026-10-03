@@ -25,7 +25,8 @@ class YudaoReadRefused(DataRefused):
     """Preserve the application's response code across the legacy and generic readers."""
     def __init__(self, message: str, *, code, reason: str = ""):
         super().__init__(message, reason=reason,
-                         permission_denied=type(code) is int and code == 403)
+                         permission_denied=type(code) is int and code == 403,
+                         read_failed=type(code) is int and 500 <= code <= 599)
         self.code = code
 
 
@@ -120,9 +121,9 @@ class YudaoClient:
             # availability failure. Do not echo an HTML error body or response headers.
             if exc.code in (401, 403):
                 return exc.code, {"code": exc.code}
-            raise DataRefused(f"{path}: HTTP {exc.code}") from exc
+            raise DataRefused(f"{path}: HTTP {exc.code}", read_failed=500 <= exc.code <= 599) from exc
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
-            raise DataRefused(f"{path}: {type(exc).__name__}") from exc
+            raise DataRefused(f"{path}: {type(exc).__name__}", read_failed=True) from exc
         return payload.get("code"), payload
 
     @staticmethod

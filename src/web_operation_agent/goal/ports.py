@@ -136,8 +136,15 @@ class Resolved:
     #: what it needs ("请选择时间范围"): the reply says it, so the person knows what the
     #: page asks for before it shows anything.
     refused: str = ""
+    #: Typed refused/unavailable read; never inferred from exception prose.
+    read_failure: str = ""
+    #: Requested operation and labels whose result the failed read cannot establish.
+    read_operation: str = ""
+    read_fields: tuple[str, ...] = ()
     #: Requested labels absent from the actor-visible schema; never guessed from errors.
     missing_fields: tuple[str, ...] = ()
+    #: Explicit indexed count grouping omitted or replaced by the declaration.
+    missing_group: str = ""
     #: Candidate names when a reference was ambiguous, so the reply can ask.
     candidates: tuple[str, ...] = ()
     #: The reference the person gave that names no record here ("S00998"), so the

@@ -16,7 +16,7 @@ left out.
 """
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 import re
 import math
 import threading
@@ -534,9 +534,10 @@ class YudaoGoalData:
         if told is not None:
             # A name as it was offered to choose from, with whose it is ("张伟（温州天成食品
             # 有限公司）"): that person at that customer.
-            name, whose = told.group(1), told.group(2)
+            name = told.group(1)
             rows = self._fetch(entity, self._narrowing(entity, name))
-            picked = [r for r in rows if self._display(entity, r) == name and self._whose(entity, r) == whose]
+            displays = self._candidate_displays(entity, rows)
+            picked = [r for r in rows if displays[str(r["id"])] == text.strip()]
             if picked:
                 return tuple(Ref(entity=entity, id=str(r["id"]), display=text.strip(), name=name)
                              for r in picked[:limit])
@@ -545,14 +546,30 @@ class YudaoGoalData:
         hits = [(self._display(entity, r), r) for r in rows]
         hits = [(d, r) for d, r in hits if wanted in d.casefold()]
         hits.sort(key=lambda h: (h[0].casefold() != wanted, not h[0].casefold().startswith(wanted), len(h[0])))
-        hits = hits[:limit]
         # Two records shown alike ("张伟" at two customers) are told apart by whose they
         # are, so a person asked which can answer; the name itself stays what it is.
-        shown = [d for d, _r in hits]
+        displays = self._candidate_displays(entity, [r for _d, r in hits])
         return tuple(Ref(entity=entity, id=str(r["id"]), name=d,
-                         display=(f"{d}（{self._whose(entity, r)}）"
-                                  if shown.count(d) > 1 and self._whose(entity, r) else d))
-                     for d, r in hits)
+                         display=displays[str(r["id"])])
+                     for d, r in hits[:limit])
+
+    def _candidate_displays(self, entity: str, rows: list[dict]) -> dict[str, str]:
+        """Actor-readable row names with their existing owner labels, then exact IDs.
+
+        Both condition searches and name searches expose the same selectable names;
+        duplicate names never collapse into one choice. No extra detail lookup.
+        """
+        names = [self._display(entity, row) for row in rows]
+        counts = Counter(names)
+        labels = []
+        for row, name in zip(rows, names):
+            owner = self._whose(entity, row)
+            labels.append(f"{name}（{owner}）" if counts[name] > 1 and owner else name)
+        counts = Counter(labels)
+        return {str(row["id"]): (f"{self._display(entity, row)}（"
+                + ((self._whose(entity, row) + "；") if self._whose(entity, row) else "")
+                + f"ID={row['id']}）" if counts[label] > 1 else label)
+                for row, label in zip(rows, labels)}
 
     def _whose(self, entity: str, row: dict) -> str:
         """The record a row belongs to, by name: its customer, else its first other link
@@ -578,7 +595,9 @@ class YudaoGoalData:
         if spec is not None and spec.has_get:
             try:
                 row = self._client.get(spec.get_path, id=id)
-            except DataRefused:
+            except DataRefused as exc:
+                if exc.read_failed:
+                    raise
                 # A detail endpoint may check the record more strictly than the list the
                 # account reads it from; the record as that list shows it is still its own.
                 row = next((r for r in self._all(entity) if str(r.get("id")) == str(id)), None)
@@ -603,12 +622,13 @@ class YudaoGoalData:
 
     def rows(self, entity: str, where: Cond, *, fields: tuple[str, ...] = (),
              order: tuple[tuple[str, bool], ...] = (), limit: int = 80) -> tuple[Row, ...]:
-        rows = [self._row(entity, r, tuple(fields) + tuple(f for f, _d in order))
-                for r in self._matching(entity, where)]
+        matched = self._matching(entity, where)
+        displays = self._candidate_displays(entity, matched)
+        rows = [self._row(entity, r, tuple(fields) + tuple(f for f, _d in order)) for r in matched]
         for field, descending in reversed(order):
             rows.sort(key=lambda r: _sortable(r.id if field == ID else r.display if field == NAME
                                               else r.values.get(field)), reverse=descending)
-        return tuple(Row(r.id, r.display, {k: v for k, v in r.values.items() if k in fields},
+        return tuple(Row(r.id, displays[r.id], {k: v for k, v in r.values.items() if k in fields},
                          {k: v for k, v in r.shown.items() if k in fields},
                          {k: v for k, v in r.units.items() if k in fields}) for r in rows[:limit])
 
@@ -737,7 +757,7 @@ class YudaoGoalData:
             detail = self._detail(spec, owner_id)
             if lines.list_key not in detail or (detail[lines.list_key] is not None
                                                and not isinstance(detail[lines.list_key], list)):
-                raise DataRefused(f"{lines.key} {owner_id}: line table is unavailable")
+                raise DataRefused(f"{lines.key} {owner_id}: line table is unavailable", read_failed=True)
             for item in (detail or {}).get(lines.list_key) or ():
                 out.append({**item, "id": f"{owner_id}:{item.get('id')}", _OWNER: owner_id})
         return out
@@ -752,7 +772,7 @@ class YudaoGoalData:
         # A failure is not an empty table, and is not cached for a later request.
         detail = self._client.get(spec.get_path, id=id)
         if not isinstance(detail, dict):
-            raise DataRefused(f"{spec.key} {id}: detail is unavailable")
+            raise DataRefused(f"{spec.key} {id}: detail is unavailable", read_failed=True)
         self._keep_read(key, detail, generation)
         return detail
 
@@ -866,7 +886,7 @@ class YudaoGoalData:
         several before it shows anything ("部门 id" and "时间范围"); only the endpoint's own
         required parameters are named, and none of them is supplied."""
         said = exc.reason
-        if not said:
+        if not said or exc.permission_denied or exc.read_failed:
             return exc
         given = set(params) | set(spec.fixed_params)
         labels = [spec.required_labels.get(name, name) for name in spec.required

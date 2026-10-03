@@ -44,6 +44,16 @@ def _write(root: Path, files: dict[str, str] = FILES) -> None:
 
 
 class LanguageNeutralRepositoryLookupTests(unittest.TestCase):
+    def test_explicit_filename_outranks_incidental_directory_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"src/constraints.md": "End date must follow signing date.\n",
+                          "src/noise/constraints_date.py": "# signing date constraint " * 40})
+            tree = _tree(root)
+            hit = RepositorySourceLookup(tree).search("constraints.md signing date", limit=1)[0]
+            self.assertEqual(hit.evidence.path, "src/constraints.md")
+            self.assertTrue(tree.verify(hit.evidence))
+
     def test_lexical_symbol_hop_finds_usage_without_a_framework_compiler(self):
         for suffix, implementation in (
             ("py", "def delete_archive(row):\n    if row.locked:\n        raise RuntimeError(ARCHIVE_DELETE_BLOCKED)\n"),

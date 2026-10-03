@@ -96,9 +96,15 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         refused = exc.reason
         if exc.permission_denied:
             return Resolved(kind=d.kind, problem=problem, refused=refused, denied="read")
+        failed = Resolved(kind=d.kind, problem=problem, refused=refused,
+                          read_failure="unavailable" if exc.read_failed else "refused",
+                          read_operation=d.metric.op if d.kind == "aggregate" and d.metric else d.kind,
+                          read_fields=d.fields or ((d.metric.field,) if d.metric and d.metric.field else ()))
+        if exc.read_failed:
+            return failed
         filters = d.metric.filters if d.metric else ()
         if len(filters) < 2:
-            return Resolved(kind=d.kind, problem=problem, refused=refused)
+            return failed
         culprits = []
         for condition in filters:
             rest = tuple(f for f in filters if f is not condition)
@@ -108,7 +114,7 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
                 continue
             culprits.append(condition.field)
         if len(culprits) != 1:
-            return Resolved(kind=d.kind, problem=problem, refused=refused)
+            return failed
         return Resolved(kind=d.kind, problem=f"{culprits[0]!r} cannot be searched",
                         repair=(f"the application cannot search on {culprits[0]!r}; drop that "
                                 "condition if the request did not ask for it, or use another "
@@ -553,7 +559,7 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
             # Every record of that exact name (two people called 张伟, told apart by whose
             # they are), then the longer names.
             return Ambiguous(dict.fromkeys(r.display for r in (exact + longer)[:6]))
-        if len(exact) == 1 or (exact and all(r.display == exact[0].display for r in exact)):
+        if len(exact) == 1 or (exact and all(r.id == exact[0].id for r in exact)):
             return _triple(exact[0])
         if len(refs) == 1:
             return _triple(refs[0])

@@ -113,6 +113,12 @@ agent.
   application reads, including when repository answers are enabled.
   An adapter-classified permission denial names the unreadable record type while
   retaining other answers; it is not inferred from exception text or a failed service.
+  Refused reads retain the requested operation and field labels in the reply. An
+  adapter-classified service failure cannot be repaired by dropping query conditions
+  or hidden by a cached-list fallback. Neither outcome establishes an empty result.
+  Explicit count-grouping phrases naming an indexed field are checked before reads;
+  an unresolved grouping is reported rather than replaced by an overall total. This
+  narrow check does not establish coverage of implicit or translated categories.
   When an accepted repair removes unavailable requested fields, its explanation
   remains beside available answers and the turn does not report complete success.
   A request containing only unavailable fields returns that scoped limitation without
@@ -189,6 +195,9 @@ agent.
   after a successful read, and holds at most 128 entries. A cached complete list can serve
   narrower local filters under the same required parent scope; credential renewal
   invalidates cached reads and linked-record names. Failed or incomplete reads are not cached.
+  Yudao condition and name searches preserve duplicate-name choices with actor-readable
+  owner labels, using exact record IDs when those labels also coincide. Selecting a
+  qualified name resolves that record again under the same actor.
   Yudao also opts into four concurrent actor-bound reference lookups, preserving index order
   and checking every entity; other adapters keep sequential reads unless explicitly enabled
   with `DataGoalPort(reference_workers=...)`. Each reader owns its resolver.
@@ -551,8 +560,11 @@ path and its resolved target against the allow/deny policy, including symlinks w
 repository. Source answers first use small
 matched summaries to select relevant primary evidence or locate an implementation,
 then select server-numbered literal spans from bounded evidence. They verify exact
-release bytes, display selected citations, and allow one shared declaration repair
-across the retrieval and answer stages. This verifies attribution, not semantic entailment of the model's
+release bytes. Summary ranking retains the original question's terms; an exact
+allowlisted filename can refine retrieval. Documented constraints must be identified
+as documented, while claims about enforced behavior need implementation evidence.
+They display selected citations and allow one shared declaration repair across stages.
+This verifies attribution, not semantic entailment of the model's
 paraphrase. Source never grants API, navigation or write authority, and cannot supply
 current data or Git history. This goal composition explicitly refuses history queries,
 including when a separate history provider is configured. Each source retrieval returns to the same server-side

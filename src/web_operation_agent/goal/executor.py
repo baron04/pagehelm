@@ -1127,7 +1127,8 @@ class GoalTurnExecutor:
             # request wrote that the declaration never uses. The resolver would answer it
             # anyway, so the gaps go back to the model once, before resolving.
             gaps = _coverage_gaps(spec, scope_parts, s.message.text, today_text, s.candidates,
-                                  named=_hands_over_a_named_control(spec, scope_parts, s.message.text))
+                                  named=_hands_over_a_named_control(spec, scope_parts, s.message.text),
+                                  index=s.index)
             if gaps:
                 s.ledger.append("goal_coverage_gaps", step=s.step, gaps=list(gaps))
                 s.step += 1
@@ -1136,7 +1137,7 @@ class GoalTurnExecutor:
                     s.ledger.append("goal_declared", step=s.step, spec=again.to_json(),
                                     attempt="coverage", **projection)
                     remaining = _coverage_gaps(again, scope_parts, s.message.text, today_text,
-                                               s.candidates) if again.deliverables else gaps
+                                               s.candidates, index=s.index) if again.deliverables else gaps
                     if again.deliverables and len(remaining) < len(gaps):
                         spec = again
                 except (ValueError, ProviderError) as exc:
@@ -1593,7 +1594,9 @@ class GoalTurnExecutor:
         missing = [_needs_beyond(d, offered) for d in spec.deliverables]
         # A question answered by rules of the source is answered here, from the index the
         # model read, with the rules' citations; the port is not asked.
-        by_rule = [self._rules_answer(s, d) if d.rules and d.kind not in ("handoff", "page") else None
+        from .coverage import missing_group
+        by_rule = [missing_group(d, s.message.text, s.index) or
+                   (self._rules_answer(s, d) if d.rules and d.kind not in ("handoff", "page") else None)
                    for d in spec.deliverables]
         missing = [frozenset() if r is not None else m for r, m in zip(by_rule, missing)]
         asked = GoalSpec(deliverables=tuple(d for d, m, r in zip(spec.deliverables, missing, by_rule)
@@ -1617,6 +1620,15 @@ class GoalTurnExecutor:
                                 declared=len(asked.deliverables),
                                 resolved=len(partial.deliverables))
             raise _ContractBroken()
+        # A custom port returning a positive total without any requested groups has
+        # not supplied that data answer. Empty scopes legitimately have no groups.
+        partial = replace(partial, deliverables=tuple(
+            replace(r, aggregate=None, problem="the application did not return the requested groups",
+                    missing_group=d.metric.group_by)
+            if (d.kind == "aggregate" and d.metric is not None and d.metric.op == "count"
+                and d.metric.group_by and r.aggregate is not None
+                and r.aggregate.count > 0 and not r.aggregate.groups) else r
+            for d, r in zip(asked.deliverables, partial.deliverables, strict=True)))
         resolved = iter(partial.deliverables)
         resolution = Resolution(deliverables=tuple(
             r if r is not None else
@@ -1631,6 +1643,7 @@ class GoalTurnExecutor:
                         conventions=[c.terms[0] for c in s.conventions],
                         kinds=[d.kind for d in resolution.deliverables],
                         problems=[d.problem for d in resolution.deliverables],
+                        read_failures=[d.read_failure for d in resolution.deliverables],
                         left_out=[list(x) for x in left_out if x],
                         reads=[list(r) for r in resolution.reads])
         return resolution
@@ -2389,12 +2402,14 @@ def _hands_over_a_named_control(spec: GoalSpec, parts: list, text: str) -> bool:
 
 
 def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
-                   candidates: tuple = (), *, named: bool = False) -> tuple[str, ...]:
+                   candidates: tuple = (), *, named: bool = False, index=None) -> tuple[str, ...]:
     """What the request asked that the declaration leaves out, judged by shape only:
     values asked for (the first step said so) with only pages or handoffs declared; a
     code, amount or day the request wrote that appears nowhere in the declaration nor in
     the candidate values it chose."""
     gaps = []
+    from .coverage import missing_group
+    gaps.extend(r.repair for d in spec.deliverables if (r := missing_group(d, text, index)))
     reads = ("fact", "list", "aggregate")
     asked = [p for p in parts if p.get("kind") in reads]
     if asked and not named and not any(d.kind in reads for d in spec.deliverables):
@@ -2894,6 +2909,9 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -
         labels = "、".join(resolved.missing_fields) if zh else ", ".join(resolved.missing_fields)
         return (f"当前可查询的字段中没有「{labels}」，这一项没有完成。" if zh
                 else f"The available fields do not include {labels}; this part was not done.")
+    if resolved.missing_group:
+        return (f"未能按「{resolved.missing_group}」分组统计，这一项没有完成。" if zh else
+                f"Counts grouped by {resolved.missing_group} were not resolved; this part was not done.")
     if resolved.denied:
         # The account's own rights, not the assistant, stand in the way; nothing was done.
         # A new record is not "this record": it is records of this kind.
@@ -2930,6 +2948,25 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -
         return (f"这个应用没有提供{'、'.join(offers)}，这一项无法完成。" if zh
                 else f"This application does not offer {', '.join(offers)}, so this part "
                      "could not be done.")
+    if resolved.read_failure:
+        subject = name or ("这类记录" if zh else "these records")
+        operation = resolved.read_operation
+        labels = ("、" if zh else ", ").join(resolved.read_fields)
+        target = ({"count": "数量", "sum": (labels + "合计") if labels else "金额合计",
+                   "min": (labels + "最低值"), "max": (labels + "最高值"),
+                   "list": "记录列表", "fact": labels or "字段值"}.get(operation, "请求结果") if zh else
+                  {"count": "the count", "sum": "the total of " + (labels or "the requested field"),
+                   "min": "the minimum of " + labels, "max": "the maximum of " + labels,
+                   "list": "the record list", "fact": labels or "the field values"}.get(operation, "the requested result"))
+        text = (f"{subject}未完成读取，无法确定{target}。" if zh else
+                f"The read of {subject} did not complete; cannot determine {target}.")
+        if resolved.read_failure == "unavailable":
+            text += "读取服务暂不可用。" if zh else " The read service is unavailable."
+        # Only the adapter's explicit user-facing reason, never exception prose.
+        why = " ".join(resolved.refused.split())
+        if why and (not zh or _CJK.search(why)):
+            text += (f"应用提示：{why}" if zh else f" Application reports: {why}")
+        return text
     if resolved.refused:
         # The application's own sentence for a read it refused, when that sentence names
         # what it needs ("请选择时间范围"): the person can act on that, and a bare "not

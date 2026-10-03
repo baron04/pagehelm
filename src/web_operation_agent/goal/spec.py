@@ -380,7 +380,7 @@ DECLARE_GOAL_TOOL = {
                                     "page_filters": {"type": "array",
                                                      "items": {"type": "string"},
                                                      "description": "Named page filters offered by the index, never page keys or paths. Put the list scope in page.key. Leave empty if the index offers no page filters; record conditions go in metric.filters."},
-                                    "group_by": {"type": "string"},
+                                    "group_by": {"type": "string", "description": "count: indexed field label for requested per-category counts (按…分组／group by／each category). Leave empty only for a single overall count; do not use page.group_by for a data answer."},
                                     "top": {"type": "integer"},
                                     "total": {"type": "boolean",
                                               "description": "sum: true only when the person asks to add several records up (合计, 总计, 一共, 总共, 加总, 加起来, 汇总, all together); a question about the amount of something (金额是多少, 多少钱, the amount of X's quotation) is false even when several records fit, since the person is then asked which one"}},
