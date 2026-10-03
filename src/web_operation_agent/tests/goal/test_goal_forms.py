@@ -64,7 +64,7 @@ class FormBrowser:
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action=""):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交"):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
         FormBrowser.submit_after_scroll = submit_after_scroll
@@ -125,9 +125,27 @@ class GoalFormsTests(unittest.TestCase):
                 staged=False, disabled_page_actions=disabled)
             with patch.object(module, "RemoteBrowserClient", FormBrowser):
                 result = runner.execute({"message_id": "form", "page_url": app.origin + "/contacts/new",
-                                         "text": "填写 Name 和 Email，尚不提交"})
+                                         "text": prompt})
             events = [json.loads(line) for line in audit.read_text().splitlines()]
             return result, FormBrowser.instances[-1], channel, chat, events
+
+    def test_missing_value_asks_before_any_approval_or_page_dispatch(self):
+        result, browser, channel, _, events = self.run_goal(batch=True, values=(("Email", ""),),
+                                                          prompt="给联系人补个 Email")
+        self.assertEqual(result.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertEqual(result.to_json()["clarification"]["response_kind"], "free_text")
+        self.assertIn("Email", result.user_answer)
+        self.assertNotIn("fill", browser.actions)
+        self.assertNotIn("click", browser.actions)
+        self.assertFalse(any(e['event'] == 'operation_control_requested' for e in events))
+
+    def test_explicit_clear_still_obeys_application_required_fields(self):
+        result, browser, _, _, _ = self.run_goal(batch=True, values=(("Email", ""),),
+                                                prompt="清空 Email")
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertNotIn("fill", browser.actions)
+        self.assertNotIn("submit", browser.actions)
+        self.assertNotIn("请提供", result.user_answer)
 
     def test_batch_cannot_ignore_an_unreviewed_business_action(self):
         result, browser, _, _, _ = self.run_goal(batch=True, batch_action="Delete")

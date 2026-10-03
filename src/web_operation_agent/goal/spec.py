@@ -431,7 +431,7 @@ DECLARE_GOAL_TOOL = {
                                     "value": {"type": "string", "maxLength": 4000}},
                                     "required": ["field", "value"], "additionalProperties": False}},
                             "value": {"type": "string",
-                                      "description": "handoff on a field: the new value the person gave, in the field's own form (a date as 2026-10-31, a number, a choice label from the index, a record's name); empty when the person gave no value"},
+                                      "description": "handoff on a field: the new value the person gave, in the field's own form (a date as 2026-10-31, a number, a choice label from the index, a record's name); empty only for explicit clearing; use fields without values when new values are missing"},
                             "sort": {"type": "string",
                                      "description": "list: field label to order by (the largest, the latest)"},
                             "descending": {"type": "boolean"},

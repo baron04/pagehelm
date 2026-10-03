@@ -47,3 +47,49 @@ def missing_group(deliverable, request, index):
                                "declare metric.group_by with that indexed field, preserving the scope "
                                "and other goals. A total alone does not answer the per-group counts.")
     return None
+
+
+def missing_form_values(deliverable, request, index):
+    """Empty model values require explicit literal clearing, using indexed labels.
+
+    Unknown phrasing asks for a value instead of dispatching uncertain input.
+    This narrow guard recognizes field lists, not business semantics or authority.
+    """
+    if index is None or deliverable.kind != "handoff":
+        return None
+    entity = index.entity(deliverable.entity)
+    if entity is None:
+        return None
+    def indexed(label):
+        return next((f for f in entity.fields if _norm(label) in {_norm(n) for n in (f.key, f.label, *f.aliases)}), None)
+
+    requested = deliverable.field_values or ((deliverable.action, deliverable.value),)
+    labels = sorted({n for f in entity.fields for n in (f.label, *f.aliases) if n}, key=len, reverse=True)
+    if not labels:
+        return None
+    field = "(?:" + "|".join(re.escape(n) for n in labels) + ")"
+    names = field + r"(?:\s*(?:、|,|，|和|及|与|\band\b|&)\s*" + field + r")*"
+    patterns = [r"(?:\bclear\b|\bempty\b|\bblank\b|清空|置空)\s*(?:the\s+)?" + names,
+                names + r"\s*(?:字段)?\s*(?:清空|置空|留空|设为空|改为空|改成空|设为\s*[\"“']\s*[\"”'])"]
+    request = re.sub(r'[“「\"]([^”」\"]+)[”」\"]', " ", request)
+    cleared = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, request, re.I):
+            before = re.split(r"[。；;，,\n]", request[:match.start()])[-1]
+            if re.search(r"(?:不要|别|不必|无需|不|don't|do not|never|not)", before, re.I):
+                continue
+            # Whole matches prevent Email from qualifying Secondary Email by substring.
+            cleared.update(_norm(m.group()) for m in re.finditer(field, match.group(), re.I))
+    missing = []
+    supplied = set()
+    for label, value in requested:
+        f = indexed(label)
+        if f is not None:
+            supplied.add(f.label)
+            if not value and not any(_norm(n) in cleared for n in (f.label, *f.aliases)):
+                missing.append(f.label)
+    missing.extend(f.label for label in deliverable.fields
+                   if (f := indexed(label)) and f.label not in supplied)
+    if not missing:
+        return None
+    return Resolved(kind="handoff", problem="form values were not supplied", input_fields=tuple(dict.fromkeys(missing)))

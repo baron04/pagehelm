@@ -254,6 +254,9 @@ def summaries(index: ApplicationIndex, request: str,
                  + (f" (lines of {entity.lines_of})" if entity.lines_of else "")]
         if entity.key in named:
             parts.append(f"named in request: {named[entity.key].name}")
+        requested_sections = [s for s in entity.sections if _norm_ref(s) in _norm_ref(request)]
+        if requested_sections:
+            parts.append("record subpages: " + ", ".join(requested_sections))
         if entity.actions:
             parts.append("controls: " + ", ".join(entity.actions[:8]))
         pages = pages_of.get(entity.key, [])

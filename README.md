@@ -154,6 +154,9 @@ agent.
   omit that batch property from their tool schema. Batch entry actions remain subject to
   application review: an existing form may omit the action or name its reviewed editor;
   a new form uses its reviewed creation entry. A batch never authorizes submission.
+  Missing form values request clarification before navigation, approval or input. Empty
+  model values require explicit clearing instructions naming indexed fields; unrecognized
+  clearing phrasing is left for clarification. Missing values are never silently cleared.
   If the operation stops before input dispatch, the reply states that no values were entered; uncertain input keeps the partial-entry warning.
   Before any value is prepared, an unobserved submit control on an application-verified
   transient form permits at most three fixed read-only scrolls. Each fresh descriptor

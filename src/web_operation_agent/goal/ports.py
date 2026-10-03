@@ -145,6 +145,8 @@ class Resolved:
     missing_fields: tuple[str, ...] = ()
     #: Explicit indexed count grouping omitted or replaced by the declaration.
     missing_group: str = ""
+    #: Form fields lacking a supplied value or an explicit clearing instruction.
+    input_fields: tuple[str, ...] = ()
     #: Candidate names when a reference was ambiguous, so the reply can ask.
     candidates: tuple[str, ...] = ()
     #: The reference the person gave that names no record here ("S00998"), so the

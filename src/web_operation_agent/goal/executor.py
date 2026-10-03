@@ -1265,8 +1265,15 @@ class GoalTurnExecutor:
                               if f.native_value else {})}
                           for r in resolution.deliverables for f in r.facts)
             self._complete_sources(s, chat, current_facts=facts)
+        input_fields = tuple(dict.fromkeys(f for r in resolution.deliverables for f in r.input_fields))
+        if input_fields:
+            s.terminal_reason = "needs_clarification"
+            question = _not_done(Resolved(kind="handoff", input_fields=input_fields), s.chinese)
+            s.clarification = {"schema_version": 1, "clarification_id": f"{s.run_id}-values"[:100],
+                "task_id": s.run_id[:100], "question": question[:500], "response_kind": "free_text", "choices": []}
+            s.ledger.append("goal_form_values_asked", step=s.step, fields=len(input_fields))
         outcomes: list[_PageOutcome | None] = [None] * len(resolution.deliverables)
-        if any(d.kind in ("page", "handoff") and r.page is not None
+        if not s.terminal_reason and any(d.kind in ("page", "handoff") and r.page is not None
                for d, r in zip(spec.deliverables, resolution.deliverables, strict=True)):
             # The declarations took their time; the page has gone on rendering meanwhile
             # and the observation the turn holds may be stale. Look once before acting.
@@ -1601,8 +1608,10 @@ class GoalTurnExecutor:
         missing = [_needs_beyond(d, offered) for d in spec.deliverables]
         # A question answered by rules of the source is answered here, from the index the
         # model read, with the rules' citations; the port is not asked.
-        from .coverage import missing_group
-        by_rule = [missing_group(d, s.message.text, s.index) or
+        from .coverage import missing_group, missing_form_values
+        by_rule = [(missing_form_values(d, s.message.text, s.full_index or s.index)
+                    if self.config.allow_form_prefill and {"fill", "handoffs"} <= offered else None) or
+                   missing_group(d, s.message.text, s.index) or
                    (self._rules_answer(s, d) if d.rules and d.kind not in ("handoff", "page") else None)
                    for d in spec.deliverables]
         missing = [frozenset() if r is not None else m for r, m in zip(by_rule, missing)]
@@ -2346,7 +2355,8 @@ class GoalTurnExecutor:
                           success_claim=("not_claimed" if terminal != "agent_finished"
                                          or s.write_intent
                                          else "verified"),
-                          detail=s.detail)
+                          detail=s.detail,
+                          clarification=s.clarification if terminal == "needs_clarification" else None)
         s.ledger.append("run_finished", task_ref=s.run_id, arm="goal",
                         terminal_reason=terminal, steps_used=s.step, wall_seconds=wall,
                         agent_said=text[:300], page_actions=s.page_actions,
@@ -2913,6 +2923,10 @@ def _not_done(resolved: Resolved, zh: bool, request: str = "", name: str = "") -
     reason ("filter 'p262' is not usable here") is written for the declarer, in the
     index's terms, and stays in the audit and the repair; the person hears that it was
     not done and, when several records fit, which ones."""
+    if resolved.input_fields:
+        labels = "、".join(resolved.input_fields) if zh else ", ".join(resolved.input_fields)
+        return (f"请提供「{labels}」的新值；如果要清空，请明确说明。" if zh
+                else f"Please provide new values for {labels}; say explicitly if you want to clear them.")
     if resolved.no_matches:
         return (f"在当前账号可见范围内，没有找到符合「{resolved.no_matches}」的记录。" if zh
                 else f"No record matches {resolved.no_matches} within this account's visible scope.")
