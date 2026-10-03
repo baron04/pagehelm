@@ -39,8 +39,9 @@ Only an explicit question about commits, past changes or blame needs history_N=t
 For source slots, about_N is a short unquoted topic phrase, not a copied sentence or an
 expanded question. basis_N=repository accepts explicit repository documentation with
 that qualification, including rule comparisons limited to the requested dimensions.
-Use basis_N=implementation only when the person specifically requires proof of code
-enforcement, a code path or actual markup. Merely asking based on source is repository.
+Use basis_N=implementation only for an explicit request to inspect actual enforcement,
+its function/code path or markup. Asking what a source rule allows/refuses or what its
+conditions are remains repository, answered with documented/code qualifications.
 Neither basis proves execution or current permissions. terms_N supplies up to three lexical search queries:
 preserve its source-language terms, adding known code identifiers when useful. Do not
 claim a source question unsupported merely because the business index lacks it.
@@ -72,7 +73,7 @@ def source_scope_tool(tool: dict) -> dict:
                 "description": "Source lexical queries; business field/control terms."},
             f"history_{number}": {"type": "boolean", "description": "Needs Git history."}})
         properties[f"basis_{number}"] = {"type": "string", "enum": ["repository", "implementation"],
-            "description": "Source only: repository=code or qualified documentation; implementation=actual code enforcement/path/markup explicitly required."}
+            "description": "Source only: repository=rules/meanings/ownership, including source-based allows/refuses questions; implementation=explicit actual-code/path/markup proof. Default repository."}
     tool["function"]["description"] = ("Declare up to four deliverables in consecutive flat slots. "
         "Kinds: source=static code/documentation/rules; fact/aggregate/list=live data; "
         "page=explicit navigation; handoff=requested change; none=no further deliverable.")
