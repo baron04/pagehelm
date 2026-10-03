@@ -586,6 +586,8 @@ declaration that could omit static work. Completed
 comparisons supply an assessment and indices into actor-read facts; the server displays
 the limited inference. This validates structure and provenance, not the model's selection
 of the needed fields or semantic comparison. The dependency itself remains model declared.
+For a declared comparison entity, a successfully read empty field is an observation;
+it does not trigger an alternate-field declaration repair. Missing or failed fields still do.
 A comparison explicitly limited to one documented rule dimension states that limit;
 it does not establish permission for the whole action.
 They display selected citations and allow one shared declaration repair across stages.

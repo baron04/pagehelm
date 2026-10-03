@@ -215,6 +215,7 @@ Never infer engineering owners from business record owners or logs.
 For current=true, declare assessment and CURRENT_FACTS indices used. Explicitly say whether
 those observed fields meet the requested rule dimensions; merely repeating the rule is not
 a comparison. With missing observations or evidence use insufficient and complete=false.
+Refer to records and field labels in the answer, never CURRENT_FACTS, payload names or fact indices.
 complete=true only when selected excerpts establish the requested answer within its limits.
 Otherwise use complete=false with empty statement/references; do not offer provisional claims.
 statement_N is concise plain prose, at most 800 characters, without paths, hashes, code blocks,

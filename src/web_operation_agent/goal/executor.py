@@ -1178,7 +1178,8 @@ class GoalTurnExecutor:
             return self._say(s, "应用未能完整解析这次请求。" if s.chinese
                              else "The application could not resolve this request completely.")
         for _round in range(_REPAIRS):
-            problems = _repairable(spec, resolution)
+            problems = _repairable(spec, resolution, observed_empty_entities=frozenset(
+                q["entity"] for q in s.source_requests if q.get("current") and q.get("entity")))
             if not problems:
                 break
             # A repair: the resolver found something a different declaration would fix
@@ -2652,10 +2653,14 @@ def _still_nothing(before: Resolution, after: Resolution) -> bool:
             and all(nothing(d) for d in after.deliverables))
 
 
-def _repairable(spec: GoalSpec, resolution: Resolution) -> tuple[str, ...]:
+def _repairable(spec: GoalSpec, resolution: Resolution, *,
+                observed_empty_entities: frozenset[str] = frozenset()) -> tuple[str, ...]:
     """What to tell the model before its one second declaration; empty when nothing
     about the declaration, as opposed to the data, is what failed."""
-    problems = [d.repair for d in resolution.deliverables if d.repair]
+    problems = [r.repair for d, r in zip(spec.deliverables, resolution.deliverables, strict=True)
+                if r.repair and not (d.kind == "fact" and d.entity in observed_empty_entities
+                    and r.facts and not r.problem and not r.missing_fields
+                    and set(r.empty) == set(d.fields) == {f.label for f in r.facts})]
     if spec.write_intent and not any(d.kind == "handoff" for d in spec.deliverables):
         problems.append("the person asks for a change (write_intent is true) but no "
                         "deliverable is a handoff: declare a handoff on the record meant, "

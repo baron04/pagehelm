@@ -97,19 +97,35 @@ class RepositoryAnswerTests(unittest.TestCase):
                     path="docs/rules.md", start_line=1, end_line=1, excerpt=text,
                     sha256=hashlib.sha256(text.encode()).hexdigest()), text=text)
         declared = flat_scope([{"kind": "fact", "entity": "order", "names": ["SO1"]},
-            {"kind": "source", "about": "signing date rule comparison", "terms": ["signing date"], "current": True}])
+            {"kind": "source", "entity": "order", "about": "signing date rule comparison", "terms": ["signing date"], "current": True}])
         reply = ("answer_sources", {"complete_0": True, "statement_0": "The observed signing date is empty.",
             "references_0": ["source#1.1"], "assessment_0": "does_not_meet", "fact_indices_0": [0]})
         result, chat, _, events = self.run_turn([declared,
             ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "order", "record": "SO1",
                 "fields": ["Signing date"]}]}), reply],
-            [Resolved(kind="fact", facts=(Fact("SO1", "Signing date", "(empty)"),))], lookup=RuleLookup())
+            [Resolved(kind="fact", facts=(Fact("SO1", "Signing date", "(empty)"),),
+                empty=("Signing date",), repair="Other populated fields may answer the request")], lookup=RuleLookup())
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertIn("Does not meet the requested rule dimensions", result.user_answer)
         event = next(e for e in events if e['event'] == 'goal_source_answer_verified')
         self.assertEqual(event['fact_indices'], [0])
         self.assertEqual(event['assessment'], 'does_not_meet')
         self.assertEqual(len(chat.messages), 4)
+        self.assertFalse(any(e['event'] == 'goal_repair_requested' for e in events))
+
+    def test_empty_comparison_observation_never_suppresses_missing_field_repair(self):
+        from web_operation_agent.goal.executor import _repairable
+        from web_operation_agent.goal.spec import GoalSpec, Deliverable
+        spec = GoalSpec((Deliverable("fact", entity="ticket", fields=("Status",)),))
+        empty = Resolved(kind="fact", facts=(Fact("T1", "Status", "(empty)"),),
+            empty=("Status",), repair="Consider another field")
+        self.assertEqual(_repairable(spec, goal_executor.Resolution((empty,))), ("Consider another field",))
+        self.assertEqual(_repairable(spec, goal_executor.Resolution((empty,)),
+            observed_empty_entities=frozenset({"ticket"})), ())
+        from dataclasses import replace
+        missing = replace(empty, problem="Missing field", missing_fields=("Owner",))
+        self.assertEqual(_repairable(spec, goal_executor.Resolution((missing,)),
+            observed_empty_entities=frozenset({"ticket"})), ("Consider another field",))
 
     def test_complete_comparison_cannot_bind_invented_or_missing_observations(self):
         from web_operation_agent.goal.source_answers import _verify_answers
