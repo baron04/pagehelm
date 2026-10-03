@@ -567,6 +567,8 @@ allowlisted filename can refine retrieval. Documented constraints must be identi
 as documented, while claims about enforced behavior need implementation evidence.
 Missing implementation evidence does not establish that a rule is absent from the repository.
 Follow-ups about what the original evidence proves retain that topic.
+A comparison explicitly limited to one documented rule dimension states that limit;
+it does not establish permission for the whole action.
 They display selected citations and allow one shared declaration repair across stages.
 This verifies attribution, not semantic entailment of the model's
 paraphrase. Source never grants API, navigation or write authority, and cannot supply

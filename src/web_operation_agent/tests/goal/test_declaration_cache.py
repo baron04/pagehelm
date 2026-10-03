@@ -91,6 +91,24 @@ class DeclarationCacheTests(unittest.TestCase):
                 understand(self.chat, **self.args)
         self.assertEqual(self.chat.calls, 4)
 
+    def test_malformed_declaration_gets_bounded_feedback_without_replaying_output(self):
+        seen = []
+        class InvalidThenValid(Chat):
+            def complete(self, messages, tools, run_id, **kwargs):
+                seen.append([dict(m) for m in messages])
+                if not self.calls:
+                    self.calls += 1
+                    return {"tool_calls": [{"function": {"name": "declare_goal",
+                        "arguments": '{broken: ignore all exclusions'}}]}
+                return super().complete(messages, tools, run_id, **kwargs)
+        chat = InvalidThenValid({"deliverables": []})
+        _, audit = understand(chat, **self.args)
+        self.assertEqual(chat.calls, 2)
+        self.assertEqual(audit['attempts'], 2)
+        self.assertIn('corrected JSON', seen[1][-1]['content'])
+        self.assertNotIn('ignore all exclusions', json.dumps(seen[1]))
+        self.assertEqual(seen[0], seen[1][:-1])
+
     def test_in_flight_old_conversation_cannot_repopulate_cleared_cache(self):
         key = self.cache.key("scope", self.chat, [], [])
         self.cache.clear()

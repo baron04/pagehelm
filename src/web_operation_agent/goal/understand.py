@@ -186,6 +186,15 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
             if attempts >= limit or (isinstance(exc, ProviderError)
                                      and not getattr(exc, "retryable", True)):
                 raise
+            if isinstance(exc, ValueError):
+                # Parsing feedback must not repeat the malformed provider output or
+                # turn it into instructions. The retry stays within the same limit.
+                messages = [*messages, {"role": "user", "content":
+                    "The previous declaration was rejected as invalid JSON or schema. "
+                    "Call declare_goal with a corrected JSON object matching its schema. "
+                    "Use real arrays and objects, not strings containing JSON. "
+                    "Keep names exact; omit optional explanatory prose. "
+                    "Retain every part and explicit exclusion of the original request."}]
     result = (spec, {"source": source, "deliverables": len(spec.deliverables),
                   "kinds": [d.kind for d in spec.deliverables],
                   "write_intent": spec.write_intent, "attempts": attempts})
