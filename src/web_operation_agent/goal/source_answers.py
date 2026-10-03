@@ -185,6 +185,10 @@ interface alone does not establish the actual guard: retrieve its implementation
 An explicit documentation statement can establish a documented meaning, field constraint,
 ownership or deployment convention. Cite it and identify it as documented; do not require an
 implementation for a documentation answer or claim that documentation proves execution.
+Asking for an answer based on source is not by itself a demand for implementation proof:
+the repository also contains documentation. Answer explicit documented constraints with
+that qualification, alongside any code-established subset. A claim that a rule is enforced
+by running code still requires its actual guard.
 When documented constraints answer a static question and code establishes only part,
 state the documented constraints and distinguish the code-supported subset. Do not
 invent enforcement for the remainder. If the request explicitly asks what code implements
