@@ -2745,21 +2745,28 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
             lines.append(head)
     if (resolved.problem and resolved.kind in ("list", "aggregate", "fact")
             and not (resolved.facts or resolved.aggregate)):
-        # A question that went unanswered stays unanswered in the reply, whatever page
-        # was opened beside it: the page is where to look, not an answer.
-        where = ""
-        if resolved.page is not None:
-            where = (f"（可在 {resolved.page.label} 页面上自行核对）" if zh
-                     else f" (you can check on {resolved.page.label})")
-        if resolved.missing:
-            # Only the name was looked up: nothing is called that, which is not to say
-            # nothing the person described exists (a Chinese description of an English
-            # product name finds no name and still means a real product).
-            lines.append((f"没有找到名为「{resolved.missing}」的记录。{where}") if zh
-                         else f"Nothing named \"{resolved.missing}\" was found.{where}")
+        # For list queries, if the page was successfully opened, show that success first
+        # rather than treating it as a failure. The page is where the user can see the list.
+        if (resolved.kind == "list" and resolved.page is not None
+                and outcome is not None and outcome.reached and not outcome.unmet):
+            # Page opened successfully - continue to page rendering logic below
+            pass
         else:
-            lines.append(_not_done(resolved, zh, request, name) + where)
-        return lines
+            # A question that went unanswered stays unanswered in the reply, whatever page
+            # was opened beside it: the page is where to look, not an answer.
+            where = ""
+            if resolved.page is not None:
+                where = (f"（可在 {resolved.page.label} 页面上自行核对）" if zh
+                         else f" (you can check on {resolved.page.label})")
+            if resolved.missing:
+                # Only the name was looked up: nothing is called that, which is not to say
+                # nothing the person described exists (a Chinese description of an English
+                # product name finds no name and still means a real product).
+                lines.append((f"没有找到名为「{resolved.missing}」的记录。{where}") if zh
+                             else f"Nothing named \"{resolved.missing}\" was found.{where}")
+            else:
+                lines.append(_not_done(resolved, zh, request, name) + where)
+            return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
         if plan.form is not None:
