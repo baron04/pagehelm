@@ -17,9 +17,42 @@ function ready(facts: ReturnType<typeof createPageFacts>) {
 }
 
 describe('native Yudao record and read completion facts', () => {
+  it('waits before the cold route starts any read or paints tabs, without granting identity', () => {
+    const facts = createPageFacts()
+    document.body.innerHTML = ''
+    expect(facts.readPageBlocker()).toBe('pending')
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+    facts.begin('/admin-api/crm/customer/get?id=6')!(403, null)
+    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+  })
+  it('waits for a cold detail title while loading without granting identity or hiding read failure', () => {
+    const facts = createPageFacts()
+    const title = document.querySelector('span')!
+    title.textContent = ''
+    title.getBoundingClientRect = () => ({width: 0, height: 0} as DOMRect)
+    const mask = document.createElement('div')
+    mask.className = 'el-loading-mask'
+    mask.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    document.body.append(mask)
+    const settle = facts.begin('/admin-api/crm/customer/get?id=6')!
+    expect(facts.readPageBlocker()).toBe('pending')
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+    settle(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageBlocker()).toBe('pending')
+    title.textContent = 'Synthetic Customer'
+    title.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    mask.remove()
+    expect(facts.readPageBlocker()).toBe(false)
+    expect(facts.readPageRecordRoute()).toBe('/crm/customer/detail/6')
+    document.body.append(mask)
+    facts.begin('/admin-api/crm/customer/get?id=6')!(200, {code: 1020007001})
+    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+  })
   it('requires a successful exact-ID read and matching visible title', () => {
     const facts = createPageFacts()
-    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageBlocker()).toBe('pending')
     ready(facts)
     expect(facts.readPageRecordRoute()).toBe('/crm/customer/detail/6')
     document.querySelector('span')!.textContent = 'Another customer'
@@ -172,6 +205,6 @@ describe('native Yudao record and read completion facts', () => {
     window.history.replaceState({}, '', '/crm/customer/detail/12')
     old(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
     expect(facts.readPageRecordRoute()).toBeUndefined()
-    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageBlocker()).toBe('pending')
   })
 })

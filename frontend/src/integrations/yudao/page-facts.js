@@ -63,16 +63,21 @@ export function createPageFacts({view = window, doc = document} = {}) {
     current()
     if (!/^\/crm\/(customer|contract|business)\/detail\/[0-9]+$/.test(route)) return false
     const titles = Array.from(doc.querySelectorAll('.text-xl.font-bold')).filter(visible)
-    if (titles.length !== 1 || record && titles[0].textContent?.trim() !== record.name) return true
+    if (titles.length > 1 || record && titles.length === 1 && titles[0].textContent?.trim()
+        && titles[0].textContent.trim() !== record.name) return true
+    const loading = Array.from(doc.querySelectorAll('.el-loading-mask')).some(visible)
     if (Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).some(visible)) return true
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]')).filter(visible)
-    if (selected.length !== 1) return true
-    const panel = selected[0].getAttribute('aria-controls') || ''
+    if (selected.length > 1) return true
+    const panel = selected[0]?.getAttribute('aria-controls') || ''
     const relevant = Array.from(reads.values()).filter(s => s.panel === '*' || !s.panel || s.panel === panel)
     if (relevant.some(s => s.failed || s.conflicts)) return true
     if (relevant.some(s => s.pending)) return 'pending'
-    if (!record) return true
-    if (Array.from(doc.querySelectorAll('.el-loading-mask')).some(visible)) return 'pending'
+    // A route can render before its first GET or loading mask exists. Unknown
+    // identity remains pending (bounded by the executor), never ready. Explicit
+    // failed/conflicting reads and visible errors above still fail immediately.
+    if (loading || !record) return 'pending'
+    if (selected.length !== 1 || titles.length !== 1 || titles[0].textContent?.trim() !== record.name) return true
     return false
   }
   function readPageRecordRoute() {
