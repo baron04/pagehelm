@@ -828,6 +828,11 @@ state and business reads are outside that cache. Missing, added, changed or link
 inputs invalidate reuse. Source retrieval remains optional.
 
 
+Source-backed how-to questions explain evidenced user-facing steps; they do not execute
+the operation. Ambiguous module workflows are distinguished rather than treated as one
+application path. Native Yudao hosts can compose separately reviewed update and creation
+entry policies; undeclared entries remain unavailable and submissions stay manual.
+
 ## License
 
 See [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md).

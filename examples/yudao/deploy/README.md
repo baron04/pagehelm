@@ -182,6 +182,13 @@ and `hashes`, mapping these relative source paths to their reviewed full-file SH
 
 Those bytes must have been reviewed for the exact update opener and transient editor
 behavior; generating hashes alone establishes neither. No production policy is supplied.
+The host can additionally load repeatable `--native-create-policy <private-review.json>`
+files. Each uses the existing reviewed creation contract (`schema_version`, `release`,
+`reference`, `hashes`); only installed, byte-matching entry reviews are offered. An
+update review and creation reviews compose in the same actor session; creation alone
+does not enable updates. Duplicate references or changed source abort startup. Both
+require the verified native guard.
+
 The server checks the acting API identity, `crm:customer:update` (or the application's
 wildcard), the exact customer's read and its actor-scoped owner/write membership. It
 issues only the unique enabled Edit button on that verified detail route, consumes its

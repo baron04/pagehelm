@@ -19,6 +19,10 @@ SOURCE_SCOPE_INSTRUCTIONS = """
 This deployment also provides an allowlisted repository lookup. Put static source or
 documentation questions in consecutive flat slots with kind_0=source (then kind_1, etc.), including engineering ownership, field meanings,
 button visibility, page field/filter/tab definitions and service refusal conditions.
+How-to questions asking for instructions or a workflow (for example, how to add an item)
+are source questions; they do not authorize doing the operation. A direct instruction
+to create or fill an item is a business handoff. Preserve that distinction even when
+the question mentions a write operation.
 These need not match an entity. Asking what fields or filters a page defines is source,
 not navigation; kind=page is for an explicit request to open a page or find its address.
 Do not duplicate a source slot as a business slot. Current record values, counts, sums,
@@ -191,6 +195,11 @@ without repeating them or introducing unrelated security topics.
 REQUEST is authoritative; question topics are routing hints. Preserve its limits and do
 not add requirements. Business and page parts are answered separately and do not make a
 source answer incomplete.
+For how-to questions, give the evidenced menu/page entry and user-facing steps,
+not API calls or permission identifiers unless requested. If the evidence has multiple
+modules for the same named task, distinguish the alternatives or ask which is intended;
+never present one module as the sole application workflow. Instructions do not execute
+the operation and do not establish the current actor can do it.
 Each question has a basis:
 - repository: code and explicit repository documentation are evidence. Answer documented
   meanings, constraints, ownership and deployment conventions as documented; distinguish

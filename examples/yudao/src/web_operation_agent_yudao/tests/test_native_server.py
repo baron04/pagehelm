@@ -157,6 +157,77 @@ class NativeHostTests(unittest.TestCase):
             self.assertIn("submit", executor.disabled_page_actions)
             self.assertIn("fill", executor.disabled_page_actions)
 
+    def _native_form_config(self, *, update=True, create=True):
+        import hashlib
+        from web_operation_agent_yudao.form_entries import REVIEWED_FILES, CREATE_ENTRIES
+        root = Path(self.tmp.name) / "source"
+        paths = set(REVIEWED_FILES) | {CREATE_ENTRIES["customer-create"][4]}
+        hashes = {}
+        for name in paths:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("<template><div /></template>")
+            hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        read = root / "reads.json"
+        read.write_text(json.dumps({"schema_version": 1, "release": "fixture-release",
+                                   "read_paths": ["/admin-api/crm/customer/get"]}))
+        update_path = root / "update.json"
+        update_path.write_text(json.dumps({"schema_version": 1, "release": "fixture-release",
+                                          "hashes": {p: hashes[p] for p in REVIEWED_FILES}}))
+        create_path = root / "create.json"
+        create_files = (CREATE_ENTRIES["customer-create"][4], REVIEWED_FILES[1], REVIEWED_FILES[2])
+        create_path.write_text(json.dumps({"schema_version": 1, "release": "fixture-release",
+                                          "reference": "customer-create",
+                                          "hashes": {p: hashes[p] for p in create_files}}))
+        return replace(self.config, source_root=root, source_release="fixture-release",
+                       ui_source=root, native_guard_port=0, native_read_policy=read,
+                       native_form_policy=update_path if update else None,
+                       native_create_policies=(create_path,) if create else ())
+
+    def test_host_installs_reviewed_create_and_update_in_the_same_actor_session(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.form_entries import NativeEntryVerifiers
+        self.config = self._native_form_config()
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+                records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
+                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy"):
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "native-forms")
+            executor = host._sessions[("1", "1")].session.runner.executor
+            forms = executor.application.ports.forms
+            self.assertIsInstance(forms._verifier, NativeEntryVerifiers)
+            self.assertTrue(forms.goal_updates)
+            self.assertEqual([e[0] for e in forms.goal_entries], ["customer-create"])
+            self.assertTrue(all(v.client is host._sessions[("1", "1")].client
+                                for v in forms._verifier.verifiers))
+            self.assertTrue(executor.config.allow_form_prefill)
+            self.assertIn("submit", executor.disabled_page_actions)
+            self.chat.return_value.complete.assert_not_called()
+
+    def test_create_only_policy_does_not_enable_update_and_requires_guard(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        self.config = self._native_form_config(update=False)
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+                records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
+                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy"):
+            host = self.host()
+            self.assertFalse(host._application(None).ports.forms.goal_updates)
+            self.config = replace(self.config, native_read_policy=None)
+            with self.assertRaisesRegex(ValueError, "verified guard"):
+                self.host()
+
+    def test_duplicate_or_changed_create_review_fails_before_opening_host(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        self.config = self._native_form_config(update=False)
+        self.config = replace(self.config, native_create_policies=self.config.native_create_policies * 2)
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource()):
+            with self.assertRaisesRegex(ValueError, "unique entry references"):
+                self.host()
+            self.config = replace(self.config, native_create_policies=self.config.native_create_policies[:1])
+            (self.config.source_root / "ui/src/views/crm/customer/CustomerForm.vue").write_text("changed")
+            with self.assertRaisesRegex(ValueError, "current source"):
+                self.host()
+
     def test_failed_native_ingress_probe_prevents_host_startup(self):
         from web_operation_agent_yudao.ui_source import UiSource
         from web_operation_agent_yudao.page_guard import GuardRefused
