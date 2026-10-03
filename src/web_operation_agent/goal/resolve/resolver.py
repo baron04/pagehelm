@@ -246,15 +246,29 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
             return Resolved(kind=d.kind, problem="the entity named is not in the index",
                             repair=("entity must be one of the index's entity keys: "
                                     + ", ".join(e.key for e in index.entities[:30])))
-        if d.kind == "fact" and d.fields and not d.record and not d.rules:
+        if d.kind == "fact" and d.fields and not d.rules:
             view = self.view(entity.key)
             if d.via and view is not None:
                 link = view.link_by_label(d.via)
                 if link is not None:
-                    view = self.view(view.info(link).relation)
+                    origin, view = view, self.view(view.info(link).relation)
+                    if (view is not None
+                            and all(view.field_by_label(label) is None for label in d.fields)
+                            and all(origin.field_by_label(label) is not None for label in d.fields)):
+                        # An owner condition is not a request to read the owner's
+                        # fields. Do not silently discard via or guess the intent.
+                        return Resolved(kind="fact",
+                            problem="the declared link target has none of the requested fields",
+                            repair=(f"via {d.via!r} follows {origin.key} to {view.key}, "
+                                    f"which has none of {', '.join(d.fields)}. These fields belong "
+                                    f"to {origin.key}. If the request asks for those values, omit "
+                                    f"via and express the owner using metric.filters on {origin.key}; "
+                                    "its condition fields are: " + ", ".join(
+                                        f.label for f in origin.schema.fields[:30] if f.searchable)
+                                    + ". Preserve every explicit exclusion; never substitute fields."))
             # A missing field cannot be resolved by asking which unrelated record
             # the person meant. Keep embedded-line fallback for parent schemas.
-            if view is not None and not any(f.kind == "lines" for f in view.fields.values()):
+            if not d.record and view is not None and not any(f.kind == "lines" for f in view.fields.values()):
                 missing = tuple(label for label in d.fields if view.field_by_label(label) is None)
                 if len(missing) == len(d.fields):
                     return Resolved(kind="fact", missing_fields=missing,

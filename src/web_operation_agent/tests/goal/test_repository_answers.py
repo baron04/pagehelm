@@ -59,6 +59,38 @@ def source_reply(*, reference="source#1.1"):
 
 
 class RepositoryAnswerTests(unittest.TestCase):
+    def test_source_basis_is_typed_and_preserved_without_an_extra_model_stage(self):
+        from web_operation_agent.goal.source_answers import split_source_scope
+        for basis in ("repository", "implementation"):
+            payload = scope()[1]
+            payload["basis_0"] = basis
+            _, requests = split_source_scope(payload)
+            self.assertEqual(requests[0]["basis"], basis)
+            result, chat, _, events = self.run_turn([("declare_scope", payload), source_reply()])
+            self.assertEqual(len(chat.messages), 3)
+            for messages in chat.messages[1:]:
+                body = json.loads(messages[1]["content"])
+                self.assertEqual(body['questions'][0]['basis'], basis)
+            self.assertEqual(next(e for e in events if e['event'] == 'goal_source_retrieved')['basis'], basis)
+
+    def test_invalid_source_basis_and_basis_on_business_or_empty_slots_are_refused(self):
+        from web_operation_agent.goal.source_answers import split_source_scope
+        for malformed in ({**scope()[1], "basis_0": "execution"},
+                          {"kind_0": "fact", "entity_0": "order", "basis_0": "repository"},
+                          {"kind_0": "none", "basis_0": "repository"}):
+            with self.assertRaises(ValueError):
+                split_source_scope(malformed)
+
+    def test_implementation_incompleteness_cannot_display_a_provisional_document_claim(self):
+        payload = scope()[1]
+        payload['basis_0'] = 'implementation'
+        result, _, _, _ = self.run_turn([("declare_scope", payload),
+            ("answer_sources", {"complete_0": False,
+                "statement_0": "Documentation proves this code executed.",
+                "references_0": ["source#1.1"]})])
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertNotIn("Documentation proves", result.user_answer)
+
     def test_focus_preserves_original_question_terms_within_the_same_span_budget(self):
         from web_operation_agent.goal.source_answers import focus_preview
         spans = [{"text": "archive implementation filler", "id": "s1"},

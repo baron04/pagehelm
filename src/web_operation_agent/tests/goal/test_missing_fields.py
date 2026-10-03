@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
-from web_operation_agent.goal.data import Choice, EntitySchema, FieldSchema, Row, Schema
+from web_operation_agent.goal.data import Choice, EntitySchema, FieldSchema, Ref, Row, Schema
 from web_operation_agent.goal.executor import _not_done
 from web_operation_agent.goal.resolve.indexing import index_from_schema
 from web_operation_agent.goal.resolve.resolver import Resolver
@@ -33,6 +33,30 @@ class MissingFieldTests(unittest.TestCase):
         result=self.resolve(("Phone",),via="Customer")
         self.assertEqual(result.missing_fields,("Phone",))
         self.assertFalse(result.candidates)
+
+    def test_owner_link_cannot_silently_redirect_fields_of_the_named_entity(self):
+        schema = Schema(entities=(
+            EntitySchema("ticket", "Ticket", fields=(
+                FieldSchema("owner", "Assigned team", "link", relation="team"),
+                FieldSchema("priority", "Priority", "text"))),
+            EntitySchema("team", "Team", fields=(FieldSchema("name", "Name", "text"),))), pages=())
+        port = SimpleNamespace(find=Mock(return_value=(Ref("ticket", "1", "T-1"),)),
+            read=Mock(return_value=Row("1", "T-1", {"priority": "High"}, {"priority": "High"})),
+            name_of=lambda text: text)
+        resolver = Resolver(port, index_from_schema(schema), schema)
+        bad = Deliverable(kind="fact", entity="ticket", record="T-1",
+                          via="Assigned team", fields=("Priority",))
+        result = resolver.resolve(GoalSpec(deliverables=(bad,))).deliverables[0]
+        self.assertFalse(result.facts)
+        self.assertIn("omit via", result.repair)
+        self.assertIn("Assigned team", result.repair)
+        self.assertFalse(result.missing_fields)
+        port.find.assert_not_called(); port.read.assert_not_called()
+        # Only an explicit corrected declaration can read the original record.
+        from dataclasses import replace
+        result = resolver.resolve(GoalSpec(deliverables=(replace(bad, via=""),))).deliverables[0]
+        self.assertEqual(result.facts[0].value, "High")
+        port.read.assert_called_once()
 
     def test_only_observed_declared_choice_codes_are_forwarded(self):
         schema=Schema(entities=(EntitySchema("record","Record",fields=(

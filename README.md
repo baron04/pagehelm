@@ -113,6 +113,9 @@ agent.
   parts' resolved answers and limitations alongside the clarification. Entity summaries
   describe types and incomplete samples; names absent from them remain unresolved until
   application reads, including when repository answers are enabled.
+  A link declaration whose requested fields belong only to the original entity is
+  refused before record reads and gets direction-specific repair feedback. An owner
+  restriction is a condition, not permission to follow that link or replace fields.
   An adapter-classified permission denial names the unreadable record type while
   retaining other answers; it is not inferred from exception text or a failed service.
   Refused reads retain the requested operation and field labels in the reply. An
@@ -567,6 +570,11 @@ allowlisted filename can refine retrieval. Documented constraints must be identi
 as documented, while claims about enforced behavior need implementation evidence.
 Missing implementation evidence does not establish that a rule is absent from the repository.
 Follow-ups about what the original evidence proves retain that topic.
+Source scope declares whether qualified repository evidence or actual implementation
+proof is required, and carries that distinction through retrieval and answering without
+another model stage. Ordinary repository answers can cite explicit documentation;
+implementation claims still require actual code or markup. This distinction is model
+declared; byte-level citation verification does not prove its semantic correctness.
 A comparison explicitly limited to one documented rule dimension states that limit;
 it does not establish permission for the whole action.
 They display selected citations and allow one shared declaration repair across stages.

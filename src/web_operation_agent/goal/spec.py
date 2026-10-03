@@ -357,7 +357,7 @@ DECLARE_GOAL_TOOL = {
                             "record": {"type": "string",
                                        "description": "the existing record named by the person, in their words (a number, a name), or its id from VALUES (v3) when listed there; empty when a new record is to be created. When the person describes the record instead of naming it (the quotation sent to X, last month's invoice, the 31,750 credit note, the order still to invoice), leave record empty and put the description in metric.filters, with page.key for the scope"},
                             "via": {"type": "string",
-                                    "description": "link field label to follow from that record, when a related record is meant"},
+                                    "description": "Follow this link from the named record only when the requested fields belong to the related entity. An owner restriction belongs in metric.filters, not via."},
                             "fields": {"type": "array", "items": {"type": "string"},
                                        "description": "field labels asked about (fact), or columns to show (list). The lines of an order or invoice are a list of the line entity with a condition on its link field to the record, not a page section."},
                             "metric": {
@@ -369,7 +369,7 @@ DECLARE_GOAL_TOOL = {
                                     "filters": {"type": "array", "items": {
                                         "type": "object",
                                         "properties": {
-                                            "field": {"type": "string"},
+                                            "field": {"type": "string", "description": "Field label of this deliverable's entity, not of its related entity; an owner condition uses this entity's link label."},
                                             "values": {"type": "array",
                                                        "items": {"type": "string"},
                                                        "description": "choice labels, names, numbers, or an id from VALUES (v3) for a name listed there; for a date field: 2026-09-12, 2026-09, 2026, 2026-09-01..2026-09-30, today, this month, last month, this quarter, last quarter, this year, last year, last 30 days, overdue. A day or month said without a year is in the current year"},
