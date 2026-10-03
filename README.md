@@ -837,10 +837,9 @@ An optional server-side product-knowledge index groups original, release-bound s
 excerpts into draft workflow guides and retains raw-source fallback. Derived summaries
 reach retrieval and answering as untrusted aids; only original numbered excerpts can
 be cited. Source changes invalidate affected guides, and guide text participates in
-the declaration-cache digest. Yudao's opt-in `repository_source(..., workflow_knowledge=True)`
-extracts literal Vue form labels, tabs, related components and bounded validation/save
-code. It does not prove complete backend rules or current permissions. The native host
-keeps this prototype disabled; broader model and browser qualification remains necessary.
+the declaration-cache digest. Applications supply these guides explicitly; Yudao uses
+raw-source lookup and does not generate workflow drafts automatically. Guides do not
+prove complete backend rules or current permissions.
 
 ## License
 
