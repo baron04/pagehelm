@@ -11,6 +11,7 @@ api modules those pages import.
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -61,6 +62,8 @@ class UiSource:
     #: A page file under views ("erp/sale/order/components/SaleOrderItemForm") -> the row
     #: fields its tables show, by the label of their column.
     tables: dict = field(default_factory=dict)
+    #: Record route template -> static tab labels from its deployed Vue component.
+    record_sections: dict = field(default_factory=dict)
 
     def line_labels(self, component_dir: str) -> dict:
         """The labels the tables of a page's own files give row fields (`productPrice` ->
@@ -107,8 +110,9 @@ class UiSource:
                 key = path.relative_to(src / "views").with_suffix("").as_posix()
                 views[key] = ListView(columns=columns, dicts=dicts, endpoint=endpoint,
                                       fixed_params=fixed_params)
-        return UiSource(views=views, records=_record_routes(
-            (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")), tables=tables)
+        router = (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")
+        return UiSource(views=views, records=_record_routes(router), tables=tables,
+                        record_sections=_record_sections(src, router))
 
 
 def _row_columns(page: str) -> dict:
@@ -213,3 +217,40 @@ def _record_routes(text: str) -> dict:
 
 
 __all__ = ["ListView", "UiSource"]
+
+
+class _LiteralTabs(HTMLParser):
+    """Literal labels are location hints; live DOM still verifies visibility and arrival."""
+    def __init__(self):
+        super().__init__()
+        self.labels = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "el-tab-pane":
+            return
+        attrs = dict(attrs)
+        label = attrs.get("label", "")
+        if label and len(label) <= 120 and not any(k in attrs for k in (":label", "v-bind:label", "v-for")):
+            if label not in self.labels and len(self.labels) < 16:
+                self.labels.append(label)
+
+
+def _record_sections(src: Path, router: str) -> dict:
+    routes = _record_routes(router)
+    out = {}
+    for match in _ROUTE_PATH.finditer(router):
+        if not re.search(r"(^|/)detail/:id\b", match.group(1)):
+            continue
+        tail = router[match.end():match.end() + 400].split("path:", 1)[0]
+        menu = _ACTIVE_MENU.search(tail)
+        component = re.search(r"component:\s*\(\)\s*=>\s*import\(['\"]@/views/([^'\"]+\.vue)['\"]\)", tail)
+        if menu is None or component is None or menu.group(1) not in routes:
+            continue
+        path = (src / "views" / component.group(1)).resolve()
+        if not path.is_relative_to((src / "views").resolve()) or not path.is_file():
+            continue
+        parser = _LiteralTabs()
+        parser.feed(path.read_text(encoding="utf-8"))
+        if parser.labels:
+            out[routes[menu.group(1)]] = tuple(parser.labels)
+    return out

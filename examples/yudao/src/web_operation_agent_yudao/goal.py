@@ -212,7 +212,9 @@ class YudaoGoalData:
         for key, entity in self._entities.items():
             label = entity.label if counts[entity.label] == 1 else entity.full_label
             self._aliases[key] = tuple(dict.fromkeys(n for n in labels.get(key, ()) if n != label))
-            entities[key] = self._entity_schema(key, label)
+            page = next((p.key for p in pages if p.entity == key), "")
+            sections = self._ui.record_sections.get(self._ui.records.get(page, ""), ()) if self._native_sections else ()
+            entities[key] = self._entity_schema(key, label, sections)
         for key, label in ((_USERS, "用户"), (_DEPTS, "部门")):
             entities[key] = EntitySchema(key=key, label=label, fields=(
                 FieldSchema("name", "名称", "text", listed=True),
@@ -398,7 +400,7 @@ class YudaoGoalData:
                        if view and view.endpoint.lstrip("/") == list_path
                        else {})
 
-    def _entity_schema(self, key: str, label: str) -> EntitySchema:
+    def _entity_schema(self, key: str, label: str, sections: tuple[str, ...] = ()) -> EntitySchema:
         entity = self._entities[key]
         props = entity.props
         columns = list(entity.view.columns) if entity.view else []
@@ -476,7 +478,8 @@ class YudaoGoalData:
         entity.name_field = name_field
         return EntitySchema(key=key, label=label, fields=tuple(fields), operations=entity.operations,
                             name_field=name_field if name_field == "name" else "",
-                            total="totalPrice" if "totalPrice" in props else "")
+                            total="totalPrice" if "totalPrice" in props else "",
+                            sections=sections)
 
     def _relation(self, entity: "_Entity", base: str) -> str:
         """The entity a `<base>Id` field links to: a person or a department, or the entity

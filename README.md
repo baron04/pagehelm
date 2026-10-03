@@ -79,7 +79,9 @@ agent.
   plus guiding a change, entering a value or explaining a rule only when the port
   declares them. The Contacts application declares tabs and handoffs and takes
   goal turns in its demo. A turn is marked complete only when every declared deliverable
-  settles. The declaration is staged by default: the request's hard references (document
+  settles. Yudao can extract literal record-tab labels from deployed Vue components
+  when native sections are enabled; dynamic labels remain unresolved. Source labels
+  do not replace live visibility or selected-tab verification. The declaration is staged by default: the request's hard references (document
   numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the
   model first picks entities and deliverable kinds from ranked entity summaries, and
   then declares the details against those entities' neighbourhood of the index (their
