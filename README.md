@@ -93,6 +93,13 @@ agent.
   query parameters or authorize actions. Changing
   visible context invalidates the declaration cache; an observation epoch alone does
   not. Runtime checks still establish permissions and action targets.
+  The native Yudao integration and Contacts goal demo can prioritize a current-record
+  candidate through the existing `values` capability. The rendered page and record
+  routes must agree, an actor-bound application read supplies its name, and the live
+  document observation must remain unchanged across that read. The candidate carries
+  both name and identifier; resolution rechecks them against application data so a
+  duplicate name cannot select another record. A URL alone supplies no such candidate.
+  This grounding is a hint to declaration, not proof that the model chooses it correctly.
   Yudao can extract literal record-tab labels from deployed Vue components
   when native sections are enabled; dynamic labels remain unresolved. Source labels
   do not replace live visibility or selected-tab verification. Its native integration

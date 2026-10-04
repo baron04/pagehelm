@@ -7,6 +7,8 @@ application can substantiate; unsupported goals remain explicit failures.
 from __future__ import annotations
 
 import hashlib
+import re
+from urllib.parse import urlsplit
 
 from web_operation_agent.goal.index import (ApplicationIndex, IndexEntity, IndexField,
                                              IndexPage)
@@ -38,6 +40,7 @@ class ContactsGoalPort:
         self._form_prefill = form_prefill
         self._adapter = adapter
         self._executor = adapter.business_tools._executor
+        self.page_reader = None
 
     def _require_actor(self, context: OperationContext | None) -> frozenset[str]:
         if context is None:
@@ -91,9 +94,28 @@ class ContactsGoalPort:
         self._require_actor(context)
         if not any(_norm(e) in {"contacts", "contact"} for e in entities):
             return ()
-        return tuple(Candidate(kind="record", entity="contacts", display=row["name"],
-                               detail=row.get("email") or "")
-                     for row in self._executor._contact_rows()[:20])
+        observation = self.page_reader(context) if self.page_reader is not None else None
+        observed_epoch = observation.epoch if observation is not None else None
+        observed_digest = observation.content_digest if observation is not None else None
+        rows = self._executor._contact_rows()
+        current = None
+        if observation is not None:
+            path = urlsplit(observation.url).path
+            if (observation.render_state == "ready" and observation.record_route == path
+                    and observation.page_route == path):
+                current = next((row for row in rows if path == f"/contacts/{row['id']}"), None)
+            fresh = self.page_reader(context)
+            if (fresh.epoch != observed_epoch or fresh.content_digest != observed_digest):
+                current = None
+        ordinary = [Candidate(kind="record", entity="contacts", display=row["name"],
+                              detail=row.get("email") or "") for row in rows[:20]
+                    if current is None or row["id"] != current["id"]]
+        if current is not None:
+            ordinary.insert(0, Candidate(kind="record", entity="contacts",
+                display=f"{current['name']}（ID={current['id']}）",
+                detail="Currently rendered record; name read under the active actor. "
+                       "Use this candidate for current-record references, not the URL identifier."))
+        return tuple(ordinary[:20])
 
     def resolve(self, spec: GoalSpec, *, context: OperationContext | None = None,
                 current_path: str = "") -> Resolution:
@@ -122,6 +144,12 @@ class ContactsGoalPort:
             return exact[0], ""
         if len(exact) > 1:
             return None, "record reference is ambiguous"
+        qualified = re.fullmatch(r"(.+)（ID=([^()（）]+)）", reference.strip())
+        if qualified is not None:
+            selected = [row for row in rows if row["id"] == qualified.group(2)
+                        and row["name"] == qualified.group(1)]
+            return (selected[0], "") if len(selected) == 1 else (
+                None, "record reference does not match this actor's current read")
         partial = [row for row in rows if _norm(reference) in _norm(row["name"])]
         if len(partial) == 1:
             return partial[0], ""

@@ -532,6 +532,10 @@ def run_demo(config: DemoConfig) -> dict:
         def runner_factory(channel):
             executor = None
             if config.goal_turns and not config.allow_mutations:
+                goal_port = ContactsGoalPort(adapter, form_prefill=True)
+                # The live channel binds both reads to this actor/session/turn and
+                # document lease; a stale or foreign observation is not a hint.
+                goal_port.page_reader = lambda context: channel.page_for_read(context).observation
                 executor = GoalTurnExecutor(
                     channel=channel,
                     config=AgentTurnConfig(
@@ -541,7 +545,7 @@ def run_demo(config: DemoConfig) -> dict:
                         wall_budget_s=max(1, int(config.turn_timeout_s)),
                         transport_timeout_s=min(30, config.turn_timeout_s),
                         require_identity=True, source=config.source, allow_form_prefill=True),
-                    chat=chat, application=bound, goal_port=ContactsGoalPort(adapter, form_prefill=True),
+                    chat=chat, application=bound, goal_port=goal_port,
                     control=ReadOnlyControl(),
                     run_id_factory=lambda _message: "minimal-" + uuid.uuid4().hex[:16],
                     # A scripted apparatus declares once against the whole index; a

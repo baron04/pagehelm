@@ -288,7 +288,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
             <button type="button" role="menuitem"
               data-delete-contact="${{contact.id}}">Delete</button></div></div>` : '';
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
-          <section class="record"><div class="eyebrow">Contact record</div>
+          <section class="record" data-page-route="/contacts/${{contact.id}}"><div class="eyebrow">Contact record</div>
           <h1>${{contact.name}}</h1>${{menu}}<dl><dt>Email</dt><dd>${{contact.email}}</dd>
           <dt>Record ID</dt><dd>${{contact.id}}</dd></dl></section>`;
         document.title = `${{contact.name}} · Minimal Contacts`;

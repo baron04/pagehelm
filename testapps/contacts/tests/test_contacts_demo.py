@@ -363,6 +363,42 @@ class MinimalDemoBrowserTests(unittest.TestCase):
         self.assertTrue(any(e["event"] == "goal_page_settled" and e["reached"] for e in events))
         self.assertFalse(any(e["event"] == "business_tool_result" for e in events))
 
+    def test_staged_goal_reads_current_record_after_native_navigation(self):
+        # Exercise the actual lease-bound host callback and DOM route proof. The
+        # scripted model selects a candidate supplied by actor reads on turn two;
+        # no evaluator state or repository is supplied to the declaration.
+        chat = ScriptedDemoChat((
+            ("declare_scope", {"parts": [{"kind": "page", "entity": "contacts"}]}),
+            ("declare_goal", {"deliverables": [{"kind": "page", "entity": "contacts",
+                "record": "Grace Hopper"}]}),
+            ("declare_scope", {"parts": [{"kind": "fact", "entity": "contacts"}]}),
+            ("declare_goal", {"deliverables": [{"kind": "fact", "entity": "contacts",
+                "record": "v1", "fields": ["Email"]}]}),
+        ))
+        original = goal_executor.GoalTurnExecutor
+        def staged(**kwargs):
+            return original(**{**kwargs, "staged": True, "readings": 1})
+        def probe(page):
+            return {"record_rendered": page.evaluate(
+                "document.querySelector('main [data-page-route]')?.dataset.pageRoute === '/contacts/grace-hopper'")}
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.demo._chat", return_value=(chat, None)), patch(
+                "testapps.contacts.demo.GoalTurnExecutor", staged):
+            summary = run_demo(DemoConfig(tasks=("Open Grace Hopper's contact.",
+                "What is this contact's email?"), headless=True, goal_turns=True,
+                output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=30,
+                final_page_probe=probe))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        self.assertEqual(["finished", "finished"], [t["status"] for t in summary["turns"]])
+        self.assertIn("grace@example.test", summary["turns"][1]["answer"])
+        self.assertIn("v1 record contacts: Grace Hopper（ID=grace-hopper）", chat.seen[-1])
+        self.assertIn("Currently rendered record", chat.seen[-1])
+        self.assertTrue(summary["panel"]["final_page_probe"]["record_rendered"])
+        self.assertEqual(0, summary["application_state"]["write_requests"])
+        self.assertEqual(0, summary["model_usage"]["provider_calls"])
+        self.assertTrue(any(e["event"] == "goal_declared" and e.get("values_bound") == 1
+                            for e in events))
+
     def test_goal_opens_entityless_help_in_real_browser_without_repository(self):
         script = (("declare_goal", {"deliverables": [
             {"kind": "page", "page": {"key": "help"}}]}),)

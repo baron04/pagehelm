@@ -19,7 +19,7 @@ from web_operation_agent.goal import executor as goal_executor
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.goal.spec import GoalSpec
 from web_operation_agent.state.identity import OperationContext, PrincipalError
-from web_operation_agent.schemas.browser import ElementRef
+from web_operation_agent.schemas.browser import ElementRef, PageObservation
 from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
 from web_operation_agent.tests.support.business import _Chat
 
@@ -247,6 +247,86 @@ class ContactsGoalPortTests(unittest.TestCase):
             self.assertEqual(port.candidates(entities=("orders",), context=north_context), ())
             with self.assertRaises(PrincipalError):
                 port.candidates(entities=("contacts",), context=None)
+
+    def test_current_record_candidate_binds_exact_actor_read_identity(self):
+        from web_operation_agent.goal.ground import bind, ground
+        with MinimalContactsApplication() as application:
+            adapter, _principal, context = self._bound(application, "ada-lovelace")
+            port = ContactsGoalPort(adapter)
+            path = "/contacts/grace-hopper"
+            observation = PageObservation(1, 2, application.origin + path, "Grace", [], [],
+                render_state="ready", record_route=path, page_route=path)
+            seen = []
+            def reader(actual):
+                seen.append(actual)
+                return observation
+            port.page_reader = reader
+            candidates = ground(port, entities=("contacts",), known=(), context=context)
+            self.assertEqual("Grace Hopper（ID=grace-hopper）", candidates[0].display)
+            self.assertEqual([context, context], seen)
+            spec, count, unknown = bind(GoalSpec.from_json({"deliverables": [
+                {"kind": "page", "entity": "contacts", "record": "v1"},
+                {"kind": "fact", "entity": "contacts", "record": "v1", "fields": ["Email"]}]}), candidates)
+            result = port.resolve(spec, context=context)
+            self.assertEqual((2, ()), (count, unknown))
+            self.assertEqual(path, result.deliverables[0].page.url)
+            self.assertEqual("grace@example.test", result.deliverables[1].facts[0].value)
+            # A same-name record cannot capture the exact current reference.
+            rows = port._executor._contact_rows()
+            rows.append({"id": "another-grace", "name": "Grace Hopper", "email": "another@example.test"})
+            with patch.object(port._executor, "_contact_rows", return_value=rows):
+                self.assertEqual(path, port.resolve(spec, context=context).deliverables[0].page.url)
+            self.assertEqual(0, application.write_requests)
+
+    def test_current_record_candidate_requires_ready_unchanged_rendering(self):
+        from dataclasses import replace
+        with MinimalContactsApplication() as application:
+            adapter, _principal, context = self._bound(application, "ada-lovelace")
+            port = ContactsGoalPort(adapter)
+            path = "/contacts/grace-hopper"
+            original = PageObservation(1, 2, application.origin + path, "Grace", [], [],
+                render_state="ready", record_route=path, page_route=path)
+            for changes in ({"record_route": ""}, {"page_route": ""}, {"render_state": "pending"},
+                            {"render_state": "blocked"}, {"page_route": "/contacts"}):
+                with self.subTest(changes=changes):
+                    port.page_reader = lambda actual: replace(original, **changes)
+                    self.assertFalse(any("Currently rendered" in c.detail
+                        for c in port.candidates(entities=("contacts",), context=context)))
+            for changes in ({"epoch": 3}, {"content": "Replaced rendering"},
+                            {"url": application.origin + "/contacts/ada-lovelace"}):
+                with self.subTest(changes=changes):
+                    snapshots = iter((original, replace(original, **changes)))
+                    port.page_reader = lambda actual: next(snapshots)
+                    self.assertFalse(any("Currently rendered" in c.detail
+                        for c in port.candidates(entities=("contacts",), context=context)))
+            port.page_reader = lambda actual: original
+            read = port._executor._contact_rows
+            def changed():
+                rows = read()
+                original.content = "Changed in place"
+                return rows
+            with patch.object(port._executor, "_contact_rows", changed):
+                self.assertFalse(any("Currently rendered" in c.detail
+                    for c in port.candidates(entities=("contacts",), context=context)))
+
+    def test_current_record_candidates_do_not_cross_actor_or_expired_page_lease(self):
+        with MinimalContactsApplication() as application:
+            north, _principal, north_context = self._bound(application, "ada-lovelace")
+            _south, _south_principal, south_context = self._bound(application, "mary-jackson")
+            port = ContactsGoalPort(north)
+            with self.assertRaises(PrincipalError):
+                port.candidates(entities=("contacts",), context=south_context)
+            def expired(context):
+                raise PrincipalError("document lease expired")
+            port.page_reader = expired
+            with self.assertRaises(PrincipalError):
+                port.candidates(entities=("contacts",), context=north_context)
+            # Even a qualified-looking reference cannot bind a mismatching name/ID.
+            for reference in ("Ada Lovelace（ID=grace-hopper）", "Grace Hopper（ID=hidden-contact）"):
+                result = port.resolve(GoalSpec.from_json({"deliverables": [
+                    {"kind": "page", "entity": "contacts", "record": reference}]}), context=north_context)
+                self.assertIsNone(result.deliverables[0].page)
+                self.assertIn("does not match", result.deliverables[0].problem)
 
     def test_rest_page_and_counts_require_supported_scope(self):
         with MinimalContactsApplication() as application:

@@ -1,10 +1,12 @@
 """Native deployment arrival verification over the existing neutral goal port."""
 from dataclasses import replace
+import re
+from urllib.parse import urlsplit
 
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.scoped import ScopedData
-from web_operation_agent.goal.ports import Resolution
+from web_operation_agent.goal.ports import Candidate, Resolution
 
 
 class NativePageGoalPort(DataGoalPort):
@@ -15,6 +17,51 @@ class NativePageGoalPort(DataGoalPort):
     """
 
     page_reader = None
+
+    def candidates(self, *, entities=(), known=(), dates=(), context=None):
+        """Prefer an actor-read current record within the existing values capability.
+
+        Route identity only selects a read; it cannot establish the display name.
+        The host validates the active document lease for both snapshots. Ordinary
+        known-record candidates remain available on unqualified/list pages.
+        """
+        ordinary = super().candidates(entities=entities, known=known, dates=dates, context=context)
+        if self.page_reader is None or "values" not in self.capabilities():
+            return ordinary
+        observation = self.page_reader(context)
+        observed_epoch, observed_digest = observation.epoch, observation.content_digest
+        path = urlsplit(observation.url).path
+        if (observation.render_state != "ready" or observation.record_route != path
+                or observation.page_route != path):
+            return ordinary
+        # Menu revocation is checked by the current actor's index, not by the URL.
+        index = self.index(context=context)
+        possible = []
+        for page in index.pages:
+            if page.entity not in entities:
+                continue
+            template = self.data._ui.records.get(page.key, "")
+            if template.count("{id}") != 1:
+                continue
+            match = re.fullmatch(re.escape(template).replace(r"\{id\}", r"([0-9]+)"), path)
+            if match:
+                possible.append((page.entity, match.group(1)))
+        possible = tuple(dict.fromkeys(possible))
+        if len(possible) != 1:
+            return ordinary
+        entity, identifier = possible[0]
+        row = self.data.read(entity, identifier, ())
+        fresh = self.page_reader(context)
+        if (row.id != identifier or not row.display
+                or self.data.record_address(entity, row.id) != path
+                or fresh.epoch != observed_epoch
+                or fresh.content_digest != observed_digest):
+            return ordinary
+        reference = f"{row.display}（ID={row.id}）"
+        current = Candidate(kind="record", entity=entity, display=reference,
+                            detail="Currently rendered record; name read under the active actor. "
+                                   "Use this candidate for current-record references, not the URL identifier.")
+        return (current, *(c for c in ordinary if (c.entity, c.display) != (entity, reference)))
 
     def requires_page_reading(self, spec, *, current_path=""):
         page = self.data.schema().page(current_path)

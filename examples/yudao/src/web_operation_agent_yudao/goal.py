@@ -605,6 +605,16 @@ class YudaoGoalData:
         wanted = text.strip().casefold()
         if not wanted:
             return ()
+        exact = re.fullmatch(r"(.+)（ID=([0-9]+)）", text.strip())
+        if exact is not None:
+            # Candidate references carry both the actor-read name and ID. Re-read
+            # the exact record rather than searching a possibly truncated list or
+            # choosing one of several records with the same name. Neither part of
+            # the reference is authority; both must agree with this actor's read.
+            row = self.read(entity, exact.group(2), ())
+            if row.id != exact.group(2) or row.display != exact.group(1):
+                return ()
+            return (Ref(entity=entity, id=row.id, display=text.strip(), name=row.display),)
         told = re.fullmatch(r"(.+?)（(.+)）", text.strip())
         if told is not None:
             # A name as it was offered to choose from, with whose it is ("张伟（温州天成食品

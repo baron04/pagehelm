@@ -49,6 +49,13 @@ contract. Multiple field deliverables combine into one final form handoff, retai
 data answers from the same turn. Its real-browser scripted test verifies both normalized
 values and the highlighted Save contact button, with zero submit requests or creations.
 This is fixed-declaration integration evidence, not a real-model accuracy result.
+The staged goal demo also supplies a current-record candidate after native navigation.
+It uses the live channel's actor/session/turn document lease, the application's rendered
+route marker, and the actor-visible REST collection. The candidate's name and opaque
+record ID are rechecked together on resolution; duplicate names cannot redirect it.
+Changing or unqualified page observations leave only ordinary record candidates.
+The two-turn scripted browser check covers this host wiring without a repository or a
+paid model; it does not measure natural-language declaration accuracy.
 
 To use the product as an ordinary signed-in user, without Playwright or browser injection:
 
