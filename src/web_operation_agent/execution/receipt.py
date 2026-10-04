@@ -142,7 +142,8 @@ class MeasuredChat:
         upstream = cancelled
         if upstream is not None or self._budget is not None:
             cancelled = lambda: bool((upstream is not None and upstream()) or self._stopped()
-                                     or (self._budget is not None and self._budget.stopped))
+                                     or (self._budget is not None and
+                                         (self._budget.stopped or self._budget.cancelled())))
         if self._budget is not None:
             self._budget.reserve()
         left = self._remaining()
@@ -161,6 +162,8 @@ class MeasuredChat:
             else:
                 reply = self._delegate.complete_cancellable(messages, tools, run_id,
                                                             cancelled=cancelled, **kwargs)
+            if self._budget is not None:
+                self._budget.check()
             succeeded = True
             return reply
         except BudgetExhausted as exc:

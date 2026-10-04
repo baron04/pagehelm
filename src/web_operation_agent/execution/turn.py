@@ -32,6 +32,8 @@ from .product import (
     render_neutral_user_answer,
 )
 from .session import ServerAgentSession, TaskSpec
+from .budget import TurnBudget
+from .receipt import MeasuredChat, TurnReceipt
 
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -302,9 +304,23 @@ class AgentTurnExecutor:
                     plan_digest=plan.content_digest, decided_at=time.time(),
                     operation_context_digest=(context.binding_digest if context else ""))
 
+        # Planning and provider retries use the same allowance as execution. Approval
+        # waits belong to the person, so the monotonic deadline excludes only the time
+        # measured by the existing authenticated approval watch.
+        session = None
+        def turn_clock():
+            return time.monotonic() - (
+                session._approvals.waited_ms / 1000 if session is not None else 0)
+        budget = TurnBudget(
+            steps=self.config.step_budget, seconds=self.config.wall_budget_s,
+            clock=turn_clock,
+            cancelled=lambda: self.channel.message_cancelled(turn_message.message_id))
+        receipt = TurnReceipt()
+        measured_chat = MeasuredChat(
+            self.chat, receipt, remaining_s=budget.remaining, budget=budget)
         session = ServerAgentSession(
             task=task,
-            chat=self.chat,
+            chat=measured_chat,
             browser=browser,
             control=self.control,
             ledger=ledger,
@@ -317,6 +333,7 @@ class AgentTurnExecutor:
             source=self.config.source,
             step_budget=self.config.step_budget,
             wall_budget_s=self.config.wall_budget_s,
+            turn_budget=budget,
             run_id=run_id,
             keep_observations=self.config.keep_observations,
             disabled_actions=self.config.disabled_actions,
@@ -373,7 +390,8 @@ class AgentTurnExecutor:
         )
         session.adopt_entry(current.observation)
         try:
-            session.plan()
+            with receipt.stage("source"):
+                session.plan()
             # No prose here. What the timeline says for this state is a user-visible
             # string, and those live in the panel contract with the rest of them.
             self.channel.publish("progress", {"state": "agent_started"},
@@ -387,6 +405,10 @@ class AgentTurnExecutor:
                 retryable=False,
                 run_id=run_id,
             ) from exc
+
+        agent.model_receipt = {**receipt.report(self.chat, run_id),
+                               "budget": budget.projection()}
+        ledger.append("turn_model_receipt", **agent.model_receipt)
 
         status = _status_for(agent.terminal_reason)
         answer_context = AgentAnswerContext(

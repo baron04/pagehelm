@@ -149,10 +149,12 @@ class RunResult:
     #: names its tools. "Your account is not permitted to perform this operation" leaves the
     #: reader guessing which half of "the phone and the orders" was refused.
     refused_operation: str | None = None
+    #: Content-free per-turn request timing and accounting, when measured by the host.
+    model_receipt: dict | None = None
 
     def to_json(self) -> dict:
         optional = {"verified_answer", "clarification", "provider_error_code",
-                    "refusal_subject", "refused_operation", "operation_control"}
+                    "refusal_subject", "refused_operation", "operation_control", "model_receipt"}
         value = {k: getattr(self, k) for k in self.__dataclass_fields__
                  if k not in optional or getattr(self, k) is not None}
         if self.clarification is not None:

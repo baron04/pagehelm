@@ -206,6 +206,7 @@ class ScopedForms(unittest.TestCase):
 
     def test_product_prefill_inherits_elapsed_turn_time_and_consumes_the_draft(self):
         session = session_for(lambda *a: self.fail("expired draft must not dispatch"))
+        session._turn_budget = None
         session._form_draft = FormDraft("/records", (FormDraftField(
             "name", "Name", "Draft", binding="label"),), control_scope=SCOPE)
         session.wall_budget_s = 1
@@ -221,6 +222,25 @@ class ScopedForms(unittest.TestCase):
         self.assertEqual(outcome.finished.terminal_reason, "wall_clock_budget")
         self.assertIsNone(session._form_draft)
         self.assertIn("助手没有执行提交", result.agent_said)
+
+    def test_product_prefill_keeps_time_spent_before_the_loop(self):
+        session = session_for(lambda *a: self.fail("planning used the form deadline"))
+        session._form_draft = FormDraft("/records", (FormDraftField(
+            "name", "Name", "Draft", binding="label"),), control_scope=SCOPE)
+        session.wall_budget_s = 60
+        clock = [0.0]
+        session._turn_budget = TurnBudget(steps=4, seconds=60, clock=lambda: clock[0])
+        clock[0] = 61
+        session.task = SimpleNamespace(prompt="填写表单")
+        def finish(result, started, reason, detail, **kwargs):
+            result.terminal_reason = reason
+            return result
+        session._finish = finish
+        result = RunResult("run", "task", "U", "")
+        turn = _Turn(result, time.time(), [], observation(), step=1)
+        outcome = prefill_form(session, turn, {}, "prefill_form", {})
+        self.assertEqual(outcome.finished.terminal_reason, "wall_clock_budget")
+        self.assertIsNone(session._form_draft)
 
     def prepared(self, port=None):
         tools = self.tools(port)

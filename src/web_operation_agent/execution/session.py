@@ -57,6 +57,7 @@ from .business_tools import render_business_skills
 from . import knowledge_tools
 from .knowledge_tools import active_capability_digest
 from .loop import run_loop
+from .budget import TurnBudget
 from .finish import FinishHandler
 from .context import (RENDER_ELEMENTS, SessionContext, _PLAN_MARK,
                       _render_contract, _render_observation)
@@ -144,6 +145,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  source: SourceCapability | None = None,
                  lab: LabApparatus = NO_LAB,
                  step_budget: int = 20, wall_budget_s: int = 300, run_id: str | None = None,
+                 turn_budget: TurnBudget | None = None,
                  keep_observations: int = 3,
                  disabled_actions: frozenset[str] | set[str] | None = None,
                  click_policy: ClickPolicy | None = None,
@@ -178,6 +180,10 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  progress: Callable[[dict], None] | None = None):
         if source is not None and not isinstance(source, SourceCapability):
             raise TypeError("source must be a SourceCapability or None")
+        if turn_budget is not None and not isinstance(turn_budget, TurnBudget):
+            raise TypeError("turn_budget must be a TurnBudget or None")
+        self._turn_budget = turn_budget
+        self._planning_terminal = ""
         if not isinstance(lab, LabApparatus):
             raise TypeError("lab must be a LabApparatus")
         # `SourceCapability.__post_init__` already refuses every incoherent combination --
@@ -841,7 +847,10 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         result.steps_used = steps
         result.page_actions = self.page_actions
         result.contract_conflicts = self.conflicts
-        result.wall_seconds = round(time.time() - t0, 1)
+        result.wall_seconds = round(
+            time.time() - t0 if self._turn_budget is None else
+            self._turn_budget.clock() - self._turn_budget.started
+            + self._approvals.waited_ms / 1000, 1)
         result.spend = self.chat.meter.report() if self.chat.meter is not None else {}
         result.plan_status = self.plan_state.counts() if self.contract_source != "none" else {}
         result.plan_withdrawn = self.plan_state.withdrawn

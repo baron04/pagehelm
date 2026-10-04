@@ -2,6 +2,9 @@
 
 from .grounding import PlanState
 from ..modeling.egress import ProviderEgressError
+from ..modeling.spend import BudgetExhausted
+from ..modeling.provider import ProviderError
+from ..transport.browser import TurnCancelled
 from ..planning.contract import (ContractPlanner, PlanningFailed,
                                  _segment_from_template, expand_terms)
 from ..planning.retrieval import EvidenceBundle, SourceRetriever
@@ -40,7 +43,28 @@ class SessionLifecycle:
     def plan(self) -> OperationContract:
         """Produce the contract for this arm. The arms differ here and nowhere else."""
         try:
-            return self._plan()
+            if self._turn_budget is not None:
+                self._turn_budget.check()
+            contract = self._plan()
+            if self._turn_budget is not None:
+                self._turn_budget.check()
+            return contract
+        except (BudgetExhausted, TurnCancelled) as e:
+            self._planning_terminal = ("user_cancelled" if isinstance(e, TurnCancelled)
+                else "step_budget" if e.kind == "step_budget"
+                else "token_budget" if e.kind == "token_budget" else "wall_clock_budget")
+            self.planning_error = str(e)[:800]
+            self.ledger.append("planning_stopped", reason=self._planning_terminal)
+            return self.contract
+        except ProviderError as e:
+            if self._turn_budget is None or e.code not in {"provider_cancelled", "provider_deadline"}:
+                raise
+            self._planning_terminal = ("user_cancelled" if e.code == "provider_cancelled"
+                                       else "wall_clock_budget")
+            self.planning_error = str(e)[:800]
+            self.ledger.append("planning_stopped", reason=self._planning_terminal,
+                               provider_error_code=e.code)
+            return self.contract
         except (PlanningFailed, ProviderEgressError) as e:
             self.planning_error = str(e)[:800]
             self.ledger.append("planning_failed", detail=self.planning_error)

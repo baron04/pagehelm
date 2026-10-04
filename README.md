@@ -608,6 +608,12 @@ policy and verified guard, checks rendered arrival, and admits only reviewed nat
 record-tab clicks from fresh observations. Source Q&A, form entry, submission and page
 filters are outside this pilot; it never runs automatically after a goal refusal. Its
 scripted isolated browser checks do not establish model accuracy or production readiness.
+Product step turns bound planning, planner repairs, execution and turn-level provider retries
+by one model-request allowance and monotonic deadline. Authenticated approval waits are
+excluded from that deadline; a reply arriving after it cannot trigger the next action.
+The audit and execution result include a content-free per-turn receipt with request counts,
+input bytes, timing and available meter usage. Missing usage or cost stays unknown.
+This request count measures ChatPort calls; connection reconnection is transport telemetry.
 The adapter also provides an opt-in `YudaoFormPort` that translates on-demand raw-source
 scalars through the existing form contract. It requires an application-owned live verifier
 for the actor, turn, entry instance, create/update target, dialog scope and reviewed

@@ -14,6 +14,8 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from ..modeling.spend import BudgetExhausted
+from ..transport.browser import TurnCancelled
 
 from ..schemas import (SCHEMA_VERSIONS, ContractStep, MutationSignature,
                        OperationContract, PageObservation, SchemaError, SourceMap)
@@ -143,6 +145,8 @@ def expand_terms(chat, prompt: str, run_id: str, *, limit: int = 16,
     for attempt in range(attempts):
         try:
             reply = chat.complete(messages, tools=None, run_id=run_id)
+        except (BudgetExhausted, TurnCancelled):
+            raise
         except Exception:
             break
         text = (reply.get("content") or "").strip()

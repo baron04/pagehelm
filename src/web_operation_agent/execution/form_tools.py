@@ -160,11 +160,13 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
                                       steps=turn.step))
     # Inherit the loop's elapsed time rather than starting a new form deadline. The
     # generic loop excludes user approval waits, so this clock keeps that same policy.
-    budget = TurnBudget(steps=1, seconds=session.wall_budget_s,
-                        cancelled=session._cancel_requested,
-                        clock=lambda: time.monotonic() - session._approvals.waited_ms / 1000)
-    budget.started -= max(0.0, time.time() - turn.started_at
-                          - session._approvals.waited_ms / 1000)
+    budget = session._turn_budget
+    if budget is None:
+        budget = TurnBudget(steps=1, seconds=session.wall_budget_s,
+                            cancelled=session._cancel_requested,
+                            clock=lambda: time.monotonic() - session._approvals.waited_ms / 1000)
+        budget.started -= max(0.0, time.time() - turn.started_at
+                              - session._approvals.waited_ms / 1000)
     prefilled, reason, detail = apply_form_draft(
         session, draft, turn.obs, turn.step, budget=budget,
         verify=(lambda obs: verification.check(draft, obs,

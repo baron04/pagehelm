@@ -13,7 +13,7 @@ from typing import Callable
 
 from ..answer import answer_protocol, page_answer
 from ..answer.answer_view import unavailable_answer
-from ..transport.browser import TransportError
+from ..transport.browser import TransportError, TurnCancelled
 from ..business.controlplane import ControlPlaneError
 from ..modeling.egress import ProviderEgressError
 from ..modeling.provider import ProviderError
@@ -86,6 +86,8 @@ PROVIDER_RETRY_MIN_REMAINING_S = 5.0
 
 def _spent(session, t0: float) -> float:
     """The turn's own time: wall-clock since it started, less what a person took to answer."""
+    if session._turn_budget is not None:
+        return session._turn_budget.clock() - session._turn_budget.started
     return time.time() - t0 - session._approvals.waited_ms / 1000
 
 
@@ -132,7 +134,7 @@ def _complete_once_more_if_transient(session, messages: list, step: int, t0: flo
 
 def run_loop(session) -> RunResult:
     t0 = time.time()
-    session._approvals.start_turn(int((t0 + session.wall_budget_s) * 1000))
+    session._approvals.start_turn(int((t0 + session.wall_budget_s - _spent(session, t0)) * 1000))
     principal = session._approvals.principal
     session._repeats.bind_scope(session.run_id + ":" + (
         principal.binding_digest if principal is not None else "anonymous"))
@@ -149,7 +151,8 @@ def run_loop(session) -> RunResult:
         return session._finish(
             result, t0, "user_cancelled", "the user stopped this task")
     if session.planning_error:
-        return session._finish(result, t0, "planning_failed", session.planning_error)
+        return session._finish(result, t0, session._planning_terminal or "planning_failed",
+                               session.planning_error)
     apply_skill_first(session)
     try:
         obs = session.entry_observation or session.browser.observe()
@@ -257,13 +260,17 @@ def run_loop(session) -> RunResult:
         session._feed.note(stage="thinking", step=step + 1)
         try:
             reply = _complete_once_more_if_transient(session, messages, step, t0)
+        except TurnCancelled:
+            return session._finish(result, t0, "user_cancelled",
+                                   "the user stopped this task", steps=step)
         except BudgetExhausted as e:
             if session._cancel_requested():
                 return session._finish(
                     result, t0, "user_cancelled",
                     "the user stopped this task while the provider was working",
                     steps=step)
-            return session._finish(result, t0, "token_budget" if e.kind == "token_budget"
+            return session._finish(result, t0, "step_budget" if e.kind == "step_budget"
+                                else "token_budget" if e.kind == "token_budget"
                                 else "wall_clock_budget", str(e), steps=step)
         except (ProviderError, ProviderEgressError) as e:
             provider_code = getattr(e, "code", "provider_error")
