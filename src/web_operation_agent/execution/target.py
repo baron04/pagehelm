@@ -205,7 +205,8 @@ def _is_selected(element) -> bool:
 def unmet_conditions(target: TargetState, obs: PageObservation, *,
                      required_selected: tuple[str, ...] = (),
                      required_effects: frozenset[str] = frozenset(),
-                     seen_active_filters: dict[str, set[str]] | None = None
+                     seen_active_filters: dict[str, set[str]] | None = None,
+                     require_page_route: bool = False
                      ) -> tuple[str, ...]:
     """Which parts of the target the observation does not show, in the order declared.
 
@@ -218,6 +219,9 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
         unmet.append("page rendering pending")
     elif obs.render_state == "blocked":
         unmet.append("application reports a blocking page error")
+    if require_page_route and (not obs.page_route or
+            _normalise_path(obs.page_route) != _normalise_path(urlsplit(obs.url).path)):
+        unmet.append("rendered page identity not verified")
     if target.path:
         wanted = urlsplit(target.path)
         current = urlsplit(obs.url)

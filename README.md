@@ -366,6 +366,12 @@ agent.
   handoff is never recorded as a claim that the requested write happened.
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
+  Integrations can set `require_page_route=True` in `AgentTurnConfig` for this loop:
+  navigation and target completion then require a fresh application-owned `page_route`
+  matching the current URL, with no pending render or blocking application error. A
+  missing proof returns unfinished-state feedback to the same Agent; losing a target's
+  proof invalidates its earlier checkpoint. This option defaults to false and does not
+  change the selected executor or grant page actions.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
   enabled, deployment-bound structured facts plus a language-neutral local code-block index
   can answer source questions while retaining exact file, line, release, and byte-digest

@@ -65,7 +65,7 @@ from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
 from .click_policy import ClickPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
-                     required_page_controls, required_page_effects, unmet_conditions)
+                     required_page_controls, required_page_effects)
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
@@ -165,6 +165,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  page_facet_policy: Callable[[PageObservation], bool] | None = None,
                  application_forms: ApplicationFormPort | None = None,
                  deterministic_read_navigation: bool = False,
+                 require_page_route: bool = False,
                  skill_first: bool = False,
                  page_write_guard: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
@@ -348,6 +349,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             ApplicationFormTools(
                 application_forms, application_id=application_routes.application_id)
             if application_forms is not None else None)
+        if not isinstance(require_page_route, bool):
+            raise ValueError("require_page_route must be a boolean")
+        self.require_page_route = require_page_route
         self.deterministic_read_navigation = deterministic_read_navigation
         current_navigation_only = _is_navigation_only(task.prompt)
         self._navigation_only = current_navigation_only
@@ -682,10 +686,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         if (self._answer_action_receipt is not None
                 and self._answer_action_receipt["kind"] == "target_state"):
             self._answer_action_receipt = None
-        unmet = unmet_conditions(target, turn.obs,
-                                 required_selected=self._required_page_controls,
-                                 required_effects=self._required_page_effects,
-                                 seen_active_filters=self._seen_active_filters)
+        unmet = self._page_goal_unmet(turn.obs)
         self.ledger.append("target_state_declared", step=turn.step, target=target.to_json(),
                            declaration=self._target_declarations,
                            unmet=list(unmet), page_url=turn.obs.url,
@@ -711,11 +712,11 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         person-facing page statement is composed from the observation, not model prose.
         """
         self._remember_active_filters(obs)
-        if (self._target is None or unmet_conditions(
-                self._target, obs,
-                required_selected=self._required_page_controls,
-                required_effects=self._required_page_effects,
-                seen_active_filters=self._seen_active_filters)):
+        if self._target is None or self._page_goal_unmet(obs):
+            self._target_reached = False
+            if (self._answer_action_receipt is not None
+                    and self._answer_action_receipt["kind"] == "target_state"):
+                self._answer_action_receipt = None
             return False
         self._target_reached = True
         self._answer_action_receipt = {

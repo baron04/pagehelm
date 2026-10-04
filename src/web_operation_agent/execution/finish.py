@@ -9,7 +9,6 @@ from .knowledge_tools import active_capability_digest
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result
 from .runstate import CAPABILITY_GAP_TERMINAL, _Next
-from .target import unmet_conditions
 
 
 def _is_capability_gap(verified: dict | None) -> bool:
@@ -69,7 +68,7 @@ class FinishHandler:
                                    or self._answer_action_receipt["kind"] in {
                                        "target_state", "navigation", "page_interaction"}))
         if claims_page_action and (self._required_page_controls
-                                   or self._required_page_effects):
+                                   or self._required_page_effects or self.require_page_route):
             missing_page_state = self._page_goal_unmet(obs)
             if missing_page_state:
                 self.ledger.append("page_presentation_claim_refused", step=step,
@@ -80,10 +79,7 @@ class FinishHandler:
                           + ". Continue to the requested view or say it is unfinished.")]
                 return self._resume(turn, messages, obs, successful_business_tools)
         if claims_page_action and self._target is not None:
-            missing_target = unmet_conditions(self._target, obs,
-                                              required_selected=self._required_page_controls,
-                                              required_effects=self._required_page_effects,
-                                              seen_active_filters=self._seen_active_filters)
+            missing_target = self._page_goal_unmet(obs)
             if missing_target:
                 self.ledger.append("page_target_claim_refused", step=step,
                                    unmet=list(missing_target))
@@ -324,7 +320,7 @@ class FinishHandler:
                 return self._resume(turn, messages, obs, successful_business_tools)
             done = args["done"]
             if done and self.page_actions and (self._required_page_controls
-                                                or self._required_page_effects):
+                                                or self._required_page_effects or self.require_page_route):
                 missing_page_state = self._page_goal_unmet(obs)
                 if missing_page_state:
                     self.ledger.append("page_presentation_claim_refused", step=step,

@@ -74,6 +74,7 @@ class GenericRecordTargetIdentity(unittest.TestCase):
             _seen_active_filters = {}
             _business_record_routes = {"/items/4"}
             _navigation_only = True
+            require_page_route = False
 
         page = PageObservation(schema_version=1, epoch=2,
                                url="http://app.test/items/4", title="Item",
@@ -147,6 +148,17 @@ def _events(session, name: str) -> list[dict]:
 
 
 class TargetParsing(unittest.TestCase):
+    def test_optional_rendered_page_identity_rejects_url_only_and_old_main_content(self):
+        target = TargetState(path=PARTNER, selected=("Terms",))
+        page = _page(2, PARTNER, active_tab="terms")
+        self.assertEqual((), unmet_conditions(target, page))
+        for route in ("", DESKS, SUPPLIER):
+            with self.subTest(route=route):
+                self.assertIn("rendered page identity not verified", unmet_conditions(
+                    target, replace(page, page_route=route), require_page_route=True))
+        self.assertEqual((), unmet_conditions(target, replace(page, page_route=PARTNER),
+                                              require_page_route=True))
+
     def test_explicit_facet_verbs_require_a_declared_effect(self):
         self.assertEqual(required_page_effects("只看还没付款的发票"),
                          frozenset({"filter"}))
@@ -305,6 +317,41 @@ class TargetParsing(unittest.TestCase):
 
 
 class TargetSettlement(unittest.TestCase):
+    def test_same_agent_receives_unverified_arrival_then_fresh_main_page_before_finish(self):
+        class DelayedMain(_WorkspaceBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                page = receipt.observation
+                page.page_route = DESKS if receipt.navigated else self.path
+                return receipt
+        chat = _Chat([
+            ("set_target", {"path": PARTNER}), ("click", {"ref": "e1"}),
+            ("finish", {"outcome": "acted"}), ("observe", {}),
+            ("finish", {"outcome": "acted"}),
+        ])
+        browser = DelayedMain()
+        session = _session(self.tmp, chat, browser, require_page_route=True)
+        result = session.run()
+        self.assertEqual("agent_finished", result.terminal_reason)
+        self.assertEqual(["click", "observe"], [name for name, _ in browser.commands])
+        self.assertIn("ARRIVAL UNVERIFIED", chat.seen[2][-1]["content"])
+        self.assertIn("rendered page identity not verified", chat.seen[3][-1]["content"])
+        self.assertIn("TARGET REACHED", chat.seen[4][-1]["content"])
+        self.assertEqual([3], [event["page_epoch"] for event in _events(session, "target_state_reached")])
+
+    def test_fresh_loss_of_main_page_proof_reopens_a_mixed_task_checkpoint(self):
+        browser = _WorkspaceBrowser(start=PARTNER)
+        chat = _Chat([])
+        session = _session(self.tmp, chat, browser,
+            prompt="Open the partner desk and tell me about its terms.", require_page_route=True)
+        session._target = TargetState(path=PARTNER)
+        page = replace(browser.observe(), page_route=PARTNER)
+        self.assertTrue(session._note_target_reached(page, step=1, acted=True))
+        self.assertFalse(session._note_target_reached(replace(page, page_route=""), step=2, acted=True))
+        self.assertFalse(session._target_reached)
+        self.assertIsNone(session._answer_action_receipt)
+        self.assertNotIn("TARGET REACHED", session._render_target(replace(page, page_route="")))
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.tmp = self.directory.name

@@ -476,7 +476,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                                      result.agent_said, steps=step))
     if (session._pending_navigation_url and obs.url != session._pending_navigation_url):
         session._pending_navigation_url = ""
-    if (session._pending_navigation_url and obs.render_state != "pending"
+    if (session._pending_navigation_url and session._navigation_ready(obs)
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
             and write["state"] == WRITE_NONE):
@@ -485,11 +485,12 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
     if ((name in ("goto", "back") or (name == "click" and receipt.navigated))
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
-            and obs.render_state == "pending"):
+            and not session._navigation_ready(obs)):
         session._pending_navigation_url = obs.url
     elif ((name in ("goto", "back") or (name == "click" and receipt.navigated))
             and receipt.ok and receipt.observation is not None
-            and receipt.observation.epoch > prior_page_epoch):
+            and receipt.observation.epoch > prior_page_epoch
+            and session._navigation_ready(obs)):
         _record_navigation(session, obs.url)
     elif (name == "click" and receipt.ok and not receipt.navigated
           and receipt.observation is not None

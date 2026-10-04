@@ -256,7 +256,8 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       if (workflow) {{
         const desk = workflow[1];
         app.innerHTML = `<a class="back" href="/contacts/workflows" data-route>← Vendor workspaces</a>
-          <section class="record" data-workflow-desk="${{desk}}" data-active-tab="overview">
+          <section class="record" data-page-route="/contacts/workflows/${{desk}}"
+            data-workflow-desk="${{desk}}" data-active-tab="overview">
           <div class="eyebrow">Read-only workspace</div><h1>${{desk === 'partner' ? 'Partner' : 'Supplier'}} desk</h1>
           <nav role="tablist"><button type="button" role="tab" aria-selected="true" data-workflow-tab="overview">Overview</button>
           <button type="button" role="tab" aria-selected="false" data-workflow-tab="terms">Terms</button></nav>

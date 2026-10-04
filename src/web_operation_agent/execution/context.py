@@ -33,13 +33,17 @@ class SessionContext:
         missing = unmet_conditions(target, obs,
                                 required_selected=self._required_page_controls,
                                 required_effects=self._required_page_effects,
-                                seen_active_filters=self._seen_active_filters)
+                                seen_active_filters=self._seen_active_filters,
+                                require_page_route=self.require_page_route)
         current_path = urlsplit(obs.url).path.rstrip("/") or "/"
         if (current_path in self._business_record_routes
                 and (self._navigation_only or target.path == current_path)
                 and obs.record_route != current_path):
             missing += ("rendered record identity not verified",)
         return missing
+
+    def _navigation_ready(self, obs: PageObservation) -> bool:
+        return not unmet_conditions(TargetState(), obs, require_page_route=self.require_page_route)
 
     def _remember_active_filters(self, obs: PageObservation) -> None:
         if obs.page_facets is not None:
@@ -253,6 +257,9 @@ class SessionContext:
         action = self._answers.render_action()
         if action:
             body.append(action)
+        if self.require_page_route and not self._navigation_ready(obs):
+            body.append("ARRIVAL UNVERIFIED: the application has not proved the rendered "
+                        "main page at this URL. Observe again or report the page unfinished.")
         target = self._render_target(obs)
         if target:
             body.append(target)
@@ -281,7 +288,7 @@ class SessionContext:
         """Keep the declared target in view: context trimming drops the call that set it."""
         if self._target is None:
             return ""
-        if self._target_reached:
+        if self._target_reached and not self._page_goal_unmet(obs):
             if not self._navigation_only:
                 return ("TARGET REACHED (server-observed): "
                         + describe_target(self._target)
@@ -296,10 +303,7 @@ class SessionContext:
                       "only if the user also asked a question, citing recorded evidence "
                       "refs, never element refs. If the request asks for more, call "
                       "set_target with the next state.")
-        unmet = unmet_conditions(self._target, obs,
-                                 required_selected=self._required_page_controls,
-                                 required_effects=self._required_page_effects,
-                                 seen_active_filters=self._seen_active_filters)
+        unmet = self._page_goal_unmet(obs)
         return ("TARGET (declared): " + describe_target(self._target)
                 + ("\nStill unmet: " + "; ".join(unmet) if unmet
                    else "\nAll conditions are shown; a fresh page action confirms them."))

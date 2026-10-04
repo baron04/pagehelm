@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unittest
 import urllib.request
 from pathlib import Path
+from dataclasses import replace
 from unittest.mock import patch
 
 from web_operation_agent.modeling.client import ProviderError, require_chat_port
@@ -128,6 +130,69 @@ class MinimalDemoUnitTests(unittest.TestCase):
 
 
 class MinimalDemoBrowserTests(unittest.TestCase):
+    def test_step_agent_uses_menu_result_then_fresh_desk_tab_with_rendered_page_proof(self):
+        class MenuThenTab(ScriptedDemoChat):
+            def complete(self, messages, tools, run_id, **kwargs):
+                self.last_feedback = messages[-1]["content"]
+                if self.calls >= 3 and self.replies[self.calls][0] == "click":
+                    refs = re.findall(r'^\s*(\S+) tab "Terms"(?:\s|$)', messages[-1]["content"], re.M)
+                    if not refs and self.calls < 9:
+                        self.replies = (*self.replies[:self.calls], ("wait_for", {"ms": 100}),
+                                        *self.replies[self.calls:])
+                    else:
+                        if len(refs) != 1:
+                            raise AssertionError("the new page must expose exactly one fresh Terms tab")
+                        self.replies = (*self.replies[:self.calls], ("click", {"ref": refs[0]}),
+                                        *self.replies[self.calls + 1:])
+                return super().complete(messages, tools, run_id, **kwargs)
+        chat = MenuThenTab((("find_page_entries", {"query": "Partner desk", "detail_query": "Terms"}),
+            ("set_target", {"path": "/contacts/workflows/partner", "selected": ["Terms"]}),
+            ("goto", {"url": "/contacts/workflows/partner"}), ("click", {}),
+            ("finish", {"outcome": "acted"})))
+        def config(*args, **kwargs):
+            return replace(AgentTurnConfig(*args, **kwargs), require_page_route=True)
+        def probe(page):
+            return {"terms": page.evaluate("document.querySelector('[data-workflow-desk=partner]')?.dataset.activeTab === 'terms'")}
+        with tempfile.TemporaryDirectory() as directory, patch("testapps.contacts.demo.AgentTurnConfig", config), patch(
+                "testapps.contacts.demo._chat", return_value=(chat, None)):
+            summary = run_demo(DemoConfig(tasks=("Open the Partner desk and select Terms.",),
+                headless=True, scripted=False, start_path="/contacts/workflows", allow_page_click=True,
+                output_dir=Path(directory), keep_open_seconds=0, step_budget=12,
+                turn_timeout_s=30, final_page_probe=probe))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        self.assertIn("status", summary["turns"][0], (summary["turns"][0], chat.last_feedback[-5000:]))
+        self.assertEqual("finished", summary["turns"][0]["status"])
+        self.assertTrue(summary["panel"]["final_page_probe"]["terms"])
+        self.assertIn("/contacts/workflows/partner", chat.seen[1])
+        feedback = [json.loads(seen)["messages"][-1]["content"] for seen in chat.seen]
+        self.assertTrue(any('tab "Terms"' in item for item in feedback[3:]))
+        self.assertTrue(any(e["event"] == "target_state_reached" and e["target"]["selected"] == ["Terms"] for e in events))
+        self.assertEqual(0, summary["application_state"]["write_requests"])
+        self.assertEqual(0, summary["model_usage"]["provider_calls"])
+
+    def test_step_agent_refuses_arrival_at_correct_url_with_wrong_rendered_main(self):
+        from testapps.contacts import app
+        original = app._html
+        def html(*args, **kwargs):
+            return original(*args, **kwargs).replace(b"document.title = 'Help \xc2\xb7 Minimal Contacts';",
+                b"app.innerHTML = '<section data-page-route=\"/contacts/workflows\"><h1>Vendor workspaces</h1></section>';document.title = 'Help \xc2\xb7 Minimal Contacts';")
+        def config(*args, **kwargs):
+            return replace(AgentTurnConfig(*args, **kwargs), require_page_route=True)
+        chat = ScriptedDemoChat((("find_page_entries", {"query": "Help"}),
+            ("set_target", {"path": "/contacts/help"}), ("goto", {"url": "/contacts/help"}),
+            ("finish", {"outcome": "acted"}), ("finish", {"outcome": "unable"})))
+        with tempfile.TemporaryDirectory() as directory, patch.object(app, "_html", html), patch(
+                "testapps.contacts.demo.AgentTurnConfig", config), patch(
+                "testapps.contacts.demo._chat", return_value=(chat, None)):
+            summary = run_demo(DemoConfig(tasks=("Open Help",), headless=True, scripted=False,
+                output_dir=Path(directory), keep_open_seconds=0, turn_timeout_s=30))
+            events = [json.loads(line) for line in next(Path(directory).glob("*/audit.jsonl")).read_text().splitlines()]
+        self.assertEqual("refused", summary["turns"][0]["status"])
+        self.assertIn("ARRIVAL UNVERIFIED", chat.seen[3])
+        self.assertFalse(any(e["event"] == "target_state_reached" for e in events))
+        self.assertEqual(0, summary["application_state"]["write_requests"])
+        self.assertEqual(0, summary["model_usage"]["provider_calls"])
+
     @classmethod
     def setUpClass(cls):
         required = os.environ.get("WOA_REQUIRE_MINIMAL_DEMO_BROWSER") == "1"
