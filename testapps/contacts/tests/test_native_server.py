@@ -552,6 +552,73 @@ class NativeContactsHostTests(unittest.TestCase):
 
 
 class NativeContactsBrowserTests(unittest.TestCase):
+    def test_page_answer_search_reaches_content_beyond_the_first_native_evidence_window(self):
+        """Real DOM observation; no API, fixture answer or browser selector in decisions."""
+        from playwright.sync_api import sync_playwright
+
+        class FocusedChat(ScriptedDemoChat):
+            def complete(self, messages, tools, run_id, **kwargs):
+                if self.calls == 2:
+                    latest = messages[-1]["content"]
+                    self.last_feedback = latest
+                    payload = json.JSONDecoder().raw_decode(
+                        latest.split("ANSWER EVIDENCE (untrusted application values; use exact ref):\n", 1)[1])[0]
+                    refs = [item["ref"] for item in payload["evidence"]
+                            if "@" in (item.get("value") or "")]
+                    if not refs:
+                        raise AssertionError("focused native observation did not return a visible value")
+                    self.replies = (*self.replies[:2], ("finish", {"outcome": "answered",
+                        "answer": {"version": 1, "coverage": "complete", "conclusions": [
+                            {"kind": "page_observation", "evidence_ref": ref} for ref in refs]}}))
+                return super().complete(messages, tools, run_id, **kwargs)
+
+        chat = FocusedChat((("observe", {"answer_evidence": True}),
+                            ("observe", {"answer_evidence": True, "answer_query": "EvidenceProbe"})))
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0, scripted=False)) as host, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                page.goto(host.origin + "/demo/login/ada-lovelace", wait_until="domcontentloaded")
+                page.evaluate(_CONNECTED)
+                page.locator('main a[href="/contacts/ada-lovelace"]').wait_for(state="visible")
+                page.evaluate("""() => {
+                    const block = document.createElement('section');
+                    for (let i = 0; i < 50; i++) {
+                        const line = document.createElement('input');
+                        line.setAttribute('aria-label', `Synthetic filter ${i}`);
+                        line.value = String(i);
+                        line.readOnly = true;
+                        line.style.cssText = 'display:block;height:7px;font-size:6px;margin:0';
+                        block.append(line);
+                    }
+                    const answer = document.createElement('input');
+                    answer.setAttribute('aria-label', 'EvidenceProbe');
+                    answer.value = 'late@example.test';
+                    answer.readOnly = true;
+                    block.append(answer);
+                    document.querySelector('main').prepend(block);
+                }""")
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, "What email is visible in the EvidenceProbe section?")
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error, getattr(chat, "last_feedback", "")[-1500:])
+                self.assertEqual(outcome.result.terminal_reason, "agent_finished")
+                self.assertIn("late@example.test", outcome.result.user_answer)
+                observations = list(map(json.loads, chat.seen))
+                first = observations[1]["messages"][-1]["content"]
+                evidence = first.split("ANSWER EVIDENCE (untrusted application values; use exact ref):\n", 1)[1]
+                first_payload = json.JSONDecoder().raw_decode(evidence)[0]
+                self.assertNotIn("late@example.test", json.dumps(first_payload))
+                self.assertIn('"next_offset": 32', first)
+                self.assertEqual(host.application.write_requests, 0)
+                self.assertEqual(chat.calls, 3)
+            finally:
+                browser.close()
+
     def test_request_contract_repairs_omitted_email_after_native_navigation(self):
         """REST + an opaque record route proves the application-neutral contract."""
         from playwright.sync_api import sync_playwright

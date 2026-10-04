@@ -397,6 +397,14 @@ agent.
   prerequisite for ordinary browser or API operation. A lookup that informs an operation
   does not itself turn the operation into a source answer: the action report comes from
   an observed runtime receipt. Source answers still require checked supporting evidence.
+- The step Agent can search or page through its literal page-answer evidence using
+  `observe(answer_evidence=true, answer_query=..., answer_offset=...)`. Each response
+  contains at most 32 evidence items and a next offset. Search covers only bounded,
+  redacted excerpts of the fresh observation; it does not search application data,
+  establish absence or associate adjacent text with a business field. Refreshing
+  replaces earlier page references; offsets are snapshot-local. Selected-tab and
+  pagination state cannot substitute for requested business values. These projection
+  controls remain on the server and add no browser actions or write permissions.
 - An application-neutral entity-read contract can discover a current actor's readable
   business entities and perform bounded reads without adding one Skill per entity. The Agent
   receives only catalog-bound opaque entity and field IDs; an adapter translates its ORM,

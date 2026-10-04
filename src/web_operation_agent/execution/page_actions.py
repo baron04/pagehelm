@@ -11,6 +11,7 @@ import re
 from urllib.parse import urljoin, urlsplit
 
 from ..answer.answer_view import _literal
+from ..answer.page_answer import observation_options
 from ..answer.evidence import EvidenceUnknown
 from ..transport.browser import TransportError, TurnCancelled
 from .grounding import WRITE_NONE, WRITE_PERMITTED
@@ -300,13 +301,14 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         return session._resume(turn, messages, obs, successful_business_tools)
 
     collect_page_answer = False
+    answer_query, answer_offset = "", 0
     if name == "observe" and session.page_answer_evidence:
-        if (set(args) - {"answer_evidence"}
-                or not isinstance(args.get("answer_evidence", False), bool)):
+        try:
+            collect_page_answer, answer_query, answer_offset = observation_options(args)
+        except ValueError as exc:
             messages += [_assistant_call(call), _tool_result(
-                call, "observe accepts only an optional boolean answer_evidence.")]
+                call, str(exc))]
             return session._resume(turn, messages, obs, successful_business_tools)
-        collect_page_answer = args.get("answer_evidence", False)
         if collect_page_answer and session._refused_reads:
             messages += [_assistant_call(call), _tool_result(
                 call, "PAGE EVIDENCE REFUSED: an authorization refusal in this turn "
@@ -560,7 +562,8 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
                 and receipt.observation.epoch > prior_page_epoch):
             try:
                 rendered_observation, page_feedback = capture_page_snapshot(
-                    session, obs, step=step, reused_observation=False)
+                    session, obs, step=step, reused_observation=False,
+                    query=answer_query, offset=answer_offset)
             except (ValueError, TypeError, EvidenceUnknown):
                 page_feedback = "PAGE EVIDENCE UNAVAILABLE: the observation could not support an answer."
         else:
