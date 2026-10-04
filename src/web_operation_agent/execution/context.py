@@ -199,6 +199,8 @@ class SessionContext:
         # The plan lives in its own message so it can be withdrawn. Only this message's
         # server-marked page snapshot may later be replaced; its task and context survive.
         parts = [f"TASK: {self.task.prompt}"]
+        if self.require_task_contract:
+            parts.append("USER REQUEST TO ACCOUNT FOR (user text only):\n" + self._task_request_text)
         now_line = self._now_line()
         if now_line:
             parts.append(now_line)

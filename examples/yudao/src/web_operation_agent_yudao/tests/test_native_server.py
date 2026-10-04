@@ -102,6 +102,7 @@ class NativeHostTests(unittest.TestCase):
             executor = active.session.runner.executor
             self.assertIsInstance(executor, AgentTurnExecutor)
             self.assertTrue(executor.config.require_page_route)
+            self.assertTrue(executor.config.require_task_contract)
             self.assertFalse(executor.config.source.runtime_source)
             self.assertFalse(executor.config.allow_form_prefill)
             self.assertFalse(executor.config.allow_application_entry)

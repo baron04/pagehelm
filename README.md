@@ -627,6 +627,16 @@ policy and verified guard, checks rendered arrival, and admits only reviewed nat
 record-tab clicks from fresh observations. Source Q&A, form entry, submission and page
 filters are outside this pilot; it never runs automatically after a goal refusal. Its
 scripted isolated browser checks do not establish model accuracy or production readiness.
+This pilot enables the application-neutral `require_task_contract` option (off by default
+for other step executors). Before application tools, the same Agent quotes the user's
+operation and answer clauses in an immutable `declare_task`. A complete finish must map
+each declared question to evidence selected by its validated conclusions and carry an
+observed receipt for the operation. Partial or unable outcomes preserve observed actions
+and identify missing clauses; answer repair cannot repeat page actions. This accounts for
+declared obligations, not semantic entailment: clause classification and evidence relevance
+still depend on the model, and one receipt cannot prove every operation inside a clause.
+The extra declaration uses the existing request/time allowance. Native Contacts tests
+exercise the same option without source access; this is not an accuracy improvement claim.
 Product step turns bound planning, planner repairs, execution and turn-level provider retries
 by one model-request allowance and monotonic deadline. Authenticated approval waits are
 excluded from that deadline; a reply arriving after it cannot trigger the next action.

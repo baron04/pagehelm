@@ -167,6 +167,11 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
                 opened = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
                 action_text += f"\n{opened}：{_literal(action['navigation_url'])}"
     refused_reads = tuple(data.pop("refused_reads", ()) or ())
+    unfinished = tuple(data.pop("unfinished_requests", ()) or ())
+    if unfinished:
+        # These are server-held user clauses, not model-authored answer prose.
+        # Keep them visible even when a separate partial-read reason is rendered.
+        action_text += ("\n\n" if action_text else "") + "\n".join(_literal(x) for x in unfinished)
     return render(VerifiedAnswer(**data), user_text=user_text,
                   max_chars=max_chars, presentation=presentation, action_text=action_text,
                   labels=labels, refused_reads=refused_reads)

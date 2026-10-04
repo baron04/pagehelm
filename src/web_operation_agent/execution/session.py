@@ -67,6 +67,7 @@ from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
 from .click_policy import ClickPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
                      required_page_controls, required_page_effects)
+from .request_contract import parse_requirements
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
@@ -168,6 +169,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  application_forms: ApplicationFormPort | None = None,
                  deterministic_read_navigation: bool = False,
                  require_page_route: bool = False,
+                 require_task_contract: bool = False,
                  skill_first: bool = False,
                  page_write_guard: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
@@ -343,6 +345,11 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         if operation_confirmation is not None and not callable(operation_confirmation):
             raise TypeError("operation_confirmation must be callable or None")
         self._capability_question = bool(_CAPABILITY_QUESTION.fullmatch(task.prompt))
+        if not isinstance(require_task_contract, bool):
+            raise ValueError("require_task_contract must be boolean")
+        # Self-capability replies are already settled from server-owned capabilities.
+        self.require_task_contract = require_task_contract and not self._capability_question
+        self._task_requirements = None
         if not isinstance(allow_clarification, bool):
             raise ValueError("allow_clarification must be a boolean")
         if not isinstance(deterministic_read_navigation, bool):
@@ -379,6 +386,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                     and isinstance(prior.get("user"), str)):
                 continuation_prompt = prior["user"].strip()
         self._answers_pending_question = bool(continuation_prompt)
+        self._task_request_text = (continuation_prompt + "\n" + task.prompt
+                                   if continuation_prompt else task.prompt)
         clarification_context_used = False
         selection = BusinessSkillSelection(
             BUSINESS_SKILL_MATCHER_VERSION, (), (), False)
@@ -656,6 +665,25 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         """
         return (not self._finalizing and not self._capability_question
                 and not self._explicit_mutation_intent)
+
+    def _tool_declare_task(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+        if self._task_requirements is not None:
+            return self._reply(turn, call, "The USER REQUEST requirements are frozen; they cannot be removed or rewritten.")
+        try:
+            requirements = parse_requirements(args, self._task_request_text)
+        except ValueError as exc:
+            self.ledger.append("task_declaration_refused", step=turn.step, reason=str(exc))
+            return self._reply(turn, call, "TASK DECLARATION REFUSED: " + str(exc))
+        self._task_requirements = requirements
+        self._answers.answer_mode = True
+        if requirements.answer_requests:
+            self._answers.action_answer_required = True
+            self._navigation_only = False
+        self.ledger.append("task_requirements_frozen", step=turn.step,
+            action=bool(requirements.action_request), answers=len(requirements.answer_requests))
+        # Keep this separate from snapshots, which may be compacted after actions.
+        turn.messages.insert(1, {"role": "user", "content": requirements.render()})
+        return self._reply(turn, call, requirements.render())
 
     def _tool_set_target(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
         """Record what the model says completes the request; note at once if the page shows it."""

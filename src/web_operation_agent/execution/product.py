@@ -166,6 +166,9 @@ class AgentTurnConfig:
     #: A step-by-step page turn may require the application's rendered main-page
     #: identity before reporting arrival; URL and selected controls alone cannot prove it.
     require_page_route: bool = False
+    #: Freeze request clauses before results; require explicit evidence coverage of
+    #: every declared question beside any observed action. Opt-in qualification.
+    require_task_contract: bool = False
     deployment_profile: str = "production"
     #: Where the person is, as an IANA zone name, so "today" and "this month" mean their
     #: days. Empty leaves the turn on UTC and says so. An application that knows its user's
@@ -210,7 +213,8 @@ class AgentTurnConfig:
                 or not isinstance(self.confirm_page_operations, bool)
                 or not isinstance(self.require_identity, bool)
                 or not isinstance(self.observe_before_reads, bool)
-                or not isinstance(self.require_page_route, bool)):
+                or not isinstance(self.require_page_route, bool)
+                or not isinstance(self.require_task_contract, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
                      "operation_approval_ttl_s", "keep_observations",

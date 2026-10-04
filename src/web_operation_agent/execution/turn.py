@@ -357,6 +357,7 @@ class AgentTurnExecutor:
             deterministic_read_navigation=(
                 self.config.deterministic_read_navigation),
             require_page_route=self.config.require_page_route,
+            require_task_contract=self.config.require_task_contract,
             skill_first=self.config.skill_first,
             # Only an application that declares a page write guard can have held one.
             page_write_guard=bool(

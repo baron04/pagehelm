@@ -47,6 +47,7 @@ class NativeServerConfig:
     max_active_requests: int = 3
     max_active_requests_per_actor: int = 2
     adversarial_form_fixture: bool = False
+    require_task_contract: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_dir", Path(self.state_dir).expanduser())
@@ -72,6 +73,8 @@ class NativeServerConfig:
             raise ValueError("max_sessions_per_actor cannot exceed max_sessions")
         if not isinstance(self.adversarial_form_fixture, bool):
             raise ValueError("adversarial_form_fixture must be a boolean")
+        if not isinstance(self.require_task_contract, bool):
+            raise ValueError("require_task_contract must be a boolean")
         if (isinstance(self.browser_idle_timeout_s, bool)
                 or not isinstance(self.browser_idle_timeout_s, int)
                 or not 30 <= self.browser_idle_timeout_s <= 86_400):
@@ -182,6 +185,7 @@ class NativeContactsHost:
                         policy_block_limit=2,
                         plain_business_answer_min_page_actions=0,
                         max_user_answer_chars=8_000,
+                        require_task_contract=self.config.require_task_contract,
                         require_identity=True,
                         allow_form_prefill=True,
                         allow_business_mutations=self.config.allow_mutations,

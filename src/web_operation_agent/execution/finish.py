@@ -9,6 +9,7 @@ from .knowledge_tools import active_capability_digest
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result
 from .runstate import CAPABILITY_GAP_TERMINAL, _Next
+from .request_contract import extract_answer_bindings, missing_answers, incomplete_notes
 
 
 def _is_capability_gap(verified: dict | None) -> bool:
@@ -48,6 +49,31 @@ def _ignore_page_prose(args: dict) -> tuple[dict, int]:
 class FinishHandler:
     """Session behavior for verified answers and plain completion claims."""
 
+    def _unfinished_task(self, verified, missing, action_missing):
+        """Preserve settled facts/actions and identify unmet user clauses explicitly."""
+        requirements = self._task_requirements
+        if requirements is None:
+            return verified
+        if verified is None:
+            verified = {"conclusions": (), "coverage": "undetermined", "prose": "",
+                        "lowered_because": ()}
+        if self._answer_action_receipt is not None:
+            verified["action"] = self._answer_action_receipt
+        verified["coverage"] = "partial"
+        verified["unfinished_requests"] = incomplete_notes(
+            requirements, missing, action_missing=action_missing,
+            chinese=any("\u3400" <= char <= "\u9fff" for char in self.task.prompt))
+        return verified
+
+    def _refuse_unfinished_task(self, result, started_at, step):
+        requirements = self._task_requirements
+        verified = self._unfinished_task(None, requirements.answer_ids,
+            bool(requirements.action_request and self._answer_action_receipt is None))
+        result.verified_answer = verified
+        result.agent_said = render_payload(verified, user_text=self.task.prompt,
+            max_chars=max(512, self.max_agent_said_chars))
+        return self._finish(result, started_at, "agent_refused", result.agent_said, steps=step)
+
     def _tool_finish(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
         """The turn's own end: a verified answer where one is required, or a plain claim.
 
@@ -62,6 +88,9 @@ class FinishHandler:
         structured_answer = isinstance(args, dict) and "outcome" in args
         claims_page_action = (isinstance(args, dict)
                               and (args.get("outcome") == "acted"
+                                   or (self._task_requirements is not None
+                                       and self._task_requirements.action_request
+                                       and args.get("outcome") == "answered")
                                    or (args.get("done") is True
                                        and self._answer_action_receipt is not None))
                               and (self._answer_action_receipt is None
@@ -88,10 +117,16 @@ class FinishHandler:
                           + "; ".join(missing_target)
                           + ". Continue to the requested state or say it is unfinished.")]
                 return self._resume(turn, messages, obs, successful_business_tools)
-        if name == "finish" and (self._answers.answer_mode or structured_answer):
+        if name == "finish" and (self._answers.answer_mode or structured_answer or self.require_task_contract):
             if isinstance(args, dict) and args.get("outcome") == "acted" and "answer" in args:
                 self._answers.action_answer_required = True
             try:
+                requirements = self._task_requirements
+                if self.require_task_contract and requirements is None:
+                    raise ValueError("declare every USER REQUEST clause before completion")
+                bindings = []
+                if requirements is not None:
+                    args, bindings = extract_answer_bindings(args)
                 if isinstance(args, dict):
                     args, ignored_page_prose = _ignore_page_prose(args)
                     if ignored_page_prose:
@@ -123,6 +158,18 @@ class FinishHandler:
                     args = {**args, "answer": {**answer, "conclusions": normalized}}
                     answer = args["answer"]
                     conclusions = normalized
+                missing = (missing_answers(requirements, bindings, conclusions)
+                           if requirements is not None else ())
+                action_missing = bool(requirements and requirements.action_request
+                                      and self._answer_action_receipt is None)
+                if requirements is not None and (
+                        args.get("outcome") in {"acted", "answered"}
+                        or (isinstance(answer, dict) and answer.get("coverage") == "complete")
+                        or args.get("done") is True) and (missing or action_missing):
+                    raise ValueError("incomplete USER REQUEST: " + "; ".join(incomplete_notes(
+                        requirements, missing, action_missing=action_missing,
+                        chinese=False)) + ". Read the missing facts, complete the operation, "
+                        "or report partial/unable; a page receipt cannot replace an answer")
                 claims_read_only_result = (
                     isinstance(conclusions, list)
                     and any(isinstance(item, dict) for item in conclusions))
@@ -215,7 +262,7 @@ class FinishHandler:
                                 "a complete count or sum answer needs the requested "
                                 "collection frozen on the first business read; an empty "
                                 "answer_goals declaration cannot be upgraded after results")
-                if self._refused_reads and any(
+                if verified is not None and self._refused_reads and any(
                         item["kind"] == "page_observation"
                         for item in verified["conclusions"]):
                     raise ValueError(
@@ -225,6 +272,13 @@ class FinishHandler:
                 if (verified is not None and self._answers.action_answer_required
                         and self._answer_action_receipt is not None):
                     verified["action"] = self._answer_action_receipt
+                if requirements is not None:
+                    if (missing or action_missing or verified is None
+                            or verified["coverage"] != "complete"
+                            or args.get("outcome") in {"partial", "unable"}):
+                        verified = self._unfinished_task(verified, missing, action_missing)
+                    elif self._answer_action_receipt is not None:
+                        verified["action"] = self._answer_action_receipt
             except (ValueError, TypeError, EvidenceUnknown) as exc:
                 self._answer_repairs += 1
                 if self._answer_action_receipt is not None:
@@ -246,6 +300,8 @@ class FinishHandler:
                     return _Next(self._finish(result, t0, "permission_denied",
                                         self._refused_detail, steps=step))
                 if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
+                    if self._task_requirements is not None:
+                        return _Next(self._refuse_unfinished_task(result, t0, step))
                     result.agent_said = unavailable_answer(self.task.prompt)
                     return _Next(self._finish(result, t0, "agent_refused", result.agent_said,
                                         steps=step))
@@ -284,7 +340,7 @@ class FinishHandler:
                 return self._resume(turn, messages, obs, successful_business_tools)
             verified = self._answers.with_refused_reads(self._answers.with_labels(verified))
             result.verified_answer = verified
-            if _is_capability_gap(verified):
+            if _is_capability_gap(verified) and not verified.get("unfinished_requests"):
                 # The claim is that nothing ran, so it is recorded with the two counts
                 # that make that checkable rather than taken on the model's word. The
                 # sentence is fixed here; a model free to phrase it is free to soften it
@@ -304,7 +360,9 @@ class FinishHandler:
             self.ledger.append("answer_verified", step=step,
                                conclusions=len(verified["conclusions"]) if verified else 0,
                                coverage=verified["coverage"] if verified else "undetermined")
-            return _Next(self._finish(result, t0, "agent_finished" if verified else "agent_refused",
+            complete = verified is not None and (self._task_requirements is None
+                                                or verified["coverage"] == "complete")
+            return _Next(self._finish(result, t0, "agent_finished" if complete else "agent_refused",
                                 result.agent_said, steps=step))
 
         if name == "finish":

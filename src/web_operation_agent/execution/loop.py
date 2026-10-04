@@ -47,6 +47,8 @@ def named_tools(session):
     branch, so a tool the session does not offer cannot be half-handled.
     """
     available: dict[str, Callable[["_Turn", dict, str, dict], "_Next"]] = {}
+    if session.require_task_contract:
+        available["declare_task"] = session._tool_declare_task
     if session.runtime_source:
         available["lookup_source"] = partial(lookup_source_tool, session)
         available["lookup_source_history"] = partial(lookup_source_history_tool, session)
@@ -163,6 +165,9 @@ def run_loop(session) -> RunResult:
                        elements=len(obs.elements), digest=obs.content_digest)
 
     system = AGENT_SYSTEM
+    if session.require_task_contract:
+        from .request_contract import TASK_SYSTEM
+        system += "\n" + TASK_SYSTEM
     if session.target_settlement_available():
         system += "\n" + TARGET_SYSTEM
     if session.page_answer_evidence:
@@ -330,7 +335,16 @@ def run_loop(session) -> RunResult:
         calls = reply.get("tool_calls") or []
         if not calls:
             said = str(reply.get("content") or "").strip()
-            if session._answers.answer_mode:
+            if session.require_task_contract and session._task_requirements is None:
+                step += 1
+                session.ledger.append("task_declaration_required", step=step,
+                                      tool="plain_content", dispatched=False)
+                messages += [{"role": "assistant", "content": said},
+                             {"role": "user", "content":
+                              "First call declare_task for every USER REQUEST clause. "
+                              "No application tool or completion has been dispatched."}]
+                continue
+            if session._answers.answer_mode or session.require_task_contract:
                 step += 1
                 session._answer_repairs += 1
                 session.ledger.append("answer_contract_refused", step=step,
@@ -345,6 +359,8 @@ def run_loop(session) -> RunResult:
                     return session._finish(result, t0, "permission_denied",
                                         session._refused_detail, steps=step)
                 if session._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
+                    if session._task_requirements is not None:
+                        return session._refuse_unfinished_task(result, t0, step)
                     result.agent_said = unavailable_answer(session.task.prompt)
                     return session._finish(result, t0, "agent_refused", result.agent_said,
                                         steps=step)
@@ -429,6 +445,12 @@ def run_loop(session) -> RunResult:
                 and session.business_tools.is_mutation(name)))
         kept_reply, unanswered_reply = (unanswered_reply if name == "finish" else ""), ""
         turn.kept_reply = kept_reply
+
+        if session.require_task_contract and session._task_requirements is None and name != "declare_task":
+            session.ledger.append("task_declaration_required", step=step, tool=name, dispatched=False)
+            messages += [_assistant_call(call), _tool_result(call,
+                "First declare_task for every original USER REQUEST clause. No application tool was dispatched.")]
+            continue
 
         no_progress = session._repeats.decide(name, args, obs)
         if no_progress == "warn":

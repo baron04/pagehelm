@@ -552,6 +552,53 @@ class NativeContactsHostTests(unittest.TestCase):
 
 
 class NativeContactsBrowserTests(unittest.TestCase):
+    def test_request_contract_repairs_omitted_email_after_native_navigation(self):
+        """REST + an opaque record route proves the application-neutral contract."""
+        from playwright.sync_api import sync_playwright
+        prompt = "Open Grace Hopper's contact record and show her email."
+        chat = ScriptedDemoChat((
+            ("declare_task", {"action_request": "Open Grace Hopper's contact record",
+                              "answer_requests": ["show her email"]}),
+            ("load_skill", {"skill_id": "minimal.contacts.query"}),
+            ("list_contacts", {"name_contains": "Grace Hopper"}),
+            ("goto", {"url": "/contacts/grace-hopper"}),
+            ("wait_for", {"ms": 500}),
+            ("finish", {"outcome": "acted"}),
+            ("finish", {"outcome": "acted", "answer": {"version": 1,
+                "coverage": "complete", "conclusions": [{"kind": "field_value",
+                "evidence_ref": "call3-record#2"}], "answers_for": [
+                {"request_ref": "a1", "evidence_refs": ["call3-record#2"]}]}}),
+        ))
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0,
+                    scripted=False, require_task_contract=True)) as host, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                page.goto(host.origin + "/demo/login/ada-lovelace", wait_until="domcontentloaded")
+                page.evaluate(_CONNECTED)
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, prompt)
+                _allow_operation(page)
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error)
+                self.assertEqual(outcome.result.terminal_reason, "agent_finished")
+                self.assertIn("grace@example.test", outcome.result.user_answer)
+                self.assertIn("Opened the page", outcome.result.user_answer)
+                page.wait_for_url("**/contacts/grace-hopper", timeout=10_000)
+                self.assertEqual(page.url, host.origin + "/contacts/grace-hopper")
+                self.assertEqual(host.application.write_requests, 0)
+                snapshots = list(map(json.loads, chat.seen))
+                self.assertEqual([t["function"]["name"] for t in snapshots[0]["tools"]], ["declare_task"])
+                self.assertIn("Unanswered request: show her email", str(snapshots[-1]["messages"]))
+                self.assertNotIn("goto", {t["function"]["name"] for t in snapshots[-1]["tools"]})
+                self.assertEqual(chat.calls, 7)
+            finally:
+                browser.close()
+
     def test_provider_overload_and_outage_are_actionable_and_do_not_poison_session(self):
         from playwright.sync_api import sync_playwright
 

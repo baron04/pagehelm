@@ -13,6 +13,7 @@ from ..answer import answer_protocol, page_answer
 from ..business.forms import FORM_TOOL_SCHEMAS
 from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
 from .knowledge_tools import capability_check_available
+from .request_contract import DECLARE_TASK_TOOL, finish_schema
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
                       SOURCE_TOOL, SOURCE_HISTORY_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL,
@@ -28,6 +29,8 @@ class ToolSurface:
 
     def schemas(self) -> list[dict]:
         session = self._session
+        if session.require_task_contract and session._task_requirements is None:
+            return [deepcopy(DECLARE_TASK_TOOL)]
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in session.disabled_actions
                  or (tool["function"]["name"] == "click"
@@ -40,7 +43,10 @@ class ToolSurface:
                      answer_protocol.finish_answer_tool(source=session.runtime_source,
                                                        skill=skill)]
         if session._capability_question:
-            return [tool for tool in tools if tool["function"]["name"] == "finish"]
+            tools = [tool for tool in tools if tool["function"]["name"] == "finish"]
+            if session._task_requirements and session._task_requirements.answer_requests:
+                tools = [finish_schema(answer_protocol.finish_answer_tool(), session._task_requirements)]
+            return tools
         if session.page_answer_evidence:
             tools = [page_answer.OBSERVE_TOOL if tool["function"]["name"] == "observe"
                      else tool for tool in tools]
@@ -137,6 +143,9 @@ class ToolSurface:
         if session._finalizing:
             permitted = answer_repair_tools(session)
             tools = [tool for tool in tools if tool["function"]["name"] in permitted]
+        if session._task_requirements and session._task_requirements.answer_requests:
+            tools = [finish_schema(tool, session._task_requirements)
+                     if tool["function"]["name"] == "finish" else tool for tool in tools]
         return tools
 
 

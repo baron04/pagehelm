@@ -284,7 +284,7 @@ class YudaoHost:
             if self.config.executor_mode == "page-agent":
                 # Keep the existing single Agent, identity, meter, approval, audit and
                 # conversation. This pilot cannot enter forms or expose source authority.
-                turn_config = replace(turn_config, require_page_route=True,
+                turn_config = replace(turn_config, require_page_route=True, require_task_contract=True,
                     source=SourceCapability.none(), allow_form_prefill=False,
                     allow_application_entry=False, allow_page_facets=False,
                     disabled_actions=turn_config.disabled_actions | {"fill", "select", "submit", "back", "apply_facet"},
