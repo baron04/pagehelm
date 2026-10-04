@@ -300,16 +300,20 @@ class WhatAnOperationLetsTheAnswerSay(unittest.TestCase):
 
     def test_answer_repair_distinguishes_control_refs_from_evidence_refs(self):
         with tempfile.TemporaryDirectory() as tmp:
+            after = _obs(2, "http://app/y")
+            after.content = "Terms tab selected"
             chat = _Chat([
                 ("click", {"ref": "e1"}),
                 ("finish", {"outcome": "acted", "answer": {
                     "version": 1, "coverage": "complete", "conclusions": [{
                         "kind": "page_observation", "evidence_ref": "e1",
                         "statement": "The page is open"}]}}),
-                ("finish", {"outcome": "acted"}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "page_observation", "evidence_ref": "obs2-page#1"}]}}),
             ])
             session = _session(tmp, chat=chat,
-                               browser=_Browser([_obs(1), _obs(2, "http://app/y")]),
+                               browser=_Browser([_obs(1), after]),
                                person=_Person("approved"))
             session._answer_mode = True
 
@@ -321,14 +325,18 @@ class WhatAnOperationLetsTheAnswerSay(unittest.TestCase):
 
     def test_answer_repair_after_action_cannot_dispatch_another_click(self):
         with tempfile.TemporaryDirectory() as tmp:
-            browser = _Browser([_obs(1), _obs(2, "http://app/y")])
+            after = _obs(2, "http://app/y")
+            after.content = "Terms tab selected"
+            browser = _Browser([_obs(1), after])
             chat = _Chat([
                 ("click", {"ref": "e1"}),
                 ("finish", {"outcome": "acted", "answer": {
                     "version": 1, "coverage": "complete", "conclusions": [{
                         "kind": "page_observation", "evidence_ref": "e1"}]}}),
                 ("click", {"ref": "e1"}),
-                ("finish", {"outcome": "acted"}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "page_observation", "evidence_ref": "obs2-page#1"}]}}),
             ])
             session = _session(tmp, chat=chat, browser=browser,
                                person=_Person("approved"))
@@ -352,7 +360,9 @@ class WhatAnOperationLetsTheAnswerSay(unittest.TestCase):
                     "version": 1, "coverage": "complete", "conclusions": [{
                         "kind": "page_observation", "evidence_ref": "e1"}]}}),
                 ("compute", {"operation": "count", "dataset_ref": "query#1"}),
-                ("finish", {"outcome": "acted"}),
+                ("finish", {"outcome": "acted", "answer": {
+                    "version": 1, "coverage": "complete", "conclusions": [{
+                        "kind": "aggregate", "evidence_ref": "calc#3"}]}}),
             ])
             session = _session(tmp, chat=chat,
                                browser=_Browser([_obs(1), _obs(2, "http://app/y")]),

@@ -168,6 +168,50 @@ class DefaultProductAnswerPath(unittest.TestCase):
         self.assertIn('"field_name":"name"', computed["content"])
         self.assertIn('"outcome":"acted"', str(final_context))
 
+    def test_answer_repair_can_read_again_without_repeating_the_action(self):
+        bad = _answer("field_value", "forged#1")
+        bad["outcome"] = "acted"
+        valid = _answer("selection", "call2-query#1", fields=["name", "amount"])
+        valid["outcome"] = "acted"
+        result, chat = self.execute([
+            ("goto", {"url": "/object/company/company-1"}), ("finish", bad),
+            ("query_companies", {}), ("finish", valid),
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("12.50 USD", result.user_answer)
+        self.assertIn("已打开页面", result.user_answer)
+        self.assertIn("query_companies", chat.tool_names[4])
+        self.assertIn("observe", chat.tool_names[4])
+        self.assertNotIn("goto", chat.tool_names[4])
+        self.assertNotIn("click", chat.tool_names[4])
+        self.assertTrue(any(m.get("name") == "query_companies"
+                            for m in chat.messages[-1][-4:]))
+
+    def test_answer_repair_cannot_erase_its_answer_and_claim_action_only(self):
+        bad = _answer("field_value", "forged#1")
+        bad["outcome"] = "acted"
+        result, _chat = self.execute([
+            ("goto", {"url": "/object/company/company-1"}), ("finish", bad),
+            ("finish", {"outcome": "acted"}), ("finish", {"outcome": "acted"}),
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIsNone(result.agent.verified_answer)
+
+    def test_answer_repair_rejects_new_navigation_before_dispatch(self):
+        bad = _answer("field_value", "forged#1")
+        bad["outcome"] = "acted"
+        valid = _answer("field_value", "call2-record#1")
+        valid["outcome"] = "acted"
+        result, chat = self.execute([
+            ("goto", {"url": "/object/company/company-1"}), ("finish", bad),
+            ("goto", {"url": "/object/company/company-2"}), ("finish", valid),
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("company-1", result.user_answer)
+        self.assertNotIn("company-2", result.user_answer)
+        self.assertIn("Do not repeat the action", str(chat.messages[-1]))
+        self.assertEqual(_RemoteBrowser.instances[-1].actions.count("goto"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

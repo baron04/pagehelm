@@ -838,6 +838,37 @@ class GoalTurnTests(unittest.TestCase):
                                 detail="Date 2026-09-15; amount 3500"),)
         self.assertTrue(_coverage_gaps(spec, [], "2026-09-15 的 Contract 金额", "2026-09-30", candidates))
 
+    def test_same_kind_repair_cannot_drop_record_or_requested_tab(self):
+        for repaired in ({"kind": "page", "entity": "order"},
+                         {"kind": "page", "entity": "order", "record": "S00006"}):
+            with self.subTest(repaired=repaired):
+                execution, _channel, _chat, _port, events = self._run(
+                    [_declaration(kind="page", entity="order", record="S00006", section="Other Info"),
+                     _declaration(**repaired)],
+                    [Resolved(kind="page", problem="record or section could not be resolved",
+                              repair="Correct the target using the indexed names")],
+                    resolved_then=[Resolved(kind="page", page=PagePlan("p1", "Orders", "/orders"))],
+                    text="打开 S00006 的 Other Info 页签", readings=1)
+                event = next(e for e in events if e["event"] == "goal_repaired")
+                self.assertFalse(event["accepted"])
+                self.assertIn("deliverable 1: record section removed", event["lost_requirements"])
+                self.assertNotEqual(execution.status, AgentTurnStatus.FINISHED)
+                self.assertFalse(any(action == "goto" for action, _ in _Browser.instances[-1].actions))
+
+    def test_page_repair_cannot_drop_requested_view_or_filter(self):
+        execution, _channel, _chat, _port, events = self._run(
+            [_declaration(kind="page", entity="order", page={"key": "p1", "view": "kanban",
+                                                            "filters_on": ["My Orders"]}),
+             _declaration(kind="page", entity="order", page={"key": "p1"})],
+            [Resolved(kind="page", problem="page control unresolved", repair="Correct the control")],
+            resolved_then=[Resolved(kind="page", page=PagePlan("p1", "Orders", "/orders"))],
+            text="打开我的订单看板", readings=1)
+        event = next(e for e in events if e["event"] == "goal_repaired")
+        self.assertFalse(event["accepted"])
+        self.assertEqual(event["lost_requirements"], ["deliverable 1: page view removed",
+                                                    "deliverable 1: page filters_on removed"])
+        self.assertNotEqual(execution.status, AgentTurnStatus.FINISHED)
+
     def test_clock_components_are_not_interpreted_as_amounts_or_record_numbers(self):
         from web_operation_agent.goal.executor import _coverage_gaps
         spec = GoalSpec.from_json({"deliverables": [{"kind": "list", "entity": "order",

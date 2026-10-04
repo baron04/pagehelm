@@ -89,6 +89,8 @@ class FinishHandler:
                           + ". Continue to the requested state or say it is unfinished.")]
                 return self._resume(turn, messages, obs, successful_business_tools)
         if name == "finish" and (self._answers.answer_mode or structured_answer):
+            if isinstance(args, dict) and args.get("outcome") == "acted" and "answer" in args:
+                self._answers.action_answer_required = True
             try:
                 if isinstance(args, dict):
                     args, ignored_page_prose = _ignore_page_prose(args)
@@ -157,22 +159,16 @@ class FinishHandler:
                     if (self._answer_action_receipt is None
                             or self._should_challenge_completion()):
                         raise ValueError("no successful action receipt supports this outcome")
+                    if "answer" not in args and (self._answers.action_answer_required
+                                                or self._answers.answer_goals):
+                        raise ValueError("the observed action still needs its requested answer; "
+                                         "do not erase it during repair. Read and cite valid "
+                                         "evidence, or report partial/unable")
                     if "answer" in args:
-                        try:
-                            verified = answer_protocol.submit(self.evidence, {
-                                "outcome": "answered", "answer": args["answer"]})
-                        except (ValueError, TypeError, EvidenceUnknown) as exc:
-                            if not self._target_reached:
-                                raise
-                            # At a target checkpoint the action is server-verified and the
-                            # answer is optional. An answer that cites what the turn never
-                            # recorded is dropped rather than sent back for repair; the
-                            # person reads the observed state and nothing the model wrote.
-                            self.ledger.append("acted_answer_dropped", step=step,
-                                               reason=type(exc).__name__,
-                                               detail=str(exc)[:300])
-                            verified = {"conclusions": (), "coverage": "complete",
-                                        "prose": "", "lowered_because": ()}
+                        # A reached page verifies the action, not its accompanying
+                        # facts. Never silently discard an invalid supplied answer.
+                        verified = answer_protocol.submit(self.evidence, {
+                            "outcome": "answered", "answer": args["answer"]})
                     else:
                         verified = {"conclusions": (), "coverage": "complete", "prose": "",
                                     "lowered_because": ()}
@@ -226,6 +222,9 @@ class FinishHandler:
                         "a page fact cannot answer this turn: an authorization refusal "
                         "closed the page as a source. Use the typed reads you have, or "
                         "finish with outcome=unable")
+                if (verified is not None and self._answers.action_answer_required
+                        and self._answer_action_receipt is not None):
+                    verified["action"] = self._answer_action_receipt
             except (ValueError, TypeError, EvidenceUnknown) as exc:
                 self._answer_repairs += 1
                 if self._answer_action_receipt is not None:
@@ -269,9 +268,11 @@ class FinishHandler:
                     except (ValueError, TypeError, EvidenceUnknown):
                         page_hint = ""
                 repair = (" Element refs such as e1 are browser controls, not answer "
-                          "evidence. The action has already been observed. Only finish is available "
-                          "during answer repair; use an existing evidence ref, report the "
-                          "action without an answer, or finish with outcome=unable. "
+                          "evidence. The action has already been observed. During answer "
+                          "repair use observe with answer_evidence=true, a registered typed "
+                          "read, or compute for missing facts. Use page_observation for "
+                          "page refs, not field_value or selection. Preserve the action "
+                          "and all requested answers; report partial/unable if unresolved. "
                           if self._finalizing else
                           " Element refs such as e1 are browser controls, not answer evidence. "
                           "For a page fact, call observe with answer_evidence=true and cite one "

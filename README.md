@@ -152,7 +152,9 @@ agent.
   conversion owned by the adapter; date-only fields do not accept time precision.
   Clock components are excluded from amount and record-number grounding.
   A repair must retain every declared deliverable; dropping an unresolved part cannot
-  make a turn complete. Ambiguous linked names expose exact candidates for a bounded
+  make a turn complete. It must also retain record targets, requested sections, views,
+  facets and query restrictions; correcting a name cannot downgrade a record detail
+  to an unqualified collection. Ambiguous linked names expose exact candidates for a bounded
   repair that preserves the user's explicit owner or exclusion conditions; they do not
   authorize choosing a candidate. When one part needs a record choice, the reply keeps the other
   parts' resolved answers and limitations alongside the clarification. Entity summaries
@@ -478,7 +480,11 @@ agent.
   A successful same-page click can be
   reported as an interaction only when a fresh observation shows a changed page; this
   receipt is not proof that a business goal was completed. After an observed action,
-  answer-format repair cannot dispatch another page action. Source-assisted page loops
+  answer-format repair cannot dispatch another page action. A supplied answer that
+  fails evidence verification is repaired even after page arrival, never silently
+  dropped to report only the action. The same Agent can observe, use registered
+  actor-scoped reads and compute during repair; the action receipt is retained and
+  writes remain unavailable. Source-assisted page loops
   that revisit the same facts and states stop without claiming completion.
 - For a page operation the assistant cannot perform, `highlight` can mark one named,
   currently visible control and end the turn without clicking or submitting. The server

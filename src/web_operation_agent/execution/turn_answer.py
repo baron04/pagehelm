@@ -65,6 +65,8 @@ class TurnAnswer:
         self.refused_detail = ""
         self.clarification_feedback = ""
         self.answer_repairs = 0
+        # An attempted answer beside an observed action cannot disappear on repair.
+        self.action_answer_required = False
         self.answer_mode = False
         self.page_answer_digest = ""
         self.action_receipt: dict | None = None

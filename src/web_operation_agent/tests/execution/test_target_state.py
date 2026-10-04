@@ -786,10 +786,10 @@ class TargetSettlement(unittest.TestCase):
         self.assertEqual(result.verified_answer["action"]["selected"], ["Terms"])
         self.assertIn("Selected: Terms", result.agent_said)
 
-    def test_a_finish_with_stray_fields_or_a_bad_optional_answer_still_reports_the_action(self):
+    def test_a_reached_target_does_not_silently_discard_a_bad_answer(self):
         # Both shapes came from the paid gate: a `reason` field beside the structured
-        # outcome, and an answer citing an element ref. Neither may cost a repair once
-        # the server has observed the target; the person reads the observed state.
+        # outcome, and an answer citing an element ref. The unsupported answer needs
+        # repair even when the action has already been verified.
         chat = _Chat([
             ("set_target", {"path": PARTNER, "selected": ["Terms"]}),
             ("click", {"ref": "e1"}),
@@ -799,7 +799,9 @@ class TargetSettlement(unittest.TestCase):
                                    "conclusions": [{"kind": "page_observation",
                                                     "evidence_ref": "e3",
                                                     "statement": "invented prose"}]}}),
-            ("finish", {"outcome": "acted"}),
+            ("finish", {"outcome": "acted", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "page_observation", "evidence_ref": "obs4-page#1"}]}}),
         ])
         browser = _WorkspaceBrowser()
         session = _session(self.tmp, chat, browser,
@@ -808,13 +810,12 @@ class TargetSettlement(unittest.TestCase):
         result = session.run()
 
         self.assertEqual(result.terminal_reason, "agent_finished")
-        self.assertEqual(len(chat.seen), 4)
-        self.assertEqual(_events(session, "answer_contract_refused"), [])
+        self.assertEqual(len(chat.seen), 5)
+        self.assertEqual(len(_events(session, "answer_contract_refused")), 1)
         self.assertEqual([event["fields"] for event in
                           _events(session, "acted_stray_fields_ignored")], [["reason"]])
-        self.assertEqual([event["reason"] for event in
-                          _events(session, "acted_answer_dropped")], ["EvidenceUnknown"])
-        self.assertEqual(result.verified_answer["conclusions"], ())
+        self.assertEqual(_events(session, "acted_answer_dropped"), [])
+        self.assertEqual(len(result.verified_answer["conclusions"]), 1)
         self.assertIn("Selected: Terms", result.agent_said)
         self.assertNotIn("invented", result.agent_said)
         self.assertNotIn("the desk and tab", result.agent_said)
@@ -828,7 +829,9 @@ class TargetSettlement(unittest.TestCase):
                         "answer": {"version": 1, "coverage": "complete",
                                    "conclusions": [{"kind": "page_observation",
                                                     "evidence_ref": "e1"}]}}),
-            ("finish", {"outcome": "acted"}),
+            ("finish", {"outcome": "acted", "answer": {
+                "version": 1, "coverage": "complete", "conclusions": [
+                    {"kind": "page_observation", "evidence_ref": "obs2-page#2"}]}}),
         ])
         session = _session(self.tmp, chat, _WorkspaceBrowser())
 

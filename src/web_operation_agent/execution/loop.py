@@ -463,9 +463,8 @@ def run_loop(session) -> RunResult:
                 return session._finish(result, t0, "indeterminate_write",
                                     session._writes.uncertain_write, steps=step)
 
-        if session._finalizing and name not in ("finish", "compute"):
-            # compute is arithmetic on evidence already read, with nothing dispatched, and
-            # an answer refusal may name it as the repair.
+        from .tools import answer_repair_tools
+        if session._finalizing and name not in answer_repair_tools(session):
             session._answer_repairs += 1
             session.ledger.append("finalizing_tool_refused", step=step, tool=name,
                                   dispatched=False, repair=session._answer_repairs)
@@ -474,12 +473,13 @@ def run_loop(session) -> RunResult:
                 return session._finish(result, t0, "agent_refused", result.agent_said,
                                        steps=step)
             messages += [_assistant_call(call), _tool_result(
-                call, "This turn is finalizing an observed action. No more tools may "
-                      "run except compute on evidence already read. Submit finish using "
-                      "existing evidence, or use outcome=unable.")]
+                call, "This turn is repairing the answer for an observed action. Only "
+                      "observe, registered business reads, compute and finish may run. "
+                      "Do not repeat the action or start another write. Submit evidence "
+                      "for the missing answer, or report partial/unable.")]
             continue
 
-        if (session._target_reached and session._navigation_only
+        if (session._target_reached and session._navigation_only and not session._finalizing
                 and name not in {"finish", "set_target", "ask_user", "withdraw_request"}):
             # A pure navigation request can stop at its page target. A request
             # that also asks a question still needs reads or observation after

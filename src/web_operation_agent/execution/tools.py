@@ -34,7 +34,10 @@ class ToolSurface:
                      and session.click_policy is not None)]
         skill = bool(session._loaded_business_skill_ids)
         if session._finalizing:
-            return [answer_protocol.finish_answer_tool(source=session.runtime_source,
+            # Answer repair may need one missing typed read or a fresh snapshot.
+            # Build the ordinary actor-scoped schemas below, then retain only reads.
+            tools = [page_answer.OBSERVE_TOOL,
+                     answer_protocol.finish_answer_tool(source=session.runtime_source,
                                                        skill=skill)]
         if session._capability_question:
             return [tool for tool in tools if tool["function"]["name"] == "finish"]
@@ -131,4 +134,18 @@ class ToolSurface:
         # A reached target does not shrink this list: the loop refuses every tool but
         # finish and set_target without dispatch, and the prompt says so. Shrinking it
         # changed the request prefix at the one step that most needs to be cheap.
+        if session._finalizing:
+            permitted = answer_repair_tools(session)
+            tools = [tool for tool in tools if tool["function"]["name"] in permitted]
         return tools
+
+
+def answer_repair_tools(session) -> frozenset[str]:
+    """Only observation, evidence arithmetic and registered reads after an action.
+
+    The same set controls schema exposure and dispatch. Write/form/page-action tools
+    cannot run again just because the action's accompanying answer was invalid.
+    """
+    reads = (session.business_tools.read_tool_names
+             if session.business_tools is not None else frozenset())
+    return frozenset({"finish", "compute", "observe"}) | reads

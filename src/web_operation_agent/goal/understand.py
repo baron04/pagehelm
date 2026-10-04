@@ -142,7 +142,10 @@ def understand(chat, *, prompt: str, index: ApplicationIndex, run_id: str,
     if previous is not None and problems:
         before += ("\n\nYOUR DECLARATION\n" + json.dumps(previous.to_json(), ensure_ascii=False, separators=(",", ":"))
                    + "\n\nPROBLEMS\n" + "\n".join(f"- {p}" for p in problems[:4])
-                   + "\n\nDeclare again, correcting these and keeping what was right.")
+                   + "\n\nDeclare again, correcting names or labels and keeping every requested "
+                     "deliverable, record target, section, view, filter and query condition. "
+                     "An unresolved detail or tab cannot be replaced by an unqualified list. "
+                     "A record description may use explicit selection conditions instead of a name.")
     # The request is the last thing in the message: a small model reads the tail most
     # reliably, and everything else is context for it. On the staged path it also
     # opens the message: in front of a small neighbourhood the model otherwise often

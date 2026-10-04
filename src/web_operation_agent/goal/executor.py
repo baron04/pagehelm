@@ -1252,6 +1252,9 @@ class GoalTurnExecutor:
                      or (after.kind in ("aggregate", "list") and after.metric is not None
                          and after.metric.op == before.metric.op))
                 for before, after in zip(spec.deliverables, repaired.deliverables))
+            from .repair import lost_requirements
+            losses = lost_requirements(spec, repaired)
+            kept = kept and not losses
             # A kind of record the person named ("这个客户") is the one they mean: a repair
             # may not answer from another entity's record of the same name instead.
             kept = kept and not _moved_from_named_kind(s, spec, repaired)
@@ -1264,6 +1267,7 @@ class GoalTurnExecutor:
                 or (_unresolved(repaired, second) == _unresolved(spec, resolution)
                     and _askable(second) > _askable(resolution)))
             s.ledger.append("goal_repaired", step=s.step, accepted=accepted,
+                            lost_requirements=list(losses),
                             unresolved_before=_unresolved(spec, resolution),
                             unresolved_after=(_unresolved(repaired, second)
                                               if second is not None else None))
