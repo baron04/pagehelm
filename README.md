@@ -113,7 +113,9 @@ agent.
   Date exclusion headings retain the exclusion operator in both languages.
   Query results may carry page links, but only a declared page or handoff goal navigates.
   Numeric minimum/maximum aggregates and lists return every tied record in a complete scope of at
-  most 4,000 records. Missing values are excluded; zero and negative values remain.
+  most 4,000 records. Requested display fields stay attached to every tied record;
+  these fields are read over the same complete actor scope before choosing the ties.
+  Missing values are excluded; zero and negative values remain.
   Incomplete reads, invalid numbers and differing or unknown currencies are refused;
   native field units are retained when the application declares no currency. No currency
   conversion is inferred. Counts checked before and after the read detect count changes,

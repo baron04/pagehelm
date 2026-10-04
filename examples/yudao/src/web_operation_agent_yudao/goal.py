@@ -672,15 +672,23 @@ class YudaoGoalData:
 
     def rows(self, entity: str, where: Cond, *, fields: tuple[str, ...] = (),
              order: tuple[tuple[str, bool], ...] = (), limit: int = 80) -> tuple[Row, ...]:
-        matched = self._matching(entity, where)
+        generation = getattr(self._client, "read_generation", 0)
+        # Local to this one read: repeated linked people never issue one GET per cell.
+        # The next rows call reads its own current actor's people again.
+        people_names: dict[str, dict[str, str]] = {}
+        matched = self._matching(entity, where, people_names=people_names)
         displays = self._candidate_displays(entity, matched)
-        rows = [self._row(entity, r, tuple(fields) + tuple(f for f, _d in order)) for r in matched]
+        rows = [self._row(entity, r, tuple(fields) + tuple(f for f, _d in order),
+                          people_names=people_names) for r in matched]
         for field, descending in reversed(order):
             rows.sort(key=lambda r: _sortable(r.id if field == ID else r.display if field == NAME
                                               else r.values.get(field)), reverse=descending)
-        return tuple(Row(r.id, displays[r.id], {k: v for k, v in r.values.items() if k in fields},
-                         {k: v for k, v in r.shown.items() if k in fields},
-                         {k: v for k, v in r.units.items() if k in fields}) for r in rows[:limit])
+        result = tuple(Row(r.id, displays[r.id], {k: v for k, v in r.values.items() if k in fields},
+                           {k: v for k, v in r.shown.items() if k in fields},
+                           {k: v for k, v in r.units.items() if k in fields}) for r in rows[:limit])
+        if generation != getattr(self._client, "read_generation", 0):
+            raise DataRefused("credentials changed while reading linked row displays", read_failed=True)
+        return result
 
     def total(self, entity: str, where: Cond, field: str) -> tuple[float, str]:
         amount = Decimal(0)
@@ -721,9 +729,10 @@ class YudaoGoalData:
         return template.format(id=id) if template else page
 
     # -- helpers ---------------------------------------------------------------------------
-    def _matching(self, entity: str, where: Cond) -> list[dict]:
+    def _matching(self, entity: str, where: Cond, *,
+                  people_names: dict[str, dict[str, str]] | None = None) -> list[dict]:
         return [r for r in self._fetch(entity, where)
-                if matches(where, self._row(entity, r, _fields_in(where)))]
+                if matches(where, self._row(entity, r, _fields_in(where), people_names=people_names))]
 
     def _fetch(self, entity: str, where: Cond) -> list[dict]:
         """Every record the account may read that the pushed-down parameters admit."""
@@ -993,7 +1002,8 @@ class YudaoGoalData:
             shown.append(f"{info.label} {self._value(info, row.get(info.key), row, spec)[1]}")
         return " · ".join(shown) or str(row.get("id"))
 
-    def _row(self, entity: str, row: dict, fields) -> Row:
+    def _row(self, entity: str, row: dict, fields, *,
+             people_names: dict[str, dict[str, str]] | None = None) -> Row:
         schema = self.schema().entity(entity)
         spec = self._entities.get(entity)
         values, shown, units = {}, {}, {}
@@ -1006,7 +1016,7 @@ class YudaoGoalData:
                 values[key] = raw
                 continue
             value, text = self._value(info, raw, row, spec,
-                                      money_unit=self._money_for(entity, key))
+                                      money_unit=self._money_for(entity, key), people_names=people_names)
             values[key], shown[key] = value, text
             if info.kind == "money":
                 unit = self._money_for(entity, key)
@@ -1018,15 +1028,24 @@ class YudaoGoalData:
         spec = self._entities.get(entity) or self._lines.get(entity)
         return spec.money.get(key, "") if spec is not None else ""
 
-    def _value(self, info: FieldSchema, raw, row: dict, spec, *, money_unit: str = ""):
+    def _value(self, info: FieldSchema, raw, row: dict, spec, *, money_unit: str = "",
+               people_names: dict[str, dict[str, str]] | None = None):
         if raw is None or raw == "":
             return None, ("否" if info.kind == "bool" else "(empty)")
         if info.kind == "link":
             name_key = (spec.links.get(info.key) if spec is not None else "") or ""
             display = str(row.get(name_key) or "") if name_key else ""
             if not display and info.relation in (_USERS, _DEPTS):
-                display = next((p["name"] for p in self._people(info.relation)
-                                if str(p["id"]) == str(raw)), "")
+                if people_names is None:
+                    display = next((p["name"] for p in self._people(info.relation)
+                                    if str(p["id"]) == str(raw)), "")
+                else:
+                    if info.relation not in people_names:
+                        names = {}
+                        for person in self._people(info.relation):
+                            names.setdefault(str(person["id"]), person["name"])
+                        people_names[info.relation] = names
+                    display = people_names[info.relation].get(str(raw), "")
             elif not display and info.relation in self._entities:
                 display = self._display_of(info.relation, str(raw))
             return LinkValue(str(raw), display or str(raw)), display or str(raw)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..data import (EVERYTHING, NAME, Compare, Cond, Native, Not, PageSchema, Via,
                     all_of, any_of, parts)
@@ -307,8 +307,7 @@ class ScopeMixin:
             rows = self._rows(model, domain, fields=columns, order=order, limit=limit + 1)
             names = []
             for row in rows[:limit]:
-                cells = [f"{view.label_of(f)}: {row.shown.get(f, '(empty)')}" for f in columns]
-                names.append(row.display + (" — " + "; ".join(cells) if cells else ""))
+                names.append(_listed_row(row, view, columns))
             total = self._count(model, domain)
             if len(rows) == 1:
                 self._found_one = (model, rows[0].id, rows[0].display)
@@ -347,7 +346,17 @@ class ScopeMixin:
                 return Resolved(kind=d.kind, problem=f"{metric.field!r} cannot be compared numerically")
             if count > EXTREME_READ_LIMIT:
                 return Resolved(kind=d.kind, problem="Scope exceeds the complete numeric comparison limit.")
-            rows = self._rows(model, domain, fields=(key,), limit=count + 1)
+            missing = tuple(label for label in d.fields if view.field_by_label(label) is None)
+            if missing:
+                return Resolved(kind=d.kind, missing_fields=missing,
+                                problem="requested fields are absent from this actor-visible schema")
+            columns = tuple(dict.fromkeys(view.field_by_label(label) for label in d.fields))
+            fields = tuple(dict.fromkeys((key, *columns)))
+            rows = self._rows(model, domain, fields=fields, limit=count + 1)
+            if columns:
+                # Preserve the requested display fields without changing the IDs,
+                # comparison values or unit bindings checked by resolve_extreme.
+                rows = tuple(replace(row, display=_listed_row(row, view, columns)) for row in rows)
             return resolve_extreme(operation=metric.op, label=info.label, key=key,
                                    subject=" · ".join(described), count=count,
                                    after=self._count(model, domain), rows=rows)
@@ -582,6 +591,12 @@ class ScopeMixin:
             # Keep this explicit so SQL and in-memory adapters agree on NULL.
             return [Compare(key, "set"), Not(all_of(*clauses))], text
         return clauses, text
+
+
+def _listed_row(row, view: EntityView, columns) -> str:
+    """The requested cells exactly as the actor-scoped adapter displayed them."""
+    cells = [f"{view.label_of(key)}: {row.shown.get(key, '(empty)')}" for key in columns]
+    return row.display + (" — " + "; ".join(cells) if cells else "")
 
 
 _OPS = {"<": "lt", "<=": "le", ">": "gt", ">=": "ge", "!=": "ne", "=": "eq"}
