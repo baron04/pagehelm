@@ -303,6 +303,7 @@ class YudaoGoalData:
         if spec is None or not spec.has_get or not spec.component:
             return []
         labels = self._ui.line_labels(spec.component.rsplit("/", 1)[0])
+        dictionaries = self._ui.line_dicts(spec.component.rsplit("/", 1)[0])
         if not labels:
             return []
         try:
@@ -339,7 +340,12 @@ class YudaoGoalData:
                 kind = ("money" if _MONEY.search(field_key) or _MONEY.search(label) or unit in ("元", "分")
                         else "number" if isinstance(value, (int, float)) and not isinstance(value, bool)
                         else "text")
-                fields.append(FieldSchema(field_key, label, kind, listed=True, on_form=True))
+                choices = tuple(Choice(key=v, label=l) for v, l in
+                                self._dicts.get(dictionaries.get(field_key, ""), ()))
+                if choices:
+                    kind = "choice"
+                fields.append(FieldSchema(field_key, label, kind, choices=choices,
+                                          listed=True, on_form=True))
                 if kind == "money":
                     money[field_key] = unit
                 if kind in ("money", "number"):

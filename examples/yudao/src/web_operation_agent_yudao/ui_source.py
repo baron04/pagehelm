@@ -64,6 +64,8 @@ class UiSource:
     tables: dict = field(default_factory=dict)
     #: Record route template -> static tab labels from its deployed Vue component.
     record_sections: dict = field(default_factory=dict)
+    #: Table component -> literal row-field dictionary bindings; empty means unresolved.
+    table_dicts: dict = field(default_factory=dict)
 
     def line_labels(self, component_dir: str) -> dict:
         """The labels the tables of a page's own files give row fields (`productPrice` ->
@@ -75,6 +77,16 @@ class UiSource:
                     out.setdefault(key, label)
         return out
 
+    def line_dicts(self, component_dir: str) -> dict:
+        """Only unambiguous literal bindings within this page's own table components."""
+        found: dict[str, set[str]] = {}
+        for path, fields in self.table_dicts.items():
+            if path == component_dir or path.startswith(component_dir + "/"):
+                for key, dictionary in fields.items():
+                    found.setdefault(key, set()).add(dictionary)
+        return {key: next(iter(names)) for key, names in found.items()
+                if len(names) == 1 and "" not in names}
+
     @staticmethod
     def none() -> "UiSource":
         return UiSource()
@@ -83,11 +95,16 @@ class UiSource:
     def read(root) -> "UiSource":
         src = Path(root) / "src"
         consts = dict(_DICT_CONST.findall((src / "utils" / "dict.ts").read_text(encoding="utf-8")))
-        views, tables = {}, {}
+        views, tables, table_dicts = {}, {}, {}
         for path in sorted((src / "views").rglob("*.vue")):
-            columns = _row_columns(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            columns = _row_columns(text)
+            key = path.relative_to(src / "views").with_suffix("").as_posix()
             if columns:
-                tables[path.relative_to(src / "views").with_suffix("").as_posix()] = columns
+                tables[key] = columns
+            dictionaries = _row_dictionaries(text, consts)
+            if dictionaries:
+                table_dicts[key] = dictionaries
         for path in sorted((src / "views").rglob("index.vue")):
             text = path.read_text(encoding="utf-8")
             columns = tuple(dict.fromkeys(_COLUMN.findall(text)))
@@ -112,7 +129,18 @@ class UiSource:
                                       fixed_params=fixed_params)
         router = (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")
         return UiSource(views=views, records=_record_routes(router), tables=tables,
-                        record_sections=_record_sections(src, router))
+                        record_sections=_record_sections(src, router), table_dicts=table_dicts)
+
+
+def _row_dictionaries(page: str, consts: dict) -> dict:
+    found: dict[str, set[str]] = {}
+    for attrs, body in _TABLE_COLUMN.findall(page):
+        if _COLUMN_LABEL.search(attrs) is None:
+            continue
+        for name, row in _DICT_TAG.findall(body or ""):
+            found.setdefault(row, set()).add(consts.get(name, ""))
+    return {key: next(iter(names)) if len(names) == 1 else ""
+            for key, names in found.items()}
 
 
 def _row_columns(page: str) -> dict:

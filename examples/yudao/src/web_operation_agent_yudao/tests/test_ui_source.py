@@ -46,6 +46,26 @@ export const getProcessInstanceMyPage = async (params: any) => {
 
 
 class UiSourceTests(unittest.TestCase):
+    def test_line_dictionaries_are_column_bound_and_conflicts_remain_unresolved(self):
+        table = '<el-table-column label="单位"><dict-tag :type="DICT_TYPE.UNIT" :value="row.measure" /></el-table-column>'
+        status = '<el-table-column label="状态"><dict-tag :type="DICT_TYPE.STATUS" :value="scope.row.status" /></el-table-column>'
+        outside = '<dict-tag :type="DICT_TYPE.UNIT" :value="row.unrelated" />'
+        unknown = '<el-table-column label="未知"><dict-tag :type="DICT_TYPE.ABSENT" :value="row.unknown" /></el-table-column>'
+        with tempfile.TemporaryDirectory() as root:
+            src = Path(root) / "src"
+            for path, text in (("utils/dict.ts", "UNIT = 'line_unit'\nSTATUS = 'line_status'\nOTHER = 'other_status'"),
+                               ("router/modules/remaining.ts", ""),
+                               ("views/orders/detail/Items.vue", table + status + outside + unknown),
+                               ("views/orders/detail/Other.vue", status.replace('DICT_TYPE.STATUS', 'DICT_TYPE.OTHER')),
+                               ("views/orders-extra/Items.vue", table.replace('DICT_TYPE.UNIT', 'DICT_TYPE.OTHER'))):
+                file = src / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text, encoding="utf-8")
+            source = UiSource.read(root)
+        self.assertEqual(source.line_dicts("orders"), {"measure": "line_unit"})
+        self.assertNotIn("unrelated", source.table_dicts["orders/detail/Items"])
+        self.assertEqual(UiSource.none().line_dicts("orders"), {})
+
     def test_a_page_reads_the_list_its_get_list_awaits(self):
         with tempfile.TemporaryDirectory() as root:
             src = Path(root) / "src"

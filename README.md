@@ -708,6 +708,9 @@ Yudao keeps failed detail reads as failures, so incomplete line data cannot beco
 zero count or total. Explicit yuan/cents units from its API or line columns are retained:
 cents are normalized to yuan for facts, comparisons and totals, while a field with no
 declared currency is not assigned one.
+Yudao line fields with an unambiguous literal dictionary binding in their deployed table
+use labels from dictionaries read under the current actor, preserving the raw keys for
+conditions. Missing dictionaries, ambiguous bindings and unknown values retain raw values.
 
 Important design documents:
 

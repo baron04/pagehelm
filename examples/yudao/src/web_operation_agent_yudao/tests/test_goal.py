@@ -572,6 +572,52 @@ class LineTests(unittest.TestCase):
         self.data = YudaoGoalData(_LinesClient(), DOCS, ui=ui)
         self.port = DataGoalPort(self.data)
 
+    def test_line_dictionary_labels_use_actor_read_values_and_keep_raw_keys(self):
+        class CodedLines(_LinesClient):
+            def get(self, path, **params):
+                result = super().get(path, **params)
+                if path == "system/dict-data/simple-list":
+                    return result + [{"dictType": "line_measure", "value": "1", "label": "箱"}]
+                if path == "crm/contract/get":
+                    result = {**result, "products": [dict(r, measureCode=1) for r in result["products"]]}
+                return result
+
+        ui = UiSource(tables={"crm/contract/detail/Items": {
+            "productName": "产品名称", "count": "数量", "measureCode": "单位"}},
+            table_dicts={"crm/contract/detail/Items": {"measureCode": "line_measure"}})
+        data = YudaoGoalData(CodedLines(), DOCS, ui=ui)
+        schema = data.schema().entity("crm/contract/products")
+        self.assertEqual(schema.field("measureCode").kind, "choice")
+        self.assertNotIn("measureCode", data._lines[schema.key].columns)
+        rows = data.rows(schema.key, Compare("__owner", "eq", "12"), fields=("measureCode",))
+        self.assertEqual([(r.values["measureCode"], r.shown["measureCode"]) for r in rows], [("1", "箱")])
+        # An unregistered value stays explicit; a known key's label is never reused.
+        get = data._client.get
+        def unknown(path, **params):
+            result = get(path, **params)
+            if path == "crm/contract/get":
+                result = {**result, "products": [dict(r, measureCode=99) for r in result["products"]]}
+            return result
+        data._client.get = unknown
+        data = YudaoGoalData(data._client, DOCS, ui=ui)
+        rows = data.rows(schema.key, Compare("__owner", "eq", "12"), fields=("measureCode",))
+        self.assertEqual(rows[0].shown["measureCode"], "99")
+
+    def test_missing_actor_dictionary_does_not_invent_line_labels(self):
+        class CodedLines(_LinesClient):
+            def get(self, path, **params):
+                result = super().get(path, **params)
+                if path == "crm/contract/get":
+                    result = {**result, "products": [dict(r, measureCode=1) for r in result["products"]]}
+                return result
+        ui = UiSource(tables={"crm/contract/detail/Items": {
+            "productName": "产品名称", "count": "数量", "measureCode": "单位"}},
+            table_dicts={"crm/contract/detail/Items": {"measureCode": "unread_dictionary"}})
+        data = YudaoGoalData(CodedLines(), DOCS, ui=ui)
+        self.assertEqual(data.schema().entity("crm/contract/products").field("measureCode").kind, "number")
+        rows = data.rows("crm/contract/products", Compare("__owner", "eq", "12"), fields=("measureCode",))
+        self.assertEqual(rows[0].shown["measureCode"], "1")
+
     def test_a_detail_s_line_table_is_an_entity_of_its_own(self):
         lines = self.data.schema().entity("crm/contract/products")
         self.assertEqual(lines.lines_of, "crm/contract")
