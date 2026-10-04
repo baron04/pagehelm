@@ -187,10 +187,14 @@ class TargetParsing(unittest.TestCase):
         self.assertEqual(required_page_controls("用列表和图表分别看"), ("List", "Graph"))
         self.assertEqual(required_page_controls("List the accounts"), ())
         self.assertEqual(required_page_controls("Open orders"), ())
+        for prompt in ("销售订单的列表视图", "从看板切换到列表", "以列表形式展示订单", "切到列表"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(required_page_controls(prompt), ("List",))
         page = _page(1, PARTNER)
         self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
                                           required_selected=("Kanban",)),
                          ('selected control "Kanban"',))
+
         page.elements.append(ElementRef("e4", "button", "Kanban", "button", 1,
                                         {"selected": "true"}))
         self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
@@ -223,6 +227,21 @@ class TargetParsing(unittest.TestCase):
         self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
                                           required_selected=("Kanban",)),
                          ('selected control "Kanban"',))
+
+    def test_page_list_noun_does_not_invent_an_unavailable_view_control(self):
+        for prompt in ("请打开销售订单列表，我要自己查看订单情况。", "打开客户列表",
+                       "打开联系人列表页", "订单列表里有多少条？", "切到销售订单列表"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(required_page_controls(prompt), ())
+        page = _page(1, PARTNER)
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+            required_selected=required_page_controls("打开客户列表")), ())
+        # A declaration or explicit view request still cannot finish on this page.
+        self.assertEqual(unmet_conditions(TargetState(PARTNER, ("List",)), page),
+                         ('selected control "List"',))
+        self.assertEqual(unmet_conditions(TargetState(PARTNER), page,
+            required_selected=required_page_controls("切到列表视图")),
+                         ('selected control "List"',))
 
     def test_a_target_is_exact_or_refused(self):
         target = parse_target({"path": "/contacts/workflows/partner/",
@@ -317,6 +336,24 @@ class TargetParsing(unittest.TestCase):
 
 
 class TargetSettlement(unittest.TestCase):
+    def test_named_list_page_finishes_without_a_view_switcher(self):
+        chat = _Chat([("set_target", {"path": PARTNER}), ("click", {"ref": "e1"}),
+                      ("finish", {"outcome": "acted"})])
+        browser = _WorkspaceBrowser()
+        session = _session(self.tmp, chat, browser, prompt="打开客户列表")
+        result = session.run()
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertTrue(_events(session, "target_state_reached"))
+        self.assertEqual(len(chat.seen), 3)
+
+    def test_explicit_list_view_still_cannot_finish_without_view_evidence(self):
+        chat = _Chat([("set_target", {"path": PARTNER}), ("click", {"ref": "e1"}),
+                      ("finish", {"outcome": "acted"}), ("finish", {"outcome": "unable"})])
+        session = _session(self.tmp, chat, _WorkspaceBrowser(), prompt="打开客户的列表视图")
+        result = session.run()
+        self.assertEqual(result.terminal_reason, "agent_refused")
+        self.assertEqual(_events(session, "target_state_reached"), [])
+
     def test_same_agent_receives_unverified_arrival_then_fresh_main_page_before_finish(self):
         class DelayedMain(_WorkspaceBrowser):
             def execute(self, action, args=None, expect_navigation=False):

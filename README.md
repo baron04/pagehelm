@@ -508,6 +508,8 @@ agent.
   List, Kanban, Calendar, Pivot, or Graph view also requires that view to be observed,
   even if the Agent declared only a path. An application may report its actually rendered
   view without a visible view-switch control; a URL or candidate alone is not evidence.
+  A Chinese destination name such as “销售订单列表” does not add a selected List control;
+  explicit wording such as “切到列表视图” still requires verified view state.
   A fresh observation may be needed after the switch.
   For a pure navigation request it accepts
   only `finish` and `set_target` (other calls are refused without dispatch; the tool list stays

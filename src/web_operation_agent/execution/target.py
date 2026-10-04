@@ -39,6 +39,10 @@ _VIEW_REQUESTS = (
     ("Pivot", re.compile(r"透视表?|(?<![a-z])pivot(?:\s+(?:table|view))?(?![a-z])", re.I)),
     ("Graph", re.compile(r"图表|(?<![a-z])(?:graph|chart)\s+view(?![a-z])", re.I)),
 )
+_LIST_VIEW_PREFIX = re.compile(
+    r"(?:用|以|按|采用|切(?:换)?(?:到|为|成)|换(?:到|为|成)|转(?:到|为)|"
+    r"改(?:成|为)|显示(?:为|成))\s*$")
+_LIST_VIEW_SUFFIX = re.compile(r"\s*(?:的\s*)?(?:视图|模式|形式)")
 _VIEW_ALIASES = {
     "看板": "kanban", "列表": "list", "表格": "list", "table": "list",
     "日历": "calendar", "透视": "pivot", "透视表": "pivot",
@@ -63,7 +67,13 @@ _EXPLICIT_HIGHLIGHT = re.compile(
 def required_page_controls(prompt: str) -> tuple[str, ...]:
     found = sorted((match.start(), name)
                    for name, pattern in _VIEW_REQUESTS
-                   for match in pattern.finditer(prompt))
+                   for match in pattern.finditer(prompt)
+                   # A Chinese page name such as "销售订单列表" describes the
+                   # destination, not an additional selected List control. Explicit
+                   # display/switch wording still requires verified view state.
+                   if not (name == "List" and match.group() == "列表"
+                           and not (_LIST_VIEW_PREFIX.search(prompt[:match.start()])
+                                    or _LIST_VIEW_SUFFIX.match(prompt[match.end():]))))
     # "从列表切换到看板" names the origin and the destination. The
     # destination alone is the page state that must be visible at completion.
     transition = re.search(r"(?:切换?|换|转)(?:到|为)\s*", prompt)
