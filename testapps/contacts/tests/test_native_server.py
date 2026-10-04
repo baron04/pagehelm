@@ -552,6 +552,56 @@ class NativeContactsHostTests(unittest.TestCase):
 
 
 class NativeContactsBrowserTests(unittest.TestCase):
+    def test_frozen_record_task_rejects_list_completion_and_recovers_in_the_same_native_run(self):
+        """A requested contact cannot be silently replaced by the contact list."""
+        from playwright.sync_api import sync_playwright
+        class TrackingChat(ScriptedDemoChat):
+            def complete(self, messages, tools, run_id, **kwargs):
+                self.run_ids.add(run_id)
+                return super().complete(messages, tools, run_id, **kwargs)
+
+        prompt = "Open Grace Hopper's contact record."
+        chat = TrackingChat((
+            ("declare_task", {"action_request": "Open Grace Hopper's contact record",
+                              "action_kind": "record", "answer_requests": []}),
+            ("set_target", {"path": "/contacts"}),
+            ("finish", {"outcome": "acted"}),
+            ("list_contacts", {"name_contains": "Grace Hopper"}),
+            ("set_target", {"path": "/contacts/grace-hopper"}),
+            ("goto", {"url": "/contacts/grace-hopper"}),
+            ("wait_for", {"ms": 500}),
+            ("finish", {"outcome": "acted"}),
+        ))
+        chat.run_ids = set()
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0,
+                    scripted=False, require_task_contract=True)) as host, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 900})
+                page.goto(host.origin + "/demo/login/ada-lovelace", wait_until="domcontentloaded")
+                page.evaluate(_CONNECTED)
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, prompt)
+                _allow_operation(page)
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error)
+                self.assertEqual(outcome.result.terminal_reason, "agent_finished")
+                page.wait_for_url("**/contacts/grace-hopper", timeout=10_000)
+                self.assertEqual(page.url, host.origin + "/contacts/grace-hopper")
+                self.assertEqual(host.application.write_requests, 0)
+                snapshots = list(map(json.loads, chat.seen))
+                recovery = snapshots[3]
+                self.assertIn("frozen operation is unfinished", str(recovery["messages"]))
+                self.assertIn("list_contacts", {tool["function"]["name"] for tool in recovery["tools"]})
+                self.assertEqual(len(chat.run_ids), 1)
+                self.assertEqual(chat.calls, 8)
+            finally:
+                browser.close()
+
     def test_page_answer_search_reaches_content_beyond_the_first_native_evidence_window(self):
         """Real DOM observation; no API, fixture answer or browser selector in decisions."""
         from playwright.sync_api import sync_playwright
@@ -625,6 +675,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
         prompt = "Open Grace Hopper's contact record and show her email."
         chat = ScriptedDemoChat((
             ("declare_task", {"action_request": "Open Grace Hopper's contact record",
+                              "action_kind": "record",
                               "answer_requests": ["show her email"]}),
             ("load_skill", {"skill_id": "minimal.contacts.query"}),
             ("list_contacts", {"name_contains": "Grace Hopper"}),

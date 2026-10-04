@@ -18,6 +18,7 @@ from .prompts import _PLAN_PREAMBLE
 from .target import TargetState, describe_target, unmet_conditions
 from .turn_answer import AnswerState
 from .page_context import join_context, snapshot_text
+from .request_contract import record_target_unmet
 
 
 # Rendering cannot expose more refs than the shared browser wire contract accepts.  Keep the
@@ -41,6 +42,7 @@ class SessionContext:
                 and (self._navigation_only or target.path == current_path)
                 and obs.record_route != current_path):
             missing += ("rendered record identity not verified",)
+        missing += record_target_unmet(self._task_requirements, obs)
         return missing
 
     def _navigation_ready(self, obs: PageObservation) -> bool:

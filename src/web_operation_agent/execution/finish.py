@@ -9,7 +9,7 @@ from .knowledge_tools import active_capability_digest
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result
 from .runstate import CAPABILITY_GAP_TERMINAL, _Next
-from .request_contract import extract_answer_bindings, missing_answers, incomplete_notes
+from .request_contract import action_unmet, extract_answer_bindings, missing_answers, incomplete_notes
 
 
 def _is_capability_gap(verified: dict | None) -> bool:
@@ -65,10 +65,10 @@ class FinishHandler:
             chinese=any("\u3400" <= char <= "\u9fff" for char in self.task.prompt))
         return verified
 
-    def _refuse_unfinished_task(self, result, started_at, step):
+    def _refuse_unfinished_task(self, result, started_at, step, observation):
         requirements = self._task_requirements
         verified = self._unfinished_task(None, requirements.answer_ids,
-            bool(requirements.action_request and self._answer_action_receipt is None))
+            bool(action_unmet(requirements, self._answer_action_receipt, observation)))
         result.verified_answer = verified
         result.agent_said = render_payload(verified, user_text=self.task.prompt,
             max_chars=max(512, self.max_agent_said_chars))
@@ -86,6 +86,15 @@ class FinishHandler:
         successful_business_tools = turn.successful_business_tools
         kept_reply = turn.kept_reply
         structured_answer = isinstance(args, dict) and "outcome" in args
+        typed_unmet = action_unmet(self._task_requirements, self._answer_action_receipt, obs)
+        if (self._task_requirements is not None and typed_unmet
+                and isinstance(args, dict)
+                and (args.get("outcome") in {"acted", "answered"} or args.get("done") is True)):
+            self.ledger.append("task_action_claim_refused", step=step, unmet=list(typed_unmet))
+            return self._reply(turn, call, "The frozen operation is unfinished: "
+                               + "; ".join(typed_unmet)
+                               + ". Continue toward the requested result or report partial/unable. "
+                                 "Do not replace a record with a collection.")
         claims_page_action = (isinstance(args, dict)
                               and (args.get("outcome") == "acted"
                                    or (self._task_requirements is not None
@@ -160,8 +169,7 @@ class FinishHandler:
                     conclusions = normalized
                 missing = (missing_answers(requirements, bindings, conclusions)
                            if requirements is not None else ())
-                action_missing = bool(requirements and requirements.action_request
-                                      and self._answer_action_receipt is None)
+                action_missing = bool(typed_unmet)
                 if requirements is not None and (
                         args.get("outcome") in {"acted", "answered"}
                         or (isinstance(answer, dict) and answer.get("coverage") == "complete")
@@ -301,7 +309,7 @@ class FinishHandler:
                                         self._refused_detail, steps=step))
                 if self._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
                     if self._task_requirements is not None:
-                        return _Next(self._refuse_unfinished_task(result, t0, step))
+                        return _Next(self._refuse_unfinished_task(result, t0, step, obs))
                     result.agent_said = unavailable_answer(self.task.prompt)
                     return _Next(self._finish(result, t0, "agent_refused", result.agent_said,
                                         steps=step))

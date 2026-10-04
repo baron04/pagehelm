@@ -73,6 +73,7 @@ class GenericRecordTargetIdentity(unittest.TestCase):
             _required_page_effects = frozenset()
             _seen_active_filters = {}
             _business_record_routes = {"/items/4"}
+            _task_requirements = None
             _navigation_only = True
             require_page_route = False
 

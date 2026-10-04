@@ -381,6 +381,13 @@ agent.
   missing proof returns unfinished-state feedback to the same Agent; losing a target's
   proof invalidates its earlier checkpoint. This option defaults to false and does not
   change the selected executor or grant page actions.
+  With opt-in `require_task_contract=True`, the first `declare_task` also freezes
+  `action_kind` (`none`, `page`, `record`, `draft`, or `mutation`) before application
+  results. A record outcome needs fresh application-owned rendered page and record
+  identity; reaching a collection cannot complete it. Rejected completion leaves
+  the same Agent able to continue discovery. Navigation cannot settle a draft or
+  persisted-change outcome. This does not verify that the model classified the
+  original intent correctly or chose the intended record; it grants no authority.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
   enabled, deployment-bound structured facts plus a language-neutral local code-block index
   can answer source questions while retaining exact file, line, release, and byte-digest

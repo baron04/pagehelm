@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import json
 import re
 import unicodedata
+from urllib.parse import urlsplit
 
 from ..privacy import redact_sensitive_assignments
 
@@ -24,13 +25,18 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
         "including modifiers; do not decide feasibility or drop an unsupported part. "
         "Every request character except punctuation and connecting words must be covered. "
         "This immutable declaration grants no permission or tool. Runtime results decide "
-        "what can be fulfilled; only evidence-backed answers can settle these questions."),
+        "what can be fulfilled; only evidence-backed answers can settle these questions. "
+        "Set action_kind from the requested result: record for a specific record's "
+        "detail or tab, page for general navigation/UI state, draft for form prefill, "
+        "mutation for a persisted change, none for questions only. A missing record "
+        "cannot be downgraded to page; this classification grants no authority."),
     "parameters": {"type": "object", "additionalProperties": False,
         "properties": {
             "action_request": {"type": "string", "maxLength": 4000},
+            "action_kind": {"type": "string", "enum": ["none", "page", "record", "draft", "mutation"]},
             "answer_requests": {"type": "array", "maxItems": MAX_ANSWERS, "uniqueItems": True,
                 "items": {"type": "string", "minLength": 1, "maxLength": 1000}}},
-        "required": ["action_request", "answer_requests"]}}}
+        "required": ["action_request", "action_kind", "answer_requests"]}}}
 
 TASK_SYSTEM = """
 First call declare_task for the USER REQUEST, before application reads or actions.
@@ -41,6 +47,10 @@ map each aN to the exact evidence_refs actually selected by that answer's conclu
 A page/action receipt cannot replace a requested fact. Missing answers or an unfinished
 operation require partial/unable, preserving any observed action and verified answers.
 The declaration does not authorize writes or submission. Existing approval still applies.
+Freeze action_kind from the requested result, before feasibility is known. A record's
+detail/tab needs an application-verified rendered record; an empty lookup cannot make
+a list page complete it. Recover its name/type, or report partial/unable. For a general
+page use page, for prefill use draft, for a persisted change use mutation, else none.
 """
 
 _CONNECTORS = re.compile(r"(?:(?:并且?|以及|和|然后|同时|顺便|还|再|也|请|帮我|麻烦)|"
@@ -51,6 +61,7 @@ _CONNECTORS = re.compile(r"(?:(?:并且?|以及|和|然后|同时|顺便|还|再
 class TaskRequirements:
     action_request: str
     answer_requests: tuple[str, ...]
+    action_kind: str
 
     @property
     def answer_ids(self) -> tuple[str, ...]:
@@ -59,18 +70,23 @@ class TaskRequirements:
     def render(self) -> str:
         return "FROZEN USER REQUIREMENTS (not application authority):\n" + json.dumps({
             "action_request": self.action_request,
+            "action_kind": self.action_kind,
             "answers": dict(zip(self.answer_ids, self.answer_requests))}, ensure_ascii=False)
 
 
 def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
-    if not isinstance(args, dict) or set(args) != {"action_request", "answer_requests"}:
-        raise ValueError("declare_task requires action_request and answer_requests only")
+    if not isinstance(args, dict) or set(args) != {"action_request", "action_kind", "answer_requests"}:
+        raise ValueError("declare_task requires action_request, action_kind and answer_requests only")
     action, answers = args["action_request"], args["answer_requests"]
     if (not isinstance(action, str) or len(action) > 4000 or not isinstance(answers, list)
             or len(answers) > MAX_ANSWERS or any(not isinstance(q, str) or not q.strip()
                 or len(q) > 1000 for q in answers)):
         raise ValueError("invalid action or answer request clauses")
     action, answers = action.strip(), tuple(q.strip() for q in answers)
+    kind = args["action_kind"]
+    if (not isinstance(kind, str) or kind not in {"none", "page", "record", "draft", "mutation"}
+            or bool(action) != (kind != "none")):
+        raise ValueError("action_kind must match a nonempty action; use none for questions only")
     if len(set(answers)) != len(answers) or not (action or answers):
         raise ValueError("request clauses must be nonempty and questions must not repeat")
     prompt = redact_sensitive_assignments(prompt)
@@ -87,7 +103,44 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
                    else " " for i, char in enumerate(prompt))
     if _CONNECTORS.sub("", rest).strip():
         raise ValueError("declaration omitted original request text; include every clause")
-    return TaskRequirements(action, answers)
+    return TaskRequirements(action, answers, kind)
+
+
+def record_target_unmet(requirements, observation) -> tuple[str, ...]:
+    """Only application-reported record identity satisfies a frozen record outcome.
+
+    The model supplies neither a route pattern nor a record-verification flag. This
+    does not decide whether it selected the user's intended record, only whether it
+    actually reached a record rather than silently substituting a collection.
+    """
+    if requirements is None or requirements.action_kind != "record":
+        return ()
+    path = urlsplit(observation.url).path.rstrip("/") or "/"
+    if (observation.render_state != "ready" or observation.page_route != path
+            or observation.record_route != path):
+        return ("the frozen record task needs an application-verified rendered record; "
+                "a collection or unverified URL cannot complete it",)
+    return ()
+
+
+def action_unmet(requirements, receipt, observation) -> tuple[str, ...]:
+    """Settlement type, distinct from write approval or semantic identity matching."""
+    if requirements is None or not requirements.action_request:
+        return ()
+    if receipt is None:
+        return ("the requested operation has no successful action receipt",)
+    if requirements.action_kind == "record":
+        missing = record_target_unmet(requirements, observation)
+        if missing:
+            return missing
+        if (receipt.get("kind") not in {"navigation", "target_state", "page_interaction"}
+                or receipt.get("url") != observation.url):
+            return ("the action receipt does not describe the current verified record",)
+    elif requirements.action_kind == "draft" and receipt.get("kind") != "form_prefill":
+        return ("navigation is not a verified form prefill and handoff",)
+    elif requirements.action_kind == "mutation" and receipt.get("kind") != "mutation":
+        return ("navigation is not a verified persisted change",)
+    return ()
 
 
 def finish_schema(tool: dict, requirements: TaskRequirements) -> dict:

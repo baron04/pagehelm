@@ -360,7 +360,7 @@ def run_loop(session) -> RunResult:
                                         session._refused_detail, steps=step)
                 if session._answer_repairs > answer_protocol.MAX_ANSWER_REPAIRS:
                     if session._task_requirements is not None:
-                        return session._refuse_unfinished_task(result, t0, step)
+                        return session._refuse_unfinished_task(result, t0, step, obs)
                     result.agent_said = unavailable_answer(session.task.prompt)
                     return session._finish(result, t0, "agent_refused", result.agent_said,
                                         steps=step)
