@@ -147,8 +147,8 @@ class DefaultProductAnswerPath(unittest.TestCase):
         self.assertIsNone(result.agent.verified_answer)
 
     def test_selection_fields_survive_query_context_trimming_after_navigation(self):
-        # Enough results to cross the batched trim (keep + TRIM_SLACK): when it runs, the
-        # query result is among those shortened and the selection computed from it is not.
+        # Navigation supersedes the query's page snapshot, but its record evidence must
+        # remain available alongside the later computation and current page.
         result, chat = self.execute([
             ("goto", {"url": "/object/company/company-1"}),
             ("wait_for", {"ms": 0}), ("wait_for", {"ms": 1}),
@@ -161,7 +161,9 @@ class DefaultProductAnswerPath(unittest.TestCase):
         final_context = chat.messages[-1]
         query = next(x for x in final_context if x.get("role") == "tool" and x.get("name") == "query_companies")
         computed = next(x for x in final_context if x.get("role") == "tool" and x.get("name") == "compute")
-        self.assertTrue(query["content"].startswith("(earlier)"))
+        self.assertIn("BUSINESS TOOL RESULT", query["content"])
+        self.assertIn("call2-record#2", query["content"])
+        self.assertIn("earlier page snapshot omitted", query["content"])
         self.assertIn("call2-record#2", computed["content"])
         self.assertIn('"field_name":"name"', computed["content"])
         self.assertIn('"outcome":"acted"', str(final_context))

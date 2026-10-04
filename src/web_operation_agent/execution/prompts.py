@@ -555,12 +555,15 @@ TRIM_SLACK = 3
 
 
 def _trim(messages: list[dict], keep: int) -> list[dict]:
-    """Keep the opening context and the last `keep` tool results in full, in batches.
+    """Keep recent server-marked snapshots without shortening their surrounding facts.
 
-    Older tool results become a single line saying what the action was and where it landed,
-    which is what the model actually needs from them; the page they described is gone. The
-    rewrite happens only once more than `keep + TRIM_SLACK` results are held in full.
+    Ordinary unmarked conversations retain the legacy batched tool-result policy. The
+    session renderer marks its own snapshot spans, so business results, source citations,
+    target state and policy feedback survive removal of an obsolete page observation.
     """
+    from .page_context import PageContextText, compact_snapshots
+    if any(isinstance(m.get("content"), PageContextText) for m in messages):
+        return compact_snapshots(messages, keep)
     tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
     full = [i for i in tool_indexes
             if not (messages[i].get("content") or "").startswith("(earlier) ")]

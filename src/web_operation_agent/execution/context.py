@@ -17,6 +17,7 @@ from .business_tools import render_business_skills
 from .prompts import _PLAN_PREAMBLE
 from .target import TargetState, describe_target, unmet_conditions
 from .turn_answer import AnswerState
+from .page_context import join_context, snapshot_text
 
 
 # Rendering cannot expose more refs than the shared browser wire contract accepts.  Keep the
@@ -195,7 +196,8 @@ class SessionContext:
 
     # -- rendering ---------------------------------------------------------------------
     def _opening(self, obs: PageObservation) -> str:
-        # The plan lives in its own message so it can be withdrawn; this one never changes.
+        # The plan lives in its own message so it can be withdrawn. Only this message's
+        # server-marked page snapshot may later be replaced; its task and context survive.
         parts = [f"TASK: {self.task.prompt}"]
         now_line = self._now_line()
         if now_line:
@@ -217,7 +219,7 @@ class SessionContext:
         business_skills = render_business_skills(self)
         if business_skills:
             parts.append(business_skills)
-        return "\n\n".join(parts)
+        return join_context(parts)
 
     def _now_line(self) -> str:
         """What the clock says where the person is, so relative dates resolve to their days.
@@ -274,7 +276,7 @@ class SessionContext:
         business_skills = render_business_skills(self)
         if business_skills:
             body.append(business_skills)
-        return "\n\n".join(body)
+        return join_context(body)
 
     def _mutation_proposal_count(self) -> int:
         return sum(1 for event in self.ledger.events
@@ -397,7 +399,8 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
         lines.append(f"  ... {hidden} further elements are not listed"
                      + (" and the page had more than the browser collects" if obs.truncated else ""))
     lines.append("END_UNTRUSTED_PAGE_OBSERVATION")
-    return "\n".join(lines)
+    return snapshot_text("\n".join(lines), epoch=obs.epoch,
+                         digest=obs.content_digest, url=obs.url)
 
 
 def _render_contract(c: OperationContract) -> str:

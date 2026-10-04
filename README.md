@@ -466,6 +466,10 @@ agent.
   bounded conversation history is included for referential or clarification follow-ups;
   Skills are selected from the current task; and deployment source remains a lazy cited
   lookup instead of being injected wholesale.
+  The step Agent retains recent distinct page observations and replaces older server-marked
+  snapshots with an omission notice. Business results, source citations, target state and
+  policy feedback outside those snapshots remain intact; the current observation is not
+  clipped by this compaction. This reduces stale page history, not every kind of model input.
 - Browser actions are checked against the current observation and application route policy.
   Page observations are viewport-bound and expose at most 200 live controls; a bounded
   read-only scroll obtains the next fresh observation instead of scanning an unbounded DOM.
