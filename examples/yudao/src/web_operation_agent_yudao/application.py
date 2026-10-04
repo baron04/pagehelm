@@ -113,6 +113,7 @@ class YudaoApplication:
                                       native_sections=native_tabs)
         from .native_tabs import NativeTabPolicy
         self.native_tab_policy = NativeTabPolicy((ui or UiSource.none()).records.values()) if native_tabs else None
+        self.read_only_tab_policy = self.native_tab_policy
         if source is not None:
             # The deployment's source rules: when a control shows, what an operation refuses.
             self.goal_data.attach_source(source)

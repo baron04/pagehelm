@@ -79,6 +79,48 @@ class NativeHostTests(unittest.TestCase):
         self.assertTrue({k.casefold() for k in SESSION_HANDOFF_KEYS} <= policy.handoffs.query_keys)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_page_agent_selection_is_explicit_and_requires_a_reviewed_guard(self):
+        self.assertEqual("goal", self.config.executor_mode)
+        for mode in ("fallback", None, True, []):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                replace(self.config, executor_mode=mode)
+        with self.assertRaisesRegex(ValueError, "reviewed native read policy"):
+            replace(self.config, executor_mode="page-agent")
+
+    def test_page_agent_reuses_the_actor_session_but_cannot_inherit_form_openers(self):
+        from web_operation_agent.execution.product import AgentTurnExecutor
+        from web_operation_agent.schemas import ElementRef, PageObservation
+        from web_operation_agent_yudao.native_tabs import NativeTabPolicy
+        from web_operation_agent_yudao.ui_source import UiSource
+        self.config = replace(self._native_form_config(), executor_mode="page-agent")
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+                records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
+                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy"):
+            host = self.host()
+            first = host.bootstrap("synthetic-a", "1", "page-agent")
+            active = host._sessions[("1", "1")]
+            executor = active.session.runner.executor
+            self.assertIsInstance(executor, AgentTurnExecutor)
+            self.assertTrue(executor.config.require_page_route)
+            self.assertFalse(executor.config.source.runtime_source)
+            self.assertFalse(executor.config.allow_form_prefill)
+            self.assertFalse(executor.config.allow_application_entry)
+            self.assertFalse(executor.config.allow_page_facets)
+            self.assertTrue({"click", "fill", "select", "submit", "apply_facet"}
+                            <= executor.config.disabled_actions)
+            self.assertIsInstance(executor.config.click_policy, NativeTabPolicy)
+            page = PageObservation(1, 1, "https://yudao.invalid/crm/customer/detail/1",
+                "Customer", [], [], render_state="ready", record_route="/crm/customer/detail/1")
+            tab = ElementRef("e1", "tab", "Contacts", "button", 1,
+                             {"id": "tab-contacts", "aria-controls": "pane-contacts"})
+            self.assertEqual("", executor.config.click_policy.decide(page, tab))
+            self.assertTrue(executor.config.click_policy.decide(page, replace(tab, role="button", name="编辑")))
+            renewed = host.bootstrap("synthetic-a-new", "1", "another-tab")
+            self.assertEqual(first["config"]["sessionId"], renewed["config"]["sessionId"])
+            self.assertIs(active.session.runner.executor, executor)
+            self.assertEqual("synthetic-a-new", active.client._token)
+            self.chat.return_value.complete.assert_not_called()
+
     def test_bootstrap_and_renewal_leave_navigation_to_the_application_document(self):
         host = self.host()
         first = host.bootstrap("synthetic-a", "1", "tab-a")

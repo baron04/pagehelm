@@ -30,7 +30,7 @@ import threading
 import time
 import urllib.request
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -39,6 +39,8 @@ from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductCapacityError,
                                                   LiveProductServer)
 from web_operation_agent.goal.executor import GoalTurnExecutor
+from web_operation_agent.execution.product import AgentTurnExecutor
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.modeling.client import ChatModel, SpendMeter
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.modeling.spend import DailyAllowance
@@ -105,6 +107,14 @@ class YudaoHostConfig:
     native_form_policy: Path | None = None
     native_create_policies: tuple[Path, ...] = ()
     native_guard_port: int = 48093
+    #: Explicit read-only page-planning pilot; never selected by browser messages or fallback.
+    executor_mode: str = "goal"
+
+    def __post_init__(self):
+        if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent"}:
+            raise ValueError("executor_mode must be goal or page-agent")
+        if self.executor_mode == "page-agent" and self.native_read_policy is None:
+            raise ValueError("page-agent requires a reviewed native read policy and write guard")
 
 
 @dataclass
@@ -267,14 +277,28 @@ class YudaoHost:
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
                                            source=self.source, click_policy=app.native_tab_policy,
                                            form_prefill=self.form_review is not None or bool(self.create_reviews))
-            executor = GoalTurnExecutor(
-                channel=channel,
-                config=turn_config, disabled_page_actions=turn_config.disabled_actions,
-                repository_answers=True,
-                chat=chat, application=bound, goal_port=app.goal_port, control=ReadOnlyControl(),
+            common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
                     self.config.state_dir / "conversation-state.sqlite3", session_id))
+            if self.config.executor_mode == "page-agent":
+                # Keep the existing single Agent, identity, meter, approval, audit and
+                # conversation. This pilot cannot enter forms or expose source authority.
+                turn_config = replace(turn_config, require_page_route=True,
+                    source=SourceCapability.none(), allow_form_prefill=False,
+                    allow_application_entry=False, allow_page_facets=False,
+                    disabled_actions=turn_config.disabled_actions | {"fill", "select", "submit", "back", "apply_facet"},
+                    click_policy=app.read_only_tab_policy,
+                    supported_scope="Open pages from the current actor's catalog or exact record references, "
+                        "then select enabled native record tabs from the fresh page. Runtime results "
+                        "must verify every requested page state. Missing candidates are not proof "
+                        "of absence; ask for clarification when ambiguous. Form entry, mutations, "
+                        "page filtering and source knowledge questions are outside this page pilot.")
+                executor = AgentTurnExecutor(**common, config=turn_config)
+            else:
+                executor = GoalTurnExecutor(**common, config=turn_config,
+                    disabled_page_actions=turn_config.disabled_actions, repository_answers=True,
+                    goal_port=app.goal_port)
             return LiveConversationRunner(channel, executor=executor)
 
         return self.server.create_session(
@@ -369,6 +393,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-form-policy", type=Path)
     ap.add_argument("--native-create-policy", type=Path, action="append", default=[])
     ap.add_argument("--native-guard-port", type=int, default=48093)
+    ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,
@@ -385,6 +410,7 @@ def main(argv=None) -> int:
         bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
         native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
         native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
+        executor_mode=a.executor,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))
     host.server.start()
