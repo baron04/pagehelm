@@ -102,6 +102,13 @@ agent.
   Simple parameter routes require the exact live component; CRM details additionally
   require a successful exact-record read and matching visible title. Read admission
   still depends on the deployment's reviewed API policy.
+  Yudao's identifier-free flat unpaged tables retain every row, including identical rows,
+  using query-local read references instead of business record IDs. Such tables are
+  read-only and have no record form. Server-bound query scopes use the existing native
+  condition contract, validate declared parameters and separate query caches; the
+  Contacts REST-derived report tests exercise the same scoped core reads without source.
+  Native sessions do not yet derive these scopes from the current page automatically,
+  so a report requiring a selected account or period still needs an explicit server binding.
   The declaration is staged by default: the request's hard references (document
   numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the
   model first picks entities and deliverable kinds from ranked entity summaries, and

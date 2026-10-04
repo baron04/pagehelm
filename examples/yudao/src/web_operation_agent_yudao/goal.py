@@ -19,6 +19,8 @@ from __future__ import annotations
 from collections import Counter, OrderedDict
 import re
 import math
+import json
+import uuid
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -27,12 +29,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from web_operation_agent.business.page_entries import PageEntry
-from web_operation_agent.goal.data import (EVERYTHING, ID, NAME, Choice, Compare, Cond,
+from web_operation_agent.goal.data import (EVERYTHING, ID, NAME, All, Native, Choice, Compare, Cond,
                                             DataRefused, EntitySchema, FieldSchema, Group,
                                             LinkValue, PageSchema, Ref, Row, Schema, as_bool,
-                                            matches, parts)
+                                            matches, parts, is_native)
 from web_operation_agent.goal.index import ApplicationIndex
 from web_operation_agent.goal.resolve.indexing import index_from_schema
+from web_operation_agent.goal.tabular import table_rows
 
 from .client import YudaoClient
 from .ui_source import UiSource
@@ -63,10 +66,21 @@ _READ_FOR_S = 15.0
 _READ_CACHE_SIZE = 128
 #: The link a line carries to the record whose detail holds it.
 _OWNER = "__owner"
+_TABLE_REF = "__table_reference"
 #: The most records whose details are read for a question about all their lines.
 _MAX_LINE_OWNERS = 400
 
 _MONEY = re.compile(r"金额|价格|单价|总价|费用|工资|薪|price|amount", re.I)
+
+
+@dataclass(frozen=True)
+class _QueryScope:
+    entity: str
+    endpoint: str
+    parameters: tuple[tuple[str, object], ...]
+    binding: str
+    generation: int
+    expires: float
 
 
 class YudaoGoalData:
@@ -100,6 +114,7 @@ class YudaoGoalData:
         self._read: OrderedDict[tuple, tuple] = OrderedDict()
         self._read_generation = getattr(client, "read_generation", 0)
         self._schema_generation = self._read_generation
+        self._query_binding = uuid.uuid4().hex
 
     # -- index and schema ---------------------------------------------------------------------
     def attach_conventions(self, conventions) -> None:
@@ -249,7 +264,9 @@ class YudaoGoalData:
                                                    permissions, str(menu["name"]))
             labels.setdefault(key, []).append(str(menu["name"]))
             ops = (("create",) if f"{key.replace('/', ':')}:create" in permissions else ())
-            pages.append(PageSchema(key=path, entity=key, label=str(menu["name"]), operations=ops))
+            table = "id" not in self._entities[key].props
+            pages.append(PageSchema(key=path, entity=key, label=str(menu["name"]),
+                                    operations=() if table else ops, opens_records=not table))
         # A label shared by entities of several modules ("客户" in CRM and ERP) keeps its
         # module's name so that it names one of them.
         plain = {k: e.label for k, e in self._entities.items()}
@@ -442,7 +459,7 @@ class YudaoGoalData:
                        props=props, params=params, required=required,
                        required_labels=required_labels, has_get=has_get,
                        get_path=get_path.removeprefix("/admin-api/"), list_path=list_path,
-                       view=view, operations=frozenset(ops), component=component,
+                       view=view, operations=frozenset({"read"} if "id" not in props else ops), component=component,
                        fixed_params={name: value for name, value in view.fixed_params if name in params}
                        if view and view.endpoint.lstrip("/") == list_path
                        else {})
@@ -523,6 +540,8 @@ class YudaoGoalData:
             (c for c in columns if c in props and _kind(props[c]) == "text"
              and not (re.search(r"(Name|No)$", c) and re.sub(r"(Name|No)$", "Id", c) in props)), "")
         entity.name_field = name_field
+        if "id" not in props:
+            fields = [replace(f, on_form=False, tab="") for f in fields]
         return EntitySchema(key=key, label=label, fields=tuple(fields), operations=entity.operations,
                             name_field=name_field if name_field == "name" else "",
                             total="totalPrice" if "totalPrice" in props else "",
@@ -587,9 +606,9 @@ class YudaoGoalData:
             name = told.group(1)
             rows = self._fetch(entity, self._narrowing(entity, name))
             displays = self._candidate_displays(entity, rows)
-            picked = [r for r in rows if displays[str(r["id"])] == text.strip()]
+            picked = [r for r in rows if displays[_row_id(r)] == text.strip()]
             if picked:
-                return tuple(Ref(entity=entity, id=str(r["id"]), display=text.strip(), name=name)
+                return tuple(Ref(entity=entity, id=_row_id(r), display=text.strip(), name=name)
                              for r in picked[:limit])
         rows = self._people(entity) if entity in (_USERS, _DEPTS) else self._fetch(
             entity, self._narrowing(entity, text))
@@ -599,8 +618,8 @@ class YudaoGoalData:
         # Two records shown alike ("张伟" at two customers) are told apart by whose they
         # are, so a person asked which can answer; the name itself stays what it is.
         displays = self._candidate_displays(entity, [r for _d, r in hits])
-        return tuple(Ref(entity=entity, id=str(r["id"]), name=d,
-                         display=displays[str(r["id"])])
+        return tuple(Ref(entity=entity, id=_row_id(r), name=d,
+                         display=displays[_row_id(r)])
                      for d, r in hits[:limit])
 
     def _candidate_displays(self, entity: str, rows: list[dict]) -> dict[str, str]:
@@ -610,15 +629,21 @@ class YudaoGoalData:
         duplicate names never collapse into one choice. No extra detail lookup.
         """
         names = [self._display(entity, row) for row in rows]
+        if rows and all(_TABLE_REF in row for row in rows):
+            # Keep the complete read reference selectable even when the table's
+            # natural label is long. Truncating only the human-readable prefix
+            # cannot merge identical rows or turn a handle into a record ID.
+            return {_row_id(row): f"{name[:32]}{'…' if len(name) > 32 else ''}（行引用={_row_id(row)}）"
+                    for row, name in zip(rows, names)}
         counts = Counter(names)
         labels = []
         for row, name in zip(rows, names):
             owner = self._whose(entity, row)
             labels.append(f"{name}（{owner}）" if counts[name] > 1 and owner else name)
         counts = Counter(labels)
-        return {str(row["id"]): (f"{self._display(entity, row)}（"
+        return {_row_id(row): (f"{self._display(entity, row)}（"
                 + ((self._whose(entity, row) + "；") if self._whose(entity, row) else "")
-                + f"ID={row['id']}）" if counts[label] > 1 else label)
+                + f"{'行引用' if _TABLE_REF in row else 'ID'}={_row_id(row)}）" if counts[label] > 1 else label)
                 for row, label in zip(rows, labels)}
 
     def _whose(self, entity: str, row: dict) -> str:
@@ -662,7 +687,7 @@ class YudaoGoalData:
                     row = {**row, **{f: listed.get(f) for f in (*spec.derived, *spec.lists)
                                      if row.get(f) is None}}
         else:
-            row = next((r for r in self._all(entity) if str(r.get("id")) == str(id)), None)
+            row = next((r for r in self._all(entity) if _row_id(r) == str(id)), None)
             if row is None:
                 raise DataRefused(f"{entity} {id} is not readable")
         return self._row(entity, row, fields)
@@ -724,15 +749,82 @@ class YudaoGoalData:
         return page
 
     def record_address(self, entity: str, id: str) -> str:
+        spec = self._entities.get(entity)
+        if spec is not None and "id" not in spec.props:
+            raise DataRefused("this read-only table has no record form")
         page = next((p.key for p in self.schema().pages if p.entity == entity), "")
         template = self._ui.records.get(page)
         return template.format(id=id) if template else page
 
+    def query_scope(self, entity: str, parameters: dict, *, label: str, ttl_s: float = 60) -> Native:
+        """Server-side query binding, not a model tool or proof of current page state.
+
+        A caller must separately establish the actual actor/page/lease and applied
+        parameters. The same actor's API still decides authorization on the read.
+        """
+        self.schema()
+        spec = self._entities.get(entity)
+        if spec is None or not isinstance(parameters, dict):
+            raise DataRefused("query scope is not in this actor's schema")
+        if not isinstance(ttl_s, (int, float)) or isinstance(ttl_s, bool) or not 0 < ttl_s <= 180:
+            raise ValueError("query scope ttl must be in (0, 180]")
+        for name, value in parameters.items():
+            kind = spec.params.get(name, {}).get("type")
+            valid = (kind == "integer" and isinstance(value, int) and not isinstance(value, bool)
+                     or kind == "number" and isinstance(value, (int, float))
+                     and not isinstance(value, bool) and math.isfinite(value)
+                     or kind == "boolean" and isinstance(value, bool)
+                     or kind == "string" and isinstance(value, str) and len(value) <= 512)
+            if not valid or _SECRET.search(name):
+                raise DataRefused("query scope has an undeclared or invalid parameter")
+            if name in spec.fixed_params and value != spec.fixed_params[name]:
+                raise DataRefused("query scope conflicts with the page's fixed parameters")
+        if any(name not in parameters and name not in spec.fixed_params for name in spec.required):
+            raise DataRefused("query scope does not supply all required parameters")
+        return Native(_QueryScope(entity, spec.list_path, tuple(sorted(parameters.items())),
+            self._query_binding, getattr(self._client, "read_generation", 0),
+            time.monotonic()+ttl_s), label=label)
+
+    def _validated_query(self, entity: str, payload) -> dict:
+        spec = self._entities.get(entity)
+        if (not isinstance(payload, _QueryScope) or payload.entity != entity or spec is None
+                or payload.endpoint != spec.list_path or payload.binding != self._query_binding
+                or payload.generation != getattr(self._client, "read_generation", 0)
+                or payload.expires <= time.monotonic()):
+            raise DataRefused("query scope is stale or belongs to another actor/query", read_failed=True)
+        return dict(payload.parameters)
+
+    def _local_conditions(self, entity: str, where: Cond) -> Cond:
+        if isinstance(where, Native):
+            self._validated_query(entity, where.payload)
+            return EVERYTHING
+        if isinstance(where, All):
+            return All(tuple(self._local_conditions(entity, c) for c in where.items))
+        if is_native(where):
+            raise DataRefused("query scopes cannot be negated or used as alternatives")
+        return where
+
+    def _query_parameters(self, entity: str, where: Cond) -> dict:
+        self._local_conditions(entity, where)
+        out = {}
+        def collect(c):
+            if isinstance(c, Native):
+                for key, value in self._validated_query(entity, c.payload).items():
+                    if key in out and out[key] != value:
+                        raise DataRefused("query scopes conflict")
+                    out[key] = value
+            elif isinstance(c, All):
+                for child in c.items:
+                    collect(child)
+        collect(where)
+        return out
+
     # -- helpers ---------------------------------------------------------------------------
     def _matching(self, entity: str, where: Cond, *,
                   people_names: dict[str, dict[str, str]] | None = None) -> list[dict]:
+        local = self._local_conditions(entity, where)
         return [r for r in self._fetch(entity, where)
-                if matches(where, self._row(entity, r, _fields_in(where), people_names=people_names))]
+                if matches(local, self._row(entity, r, _fields_in(local), people_names=people_names))]
 
     def _fetch(self, entity: str, where: Cond) -> list[dict]:
         """Every record the account may read that the pushed-down parameters admit."""
@@ -753,6 +845,8 @@ class YudaoGoalData:
         # condition locally. Never borrow a list from another required parent.
         broad = (entity, tuple(sorted((k, str(v)) for k, v in params.items()
                                       if k in spec.required)))
+        if is_native(where):
+            broad = key  # A query scope cannot borrow a wider cached table.
         held = self._cached_read(key, generation)
         if held is None and broad != key:
             held = self._cached_read(broad, generation)
@@ -766,7 +860,24 @@ class YudaoGoalData:
         return rows
 
     def _fetch_pages(self, entity: str, spec: "_Entity", params: dict) -> list[dict]:
+        if "id" not in spec.props:
+            if spec.has_get or not _unpaged(self._docs, spec.list_path):
+                raise DataRefused("identifier-free tables require a complete unpaged read", read_failed=True)
+            query = {**params, **spec.fixed_params}
+            generation = getattr(self._client, "read_generation", 0)
+            data = self._client.get(spec.list_path, **query)
+            binding = json.dumps([self._query_binding, generation, entity, query],
+                                 sort_keys=True, separators=(",", ":"))
+            converted = table_rows(data, binding=binding, max_rows=self._max_rows)
+            if generation != getattr(self._client, "read_generation", 0):
+                raise DataRefused("credentials changed while reading the table", read_failed=True)
+            if any(_TABLE_REF in r.values or "id" in r.values for r in converted):
+                raise DataRefused("read-only table changed its declared identity shape", read_failed=True)
+            if spec.list_path.endswith("/tree") or any(r.values.get("children") for r in converted):
+                raise DataRefused("identifier-free hierarchical tables require a reviewed row projection", read_failed=True)
+            return [{**r.values, _TABLE_REF:r.reference} for r in converted]
         scenes = (_SCENES if "sceneType" in spec.params and "sceneType" not in spec.fixed_params
+                  and "sceneType" not in params
                   else (None,))
         rows: dict[str, dict] = {}
         for scene in scenes:
@@ -881,7 +992,8 @@ class YudaoGoalData:
     def _pushdown(self, spec: "_Entity", where: Cond) -> dict:
         """Query parameters that narrow the list without losing a match of `where`: an
         exact number or code, or a name the list matches by containment."""
-        params = {}
+        bound = self._query_parameters(spec.key, where)
+        params = dict(bound)
         for cond in parts(where):
             if not isinstance(cond, Compare) or cond.field not in spec.params:
                 continue
@@ -896,6 +1008,8 @@ class YudaoGoalData:
             else:
                 op = cond.op
             if kind in ("integer", "number") and op == "eq" and str(value).lstrip("-").isdigit():
+                if cond.field in params and str(params[cond.field]) != str(value):
+                    raise DataRefused("explicit condition conflicts with the bound query scope")
                 params[cond.field] = value
             elif kind == "boolean" and op == "eq":
                 # Only a value that is a yes/no word is pushed down: the application
@@ -906,6 +1020,8 @@ class YudaoGoalData:
                     params[cond.field] = "true" if flag else "false"
             elif kind == "string" and op in ("eq", "contains") and value:
                 params[cond.field] = value
+        if any(str(params.get(name)) != str(value) for name, value in bound.items()):
+            raise DataRefused("explicit condition conflicts with the bound query scope")
         return params
 
     def _with_parent(self, spec: "_Entity", params: dict) -> dict:
@@ -986,6 +1102,14 @@ class YudaoGoalData:
             # A line is called by what it is of: its product.
             return str(row.get("productName") or row.get("name") or row.get("id"))
         spec = self._entities.get(entity)
+        if spec is not None and "id" not in spec.props:
+            schema = self.schema().entity(entity)
+            shown = []
+            for info in schema.fields:
+                value = row.get(spec.links.get(info.key) or info.key)
+                if info.listed and info.kind in ("text", "link", "date", "datetime") and value not in (None, ""):
+                    shown.append(f"{info.label} {value}")
+            return " · ".join(shown) or _row_id(row)
         for key in ((spec.name_field,) if spec and spec.name_field else ()) + ("name", "no", "nickname"):
             if row.get(key):
                 return str(row[key])
@@ -1021,7 +1145,7 @@ class YudaoGoalData:
             if info.kind == "money":
                 unit = self._money_for(entity, key)
                 units[key] = "元" if unit in ("元", "分") else unit
-        return Row(id=str(row.get("id")), display=self._display(entity, row),
+        return Row(id=_row_id(row), display=self._display(entity, row),
                    values=values, shown=shown, units=units)
 
     def _money_for(self, entity: str, key: str) -> str:
@@ -1168,6 +1292,20 @@ def _page_item(operation: dict, schemas: dict) -> str:
         return schemas[page]["properties"]["list"]["items"]["$ref"].split("/")[-1]
     except (KeyError, TypeError):
         return ""
+
+
+def _unpaged(docs: dict, path: str) -> bool:
+    operation = docs["paths"]["/admin-api/"+path]["get"]
+    schemas = docs.get("components", {}).get("schemas", {})
+    try:
+        ref = operation["responses"]["200"]["content"]["*/*"]["schema"]["$ref"].split("/")[-1]
+        return schemas[ref]["properties"]["data"].get("type") == "array"
+    except (KeyError, TypeError):
+        return False
+
+
+def _row_id(row: dict) -> str:
+    return str(row[_TABLE_REF] if _TABLE_REF in row else row.get("id"))
 
 
 def _kind(prop: dict) -> str | None:
