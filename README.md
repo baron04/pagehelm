@@ -417,6 +417,14 @@ agent.
   narrower `query_customers` collection filter; Contacts implements the same contract over
   its REST data. This is a record-location primitive, not a completed-answer or page-action
   guarantee.
+  Once a type is known, this same tool accepts its current opaque `entity_id` instead
+  of `entity_query`, and revalidates the actor/catalog binding before searching only
+  that type. The two arguments cannot be combined. A bound type's permission refusal
+  remains a typed refusal rather than widening to other types. Results identify the
+  types actually searched and their incomplete/refused reads; recovery hints ask the
+  Agent to check the original name and type independently, without adding type words
+  to a name or substituting a collection for a requested record. These hints neither
+  choose a record nor establish that the model understood the request.
 - A separate `find_page_entries` read ranks current-actor page/action metadata, including
   entries with no menu breadcrumb. It returns a route only for an adapter-reviewed,
   standalone destination; an unreviewed or current-record-dependent action is information

@@ -142,8 +142,77 @@ class ReferenceLookupContractTests(unittest.TestCase):
 
     def setUp(self):
         self.lookup = self._Lookup()
+        self.port = _Port()
         self.tools = ReferenceLookupTools(
-            _Port(), self.lookup, application_id="fixture.app")
+            self.port, self.lookup, application_id="fixture.app")
+
+    def entity(self, context=None):
+        return EntityReadTools(self.port, application_id="fixture.app").execute(
+            DISCOVER_ENTITIES_TOOL, {"query": "work items"}, context=context).content[
+                "candidates"][0]["entity_id"]
+
+    def test_bound_type_recovers_without_searching_category_words_inside_record_name(self):
+        missed = self.tools.execute({"entity_query": "release", "reference": "Prepare release"})
+        self.assertEqual(missed.content["searched_entities"], [])
+        self.assertIn("original name/number", missed.content["recovery_hint"])
+        found = self.tools.execute({"entity_id": self.entity(), "reference": "Prepare release"})
+        self.assertEqual(self.lookup.calls, [("internal.work.item", "Prepare release", 5)])
+        self.assertEqual(found.content["lookup_mode"], "bound_entity")
+        self.assertEqual(found.content["searched_entities"][0]["label"], "Work Items")
+        self.assertEqual(found.allowed_routes, ("/work/items/42",))
+        self.assertNotIn("internal.work.item", found.render())
+        self.assertNotIn("recovery_hint", found.content)
+
+    def test_bound_lookup_keeps_duplicates_and_never_substitutes_a_collection(self):
+        result = self.tools.execute({"entity_id": self.entity(), "reference": "duplicate"})
+        self.assertEqual([c["record_id"] for c in result.content["candidates"]], ["42", "43"])
+        self.assertEqual(result.content["searched_entity_count"], 1)
+        self.assertNotIn("chosen_candidate", result.content)
+        empty = self.tools.execute({"entity_id": self.entity(), "reference": "Prepare release Work Items"})
+        self.assertEqual(empty.allowed_routes, ())
+        self.assertEqual(empty.content["candidates"], [])
+        self.assertNotIn("not_found", empty.content)
+
+    def test_bound_lookup_does_not_rerank_or_query_a_similarly_named_other_type(self):
+        catalog = self.port.catalog()
+        other = EntityDescriptor(reference="internal.release", label="Release Register",
+                                 search_text="release work items")
+        self.port.catalog = lambda **kw: EntityCatalog(catalog.binding_digest,
+            (*catalog.entities, other), True, catalog.scope)
+        entity = self.entity()
+        result = self.tools.execute({"entity_id": entity, "reference": "Prepare release"})
+        self.assertEqual(self.lookup.calls, [("internal.work.item", "Prepare release", 5)])
+        self.assertEqual([c["entity_label"] for c in result.content["candidates"]], ["Work Items"])
+
+    def test_stale_or_native_type_and_conflicting_arguments_are_rejected_before_lookup(self):
+        old = self.entity()
+        self.port.revision = "2"
+        for args in ({"entity_id": old, "reference": "Prepare release"},
+                     {"entity_id": "internal.work.item", "reference": "Prepare release"},
+                     {"entity_id": old, "entity_query": "work items", "reference": "Prepare release"},
+                     {"reference": "Prepare release"}):
+            with self.subTest(args=args), self.assertRaises(BusinessToolRequestError):
+                self.tools.execute(args)
+        self.assertEqual(self.lookup.calls, [])
+
+    def test_bound_permission_refusal_is_typed_and_never_broadens_the_search(self):
+        def refused(*args, **kwargs):
+            raise BusinessToolPermissionError("record lookup denied")
+        self.lookup.lookup = refused
+        with self.assertRaises(BusinessToolPermissionError):
+            self.tools.execute({"entity_id": self.entity(), "reference": "Prepare release"})
+
+    def test_bound_type_cannot_cross_actor_authority(self):
+        def context(actor):
+            now = int(time.time() * 1000)
+            principal = PrincipalContext(1, "fixture.app", "tenant", "workspace", actor,
+                "delegation", now - 1000, now + 60000, ("records:read",))
+            return OperationContext.create(principal, session_id="session", turn_id="turn",
+                operation_id="lookup", deadline_ms=now + 30000, now_ms=now)
+        entity = self.entity(context("one"))
+        with self.assertRaises(BusinessToolRequestError):
+            self.tools.execute({"entity_id": entity, "reference": "Prepare release"}, context=context("two"))
+        self.assertEqual(self.lookup.calls, [])
 
     def test_one_call_resolves_actor_catalog_entity_and_record_without_native_names(self):
         result = self.tools.execute({

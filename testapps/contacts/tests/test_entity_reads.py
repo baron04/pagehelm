@@ -90,6 +90,24 @@ class ContactsEntityReadContractTests(unittest.TestCase):
                              "grace-hopper")
             self.assertEqual(result.allowed_routes, ("/contacts/grace-hopper",))
 
+    def test_bound_reference_recovery_uses_live_rest_type_without_reranking(self):
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
+            executor = adapter.business_tools._executor
+            refs = executor._reference_lookup
+            miss = refs.execute({"entity_query": "compiler", "reference": "Grace Hopper"})
+            self.assertEqual(miss.content["candidates"], [])
+            # This is the same actor-scoped opaque ID ordinary entity tools expose.
+            found = refs.execute({"entity_query": "contacts", "reference": "Ada Lovelace"})
+            entity_id = found.content["candidates"][0]["entity_id"]
+            suffix_miss = refs.execute({"entity_id": entity_id, "reference": "Grace Hopper contact"})
+            self.assertEqual(suffix_miss.content["candidates"], [])
+            recovered = refs.execute({"entity_id": entity_id, "reference": "Grace Hopper"})
+            self.assertEqual(recovered.allowed_routes, ("/contacts/grace-hopper",))
+            self.assertEqual(recovered.content["searched_entity_count"], 1)
+            self.assertEqual(recovered.content["lookup_mode"], "bound_entity")
+            self.assertEqual(application.write_requests, 0)
+
     def test_page_entry_contract_uses_the_rest_application_not_odoo_actions(self):
         with MinimalContactsApplication() as application:
             adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)

@@ -173,6 +173,19 @@ class GenericReadTests(unittest.TestCase):
         pages = self.tools.execute("find_page_entries", {"query": "合同"})
         self.assertIn("/crm/contract", pages.allowed_routes)
 
+    def test_bound_record_lookup_uses_only_discovered_type_and_preserves_exact_route(self):
+        customer = self.entity("客户")
+        miss = self.tools.execute("resolve_record_reference", {
+            "entity_id": customer, "reference": "云帆科技有限公司客户"})
+        self.assertEqual(miss.allowed_routes, ())
+        self.client.calls.clear()
+        found = self.tools.execute("resolve_record_reference", {
+            "entity_id": customer, "reference": "云帆科技有限公司"})
+        self.assertEqual(found.allowed_routes, ("/crm/customer/detail/5",))
+        self.assertEqual(found.content["searched_entity_count"], 1)
+        self.assertEqual(found.content["lookup_mode"], "bound_entity")
+        self.assertFalse(any(path.startswith("crm/contract/") for path, _params in self.client.calls))
+
     def test_complete_counts_sum_cents_and_stable_paging(self):
         self.docs["components"]["schemas"]["Contract"]["properties"]["totalPrice"][
             "description"] = "合同金额，单位：分"

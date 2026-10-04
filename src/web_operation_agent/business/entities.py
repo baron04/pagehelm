@@ -174,7 +174,11 @@ RESOLVE_RECORD_REFERENCE_SCHEMA = {
         "name": RESOLVE_RECORD_REFERENCE_TOOL,
         "description": (
             "Find a named or numbered record in the signed-in actor's readable application "
-            "entities. Give the kind of entity and the reference separately. Returns "
+            "entities. Give exactly one of entity_query (the entity kind) or entity_id "
+            "(an opaque ID already returned by discovery or reference lookup), separately "
+            "from the reference. Prefer entity_id once the right type is known; words "
+            "inside a record's name are not its entity type. Copy the record name/number "
+            "from the user or a current candidate without appending the entity kind. Returns "
             "bounded candidates, not proof that an absent record does not exist. Use a "
             "candidate's opaque entity ID for follow-up typed reads."
         ),
@@ -183,11 +187,14 @@ RESOLVE_RECORD_REFERENCE_SCHEMA = {
             "properties": {
                 "entity_query": {"type": "string", "minLength": 1, "maxLength": 120,
                                  "description": "Entity kind, such as customer or invoice."},
+                "entity_id": {"type": "string", "pattern": r"^entity_[0-9a-f]{32}$",
+                              "description": "Current actor-bound type from discovery; no keyword reranking."},
                 "reference": {"type": "string", "minLength": 1, "maxLength": 120,
                               "description": "A name or document number from the request."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 5},
             },
-            "required": ["entity_query", "reference"],
+            "required": ["reference"],
+            "oneOf": [{"required": ["entity_query"]}, {"required": ["entity_id"]}],
             "additionalProperties": False,
         },
     },
@@ -1100,20 +1107,29 @@ class ReferenceLookupTools:
 
     def execute(self, args: dict, *, context: OperationContext | None = None
                 ) -> BusinessToolResult:
-        args = _exact_args(args, {"entity_query", "reference", "limit"},
+        args = _exact_args(args, {"entity_query", "entity_id", "reference", "limit"},
                            RESOLVE_RECORD_REFERENCE_TOOL)
-        entity_query = _request_text(args.get("entity_query"), "entity_query", 120)
+        if ("entity_id" in args) == ("entity_query" in args):
+            raise BusinessToolRequestError("give exactly one of entity_query or entity_id")
         reference = _request_text(args.get("reference"), "reference", 120)
         limit = _bounded_int(args.get("limit"), name="limit", default=5,
                              minimum=1, maximum=5)
-        catalog = self._entity_reads._catalog(context)
-        ranked = []
-        for entity_id, entity in self._entity_reads._entities(catalog, context):
-            score = _score(entity_query, f"{entity.label} {entity.search_text}")
-            if score > 0:
-                ranked.append((score, entity_id, entity))
-        ranked.sort(key=lambda item: (-item[0], item[2].label.casefold(), item[1]))
+        bound = "entity_id" in args
+        if bound:
+            catalog, entity_id, entity = self._entity_reads._entity(args["entity_id"], context)
+            ranked = [(0, entity_id, entity)]
+            entity_query = ""
+        else:
+            entity_query = _request_text(args["entity_query"], "entity_query", 120)
+            catalog = self._entity_reads._catalog(context)
+            ranked = []
+            for entity_id, entity in self._entity_reads._entities(catalog, context):
+                score = _score(entity_query, f"{entity.label} {entity.search_text}")
+                if score > 0:
+                    ranked.append((score, entity_id, entity))
+            ranked.sort(key=lambda item: (-item[0], item[2].label.casefold(), item[1]))
         matches = []
+        searched = []
         lookup_truncated = False
         permission_omissions = 0
         for score, entity_id, entity in ranked[:3]:
@@ -1121,7 +1137,12 @@ class ReferenceLookupTools:
                 response = self._lookup.lookup(
                     entity, reference, limit=limit, context=context)
             except BusinessToolPermissionError:
+                if bound:
+                    # A known type's refusal cannot silently widen to other types.
+                    raise
                 permission_omissions += 1
+                searched.append({"entity_id": entity_id, "label": entity.label,
+                                 "status": "permission_denied"})
                 continue
             except (BusinessToolContractError, BusinessToolRequestError):
                 raise
@@ -1139,6 +1160,9 @@ class ReferenceLookupTools:
                 raise BusinessToolContractError(
                     "the application returned invalid reference matches")
             lookup_truncated |= truncated
+            searched.append({"entity_id": entity_id, "label": entity.label,
+                             "status": "read", "returned_count": len(found),
+                             "lookup_incomplete": truncated})
             for item in found:
                 exact = item.label.casefold() == reference.casefold()
                 matches.append((exact, score, entity_id, entity, item))
@@ -1152,7 +1176,8 @@ class ReferenceLookupTools:
         observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return BusinessToolResult(
             content={
-                "entity_query": entity_query,
+                **({"entity_id": args["entity_id"]} if bound else {"entity_query": entity_query}),
+                "lookup_mode": "bound_entity" if bound else "entity_query",
                 "reference": reference,
                 "candidates": [{
                     "entity_id": entity_id,
@@ -1163,6 +1188,14 @@ class ReferenceLookupTools:
                     **({"ui_path": item.route} if item.route else {}),
                 } for exact, _score_value, entity_id, entity, item in visible],
                 "searched_entity_count": min(3, len(ranked)) - permission_omissions,
+                "searched_entities": searched,
+                **({"recovery_hint": (
+                    "These are only the types and reference actually searched. If no requested "
+                    "record was found, verify the original name/number without added type words "
+                    "and discover the requested entity kind independently. Retry with its "
+                    "current entity_id; do not substitute a collection for a requested record. "
+                    "An empty or incomplete lookup is not proof of global absence.")}
+                   if not visible or truncated else {}),
                 "permission_omissions": permission_omissions,
                 "matching_entity_count": len(ranked),
                 "returned_count": len(visible),
@@ -1173,6 +1206,7 @@ class ReferenceLookupTools:
             audit={
                 "application": self._application_id,
                 "operation": RESOLVE_RECORD_REFERENCE_TOOL,
+                "lookup_mode": "bound_entity" if bound else "entity_query",
                 "catalog_digest": catalog.binding_digest,
                 "searched_entity_count": min(3, len(ranked)) - permission_omissions,
                 "permission_omissions": permission_omissions,
