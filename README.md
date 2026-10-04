@@ -87,7 +87,10 @@ agent.
   leaves the navigation unverified. Large navigation directories expose a bounded ranked
   sample, with space reserved ahead of entity summaries; omitted entries are not proof
   of absence. Goal declarations receive a redacted visible-page reference projection
-  of at most 4 KiB, without selectors, input attributes or action references. Changing
+  of at most 4 KiB, without selectors, input attributes or action references. The
+  visible control-name projection prioritizes working controls over navigation containers and
+  removes duplicate names within the same budget. These hints do not establish applied
+  query parameters or authorize actions. Changing
   visible context invalidates the declaration cache; an observation epoch alone does
   not. Runtime checks still establish permissions and action targets.
   Yudao can extract literal record-tab labels from deployed Vue components

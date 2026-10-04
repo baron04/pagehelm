@@ -16,6 +16,8 @@ from ..schemas.browser import PageObservation
 _CONVERSATION_BYTES = 8 * 1024
 _PAGE_CONTEXT_BYTES = 4 * 1024
 _PAGE_MARKUP = re.compile(r"(?:^|\n)\s*\*?\[\d+\]\s*<|<\s*/?\s*[A-Za-z][\w-]*(?:\s|/?>|$)")
+_CONTROL_ROLES = frozenset({"button", "textbox", "searchbox", "combobox", "spinbutton",
+                            "checkbox", "radio", "switch", "tab", "slider"})
 
 
 def _json_bytes(value) -> int:
@@ -93,10 +95,17 @@ def page_context(observation: PageObservation, *, handoffs=None):
         result[key], clipped = _context_text(
             value, handoffs=handoffs, chars=chars, bytes_limit=limit)
         result["truncated"] |= clipped
+    # Large shells put menu containers before the working page in the observation.
+    # Reserve the bounded name projection for actual controls before navigation and
+    # container text. Names are only reference hints, never attributes or authority.
+    controls = sorted((e for e in observation.elements if e.name),
+                      key=lambda e: 0 if e.role in _CONTROL_ROLES else
+                                    1 if e.role == "link" else 2)
+    control_names = list(dict.fromkeys(e.name for e in controls))
     for key, values, count, limit in (
             ("landmarks", observation.landmarks, 5, 120),
             ("messages", observation.messages, 3, 180),
-            ("control_names", [e.name for e in observation.elements if e.name], 12, 120)):
+            ("control_names", control_names, 12, 120)):
         result["truncated"] |= len(values) > count
         for value in values[:count]:
             text, clipped = _context_text(value, handoffs=handoffs, chars=limit, bytes_limit=limit)

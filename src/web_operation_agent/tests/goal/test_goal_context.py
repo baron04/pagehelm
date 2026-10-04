@@ -14,6 +14,38 @@ from web_operation_agent.tests.support.business import _Chat
 
 
 class GoalContextTests(unittest.TestCase):
+    def test_large_navigation_shell_does_not_hide_working_controls(self):
+        menus = [ElementRef(ref=f"menu-{i}", role="menuitem", name=f"Module {i}\nChild page",
+                            tag="li", epoch=1) for i in range(30)]
+        controls = [ElementRef(ref=f"control-{i}", role=role, name=name, tag=tag, epoch=1,
+                              attrs={"value": "private-draft-value", "id": "private-selector"})
+                    for i, (role, name, tag) in enumerate((
+                        ("combobox", "Start period", "input"),
+                        ("combobox", "End period", "input"),
+                        ("button", "Search", "button"),
+                        ("tab", "Contacts", "div")))]
+        # PageController may also expose the label's inner span. It must not spend
+        # another slot or displace a different control.
+        duplicate = ElementRef(ref="duplicate", role="span", name="Search", tag="span", epoch=1)
+        page = self.page(elements=menus + [duplicate] + controls)
+        self.assertEqual(["Start period", "End period", "Search", "Contacts"],
+                         page["control_names"][:4])
+        self.assertEqual(12, len(page["control_names"]))
+        self.assertEqual(1, page["control_names"].count("Search"))
+        self.assertTrue(page["truncated"])
+        serialized = json.dumps(page)
+        for private in ("private-draft-value", "private-selector", "control-0", "menu-0"):
+            self.assertNotIn(private, serialized)
+        self.assertLessEqual(len(json.dumps(page, ensure_ascii=False,
+                                            separators=(",", ":")).encode()), 4096)
+
+    def test_links_remain_reference_hints_when_no_working_controls_exist(self):
+        container = ElementRef(ref="container", role="div", name="All navigation pages",
+                               tag="div", epoch=1)
+        link = ElementRef(ref="link", role="link", name="Documentation", tag="a", epoch=1)
+        self.assertEqual(["Documentation", "All navigation pages"],
+                         self.page(elements=[container, link])["control_names"])
+
     def test_indexed_text_dom_never_supplies_attributes_values_or_action_refs_to_models(self):
         from types import SimpleNamespace
         from web_operation_agent.goal.source_answers import answer, retrieve
