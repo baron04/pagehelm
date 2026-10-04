@@ -92,7 +92,14 @@ agent.
   not. Runtime checks still establish permissions and action targets.
   Yudao can extract literal record-tab labels from deployed Vue components
   when native sections are enabled; dynamic labels remain unresolved. Source labels
-  do not replace live visibility or selected-tab verification. The declaration is staged by default: the request's hard references (document
+  do not replace live visibility or selected-tab verification. Its native integration
+  also requires rendered-route proof for data lists, record details and form handoffs.
+  Same-origin application GETs that are pending or fail block arrival, including
+  business errors returned with HTTP 200 and failures whose toast has disappeared.
+  Simple parameter routes require the exact live component; CRM details additionally
+  require a successful exact-record read and matching visible title. Read admission
+  still depends on the deployment's reviewed API policy.
+  The declaration is staged by default: the request's hard references (document
   numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the
   model first picks entities and deliverable kinds from ranked entity summaries, and
   then declares the details against those entities' neighbourhood of the index (their

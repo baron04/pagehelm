@@ -151,6 +151,8 @@ class NativeHostTests(unittest.TestCase):
             self.assertTrue(result["config"]["pageControllerModule"].endswith("/woa/yudao-page-controller.js"))
             session = host._sessions[("1", "1")].session
             executor = session.runner.executor
+            from web_operation_agent_yudao.page_goals import NativePageGoalPort
+            self.assertIsInstance(executor.goal_port, NativePageGoalPort)
             self.assertIsNotNone(executor.config.click_policy)
             self.assertEqual(executor.application.descriptor.page_write_guard, GUARD_PATH)
             self.assertIn("click", executor.disabled_page_actions)

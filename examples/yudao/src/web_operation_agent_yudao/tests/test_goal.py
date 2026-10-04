@@ -1103,3 +1103,30 @@ class ReferenceConventionTests(unittest.TestCase):
         self.assertEqual(unpaid.conditions, (("订单状态", ("待支付",)),))
         self.assertTrue(unpaid.named_in("商城订单里还没付款的有多少笔？"))
         self.assertFalse(unpaid.named_in("采购订单有几个？"))
+
+
+class NativePageGoalTests(unittest.TestCase):
+    def test_native_lists_and_records_require_mount_proof_without_changing_reads(self):
+        from web_operation_agent_yudao.page_goals import NativePageGoalPort
+
+        data = YudaoGoalData(_Client(), DOCS, ui=UiSource(
+            records={"/crm/contract": "/crm/contract/detail/{id}"}))
+        ordinary, native = DataGoalPort(data), NativePageGoalPort(data)
+        for goal in (
+            {"kind": "page", "entity": "crm/contract", "page": {"key": "/crm/contract"}},
+            {"kind": "page", "entity": "crm/contract", "record": "云帆企业版合同"},
+            {"kind": "fact", "entity": "crm/contract", "record": "云帆企业版合同", "fields": ["合同金额"]},
+            {"kind": "page", "entity": "crm/contract", "record": "Missing synthetic contract"},
+        ):
+            with self.subTest(goal=goal):
+                spec = GoalSpec.from_json({"deliverables": [goal]})
+                before, after = ordinary.resolve(spec), native.resolve(spec)
+                item = after.deliverables[0]
+                if item.page:
+                    self.assertTrue(item.page.requires_page_route)
+                    self.assertTrue(item.page.expected_path)
+                    from dataclasses import replace
+                    self.assertEqual(before, replace(after, deliverables=(replace(item,
+                        page=replace(item.page, requires_page_route=False)),)))
+                else:
+                    self.assertEqual(before, after)

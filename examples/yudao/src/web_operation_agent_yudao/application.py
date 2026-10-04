@@ -119,7 +119,9 @@ class YudaoApplication:
         if conventions is not None:
             # What this organisation means by some words, as its owner reviewed them.
             self.goal_data.attach_conventions(load_conventions(conventions))
-        self.goal_port = DataGoalPort(self.goal_data, today=today, reference_workers=4)
+        from .page_goals import NativePageGoalPort
+        goal_port = NativePageGoalPort if native_tabs else DataGoalPort
+        self.goal_port = goal_port(self.goal_data, today=today, reference_workers=4)
         from .form_entries import NativeEntryFormPort
         if isinstance(forms, NativeEntryFormPort):
             from .form_goals import NativeFormsGoalPort

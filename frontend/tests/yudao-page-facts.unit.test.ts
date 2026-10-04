@@ -196,11 +196,11 @@ describe('native Yudao record and read completion facts', () => {
     late(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
     expect(facts.readPageBlocker()).toBe(true)
   })
-  it('ignores an old route completion and other origins or non-CRM requests', () => {
+  it('ignores an old route completion, other origins, writes and non-application requests', () => {
     const facts = createPageFacts()
     expect(facts.begin('https://other.test/admin-api/crm/customer/get?id=6')).toBeNull()
     expect(facts.begin('/admin-api/crm/customer/update', 'PUT')).toBeNull()
-    expect(facts.begin('/admin-api/system/notify-message/get-unread-count')).toBeNull()
+    expect(facts.begin('/assets/application.js')).toBeNull()
     const old = facts.begin('/admin-api/crm/customer/get?id=6')!
     window.history.replaceState({}, '', '/crm/customer/detail/12')
     old(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
@@ -273,6 +273,101 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
 }
 
 describe('native Yudao mounted navigation identity', () => {
+  it('keeps a mounted list unverified during its read and after a failed read, even without a toast', () => {
+    mountedPage('/erp/sale/order', 'ErpSaleOrder')
+    const facts = createPageFacts()
+    const settle = facts.begin('/admin-api/erp/sale-order/page?pageNo=1')!
+    expect(facts.readPageBlocker()).toBe('pending')
+    expect(facts.readPageRoute()).toBeUndefined()
+    settle(403, null)
+    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageRoute()).toBeUndefined()
+    // An actor-verified empty result is valid; failure is never an empty result.
+    facts.begin('/admin-api/erp/sale-order/page?pageNo=1')!(200, {code: 0, data: {list: [], total: 0}})
+    expect(facts.readPageBlocker()).toBe(false)
+    expect(facts.readPageRoute()).toBe('/erp/sale/order')
+  })
+  it('rejects business-error envelopes and malformed responses on non-CRM pages', () => {
+    mountedPage('/mall/trade/order', 'TradeOrder')
+    for (const [status, body] of [[200, {code: 403}], [200, undefined], [0, null], [500, {code: 0}]]) {
+      const facts = createPageFacts()
+      facts.begin('/admin-api/trade/order/page')!(status, body)
+      expect(facts.readPageBlocker()).toBe(true)
+      expect(facts.readPageRoute()).toBeUndefined()
+    }
+  })
+  it('requires all observed dependencies and preserves the latest verdict across concurrent completions', () => {
+    mountedPage('/mall/trade/order', 'TradeOrder')
+    const facts = createPageFacts()
+    const old = facts.begin('/admin-api/trade/order/page')!
+    const latest = facts.begin('/admin-api/trade/order/page')!
+    const choices = facts.begin('/admin-api/trade/delivery/express/list-all-simple')!
+    latest(200, {code: 0, data: {list: []}})
+    old(403, null)
+    expect(facts.readPageBlocker()).toBe('pending')
+    choices(200, {code: 0, data: []})
+    expect(facts.readPageRoute()).toBe('/mall/trade/order')
+    const earlier = facts.begin('/admin-api/trade/order/page')!
+    facts.begin('/admin-api/trade/order/page')!(403, null)
+    earlier(200, {code: 0, data: {list: []}})
+    expect(facts.readPageRoute()).toBeUndefined()
+  })
+  it('does not reuse read completion across a change to the same page query', () => {
+    const state = mountedPage('/erp/sale/order', 'ErpSaleOrder')
+    const facts = createPageFacts()
+    const old = facts.begin('/admin-api/erp/sale-order/page?pageNo=1')!
+    window.history.replaceState({}, '', '/erp/sale/order?pageNo=2')
+    state.active.fullPath = '/erp/sale/order?pageNo=2'
+    state.instance.vnode.key = state.active.fullPath
+    const fresh = facts.begin('/admin-api/erp/sale-order/page?pageNo=2')!
+    old(200, {code: 0, data: {list: []}})
+    expect(facts.readPageBlocker()).toBe('pending')
+    fresh(403, null)
+    expect(facts.readPageRoute()).toBeUndefined()
+  })
+  it('fails closed on excessive read dependencies rather than dropping their unfinished state', () => {
+    mountedPage()
+    const facts = createPageFacts()
+    for (let i = 0; i < 64; i++) facts.begin('/admin-api/synthetic/read-' + i)!(200, {code: 0})
+    expect(facts.begin('/admin-api/synthetic/overflow')).toBeNull()
+    expect(facts.readPageBlocker()).toBe(true)
+    expect(facts.readPageRoute()).toBeUndefined()
+  })
+  it('observes non-CRM XHR failures without retaining the request query', () => {
+    mountedPage('/erp/sale/order', 'ErpSaleOrder')
+    class Request extends EventTarget {
+      responseType = 'json'
+      response = {code: 403}
+      status = 200
+      open() {}
+      send() { this.dispatchEvent(new Event('loadend')) }
+    }
+    const facts = installPageFacts({location: window.location, fetch: window.fetch, XMLHttpRequest: Request}, document)
+    try {
+      const request = new Request()
+      // @ts-expect-error Browser arguments are received by the installed wrapper.
+      request.open('GET', '/admin-api/erp/sale-order/page?name=Synthetic')
+      request.send()
+      expect(facts.readPageRoute()).toBeUndefined()
+      expect(facts.readPageBlocker()).toBe(true)
+    } finally { facts.dispose() }
+  })
+  it('proves a simple parameter route only with the exact mounted record and successful identity read', () => {
+    const state = mountedPage('/crm/customer/detail/6', 'CrmCustomerDetail')
+    state.matched.path = '/crm/customer/detail/:id'
+    state.element.innerHTML = '<span class="text-xl font-bold">Synthetic Customer</span>'
+      + '<div role="tab" aria-selected="true" aria-controls="panel-basic">基本信息</div>'
+    for (const element of state.element.querySelectorAll('*'))
+      element.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    const facts = createPageFacts()
+    expect(facts.readPageRoute()).toBeUndefined()
+    ready(facts)
+    expect(facts.readPageRoute()).toBe('/crm/customer/detail/6')
+    state.matched.path = '/crm/customer/detail/:pathMatch(.*)*'
+    expect(facts.readPageRoute()).toBeUndefined()
+    state.matched.path = '/crm/contract/detail/:id'
+    expect(facts.readPageRoute()).toBeUndefined()
+  })
   it('does not grant a route from source, currentRoute, metadata, menu or header alone', () => {
     const state = mountedPage()
     delete state.matched.instances

@@ -150,6 +150,7 @@ class EntryTests(unittest.TestCase):
             resolved = port.resolve(spec,context=self.context)
             self.assertEqual(resolved.deliverables[0],result.deliverables[0])
             self.assertTrue(resolved.deliverables[1].page.form.open_entry)
+            self.assertTrue(resolved.deliverables[1].page.requires_page_route)
             batch = replace(spec,deliverables=(spec.deliverables[0],replace(spec.deliverables[1],
                 action="",value="",field_values=(("合成备注","Draft"),))))
             self.assertEqual(port.resolve(batch,context=self.context).deliverables[1].page.form.values,

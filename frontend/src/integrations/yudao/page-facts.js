@@ -1,40 +1,43 @@
 /** App-owned page facts. Load before the application's module entry.
- * Observes only same-origin CRM GET completion; retains no credentials, queries,
+ * Observes same-origin application GET completion; retains no credentials, queries,
  * bodies or business values except the current detail's bounded visible title.
  * A navigation fact additionally requires the deployed AppView's live Vue mount.
  * This is observation, never the application's API write fence.
  */
 export function createPageFacts({view = window, doc = document} = {}) {
-  let route = '', generation = 0, record = null, disposed = false
+  let route = '', locationKey = '', generation = 0, record = null, disposed = false
   const reads = new Map()
   const visible = element => Boolean(element && element.getBoundingClientRect().width
     && element.getBoundingClientRect().height && !element.closest('[hidden],[aria-hidden="true"]'))
   function current() {
-    const next = view.location.pathname
-    if (next !== route) { route = next; generation++; record = null; reads.clear() }
+    const next = view.location.pathname + view.location.search + view.location.hash
+    if (next !== locationKey) {
+      locationKey = next; route = view.location.pathname; generation++; record = null; reads.clear()
+    }
     return generation
   }
   function begin(input, method = 'GET') {
     if (disposed || String(method).toUpperCase() !== 'GET') return null
     let url
     try { url = new URL(input, view.location.href) } catch { return null }
-    if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/crm/')) return null
+    if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/')) return null
     const heldGeneration = current()
     const detail = /^\/crm\/(customer|contract|business)\/detail\/([0-9]+)$/.exec(route)
-    if (!detail) return null
-    const isRecord = url.pathname === `/admin-api/crm/${detail[1]}/get`
+    const isRecord = Boolean(detail && url.pathname === `/admin-api/crm/${detail[1]}/get`)
     const ids = url.searchParams.getAll('id')
     const matchesRecord = !isRecord || ids.length === 1 && ids[0] === detail[2]
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]'))
       .filter(visible)
-    const panel = selected.length === 1 ? selected[0].getAttribute('aria-controls') || '' : ''
-    const key = (isRecord ? '*' : panel) + '\n' + url.pathname
+    const scoped = Boolean(detail && url.pathname.startsWith('/admin-api/crm/'))
+    const panel = scoped && selected.length === 1 ? selected[0].getAttribute('aria-controls') || '' : ''
+    const readPanel = isRecord || !scoped ? '*' : panel
+    const key = readPanel + '\n' + url.pathname
     // A bounded projection fails closed rather than dropping unfinished/error reads.
     if (!reads.has(key) && reads.size >= 64) { reads.set('overflow', {pending: 0, failed: true, panel: '*'}); return null }
     const prior = reads.get(key)
     const state = {pending: (prior?.pending || 0) + 1, failed: prior?.failed || false,
       conflicts: (prior?.conflicts || 0) + Number(!matchesRecord),
-      panel: isRecord ? '*' : panel, serial: (prior?.serial || 0) + 1}
+      panel: readPanel, serial: (prior?.serial || 0) + 1}
     reads.set(key, state)
     const serial = state.serial
     if (isRecord) record = null
@@ -62,18 +65,19 @@ export function createPageFacts({view = window, doc = document} = {}) {
   }
   function readPageBlocker() {
     current()
-    if (!/^\/crm\/(customer|contract|business)\/detail\/[0-9]+$/.test(route)) return false
-    const titles = Array.from(doc.querySelectorAll('.text-xl.font-bold')).filter(visible)
-    if (titles.length > 1 || record && titles.length === 1 && titles[0].textContent?.trim()
-        && titles[0].textContent.trim() !== record.name) return true
-    const loading = Array.from(doc.querySelectorAll('.el-loading-mask')).some(visible)
-    if (Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).some(visible)) return true
+    if (disposed) return true
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]')).filter(visible)
-    if (selected.length > 1) return true
     const panel = selected[0]?.getAttribute('aria-controls') || ''
     const relevant = Array.from(reads.values()).filter(s => s.panel === '*' || !s.panel || s.panel === panel)
     if (relevant.some(s => s.failed || s.conflicts)) return true
+    if (Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).some(visible)) return true
     if (relevant.some(s => s.pending)) return 'pending'
+    const loading = Array.from(doc.querySelectorAll('.el-loading-mask,[aria-busy="true"]')).some(visible)
+    if (!/^\/crm\/(customer|contract|business)\/detail\/[0-9]+$/.test(route)) return loading ? 'pending' : false
+    const titles = Array.from(doc.querySelectorAll('.text-xl.font-bold')).filter(visible)
+    if (titles.length > 1 || record && titles.length === 1 && titles[0].textContent?.trim()
+        && titles[0].textContent.trim() !== record.name) return true
+    if (selected.length > 1) return true
     // A route can render before its first GET or loading mask exists. Unknown
     // identity remains pending (bounded by the executor), never ready. Explicit
     // failed/conflicting reads and visible errors above still fail immediately.
@@ -93,9 +97,15 @@ export function createPageFacts({view = window, doc = document} = {}) {
       const app = doc.querySelector('#app')?.__vue_app__
       const active = app?.config?.globalProperties?.$router?.currentRoute?.value
       const matched = active?.matched?.at(-1)
-      // A wildcard, parameter template, redirect or source/menu entry is not a
-      // concrete rendered destination. RouterView stores a public Vue proxy.
-      if (!matched || active.path !== route || matched.path !== route || matched.redirect) return undefined
+      // Simple parameter routes may identify the active record. A wildcard,
+      // redirect or unsupported route expression cannot prove a destination.
+      // The live proxy and its fullPath key below bind the concrete instance.
+      if (!matched || active.path !== route || matched.redirect || typeof matched.path !== 'string') return undefined
+      const segments = matched.path.split('/')
+      if (segments.some(segment => /[:()*?]/.test(segment) && !/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment))) return undefined
+      const pattern = segments.map(segment => segment.startsWith(':') ? '[^/]+'
+        : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('/')
+      if (!new RegExp('^' + pattern + '$').test(route)) return undefined
       const instance = matched.instances?.default?.$
       const component = matched.components?.default
       const mounted = item => item?.isMounted === true && item.isUnmounted === false && item.isDeactivated === false
@@ -186,7 +196,7 @@ export function installPageFacts(view = window, doc = document) {
     requests.delete(this)
     try {
       const target = new URL(String(url), view.location.href)
-      if (target.origin === view.location.origin && target.pathname.startsWith('/admin-api/crm/')) {
+      if (target.origin === view.location.origin && target.pathname.startsWith('/admin-api/')) {
         const ids = target.searchParams.getAll('id')
         const id = ids.length === 1 ? ids[0] : ''
         requests.set(this, {method, path: target.pathname,

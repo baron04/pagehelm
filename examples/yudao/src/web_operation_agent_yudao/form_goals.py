@@ -3,11 +3,11 @@ from dataclasses import replace
 import re
 
 from web_operation_agent.goal.ports import FormPlan, Resolved
-from web_operation_agent.goal.resolve.service import DataGoalPort
+from .page_goals import NativePageGoalPort
 from .form_entries import REVIEWED_FILES
 
 
-class NativeFormsGoalPort(DataGoalPort):
+class NativeFormsGoalPort(NativePageGoalPort):
     def __init__(self, data, source, *, entries=(), updates=True, **kwargs):
         super().__init__(data, **kwargs)
         self._form_source = source
