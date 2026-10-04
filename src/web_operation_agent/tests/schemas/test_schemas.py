@@ -65,6 +65,21 @@ def _reasons_emitted_by(*classes) -> set[str]:
 
 
 class WireTypes(unittest.TestCase):
+    def test_applied_query_is_optional_bounded_and_rejects_credential_keys(self):
+        base = dict(schema_version=1, epoch=1, url="https://app.test/contacts",
+                    title="", landmarks=[], elements=[])
+        self.assertNotIn("page_query", S.PageObservation(**base).to_json())
+        query = {"path":"/api/contacts", "parameters":{"domain":"example.test"}}
+        page = S.PageObservation(**base, page_query=query)
+        query["parameters"]["domain"] = "changed"
+        self.assertEqual("example.test", S.PageObservation.from_json(page.to_json()).page_query["parameters"]["domain"])
+        for q in ({}, {"path":"//foreign/api", "parameters":{}},
+                  {"path":"/api?x=1", "parameters":{}},
+                  {"path":"/api", "parameters":{"token":"secret"}},
+                  {"path":"/api", "parameters":{"domain":["a","b"]}},
+                  {"path":"/api", "parameters":{"domain":"x"*257}}):
+            with self.subTest(query=q), self.assertRaises(S.SchemaError):
+                S.PageObservation(**base,page_query=q)
     def test_rendered_page_route_round_trips_without_changing_absent_wire_shape(self):
         base = dict(schema_version=1, epoch=1, url="https://app.test/help",
                     title="Help", landmarks=[], elements=[])

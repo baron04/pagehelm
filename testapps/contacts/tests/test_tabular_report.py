@@ -103,6 +103,30 @@ class DomainReport:
 
 
 class ContactReportTests(unittest.TestCase):
+    def test_rest_report_uses_authenticated_document_query_without_framework_or_source(self):
+        from web_operation_agent.transport import RemoteSessionRegistry
+        from web_operation_agent.schemas import ClientHello, PageObservation, ObservationEnvelope
+        with MinimalContactsApplication() as app:
+            data=self.bind(app,"ada-lovelace")
+            actor=data.context.principal
+            grant,channel=RemoteSessionRegistry().create(allowed_origins=[app.origin],principal=actor,session_id=data.context.session_id)
+            self.addCleanup(channel.close)
+            lease=channel.accept_hello(ClientHello(1,grant.session_id,"contacts-tab","test/1","contacts-document",
+                ("dom.observe",),app.origin,application_id=actor.application_id,principal_digest=actor.binding_digest))["lease_id"]
+            page=PageObservation(1,1,app.origin+"/contacts","Contacts",[],[],render_state="ready",page_route="/contacts",
+                page_query={"path":"/api/contacts","parameters":{"domain":"example.test"}})
+            channel.accept_observation(ObservationEnvelope(1,grant.session_id,"contact-query",1,page),lease_id=lease)
+            channel.accept_message({"message_id":data.context.turn_id,"text":"How many contacts use this domain?",
+                                    "page_url":page.url},lease_id=lease)
+            channel.wait_for_message(timeout_s=0)
+            observed=channel.page_for_read(data.context).observation
+            self.assertEqual("/api/contacts",observed.page_query["path"])
+            scoped=ScopedData(data,{"domains":data.scope(observed.page_query["parameters"]["domain"])})
+            result=DataGoalPort(scoped).resolve(GoalSpec.from_json({"deliverables":[{
+                "kind":"fact","entity":"domains","record":"example.test","fields":["Contacts"]}]})).deliverables[0]
+            self.assertFalse(result.problem)
+            self.assertEqual("3",result.facts[0].value)
+            self.assertEqual(0,app.write_requests)
     def bind(self,application,actor_id):
         actor=ACTORS_BY_ID[actor_id]
         adapter=MinimalContactsAdapter(application.origin,api_token=actor.token)

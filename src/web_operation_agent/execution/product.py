@@ -158,6 +158,9 @@ class AgentTurnConfig:
     #: what was typed there and loses the page's own state, so it is on by default.
     confirm_page_operations: bool = True
     require_identity: bool = False
+    #: Refresh the Agent's own observation before resolving data reads. A page
+    #: query hint is not current merely because its declaration was current.
+    observe_before_reads: bool = False
     deployment_profile: str = "production"
     #: Where the person is, as an IANA zone name, so "today" and "this month" mean their
     #: days. Empty leaves the turn on UTC and says so. An application that knows its user's
@@ -200,7 +203,8 @@ class AgentTurnConfig:
                 or not isinstance(self.deterministic_read_navigation, bool)
                 or not isinstance(self.skill_first, bool)
                 or not isinstance(self.confirm_page_operations, bool)
-                or not isinstance(self.require_identity, bool)):
+                or not isinstance(self.require_identity, bool)
+                or not isinstance(self.observe_before_reads, bool)):
             raise ValueError("turn policy flags must be booleans")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
                      "operation_approval_ttl_s", "keep_observations",

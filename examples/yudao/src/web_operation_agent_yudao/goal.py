@@ -785,6 +785,48 @@ class YudaoGoalData:
             self._query_binding, getattr(self._client, "read_generation", 0),
             time.monotonic()+ttl_s), label=label)
 
+    def scope_from_page(self, entity: str, observation, *, current_path: str) -> Native:
+        """Translate an authenticated fresh runtime fact, then recheck API authority.
+
+        The channel establishes actor/session/lease/turn. Runtime facts remain
+        untrusted: routes, endpoint and declared parameter types must agree here.
+        """
+        self.schema()
+        spec = self._entities.get(entity)
+        query = observation.page_query
+        page = self.schema().page(current_path)
+        if (not spec or not page or page.entity != entity or observation.page_route != current_path
+                or observation.render_state != "ready" or not isinstance(query, dict)
+                or query.get("path") != "/admin-api/" + spec.list_path
+                or not isinstance(query.get("parameters"), dict)):
+            raise DataRefused("当前页面尚未提供成功应用的查询范围。", read_failed=True)
+        parameters = {}
+        for name, value in query["parameters"].items():
+            kind = spec.params.get(name, {}).get("type")
+            if kind == "integer" and isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value):
+                parameters[name] = int(value)
+            elif kind == "number" and isinstance(value, str):
+                try:
+                    parameters[name] = float(value)
+                except ValueError:
+                    raise DataRefused("页面查询参数类型不一致。", read_failed=True) from None
+            elif kind == "boolean" and value in ("true", "false"):
+                parameters[name] = value == "true"
+            else:
+                parameters[name] = value
+        try:
+            scope = self.query_scope(entity, parameters, label="已应用的页面查询")
+        except DataRefused as exc:
+            raise DataRefused("页面查询参数未通过当前应用合同校验。", read_failed=True) from exc
+        # Distribution-owned verification for the measured ledger prototype.
+        # This is not a core schema, a model tool or a global 'last account'.
+        if entity == "fms/ledger/general":
+            accounts = self._client.get("fms/config/account-set/list")
+            if (not isinstance(accounts, list) or not all(isinstance(a, dict) for a in accounts)
+                    or sum(a.get("id") == parameters.get("accountSetId") for a in accounts) != 1):
+                raise DataRefused("当前账号无法唯一读取页面所选账套。", read_failed=True)
+        return scope
+
     def _validated_query(self, entity: str, payload) -> dict:
         spec = self._entities.get(entity)
         if (not isinstance(payload, _QueryScope) or payload.entity != entity or spec is None

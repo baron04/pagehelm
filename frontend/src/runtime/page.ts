@@ -51,6 +51,7 @@ interface PageControllerModule {
   readPageBlocker?: () => unknown
   readActiveView?: () => unknown
   readPageRoute?: () => unknown
+  readPageQuery?: () => unknown
 }
 
 export type PageFacetReader = () => unknown
@@ -60,6 +61,7 @@ export type PageRecordRouteReader = () => unknown
 export type PageBlockerReader = () => unknown
 export type ActiveViewReader = () => unknown
 export type PageRouteReader = () => unknown
+export type PageQueryReader = () => unknown
 export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {
   ref?: string; field: string; control: string; value: string
@@ -127,7 +129,8 @@ export class Page {
               private readonly readPageRecordRoute?: PageRecordRouteReader,
               private readonly readPageBlocker?: PageBlockerReader,
               private readonly readActiveView?: ActiveViewReader,
-              private readonly readPageRoute?: PageRouteReader) {}
+              private readonly readPageRoute?: PageRouteReader,
+              private readonly readPageQuery?: PageQueryReader) {}
 
   /** App-owned loading is distinct from an error; unknown values remain blocking. */
   readiness(): {blocked: boolean; pending: boolean} {
@@ -376,6 +379,7 @@ export class Page {
     const recordRoute = this.boundedRecordRoute()
     const activeView = this.boundedActiveView()
     const pageRoute = this.boundedPageRoute()
+    const pageQuery = pageRoute === undefined ? undefined : this.boundedPageQuery()
     return {
       observation: {
         schema_version: WIRE_VERSION,
@@ -393,6 +397,7 @@ export class Page {
         ...(candidates === undefined ? {} : {facet_candidates: candidates}),
         ...(recordRoute === undefined ? {} : {record_route: recordRoute}),
         ...(pageRoute === undefined ? {} : {page_route: pageRoute}),
+        ...(pageQuery === undefined ? {} : {page_query: pageQuery}),
       },
       fingerprints,
       canonicalUrl: canonicalUrl(state.url),
@@ -408,6 +413,31 @@ export class Page {
         raw.split('/').some(part => part === '.' || part === '..')) return undefined
     const safe = this.redactor.redactString(raw)
     return safe === raw ? raw : undefined
+  }
+
+  private boundedPageQuery(): PageObservation['page_query'] {
+    try {
+      const raw = this.readPageQuery?.()
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+      const q = raw as Record<string, unknown>
+      if (Object.keys(q).sort().join(',') !== 'parameters,path' || typeof q.path !== 'string' ||
+          q.path.length > browserContract.observation.max_page_route_chars || !q.path.startsWith('/') ||
+          q.path.startsWith('//') || /[?#\\]/.test(q.path) ||
+          Array.from(q.path).some(c => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 127) ||
+          q.path.split('/').some(p => p === '.' || p === '..') || this.redactor.redactString(q.path) !== q.path ||
+          !q.parameters || typeof q.parameters !== 'object' || Array.isArray(q.parameters)) return undefined
+      const pairs = Object.entries(q.parameters)
+      if (pairs.length > browserContract.observation.max_query_parameters) return undefined
+      const parameters: Record<string, string> = {}
+      for (const [key, value] of pairs) {
+        if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key) || key.length > browserContract.observation.max_query_key_chars ||
+            this.redactor.isSensitiveName(key) || typeof value !== 'string' ||
+            value.length > browserContract.observation.max_query_value_chars ||
+            this.redactor.redactString(value) !== value) return undefined
+        parameters[key] = value
+      }
+      return {path: q.path, parameters}
+    } catch { return undefined }
   }
 
   private boundedPageRoute(): string | undefined {
@@ -500,6 +530,7 @@ export interface LoadedPageController {
   readPageBlocker?: PageBlockerReader
   readActiveView?: ActiveViewReader
   readPageRoute?: PageRouteReader
+  readPageQuery?: PageQueryReader
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -553,5 +584,7 @@ export async function loadPageController(moduleUrl: string | undefined,
     ...(typeof module.readActiveView === 'function'
       ? {readActiveView: module.readActiveView} : {}),
     ...(typeof module.readPageRoute === 'function'
-      ? {readPageRoute: module.readPageRoute} : {})}
+      ? {readPageRoute: module.readPageRoute} : {}),
+    ...(typeof module.readPageQuery === 'function'
+      ? {readPageQuery: module.readPageQuery} : {})}
 }

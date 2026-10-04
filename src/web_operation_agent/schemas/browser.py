@@ -8,6 +8,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from importlib.resources import files
+from ..privacy import SENSITIVE_CREDENTIAL_NAME, SESSION_HANDOFF_QUERY_KEYS
 
 from .common import (SCHEMA_VERSIONS, _bool, _dict_copy, _non_negative_int,
                      _require, _schema_version, _str, _strict_object, digest)
@@ -40,6 +41,9 @@ MAX_SELECTED_CONTROLS = int(_BROWSER_CONTRACT["observation"]["max_selected_contr
 MAX_SELECTED_CONTROL_CHARS = int(_BROWSER_CONTRACT["observation"]["max_selected_control_chars"])
 MAX_PAGE_FACETS = int(_BROWSER_CONTRACT["observation"]["max_page_facets"])
 MAX_PAGE_ROUTE_CHARS = int(_BROWSER_CONTRACT["observation"]["max_page_route_chars"])
+MAX_QUERY_PARAMETERS = int(_BROWSER_CONTRACT["observation"]["max_query_parameters"])
+MAX_QUERY_KEY_CHARS = int(_BROWSER_CONTRACT["observation"]["max_query_key_chars"])
+MAX_QUERY_VALUE_CHARS = int(_BROWSER_CONTRACT["observation"]["max_query_value_chars"])
 MAX_FACET_CANDIDATES = int(_BROWSER_CONTRACT["observation"]["max_facet_candidates"])
 MAX_OBSERVATION_CONTENT_CHARS = int(
     _BROWSER_CONTRACT["observation"]["max_content_chars"])
@@ -158,9 +162,26 @@ class PageObservation:
     # Application-owned identity of the main page actually rendered. This fact can
     # verify arrival at an already authorized destination; it grants no route authority.
     page_route: str = ""
+    # Application-reported successful applied read, never draft inputs or authority.
+    page_query: dict | None = None
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
+        if self.page_query is not None:
+            q = self.page_query
+            _require(isinstance(q, dict) and set(q) == {"path", "parameters"}, "invalid page_query")
+            path, params = q["path"], q["parameters"]
+            _require(isinstance(path, str) and len(path) <= MAX_PAGE_ROUTE_CHARS
+                     and path.startswith("/") and not path.startswith("//")
+                     and not re.search(r"[?#\\\x00-\x20\x7f]", path)
+                     and not any(p in {".", ".."} for p in path.split("/")), "invalid query path")
+            _require(isinstance(params, dict) and len(params) <= MAX_QUERY_PARAMETERS, "invalid query parameters")
+            _require(all(isinstance(k, str) and 0 < len(k) <= MAX_QUERY_KEY_CHARS
+                         and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", k)
+                         and not SENSITIVE_CREDENTIAL_NAME.search(k) and k.lower() not in SESSION_HANDOFF_QUERY_KEYS
+                         and isinstance(v, str) and len(v) <= MAX_QUERY_VALUE_CHARS
+                         for k, v in params.items()), "invalid query parameter value")
+            self.page_query = copy.deepcopy(q)
         _non_negative_int(self.epoch, "epoch")
         _str(self.url, "url")
         _str(self.title, "title", allow_empty=True)
@@ -266,6 +287,8 @@ class PageObservation:
             out["record_route"] = self.record_route
         if self.page_route:
             out["page_route"] = self.page_route
+        if self.page_query is not None:
+            out["page_query"] = copy.deepcopy(self.page_query)
         return out
 
     @staticmethod
@@ -273,7 +296,7 @@ class PageObservation:
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
                    "content", "messages", "truncated", "render_state", "selected_controls",
                    "active_view",
-                   "page_facets", "facet_candidates", "record_route", "page_route"}
+                   "page_facets", "facet_candidates", "record_route", "page_route", "page_query"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
@@ -293,7 +316,7 @@ class PageObservation:
                                page_facets=copy.deepcopy(d.get("page_facets")),
                                facet_candidates=copy.deepcopy(d.get("facet_candidates")),
                                record_route=d.get("record_route", ""),
-                               page_route=d.get("page_route", ""))
+                               page_route=d.get("page_route", ""), page_query=copy.deepcopy(d.get("page_query")))
 
     @property
     def content_digest(self) -> str:

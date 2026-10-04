@@ -273,6 +273,39 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
 }
 
 describe('native Yudao mounted navigation identity', () => {
+  it('retains only the successful applied ledger query, independent of draft inputs and other documents', () => {
+    mountedPage('/fms/ledger/general', 'FmsLedgerGeneral')
+    const facts = createPageFacts(), other = createPageFacts()
+    const query = '/admin-api/fms/ledger/general/list?accountSetId=9&startMonth=2026-09&endMonth=2026-09&minLevel=1&maxLevel=1'
+    const first = facts.begin(query)!
+    expect(facts.readPageQuery()).toBeUndefined()
+    first(200, {code: 0, data: []})
+    expect(facts.readPageQuery()?.parameters.startMonth).toBe('2026-09')
+    expect(other.readPageQuery()).toBeUndefined()
+    // A draft control change is not a successful query.
+    const draft = document.createElement('input'); draft.value = '2026-08'; document.body.append(draft)
+    expect(facts.readPageQuery()?.parameters.startMonth).toBe('2026-09')
+    const old = facts.begin(query)!, newest = facts.begin(query.replaceAll('2026-09', '2026-08'))!
+    newest(200, {code: 0, data: []}); old(200, {code: 0, data: []})
+    expect(facts.readPageQuery()?.parameters.startMonth).toBe('2026-08')
+    const failed = facts.begin(query)!
+    expect(facts.readPageQuery()).toBeUndefined()
+    failed(200, {code: 123, data: []})
+    expect(facts.readPageQuery()).toBeUndefined()
+    facts.begin(query)!(200, {code: 0, data: []})
+    window.history.replaceState({}, '', '/fms/ledger/detail')
+    expect(facts.readPageQuery()).toBeUndefined()
+  })
+  it('does not retain malformed, duplicate, secret or incomplete ledger query parameters', () => {
+    mountedPage('/fms/ledger/general', 'FmsLedgerGeneral')
+    const query = '/admin-api/fms/ledger/general/list?accountSetId=9&startMonth=2026-09&endMonth=2026-09&minLevel=1&maxLevel=1'
+    for (const input of [query + '&token=private', query + '&accountSetId=10',
+      query.replace('accountSetId=9', 'accountSetId=no'), query.replace('&minLevel=1', '')]) {
+      const facts = createPageFacts()
+      facts.begin(input)!(200, {code: 0, data: []})
+      expect(facts.readPageQuery()).toBeUndefined()
+    }
+  })
   it('keeps a mounted list unverified during its read and after a failed read, even without a toast', () => {
     mountedPage('/erp/sale/order', 'ErpSaleOrder')
     const facts = createPageFacts()

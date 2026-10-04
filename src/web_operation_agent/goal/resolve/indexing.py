@@ -24,7 +24,10 @@ def index_from_schema(schema: Schema, *, breadcrumbs: dict[str, str] | None = No
     breadcrumbs, aliases, rules = breadcrumbs or {}, aliases or {}, rules or {}
     entities = []
     for entity in schema.entities:
-        shown = [f for f in entity.fields if f.listed or f.on_form] or list(entity.fields)
+        # A read-only entity has no form; absence of a literal UI column cannot
+        # hide a field the application explicitly declares readable in its schema.
+        shown = (list(entity.fields) if entity.operations == frozenset({"read"}) else
+                 [f for f in entity.fields if f.listed or f.on_form] or list(entity.fields))
         fields = tuple(IndexField(key=f.key, label=f.label, kind=_KINDS[f.kind],
                                   relation=f.relation if f.kind == "link" else "",
                                   choices=tuple(c.label for c in f.choices), aliases=f.aliases)

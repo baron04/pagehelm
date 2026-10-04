@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 
 from ..state.store import DurableStateError
-from ..state.identity import PrincipalContext, PrincipalError, PrincipalRevokedError
+from ..state.identity import OperationContext, PrincipalContext, PrincipalError, PrincipalRevokedError
 from ..schemas import SCHEMA_VERSIONS, TaskEvent, canonical_json
 from .protocol import (RemoteProtocolError, RemoteSessionClosed, _MAX_EVENT_BYTES,
                        _copy_json, _copy_wire)
@@ -56,6 +56,23 @@ class ChannelState:
         with self._condition:
             return (_copy_wire(self._latest_observation)
                     if self._latest_observation is not None else None)
+
+    def page_for_read(self, context: OperationContext) -> ObservationEnvelope:
+        """Read only the active turn's authenticated document, never an actor-global page."""
+        with self._condition:
+            self._ensure_open()
+            if not isinstance(context, OperationContext):
+                raise PrincipalError("page read requires an operation context")
+            context.require_live()
+            if (self.principal is None or context.principal.binding_digest != self.principal.binding_digest
+                    or context.session_id != self.session_id or context.turn_id != self._active_message_id
+                    or context.turn_id in self._cancelled_message_ids or not self._active_lease_id):
+                raise PrincipalError("page read is not bound to the current actor/session/turn")
+            self._require_active_lease(self._active_lease_id)
+            envelope = self._lease_observations.get(self._active_lease_id)
+            if envelope is None:
+                raise PrincipalError("the active document has no page reading")
+            return _copy_wire(envelope)
 
     @property
     def pending_action(self) -> ActionEnvelope | None:

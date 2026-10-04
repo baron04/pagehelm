@@ -68,6 +68,8 @@ export interface PageObservation {
   record_route?: string
   /** Application-owned main-page identity actually rendered, not a navigation grant. */
   page_route?: string
+  /** Successful application-owned applied query; not a draft or authorization. */
+  page_query?: {path: string; parameters: Record<string, string>}
 }
 
 export interface ObservationEnvelope {

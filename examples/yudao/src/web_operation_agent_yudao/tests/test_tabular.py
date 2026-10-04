@@ -48,6 +48,31 @@ class Client(_Client):
 
 
 class YudaoTableTests(unittest.TestCase):
+    def test_native_page_resolution_binds_successful_query_and_never_falls_back_on_failure(self):
+        from web_operation_agent.schemas import PageObservation
+        from web_operation_agent_yudao.page_goals import NativePageGoalPort
+        from dataclasses import replace
+        page=PageObservation(1,1,"https://test.invalid"+PAGE,"",[],[],render_state="ready",page_route=PAGE,
+                             page_query={"path":"/admin-api/"+PATH,"parameters":{"ledgerId":"2","month":"2026-09"}})
+        port=NativePageGoalPort(self.data)
+        readings=[]
+        port.page_reader=lambda context: readings.append(context) or page
+        spec=GoalSpec.from_json({"deliverables":[{"entity":ENTITY,"kind":"fact","fields":["Debit"],
+            "metric":{"op":"count","filters":[{"field":"Row kind","values":["Monthly"]}]}}]})
+        result=port.resolve(spec,current_path=PAGE).deliverables[0]
+        self.assertEqual("240",result.facts[0].value)
+        for failed in (replace(page,page_query=None),replace(page,render_state="pending"),
+                       replace(page,page_route="/other"),
+                       replace(page,page_query={"path":"/admin-api/other/list","parameters":{}})):
+            port.page_reader=lambda context:failed
+            calls=len(self.client.calls)
+            result=port.resolve(spec,current_path=PAGE).deliverables[0]
+            self.assertEqual("unavailable",result.read_failure)
+            self.assertFalse(result.facts)
+            self.assertEqual(calls,len(self.client.calls))
+        port.page_reader=lambda context: (_ for _ in ()).throw(AssertionError("navigation needs no read scope"))
+        result=port.resolve(GoalSpec.from_json({"deliverables":[{"kind":"page","entity":ENTITY}]}),current_path=PAGE)
+        self.assertFalse(result.deliverables[0].problem)
     def test_bound_crm_scene_is_not_overwritten_by_the_three_scene_union(self):
         client=_Client()
         data=YudaoGoalData(client,deepcopy(CRM_DOCS))

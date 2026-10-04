@@ -1,3 +1,3 @@
 /** Application-owned wrapper around the pinned generic controller, never a new harness. */
 export {PageController, getElementByIndex} from './page-controller.js'
-export {readPageBlocker, readPageRecordRoute, readPageRoute} from './page-facts.js'
+export {readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery} from './page-facts.js'

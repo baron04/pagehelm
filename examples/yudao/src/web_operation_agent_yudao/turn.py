@@ -27,7 +27,7 @@ def yudao_turn_config(run_dir: Path, *, timeout_s: int,
             "For a pure page-opening request, find_page_entries returns current "
             "application paths; keep those paths relative rather than adding an origin."),
         ledger_path=run_dir / "audit.jsonl", wall_budget_s=timeout_s,
-        transport_timeout_s=30, require_identity=True, source=source,
+        transport_timeout_s=30, require_identity=True, observe_before_reads=True, source=source,
         disabled_actions=frozenset({"click", "select", "submit", "back", "apply_facet"}
                                   | (set() if form_prefill else {"fill"})),
         allow_form_prefill=form_prefill,

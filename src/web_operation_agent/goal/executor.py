@@ -1616,6 +1616,15 @@ class GoalTurnExecutor:
 
     def _resolve(self, s: _TurnState, spec: GoalSpec, *, quiet: bool = False) -> Resolution:
         s.budget.check()
+        reading_policy = getattr(self.goal_port, "requires_page_reading", None)
+        scoped_read = (reading_policy(spec, current_path=_path_of(s.obs.url))
+                       if self.config.observe_before_reads and callable(reading_policy) else True)
+        if self.config.observe_before_reads and scoped_read and any(d.kind in {"fact", "list", "aggregate"} for d in spec.deliverables):
+            receipt = self._dispatch(s, "observe", {})
+            if receipt is None or not receipt.ok:
+                return Resolution(tuple(Resolved(kind=d.kind, problem="fresh page reading is unavailable",
+                    read_failure="unavailable", read_operation=d.kind, read_fields=d.fields)
+                    for d in spec.deliverables), ())
         with s.receipt.stage("business"):
             return self._resolve_declared(s, spec, quiet=quiet)
 

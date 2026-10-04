@@ -26,7 +26,7 @@ import {Page, loadPageController, formFieldMatches, type FormHandoffField,
   type FormSubmitTarget, type PageControllerApi, type PageFacetReader,
   type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
   type ActiveViewReader, type FacetCandidateReader, type FacetApplier,
-  type PageRouteReader} from './page'
+  type PageRouteReader, type PageQueryReader} from './page'
 import type {ElementLookup} from './pageModel'
 import {createShell, type PanelShell} from './shell'
 import {DEFAULT_CONFIGURATION} from '../contract/panel'
@@ -100,6 +100,7 @@ export class EmbeddedWebRuntime {
   readPageBlocker: PageBlockerReader | undefined
   readActiveView: ActiveViewReader | undefined
   readPageRoute: PageRouteReader | undefined
+  readPageQuery: PageQueryReader | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -223,7 +224,7 @@ export class EmbeddedWebRuntime {
     }
     return new Page(this.controller, this.getElementByIndex, this.redactor,
       this.readPageFacets, this.readFacetCandidates, this.applyPageFacet,
-      this.readPageRecordRoute, this.readPageBlocker, this.readActiveView, this.readPageRoute)
+      this.readPageRecordRoute, this.readPageBlocker, this.readActiveView, this.readPageRoute, this.readPageQuery)
   }
 
   _save(): void { writeStored(this.sessionId, this.stored) }
@@ -261,7 +262,7 @@ export class EmbeddedWebRuntime {
 
   async start(): Promise<this> {
     const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
-      readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute} = await loadPageController(
+      readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute, readPageQuery} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
@@ -272,6 +273,7 @@ export class EmbeddedWebRuntime {
     this.readPageBlocker = readPageBlocker
     this.readActiveView = readActiveView
     this.readPageRoute = readPageRoute
+    this.readPageQuery = readPageQuery
     return this._startConnectedRuntime()
   }
 

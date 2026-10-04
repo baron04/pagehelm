@@ -107,8 +107,17 @@ agent.
   read-only and have no record form. Server-bound query scopes use the existing native
   condition contract, validate declared parameters and separate query caches; the
   Contacts REST-derived report tests exercise the same scoped core reads without source.
-  Native sessions do not yet derive these scopes from the current page automatically,
-  so a report requiring a selected account or period still needs an explicit server binding.
+  The native integration can bind the general ledger's successful applied query
+  from a fresh observation of the active actor/session/turn document and rechecks the
+  account set through the same actor's API. Draft months, pending or failed reads,
+  mismatched pages and another document's query cannot establish that scope.
+  The initial application projection covers account set, start/end month and level
+  bounds; additional query criteria remain unbound. Opening this report under an
+  active guard still requires its FMS read chain to be reviewed in the deployment policy.
+  The Agent retains the refreshed
+  observation before resolution. Ordinary API reads do not require this page refresh.
+  Read-only entities retain every declared typed query field in the index even when
+  a dynamic UI column cannot be extracted; this does not expose form entry or writes.
   The declaration is staged by default: the request's hard references (document
   numbers, codes, Latin-script names) are cut out by shape and located by the adapter, the
   model first picks entities and deliverable kinds from ranked entity summaries, and

@@ -36,6 +36,31 @@ from web_operation_agent.tests.transport.support import (
 
 
 class ChannelTests(unittest.TestCase):
+    def test_read_context_uses_the_active_turn_document_and_rejects_foreign_bindings(self):
+        from web_operation_agent.state.identity import PrincipalError
+        now = int(time.time()*1000)
+        actor = principal(now)
+        grant, channel = RemoteSessionRegistry().create(allowed_origins=[ORIGIN], principal=actor)
+        leases = []
+        for number in (1,2):
+            lease = channel.accept_hello(hello(grant.session_id,client_id=f"tab-{number}",
+                runtime_instance_id=f"doc-{number}",application_id="sample",
+                principal_digest=actor.binding_digest))["lease_id"]
+            page = dataclasses.replace(observation(grant.session_id,number).observation,
+                page_route="/start",page_query={"path":"/api/report", "parameters":{"tenantView":str(number)}})
+            channel.accept_observation(ObservationEnvelope(1,grant.session_id,f"read-{number}",number,page),lease_id=lease)
+            leases.append(lease)
+        channel.accept_message({"message_id":"read-turn","text":"Read this report","page_url":ORIGIN+"/start"},lease_id=leases[0])
+        channel.wait_for_message(timeout_s=0)
+        context = OperationContext.create(actor,session_id=grant.session_id,turn_id="read-turn",
+                                         operation_id="read",deadline_ms=now+30000)
+        self.assertEqual("1",channel.page_for_read(context).observation.page_query["parameters"]["tenantView"])
+        for c in (None,dataclasses.replace(context,session_id="other-session"),
+                  dataclasses.replace(context,turn_id="other-turn"),
+                  dataclasses.replace(context,principal=principal(now,actor_id="other"))):
+            with self.assertRaises(PrincipalError):channel.page_for_read(c)
+        channel._release_lease(leases[0])
+        with self.assertRaises(RemoteProtocolError):channel.page_for_read(context)
     def setUp(self):
         registry = RemoteSessionRegistry()
         self.grant, self.channel = registry.create(allowed_origins=[ORIGIN],

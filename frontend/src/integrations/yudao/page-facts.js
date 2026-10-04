@@ -1,18 +1,31 @@
 /** App-owned page facts. Load before the application's module entry.
- * Observes same-origin application GET completion; retains no credentials, queries,
- * bodies or business values except the current detail's bounded visible title.
+ * Observes same-origin application GET completion; retains no credentials,
+ * bodies or business values except a bounded visible detail title and reviewed
+ * scalar applied-query parameters.
  * A navigation fact additionally requires the deployed AppView's live Vue mount.
  * This is observation, never the application's API write fence.
  */
+function ledgerQuery(url) {
+  // Application-owned projection, not a schema or permission in the core.
+  const patterns = {accountSetId: /^[1-9][0-9]{0,19}$/, startMonth: /^\d{4}-(0[1-9]|1[0-2])$/,
+    endMonth: /^\d{4}-(0[1-9]|1[0-2])$/, minLevel: /^[1-9][0-9]?$/, maxLevel: /^[1-9][0-9]?$/}
+  const pairs = Array.from(url.searchParams)
+  if (pairs.length === Object.keys(patterns).length && new Set(pairs.map(([key]) => key)).size === pairs.length &&
+      pairs.every(([key, value]) => Object.hasOwn(patterns, key) && patterns[key].test(value))) {
+    return {path: url.pathname, parameters: Object.fromEntries(pairs)}
+  }
+  return null
+}
+
 export function createPageFacts({view = window, doc = document} = {}) {
-  let route = '', locationKey = '', generation = 0, record = null, disposed = false
+  let route = '', locationKey = '', generation = 0, record = null, appliedQuery = null, disposed = false
   const reads = new Map()
   const visible = element => Boolean(element && element.getBoundingClientRect().width
     && element.getBoundingClientRect().height && !element.closest('[hidden],[aria-hidden="true"]'))
   function current() {
     const next = view.location.pathname + view.location.search + view.location.hash
     if (next !== locationKey) {
-      locationKey = next; route = view.location.pathname; generation++; record = null; reads.clear()
+      locationKey = next; route = view.location.pathname; generation++; record = null; appliedQuery = null; reads.clear()
     }
     return generation
   }
@@ -22,6 +35,14 @@ export function createPageFacts({view = window, doc = document} = {}) {
     try { url = new URL(input, view.location.href) } catch { return null }
     if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/')) return null
     const heldGeneration = current()
+    const ledger = route === '/fms/ledger/general' && url.pathname === '/admin-api/fms/ledger/general/list'
+    let query = null
+    if (ledger) {
+      appliedQuery = null
+      // Application-owned scalar query observation for the first native report.
+      // Retain only reviewed query fields, never headers, bodies or arbitrary URLs.
+      query = ledgerQuery(url)
+    }
     const detail = /^\/crm\/(customer|contract|business)\/detail\/([0-9]+)$/.exec(route)
     const isRecord = Boolean(detail && url.pathname === `/admin-api/crm/${detail[1]}/get`)
     const ids = url.searchParams.getAll('id')
@@ -54,6 +75,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
       if (latest.serial !== serial) return
       const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
       latest.failed = !ok
+      if (ledger && ok && query && Array.isArray(body?.data)) appliedQuery = query
       if (isRecord && ok) {
         const id = body?.data?.id, name = body?.data?.name
         if ((typeof id === 'number' && Number.isSafeInteger(id) || typeof id === 'string' && /^[0-9]+$/.test(id))
@@ -89,6 +111,11 @@ export function createPageFacts({view = window, doc = document} = {}) {
     current()
     if (readPageBlocker() || record?.route !== route) return undefined
     return route
+  }
+  function readPageQuery() {
+    current()
+    if (!appliedQuery || readPageBlocker() || readPageRoute() !== route) return undefined
+    return {path: appliedQuery.path, parameters: {...appliedQuery.parameters}}
   }
   function readPageRoute() {
     if (disposed) return undefined
@@ -169,8 +196,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
       return route
     } catch { return undefined }
   }
-  return {begin, readPageBlocker, readPageRecordRoute, readPageRoute,
-    dispose() {disposed = true; reads.clear(); record = null}}
+  return {begin, readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery,
+    dispose() {disposed = true; reads.clear(); record = null; appliedQuery = null}}
 }
 
 export function installPageFacts(view = window, doc = document) {
@@ -197,9 +224,11 @@ export function installPageFacts(view = window, doc = document) {
     try {
       const target = new URL(String(url), view.location.href)
       if (target.origin === view.location.origin && target.pathname.startsWith('/admin-api/')) {
-        const ids = target.searchParams.getAll('id')
-        const id = ids.length === 1 ? ids[0] : ''
-        requests.set(this, {method, path: target.pathname,
+        const ids = target.searchParams.getAll('id'), id = ids.length === 1 ? ids[0] : ''
+        const ledger = view.location.pathname === '/fms/ledger/general' && target.pathname === '/admin-api/fms/ledger/general/list'
+        // Retain only a bounded scalar projection; open alone starts no read.
+        const query = ledger ? ledgerQuery(target) : null
+        requests.set(this, {method, path: target.pathname, ledger, query,
           id: /^[0-9]{1,20}$/.test(id) ? id : ''})
       }
     } catch { /* The original implementation owns invalid URL errors. */ }
@@ -208,7 +237,14 @@ export function installPageFacts(view = window, doc = document) {
   const send = function(...args) {
     const request = requests.get(this)
     requests.delete(this)
-    const settle = request && facts.begin(request.path + (request.id ? '?id=' + request.id : ''), request.method)
+    let target
+    if (request) {
+      target = new URL(request.path, view.location.href)
+      if (request.ledger) {
+        for (const [key, value] of Object.entries(request.query?.parameters || {})) target.searchParams.set(key, value)
+      } else if (request.id) target.searchParams.set('id', request.id)
+    }
+    const settle = request && facts.begin(target.href, request.method)
     if (settle) this.addEventListener('loadend', () => {
       let body
       try { body = this.responseType === 'json' ? this.response : JSON.parse(this.responseText) } catch { /* blocked */ }
@@ -230,4 +266,5 @@ const installed = typeof window === 'undefined' ? null : installPageFacts()
 export const readPageBlocker = () => installed ? installed.readPageBlocker() : true
 export const readPageRecordRoute = () => installed?.readPageRecordRoute()
 export const readPageRoute = () => installed?.readPageRoute()
+export const readPageQuery = () => installed?.readPageQuery()
 export const disposeInstalledPageFacts = () => installed?.dispose()

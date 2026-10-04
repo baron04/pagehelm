@@ -41,6 +41,21 @@ describe('the product PageController extraction policy', () => {
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {
+  it('projects an application query only with page identity and intact bounded nonsecret values', () => {
+    const query = {path: '/api/contacts', parameters: {domain: 'example.test'}}
+    const read = (value: unknown, path: string | undefined = '/contacts') => new Page(controller(), () => null,
+      createRedactor(), undefined, undefined, undefined, undefined, undefined, undefined,
+      () => path, () => value).describe({url: 'https://app.test/contacts', title: '', content: ''}, 1).observation
+    expect(read(query).page_query).toEqual(query)
+    expect(read(query, '').page_query).toBeUndefined()
+    for (const value of [null, {path: '//other/api', parameters: {}},
+      {path: '/api/contacts?token=x', parameters: {}},
+      {path: '/api/contacts', parameters: {token: 'private'}},
+      {path: '/api/contacts', parameters: {domain: 'x'.repeat(257)}},
+      {path: '/api/contacts', parameters: {domain: ['one', 'two']}}]) {
+      expect(read(value).page_query).toBeUndefined()
+    }
+  })
   it('removes wrapper-identified credentials from both text and element projections', () => {
     const wrapper = document.createElement('div')
     wrapper.setAttribute('name', 'api_key')

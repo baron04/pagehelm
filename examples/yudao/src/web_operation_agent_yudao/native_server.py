@@ -254,6 +254,16 @@ class YudaoHost:
                              session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
 
         def runner_factory(channel):
+            from .page_goals import NativePageGoalPort
+            if isinstance(app.goal_port, NativePageGoalPort):
+                from web_operation_agent.transport import RemoteProtocolError
+                from web_operation_agent.goal.data import DataRefused
+                def page_reader(context):
+                    try:
+                        return channel.page_for_read(context).observation
+                    except (PrincipalError, RemoteProtocolError) as exc:
+                        raise DataRefused("当前页面读取身份或租约已失效。", read_failed=True) from exc
+                app.goal_port.page_reader = page_reader
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
                                            source=self.source, click_policy=app.native_tab_policy,
                                            form_prefill=self.form_review is not None or bool(self.create_reviews))
