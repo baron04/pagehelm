@@ -1144,7 +1144,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
 
     def test_source_free_radio_draft_selects_exactly_one_option_without_saving(self):
         from playwright.sync_api import sync_playwright
-        chat = _GenericFormChat({"Contact method": "phone"})
+        chat = _GenericFormChat({"Name": "Synthetic draft", "Contact method": "phone"})
         with tempfile.TemporaryDirectory() as directory, patch(
                 "testapps.contacts.server._chat", return_value=(chat, None)), \
                 NativeContactsHost(NativeServerConfig(Path(directory), port=0, scripted=False)) as host, \
@@ -1164,6 +1164,8 @@ class NativeContactsBrowserTests(unittest.TestCase):
                 self.assertEqual(outcome.result.terminal_reason, "agent_finished", outcome.result.user_answer)
                 self.assertTrue(page.get_by_role('radio', name='Phone call').is_checked())
                 self.assertFalse(page.get_by_role('radio', name='Email only').is_checked())
+                self.assertEqual(page.get_by_label('Name', exact=True).input_value(), 'Synthetic draft')
+                self.assertEqual(page.locator('#contact-email-preferences').count(), 0)
                 self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
                 self.assertEqual(host.application.write_requests, 0)
                 self.assertEqual(host.application.records_created, 0)

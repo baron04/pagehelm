@@ -2,6 +2,7 @@ import {describe, expect, it, vi} from 'vitest'
 import {Page, type PageControllerApi} from '../src/runtime/page'
 import {hydrateFormFacts} from '../src/runtime/pageModel'
 import {createRedactor} from '../src/runtime/redaction'
+import {formInstance} from '../src/runtime/formInstance'
 
 function setup(aria = false, interrupted: () => boolean = () => false) {
   const form = document.createElement('form')
@@ -97,5 +98,65 @@ describe('adapter-issued radio choice', () => {
       await expect(s.page.select('e1', 'true', 'Public')).rejects.toThrow(/fresh action/)
       expect(s.api.clickElement).not.toHaveBeenCalled()
     } finally { s.form.remove() }
+  })
+  it('keeps an approved radio selection when it removes an unentered dependent field', async () => {
+    const s = setup()
+    try {
+      const dependent = document.createElement('div')
+      dependent.innerHTML = '<label>Members<input name="members"></label>'
+      s.form.append(dependent)
+      const later = document.createElement('input'); s.form.append(later)
+      const before = formInstance(s.group)
+      const click = s.api.clickElement
+      s.api.clickElement = vi.fn(async index => {
+        dependent.remove()
+        return click(index)
+      })
+      await s.page.select('e1', 'true', 'Public')
+      expect(formInstance(s.group)).toBe(before)
+      expect(s.page.verifyFormFields(s.fields, s.observed)).toBe(true)
+      expect(s.api.clickElement).toHaveBeenCalledTimes(1)
+      later.remove()
+      expect(formInstance(s.group)).not.toBe(before)
+    } finally { s.form.remove() }
+  })
+  it.each(['replacement', 'reopen', 'heading', 'intervention', 'protected-removal', 'new-control'])(
+    'does not turn %s during an acknowledged radio click into a successful handoff', async mode => {
+      let interrupted = false
+      const s = setup(false, () => interrupted)
+      try {
+        const title = document.createElement('h2'); title.setAttribute('role', 'heading'); title.textContent = 'Create'
+        s.form.prepend(title)
+        const entered = document.createElement('input'); entered.name = 'name'; s.form.append(entered)
+        s.options.push(entered)
+        s.api.inputText = vi.fn(async () => {entered.value = 'Synthetic'; return {success: true}})
+        await s.page.input('e3', 'Synthetic')
+        const before = formInstance(s.group), click = s.api.clickElement
+        s.api.clickElement = vi.fn(async index => {
+          const result = await click(index)
+          if (mode === 'replacement') s.options[1]!.replaceWith(s.options[1]!.cloneNode(true))
+          else if (mode === 'reopen') {s.form.hidden = true; s.form.hidden = false}
+          else if (mode === 'heading') title.textContent = 'Edit another record'
+          else if (mode === 'intervention') interrupted = true
+          else if (mode === 'new-control') s.form.append(document.createElement('input'))
+          else entered.remove()
+          return result
+        })
+        await expect(s.page.select('e1', 'true', 'Public')).rejects.toThrow(/not verified/)
+        expect(s.api.clickElement).toHaveBeenCalledTimes(1)
+        if (mode !== 'intervention') expect(formInstance(s.group)).not.toBe(before)
+      } finally { s.form.remove() }
+    })
+  it('closes the removal window when the controller throws', async () => {
+    const s = setup()
+    try {
+      const dependent = document.createElement('input'); s.form.append(dependent)
+      const before = formInstance(s.group)
+      s.api.clickElement = vi.fn(async () => {throw new Error('controller unavailable')})
+      await expect(s.page.select('e1', 'true', 'Public')).rejects.toThrow(/controller unavailable/)
+      dependent.remove()
+      expect(formInstance(s.group)).not.toBe(before)
+      expect(s.api.clickElement).toHaveBeenCalledTimes(1)
+    } finally {s.form.remove()}
   })
 })

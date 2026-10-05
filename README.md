@@ -709,8 +709,12 @@ options. Contacts qualifies this without source access. Yudao can translate lite
 and integer radio values plus shallow allowlisted view-local constants; source bytes remain
 bound to the draft. A source `formType === 'create'` or `'update'` condition is accepted only
 when the application's entry verifier attests that mode; other conditions remain excluded.
-The current Yudao public-visibility choice removes a member control and invalidates the form
-instance: values may be entered, but handoff stops. That dependent-control flow remains incomplete.
+During an approved radio action, removal of an unentered dependent control can preserve
+the form instance. The selected group and previously entered controls must survive, and
+the server revalidates the complete application descriptor before handoff. New or replaced
+controls, closing/reopening the editor or changing its target still stop the draft.
+Yudao's public-project choice and Contacts' source-free contact-method choice exercise
+this removal-only flow; other conditional layouts remain outside this qualification.
 Dynamic numeric constraints, date ranges, custom date formats, datetime fields, multi-select,
 cascaders, remote option search and editable detail rows remain unsupported by this translation.
 One scope declaration

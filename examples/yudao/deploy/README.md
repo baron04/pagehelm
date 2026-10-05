@@ -160,7 +160,10 @@ Single-choice radio groups reuse the same current-form contract and exact option
 verification. The source reader accepts literal Boolean/integer values and bounded direct
 imports of literal constants from allowlisted view-local TypeScript files; it executes no
 scripts and binds dependency bytes to the draft. Multi-select and datetime inputs remain
-excluded. Reviewed project creation admits only the source-declared `tabs=participate`,
+excluded. Selecting public project visibility may remove the unentered members control
+during the approved radio action; editor identity, entered fields and the application
+descriptor must remain valid before manual handoff. Added or replaced controls still stop
+the draft. Reviewed project creation admits only the source-declared `tabs=participate`,
 `tabs=owner` and `tabs=all` collection queries, bound unchanged through handoff. This does
 not enable automatic navigation: the project-group GET can initialize persisted defaults
 and cannot be admitted as read-only merely because it is a GET.

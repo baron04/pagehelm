@@ -18,7 +18,7 @@ import {selectedControlsFromPage} from './pageSelection'
 import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
-import {formInstance} from './formInstance'
+import {formInstance, localChoiceRemoval} from './formInstance'
 import {listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
@@ -291,14 +291,20 @@ export class Page {
     if (indexes.length !== 1 || !current() || !radioEnabled(matches[0]!)) {
       throw new Error('execution_failed: radio choice has no unique fresh action reference')
     }
-    const result = await this.controller.clickElement(indexes[0]!)
-    if (!result || (result as {success?: unknown}).success !== true) return result
-    await sleep(50)
-    if (!current() || !radioSelectionMatches(group, label, value)) {
-      throw new Error('execution_failed: radio selection was not verified')
+    const finishRemoval = localChoiceRemoval(group, [...this.enteredControls.values()]
+      .filter(entry => entry.instance === instance).map(entry => entry.element))
+    try {
+      const result = await this.controller.clickElement(indexes[0]!)
+      if (!result || (result as {success?: unknown}).success !== true) return result
+      await sleep(50)
+      if (!current() || !radioSelectionMatches(group, label, value)) {
+        throw new Error('execution_failed: radio selection was not verified')
+      }
+      this.rememberEntered(group)
+      return result
+    } finally {
+      finishRemoval()
     }
-    this.rememberEntered(group)
-    return result
   }
   private async selectCombobox(index: number, element: HTMLInputElement, label: string): Promise<unknown> {
     const scope = formControlScope(element), instance = formInstance(element), url = location.href

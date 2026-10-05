@@ -240,6 +240,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
               <label>Email only<input type="radio" name="local-contact-method" value="email" checked></label>
               <label>Phone call<input type="radio" name="local-contact-method" value="phone"></label>
             </div>
+            <div id="contact-email-preferences"><label>Email preferences<input id="contact-draft-email-preferences"></label></div>
             <label>Daily limit<input id="contact-draft-limit" type="number"></label>
             <label>Follow-up date<input id="contact-draft-date" type="date"></label>
             <label>Priority<input id="contact-draft-priority" role="combobox" readonly
@@ -251,6 +252,10 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
             <button type="submit">Save contact</button><p class="status" role="status"></p>
           </form></section>`;
         document.title = 'New contact · Minimal Contacts';
+        for (const radio of app.querySelectorAll('[name="local-contact-method"]'))
+          radio.addEventListener('change', () => {{
+            if (radio.checked && radio.value === 'phone') app.querySelector('#contact-email-preferences')?.remove();
+          }});
         const priority = app.querySelector('#contact-draft-priority');
         const choices = app.querySelector('#contact-priorities');
         priority.addEventListener('click', () => {{

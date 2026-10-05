@@ -46,6 +46,9 @@ manual submit target. The scripted real-browser qualification fills both fields,
 that button, and checks that no submit request or record creation occurred.
 Its source-free contact-method radio group also qualifies exact option selection, exclusive
 checked state and manual handoff through this contract, with no save request.
+Choosing Phone call removes an unentered email-preferences control while retaining the
+entered Name. This qualifies removal-only form continuity during the approved radio
+action; the application descriptor and entered fields are revalidated before handoff.
 The goal demo also resolves explicit new-form Name and Email handoffs through this
 contract. Multiple field deliverables combine into one final form handoff, retaining any
 data answers from the same turn. Its real-browser scripted test verifies both normalized
