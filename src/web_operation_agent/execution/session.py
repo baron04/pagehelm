@@ -67,6 +67,7 @@ from .lifecycle import SessionLifecycle
 from .runstate import (CAPABILITY_GAP_TERMINAL, LabApparatus, NO_LAB, RunResult,
                        TaskSpec, _Next, _Turn)
 from .click_policy import ClickPolicy
+from .action_admission import ActionAdmission, ApplicationActionPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
                      required_page_controls, required_page_effects)
 from .request_contract import parse_requirements
@@ -74,8 +75,8 @@ from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
                       _REFERENCE_FOLLOWUP, _assistant_call, _tool_result, _trim)
-from ..schemas import (BROWSER_ACTIONS, ActionReceipt, ControlPlan, OperationContract,
-                       PageObservation, digest, empty_contract)
+from ..schemas import (BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
+                       ControlPlan, OperationContract, PageObservation, digest, empty_contract)
 from ..answer.evidence import EvidenceUnknown
 
 #: Describe a plan by its actual origin. A page-only plan must never be presented to the model
@@ -152,6 +153,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  keep_observations: int = 3,
                  disabled_actions: frozenset[str] | set[str] | None = None,
                  click_policy: ClickPolicy | None = None,
+                 action_policy: ApplicationActionPolicy | None = None,
                  scope_first_policy: bool = False,
                  page_answer_evidence: bool = False,
                  policy_block_limit: int | None = None,
@@ -589,6 +591,14 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                                          or "click" not in disabled):
             raise ValueError("a click policy only narrows a disabled click")
         self.click_policy = click_policy
+        if action_policy is not None and (principal is None or application_routes is None
+                                          or not page_write_guard or click_policy is not None
+                                          or allow_page_facets):
+            raise ValueError("action policy requires a guarded principal and replaces click_policy")
+        self.action_admission = (ActionAdmission(action_policy, application_routes.application_id)
+                                 if action_policy is not None else None)
+        if self.action_admission is not None:
+            self.disabled_actions |= POTENTIALLY_WRITING_ACTIONS
         self.policy_blocks = 0
         self.policy_block_limit = policy_block_limit
         self.no_progress_repeat_limit = no_progress_repeat_limit

@@ -37,7 +37,9 @@ class ToolSurface:
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in session.disabled_actions
                  or (tool["function"]["name"] == "click"
-                     and session.click_policy is not None)]
+                     and session.click_policy is not None)
+                 or (session.action_admission is not None
+                     and tool["function"]["name"] in session.action_admission.actions)]
         skill = bool(session._loaded_business_skill_ids)
         if session._finalizing:
             # Answer repair may need one missing typed read or a fresh snapshot.

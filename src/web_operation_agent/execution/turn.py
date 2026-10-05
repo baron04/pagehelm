@@ -364,6 +364,7 @@ class AgentTurnExecutor:
             keep_observations=self.config.keep_observations,
             disabled_actions=self.config.disabled_actions,
             click_policy=self.config.click_policy,
+            action_policy=self.config.action_policy,
             scope_first_policy=self.config.scope_first_policy,
             page_answer_evidence=self.config.page_answer_evidence,
             policy_block_limit=self.config.policy_block_limit,

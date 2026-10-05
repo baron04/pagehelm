@@ -20,6 +20,13 @@ from ..schemas import (BROWSER_ACTIONS, INTERNAL_BROWSER_ACTIONS,
                        POTENTIALLY_WRITING_ACTIONS, ActionReceipt,
                        PageObservation)
 from .click_policy import click_policy_refusal, reviewed_destination
+from .action_admission import ActionAdmissionRefused
+from .admitted_actions import prepare_action, consume_action, verify_action
+from .data_tools import stopped_read
+from ..modeling.spend import BudgetExhausted
+from ..state.identity import PrincipalError
+from ..business.errors import (BusinessToolPermissionError, BusinessToolIdentityError,
+                               BusinessToolAuthenticationError)
 from .knowledge_tools import capability_check_available, capability_check_feedback
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result, _trim
@@ -41,6 +48,34 @@ def _record_navigation(session, url: str) -> None:
         session._answer_action_receipt = {"kind": "navigation", "url": url}
 
 
+def _admission_failure(session, turn, call, name, exc, *, dispatched):
+    if isinstance(exc, (TurnCancelled, BudgetExhausted)):
+        return stopped_read(session, turn, exc)
+    if isinstance(exc, (PrincipalError, BusinessToolPermissionError,
+                        BusinessToolIdentityError, BusinessToolAuthenticationError)):
+        session.ledger.append("action_effect_identity_refused", step=turn.step,
+                              tool=name, dispatched=dispatched)
+        return _Next(session._finish(turn.result, turn.started_at, "permission_denied",
+            "the application could not verify this action under the same live actor", steps=turn.step))
+    code = exc.code if isinstance(exc, ActionAdmissionRefused) else "policy_failed"
+    session.ledger.append("action_effect_refused", step=turn.step, tool=name,
+                          error_code=code, dispatched=dispatched)
+    if dispatched:
+        return _Next(session._finish(turn.result, turn.started_at, "agent_refused",
+            "the application did not verify the action's result; it was not repeated",
+            steps=turn.step))
+    ended = _refuse_before_dispatch(session, name,
+        f"ACTION EFFECT REFUSED ({code}): no action was dispatched. Choose an application-reviewed "
+        "target or report the missing capability. Business form values require the approved FormPort.",
+        obs=turn.obs, step=turn.step, no_fresh_detail="action refusal could not obtain a fresh page")
+    if ended.terminal:
+        return _Next(session._finish(turn.result, turn.started_at, ended.reason,
+                                     ended.detail, steps=turn.step))
+    messages = [*turn.messages, _assistant_call(call), _tool_result(call, ended.feedback)]
+    return session._resume(turn, _trim(messages, session.keep_observations),
+                           ended.observation, turn.successful_business_tools)
+
+
 def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
                      *, receipt_sink=None) -> "_Next":
     """Everything a page action is: refuse it, route it, dispatch it, report what it did.
@@ -53,6 +88,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
     result, t0, step = turn.result, turn.started_at, turn.step
     messages, obs = turn.messages, turn.obs
     successful_business_tools = turn.successful_business_tools
+    admitted = None
     if obs.render_state in {"pending", "blocked"} and name not in {"observe", "wait_for"}:
         blocked = obs.render_state == "blocked"
         session.ledger.append("blocked_page_action_refused" if blocked
@@ -131,6 +167,11 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
             messages += [_assistant_call(call), _tool_result(call, ended.feedback)]
             return session._resume(turn, _trim(messages, session.keep_observations),
                                    ended.observation, successful_business_tools)
+    if session.action_admission is not None and name in POTENTIALLY_WRITING_ACTIONS:
+        try:
+            admitted = prepare_action(session, turn, name, args)
+        except Exception as exc:
+            return _admission_failure(session, turn, call, name, exc, dispatched=False)
     click_refusal = ""
     if name == "click" and name in session.disabled_actions \
             and session.click_policy is not None:
@@ -141,7 +182,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
             reason=click_refusal[:200], page_url=obs.url,
             role=element.role if element is not None else "",
             element_name=(element.name[:80] if element is not None else ""))
-    if name in session.disabled_actions and not (
+    if name in session.disabled_actions and admitted is None and not (
             name == "click" and session.click_policy is not None and not click_refusal):
         # This refusal is known before dispatch, so it is safe to continue.  Do not
         # manufacture a failed ActionReceipt for the requested action: that would blur
@@ -322,7 +363,16 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
             session._page_answer_digest = ""
         args = {}
 
-    if name == "goto" and not source_route_read_only:
+    # A source/typed routing tool may have resolved into goto after the early gate.
+    # Route provenance is not effect admission; bind the exact resulting action too.
+    if (session.action_admission is not None and admitted is None
+            and name in POTENTIALLY_WRITING_ACTIONS):
+        try:
+            admitted = prepare_action(session, turn, name, args)
+        except Exception as exc:
+            return _admission_failure(session, turn, call, name, exc, dispatched=False)
+
+    if name == "goto" and not source_route_read_only and admitted is None:
         url = args.get("url")
         if isinstance(url, str) and url in session._business_routes:
             source_route_read_only = True
@@ -393,6 +443,11 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
         url=(str(args.get("url") or "") if name == "goto" else (link or "")))
     if reason:
         return _Next(session._finish(result, t0, reason, detail, steps=step))
+    if admitted is not None:
+        try:
+            consume_action(session, admitted, obs)
+        except Exception as exc:
+            return _admission_failure(session, turn, call, name, exc, dispatched=False)
     prior_page_epoch = obs.epoch
     try:
         session._browser_attempts += 1
@@ -402,7 +457,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
         # navigation or an observed page interaction below. Route drift is checked
         # by the main loop before the next model decision.
         receipt = session.browser.execute(name, args, expect_navigation=expect_nav)
-        if _answer_closed_the_menu(session, name, link, receipt, obs):
+        if admitted is None and _answer_closed_the_menu(session, name, link, receipt, obs):
             # Answering the card is a click on the page, and the application closed the
             # menu this link was in. The click never dispatched, the card was answered for
             # this very link, and the link was on the page the model acted on: go there by
@@ -461,6 +516,14 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
                                      steps=step))
     if receipt.observation is not None:
         obs = receipt.observation
+    if admitted is not None and receipt.error_code == "stale_observation":
+        session.ledger.append("action_effect_binding_expired", step=step,
+                              dispatched=False, binding_digest=admitted.intent.binding_digest)
+    elif admitted is not None:
+        try:
+            verify_action(session, turn, admitted, receipt)
+        except Exception as exc:
+            return _admission_failure(session, turn, call, name, exc, dispatched=True)
     if name == "highlight":
         if (not receipt.ok or receipt.observation is None
                 or obs.epoch <= prior_page_epoch or obs.render_state != "ready"

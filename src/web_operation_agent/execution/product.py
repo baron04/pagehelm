@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from ..composition.sources import SourceCapability
 from ..goal.read_tools import DataReadTools
 from .click_policy import ClickPolicy
+from .action_admission import ApplicationActionPolicy
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult
@@ -194,9 +195,19 @@ class AgentTurnConfig:
     #: policy otherwise disables. See `execution.click_policy`. None keeps click as
     #: `disabled_actions` says.
     click_policy: ClickPolicy | None = None
+    #: Optional application effects for generic browser tools. This replaces the
+    #: legacy click policy, requires a guarded actor-bound session, and verifies results.
+    action_policy: ApplicationActionPolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ledger_path", Path(self.ledger_path))
+        if self.action_policy is not None:
+            if not isinstance(self.action_policy, ApplicationActionPolicy):
+                raise TypeError("action_policy must implement ApplicationActionPolicy")
+            if not self.require_identity or self.click_policy is not None:
+                raise ValueError("action policy requires identity and replaces click_policy")
+            if self.allow_page_facets:
+                raise ValueError("action policy requires reviewed query tools, not the legacy facet policy")
         if self.click_policy is not None:
             if not isinstance(self.click_policy, ClickPolicy):
                 raise TypeError("click_policy must implement ClickPolicy")

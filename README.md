@@ -418,6 +418,16 @@ agent.
   path is opt-in; it does not migrate the default goal executor or establish natural
   task accuracy. The neutral contract is also tested against a source-free Contacts
   REST-derived report under real synthetic actor authentication.
+  A guarded, identity-verified turn may opt into `AgentTurnConfig.action_policy`,
+  replacing the legacy click policy with application-issued effects for the existing
+  click, navigation and query-input tools. A permit binds the exact actor operation,
+  observation and arguments, consumes once, and requires an application result check
+  before success. Persistent/unknown effects are refused; business drafts still use
+  the approved FormPort. An HTTP fence or control label alone proves no effect.
+  The current prototypes cover native menus/tabs and plain-HTML navigation contract
+  tests, not general search/paging or deployment coverage. The default integrations
+  do not enable them. The Contacts native host has no page effect guard and correctly
+  refuses this opt-in mode; it is not a positive guarded-browser qualification.
   Integrations can set `require_page_route=True` in `AgentTurnConfig` for this loop:
   navigation and target completion then require a fresh application-owned `page_route`
   matching the current URL, with no pending render or blocking application error. A
