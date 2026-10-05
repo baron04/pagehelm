@@ -171,6 +171,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  deterministic_read_navigation: bool = False,
                  require_page_route: bool = False,
                  require_task_contract: bool = False,
+                 defer_page_context: bool = False,
+                 page_entry: Callable[[], PageObservation] | None = None,
                  skill_first: bool = False,
                  page_write_guard: bool = False,
                  plain_business_answer_min_page_actions: int | None = None,
@@ -186,6 +188,12 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         if turn_budget is not None and not isinstance(turn_budget, TurnBudget):
             raise TypeError("turn_budget must be a TurnBudget or None")
         self._turn_budget = turn_budget
+        if not isinstance(defer_page_context, bool):
+            raise ValueError("defer_page_context must be boolean")
+        if page_entry is not None and not callable(page_entry):
+            raise TypeError("page_entry must be callable or None")
+        self.defer_page_context = defer_page_context
+        self._page_entry = page_entry
         self._planning_terminal = ""
         if not isinstance(lab, LabApparatus):
             raise TypeError("lab must be a LabApparatus")
@@ -860,7 +868,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             # continued past the refusal, saying which operation this account was refused.
             reason, detail = "permission_denied", self._refused_detail or detail
         try:
-            result.control = self._writes.refresh_control()
+            result.control = (self._writes.refresh_control()
+                              if self._writes.control_started else {})
         except ControlPlaneError as e:
             result.control = {"error": str(e)}
             write_unresolved = self.pending_write or self._writes.awaiting_control

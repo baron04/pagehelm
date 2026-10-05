@@ -76,6 +76,11 @@ class SessionLifecycle:
             self.contract = self.oracle_contract
             self.contract_source = "oracle"
         elif source_contract or self.plan_from_page:
+            # Compiled operation plans still require runtime scope. Ordinary source
+            # retrieval does not enter this legacy planning branch.
+            if self.entry_observation is None:
+                self.adopt_entry(self._page_entry() if self._page_entry is not None
+                                 else self.browser.observe())
             if source_contract:
                 retriever = SourceRetriever(self.source_map)
                 terms = expand_terms(self.chat, self.task.prompt, self.run_id,

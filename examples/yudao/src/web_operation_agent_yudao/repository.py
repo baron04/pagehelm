@@ -28,13 +28,20 @@ def repository_tree(root: Path, release: str) -> SourceTree:
     return tree
 
 
-def repository_source(root: Path | None, release: str) -> SourceCapability:
+def repository_source(root: Path | None, release: str, *,
+                      commits: tuple[tuple[str, str], ...] = ()) -> SourceCapability:
     if root is None:
+        if commits:
+            raise ValueError("source commits require a configured repository source root")
         return SourceCapability.none()
     tree = repository_tree(root, release)
     lookup = RepositorySourceLookup(tree, line_limit=24, char_limit=1800, overlap=4)
+    history = None
+    if commits:
+        from .repository_history import YudaoRepositoryHistory
+        history = YudaoRepositoryHistory(tree, commits)
     return SourceCapability(
-        runtime_source=True, lookup=lookup,
+        runtime_source=True, lookup=lookup, history=history,
         history_unavailable_reason=(
             "this deployment supplies source snapshots, not Git history bound to a deployed commit; "
             "application operation logs do not identify code changes"))

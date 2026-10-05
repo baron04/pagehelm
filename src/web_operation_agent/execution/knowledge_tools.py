@@ -59,7 +59,7 @@ def _source_line(session, hit, query: str) -> str:
     return f"{ref} {hit.line}"
 
 
-def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
+def lookup_source(session, query: str, obs: PageObservation | None) -> EvidenceBundle:
     """Local retrieval only: no planner/model call, filesystem expansion or hidden data.
 
     The query originates in the live loop, and the current page provides its context.
@@ -69,8 +69,9 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
         raise ValueError("runtime source lookup is disabled")
     if session.source_affordance_mode == "empty":
         bundle = EvidenceBundle(task_ref=session.task.task_ref)
-        session.ledger.append("runtime_source_retrieved", query=query, page_url=obs.url,
-                           page_epoch=obs.epoch, source_digest="",
+        session.ledger.append("runtime_source_retrieved", query=query,
+                           page_url=obs.url if obs is not None else "",
+                           page_epoch=obs.epoch if obs is not None else None, source_digest="",
                            evidence=[], licensed_view_routes=[], **bundle.stats)
         return bundle
     started = time.monotonic()
@@ -105,8 +106,10 @@ def lookup_source(session, query: str, obs: PageObservation) -> EvidenceBundle:
             webapp, _, request = relation.subject.partition("/")
             session._source_view_routes.setdefault(
                 (webapp.lower(), request.rstrip("/").lower()), set()).update(keys)
-    session.ledger.append("runtime_source_retrieved", query=query, page_url=obs.url,
-                       page_epoch=obs.epoch, source_digest=session.source.content_digest,
+    session.ledger.append("runtime_source_retrieved", query=query,
+                       page_url=obs.url if obs is not None else "",
+                       page_epoch=obs.epoch if obs is not None else None,
+                       source_digest=session.source.content_digest,
                        evidence=list(bundle.lines),
                        licensed_view_routes=[f"{a}/{r}" for a, r in session._source_view_routes],
                        **bundle.stats)
@@ -124,6 +127,10 @@ def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict
         return _Next(session._finish(
             turn.result, turn.started_at, "user_cancelled",
             "the user stopped this task after source retrieval", steps=turn.step))
+    if turn.obs is None:
+        return session._reply(turn, call, "SOURCE EVIDENCE (repository facts; not runtime "
+                              "permissions or execution proof):\n" +
+                              (bundle.render() or "No matching source evidence. Do not invent an answer."))
     try:
         receipt = session.browser.execute("observe", {})
         session._browser_attempts += 1
@@ -198,6 +205,7 @@ def lookup_source_history(session, kind: str, *, path: str = "", start_line: int
         "runtime_source_history_retrieved", kind=kind, path=path,
         start_line=start_line, end_line=end_line, target_commit=target_commit,
         deployed_commit=history.deployed_commit,
+        deployment_commits=sorted({(hit.repository_id, hit.deployed_commit) for hit in hits}),
         evidence=[hit.digest for hit in hits], facts_shown=len(hits),
         latency_ms=round((time.monotonic() - started) * 1000, 1))
     return "\n".join(lines) or "No matching source history. Do not invent an answer."
@@ -231,6 +239,8 @@ def lookup_source_history_tool(session, turn: "_Turn", call: dict, name: str,
         return _Next(session._finish(
             turn.result, turn.started_at, "user_cancelled",
             "the user stopped this task after source history retrieval", steps=turn.step))
+    if turn.obs is None:
+        return session._reply(turn, call, "SOURCE HISTORY (version-bound Git metadata):\n" + result)
     try:
         receipt = session.browser.execute("observe", {})
         session._browser_attempts += 1
@@ -256,6 +266,10 @@ def lookup_source_history_tool(session, turn: "_Turn", call: dict, name: str,
 
 
 # -- capability check ------------------------------------------------------------
+
+
+def check_capability_tool(session, turn, call, name, args):
+    return session._reply(turn, call, capability_check_feedback(session))
 
 
 def register_capability_evidence(session) -> str:

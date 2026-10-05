@@ -67,7 +67,9 @@ class SourceHistoryHit:
 @runtime_checkable
 class SourceHistoryLookup(Protocol):
     release: str
-    deployed_commit: str
+    # A provider may compose several repositories. Each hit binds its own real
+    # commit; None means there is no single deployment commit for the composition.
+    deployed_commit: str | None
 
     def search(self, kind: str, *, path: str = "", start_line: int = 0,
                end_line: int = 0, target_commit: str = "",

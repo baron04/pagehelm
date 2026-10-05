@@ -26,7 +26,7 @@ class NativeHostTests(unittest.TestCase):
             api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
             state_dir=Path(self.tmp.name), gateway_host="127.0.0.1", gateway_port=0)
         self.addCleanup(patch.stopall)
-        patch("web_operation_agent_yudao.native_server._api_docs", return_value={}).start()
+        self.documents = patch("web_operation_agent_yudao.native_server._api_docs", return_value={}).start()
         self.chat = patch("web_operation_agent_yudao.native_server.ChatModel").start()
         self.chat.return_value.model = "scripted/no-model"
         self.chat.return_value.egress_policy = ProviderEgressPolicy(
@@ -53,6 +53,62 @@ class NativeHostTests(unittest.TestCase):
         host = YudaoHost(self.config)
         self.hosts.append(host)
         return host
+
+    def test_unavailable_business_documents_do_not_block_host_or_authenticated_session(self):
+        from web_operation_agent.goal.data import DataRefused
+        self.documents.side_effect = OSError("synthetic catalog outage")
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "source-only")
+        self.documents.assert_not_called()
+        with self.assertRaises(DataRefused) as failed:
+            host._load_api_docs()
+        self.assertTrue(failed.exception.read_failed)
+        self.assertIsNone(host._api_documents)
+        self.documents.side_effect = None
+        self.documents.return_value = {"paths": {}, "components": {}}
+        self.assertEqual(host._load_api_docs(), self.documents.return_value)
+        host.bootstrap("synthetic-a-new", "1", "renewed")
+        self.assertEqual(self.documents.call_count, 2)
+
+    def test_native_source_answer_completes_without_browser_or_business_metadata(self):
+        from web_operation_agent.tests.support.business import _Chat
+        from web_operation_agent_yudao.ui_source import UiSource
+        self.config = replace(self._native_form_config(update=False, create=False),
+                              executor_mode="page-agent")
+        path = self.config.source_root / "ui/src/utils/refund.ts"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("export const batchLimit = 125;\n")
+        self.documents.side_effect = AssertionError("business metadata is unavailable")
+        question = "代码中的batchLimit是多少？"
+        chat = _Chat([
+            ("declare_task", {"action_request": "", "action_kind": "none",
+                 "answer_requests": [question], "answer_kinds": ["knowledge"]}),
+            ("lookup_source", {"query": "batchLimit"}),
+            ("finish", {"outcome": "answered", "answer": {"version": 1,
+                "coverage": "complete", "conclusions": [{"kind": "source_excerpt",
+                    "evidence_ref": "source#1", "statement": "batchLimit定义为125。",
+                    "support": "export const batchLimit = 125;"}],
+                "answers_for": [{"request_ref": "a1", "evidence_refs": ["source#1"]}]}}),
+        ])
+        chat.model = "scripted/no-model"
+        chat.egress_policy = ProviderEgressPolicy(session_handoff_keys=SESSION_HANDOFF_KEYS)
+        self.chat.return_value = chat
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+                records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
+                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), patch(
+                "web_operation_agent.execution.turn.RemoteBrowserClient.start",
+                side_effect=AssertionError("browser transport is unavailable")):
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "source-only")
+            session = host._sessions[("1", "1")].session
+            result = session.runner.executor.execute({"message_id": "source-question",
+                "text": question, "page_url": self.config.public_origin + "/crm/customer"})
+        self.assertEqual(result.terminal_reason, "agent_finished")
+        self.assertIsNone(result.entry_observation_id)
+        self.assertIsNone(session.channel.latest_observation_envelope)
+        self.documents.assert_not_called()
+        self.assertIn("125", result.user_answer)
+
 
     def test_tabs_share_the_actor_s_session_and_renew_only_its_token(self):
         host = self.host()

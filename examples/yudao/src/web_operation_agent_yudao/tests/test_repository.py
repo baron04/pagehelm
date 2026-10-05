@@ -3,11 +3,79 @@ from pathlib import Path
 import os
 import tempfile
 import unittest
+import subprocess
+
+from web_operation_agent.planning.source_history import HistoryUnavailable
 
 from web_operation_agent_yudao.repository import repository_source
 
 
 class RepositoryTests(unittest.TestCase):
+    def git(self, root, *args):
+        return subprocess.check_output(["git", "-C", str(root),
+            "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+            "-c", "user.name=Synthetic author", "-c", "user.email=synthetic@example.invalid",
+            *args], stderr=subprocess.PIPE, text=True).strip()
+
+    def repository(self, root, files):
+        root.mkdir(parents=True)
+        self.git(root, "init", "-q")
+        for name, contents in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(contents)
+        self.git(root, "add", ".")
+        self.git(root, "commit", "-qm", "Initial synthetic implementation")
+        path = root / next(iter(files))
+        path.write_text(path.read_text() + "\n// reviewed validation change\n")
+        self.git(root, "add", ".")
+        self.git(root, "commit", "-qm", "Add synthetic refund validation")
+        return self.git(root, "rev-parse", "HEAD")
+
+    def test_two_real_git_repositories_bind_their_own_commits_and_allowlists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ui = self.repository(root / "ui", {
+                "src/refund.ts": "export const refundLimit = 100;\n",
+                "CODEOWNERS": "/src/ @synthetic-ui\n", ".env": "PRIVATE_GIT_MARKER\n"})
+            server_path = "yudao-module-demo/src/main/java/example/Refund.java"
+            server = self.repository(root / "server", {server_path: "class Refund {}\n"})
+            source = repository_source(root, "synthetic-git", commits=(("ui", ui), ("server", server)))
+            history = source.history_lookup()
+            self.assertIsNone(history.deployed_commit)
+            owners = history.search("owners", path="ui/src/refund.ts")
+            self.assertIn("synthetic-ui", owners[0].statement)
+            self.assertEqual(owners[0].deployed_commit, ui)
+            blame = history.search("blame", path="server/" + server_path, start_line=1, end_line=1)
+            self.assertEqual(blame[0].deployed_commit, server)
+            hits = (*history.search("changes", path="ui/src/refund.ts", limit=2,
+                        target_commit=self.git(root / "ui", "rev-parse", ui + "^")),
+                    *history.search("changes", path="server/" + server_path, limit=2,
+                        target_commit=self.git(root / "server", "rev-parse", server + "^")))
+            self.assertEqual({h.deployed_commit for h in hits}, {ui, server})
+            self.assertTrue(all(h.path.startswith(("ui/", "server/")) for h in hits))
+            self.assertFalse(source.history_unavailable_reason)
+            for path in ("ui/.env", "ui/../server/.env", "outside/src/refund.ts"):
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    history.search("commits", path=path)
+            with self.assertRaises(ValueError):
+                history.search("changes", target_commit=ui)
+            with self.assertRaises(HistoryUnavailable):
+                repository_source(root, "synthetic-git", commits=(("ui", server),))
+            (root / "ui/src/refund.ts").write_text("uncommitted drift")
+            with self.assertRaises(HistoryUnavailable):
+                repository_source(root, "synthetic-git", commits=(("ui", ui),))
+
+    def test_single_repository_can_bind_a_snapshot_with_both_source_trees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repository"
+            commit = self.repository(root, {"ui/src/refund.ts": "export const maximum = 20;\n"})
+            source = repository_source(root, "synthetic-git", commits=(("root", commit),))
+            hits = source.history_lookup().search("commits", path="ui/src/refund.ts")
+            self.assertEqual(hits[0].commit, commit)
+            self.assertEqual(hits[0].path, "ui/src/refund.ts")
+            self.assertEqual(source.history_lookup().deployed_commit, commit)
+
     def test_cli_relative_source_root_is_resolved_before_allowlist_reads(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

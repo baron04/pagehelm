@@ -10,6 +10,7 @@ import json
 import time
 from datetime import date
 from pathlib import Path
+from typing import Callable
 import urllib.error
 import urllib.request
 
@@ -95,7 +96,7 @@ class YudaoIdentityPort:
 class YudaoApplication:
     """The composed read-only adapter: `bind_application(YudaoApplication(...))`."""
 
-    def __init__(self, origin: str, account: YudaoAccount | None, api_docs: dict, *,
+    def __init__(self, origin: str, account: YudaoAccount | None, api_docs: dict | Callable[[], dict], *,
                  api_base_url: str = "", ui: UiSource | None = None,
                  time_zone: str = "Asia/Shanghai", today: date | None = None, source=None,
                  conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None,

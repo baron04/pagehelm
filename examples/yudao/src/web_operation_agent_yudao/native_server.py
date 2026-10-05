@@ -60,13 +60,14 @@ _MODEL_ENV_KEYS = ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENA
 _MAX_BODY = 4096
 
 
-def _api_docs(api_base: str, *, wait_s: float = 600, every_s: float = 5) -> dict:
+def _api_docs(api_base: str, *, wait_s: float = 600, every_s: float = 5,
+              timeout_s: float = 20) -> dict:
     """yudao's API documentation, waited for: the server may still be starting when this
     host does, and a host that exits on the first refusal only restarts into it again."""
     deadline = time.monotonic() + wait_s
     while True:
         try:
-            with urllib.request.urlopen(f"{api_base.rstrip('/')}/v3/api-docs/all", timeout=60) as r:
+            with urllib.request.urlopen(f"{api_base.rstrip('/')}/v3/api-docs/all", timeout=timeout_s) as r:
                 return json.load(r)
         except OSError:
             if time.monotonic() >= deadline:
@@ -94,6 +95,7 @@ class YudaoHostConfig:
     ui_source: Path | None = None
     source_root: Path | None = None
     source_release: str = ""
+    source_commits: tuple[tuple[str, str], ...] = ()
     #: One per signed-in person; a session is about a megabyte. What bounds use is model
     #: spend, which the daily allowance bounds per person.
     max_sessions: int = 300
@@ -136,9 +138,11 @@ class YudaoHost:
     def __init__(self, config: YudaoHostConfig):
         self.config = config
         config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.api_docs = _api_docs(config.api_base)
+        self._api_documents = None
+        self._documents_lock = threading.Lock()
         self.ui = UiSource.read(config.ui_source) if config.ui_source else None
-        self.source = repository_source(config.source_root, config.source_release)
+        self.source = repository_source(config.source_root, config.source_release,
+                                        commits=config.source_commits)
         self.native_proxy = None
         self.form_review = None
         self.form_tree = None
@@ -202,6 +206,21 @@ class YudaoHost:
         self._lock = threading.RLock()
 
     # -- bootstrap ------------------------------------------------------------------------
+    def _load_api_docs(self) -> dict:
+        from web_operation_agent.goal.data import DataRefused
+        with self._documents_lock:
+            if self._api_documents is None:
+                try:
+                    documents = _api_docs(self.config.api_base, wait_s=0)
+                except (OSError, ValueError) as exc:
+                    raise DataRefused("the application API documentation is unavailable",
+                                      read_failed=True) from exc
+                if not isinstance(documents, dict):
+                    raise DataRefused("the application API documentation is invalid",
+                                      read_failed=True)
+                self._api_documents = documents
+            return self._api_documents
+
     def bootstrap(self, token: str, tenant: str, instance: str) -> dict:
         # `instance` names the page asking; the session is the person's, whichever page.
         if not token or not tenant.isdigit() or not instance or len(instance) > 80:
@@ -253,7 +272,7 @@ class YudaoHost:
             verifiers.extend(NativeCreateEntryVerifier(self.form_tree, review, client)
                              for review in self.create_reviews)
             forms = NativeEntryFormPort(NativeEntryVerifiers(*verifiers))
-        app = YudaoApplication(self.config.public_origin, None, self.api_docs,
+        app = YudaoApplication(self.config.public_origin, None, self._load_api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
                                 native_tabs=self.native_proxy is not None,
@@ -261,10 +280,11 @@ class YudaoHost:
                                 forms=forms,
                                 page_write_guard=GUARD_PATH if self.native_proxy is not None else "")
         if self.filter_reviews:
-            from datetime import date
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
             from .page_filters import NativePageFilters
             app.goal_port.page_filters = NativePageFilters(app.goal_data, self.form_tree,
-                self.filter_reviews, date.fromisoformat(app.goal_port.today()))
+                self.filter_reviews, datetime.now(ZoneInfo(app.goal_data.time_zone())).date())
         return app
 
     def _open(self, app: YudaoApplication, principal, key):
@@ -310,6 +330,7 @@ class YudaoHost:
                 # The same Agent receives optional source evidence and reviewed form
                 # entries. Source grants no actions; form review grants no submission.
                 turn_config = replace(turn_config, require_page_route=True, require_task_contract=True,
+                    defer_page_context=True,
                     allow_application_entry=False, allow_page_facets=False,
                     disabled_actions=turn_config.disabled_actions | {"fill", "select", "submit", "back", "apply_facet"},
                     click_policy=app.native_tab_policy,
@@ -415,6 +436,8 @@ def main(argv=None) -> int:
     ap.add_argument("--ui-source", type=Path)
     ap.add_argument("--source-root", type=Path)
     ap.add_argument("--source-release", default="")
+    ap.add_argument("--source-commit", action="append", default=[], metavar="REPOSITORY=FULL_COMMIT",
+                    help="repeat for ui/server repositories, or use root for a single Git repository")
     ap.add_argument("--gateway-port", type=int, default=48091)
     ap.add_argument("--bootstrap-port", type=int, default=48092)
     ap.add_argument("--native-read-policy", type=Path)
@@ -429,6 +452,9 @@ def main(argv=None) -> int:
     ap.add_argument("--daily-allowance-cny", type=float,
                     default=YudaoHostConfig.daily_allowance_cny)
     a = ap.parse_args(argv)
+    commits = tuple(tuple(value.split("=", 1)) for value in a.source_commit)
+    if any(len(item) != 2 for item in commits):
+        ap.error("--source-commit requires REPOSITORY=FULL_COMMIT")
     env = {k: os.environ[k] for k in _MODEL_ENV_KEYS if os.environ.get(k)}
     if "AGENT_OPENAI_API_KEY" not in env:
         raise SystemExit("AGENT_OPENAI_API_KEY is not set")
@@ -436,7 +462,7 @@ def main(argv=None) -> int:
         api_base=a.api_base, public_origin=a.public_origin,
         public_agent_url=a.public_agent_url or a.public_origin.rstrip("/") + "/woa-agent",
         state_dir=a.state_dir, ui_source=a.ui_source, source_root=a.source_root,
-        source_release=a.source_release, gateway_port=a.gateway_port,
+        source_release=a.source_release, source_commits=commits, gateway_port=a.gateway_port,
         bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
         native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
         native_navigation=a.native_navigation,

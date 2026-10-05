@@ -313,6 +313,11 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
     if session._cancel_requested():
         return _Next(session._finish(result, t0, "user_cancelled",
                                     "the user stopped this task after the read", steps=step))
+    if obs is None:
+        session._sync_plan_message(messages)
+        messages += [_assistant_call(call), _tool_result(call, feedback)]
+        return session._resume(turn, _trim(messages, session.keep_observations), None,
+                               successful_business_tools)
     try:
         session._browser_attempts += 1
         receipt = session.browser.execute("observe", {})

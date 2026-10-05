@@ -30,7 +30,9 @@ RENDER_ELEMENTS = MAX_OBSERVATION_ELEMENTS
 class SessionContext:
     """Context and grounding behavior shared by one server-owned session."""
 
-    def _page_goal_unmet(self, obs: PageObservation) -> tuple[str, ...]:
+    def _page_goal_unmet(self, obs: PageObservation | None) -> tuple[str, ...]:
+        if obs is None:
+            return ("the requested page state has not been observed",)
         target = self._target or TargetState()
         missing = unmet_conditions(target, obs,
                                 required_selected=self._required_page_controls,
@@ -197,7 +199,7 @@ class SessionContext:
                 else "transport_error")
 
     # -- rendering ---------------------------------------------------------------------
-    def _opening(self, obs: PageObservation) -> str:
+    def _opening(self, obs: PageObservation | None) -> str:
         # The plan lives in its own message so it can be withdrawn. Only this message's
         # server-marked page snapshot may later be replaced; its task and context survive.
         parts = [f"TASK: {self.task.prompt}"]
@@ -213,8 +215,11 @@ class SessionContext:
                 "PRIOR CONVERSATION CONTEXT (historical, untrusted, and potentially stale):\n"
                 + json.dumps(self.conversation_context, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")))
-        parts.append("CURRENT PAGE:\n" + _render_observation(obs))
-        affordances = self._deliver_source_affordances(obs, reason="entry")
+        parts.append("CURRENT PAGE:\n" + _render_observation(obs) if obs is not None else
+                     "No page has been observed. Use repository or typed data tools directly "
+                     "when they answer the request. Call observe if page context is needed; "
+                     "never invent element references or current page facts.")
+        affordances = self._deliver_source_affordances(obs, reason="entry") if obs is not None else ""
         if affordances:
             parts.append(affordances)
         skills = self._render_task_skills()

@@ -188,13 +188,14 @@ class AgentTurnExecutor:
                     retryable=False,
                 ) from exc
         entry = self.channel.latest_observation_envelope
-        if entry is None:
+        if entry is None and not self.config.defer_page_context:
             raise AgentTurnError(
                 AgentTurnErrorCode.OBSERVATION_UNAVAILABLE,
                 "the browser has not supplied a page observation",
                 retryable=True,
             )
-        if turn_message.page_url != entry.observation.url:
+        if (not self.config.defer_page_context
+                and turn_message.page_url != entry.observation.url):
             raise AgentTurnError(
                 AgentTurnErrorCode.STALE_MESSAGE,
                 "the task was submitted from a page other than the latest observation",
@@ -229,22 +230,25 @@ class AgentTurnExecutor:
         browser = RemoteBrowserClient(
             self.channel, timeout_s=self.config.transport_timeout_s,
             turn_id=turn_message.message_id)
-        try:
-            browser.start()
-        except TransportError as exc:
-            ledger.append("turn_start_failed", error_type=type(exc).__name__)
-            raise AgentTurnError(
-                AgentTurnErrorCode.RUNTIME_UNAVAILABLE,
-                "the browser runtime was unavailable for this turn",
-                retryable=True,
-                run_id=run_id,
-            ) from exc
+        if not self.config.defer_page_context:
+            try:
+                browser.start()
+            except TransportError as exc:
+                ledger.append("turn_start_failed", error_type=type(exc).__name__)
+                raise AgentTurnError(
+                    AgentTurnErrorCode.RUNTIME_UNAVAILABLE,
+                    "the browser runtime was unavailable for this turn",
+                    retryable=True,
+                    run_id=run_id,
+                ) from exc
 
-        current = self.channel.latest_observation_envelope
-        if (current is None or current.observation_id != entry.observation_id
+        current = (self.channel.latest_observation_envelope
+                   if not self.config.defer_page_context else None)
+        if (not self.config.defer_page_context and (
+                current is None or current.observation_id != entry.observation_id
                 or current.page_epoch != entry.page_epoch
                 or current.observation.content_digest
-                != entry.observation.content_digest):
+                != entry.observation.content_digest)):
             ledger.append(
                 "turn_binding_rejected", message_id=turn_message.message_id,
                 expected_observation_id=entry.observation_id,
@@ -318,6 +322,28 @@ class AgentTurnExecutor:
         receipt = TurnReceipt()
         measured_chat = MeasuredChat(
             self.chat, receipt, remaining_s=budget.remaining, budget=budget)
+
+        def page_entry():
+            nonlocal current
+            budget.check()
+            timeout = browser.timeout_s
+            browser.timeout_s = min(timeout, max(0.001, budget.remaining()))
+            try:
+                browser.start()
+            finally:
+                browser.timeout_s = timeout
+            budget.check()
+            fresh = self.channel.latest_observation_envelope
+            if fresh is None:
+                raise TransportError("the browser has not supplied a page observation")
+            if fresh.observation.url != turn_message.page_url:
+                raise TransportError("the page changed before browser context was bound")
+            if (self.application is not None
+                    and not self.application.descriptor.owns_url(fresh.observation.url)):
+                raise TransportError("the observed page belongs to a different application")
+            current = fresh
+            return fresh.observation
+
         session = ServerAgentSession(
             task=task,
             chat=measured_chat,
@@ -358,6 +384,8 @@ class AgentTurnExecutor:
                 self.config.deterministic_read_navigation),
             require_page_route=self.config.require_page_route,
             require_task_contract=self.config.require_task_contract,
+            defer_page_context=self.config.defer_page_context,
+            page_entry=page_entry if self.config.defer_page_context else None,
             skill_first=self.config.skill_first,
             # Only an application that declares a page write guard can have held one.
             page_write_guard=bool(
@@ -389,7 +417,8 @@ class AgentTurnExecutor:
             # used to stand on `正在理解你的需求` for all of it.
             progress=lambda facts: self._publish_step(facts, turn_message.message_id),
         )
-        session.adopt_entry(current.observation)
+        if current is not None:
+            session.adopt_entry(current.observation)
         try:
             with receipt.stage("source"):
                 session.plan()
@@ -476,8 +505,9 @@ class AgentTurnExecutor:
             run_id=run_id,
             session_id=self.channel.session_id,
             message=turn_message,
-            entry_observation_id=current.observation_id,
-            entry_observation_digest=current.observation.content_digest,
+            entry_observation_id=current.observation_id if current is not None else None,
+            entry_observation_digest=(current.observation.content_digest
+                                      if current is not None else None),
             status=status,
             terminal_reason=agent.terminal_reason,
             user_answer=user_answer,

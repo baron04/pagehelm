@@ -163,6 +163,9 @@ class AgentTurnConfig:
     #: Refresh the Agent's own observation before resolving data reads. A page
     #: query hint is not current merely because its declaration was current.
     observe_before_reads: bool = False
+    #: Start with only the request and registered tools. Browser context and its control
+    #: lease are acquired on the first page tool; repository/API answers need neither.
+    defer_page_context: bool = False
     #: A step-by-step page turn may require the application's rendered main-page
     #: identity before reporting arrival; URL and selected controls alone cannot prove it.
     require_page_route: bool = False
@@ -213,6 +216,7 @@ class AgentTurnConfig:
                 or not isinstance(self.confirm_page_operations, bool)
                 or not isinstance(self.require_identity, bool)
                 or not isinstance(self.observe_before_reads, bool)
+                or not isinstance(self.defer_page_context, bool)
                 or not isinstance(self.require_page_route, bool)
                 or not isinstance(self.require_task_contract, bool)):
             raise ValueError("turn policy flags must be booleans")
@@ -441,8 +445,8 @@ class AgentTurnExecution:
     run_id: str
     session_id: str
     message: AgentTurnMessage
-    entry_observation_id: str
-    entry_observation_digest: str
+    entry_observation_id: str | None
+    entry_observation_digest: str | None
     status: AgentTurnStatus
     terminal_reason: str
     user_answer: str

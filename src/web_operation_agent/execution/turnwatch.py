@@ -62,7 +62,7 @@ class RepeatGuard:
         """A successful business result may refresh metadata; old refusals no longer bind."""
         self._refused.clear()
 
-    def refused(self, name: str, args: object, observation: PageObservation) -> None:
+    def refused(self, name: str, args: object, observation: PageObservation | None) -> None:
         """Remember only a caller-proven request/policy refusal with no possible effect.
 
         Authentication, permission, availability and uncertain write errors must never
@@ -74,7 +74,7 @@ class RepeatGuard:
                 self._refused.setdefault(key, False)
 
     def _refusal_key(self, name, args, observation):
-        page = observation.to_json()
+        page = observation.to_json() if observation is not None else {}
         page.pop("epoch", None)
         for element in page.get("elements", ()):
             element.pop("epoch", None)
@@ -98,7 +98,7 @@ class RepeatGuard:
         self._warned = False
         self._refused.clear()
 
-    def decide(self, name: str, args: object, observation: PageObservation) -> str:
+    def decide(self, name: str, args: object, observation: PageObservation | None) -> str:
         """`""` to carry on, `"warn"` to say so once, `"end"` to stop the turn."""
         if self._limit is None or name in {"finish", "ask_user"}:
             self.reset()
@@ -124,8 +124,8 @@ class RepeatGuard:
         return ""
 
     @staticmethod
-    def _fingerprint_of(name: str, args: object, observation: PageObservation) -> str:
-        page = observation.to_json()
+    def _fingerprint_of(name: str, args: object, observation: PageObservation | None) -> str:
+        page = observation.to_json() if observation is not None else {}
         page.pop("epoch", None)
         for element in page.get("elements", ()):
             element.pop("epoch", None)
@@ -153,9 +153,9 @@ class SourcePageProgress:
         self._seen: set[str] = set()
         self._stalled = 0
 
-    def note(self, observation: PageObservation,
+    def note(self, observation: PageObservation | None,
              source_refs: tuple[str, ...]) -> str:
-        page = observation.to_json()
+        page = observation.to_json() if observation is not None else {}
         page.pop("epoch", None)
         page.pop("messages", None)
         for element in page.get("elements", ()):

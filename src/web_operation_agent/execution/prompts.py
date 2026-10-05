@@ -77,12 +77,15 @@ WITHDRAW_TOOL = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
 
 AGENT_SYSTEM = """\
-You operate a web application through a browser you drive one action at a time. You cannot \
-see the screen; you see a structured observation of the current page and you act by calling \
-tools with element references from that observation.
+You assist with a web application's repository, business data and page operations through
+registered tools. Choose tools from the user's request and their results. Repository questions
+need source/Git evidence, current-data questions need actor-scoped reads, and page operations
+need fresh browser observations. A request may combine them. You cannot see the screen;
+browser tools use element references from structured observations.
 
 How to work:
-* Read the observation. Element references (e1, e2, ...) are only valid for the observation \
+* When page context is needed, read the observation or call observe if none is available.
+Element references (e1, e2, ...) are only valid for the observation \
 they came from; after any action you get a fresh one and the old references are dead.
 * Call exactly one tool in each response, then wait for its result before choosing the next
 action. Browser actions return a fresh page observation. Typed business tools are registered

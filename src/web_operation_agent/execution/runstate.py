@@ -179,7 +179,7 @@ class _Turn:
     result: RunResult
     started_at: float
     messages: list[dict]
-    obs: PageObservation
+    obs: PageObservation | None
     step: int = 0
     #: Business tools that answered. A turn that read through the typed API is held to a
     #: different standard when it claims to be done.

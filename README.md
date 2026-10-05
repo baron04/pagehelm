@@ -396,6 +396,12 @@ agent.
   handoff is never recorded as a claim that the requested write happened.
 - A server-side ReAct loop receives every tool result and a fresh page observation before
   its next decision, with step, time, token, and provider-spend limits.
+  With opt-in `defer_page_context=True` in `AgentTurnConfig`, repository and API reads
+  can complete without browser transport or a page-control lease. The first page tool
+  acquires fresh runtime context; an action proposed before that context is returned
+  without dispatch so the same Agent can replan. This does not bypass identity, approval,
+  cancellation or shared budgets. Turns that never acquire a page have nullable entry
+  observation metadata; they do not synthesize page evidence.
   Integrations can set `require_page_route=True` in `AgentTurnConfig` for this loop:
   navigation and target completion then require a fresh application-owned `page_route`
   matching the current URL, with no pending render or blocking application error. A

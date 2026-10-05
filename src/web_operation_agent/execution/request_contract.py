@@ -154,6 +154,8 @@ def record_target_unmet(requirements, observation) -> tuple[str, ...]:
     """
     if requirements is None or requirements.action_kind != "record":
         return ()
+    if observation is None:
+        return ("the requested record has not been observed",)
     path = urlsplit(observation.url).path.rstrip("/") or "/"
     if (observation.render_state != "ready" or observation.page_route != path
             or observation.record_route != path):

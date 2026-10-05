@@ -22,7 +22,9 @@ from ..privacy import safe_tool_arguments as _safe
 from .business_tools import apply_skill_first, business_tool, load_skill, prefill_form
 from .form_tools import describe_form, prepare_form
 from .form_entries import find_form_entries, open_form_entry
-from .knowledge_tools import ask_user_tool, lookup_source_history_tool, lookup_source_tool
+from .knowledge_tools import (ask_user_tool, check_capability_tool, capability_check_available,
+                              lookup_source_history_tool, lookup_source_tool)
+from .page_lifecycle import acquire_page, requires_page
 from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
                       CAPABILITY_SYSTEM, CLARIFICATION_SYSTEM, CONVERSATION_SYSTEM,
@@ -70,6 +72,8 @@ def named_tools(session):
         available["compute"] = session._tool_compute
     if session.allow_clarification:
         available["ask_user"] = partial(ask_user_tool, session)
+    if capability_check_available(session):
+        available["check_capability"] = partial(check_capability_tool, session)
     if session.target_settlement_available():
         available["set_target"] = session._tool_set_target
     available["finish"] = session._tool_finish
@@ -150,7 +154,8 @@ def run_loop(session) -> RunResult:
                        contract_source=session.contract_source,
                        citations=len(session.contract.cited_keys()))
     try:
-        session._writes.begin_control()
+        if not session.defer_page_context or session.entry_observation is not None:
+            session._writes.begin_control()
     except ControlPlaneError as exc:
         return session._finish(result, t0, "control_plane_error", str(exc))
     if session._cancel_requested():
@@ -161,12 +166,15 @@ def run_loop(session) -> RunResult:
                                session.planning_error)
     apply_skill_first(session)
     try:
-        obs = session.entry_observation or session.browser.observe()
+        obs = session.entry_observation
+        if obs is None and not session.defer_page_context:
+            obs = session.browser.observe()
     except TransportError as e:
         reason = "user_cancelled" if session._cancel_requested() else "transport_error"
         return session._finish(result, t0, reason, str(e))
-    session.ledger.append("observation", epoch=obs.epoch, url=obs.url,
-                       elements=len(obs.elements), digest=obs.content_digest)
+    if obs is not None:
+        session.ledger.append("observation", epoch=obs.epoch, url=obs.url,
+                             elements=len(obs.elements), digest=obs.content_digest)
 
     system = AGENT_SYSTEM
     if session.require_task_contract:
@@ -206,7 +214,8 @@ def run_loop(session) -> RunResult:
                 {"role": "user", "content": session._opening(obs)}]
     session._sync_plan_message(messages)
     try:
-        session._writes.start_observing()
+        if session._writes.control_started:
+            session._writes.start_observing()
     except ControlPlaneError as e:
         return session._finish(result, t0, "control_plane_error", str(e))
     step = 0
@@ -220,15 +229,15 @@ def run_loop(session) -> RunResult:
     unanswered_reply = ""
     last_tool_name = ""
     while True:
-        if session._page_answer_digest and session._page_answer_digest != obs.content_digest:
+        if obs is not None and session._page_answer_digest and session._page_answer_digest != obs.content_digest:
             session.evidence.discard_pages()
             session._page_answer_digest = ""
-        if (session._answer_action_receipt is not None
+        if (obs is not None and session._answer_action_receipt is not None
                 and session._answer_action_receipt["kind"] in
                     {"navigation", "page_interaction", "target_state"}
                 and session._answer_action_receipt["url"] != obs.url):
             session._answer_action_receipt = None
-        if (session._answer_action_receipt is not None
+        if (obs is not None and session._answer_action_receipt is not None
                 and session._answer_action_receipt.get("navigation_url", obs.url) != obs.url):
             session._answer_action_receipt.pop("navigation_url", None)
         if session._cancel_requested():
@@ -454,6 +463,27 @@ def run_loop(session) -> RunResult:
             session.ledger.append("task_declaration_required", step=step, tool=name, dispatched=False)
             messages += [_assistant_call(call), _tool_result(call,
                 "First declare_task for every original USER REQUEST clause. No application tool was dispatched.")]
+            continue
+
+        if obs is None and name not in {tool["function"]["name"] for tool in session.tool_schemas()}:
+            session.ledger.append("unknown_tool_rejected", step=step, tool=name,
+                                  dispatched=False, side_effect_possible=False)
+            session._reply(turn, call, f"There is no available tool called {name!r}.")
+            messages = turn.messages
+            continue
+        if obs is None and requires_page(session, name):
+            prepared = acquire_page(session, turn, call, name)
+            obs = turn.obs
+            if prepared is not None:
+                if prepared.finished is not None:
+                    return prepared.finished
+                messages = turn.messages
+                continue
+        elif obs is None and name not in named_tools(session):
+            session.ledger.append("unknown_tool_rejected", step=step, tool=name,
+                                  dispatched=False, side_effect_possible=False)
+            session._reply(turn, call, f"There is no registered tool called {name!r}.")
+            messages = turn.messages
             continue
 
         no_progress = session._repeats.decide(name, args, obs)

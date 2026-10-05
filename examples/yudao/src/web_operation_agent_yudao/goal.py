@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from typing import Callable
 
 from web_operation_agent.business.page_entries import PageEntry
 from web_operation_agent.goal.data import (EVERYTHING, ID, NAME, All, Native, Choice, Compare, Cond,
@@ -84,13 +85,15 @@ class _QueryScope:
 
 
 class YudaoGoalData:
-    def __init__(self, client: YudaoClient, api_docs: dict, *, ui: UiSource | None = None,
+    def __init__(self, client: YudaoClient, api_docs: dict | Callable[[], dict], *, ui: UiSource | None = None,
                  modules: tuple[str, ...] = MODULES, time_zone: str = "Asia/Shanghai",
                  max_rows: int = _MAX_ROWS, native_sections: bool = False):
         if not isinstance(native_sections, bool):
             raise TypeError("native sections must be explicitly enabled")
         self._native_sections = native_sections
-        self._client, self._docs = client, api_docs
+        if not isinstance(api_docs, dict) and not callable(api_docs):
+            raise TypeError("API documents require a snapshot or a loader")
+        self._client, self._documents = client, api_docs
         self._ui = ui or UiSource.none()
         self._modules, self._zone_name, self._max_rows = tuple(modules), time_zone, max_rows
         self._lock = threading.Lock()
@@ -117,6 +120,17 @@ class YudaoGoalData:
         self._query_binding = uuid.uuid4().hex
 
     # -- index and schema ---------------------------------------------------------------------
+    @property
+    def _docs(self) -> dict:
+        # Schema compilation owns _lock. Load only when the schema actually needs it;
+        # a failed loader is not cached as an empty or incomplete catalog.
+        if callable(self._documents):
+            documents = self._documents()
+            if not isinstance(documents, dict):
+                raise DataRefused("the application API documents are invalid", read_failed=True)
+            self._documents = documents
+        return self._documents
+
     def attach_conventions(self, conventions) -> None:
         with self._lock:
             self._conventions, self._index = tuple(conventions), None

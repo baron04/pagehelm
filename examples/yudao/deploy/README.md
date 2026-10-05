@@ -213,6 +213,23 @@ answer. Arbitrary buttons, unreviewed fields, form submission and page filters r
 unavailable. Source lookup supplies evidence, never action authority. This is a measured
 prototype, not a claim of general native-form coverage or model accuracy.
 
+Host startup and authenticated session creation load API documents only when a business
+tool needs the schema. An unavailable document endpoint remains a typed read failure,
+not an empty catalog. The page-agent pilot also acquires browser context on demand:
+static repository answers can finish without page transport, while page operations
+require a fresh binding to the submitting page. Login verification and native-guard
+ingress qualification remain prerequisites; an unavailable identity service cannot
+create an authenticated session.
+
+Git history is optional and requires actual local repositories matching the deployed
+source bytes. Repeat `--source-commit ui=<full-commit>` and
+`--source-commit server=<full-commit>` for separate repositories below `--source-root`,
+or use `--source-commit root=<full-commit>` for a single repository. Each history hit
+retains its own repository and deployment commit; two repositories do not acquire a
+fictional shared commit. Missing Git objects, allowlisted source drift, or a repository
+outside the source boundary refuse this explicit configuration. History queries retain
+the source allowlist, and a diff target must belong to the selected repository.
+
 The server checks the acting API identity, `crm:customer:update` (or the application's
 wildcard), the exact customer's read and its actor-scoped owner/write membership. It
 issues only the unique enabled Edit button on that verified detail route, consumes its
