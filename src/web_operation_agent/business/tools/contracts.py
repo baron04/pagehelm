@@ -249,6 +249,7 @@ class FormDraftField:
     value: str
     control: str = "textbox"
     binding: str = "field"
+    option_label: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.field, str) or not _FORM_FIELD.fullmatch(self.field):
@@ -257,6 +258,11 @@ class FormDraftField:
             raise ValueError("form draft control is not supported")
         if self.binding not in {"field", "label"}:
             raise ValueError("form draft binding must be field or label")
+        if (not isinstance(self.option_label, str) or len(self.option_label) > MAX_FORM_LABEL_CHARS
+                or self.option_label and (self.control != "combobox"
+                    or not self.option_label.strip()
+                    or re.search(r"[\x00-\x1f\x7f]", self.option_label))):
+            raise ValueError("form draft option label is invalid")
         for name, value, maximum, allow_empty in (
                 ("label", self.label, MAX_FORM_LABEL_CHARS, False),
                 ("value", self.value, 4_000, True)):
@@ -270,7 +276,8 @@ class FormDraftField:
     def to_json(self) -> dict:
         return {"field": self.field, "label": self.label,
                 "value": self.value, "control": self.control,
-                **({"binding": self.binding} if self.binding != "field" else {})}
+                **({"binding": self.binding} if self.binding != "field" else {}),
+                **({"option_label": self.option_label} if self.option_label else {})}
 
 
 #: A form the application leaves alone until its own submit control is used.

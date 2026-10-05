@@ -268,3 +268,11 @@ export const readPageRecordRoute = () => installed?.readPageRecordRoute()
 export const readPageRoute = () => installed?.readPageRoute()
 export const readPageQuery = () => installed?.readPageQuery()
 export const disposeInstalledPageFacts = () => installed?.dispose()
+/** Map one Element Plus select hit area to its own accessible form input. */
+export function nativeControlElement(element) {
+  if (!(element instanceof HTMLElement) || !element.matches('.el-select__wrapper') ||
+      element.classList.contains('is-disabled') || element.getAttribute('aria-disabled') === 'true') return element
+  const inputs = element.querySelectorAll('input[role="combobox"][aria-haspopup="listbox"][aria-controls]')
+  return inputs.length === 1 && inputs[0].closest('.el-select__wrapper') === element
+    ? inputs[0] : element
+}

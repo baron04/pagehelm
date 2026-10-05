@@ -147,7 +147,10 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
       return access().input(args.ref, String(args.value), args.commit === true)
     case 'select':
       if (args.value === undefined) throw new Error('bad_arguments: select needs value')
-      return access().select(args.ref, String(args.value))
+      if (args.option_label !== undefined && typeof args.option_label !== 'string') {
+        throw new Error('bad_arguments: select option label must be a string')
+      }
+      return access().select(args.ref, String(args.value), args.option_label as string | undefined)
     case 'wait_for':
       await sleep(Math.min(Math.max(Number(args.ms || 1000), 0), MAX_WAIT_MS))
       return {success: true, message: 'wait completed'}

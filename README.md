@@ -696,8 +696,15 @@ Numeric translation enforces literal bounds and precision and refuses values tha
 control would round or clamp. Spinbutton discovery and verification share the browser contract
 and are also exercised by Contacts' source-free HTML form. A prepared draft commits each local
 editor with change/blur, checks its fresh value, and highlights submission for the person.
-Dynamic numeric constraints, date ranges, custom date formats, datetime fields and custom
-choice/association widgets remain unsupported by this source translation.
+Single-choice ARIA listboxes use adapter-issued option values and labels, reject ambiguous or
+disabled choices, and verify the selection before handoff. The native Yudao form port can
+translate literal options, integer dictionary options and its fixed user-list relation
+pattern from current allowlisted source. Choice data is re-read under the same actor before
+preparation; changed source or choices invalidate the draft. Element Plus hit-area translation
+stays in the application controller. Contacts exercises the same contract with a source-free
+HTML combobox. This is bounded capability coverage, not a model accuracy result.
+Dynamic numeric constraints, date ranges, custom date formats, datetime fields, multi-select,
+cascaders, remote option search and editable detail rows remain unsupported by this translation.
 One scope declaration
 preserves every business and static-source part of a mixed request; business details use
 the existing paired readings and deterministic resolver, rather than a growing generic

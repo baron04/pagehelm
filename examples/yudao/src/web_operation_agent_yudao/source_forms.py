@@ -1,9 +1,11 @@
-"""On-demand scalar form facts from allowlisted raw Vue source.
+"""On-demand form facts from allowlisted raw Vue source.
 
 This compiler supplies evidence, not permission to type. A form port must still bind an
 application-verified entry, actor, create/update target and fresh visible dialog before
 using these facts. No source map, global form directory or framework code enters the core.
-Scripts are never executed; dynamic bindings and custom controls remain uncompiled.
+Scripts are never executed. Single-choice literals, integer dictionary bindings and the
+fixed user-list read pattern may describe options; other dynamic/custom controls remain
+uncompiled. These facts never authorize a request extracted from source.
 """
 from __future__ import annotations
 
@@ -38,18 +40,24 @@ class ScalarSourceField:
     minimum: str | None = None
     maximum: str | None = None
     precision: int | None = None
+    choices: tuple[tuple[str, str], ...] = ()
+    choice_source: str = ""
+    choice_reference: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class ScalarFormSource:
     fields: tuple[ScalarSourceField, ...]
     evidence: EvidenceRef
+    dependencies: tuple[EvidenceRef, ...] = ()
 
     @property
     def binding_digest(self) -> str:
         ref = self.evidence
         return hashlib.sha256((ref.repository_id + "\0" + ref.release + "\0"
-                               + ref.path + "\0" + ref.sha256).encode()).hexdigest()
+                               + ref.path + "\0" + ref.sha256 + "".join(
+                                   "\0" + dep.path + "\0" + dep.sha256
+                                   for dep in self.dependencies)).encode()).hexdigest()
 
 
 @dataclass
@@ -130,7 +138,56 @@ def _number_attribute(attrs: dict, name: str) -> str | None:
     return value
 
 
-def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
+def _select_choices(control: _Node, text: str, dictionary: str):
+    attrs = control.attrs
+    if (_dynamic(attrs, "multiple", "remote", "allow-create", "remote-method") or any(key in attrs for key in
+            ("multiple", ":multiple", "v-bind:multiple", "remote", ":remote", "allow-create",
+             ":allow-create", "remote-method", ":remote-method"))):
+        return None
+    options = [node for node, _ in _walk(control) if node.tag == "el-option"]
+    if not options or len(options) > 50:
+        return None
+    if len(options) == 1 and "v-for" in options[0].attrs:
+        option = options[0].attrs
+        dict_loop = re.fullmatch(r"([A-Za-z][A-Za-z0-9_]*) in getIntDictOptions\(DICT_TYPE\.([A-Z][A-Z0-9_]*)\)",
+                                 option["v-for"] or "")
+        if dict_loop:
+            variable, constant = dict_loop.groups()
+            if (option.get(":label") != variable + ".label" or option.get(":value") != variable + ".value"
+                    or any(k.startswith(("@", "v-on", ":disabled", "v-bind")) or k == "disabled" for k in option)
+                    or not re.search(r"import\s*\{[^}]*\bgetIntDictOptions\b[^}]*\}\s*from\s*['\"]@/utils/dict['\"]", text)):
+                return None
+            enums = re.findall(r"export enum DICT_TYPE\s*\{([^}]+)\}", dictionary)
+            keys = re.findall(r"^\s*" + re.escape(constant) + r"\s*=\s*['\"]([a-z][a-z0-9_]{0,119})['\"]\s*,?\s*(?://[^\n]*)?$",
+                              enums[0], re.MULTILINE) if len(enums) == 1 else []
+            return ((), "dictionary", keys[0]) if len(keys) == 1 else None
+        user_loop = re.fullmatch(r"([A-Za-z][A-Za-z0-9_]*) in ([A-Za-z][A-Za-z0-9_]*)", option["v-for"] or "")
+        if user_loop:
+            variable, collection = user_loop.groups()
+            imports = re.findall(r"import \* as ([A-Za-z][A-Za-z0-9_]*) from ['\"]@/api/system/user['\"]", text)
+            assignments = re.findall(re.escape(collection) + r"\.value\s*=([^\n;]+)", text)
+            if (len(imports) == 1 and assignments == [" await " + imports[0] + ".getSimpleUserList()"]
+                    and option.get(":label") == variable + ".nickname" and option.get(":value") == variable + ".id"
+                    and not any(k.startswith(("@", "v-on", ":disabled", "v-bind")) or k == "disabled" for k in option)):
+                return (), "users", ""
+        return None
+    choices = []
+    for node in options:
+        attrs = node.attrs
+        if any(key.startswith((":label", "v-", "@", ":disabled")) or key == "disabled" for key in attrs):
+            return None
+        label, value = attrs.get("label"), attrs.get("value")
+        if value is None and re.fullmatch(r"-?(?:0|[1-9][0-9]*)", attrs.get(":value") or ""):
+            value = attrs[":value"]
+        if not isinstance(label, str) or not label.strip() or not isinstance(value, str):
+            return None
+        choices.append((value, " ".join(label.split())))
+    if len({v for v, _ in choices}) != len(choices) or len({l for _, l in choices}) != len(choices):
+        return None
+    return tuple(choices), "literal", ""
+
+
+def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "") -> ScalarFormSource | None:
     parser = _Template()
     try:
         parser.feed(text)
@@ -155,7 +212,7 @@ def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
                 or _dynamic(item.attrs, "label", "prop")):
             continue
         controls = [(node, parents) for node, parents in _walk(item)
-                    if node.tag in {"el-input", "el-input-number", "el-date-picker"}]
+                    if node.tag in {"el-input", "el-input-number", "el-date-picker", "el-select"}]
         if len(controls) != 1:
             continue
         control, parents = controls[0]
@@ -165,7 +222,14 @@ def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
                 or _dynamic(attrs, "type", "maxlength")):
             continue
         minimum = maximum = precision = None
-        if control.tag == "el-input-number":
+        choices, choice_source, choice_reference = (), "", ""
+        if control.tag == "el-select":
+            compiled = _select_choices(control, text, dictionary)
+            if compiled is None:
+                continue
+            choices, choice_source, choice_reference = compiled
+            input_type = "choice"
+        elif control.tag == "el-input-number":
             # Step-strict typing or a custom formatter can alter the entered value.
             if ("v-bind" in attrs or any(key in attrs for key in
                     ("step-strictly", ":step-strictly", "v-bind:step-strictly", "formatter", ":formatter"))
@@ -209,6 +273,7 @@ def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
                           if key.startswith(("@", "v-on"))})),
             _evidence(tree, path, lines, item.start, item.end),
             minimum, maximum, precision,
+            choices, choice_source, choice_reference,
         ))
     # Repeated fields/labels cannot establish a unique semantic binding, even if their
     # source branches appear mutually exclusive. The compiler never evaluates Vue code.
@@ -216,7 +281,9 @@ def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
             or len({item.reference for item in fields}) != len(fields)
             or len({item.label for item in fields}) != len(fields)):
         return None
-    return ScalarFormSource(tuple(fields), _evidence(tree, path, lines, 1, len(lines)))
+    dependencies = (_evidence(tree, "ui/src/utils/dict.ts", dictionary.splitlines(keepends=True),
+                             1, len(dictionary.splitlines())),) if dictionary else ()
+    return ScalarFormSource(tuple(fields), _evidence(tree, path, lines, 1, len(lines)), dependencies)
 
 
 class SourceFormReader:
@@ -240,13 +307,19 @@ class SourceFormReader:
             text = self._tree.read_text(path)
         except (AccessDenied, OSError, UnicodeError):
             return None
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        dictionary = ""
+        if "getIntDictOptions(DICT_TYPE." in text:
+            try:
+                dictionary = self._tree.read_text("ui/src/utils/dict.ts")
+            except (AccessDenied, OSError, UnicodeError):
+                pass
+        digest = hashlib.sha256((text + "\0" + dictionary).encode("utf-8")).hexdigest()
         with self._lock:
             cached = self._cache.get(path)
             if cached is not None and cached[0] == digest:
                 self._cache.move_to_end(path)
                 return cached[1]
-            result = _compile(self._tree, path, text)
+            result = _compile(self._tree, path, text, dictionary)
             self._cache[path] = (digest, result)
             self._cache.move_to_end(path)
             while len(self._cache) > 128:

@@ -5,7 +5,7 @@ import unittest
 import time
 
 from web_operation_agent.business.forms import (
-    ApplicationFormDescriptor, ApplicationFormField, ApplicationFormTools)
+    ApplicationFormDescriptor, ApplicationFormField, ApplicationFormTools, FormChoice)
 from web_operation_agent.business.errors import BusinessToolContractError, BusinessToolRequestError
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.execution.form_tools import apply_form_draft, prefill_form
@@ -65,6 +65,41 @@ def session_for(execute):
 
 
 class ScopedForms(unittest.TestCase):
+    def test_combobox_draft_uses_select_and_retains_label_in_handoff(self):
+        obs = observation()
+        obs.elements[0] = replace(obs.elements[0], role="combobox")
+        calls = []
+        def execute(action, args):
+            calls.append((action, args))
+            return ActionReceipt(1, "cmd" + str(len(calls)), action, {}, True,
+                                 observation=replace(obs, epoch=len(calls) + 1,
+                                     elements=[replace(e, epoch=len(calls) + 1) for e in obs.elements]))
+        draft = FormDraft("/records", (FormDraftField("name", "Name", "17", "combobox",
+                          binding="label", option_label="Synthetic person"),),
+                          control_scope=SCOPE, submit_label="Confirm")
+        _, reason, _ = apply_form_draft(session_for(execute), draft, obs, 1)
+        self.assertEqual(reason, "")
+        self.assertEqual([c[0] for c in calls], ["select", "handoff_form"])
+        self.assertEqual(calls[0][1]["option_label"], "Synthetic person")
+        self.assertEqual(calls[1][1]["fields"][0]["option_label"], "Synthetic person")
+
+    def test_adapter_cannot_replace_a_declared_choice_label(self):
+        class Choices(LabelForms):
+            def describe_form(self, obs, *, context=None):
+                return replace(super().describe_form(obs), fields=(ApplicationFormField(
+                    "name", "Name", kind="choice", controls=("combobox",), binding="label",
+                    choices=(FormChoice("17", "Synthetic person"),)),))
+            def prepare_form(self, form, values, *, context=None):
+                draft = super().prepare_form(form, values)
+                return replace(draft, fields=(replace(draft.fields[0], option_label="Other person"),))
+        obs = observation()
+        obs.elements[0] = replace(obs.elements[0], role="combobox")
+        tools = self.tools(Choices())
+        result = tools.describe(obs, {})
+        with self.assertRaisesRegex(BusinessToolContractError, "declared choice"):
+            tools.prepare(obs, {"form_id": result["form_id"], "values": [
+                {"field_id": result["fields"][0]["field_id"], "value": "17"}]})
+
     def tools(self, port=None):
         return ApplicationFormTools(port or LabelForms(), application_id="fixture",
                                     binding_secret=b"s" * 32)

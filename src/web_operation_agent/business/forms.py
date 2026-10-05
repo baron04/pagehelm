@@ -613,6 +613,13 @@ class ApplicationFormTools:
                      item.field.binding) for item in selected}
         actual = {(item.field, item.label, item.control, item.binding)
                   for item in draft.fields}
+        choices = {item.field.reference: item.field.choices for item in selected}
+        requested_values = {item.field.reference: item.value for item in selected}
+        if any(item.option_label and (item.value != requested_values[item.field] or
+               sum(choice.value == item.value and choice.label == item.option_label
+                   for choice in choices[item.field]) != 1) for item in draft.fields
+               if item.field in choices):
+            raise BusinessToolContractError("the form draft option is not a declared choice")
         if (draft.route != form.route or expected != actual
                 or draft.persistence != form.persistence
                 or draft.effect != form.effect or draft.targets != form.targets

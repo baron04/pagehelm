@@ -36,6 +36,50 @@ const formData = ref({ name: '', description: '', remark: '', memberIds: [] })
 
 
 class SourceFormTests(unittest.TestCase):
+    def test_literal_single_choices_and_dynamic_multiple_or_duplicate_choices(self):
+        select = '<el-select v-model="formData.remark"><el-option label="普通" value="normal"/><el-option label="加急" :value="2"/></el-select>'
+        self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />', select))
+        result = self.reader.read(_PATH)
+        self.assertEqual(result.fields[-1].choices, (("normal", "普通"), ("2", "加急")))
+        self.assertTrue(self.tree.verify(result.fields[-1].evidence))
+        for bad in (select.replace('v-model=', 'multiple v-model='),
+                    select.replace('label="加急"', 'label="普通"'),
+                    select.replace('label="加急"', ':label="dynamic"'),
+                    select.replace(':value="2"', ':value="expr()"')):
+            self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />', bad))
+            self.assertNotIn("remark", [f.reference for f in self.reader.read(_PATH).fields])
+
+    def test_dictionary_dependency_is_allowlisted_fresh_and_release_bound(self):
+        dictionary = self.root/'ui/src/utils/dict.ts'
+        dictionary.parent.mkdir(parents=True)
+        dictionary.write_text("export enum DICT_TYPE {\n SYNTHETIC = 'synthetic',\n}\n")
+        select = '<el-select v-model="formData.remark"><el-option v-for="dict in getIntDictOptions(DICT_TYPE.SYNTHETIC)" :label="dict.label" :value="dict.value"/></el-select>'
+        body = _SOURCE.replace('<el-input v-model="formData.remark" />', select).replace(
+            '// Do not execute', "import { DICT_TYPE, getIntDictOptions } from '@/utils/dict'\n// Do not execute")
+        self.path.write_text(body)
+        first = self.reader.read(_PATH)
+        self.assertEqual(first.fields[-1].choice_reference, "synthetic")
+        self.assertTrue(self.tree.verify(first.dependencies[0]))
+        dictionary.write_text(dictionary.read_text().replace("'synthetic'", "'changed'"))
+        second = self.reader.read(_PATH)
+        self.assertEqual(second.fields[-1].choice_reference, "changed")
+        self.assertNotEqual(first.binding_digest, second.binding_digest)
+        dictionary.unlink()
+        self.assertNotIn("remark", [f.reference for f in self.reader.read(_PATH).fields])
+
+    def test_user_relation_requires_the_fixed_zero_argument_read_and_scalar_ids(self):
+        select = '<el-select v-model="formData.remark"><el-option v-for="item in userOptions" :label="item.nickname" :value="item.id"/></el-select>'
+        body = _SOURCE.replace('<el-input v-model="formData.remark" />', select).replace(
+            '// Do not execute', "import * as UserApi from '@/api/system/user'\nuserOptions.value = await UserApi.getSimpleUserList()\n// Do not execute")
+        self.path.write_text(body)
+        self.assertEqual(self.reader.read(_PATH).fields[-1].choice_source, 'users')
+        for old, new in [('getSimpleUserList()', 'getSimpleUserList(query)'),
+                         ('item.id', 'item'), ('item.nickname', 'item.displayName'),
+                         ("@/api/system/user", '@/api/private/users'),
+                         ('v-model=', ':multiple.prop="true" v-model=')]:
+            self.path.write_text(body.replace(old, new))
+            self.assertNotIn('remark', [f.reference for f in self.reader.read(_PATH).fields])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

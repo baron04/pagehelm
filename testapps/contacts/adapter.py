@@ -69,6 +69,7 @@ from web_operation_agent.business.forms import (
     ApplicationFormDescriptor,
     ApplicationFormField,
     ApplicationFormValue,
+    FormChoice,
 )
 from web_operation_agent.business.tools.contracts import FormDraft, FormDraftField
 from web_operation_agent.business.errors import BusinessToolRequestError
@@ -661,6 +662,8 @@ class _ContactsFormPort:
                 ApplicationFormField("daily_limit", "Daily limit", kind="integer",
                                      controls=("spinbutton",), binding="label"),
                 ApplicationFormField("follow_up_date", "Follow-up date", kind="date", binding="label"),
+                ApplicationFormField("priority", "Priority", kind="choice", controls=("combobox",),
+                    choices=(FormChoice("normal", "Normal"), FormChoice("urgent", "Urgent")), binding="label"),
             ),
             scope="fields writable by the current actor on the new-contact page",
             control_scope="form:contact-create", submit_label="Save contact",
@@ -684,7 +687,8 @@ class _ContactsFormPort:
             route=form.route,
             fields=tuple(FormDraftField(
                 item.field.reference, item.field.label,
-                normalized[item.field.reference], item.control, binding=item.field.binding)
+                normalized[item.field.reference], item.control, binding=item.field.binding,
+                option_label=next((c.label for c in item.field.choices if c.value == item.value), ""))
                 for item in values),
             control_scope=form.control_scope, submit_label=form.submit_label,
         )

@@ -438,7 +438,7 @@ def apply_form_draft(
                 dispatched=False, side_effect_possible=False)
             return current, "agent_refused", (
                 f"the current form did not expose one exact {binding.field} field")
-        action = "select" if binding.control == "select" else "fill"
+        action = "select" if binding.control == "select" or binding.option_label else "fill"
         # The application finishes rendering its own form while we are aiming at it, so
         # the first fill can be refused as stale -- which is the runtime doing its job:
         # nothing was typed. Look again and aim at the field the fresh page has. This is
@@ -448,6 +448,7 @@ def apply_form_draft(
             current, reason, detail = dispatch(
                 action,
                 {"ref": matches[0].ref, "epoch": current.epoch, "value": binding.value,
+                 **({"option_label": binding.option_label} if binding.option_label else {}),
                  **({"commit": True} if action == "fill" else {})},
                 binding.field, current)
             if not reason:
@@ -508,6 +509,7 @@ def apply_form_draft(
         # form instance; this is never a selector search or permission fallback.
         handoff_fields.append({**({"ref": matches[0].ref} if matches else {}), "field": binding.field,
                                "control": binding.control, "value": binding.value,
+                               **({"option_label": binding.option_label} if binding.option_label else {}),
                                **({"binding": "label", "label": binding.label}
                                   if binding.binding == "label" else {}),
                                **({"scope": draft.control_scope}

@@ -222,10 +222,17 @@ export class EmbeddedWebRuntime {
     if (!this.controller || !this.getElementByIndex) {
       throw new Error('the page is not loaded yet')
     }
-    return new Page(this.controller, this.getElementByIndex, this.redactor,
+    if (this.heldPage?.controller === this.controller && this.heldPage.lookup === this.getElementByIndex) {
+      return this.heldPage.page
+    }
+    const page = new Page(this.controller, this.getElementByIndex, this.redactor,
       this.readPageFacets, this.readFacetCandidates, this.applyPageFacet,
-      this.readPageRecordRoute, this.readPageBlocker, this.readActiveView, this.readPageRoute, this.readPageQuery)
+      this.readPageRecordRoute, this.readPageBlocker, this.readActiveView, this.readPageRoute, this.readPageQuery,
+      () => this.userIntervened)
+    this.heldPage = {controller: this.controller, lookup: this.getElementByIndex, page}
+    return page
   }
+  private heldPage: {controller: PageControllerApi; lookup: ElementLookup; page: Page} | undefined
 
   _save(): void { writeStored(this.sessionId, this.stored) }
 
@@ -480,6 +487,7 @@ export class EmbeddedWebRuntime {
     // not dispose PageController twice.
     const controller = this.controller
     this.controller = null
+    this.heldPage = undefined
     controller?.dispose()
     if (removePanel) {
       // The panel's intents go back to the page's shell, which stays; a shell of this

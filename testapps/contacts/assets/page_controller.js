@@ -65,7 +65,7 @@ export class PageController {
   }
 
   async getBrowserState() {
-    const selectors = 'a,button,input,textarea,select,form'
+    const selectors = 'a,button,input,textarea,select,form,[role="option"]'
     const elements = Array.from(document.querySelectorAll(selectors)).filter(visible)
     this.selectorMap = new Map(elements.map((element, index) => [index, element]))
     const records = elements.map((element, index) => {

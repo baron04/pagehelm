@@ -11,6 +11,7 @@ import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance} from './formInstance'
+import {listboxCombobox} from './combobox'
 
 /** Maximum live controls one observation may expose across the browser boundary. */
 export const MAX_OBSERVATION_ELEMENTS = browserContract.observation.max_elements
@@ -367,9 +368,16 @@ export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unkno
 export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
                                  getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {
   for (const item of elements) {
-    if (![...browserContract.form_handoff.input_controls, 'button'].includes(item.role)) continue
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
+      // An application controller may map an annotated hit area to its accessible input.
+      // Keep its live semantic role; no framework selector or invented label is used here.
+      if (typeof HTMLInputElement !== 'undefined' && element instanceof HTMLInputElement &&
+          element.getAttribute('role') === 'combobox') {
+        item.role = 'combobox'
+        item.tag = 'input'
+      }
+      if (![...browserContract.form_handoff.input_controls, 'button'].includes(item.role)) continue
       delete item.attrs.form_scope
       delete item.attrs.form_instance
       delete item.attrs.field_label
@@ -378,7 +386,10 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // They let the server omit an unavailable field up front; Page.input/select still
       // recheck the live element at execution time because the DOM may change afterwards.
       if (element?.disabled) item.attrs.disabled = 'true'
-      if (element?.readOnly) item.attrs.readonly = 'true'
+      // Read-only text entry is normal for a single-choice combobox. Selection remains
+      // available; Page.input still refuses typing and Page.select checks the live menu.
+      delete item.attrs.readonly
+      if (element?.readOnly && !listboxCombobox(element)) item.attrs.readonly = 'true'
       const scope = formControlScope(element)
       if (scope && !redactor.isSensitiveName(scope)) item.attrs.form_scope = scope
       const instance = scope ? formInstance(element as Element | null) : null

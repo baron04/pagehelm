@@ -16,7 +16,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from web_operation_agent.business.forms import (
-    ApplicationFormDescriptor, ApplicationFormField, ApplicationFormValue)
+    ApplicationFormDescriptor, ApplicationFormField, ApplicationFormValue, FormChoice)
 from web_operation_agent.business.errors import BusinessToolRequestError
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.schemas import PageObservation
@@ -83,10 +83,11 @@ class YudaoFormPort:
     """On-demand source translation using the existing application-neutral form port."""
     required_scopes = frozenset({"yudao.read"})
 
-    def __init__(self, source: SourceFormReader, verifier: NativeFormVerifier):
+    def __init__(self, source: SourceFormReader, verifier: NativeFormVerifier, *, choices=None):
         if not callable(getattr(verifier, "current", None)) or not callable(getattr(verifier, "validate", None)):
             raise TypeError("native forms require an application-owned live verifier")
         self._source, self._verifier = source, verifier
+        self._choices = choices
         # Only one descriptor is needed for this session's current form. No site catalog.
         self._bound: tuple[ApplicationFormDescriptor, NativeFormState] | None = None
 
@@ -119,13 +120,17 @@ class YudaoFormPort:
             if item.conditional or item.handlers:
                 continue
             try:
+                options = (self._choices(item, state, context) if self._choices else
+                           tuple(FormChoice(v, l) for v, l in item.choices)) if item.input_type == "choice" else ()
+                if item.input_type == "choice" and not options:
+                    continue
                 fields.append(ApplicationFormField(item.reference, item.label,
                     kind={"email": "email", "tel": "phone", "url": "url", "date": "date",
-                          "integer": "integer", "number": "number"}.get(item.input_type, "text"),
+                          "integer": "integer", "number": "number", "choice": "choice"}.get(item.input_type, "text"),
                     controls=(("spinbutton",) if item.input_type in {"number", "integer"}
                               else ("textbox", "combobox") if item.input_type == "date"
-                              else ("textbox",)),
-                    binding="label"))
+                              else ("combobox",) if item.input_type == "choice" else ("textbox",)),
+                    choices=options, binding="label"))
             except ValueError:
                 # Credential-like semantics never enter the generic draft contract.
                 continue
@@ -166,6 +171,11 @@ class YudaoFormPort:
             if limit is not None and units > limit:
                 raise BusinessToolRequestError(f"{item.field.label} exceeds the native input limit")
             fact = facts[item.field.reference]
+            if item.field.kind == "choice":
+                options = (self._choices(fact, bound[1], context) if self._choices else
+                           tuple(FormChoice(v, l) for v, l in fact.choices))
+                if options != item.field.choices or item.value not in {c.value for c in options}:
+                    raise BusinessToolRequestError("the current form choices changed")
             normalized[item.field.reference] = item.value
             if fact.input_type in {"number", "integer"}:
                 try:
@@ -184,7 +194,8 @@ class YudaoFormPort:
                     raise BusinessToolRequestError(
                         f"{item.field.label} exceeds the native numeric range or precision") from None
         return FormDraft(form.route, tuple(FormDraftField(item.field.reference, item.field.label,
-            normalized[item.field.reference], item.control, binding=item.field.binding) for item in values),
+            normalized[item.field.reference], item.control, binding=item.field.binding,
+            option_label=next((c.label for c in item.field.choices if c.value == item.value), "")) for item in values),
             control_scope=form.control_scope, submit_label=form.submit_label)
 
 

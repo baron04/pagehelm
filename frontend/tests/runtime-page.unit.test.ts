@@ -17,6 +17,82 @@ function controller(): PageControllerApi {
   }
 }
 
+describe('adapter-issued single-choice combobox drafts', () => {
+  function setup(extra = '', interrupt: () => boolean = () => false) {
+    const form = document.createElement('form')
+    form.id = 'choice-form'
+    form.innerHTML = `<label>Owner<input role="combobox" readonly aria-haspopup="listbox"
+      aria-controls="owner-options" aria-expanded="false"></label>
+      <ul id="owner-options" role="listbox" hidden><li role="option" aria-selected="false">Alex</li>${extra}</ul>`
+    document.body.append(form)
+    const input = form.querySelector('input')!, list = form.querySelector('ul')!, option = list.querySelector('[role="option"]')!
+    for (const node of [input, list, ...list.querySelectorAll('li')])
+      node.getBoundingClientRect = () => ({width: 100, height: 20} as DOMRect)
+    const api = controller()
+    api.getBrowserState = vi.fn(async () => ({url:location.href, title:'', content:'[2]<li role=option>Alex />'}))
+    api.clickElement = vi.fn(async index => {
+      if (index === 1) {list.hidden = false; input.setAttribute('aria-expanded','true')}
+      else {option.setAttribute('aria-selected','true'); list.hidden = true; input.setAttribute('aria-expanded','false')}
+      return {success:true}
+    })
+    const page = new Page(api, (_, index) => index === 1 ? input : option, createRedactor(),
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, interrupt)
+    const observed = [{ref:'e1', role:'combobox', name:'Owner', tag:'input', epoch:1,
+      attrs:{field_label:'Owner',form_scope:'form:choice-form'}}]
+    const fields = [{ref:'e1', field:'owner', label:'Owner', binding:'label', scope:'form:choice-form',
+      control:'combobox', value:'17', option_label:'Alex'}]
+    return {form,input,list,option,api,page,observed,fields}
+  }
+  it('selects only an option in its own list and verifies selection rather than the filter input', async () => {
+    const s = setup()
+    try {
+      await s.page.select('e1', '17', 'Alex')
+      expect(s.api.clickElement).toHaveBeenNthCalledWith(1,1)
+      expect(s.api.clickElement).toHaveBeenNthCalledWith(2,2)
+      expect(s.input.value).toBe('')
+      expect(s.page.verifyFormFields(s.fields,s.observed)).toBe(true)
+      s.option.setAttribute('aria-selected','false')
+      expect(s.page.verifyFormFields(s.fields,s.observed)).toBe(false)
+      expect(() => s.page.input('e1','Alex')).toThrow(/read-only/)
+    } finally {s.form.remove()}
+  })
+  it('refuses duplicate, disabled or multi-select options without choosing anything', async () => {
+    for (const mode of ['duplicate','disabled','multiple']) {
+      const s = setup(mode === 'duplicate' ? '<li role="option">Alex</li>' : '')
+      try {
+        if (mode === 'disabled') s.option.setAttribute('aria-disabled','true')
+        if (mode === 'multiple') s.list.setAttribute('aria-multiselectable','true')
+        await expect(s.page.select('e1','17','Alex')).rejects.toThrow()
+        expect(s.api.clickElement).not.toHaveBeenCalledWith(2)
+      } finally {s.form.remove()}
+    }
+  })
+  it('stops when the user intervenes between opening and choosing', async () => {
+    let interrupted = false
+    const s = setup('', () => interrupted)
+    try {
+      s.api.getBrowserState = vi.fn(async () => {interrupted = true; return {url:location.href,title:'',content:'[2]<li>Alex />'}})
+      await expect(s.page.select('e1','17','Alex')).rejects.toThrow(/changed before selection/)
+      expect(s.api.clickElement).toHaveBeenCalledTimes(1)
+    } finally {s.form.remove()}
+  })
+  it('scrolls only from an indexed option in the owned menu and refreshes before choosing', async () => {
+    const s = setup('<li role="option">Bob</li>')
+    let scrolled = false
+    const other = s.list.lastElementChild!
+    const page = new Page(s.api, (_, index) => index === 1 ? s.input : index === 2 ? s.option : other, createRedactor())
+    try {
+      s.api.getBrowserState = vi.fn(async () => ({url:location.href,title:'',
+        content:scrolled ? '[2]<li role=option>Alex />' : '[3]<li role=option>Bob />'}))
+      s.api.scroll = vi.fn(async () => {scrolled = true; return {success:true}})
+      await page.select('e1','17','Alex')
+      expect(s.api.scroll).toHaveBeenCalledOnce()
+      expect(s.api.scroll).toHaveBeenCalledWith(expect.objectContaining({index:3}))
+      expect(s.api.clickElement).toHaveBeenNthCalledWith(2,2)
+    } finally {s.form.remove()}
+  })
+})
+
 describe('the product PageController extraction policy', () => {
   it('accepts explicit application loading while unknown blocker values fail closed', () => {
     const read = (value: unknown) => new Page(controller(), () => null, createRedactor(),

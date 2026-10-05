@@ -238,9 +238,26 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
             autocomplete="email" required maxlength="200"></label>
             <label>Daily limit<input id="contact-draft-limit" type="number"></label>
             <label>Follow-up date<input id="contact-draft-date" type="date"></label>
+            <label>Priority<input id="contact-draft-priority" role="combobox" readonly
+              aria-haspopup="listbox" aria-controls="contact-priorities" aria-expanded="false"></label>
+            <ul id="contact-priorities" role="listbox" hidden>
+              <li role="option" aria-selected="false" tabindex="0">Normal</li>
+              <li role="option" aria-selected="false" tabindex="0">Urgent</li>
+            </ul>
             <button type="submit">Save contact</button><p class="status" role="status"></p>
           </form></section>`;
         document.title = 'New contact · Minimal Contacts';
+        const priority = app.querySelector('#contact-draft-priority');
+        const choices = app.querySelector('#contact-priorities');
+        priority.addEventListener('click', () => {{
+          choices.hidden = false; priority.setAttribute('aria-expanded', 'true');
+        }});
+        for (const option of choices.querySelectorAll('[role=option]')) option.addEventListener('click', () => {{
+          for (const peer of choices.querySelectorAll('[role=option]'))
+            peer.setAttribute('aria-selected', String(peer === option));
+          priority.value = option.textContent;
+          choices.hidden = true; priority.setAttribute('aria-expanded', 'false');
+        }});
         return;
       }}
       if (location.pathname === '/contacts/workflows') {{

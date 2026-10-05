@@ -19,6 +19,8 @@ import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance} from './formInstance'
+import {listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
+import {sleep} from './contain'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
@@ -49,7 +51,7 @@ export interface PageControllerApi {
   clickElement(index: number): Promise<unknown>
   inputText(index: number, text: string): Promise<unknown>
   selectOption(index: number, text: string): Promise<unknown>
-  scroll(options: {down: boolean; numPages: number}): Promise<unknown>
+  scroll(options: {down: boolean; numPages: number; pixels?: number; index?: number}): Promise<unknown>
   dispose(): void
 }
 
@@ -78,6 +80,7 @@ export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {
   ref?: string; field: string; control: string; value: string
   binding?: string; label?: string; scope?: string
+  option_label?: string
 }
 export interface FormSubmitTarget {ref: string; label: string; scope: string}
 
@@ -142,7 +145,8 @@ export class Page {
               private readonly readPageBlocker?: PageBlockerReader,
               private readonly readActiveView?: ActiveViewReader,
               private readonly readPageRoute?: PageRouteReader,
-              private readonly readPageQuery?: PageQueryReader) {}
+              private readonly readPageQuery?: PageQueryReader,
+              private readonly interrupted: () => boolean = () => false) {}
 
   /** App-owned loading is distinct from an error; unknown values remain blocking. */
   readiness(): {blocked: boolean; pending: boolean} {
@@ -218,10 +222,18 @@ export class Page {
       return result
     })
   }
-  select(ref: unknown, text: string): Promise<unknown> {
+  select(ref: unknown, text: string, optionLabel?: string): Promise<unknown> {
     const element = this.element(ref)
     if (!element || element.isConnected === false) {
       throw new Error('bad_arguments: select target is no longer on the page')
+    }
+    if (optionLabel !== undefined) {
+      if (!listboxCombobox(element) || !optionLabel.trim() ||
+          optionLabel.length > browserContract.form_handoff.max_label_chars ||
+          isSensitiveFormControl(element, this.redactor)) {
+        throw new Error('bad_arguments: select requires one enabled single-choice combobox')
+      }
+      return this.selectCombobox(refIndex(ref), element, optionLabel)
     }
     if (element.disabled || element.readOnly) {
       throw new Error('bad_arguments: select target is disabled or read-only')
@@ -248,6 +260,75 @@ export class Page {
       if (result && (result as {success?: unknown}).success === true) this.rememberEntered(element)
       return result
     })
+  }
+  private async selectCombobox(index: number, element: HTMLInputElement, label: string): Promise<unknown> {
+    const scope = formControlScope(element), instance = formInstance(element), url = location.href
+    const labelBefore = formControlLabel(element), fieldBefore = formFieldName(element)
+    const current = () => !this.interrupted() && location.href === url && element.isConnected &&
+      listboxCombobox(element) && formControlScope(element) === scope && formInstance(element) === instance &&
+      formControlLabel(element) === labelBefore && formFieldName(element) === fieldBefore
+    const list = ownedListbox(element)
+    if (!list || !scope || !instance || !current()) {
+      throw new Error('bad_arguments: combobox has no unique current form listbox')
+    }
+    if (selectedOption(element) === label) {
+      this.rememberEntered(element)
+      return {success: true}
+    }
+    if (element.getAttribute('aria-expanded') !== 'true') {
+      const opened = await this.controller.clickElement(index)
+      if (!opened || (opened as {success?: unknown}).success !== true) return opened
+    }
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const state = await this.controller.getBrowserState()
+      if (!current() || ownedListbox(element) !== list) {
+        throw new Error('execution_failed: combobox changed before selection')
+      }
+      if (visibleElement(list)) {
+        const matches = [...list.querySelectorAll('[role="option"]')].filter(option =>
+          option.closest('[role="listbox"]') === list && optionText(option) === label)
+        if (matches.length !== 1 || !visibleElement(matches[0]!) ||
+            matches[0]!.getAttribute('aria-disabled') === 'true' ||
+            matches[0]!.hasAttribute('disabled')) {
+          throw new Error('execution_failed: combobox option is absent, ambiguous, or disabled')
+        }
+        const option = matches[0]!
+        const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
+        const indexes = indexed.filter(i => this.lookup(this.controller.selectorMap, i) === option)
+        if (indexes.length === 0) {
+          // Reuse PageController's scoped scroll. Anchor it to an indexed option in
+          // this owned menu; never scroll an unrelated popup or choose an old index.
+          const anchors = indexed.filter(i => {
+            const node = this.lookup(this.controller.selectorMap, i)
+            return node instanceof Element && node.getAttribute('role') === 'option' &&
+              node.closest('[role="listbox"]') === list && visibleElement(node)
+          })
+          if (!anchors.length || !current()) {
+            throw new Error('execution_failed: combobox menu has no current scroll target')
+          }
+          const scrolled = await this.controller.scroll({
+            down: option.getBoundingClientRect().top >= list.getBoundingClientRect().top,
+            numPages: 1, pixels: Math.min(800, Math.max(40, list.clientHeight)), index: anchors[0]!,
+          })
+          if (!scrolled || (scrolled as {success?: unknown}).success !== true) return scrolled
+          await sleep(50)
+          continue
+        }
+        if (indexes.length !== 1 || !current()) {
+          throw new Error('execution_failed: combobox option is not uniquely actionable')
+        }
+        const result = await this.controller.clickElement(indexes[0]!)
+        if (!result || (result as {success?: unknown}).success !== true) return result
+        await sleep(50)
+        if (!current() || ownedListbox(element) !== list || selectedOption(element) !== label) {
+          throw new Error('execution_failed: combobox selection was not verified')
+        }
+        this.rememberEntered(element)
+        return result
+      }
+      await sleep(50)
+    }
+    throw new Error('execution_failed: combobox option did not become actionable')
   }
   scroll(down: boolean, pages: number): Promise<unknown> {
     return this.controller.scroll({down, numPages: pages})
@@ -276,7 +357,8 @@ export class Page {
         if (matches.length > 1) return false
         live = this.enteredControl(binding, observed)
       }
-      if (!live || live.isConnected === false || live.disabled || live.readOnly) return false
+      if (!live || live.isConnected === false || live.disabled ||
+          live.readOnly && !(binding.option_label && listboxCombobox(live))) return false
       if (binding.scope && formControlScope(live) !== binding.scope) return false
       if (isSensitiveFormControl(live, this.redactor)) return false
       if (binding.binding === 'label') {
@@ -291,6 +373,11 @@ export class Page {
         return false
       }
       const shown = String(live.value ?? '')
+      if (binding.option_label !== undefined) {
+        return typeof binding.option_label === 'string' && binding.control === 'combobox' &&
+          binding.option_label.length <= browserContract.form_handoff.max_label_chars &&
+          listboxCombobox(live) && selectedOption(live) === binding.option_label
+      }
       if (binding.control === 'spinbutton') {
         const expected = numericValue(binding.value)
         return expected !== undefined && numericValue(shown) === expected
@@ -577,6 +664,7 @@ export function pageControllerOptions(exclude: Element[]): Record<string, unknow
     includeAttributes: [
       'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
       'type', 'name', 'id', 'value',
+      'role', 'aria-haspopup', 'aria-controls', 'aria-owns', 'aria-disabled',
       'aria-label', 'aria-selected', 'aria-checked', 'aria-expanded', 'title', 'data-tooltip',
       'aria-pressed',
       'placeholder', 'autocomplete',

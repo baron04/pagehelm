@@ -31,6 +31,20 @@ class Verifier:
 
 
 class FormsTests(unittest.TestCase):
+    def test_literal_choices_use_opaque_field_ids_and_reject_source_replacement(self):
+        self.path.write_text(_SOURCE.replace('<el-input v-model="formData.name" maxlength="31" clearable />',
+            '<el-select v-model="formData.name"><el-option label="合成负责人" value="17"/></el-select>'))
+        self.verifier.state = replace(self.state, source_digest=self.reader.read(_PATH).binding_digest)
+        self.obs.elements[0] = replace(self.obs.elements[0], role="combobox")
+        result = self.describe()
+        self.assertEqual(result['fields'][0]['choices'], [{'value':'17','label':'合成负责人'}])
+        draft, _ = self.tools.prepare(self.obs, self.args(result, '17'), context=self.context)
+        self.assertEqual((draft.fields[0].value, draft.fields[0].option_label), ('17','合成负责人'))
+        result = self.describe()
+        self.path.write_text(self.path.read_text().replace('value="17"','value="18"'))
+        with self.assertRaises(BusinessToolRequestError):
+            self.tools.prepare(self.obs, self.args(result, '17'), context=self.context)
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

@@ -342,7 +342,8 @@ class NativeEntryVerifiers:
 
 class NativeEntryFormPort(YudaoFormPort):
     def __init__(self, verifier):
-        super().__init__(verifier.source, verifier)
+        from .form_choices import NativeFormChoices
+        super().__init__(verifier.source, verifier, choices=NativeFormChoices(verifier))
         self.goal_source = verifier.source
         self.goal_entries = getattr(verifier,"goal_entries",())
         self.goal_updates = getattr(verifier, "goal_updates",
