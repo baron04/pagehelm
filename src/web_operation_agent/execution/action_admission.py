@@ -30,7 +30,7 @@ class ActionEffect(StrEnum):
 
 
 class ActionAdmissionRefused(RuntimeError):
-    """A typed, pre-dispatch refusal; adapters should not include private values."""
+    """A typed admission/result refusal; adapters must not include private values."""
 
     def __init__(self, code: str):
         if code not in {"unreviewed", "invalid_target", "stale_binding", "unsafe_effect",
@@ -38,6 +38,10 @@ class ActionAdmissionRefused(RuntimeError):
             raise ValueError("unknown action admission refusal")
         self.code = code
         super().__init__(code)
+
+
+class ActionResultPending(RuntimeError):
+    """An acknowledged action is awaiting a fresh, guarded result observation."""
 
 
 def _encoded(value: object) -> str:
@@ -130,7 +134,8 @@ class ApplicationActionPolicy(Protocol):
               checkpoint: Callable[[], None]) -> ActionPermit: ...
 
     def verify(self, permit: ActionPermit, intent: ActionIntent, receipt: ActionReceipt,
-               *, context: OperationContext, checkpoint: Callable[[], None]) -> bool: ...
+               *, observation: PageObservation, context: OperationContext,
+               checkpoint: Callable[[], None]) -> bool: ...
 
 
 class ActionAdmission:
@@ -181,7 +186,8 @@ class ActionAdmission:
             raise ActionAdmissionRefused("already_consumed")
         self._consumed.add(intent.operation_binding)
 
-    def verify(self, intent, permit, receipt, *, context, checkpoint):
+    def verify(self, intent, permit, receipt, *, context, checkpoint,
+               settlement: ActionReceipt | None = None, minimum_epoch: int = 0):
         self._check(context, checkpoint)
         before, after = intent.observation, receipt.observation
         echo = dict(receipt.args_echo)
@@ -193,13 +199,35 @@ class ActionAdmission:
                 or self._issued.get(intent.binding_digest) != permit
                 or context.binding_digest != intent.operation_binding
                 or receipt.action != intent.action or echo != expected or not receipt.ok
+                or receipt.error_code
                 or ("ref" in expected and echoed_epoch != before.epoch)
                 or not receipt.write_guard_held or after is None
-                or after.epoch <= before.epoch or after.render_state != "ready"
+                or after.epoch <= before.epoch
                 or receipt.url_before != before.url or receipt.url_after != after.url
                 or urlsplit(after.url)[:2] != urlsplit(before.url)[:2]):
             raise ActionAdmissionRefused("unverified")
-        verified = self.policy.verify(permit, intent, receipt, context=context, checkpoint=checkpoint)
+        if settlement is not None:
+            fresh = settlement.observation
+            if (settlement.action not in {"observe", "wait_for"} or not settlement.ok
+                    or settlement.error_code
+                    or not settlement.write_guard_held or fresh is None
+                    or fresh.epoch <= max(after.epoch, minimum_epoch)
+                    or settlement.url_after != fresh.url
+                    or urlsplit(settlement.url_before)[:2] != urlsplit(before.url)[:2]
+                    or urlsplit(fresh.url)[:2] != urlsplit(before.url)[:2]):
+                raise ActionAdmissionRefused("unverified")
+            after = fresh
+        if after.render_state == "pending":
+            raise ActionResultPending()
+        if after.render_state != "ready":
+            raise ActionAdmissionRefused("unverified")
+        try:
+            verified = self.policy.verify(permit, intent, ActionReceipt.from_json(receipt.to_json()),
+                observation=PageObservation.from_json(after.to_json()),
+                context=context, checkpoint=checkpoint)
+        except ActionResultPending:
+            self._check(context, checkpoint)
+            raise
         self._check(context, checkpoint)
         if verified is not True:
             raise ActionAdmissionRefused("unverified")

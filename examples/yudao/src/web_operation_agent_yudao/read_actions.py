@@ -78,12 +78,12 @@ class NativeReadActions:
             raise ActionAdmissionRefused("invalid_target")
         return ActionPermit(intent.binding_digest, effect, self.review, encoded)
 
-    def verify(self, permit, intent, receipt, *, context, checkpoint):
+    def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
         index = self._index(context, checkpoint)
         generation, expected = json.loads(permit.postcondition)
         if generation != self.data._client.read_generation:
             return False
-        after, before = receipt.observation, intent.observation
+        after, before = observation, intent.observation
         path = self._path(after.url)
         if after.page_route != path:
             return False

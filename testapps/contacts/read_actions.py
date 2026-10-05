@@ -62,7 +62,7 @@ class ContactsReadActions:
             raise ActionAdmissionRefused("unreviewed")
         return ActionPermit(intent.binding_digest, ActionEffect.NAVIGATION, self.review, destination)
 
-    def verify(self, permit, intent, receipt, *, context, checkpoint):
+    def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
         self._actor(context, checkpoint)
-        after = receipt.observation
+        after = observation
         return self._path(after.url) == permit.postcondition and after.page_route == permit.postcondition

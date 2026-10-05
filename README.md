@@ -422,7 +422,10 @@ agent.
   replacing the legacy click policy with application-issued effects for the existing
   click, navigation and query-input tools. A permit binds the exact actor operation,
   observation and arguments, consumes once, and requires an application result check
-  before success. Persistent/unknown effects are refused; business drafts still use
+  before success. An acknowledged action whose result is pending keeps its original
+  receipt; only guarded observation/waiting or an honest partial/unable finish may
+  follow until the application verifies a fresh result. It is never redispatched.
+  Persistent/unknown effects are refused; business drafts still use
   the approved FormPort. An HTTP fence or control label alone proves no effect.
   The current prototypes cover native menus/tabs and plain-HTML navigation contract
   tests, not general search/paging or deployment coverage. The default integrations

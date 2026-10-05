@@ -673,6 +673,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         #: whether that completes the request. Only `finish` and `set_target` are offered.
         self._target_reached = False
         self._pending_navigation_url = ""
+        self._pending_action = None
         self._tool_surface = ToolSurface(self)
 
     # -- phases ------------------------------------------------------------------------

@@ -524,6 +524,20 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
             verify_action(session, turn, admitted, receipt)
         except Exception as exc:
             return _admission_failure(session, turn, call, name, exc, dispatched=True)
+    elif session._pending_action is not None and name in {"observe", "wait_for"}:
+        pending = session._pending_action
+        try:
+            verified = verify_action(session, turn, pending.admitted, pending.receipt,
+                                     settlement=receipt)
+        except Exception as exc:
+            return _admission_failure(session, turn, call, name, exc, dispatched=True)
+        if verified:
+            original = pending.receipt
+            if original.action == "goto" or original.navigated:
+                _record_navigation(session, obs.url)
+            else:
+                session._answer_action_receipt = {"kind": "page_interaction",
+                    "action": original.action, "url": obs.url}
     if name == "highlight":
         if (not receipt.ok or receipt.observation is None
                 or obs.epoch <= prior_page_epoch or obs.render_state != "ready"
@@ -545,6 +559,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
     if (session._pending_navigation_url and obs.url != session._pending_navigation_url):
         session._pending_navigation_url = ""
     if (session._pending_navigation_url and session._navigation_ready(obs)
+            and session._pending_action is None
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
             and write["state"] == WRITE_NONE):
@@ -556,11 +571,13 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
             and not session._navigation_ready(obs)):
         session._pending_navigation_url = obs.url
     elif ((name in ("goto", "back") or (name == "click" and receipt.navigated))
+            and session._pending_action is None
             and receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
             and session._navigation_ready(obs)):
         _record_navigation(session, obs.url)
     elif (name == "click" and receipt.ok and not receipt.navigated
+          and session._pending_action is None
           and receipt.observation is not None
           and receipt.observation.epoch > prior_page_epoch
           and write["state"] == "none"
@@ -573,7 +590,8 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
                                           "url": obs.url}
     if (receipt.ok and receipt.observation is not None
             and receipt.observation.epoch > prior_page_epoch
-            and write["state"] == WRITE_NONE and not session.pending_write):
+            and write["state"] == WRITE_NONE and not session.pending_write
+            and session._pending_action is None):
         # The declared target is checked against every fresh, write-free page, whatever
         # action produced it, after the action's own receipt is recorded so the target
         # receipt is the one a finish reports. A write in the same window is settled by
@@ -590,6 +608,7 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
             == (actual.path.rstrip("/") or "/")
             and expected.query == actual.query)
     if (session.deterministic_read_navigation and session._navigation_only
+            and session._pending_action is None
             and sum(skill.read_only for skill in session._task_business_skills) == 1
             and name == "goto" and latest_business_route
             and receipt.ok and receipt.observation is not None
@@ -637,6 +656,10 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
     feedback = session._render(rendered_observation, receipt, note, write)
     if page_feedback:
         feedback += "\n" + page_feedback
+    if session._pending_action is not None:
+        feedback += ("\nACTION RESULT PENDING: the action was acknowledged once but the application "
+                     "has not verified its result. Observe or wait_for; do not repeat the action "
+                     "or claim completion. Finish unable/partial if it cannot be verified.")
     messages += [_assistant_call(call), _tool_result(call, feedback)]
     messages = _trim(messages, session.keep_observations)
     return session._resume(turn, messages, obs, successful_business_tools)

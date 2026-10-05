@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from web_operation_agent.execution.action_admission import (
-    ActionAdmission, ActionAdmissionRefused, ActionEffect, ActionPermit)
+    ActionAdmission, ActionAdmissionRefused, ActionEffect, ActionPermit, ActionResultPending)
 from web_operation_agent.execution.product import AgentTurnConfig
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
@@ -36,9 +36,9 @@ class Policy:
         self.admissions.append(intent)
         return ActionPermit(intent.binding_digest, self.effect, "reviewed-handler-v1", "selected-next")
 
-    def verify(self, permit, intent, receipt, *, context, checkpoint):
+    def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
         self.verifications.append(intent)
-        return "Next" in receipt.observation.selected_controls
+        return "Next" in observation.selected_controls
 
 
 class ActionAdmissionTests(unittest.TestCase):
@@ -119,6 +119,44 @@ class ActionAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
             self.runtime.verify(intent, permit, self.receipt(), context=self.context, checkpoint=lambda: None)
 
+    def test_async_settlement_preserves_original_receipt_and_checks_fresh_guard(self):
+        intent, permit = self.prepare()
+        self.runtime.consume(intent, permit, self.before, context=self.context, checkpoint=lambda: None)
+        original = replace(self.receipt(), observation=replace(page(2), render_state="pending"))
+        original_json = original.to_json()
+        with self.assertRaises(ActionResultPending):
+            self.runtime.verify(intent, permit, original, context=self.context, checkpoint=lambda: None)
+        self.assertEqual([], self.policy.verifications)
+        after = page(3, selected=True)
+        settled = ActionReceipt(1, "settlement", "observe", {}, True,
+            url_before=original.url_after, url_after=after.url,
+            observation=after, write_guard_held=True)
+        for unsafe in (replace(settled, write_guard_held=False),
+                       replace(settled, action="click"),
+                       replace(settled, observation=page(2, selected=True)),
+                       replace(settled, url_before="http://elsewhere/list"),
+                       replace(settled, observation=replace(after, render_state="blocked"))):
+            with self.subTest(action=unsafe.action), self.assertRaises(ActionAdmissionRefused):
+                self.runtime.verify(intent, permit, original, context=self.context,
+                                    checkpoint=lambda: None, settlement=unsafe)
+        self.runtime.verify(intent, permit, original, context=self.context,
+                            checkpoint=lambda: None, settlement=settled)
+        self.assertEqual(original_json, original.to_json())
+        self.assertEqual(1, len(self.policy.verifications))
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+            self.runtime.verify(intent, permit, original, context=self.context,
+                checkpoint=lambda: None, settlement=settled, minimum_epoch=3)
+
+    def test_pending_result_does_not_hide_wrong_echo_or_actor(self):
+        intent, permit = self.prepare()
+        self.runtime.consume(intent, permit, self.before, context=self.context, checkpoint=lambda: None)
+        original = replace(self.receipt(), observation=replace(page(2), render_state="pending"))
+        for receipt, ctx in ((replace(original, args_echo={"ref": "e2", "epoch": 1}), self.context),
+                (original, replace(self.context, principal=replace(self.context.principal,
+                    actor_id="another-actor")))):
+            with self.assertRaises(ActionAdmissionRefused):
+                self.runtime.verify(intent, permit, receipt, context=ctx, checkpoint=lambda: None)
+
     def test_policy_requires_actor_and_replaces_legacy_click_grant(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = dict(supported_scope="Read.", ledger_path=Path(tmp) / "audit", action_policy=self.policy)
@@ -190,3 +228,48 @@ class EffectLoopTests(unittest.TestCase):
         self.assertEqual("user_cancelled", result.terminal_reason)
         self.assertEqual([], browser.done)
         self.assertEqual(1, len(chat.seen))
+
+    def test_pending_result_returns_to_same_agent_without_repeating_the_action(self):
+        result, session, browser, chat = self.execute(Policy(), [
+            ("click", {"ref": "e1"}), ("click", {"ref": "e1"}),
+            ("finish", {"done": True}), ("observe", {}),
+            ("finish", {"done": True})], after=replace(page(2), render_state="pending"))
+        self.assertEqual("agent_finished", result.terminal_reason)
+        self.assertEqual(["click", "observe"], [n for n, _ in browser.done])
+        self.assertEqual(1, len(session.ledger.of_kind("action_effect_pending")))
+        self.assertEqual(1, len(session.ledger.of_kind("action_effect_verified")))
+        self.assertEqual(2, len(session.ledger.of_kind("pending_action_tool_refused")))
+        self.assertIsNone(session._pending_action)
+        self.assertEqual(5, len(chat.seen))
+
+    def test_pending_result_can_end_unable_and_cannot_claim_success(self):
+        result, session, browser, _ = self.execute(Policy(), [
+            ("click", {"ref": "e1"}), ("finish", {"done": False, "why": "cannot verify"})],
+            after=replace(page(2), render_state="pending"))
+        self.assertEqual("agent_refused", result.terminal_reason)
+        self.assertEqual(["click"], [n for n, _ in browser.done])
+        self.assertEqual([], session.ledger.of_kind("action_effect_verified"))
+
+    def test_failed_async_postcondition_ends_without_another_click(self):
+        policy = Policy()
+        policy.verify = lambda *a, **k: False
+        result, session, browser, chat = self.execute(policy, [
+            ("click", {"ref": "e1"}), ("observe", {}), ("click", {"ref": "e1"})],
+            after=replace(page(2), render_state="pending"))
+        self.assertEqual("agent_refused", result.terminal_reason)
+        self.assertEqual(["click", "observe"], [n for n, _ in browser.done])
+        self.assertEqual(2, len(chat.seen))
+        self.assertEqual([], session.ledger.of_kind("action_effect_verified"))
+
+    def test_application_pending_on_ready_page_cannot_record_an_arrival(self):
+        policy = Policy()
+        def pending(*args, **kwargs):
+            raise ActionResultPending()
+        policy.verify = pending
+        result, session, browser, _ = self.execute(policy, [
+            ("goto", {"url": "/list"}), ("finish", {"done": True}),
+            ("finish", {"done": False, "why": "cannot verify"})])
+        self.assertEqual("agent_refused", result.terminal_reason)
+        self.assertIsNone(session._answer_action_receipt)
+        self.assertEqual(["goto"], [n for n, _ in browser.done])
+        self.assertEqual(1, len(session.ledger.of_kind("pending_action_tool_refused")))

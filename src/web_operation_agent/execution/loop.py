@@ -356,6 +356,14 @@ def run_loop(session) -> RunResult:
         calls = reply.get("tool_calls") or []
         if not calls:
             said = str(reply.get("content") or "").strip()
+            if session._pending_action is not None:
+                step += 1
+                messages += [{"role": "assistant", "content": said},
+                             {"role": "user", "content":
+                              "The acknowledged action is still unverified. Observe or wait_for "
+                              "its result; do not repeat it or claim completion. Finish unable "
+                              "if the result cannot be verified."}]
+                continue
             if session.require_task_contract and session._task_requirements is None:
                 step += 1
                 session.ledger.append("task_declaration_required", step=step,
@@ -466,6 +474,18 @@ def run_loop(session) -> RunResult:
                 and session.business_tools.is_mutation(name)))
         kept_reply, unanswered_reply = (unanswered_reply if name == "finish" else ""), ""
         turn.kept_reply = kept_reply
+
+        if (session._pending_action is not None
+                and name not in {"observe", "wait_for"}
+                and not (name == "finish" and isinstance(args, dict)
+                         and (args.get("outcome") in {"unable", "partial"}
+                              or args.get("done") is False))):
+            session.ledger.append("pending_action_tool_refused", step=step, tool=name,
+                                  dispatched=False, side_effect_possible=False)
+            messages += [_assistant_call(call), _tool_result(call,
+                "ACTION RESULT PENDING: the acknowledged action was not repeated. Only observe, "
+                "wait_for, or finish unable/partial may run until its result is verified.")]
+            continue
 
         if session.require_task_contract and session._task_requirements is None and name != "declare_task":
             session.ledger.append("task_declaration_required", step=step, tool=name, dispatched=False)

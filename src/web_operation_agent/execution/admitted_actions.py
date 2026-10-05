@@ -1,11 +1,13 @@
 """Bind effect admission to the existing page dispatch, budget and result path."""
 from dataclasses import dataclass
 import hashlib
+import json
 from typing import Callable
 
 from ..state.identity import OperationContext
 from ..transport.browser import TurnCancelled
-from .action_admission import ActionIntent, ActionPermit
+from ..schemas import ActionReceipt
+from .action_admission import ActionIntent, ActionPermit, ActionResultPending
 
 
 @dataclass(frozen=True)
@@ -14,6 +16,16 @@ class AdmittedAction:
     permit: ActionPermit
     context: OperationContext
     checkpoint: Callable[[], None]
+
+
+@dataclass(frozen=True)
+class PendingAction:
+    admitted: AdmittedAction
+    receipt_json: str
+
+    @property
+    def receipt(self):
+        return ActionReceipt.from_json(json.loads(self.receipt_json))
 
 
 def prepare_action(session, turn, name, args):
@@ -43,10 +55,22 @@ def consume_action(session, admitted, observation):
                           binding_digest=admitted.intent.binding_digest, dispatched=False)
 
 
-def verify_action(session, turn, admitted, receipt):
-    session.action_admission.verify(admitted.intent, admitted.permit, receipt,
-        context=admitted.context, checkpoint=admitted.checkpoint)
+def verify_action(session, turn, admitted, receipt, *, settlement=None):
+    try:
+        session.action_admission.verify(admitted.intent, admitted.permit, receipt,
+            context=admitted.context, checkpoint=admitted.checkpoint, settlement=settlement,
+            minimum_epoch=turn.obs.epoch)
+    except ActionResultPending:
+        session._pending_action = PendingAction(admitted, json.dumps(receipt.to_json(),
+            ensure_ascii=False, separators=(",", ":"), allow_nan=False))
+        session.ledger.append("action_effect_pending", step=turn.step,
+            command_id=receipt.command_id, binding_digest=admitted.intent.binding_digest,
+            observation_epoch=(settlement or receipt).observation.epoch,
+            repeated=False, submitted=False, persisted=False)
+        return False
+    session._pending_action = None
     session.ledger.append("action_effect_verified", step=turn.step,
         command_id=receipt.command_id, binding_digest=admitted.intent.binding_digest,
-        effect=admitted.permit.effect.value, observation_epoch=receipt.observation.epoch,
+        effect=admitted.permit.effect.value, observation_epoch=(settlement or receipt).observation.epoch,
         submitted=False, persisted=False)
+    return True
