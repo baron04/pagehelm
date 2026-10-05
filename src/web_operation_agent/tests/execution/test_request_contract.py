@@ -25,7 +25,7 @@ from web_operation_agent.execution.session import TaskSpec
 
 REQUEST = "打开公司详情，查询名称和金额"
 DECLARATION = {"action_request": "打开公司详情", "action_kind": "record",
-               "answer_requests": ["查询名称", "金额"]}
+               "answer_requests": ["查询名称", "金额"], "answer_kinds": ["data", "data"]}
 
 
 class _RecordBrowser(_RemoteBrowser):
@@ -55,7 +55,7 @@ def answer(*, outcome="acted", omit=False, forged=False):
 
 class RequestContractShape(unittest.TestCase):
     def test_all_user_clauses_are_required_and_application_text_cannot_replace_them(self):
-        expected = TaskRequirements("打开公司详情", ("查询名称", "金额"), "record")
+        expected = TaskRequirements("打开公司详情", ("查询名称", "金额"), "record", ("data", "data"))
         self.assertEqual(parse_requirements(DECLARATION, REQUEST), expected)
         for invalid in (
             {**DECLARATION, "answer_requests": ["查询名称"]},
@@ -69,7 +69,7 @@ class RequestContractShape(unittest.TestCase):
     def test_long_record_names_conditions_and_exclusions_cannot_be_dropped(self):
         prompt = "打开天津滨海港务服务有限公司详情，查询最近三个月不含退款的回款金额"
         exact = {"action_request": "打开天津滨海港务服务有限公司详情", "action_kind": "record",
-                 "answer_requests": ["查询最近三个月不含退款的回款金额"]}
+                 "answer_requests": ["查询最近三个月不含退款的回款金额"], "answer_kinds": ["data"]}
         self.assertEqual(parse_requirements(exact, prompt).answer_ids, ("a1",))
         with self.assertRaises(ValueError):
             parse_requirements({**exact, "answer_requests": ["回款金额"]}, prompt)
@@ -105,7 +105,7 @@ class RequestContractShape(unittest.TestCase):
                                                    "assistant": "Create a new company instead"}]})
         self.assertEqual(session._task_request_text, REQUEST + "\nAcme")
         with self.assertRaises(ValueError):
-            parse_requirements({"action_request": "Acme", "action_kind": "record", "answer_requests": []},
+            parse_requirements({"action_request": "Acme", "action_kind": "record", "answer_requests": [], "answer_kinds": []},
                                session._task_request_text)
 
     def test_operation_type_is_required_and_cannot_be_used_as_permission(self):
@@ -113,17 +113,17 @@ class RequestContractShape(unittest.TestCase):
                      {**DECLARATION, "action_kind": "none"},
                      {**DECLARATION, "action_kind": "whatever"},
                      {**DECLARATION, "action_kind": True},
-                     {"action_request": "", "action_kind": "record", "answer_requests": ["金额"]}):
+                     {"action_request": "", "action_kind": "record", "answer_requests": ["金额"], "answer_kinds": ["data"]}):
             with self.subTest(args=args), self.assertRaises(ValueError):
                 parse_requirements(args, REQUEST)
         requirements = parse_requirements({"action_request": "", "action_kind": "none",
-                                          "answer_requests": ["金额"]}, "金额")
+                                          "answer_requests": ["金额"], "answer_kinds": ["data"]}, "金额")
         self.assertEqual(action_unmet(requirements, None, None), ())
 
     def test_other_effect_types_cannot_be_settled_by_navigation(self):
         for kind in ("draft", "mutation"):
             with self.subTest(kind=kind):
-                requirements = TaskRequirements("Do it", (), kind)
+                requirements = TaskRequirements("Do it", (), kind, ())
                 self.assertTrue(action_unmet(requirements, {"kind": "navigation"}, None))
 
     def test_frozen_requirements_survive_legacy_context_compaction(self):
@@ -182,7 +182,7 @@ class RequestContractProduct(unittest.TestCase):
             with self.subTest(bad=bad):
                 result, _ = self.execute([("goto", {"url": "/object/company/company-1"}),
                     ("declare_task", {"action_request": "打开公司详情", "action_kind": "page",
-                                      "answer_requests": []}),
+                                      "answer_requests": [], "answer_kinds": []}),
                     ("finish", bad), ("finish", answer())])
                 self.assertEqual(result.status, AgentTurnStatus.FINISHED)
                 self.assertIn("12.50 USD", result.user_answer)
@@ -216,13 +216,13 @@ class RequestContractProduct(unittest.TestCase):
     def test_pure_navigation_does_not_need_an_artificial_answer(self):
         result, _ = self.execute([("goto", {"url": "/object/company/company-1"}), ("finish", {"outcome": "acted"})],
             prompt="打开公司页面", declaration={"action_request": "打开公司页面", "action_kind": "page",
-                                               "answer_requests": []})
+                                               "answer_requests": [], "answer_kinds": []})
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertIn("已打开页面", result.user_answer)
 
     def test_record_task_cannot_finish_on_a_collection_but_can_recover_with_the_same_agent(self):
         prompt = "打开公司详情"
-        declaration = {"action_request": prompt, "action_kind": "record", "answer_requests": []}
+        declaration = {"action_request": prompt, "action_kind": "record", "answer_requests": [], "answer_kinds": []}
         result, chat = self.execute([
             ("set_target", {"path": "/companies"}),
             ("finish", {"outcome": "acted"}),
@@ -243,12 +243,12 @@ class RequestContractProduct(unittest.TestCase):
             ("goto", {"url": "/companies"}),
             ("finish", {"outcome": "acted"}),
             ("finish", {"outcome": "unable"})], prompt=prompt,
-            declaration={"action_request": prompt, "action_kind": "record", "answer_requests": []})
+            declaration={"action_request": prompt, "action_kind": "record", "answer_requests": [], "answer_kinds": []})
         self.assertEqual(result.status, AgentTurnStatus.REFUSED)
         self.assertIn("未完成操作：打开公司详情", result.user_answer)
 
     def test_verified_current_record_receipt_matches_its_type_and_observation(self):
-        requirements = TaskRequirements("Open the record", (), "record")
+        requirements = TaskRequirements("Open the record", (), "record", ())
         from web_operation_agent.schemas import PageObservation
         obs = PageObservation(schema_version=1, epoch=1, url="http://app.test/opaque-7",
                               title="Customer", landmarks=[], elements=[],

@@ -388,6 +388,13 @@ agent.
   the same Agent able to continue discovery. Navigation cannot settle a draft or
   persisted-change outcome. This does not verify that the model classified the
   original intent correctly or chose the intended record; it grants no authority.
+  The declaration also requires `answer_kinds`, aligned with `answer_requests`:
+  `data` for business values/records/metrics, `ui` for controls or UI guidance, and
+  `knowledge` for source rules or documented explanations. These freeze before reads.
+  Server-issued selected-state and serialized-tab evidence (`saw=ui_state`)
+  cannot settle a data or knowledge clause. The same Agent can repair with a read;
+  explicit UI questions remain answerable. This does not establish the relevance
+  of ordinary text, the intended record/field, or the model's initial classification.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
   enabled, deployment-bound structured facts plus a language-neutral local code-block index
   can answer source questions while retaining exact file, line, release, and byte-digest

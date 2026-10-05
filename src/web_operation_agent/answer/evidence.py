@@ -214,6 +214,9 @@ class PageEvidence:
     a Runtime observation carries does not include input values. Seeing the label is
     evidence that the control exists. It is not evidence that the field is empty, and the
     difference is the whole reason this kind is separate.
+
+    Selected states and controller-serialized tab text are UI facts, stored as
+    ui_state; their presence cannot replace business data or source knowledge.
     """
 
     evidence_id: str
@@ -224,7 +227,7 @@ class PageEvidence:
     value: str | None = None
 
     #: What the observation actually contained.
-    SAW_KINDS = ("value", "control_only", "text")
+    SAW_KINDS = ("value", "control_only", "text", "ui_state")
 
     def __post_init__(self) -> None:
         _require_id(self.evidence_id)
@@ -237,7 +240,7 @@ class PageEvidence:
         object.__setattr__(self, "detail", _text(self.detail, "detail"))
         if self.saw == "control_only" and self.value is not None:
             raise ValueError("a control with no readable value cannot carry one")
-        if self.saw == "value" and self.value is None:
+        if self.saw in {"value", "ui_state"} and self.value is None:
             raise ValueError("page evidence that saw a value must carry it")
 
 

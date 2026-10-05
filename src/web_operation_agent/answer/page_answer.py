@@ -15,7 +15,8 @@ answer_evidence=true and cite the resulting page_observation or undetermined ref
 Quote the observed text/value; do not infer that a label means an empty field. Explanations
 without claims about current data can use ordinary prose. Prefer a suitable typed read for
 business facts, and do not repeat page observations after a sufficient API read. A control
-with an explicit selected state may support only that UI state. If the answer evidence
+with an explicit selected state or tab-control text supports UI information, not business
+data or source knowledge. Such evidence has saw=ui_state. If the answer evidence
 window omits the needed content, use answer_query for a literal visible word or label,
 or answer_offset for the next window. These search only this redacted observation;
 no match does not prove a business record or field is absent."""
@@ -77,6 +78,21 @@ def _has_page_text(line: str) -> bool:
     return bool(candidate.strip())
 
 
+def _text_kind(line: str) -> str:
+    """Keep controller-serialized tab/selection facts distinct from document content.
+
+    Links/buttons can carry business names, so their labels are not universally
+    UI-only. Only an explicit tab or selected-state attribute qualifies here.
+    """
+    match = re.match(r"\s*\[\d+\]<([A-Za-z][\w-]*)([^>]*)>", line)
+    if match is not None:
+        attributes = match.group(2)
+        if re.search(r"\baria-selected\s*=", attributes, re.I) or re.search(
+                r"\brole\s*=\s*(?:\"tab\"|'tab'|tab(?=[\s/>]))", attributes, re.I):
+            return "ui_state"
+    return "text"
+
+
 def _candidates(observation: PageObservation, *, observed_at: str, query: str = ""):
     """The caller supplies a redacted observation from an actual successful receipt."""
     origin = Origin(kind="page", reference=observation.content_digest,
@@ -103,7 +119,7 @@ def _candidates(observation: PageObservation, *, observed_at: str, query: str = 
             continue
         yield PageEvidence(
             evidence_id="page#1", origin=origin,
-            page_route=observation.url, saw="value",
+            page_route=observation.url, saw="ui_state",
             detail=f"{element.name or element.role} ({element.role})"[:MAX_PAGE_EXCERPT_CHARS],
             value="selected")
     # Exact bounded excerpts, not inferred key/value pairs or extracted table records.
@@ -123,7 +139,7 @@ def _candidates(observation: PageObservation, *, observed_at: str, query: str = 
                 start = max(0, match.start() - 80)
                 end = min(len(line), start + MAX_PAGE_EXCERPT_CHARS)
                 yield PageEvidence(evidence_id="page#1", origin=origin,
-                    page_route=observation.url, saw="text",
+                    page_route=observation.url, saw=_text_kind(line),
                     detail=f"page text line {line_number}, chars {start}-{end} (bounded excerpt)",
                     value=line[start:end])
                 last_end = end
@@ -131,7 +147,7 @@ def _candidates(observation: PageObservation, *, observed_at: str, query: str = 
                 continue
         yield PageEvidence(
             evidence_id="page#1", origin=origin, page_route=observation.url,
-            saw="text", detail=f"page text line {line_number} (bounded excerpt)",
+            saw=_text_kind(line), detail=f"page text line {line_number} (bounded excerpt)",
             value=line[:MAX_PAGE_EXCERPT_CHARS])
 
 

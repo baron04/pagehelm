@@ -9,7 +9,8 @@ from .knowledge_tools import active_capability_digest
 from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result
 from .runstate import CAPABILITY_GAP_TERMINAL, _Next
-from .request_contract import action_unmet, extract_answer_bindings, missing_answers, incomplete_notes
+from .request_contract import (action_unmet, check_answer_evidence, extract_answer_bindings,
+                               missing_answers, incomplete_notes)
 
 
 def _is_capability_gap(verified: dict | None) -> bool:
@@ -169,6 +170,8 @@ class FinishHandler:
                     conclusions = normalized
                 missing = (missing_answers(requirements, bindings, conclusions)
                            if requirements is not None else ())
+                if requirements is not None:
+                    check_answer_evidence(requirements, bindings, self.evidence)
                 action_missing = bool(typed_unmet)
                 if requirements is not None and (
                         args.get("outcome") in {"acted", "answered"}

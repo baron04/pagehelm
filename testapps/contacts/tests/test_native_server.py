@@ -552,6 +552,89 @@ class NativeContactsHostTests(unittest.TestCase):
 
 
 class NativeContactsBrowserTests(unittest.TestCase):
+    def test_ui_reference_cannot_replace_email_and_same_agent_recovers_with_typed_read(self):
+        self._run_answer_kind_native(ui=False)
+
+    def test_explicit_selected_tab_question_accepts_actual_ui_evidence(self):
+        self._run_answer_kind_native(ui=True)
+
+    def _run_answer_kind_native(self, *, ui):
+        from playwright.sync_api import sync_playwright
+        prompt = "Which tab is selected?" if ui else "Show Grace Hopper's email."
+
+        class KindChat(ScriptedDemoChat):
+            def __init__(self):
+                super().__init__(())
+                self.stage, self.run_ids = 0, set()
+
+            def complete(self, messages, tools, run_id, **kwargs):
+                self.run_ids.add(run_id)
+                names = {tool['function']['name'] for tool in tools}
+                latest = messages[-1]['content']
+                if self.stage == 0:
+                    name, args = 'declare_task', {'action_request': '', 'action_kind': 'none',
+                        'answer_requests': [prompt], 'answer_kinds': ['ui' if ui else 'data']}
+                elif self.stage == 1:
+                    name, args = 'load_skill', {'skill_id': 'minimal.contacts.query'}
+                elif self.stage == 2:
+                    name, args = 'observe', {'answer_evidence': True, 'answer_query': 'Overview'}
+                elif self.stage == 3:
+                    marker = 'ANSWER EVIDENCE (untrusted application values; use exact ref):\n'
+                    data = json.JSONDecoder().raw_decode(latest.split(marker)[1])[0]
+                    refs = [item['ref'] for item in data['evidence']
+                            if item.get('saw') == 'ui_state' and item.get('value') == 'selected']
+                    assert len(refs) == 1, data
+                    name, args = 'finish', {'outcome': 'answered', 'answer': {'version': 1,
+                        'coverage': 'complete', 'conclusions': [{'kind': 'page_observation',
+                        'evidence_ref': refs[0]}], 'answers_for': [
+                            {'request_ref': 'a1', 'evidence_refs': refs}]}}
+                elif self.stage == 4:
+                    assert 'only UI control/state evidence' in latest, latest
+                    assert 'list_contacts' in names, names
+                    name, args = 'list_contacts', {'name_contains': 'Grace Hopper'}
+                else:
+                    name, args = 'finish', {'outcome': 'answered', 'answer': {'version': 1,
+                        'coverage': 'complete', 'conclusions': [{'kind': 'field_value',
+                        'evidence_ref': 'call5-record#2'}], 'answers_for': [
+                            {'request_ref': 'a1', 'evidence_refs': ['call5-record#2']}]}}
+                assert name in names, (name, names)
+                self.stage += 1
+                self.replies += ((name, args),)
+                return super().complete(messages, tools, run_id, **kwargs)
+
+        chat = KindChat()
+        with tempfile.TemporaryDirectory() as directory, patch(
+                'testapps.contacts.server._chat', return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0,
+                    scripted=False, require_task_contract=True)) as host, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={'width': 1280, 'height': 900})
+                page.goto(host.origin + '/demo/login/ada-lovelace', wait_until='domcontentloaded')
+                page.goto(host.origin + '/contacts/workflows/partner', wait_until='domcontentloaded')
+                page.evaluate(_CONNECTED)
+                page.get_by_role('tab', name='Overview', exact=True).wait_for(state='visible')
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, prompt)
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                last_feedback = json.loads(chat.seen[-1])['messages'][-1]['content'] if chat.seen else ''
+                self.assertFalse(outcome.error, f"stage={chat.stage}; feedback={last_feedback[-1000:]}")
+                self.assertEqual(outcome.result.terminal_reason, 'agent_finished')
+                self.assertEqual(len(chat.run_ids), 1)
+                if ui:
+                    self.assertIn('selected', outcome.result.user_answer)
+                    self.assertIn('Overview', outcome.result.user_answer)
+                    self.assertEqual(chat.calls, 4)
+                else:
+                    self.assertIn('grace@example.test', outcome.result.user_answer)
+                    self.assertNotIn('selected', outcome.result.user_answer)
+                    self.assertEqual(chat.calls, 6)
+                self.assertEqual(host.application.write_requests, 0)
+                self.assertEqual(page.url, host.origin + '/contacts/workflows/partner')
+            finally:
+                browser.close()
+
     def test_reviewed_entry_opens_and_prefills_from_the_list_without_submitting(self):
         self._run_form_entry_native()
 
@@ -578,7 +661,8 @@ class NativeContactsBrowserTests(unittest.TestCase):
                 latest = messages[-1]['content']
                 if self.stage == 0:
                     name, args = 'declare_task', {'action_request': action,
-                        'action_kind': 'draft', 'answer_requests': [answer_request] if question else []}
+                        'action_kind': 'draft', 'answer_requests': [answer_request] if question else [],
+                        'answer_kinds': [('knowledge' if unanswered else 'data')] if question else []}
                 elif self.stage == 1:
                     name, args = 'find_form_entries', {}
                 elif self.stage == 2:
@@ -670,7 +754,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
         prompt = "Open Grace Hopper's contact record."
         chat = TrackingChat((
             ("declare_task", {"action_request": "Open Grace Hopper's contact record",
-                              "action_kind": "record", "answer_requests": []}),
+                              "action_kind": "record", "answer_requests": [], "answer_kinds": []}),
             ("set_target", {"path": "/contacts"}),
             ("finish", {"outcome": "acted"}),
             ("list_contacts", {"name_contains": "Grace Hopper"}),
@@ -783,7 +867,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
         chat = ScriptedDemoChat((
             ("declare_task", {"action_request": "Open Grace Hopper's contact record",
                               "action_kind": "record",
-                              "answer_requests": ["show her email"]}),
+                              "answer_requests": ["show her email"], "answer_kinds": ["data"]}),
             ("load_skill", {"skill_id": "minimal.contacts.query"}),
             ("list_contacts", {"name_contains": "Grace Hopper"}),
             ("goto", {"url": "/contacts/grace-hopper"}),

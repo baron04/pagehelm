@@ -13,8 +13,10 @@ import unicodedata
 from urllib.parse import urlsplit
 
 from ..privacy import redact_sensitive_assignments
+from ..answer.evidence import EvidenceUnknown, PageEvidence, TurnEvidence
 
 MAX_ANSWERS = 8
+ANSWER_KINDS = ("data", "ui", "knowledge")
 DECLARE_TASK_TOOL = {"type": "function", "function": {
     "name": "declare_task",
     "description": (
@@ -23,6 +25,9 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
         "each independently requested answer clause into answer_requests. Preserve record "
         "names, requested fields, conditions and exclusions. Copy exact request text, "
         "including modifiers; do not decide feasibility or drop an unsupported part. "
+        "In answer_kinds, classify each answer in the same order: data for business "
+        "values/counts/records, ui for visible controls/selected states/UI guidance, "
+        "knowledge for source rules/implementation or documented explanations. "
         "Every request character except punctuation and connecting words must be covered. "
         "This immutable declaration grants no permission or tool. Runtime results decide "
         "what can be fulfilled; only evidence-backed answers can settle these questions. "
@@ -35,8 +40,10 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
             "action_request": {"type": "string", "maxLength": 4000},
             "action_kind": {"type": "string", "enum": ["none", "page", "record", "draft", "mutation"]},
             "answer_requests": {"type": "array", "maxItems": MAX_ANSWERS, "uniqueItems": True,
-                "items": {"type": "string", "minLength": 1, "maxLength": 1000}}},
-        "required": ["action_request", "action_kind", "answer_requests"]}}}
+                "items": {"type": "string", "minLength": 1, "maxLength": 1000}},
+            "answer_kinds": {"type": "array", "maxItems": MAX_ANSWERS,
+                "items": {"type": "string", "enum": list(ANSWER_KINDS)}}},
+        "required": ["action_request", "action_kind", "answer_requests", "answer_kinds"]}}}
 
 TASK_SYSTEM = """
 First call declare_task for the USER REQUEST, before application reads or actions.
@@ -47,6 +54,9 @@ map each aN to the exact evidence_refs actually selected by that answer's conclu
 A page/action receipt cannot replace a requested fact. Missing answers or an unfinished
 operation require partial/unable, preserving any observed action and verified answers.
 The declaration does not authorize writes or submission. Existing approval still applies.
+Freeze answer_kinds alongside the original clauses, before reading evidence. UI control
+labels and selected states (saw=ui_state) cannot settle data or knowledge questions. Read
+the actual content or report that question unanswered; do not reclassify it after a result.
 Freeze action_kind from the requested result, before feasibility is known. A record's
 detail/tab needs an application-verified rendered record; an empty lookup cannot make
 a list page complete it. Recover its name/type, or report partial/unable. For a general
@@ -62,6 +72,7 @@ class TaskRequirements:
     action_request: str
     answer_requests: tuple[str, ...]
     action_kind: str
+    answer_kinds: tuple[str, ...]
 
     @property
     def answer_ids(self) -> tuple[str, ...]:
@@ -71,18 +82,24 @@ class TaskRequirements:
         return "FROZEN USER REQUIREMENTS (not application authority):\n" + json.dumps({
             "action_request": self.action_request,
             "action_kind": self.action_kind,
-            "answers": dict(zip(self.answer_ids, self.answer_requests))}, ensure_ascii=False)
+            "answers": dict(zip(self.answer_ids, self.answer_requests)),
+            "answer_kinds": dict(zip(self.answer_ids, self.answer_kinds))}, ensure_ascii=False)
 
 
 def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
-    if not isinstance(args, dict) or set(args) != {"action_request", "action_kind", "answer_requests"}:
-        raise ValueError("declare_task requires action_request, action_kind and answer_requests only")
+    if not isinstance(args, dict) or set(args) != {
+            "action_request", "action_kind", "answer_requests", "answer_kinds"}:
+        raise ValueError("declare_task requires action_request, action_kind, answer_requests and answer_kinds only")
     action, answers = args["action_request"], args["answer_requests"]
     if (not isinstance(action, str) or len(action) > 4000 or not isinstance(answers, list)
             or len(answers) > MAX_ANSWERS or any(not isinstance(q, str) or not q.strip()
                 or len(q) > 1000 for q in answers)):
         raise ValueError("invalid action or answer request clauses")
     action, answers = action.strip(), tuple(q.strip() for q in answers)
+    kinds = args["answer_kinds"]
+    if (not isinstance(kinds, list) or len(kinds) != len(answers)
+            or any(not isinstance(item, str) or item not in ANSWER_KINDS for item in kinds)):
+        raise ValueError("answer_kinds needs one data/ui/knowledge kind per original answer clause")
     kind = args["action_kind"]
     if (not isinstance(kind, str) or kind not in {"none", "page", "record", "draft", "mutation"}
             or bool(action) != (kind != "none")):
@@ -103,7 +120,7 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
                    else " " for i, char in enumerate(prompt))
     if _CONNECTORS.sub("", rest).strip():
         raise ValueError("declaration omitted original request text; include every clause")
-    return TaskRequirements(action, answers, kind)
+    return TaskRequirements(action, answers, kind, tuple(kinds))
 
 
 def record_target_unmet(requirements, observation) -> tuple[str, ...]:
@@ -185,6 +202,30 @@ def missing_answers(requirements: TaskRequirements, bindings: object, conclusion
             raise ValueError("answers_for must cite references actually selected by answer conclusions")
         answered.add(ref)
     return tuple(ref for ref in requirements.answer_ids if ref not in answered)
+
+
+def check_answer_evidence(requirements: TaskRequirements, bindings: list,
+                          evidence: TurnEvidence) -> None:
+    """Reject known UI-only references used to settle frozen non-UI questions.
+
+    Binding shape and conclusion selection are checked by missing_answers. This
+    checks server-issued evidence, not a model's description of its evidence. It
+    does not prove relevance of ordinary text or that the initial kind was right.
+    """
+    kinds = dict(zip(requirements.answer_ids, requirements.answer_kinds))
+    for binding in bindings:
+        ref = binding["request_ref"]
+        if kinds[ref] == "ui":
+            continue
+        for evidence_ref in binding["evidence_refs"]:
+            try:
+                item = evidence.get(evidence_ref)
+            except EvidenceUnknown:
+                raise ValueError(f"{ref} cites absent or expired evidence; read the actual content again") from None
+            if isinstance(item, PageEvidence) and item.saw == "ui_state":
+                raise ValueError(f"{ref} is a frozen {kinds[ref]} question; {evidence_ref} "
+                                 "is only UI control/state evidence. Read the requested content "
+                                 "or report this question unanswered")
 
 
 def incomplete_notes(requirements, missing, *, action_missing: bool, chinese: bool):
