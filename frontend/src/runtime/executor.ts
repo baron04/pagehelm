@@ -141,7 +141,10 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
     }
     case 'fill':
       if (args.value === undefined) throw new Error('bad_arguments: fill needs value')
-      return access().input(args.ref, String(args.value))
+      if (args.commit !== undefined && typeof args.commit !== 'boolean') {
+        throw new Error('bad_arguments: fill commit must be boolean')
+      }
+      return access().input(args.ref, String(args.value), args.commit === true)
     case 'select':
       if (args.value === undefined) throw new Error('bad_arguments: select needs value')
       return access().select(args.ref, String(args.value))

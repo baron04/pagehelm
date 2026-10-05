@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from ...answer.answering import StructuredQueryAnswer
 from ...answer.evidence import RecordEvidence
 from ...state.identity import OperationContext
-from ...schemas.browser import MAX_FORM_LABEL_CHARS
+from ...schemas.browser import MAX_FORM_LABEL_CHARS, FORM_INPUT_CONTROLS
 
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -253,8 +253,8 @@ class FormDraftField:
     def __post_init__(self) -> None:
         if not isinstance(self.field, str) or not _FORM_FIELD.fullmatch(self.field):
             raise ValueError("form draft field identifier is invalid")
-        if self.control not in {"textbox", "combobox", "select"}:
-            raise ValueError("form draft control must be textbox, combobox or select")
+        if self.control not in FORM_INPUT_CONTROLS:
+            raise ValueError("form draft control is not supported")
         if self.binding not in {"field", "label"}:
             raise ValueError("form draft binding must be field or label")
         for name, value, maximum, allow_empty in (

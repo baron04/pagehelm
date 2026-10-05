@@ -26,7 +26,7 @@ from .tools.contracts import (APPLICATION_SAVES_ON_LEAVE, FORM_PERSISTENCE,
                               FormDraft, FormDraftField, matches_form_control,
                               validate_form_scope, form_control_unavailable)
 from ..schemas import PageObservation, ElementRef, ActionReceipt
-from ..schemas.browser import MAX_FORM_LABEL_CHARS
+from ..schemas.browser import MAX_FORM_LABEL_CHARS, FORM_INPUT_CONTROLS
 from ..state.identity import OperationContext, PrincipalError
 
 
@@ -73,7 +73,7 @@ _SENSITIVE = re.compile(
     r"(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)", re.I)
 _KINDS = frozenset({"text", "email", "phone", "url", "integer", "number",
                     "date", "datetime", "choice"})
-_CONTROLS = frozenset({"textbox", "combobox", "select"})
+_CONTROLS = FORM_INPUT_CONTROLS
 
 
 DESCRIBE_FORM_SCHEMA = {

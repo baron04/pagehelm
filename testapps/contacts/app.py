@@ -236,6 +236,8 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
           <form id="contact-create" data-page-route="/contacts/new"><label>Name<input name="name" autocomplete="name"
             required maxlength="120"></label><label>Email<input name="email" type="email"
             autocomplete="email" required maxlength="200"></label>
+            <label>Daily limit<input id="contact-draft-limit" type="number"></label>
+            <label>Follow-up date<input id="contact-draft-date" type="date"></label>
             <button type="submit">Save contact</button><p class="status" role="status"></p>
           </form></section>`;
         document.title = 'New contact · Minimal Contacts';

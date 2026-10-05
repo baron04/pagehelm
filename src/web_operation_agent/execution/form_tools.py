@@ -447,7 +447,8 @@ def apply_form_draft(
         for attempt in range(3):
             current, reason, detail = dispatch(
                 action,
-                {"ref": matches[0].ref, "epoch": current.epoch, "value": binding.value},
+                {"ref": matches[0].ref, "epoch": current.epoch, "value": binding.value,
+                 **({"commit": True} if action == "fill" else {})},
                 binding.field, current)
             if not reason:
                 break
@@ -466,10 +467,37 @@ def apply_form_draft(
                     matches=len(matches), dispatched=False, side_effect_possible=False)
                 return current, "agent_refused", (
                     f"the current form did not expose one exact {binding.field} field")
-    handoff_fields = []
     reason, detail = ready()
     if reason:
         return current, reason, detail
+    submit_target = None
+    if draft.submit_label:
+        def submit_buttons():
+            return [element for element in current.elements
+                    if element.role == "button" and element.name == draft.submit_label
+                    and element.attrs.get("form_scope") == draft.control_scope
+                    and not form_control_unavailable(element.attrs)]
+
+        buttons = submit_buttons()
+        # Input focus can move the reviewed footer outside the viewport. Use the
+        # existing generic scroll tool and fresh receipts; never re-enter a value or
+        # click a guessed control. Look below, then above, under the same form verifier.
+        for direction, pages in (("down", 1), ("up", 2)):
+            if buttons:
+                break
+            current, reason, detail = dispatch(
+                "scroll", {"direction": direction, "pages": pages}, "", current)
+            if reason:
+                return current, reason, detail
+            reason, detail = ready()
+            if reason:
+                return current, reason, detail
+            buttons = submit_buttons()
+        if len(buttons) != 1:
+            return current, "agent_refused", "the form has no unique enabled submit control"
+        submit_target = {"ref": buttons[0].ref, "label": draft.submit_label,
+                         "scope": draft.control_scope}
+    handoff_fields = []
     for binding in draft.fields:
         matches = matching(binding)
         if len(matches) > 1 or (not matches and not draft.control_scope):
@@ -485,13 +513,6 @@ def apply_form_draft(
                                **({"scope": draft.control_scope}
                                   if draft.control_scope else {})})
     args = {"fields": handoff_fields}
-    if draft.submit_label:
-        buttons = [element for element in current.elements
-                   if element.role == "button" and element.name == draft.submit_label
-                   and element.attrs.get("form_scope") == draft.control_scope
-                   and not form_control_unavailable(element.attrs)]
-        if len(buttons) != 1:
-            return current, "agent_refused", "the form has no unique enabled submit control"
-        args["submit"] = {"ref": buttons[0].ref, "label": draft.submit_label,
-                          "scope": draft.control_scope}
+    if submit_target is not None:
+        args["submit"] = submit_target
     return dispatch("handoff_form", args, "", current)

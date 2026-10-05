@@ -146,6 +146,40 @@ class ScopedForms(unittest.TestCase):
                 self.assertEqual(reason, "agent_refused" if remains_pending else "")
                 self.assertEqual("handoff_form" in calls, not remains_pending)
 
+    def test_missing_footer_scrolls_without_retyping_and_rebinds_fresh_field_refs(self):
+        calls = []
+        def execute(action, args):
+            calls.append((action, args))
+            obs = observation(len(calls) + 1)
+            if action == "fill":
+                obs.elements = [e for e in obs.elements if e.ref != "e2"]
+            elif action == "scroll":
+                obs.elements = [replace(e, ref="e9") if e.ref == "e1" else e for e in obs.elements]
+            return ActionReceipt(schema_version=1, command_id=str(len(calls)), action=action,
+                                 args_echo={}, ok=True, observation=obs)
+        draft = FormDraft("/records", (FormDraftField("name", "Name", "Draft", binding="label"),),
+                          control_scope=SCOPE, submit_label="Confirm")
+        _, reason, _ = apply_form_draft(session_for(execute), draft, observation(), 1)
+        self.assertEqual(reason, "")
+        self.assertEqual([name for name, _ in calls], ["fill", "scroll", "handoff_form"])
+        self.assertTrue(calls[0][1]["commit"])
+        self.assertEqual(calls[-1][1]["fields"][0]["ref"], "e9")
+        self.assertEqual(calls[-1][1]["submit"]["scope"], SCOPE)
+
+    def test_unreachable_footer_has_bounded_scrolls_and_never_clicks_or_retypes(self):
+        calls = []
+        def execute(action, args):
+            calls.append(action)
+            obs = observation(len(calls) + 1)
+            obs.elements = [e for e in obs.elements if e.ref != "e2"]
+            return ActionReceipt(schema_version=1, command_id=str(len(calls)), action=action,
+                                 args_echo={}, ok=True, observation=obs)
+        draft = FormDraft("/records", (FormDraftField("name", "Name", "Draft", binding="label"),),
+                          control_scope=SCOPE, submit_label="Confirm")
+        _, reason, _ = apply_form_draft(session_for(execute), draft, observation(), 1)
+        self.assertEqual(reason, "agent_refused")
+        self.assertEqual(calls, ["fill", "scroll", "scroll"])
+
     def test_shared_budget_stops_after_approval_input_wait_and_late_handoff(self):
         draft = FormDraft("/records", (FormDraftField("name", "Name", "Draft", binding="label"),),
                           control_scope=SCOPE, submit_label="Confirm")

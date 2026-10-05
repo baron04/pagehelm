@@ -229,6 +229,7 @@ function roleFor(tag: string, attrs: Record<string, string>): string {
     const type = String(attrs.type || 'text').toLowerCase()
     if (['submit', 'button', 'image'].includes(type)) return 'button'
     if (['checkbox', 'radio', 'password'].includes(type)) return type
+    if (type === 'number') return 'spinbutton'
     return 'textbox'
   }
   return tag
@@ -366,7 +367,7 @@ export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unkno
 export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
                                  getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {
   for (const item of elements) {
-    if (!['textbox', 'combobox', 'select', 'button'].includes(item.role)) continue
+    if (![...browserContract.form_handoff.input_controls, 'button'].includes(item.role)) continue
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
       delete item.attrs.form_scope

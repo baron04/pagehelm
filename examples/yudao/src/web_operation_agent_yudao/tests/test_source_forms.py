@@ -131,9 +131,45 @@ class SourceFormTests(unittest.TestCase):
         self.path.unlink()
         self.path.symlink_to(denied)
         self.assertIsNone(self.reader.read(_PATH))
+
         self.path.unlink()
         self.path.write_bytes(b'\xff' + _SOURCE.encode())
         self.assertIsNone(self.reader.read(_PATH))
+
+    def test_literal_numeric_constraints_and_single_iso_day_preserve_source_evidence(self):
+        self.path.write_text(_SOURCE.replace(
+            '<el-input v-model="formData.remark" />',
+            '<el-input-number v-model="formData.remark" :min="0.01" :max="999" :precision="2" />')
+            .replace('<el-input type="textarea" v-model="formData.description" maxlength="500" />',
+                     '<el-date-picker v-model="formData.description" type="date" value-format="x" />'))
+        result = self.reader.read(_PATH)
+        date, number = result.fields[1:]
+        self.assertEqual(date.input_type, "date")
+        self.assertEqual((number.input_type, number.minimum, number.maximum, number.precision),
+                         ("number", "0.01", "999", 2))
+        self.assertTrue(self.tree.verify(number.evidence))
+        self.assertTrue(self.tree.verify(date.evidence))
+
+    def test_dynamic_numeric_constraints_and_non_iso_or_range_dates_are_not_compiled(self):
+        controls = [
+            '<el-input-number :min="limit" />',
+            '<el-input-number :precision="scale" />',
+            '<el-input-number :precision="16" />',
+            '<el-input-number :min="0" min="1" />',
+            '<el-input-number :min.prop="0" />',
+            '<el-input-number step-strictly />',
+            '<el-date-picker type="daterange" />',
+            '<el-date-picker type="datetime" />',
+            '<el-date-picker :format="fmt" />',
+            '<el-date-picker format="DD/MM/YYYY" />',
+            '<el-date-picker value-format="YYYY/MM/DD" />',
+        ]
+        for control in controls:
+            with self.subTest(control=control):
+                bound = control.replace(' />', ' v-model="formData.remark" />')
+                self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />', bound))
+                self.assertEqual([f.reference for f in self.reader.read(_PATH).fields],
+                                 ["name", "description"])
 
 
 if __name__ == "__main__":

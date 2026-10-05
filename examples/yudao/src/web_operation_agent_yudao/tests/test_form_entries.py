@@ -147,6 +147,19 @@ class EntryTests(unittest.TestCase):
         with self.assertRaises(BusinessToolRequestError):
             self.port.accept_entry(entry,self.before,self.receipt,replace(self.after,record_route="/crm/customer/detail/13"),context=self.context)
 
+    def test_calendar_navigation_does_not_rebind_the_editor_but_another_editor_is_ambiguous(self):
+        popup = ElementRef("e4", "button", "Previous month", "button", 3,
+                           {"form_scope": "dialog:calendar", "form_instance": "b" * 36})
+        observation = replace(self.after, elements=[*self.after.elements, popup])
+        self.assertEqual(self.verifier._scope(observation),
+                         ("dialog:editor", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+        for other in (replace(popup, name="确 定"),
+                      replace(popup, role="textbox", attrs={**popup.attrs, "field_label": "Other field"}),
+                      replace(popup, role="spinbutton", attrs={**popup.attrs, "field_label": "Other amount"})):
+            with self.subTest(other=other):
+                with self.assertRaises(BusinessToolRequestError):
+                    self.verifier._scope(replace(observation, elements=[*self.after.elements, other]))
+
     def test_source_replacement_and_incomplete_review_refuse(self):
         with self.assertRaises(ValueError):
             NativeFormReview.load({**self.payload,"hashes":{}},self.tree)

@@ -235,7 +235,8 @@ class _GenericFormChat:
 
     model = "scripted/generic-current-form"
 
-    def __init__(self):
+    def __init__(self, values=None):
+        self.values = values or {"Name": "Margaret Hamilton", "Email": "margaret@example.test"}
         self.calls = 0
         self.seen = []
 
@@ -244,15 +245,15 @@ class _GenericFormChat:
         self.calls += 1
         self.seen.append({tool["function"]["name"] for tool in (tools or [])})
         if self.calls == 1:
-            name, arguments = "describe_form", {"field_query": "name email"}
+            name, arguments = "describe_form", {"field_query": " ".join(self.values)}
         elif self.calls == 2:
             descriptor = json.loads(messages[-1]["content"].split("\n", 1)[1])
             fields = {item["label"]: item["field_id"] for item in descriptor["fields"]}
             name, arguments = "prepare_form", {
                 "form_id": descriptor["form_id"],
                 "values": [
-                    {"field_id": fields["Name"], "value": "Margaret Hamilton"},
-                    {"field_id": fields["Email"], "value": "margaret@example.test"},
+                    {"field_id": fields[label], "value": value}
+                    for label, value in self.values.items()
                 ],
             }
         else:
@@ -1071,6 +1072,43 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         row.get("event") == "form_prefill_completed" for row in events), 1)
                 finally:
                     browser.close()
+
+    def test_numeric_and_date_drafts_commit_local_values_and_leave_submission_to_user(self):
+        from playwright.sync_api import sync_playwright
+        values = {"Daily limit": "12", "Follow-up date": "2026-10-05"}
+        chat = _GenericFormChat(values)
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0, scripted=False)) as host, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 1100})
+                page.goto(host.origin + "/demo/login/ada-lovelace", wait_until="domcontentloaded")
+                page.goto(host.origin + "/contacts/new", wait_until="domcontentloaded")
+                page.evaluate(_CONNECTED)
+                page.evaluate("""() => {
+                    for (const id of ['contact-draft-limit', 'contact-draft-date']) {
+                        const input = document.getElementById(id);
+                        input.addEventListener('change', () => input.dataset.committed = input.value);
+                    }
+                }""")
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, "Set the daily limit to 12 and follow-up date to October 5, 2026; leave saving to me.")
+                _allow_operation(page)
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error)
+                self.assertEqual(outcome.result.terminal_reason, "agent_finished")
+                for label, value in values.items():
+                    field = page.get_by_label(label, exact=True)
+                    self.assertEqual(field.input_value(), value)
+                    self.assertEqual(field.get_attribute('data-committed'), value)
+                self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
+                self.assertEqual(host.application.write_requests, 0)
+                self.assertEqual(host.application.records_created, 0)
+            finally:
+                browser.close()
 
     def test_unreviewed_onchange_form_is_not_exposed_to_generic_prefill(self):
         """P8.6d: DOM similarity cannot grant authority over application events."""

@@ -22,6 +22,18 @@ import {formInstance} from './formInstance'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
+function numericValue(text: string): string | undefined {
+  const value = text.trim()
+  const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(value)
+  if (!match || !Number.isFinite(Number(value))) return undefined
+  const fraction = match[3] ?? match[4] ?? ''
+  const digits = ((match[2] ?? '') + fraction).replace(/^0+/, '')
+  if (!digits) return '0'
+  const significant = digits.replace(/0+$/, '')
+  const exponent = Number(match[5] ?? 0) - fraction.length + digits.length - significant.length
+  return `${match[1] === '-' ? '-' : ''}${significant}e${exponent}`
+}
+
 export interface BrowserState {
   url: string
   title: string
@@ -182,7 +194,7 @@ export class Page {
     }
     return this.controller.clickElement(refIndex(ref))
   }
-  input(ref: unknown, text: string): Promise<unknown> {
+  input(ref: unknown, text: string, commit = false): Promise<unknown> {
     const element = this.element(ref)
     if (!element || element.isConnected === false) {
       throw new Error('bad_arguments: fill target is no longer on the page')
@@ -191,7 +203,18 @@ export class Page {
       throw new Error('bad_arguments: fill target is disabled or read-only')
     }
     return Promise.resolve(this.controller.inputText(refIndex(ref), text)).then(result => {
-      if (result && (result as {success?: unknown}).success === true) this.rememberEntered(element)
+      if (result && (result as {success?: unknown}).success === true) {
+        // An application-issued form draft commits the local editor before its fresh
+        // observation. Ordinary typing keeps suggestion lists open. No submit is used.
+        if (commit && (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+          if (!element.isConnected || element.disabled || element.readOnly) {
+            throw new Error('execution_failed: entered form control changed before local commit')
+          }
+          element.dispatchEvent(new Event('change', {bubbles: true}))
+          element.blur()
+        }
+        this.rememberEntered(element)
+      }
       return result
     })
   }
@@ -241,7 +264,7 @@ export class Page {
           typeof binding.value !== 'string' ||
           !['field', 'label'].includes(binding.binding || 'field') ||
           (binding.binding === 'label' && (!binding.label || !binding.scope)) ||
-          !['textbox', 'combobox', 'select'].includes(binding.control) ||
+          !browserContract.form_handoff.input_controls.includes(binding.control) ||
           seen.has(binding.field)) return false
       seen.add(binding.field)
       const matches = observed.filter(element => formFieldMatches(element, binding))
@@ -260,12 +283,19 @@ export class Page {
         if (formFieldName(live) || formControlLabel(live) !== binding.label) return false
       } else if (formFieldName(live) !== binding.field) return false
       const tag = String(live.tagName || '').toLowerCase()
-      const control = tag === 'select' ? 'select' : live.getAttribute?.('role') === 'combobox' ? 'combobox' : 'textbox'
+      const declared = live.getAttribute?.('role')
+      const control = tag === 'select' ? 'select' : declared === 'combobox' ? 'combobox'
+        : declared === 'spinbutton' || tag === 'input' && live.type === 'number' ? 'spinbutton' : 'textbox'
       if (!binding.ref && (!['input', 'textarea', 'select'].includes(tag) || control !== binding.control)) return false
       if (binding.control === 'select' && tag !== 'select') {
         return false
       }
-      return String(live.value ?? '') === binding.value
+      const shown = String(live.value ?? '')
+      if (binding.control === 'spinbutton') {
+        const expected = numericValue(binding.value)
+        return expected !== undefined && numericValue(shown) === expected
+      }
+      return shown === binding.value
     })
   }
 

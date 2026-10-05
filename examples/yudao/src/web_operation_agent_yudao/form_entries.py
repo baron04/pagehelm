@@ -18,6 +18,7 @@ from web_operation_agent.planning.sourcetree import AccessDenied
 from web_operation_agent.business.tools.contracts import form_control_unavailable
 from .forms import NativeFormState, YudaoFormPort
 from .source_forms import SourceFormReader
+from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS
 
 REVIEWED_FILES = (
     "ui/src/views/crm/customer/detail/index.vue",
@@ -119,9 +120,15 @@ class NativeCustomerEntryVerifier:
 
     @staticmethod
     def _scope(observation):
+        # Calendar/list popups may also use role=dialog. Their navigation buttons do
+        # not constitute another editor: bind the actual field controls and the
+        # reviewed submit control. A second labelled editor or submit stays ambiguous.
         scopes = {(e.attrs.get("form_scope"), e.attrs.get("form_instance"))
-                  for e in observation.elements if e.role in {"textbox", "button"}
-                  and isinstance(e.attrs.get("form_scope"), str)
+                  for e in observation.elements
+                  if (e.role in FORM_INPUT_CONTROLS and
+                      (e.attrs.get("field") or e.attrs.get("field_label")))
+                  or (e.role == "button" and e.name == "确 定")
+                  if isinstance(e.attrs.get("form_scope"), str)
                   and e.attrs["form_scope"].startswith("dialog")}
         if len(scopes) != 1:
             raise BusinessToolRequestError("the current editor scope is ambiguous")

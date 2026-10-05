@@ -50,6 +50,7 @@ MAX_OBSERVATION_CONTENT_CHARS = int(
 MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
 SCOPED_FORM_HANDOFF_CAPABILITY = _BROWSER_CONTRACT["form_handoff"]["scoped_capability"]
 MAX_FORM_LABEL_CHARS = int(_BROWSER_CONTRACT["form_handoff"]["max_label_chars"])
+FORM_INPUT_CONTROLS = frozenset(_BROWSER_CONTRACT["form_handoff"]["input_controls"])
 if min(MAX_OBSERVATION_ELEMENTS, MAX_OBSERVATION_CONTENT_CHARS, MAX_SCROLL_PAGES,
        MAX_PAGE_FACETS, MAX_FACET_CANDIDATES, MAX_PAGE_ROUTE_CHARS) < 1:
     raise ValueError("browser contract bounds must be positive integers")

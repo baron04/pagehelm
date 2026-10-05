@@ -35,6 +35,9 @@ class ScalarSourceField:
     # Declared handlers are facts only. Their absence does not prove side-effect freedom.
     handlers: tuple[str, ...]
     evidence: EvidenceRef
+    minimum: str | None = None
+    maximum: str | None = None
+    precision: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +118,18 @@ def _evidence(tree: SourceTree, path: str, lines: list[str], start: int, end: in
                        sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(), excerpt="")
 
 
+def _number_attribute(attrs: dict, name: str) -> str | None:
+    """Read a decimal literal only; never evaluate a Vue expression or spread."""
+    keys = [key for key in attrs if key in {name, ":" + name, "v-bind:" + name}]
+    if not keys:
+        return None
+    value = attrs[keys[0]]
+    if (len(keys) != 1 or not isinstance(value, str) or len(value) > 32
+            or not re.fullmatch(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value)):
+        raise ValueError("numeric form constraint is not a decimal literal")
+    return value
+
+
 def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
     parser = _Template()
     try:
@@ -140,7 +155,7 @@ def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
                 or _dynamic(item.attrs, "label", "prop")):
             continue
         controls = [(node, parents) for node, parents in _walk(item)
-                    if node.tag == "el-input"]
+                    if node.tag in {"el-input", "el-input-number", "el-date-picker"}]
         if len(controls) != 1:
             continue
         control, parents = controls[0]
@@ -149,9 +164,37 @@ def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
                 or any(key.startswith("v-model.") for key in attrs)
                 or _dynamic(attrs, "type", "maxlength")):
             continue
-        input_type = attrs.get("type", "text")
-        if input_type not in {"text", "textarea", "email", "tel", "url"}:
-            continue
+        minimum = maximum = precision = None
+        if control.tag == "el-input-number":
+            # Step-strict typing or a custom formatter can alter the entered value.
+            if ("v-bind" in attrs or any(key in attrs for key in
+                    ("step-strictly", ":step-strictly", "v-bind:step-strictly", "formatter", ":formatter"))
+                    or any(key.startswith((":min.", ":max.", ":precision.", "v-bind:min.",
+                                           "v-bind:max.", "v-bind:precision.")) for key in attrs)):
+                continue
+            try:
+                minimum, maximum = (_number_attribute(attrs, name) for name in ("min", "max"))
+                raw_precision = _number_attribute(attrs, "precision")
+                if raw_precision is not None:
+                    if not raw_precision.isdecimal() or not 0 <= int(raw_precision) <= 15:
+                        continue
+                    precision = int(raw_precision)
+            except ValueError:
+                continue
+            input_type = "integer" if precision == 0 else "number"
+        elif control.tag == "el-date-picker":
+            # A single day with ISO display can be typed and checked exactly. Range,
+            # time/epoch conversions and dynamic formatting need a separate translation.
+            if (attrs.get("type", "date") != "date" or attrs.get("format", "YYYY-MM-DD") != "YYYY-MM-DD"
+                    or attrs.get("value-format", "YYYY-MM-DD") not in {"YYYY-MM-DD", "x"}
+                    or _dynamic(attrs, "format", "value-format", "editable")
+                    or attrs.get(":editable") == "false" or "v-bind" in attrs):
+                continue
+            input_type = "date"
+        else:
+            input_type = attrs.get("type", "text")
+            if input_type not in {"text", "textarea", "email", "tel", "url", "date"}:
+                continue
         limit = attrs.get("maxlength")
         if "maxlength" in attrs and (not isinstance(limit, str)
                                   or not re.fullmatch(r"[0-9]{1,6}", limit)
@@ -165,6 +208,7 @@ def _compile(tree: SourceTree, path: str, text: str) -> ScalarFormSource | None:
             tuple(sorted({key for node in chain for key in node.attrs
                           if key.startswith(("@", "v-on"))})),
             _evidence(tree, path, lines, item.start, item.end),
+            minimum, maximum, precision,
         ))
     # Repeated fields/labels cannot establish a unique semantic binding, even if their
     # source branches appear mutually exclusive. The compiler never evaluates Vue code.

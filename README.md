@@ -688,6 +688,13 @@ for the actor, turn, entry instance, create/update target, dialog scope and revi
 component bytes. Changed entry or source invalidates the draft; literal input limits use
 UTF-16 units as the native controls do. The native host installs no such verifier by default;
 this port does not yet qualify the full Goal form-entry flow.
+Reviewed single-day ISO date inputs and numeric inputs can use the same current-form contract.
+Numeric translation enforces literal bounds and precision and refuses values that the native
+control would round or clamp. Spinbutton discovery and verification share the browser contract
+and are also exercised by Contacts' source-free HTML form. A prepared draft commits each local
+editor with change/blur, checks its fresh value, and highlights submission for the person.
+Dynamic numeric constraints, date ranges, custom date formats, datetime fields and custom
+choice/association widgets remain unsupported by this source translation.
 One scope declaration
 preserves every business and static-source part of a mixed request; business details use
 the existing paired readings and deterministic resolver, rather than a growing generic

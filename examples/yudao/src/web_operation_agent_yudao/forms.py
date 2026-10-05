@@ -8,6 +8,7 @@ issue that attestation. The default native host installs no verifier or form por
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import re
@@ -119,7 +120,11 @@ class YudaoFormPort:
                 continue
             try:
                 fields.append(ApplicationFormField(item.reference, item.label,
-                    kind={"email": "email", "tel": "phone", "url": "url"}.get(item.input_type, "text"),
+                    kind={"email": "email", "tel": "phone", "url": "url", "date": "date",
+                          "integer": "integer", "number": "number"}.get(item.input_type, "text"),
+                    controls=(("spinbutton",) if item.input_type in {"number", "integer"}
+                              else ("textbox", "combobox") if item.input_type == "date"
+                              else ("textbox",)),
                     binding="label"))
             except ValueError:
                 # Credential-like semantics never enter the generic draft contract.
@@ -149,6 +154,7 @@ class YudaoFormPort:
                 or any(not isinstance(item, ApplicationFormValue) for item in values)
                 or len({item.field.reference for item in values}) != len(values)):
             raise BusinessToolRequestError("native form values are empty or repeated")
+        normalized = {}
         for item in values:
             if available.get(item.field.reference) != item.field:
                 raise BusinessToolRequestError("value does not name a current native field")
@@ -159,8 +165,26 @@ class YudaoFormPort:
                 raise BusinessToolRequestError("native form values require valid Unicode") from None
             if limit is not None and units > limit:
                 raise BusinessToolRequestError(f"{item.field.label} exceeds the native input limit")
+            fact = facts[item.field.reference]
+            normalized[item.field.reference] = item.value
+            if fact.input_type in {"number", "integer"}:
+                try:
+                    value = Decimal(item.value)
+                    if (not value.is_finite() or abs(value) > Decimal(2**53 - 1)
+                            or Decimal(str(float(value))) != value
+                            or fact.minimum is not None and value < Decimal(fact.minimum)
+                            or fact.maximum is not None and value > Decimal(fact.maximum)
+                            or fact.precision is not None and value.scaleb(fact.precision) != value.scaleb(fact.precision).to_integral_value()):
+                        raise ValueError("native numeric input would clamp or round the value")
+                    value = Decimal(0) if value == 0 else value
+                    normalized[item.field.reference] = (
+                        format(value, f".{fact.precision}f") if fact.precision is not None
+                        else format(value.normalize(), "f"))
+                except (InvalidOperation, ValueError, OverflowError):
+                    raise BusinessToolRequestError(
+                        f"{item.field.label} exceeds the native numeric range or precision") from None
         return FormDraft(form.route, tuple(FormDraftField(item.field.reference, item.field.label,
-            item.value, item.control, binding=item.field.binding) for item in values),
+            normalized[item.field.reference], item.control, binding=item.field.binding) for item in values),
             control_scope=form.control_scope, submit_label=form.submit_label)
 
 

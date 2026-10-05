@@ -77,6 +77,40 @@ class FormsTests(unittest.TestCase):
         self.assertEqual((draft.control_scope, draft.submit_label), ("dialog:editor", "确定"))
         self.assertEqual(reply["submission"], "user_only")
 
+    def numeric_date_form(self):
+        self.path.write_text(_SOURCE.replace('<el-input v-model="formData.name" maxlength="31" clearable />',
+            '<el-input-number v-model="formData.name" :min="0.01" :max="1000" :precision="2" />')
+            .replace('<el-input type="textarea" v-model="formData.description" maxlength="500" />',
+                     '<el-date-picker v-model="formData.description" type="date" value-format="x" />'))
+        self.verifier.state = replace(self.state, source_digest=self.reader.read(_PATH).binding_digest)
+        self.obs.elements[0] = replace(self.obs.elements[0], role="spinbutton")
+
+    def test_numeric_and_date_drafts_validate_native_constraints_without_rounding(self):
+        self.numeric_date_form()
+        result = self.describe()
+        fields = {f["label"]: f for f in result["fields"]}
+        self.assertEqual(fields["合成名称"]["type"], "number")
+        self.assertEqual(fields["合成描述"]["type"], "date")
+        draft, reply = self.tools.prepare(self.obs, {"form_id": result["form_id"], "values": [
+            {"field_id": fields["合成名称"]["field_id"], "value": "12.5"},
+            {"field_id": fields["合成描述"]["field_id"], "value": "2026-10-05"},
+        ]}, context=self.context)
+        self.assertEqual([(f.control, f.value) for f in draft.fields],
+                         [("spinbutton", "12.50"), ("textbox", "2026-10-05")])
+        self.assertEqual(reply["submission"], "user_only")
+
+    def test_invalid_numeric_values_and_calendar_days_are_refused_before_typing(self):
+        self.numeric_date_form()
+        for label, value in ([("合成名称", v) for v in
+                             ("0", "1000.01", "12.501", "NaN", "1e100", "9007199254740992")]
+        + [("合成描述", "2026-02-30")]):
+            with self.subTest(value=value):
+                result = self.describe()
+                field = next(f for f in result["fields"] if f["label"] == label)
+                with self.assertRaises(BusinessToolRequestError):
+                    self.tools.prepare(self.obs, {"form_id": result["form_id"], "values": [
+                        {"field_id": field["field_id"], "value": value}]}, context=self.context)
+
     def test_no_live_verifier_or_wrong_actor_session_turn_route_has_no_form(self):
         self.verifier.allowed = False
         self.assertFalse(self.describe()["form_available"])

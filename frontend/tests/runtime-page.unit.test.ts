@@ -181,6 +181,47 @@ describe('Page.describe bounds an observation before it crosses the browser boun
 })
 
 describe('Page refuses controls that are not writable at execution time', () => {
+  it('commits a local numeric or date draft while ordinary typing keeps its current focus', async () => {
+    const form = document.createElement('form')
+    form.id = 'draft-types'
+    form.innerHTML = '<label>Amount<input type="number"></label><label>Day<input type="date"></label>'
+    document.body.append(form)
+    try {
+      for (const [index, input] of Array.from(form.querySelectorAll('input')).entries()) {
+        const changed = vi.fn(), blurred = vi.fn()
+        input.addEventListener('change', changed)
+        input.addEventListener('blur', blurred)
+        const api = controller()
+        api.inputText = vi.fn(async (_i, value) => {input.focus(); input.value = value; return {success: true}})
+        const page = new Page(api, () => input, createRedactor())
+        const value = index === 0 ? '12.50' : '2026-10-05'
+        await page.input('e1', value)
+        expect(changed).not.toHaveBeenCalled()
+        expect(document.activeElement).toBe(input)
+        await page.input('e1', value, true)
+        expect(changed).toHaveBeenCalledTimes(1)
+        expect(blurred).toHaveBeenCalledTimes(1)
+        const observed = [{ref: 'e1', role: index === 0 ? 'spinbutton' : 'textbox',
+          name: '', tag: 'input', epoch: 1, attrs: {field_label: index === 0 ? 'Amount' : 'Day', form_scope: 'form:draft-types'}}]
+        expect(page.verifyFormFields([{ref: 'e1', field: 'value', binding: 'label',
+          label: index === 0 ? 'Amount' : 'Day', control: observed[0]!.role,
+          scope: 'form:draft-types', value}], observed)).toBe(true)
+        if (index === 0) {
+          const binding = [{ref: 'e1', field: 'value', binding: 'label', label: 'Amount',
+            control: 'spinbutton', scope: 'form:draft-types', value: '12.5'}]
+          expect(page.verifyFormFields(binding, observed)).toBe(true)
+          input.value = '12.5001'
+          expect(page.verifyFormFields(binding, observed)).toBe(false)
+          input.value = ''; binding[0]!.value = '0'
+          expect(page.verifyFormFields(binding, observed)).toBe(false)
+          input.value = '9007199254740992'; binding[0]!.value = '9007199254740993'
+          expect(page.verifyFormFields(binding, observed)).toBe(false)
+          input.value = '1.25e1'; binding[0]!.value = '12.50'
+          expect(page.verifyFormFields(binding, observed)).toBe(true)
+        }
+      }
+    } finally {form.remove()}
+  })
   it('checks a scoped unnamed input and its native submit button without clicking', () => {
     const form = document.createElement('form')
     form.id = 'native-editor'
