@@ -47,6 +47,7 @@ from ..modeling.egress import AuditedChat, ProviderEgressError
 from .grounding import (NOT_APPLICABLE, REFUTED, WRITE_PERMITTED, WRITE_REFUSED,
                         PlanState, opaque_route_identity)
 from ..state.identity import PrincipalContext
+from ..goal.read_tools import DataReadTools
 from ..planning.knowledge import ApplicationKnowledgePort
 from ..state.ledger import SessionLedger
 from ..privacy import SessionHandoffPolicy, safe_tool_arguments as _safe
@@ -159,6 +160,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  allow_application_entry: bool = False,
                  application_routes: ApplicationRoutePort | None = None,
                  business_tools: BusinessToolRuntime | None = None,
+                 data_reads: DataReadTools | None = None,
                  business_mutation_approval=None,
                  operation_confirmation=None,
                  approval_hold_s: int = 0,
@@ -346,6 +348,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             allow_application_entry=self.allow_application_entry,
             source_affordance_mode=source_affordance_mode)
         self.business_tools = business_tools
+        if data_reads is not None and not isinstance(data_reads, DataReadTools):
+            raise TypeError("data_reads must be DataReadTools or None")
+        self.data_reads = data_reads
         #: Where the turn reports what it is doing, between page actions. Nobody may be
         #: listening -- every apparatus without a panel -- and the run does not depend on it.
         self._progress = progress
@@ -569,6 +574,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 "open_source_candidate", "open_skill_route", "enter_skill_app",
                 "enter_application", "prefill_form",
                 "describe_form", "prepare_form",
+                "inspect_data", "resolve_data",
             }
             collisions = business_tools.tool_names & reserved
             if collisions:

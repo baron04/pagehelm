@@ -369,6 +369,7 @@ class AgentTurnExecutor:
             policy_block_limit=self.config.policy_block_limit,
             no_progress_repeat_limit=self.config.no_progress_repeat_limit,
             business_tools=self.business_tools,
+            data_reads=self.config.data_reads,
             business_mutation_approval=(
                 approve_business_mutation
                 if self.config.allow_business_mutations else None),

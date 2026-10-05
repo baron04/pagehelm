@@ -55,8 +55,10 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
     """Resolves one declaration against one index and one port; not shared across turns."""
 
     def __init__(self, port: DataPort, index: ApplicationIndex, schema: Schema, *,
-                 views: dict[str, EntityView] | None = None, today: date | None = None):
+                 views: dict[str, EntityView] | None = None, today: date | None = None,
+                 evidence=None):
         self.port, self.index, self.schema = port, index, schema
+        self._evidence = evidence
         self._views = views if views is not None else {}
         self._reads: list[tuple[str, str]] = []
         self._named_scopes: tuple = ()
@@ -78,6 +80,8 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         self._listed_rows = None
         resolved = []
         for deliverable in spec.deliverables:
+            if self._evidence is not None:
+                self._evidence.begin()
             previous_list, self._listed_rows = self._listed_rows, None
             try:
                 result = self._linked_list_facts(deliverable, previous_list,
@@ -92,6 +96,8 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
                 resolved.append(result)
             except DataRefused as exc:
                 resolved.append(self._refused_read(deliverable, exc))
+            if self._evidence is not None:
+                self._evidence.settle(resolved[-1])
         return Resolution(deliverables=tuple(resolved), reads=tuple(self._reads))
 
     def _linked_list_facts(self, d, previous, *, preceding_list=False):
@@ -660,12 +666,18 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
                                                               or ", ".join(f.label for f in
                                                                            view.schema.fields[:30]))))
         row = self._read(model, rid, fields)
+        if self._evidence is not None:
+            self._evidence.facts(model, view, row, fields)
         facts = tuple(Fact(subject=name, label=view.label_of(f), value=str(row.shown.get(f, "(empty)")),
                            field_key=f,
                            native_value=(str(row.values[f]) if view.info(f).kind == "choice"
                                and type(row.values.get(f)) in (str, int)
                                and any(c.key == str(row.values[f]) for c in view.info(f).choices) else ""))
                       for f in fields)
+        if self._evidence is not None and any(f not in row.values for f in fields):
+            return Resolved(kind="fact", facts=facts,
+                            problem="the application did not read every requested field",
+                            repair="Unread fields are undetermined, not empty; repeat a supported typed read.")
         problem = "not on this record: " + ", ".join(missing) if missing else ""
         empty = tuple(view.label_of(f) for f in fields if row.values.get(f) in (None, ""))
         repair = ""

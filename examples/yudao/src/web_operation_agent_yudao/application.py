@@ -23,6 +23,7 @@ from web_operation_agent.composition.ports import (ApplicationPorts, Conservativ
                                                    ResultPostconditionVerifier)
 from web_operation_agent.goal.conventions import load_conventions
 from web_operation_agent.goal.resolve.service import DataGoalPort
+from web_operation_agent.goal.read_tools import DataReadTools
 from web_operation_agent.state.identity import (PRINCIPAL_CONTEXT_VERSION, IdentityAssertion,
                                                 PrincipalContext, PrincipalError,
                                                 bind_matching_identity)
@@ -31,6 +32,7 @@ from .client import YudaoAccount, YudaoClient
 from .conventions import REFERENCE_CONVENTIONS
 from .goal import YudaoGoalData
 from .generic_reads import YudaoReadTools
+from .bound_data_reads import BoundDataReads
 from .ui_source import UiSource
 
 APPLICATION_ID = "yudao"
@@ -137,6 +139,9 @@ class YudaoApplication:
                                                  today=today, reference_workers=4)
             self.native_tab_policy = forms.click_policy(self.native_tab_policy)
         reads = YudaoReadTools(self.goal_data, application_id=APPLICATION_ID)
+        self.data_reads = DataReadTools(
+            lambda context, checkpoint: BoundDataReads(self.goal_data, context, checkpoint),
+            APPLICATION_ID, "yudao.read", today=today)
         names = tuple(reads.tool_effects())
         classes = {
             "discover_entities": ("application.metadata",),

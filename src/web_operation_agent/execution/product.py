@@ -16,6 +16,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from ..composition.sources import SourceCapability
+from ..goal.read_tools import DataReadTools
 from .click_policy import ClickPolicy
 from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
@@ -166,6 +167,9 @@ class AgentTurnConfig:
     #: Start with only the request and registered tools. Browser context and its control
     #: lease are acquired on the first page tool; repository/API answers need neither.
     defer_page_context: bool = False
+    #: Optional actor-bound access to the existing readonly deterministic resolver.
+    #: It shares this Agent, evidence store and budget; no nested model execution.
+    data_reads: DataReadTools | None = None
     #: A step-by-step page turn may require the application's rendered main-page
     #: identity before reporting arrival; URL and selected controls alone cannot prove it.
     require_page_route: bool = False
@@ -250,6 +254,10 @@ class AgentTurnConfig:
             raise ValueError("observe cannot be disabled: policy refusals need a fresh page")
         if not isinstance(self.source, SourceCapability):
             raise TypeError("source must be a SourceCapability")
+        if self.data_reads is not None and not isinstance(self.data_reads, DataReadTools):
+            raise TypeError("data_reads must be DataReadTools or None")
+        if self.data_reads is not None and not self.require_identity:
+            raise ValueError("deterministic data reads require a verified session identity")
         if self.deployment_profile not in {"production", "test"}:
             raise ValueError("deployment_profile must be production or test")
         if self.allow_business_mutations and not self.require_identity:

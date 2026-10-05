@@ -402,6 +402,22 @@ agent.
   without dispatch so the same Agent can replan. This does not bypass identity, approval,
   cancellation or shared budgets. Turns that never acquire a page have nullable entry
   observation metadata; they do not synthesize page evidence.
+  An integration can additionally supply actor-bound `DataReadTools` as
+  `AgentTurnConfig.data_reads` (verified identity required). `inspect_data` returns
+  a bounded ranked sample of entities, fields and query pages; omitted metadata is
+  not proof of absence. `resolve_data` uses the existing deterministic resolver for
+  facts, scoped counts/sums, lists and numeric extremes, returning typed record IDs,
+  native values, units and completeness evidence to the same Agent without another
+  planning model. Every port call checks the existing deadline, cancellation and
+  read scope. The application factory binds actual delegated credentials; the Yudao
+  pilot also checks each API subrequest and rejects credential renewal mid-read.
+  Metadata alone cannot settle a factual answer. These tools grant no page route,
+  source-rule access, form draft or write authority. Truncated lists/groups and
+  unread fields stay distinguishable from complete reads and known-empty fields.
+  Reads are separate application operations, not a transactional snapshot. This
+  path is opt-in; it does not migrate the default goal executor or establish natural
+  task accuracy. The neutral contract is also tested against a source-free Contacts
+  REST-derived report under real synthetic actor authentication.
   Integrations can set `require_page_route=True` in `AgentTurnConfig` for this loop:
   navigation and target completion then require a fresh application-owned `page_route`
   matching the current URL, with no pending render or blocking application error. A

@@ -6,6 +6,7 @@ import re
 
 from ..answer import answer_protocol
 from ..transport.browser import TransportError, TurnCancelled
+from ..modeling.spend import BudgetExhausted
 from ..business.errors import BusinessToolError, BusinessToolPermissionError, BusinessToolRequestError
 from ..business.entities import QUERY_ENTITY_RECORDS_TOOL
 from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
@@ -21,7 +22,8 @@ MAX_REPEATED_READS = 3
 
 
 def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: dict,
-                          operation_context, operation_identity: dict) -> "_Next":
+                          operation_context, operation_identity: dict, *,
+                          reader=None, counts_as_read=True) -> "_Next":
     result, t0, step = turn.result, turn.started_at, turn.step
     messages, obs = turn.messages, turn.obs
     successful_business_tools = turn.successful_business_tools
@@ -31,9 +33,9 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
             result, t0, "user_cancelled",
             "the user stopped this task before tool dispatch", steps=step))
     try:
-        tool_result = session.business_tools.execute(
+        tool_result = (reader() if reader is not None else session.business_tools.execute(
             name, args, session._loaded_business_skill_ids,
-            context=operation_context)
+            context=operation_context))
         session._repeats.facts_changed()
         session.ledger.append(
             "business_tool_result", step=step, tool=name,
@@ -70,7 +72,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 scope=session._scope_label(tool_result.query_answer.scope))
         # Candidate metadata is not a completed business-data read. A plain model reply
         # after this tool alone must not be projected as a successful answer.
-        if name != RESOLVE_GOAL_CANDIDATES_TOOL:
+        if counts_as_read and name != RESOLVE_GOAL_CANDIDATES_TOOL:
             successful_business_tools += 1
         first_step = session._read_digests.setdefault(tool_result.content_digest, step)
         if first_step != step:
@@ -252,6 +254,9 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
                 "\n\nThe server tried the adapter's unique current route, but "
                 "the fresh page did not verify that target. Replan from the "
                 "current page.\n\n" + session._render(obs, receipt, note, write))
+    except (TurnCancelled, BudgetExhausted) as exc:
+        from .data_tools import stopped_read
+        return stopped_read(session, turn, exc)
     except BusinessToolPermissionError as exc:
         # The account's own authority refused this read. The turn goes on with
         # what it already read -- ending it threw away the half of the question
@@ -313,6 +318,12 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
     if session._cancel_requested():
         return _Next(session._finish(result, t0, "user_cancelled",
                                     "the user stopped this task after the read", steps=step))
+    if session._turn_budget is not None:
+        try:
+            session._turn_budget.check()
+        except (TurnCancelled, BudgetExhausted) as exc:
+            from .data_tools import stopped_read
+            return stopped_read(session, turn, exc)
     if obs is None:
         session._sync_plan_message(messages)
         messages += [_assistant_call(call), _tool_result(call, feedback)]

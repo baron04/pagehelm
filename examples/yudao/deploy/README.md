@@ -213,6 +213,16 @@ answer. Arbitrary buttons, unreviewed fields, form submission and page filters r
 unavailable. Source lookup supplies evidence, never action authority. This is a measured
 prototype, not a claim of general native-form coverage or model accuracy.
 
+The pilot also offers the neutral `inspect_data` / `resolve_data` tools over the existing
+deterministic data resolver. Metadata is bounded and reports omissions; facts retain
+exact record and field identities, native values, units and query completeness. The
+same Agent receives results without a nested planning model. Each operation checks
+the delegated actor, tenant and workspace against the application's identity endpoint;
+every API subrequest checks the shared cancellation/deadline and fixed credential
+generation. Renewal during a read rejects that operation. Data results grant no page,
+form or write authority. These engineering contracts do not establish model accuracy
+or widen reviewed native actions; the default executor remains `goal`.
+
 Host startup and authenticated session creation load API documents only when a business
 tool needs the schema. An unavailable document endpoint remains a typed read failure,
 not an empty catalog. The page-agent pilot also acquires browser context on demand:

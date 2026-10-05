@@ -295,6 +295,11 @@ class ScopeMixin:
                 domain.remove(clause)
             described.append(self.say.beyond_defaults())
         if d.kind == "list" and metric.op not in ("min", "max"):
+            if self._evidence is not None:
+                missing = tuple(label for label in d.fields if view.field_by_label(label) is None)
+                if missing:
+                    return Resolved(kind=d.kind, missing_fields=missing,
+                                    problem="requested fields are absent from this actor-visible schema")
             columns = list(dict.fromkeys(f for f in (view.field_by_label(label) for label in d.fields) if f))
             limit = d.limit or _RECORD_LIMIT
             order = ()
@@ -310,6 +315,9 @@ class ScopeMixin:
             for row in rows[:limit]:
                 names.append(_listed_row(row, view, columns))
             total = self._count(model, domain)
+            if self._evidence is not None:
+                self._evidence.listing(model, view, rows, columns,
+                    subject=" · ".join(described), before=before, after=total, limit=limit)
             if (before == total == len(rows) and len(rows) <= limit
                     and len({r.id for r in rows}) == len(rows)
                     and all(r.id and r.id != "None" for r in rows)):
@@ -358,6 +366,7 @@ class ScopeMixin:
             columns = tuple(dict.fromkeys(view.field_by_label(label) for label in d.fields))
             fields = tuple(dict.fromkeys((key, *columns)))
             rows = self._rows(model, domain, fields=fields, limit=count + 1)
+            evidence_rows = rows
             if columns:
                 # Preserve the requested display fields without changing the IDs,
                 # comparison values or unit bindings checked by resolve_extreme.
@@ -365,6 +374,9 @@ class ScopeMixin:
             result = resolve_extreme(operation=metric.op, label=info.label, key=key,
                                    subject=" · ".join(described), count=count,
                                    after=self._count(model, domain), rows=rows)
+            if self._evidence is not None and not result.problem:
+                self._evidence.extreme(model, view, evidence_rows, fields,
+                    subject=" · ".join(described), count=count, operation=metric.op, key=key)
             if d.kind == "list" and not result.problem and result.aggregate.extreme[2] is not None:
                 extreme = (max if metric.op == "max" else min)(
                     r.values[key] for r in rows if r.values[key] not in (None, ""))
@@ -379,14 +391,20 @@ class ScopeMixin:
             amount, unit = self.port.total(model, all_of(*domain), key)
             sums.append((info.label, f"{amount:,.2f} {unit if count else ''}".strip()))
         groups_out: list[tuple[str, int]] = []
+        groups = ()
         if metric.group_by:
             key = view.field_by_label(metric.group_by)
             if key is None:
                 return Resolved(kind=d.kind, problem=f"cannot group by {metric.group_by!r}")
             self._reads.append(("groups", model))
-            for group in self.port.groups(model, all_of(*domain), key, limit=metric.top or _GROUP_LIMIT,
-                                          by_month=view.info(key).kind in ("date", "datetime")):
+            groups = self.port.groups(model, all_of(*domain), key, limit=metric.top or _GROUP_LIMIT,
+                                      by_month=view.info(key).kind in ("date", "datetime"))
+            for group in groups:
                 groups_out.append((group.label, group.count))
+        if self._evidence is not None:
+            self._evidence.aggregate(model, " · ".join(described), count,
+                sums=((view.field_by_label(metric.field), amount, unit),) if metric.op == "sum" else (),
+                groups=groups, grouped=bool(metric.group_by))
         note = self.say.any_status(view.label, widened) if widened else ""
         return Resolved(kind="aggregate", aggregate=Aggregate(
             subject=subject, count=count, sums=tuple(sums), groups=tuple(groups_out), note=note))

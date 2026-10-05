@@ -64,6 +64,8 @@ class LinesMixin:
                 rows = self._rows(info.relation, [Compare(parent, "eq", rid), line_scope, match],
                                   fields=columns, limit=5)
                 for row in rows:
+                    if self._evidence is not None:
+                        self._evidence.facts(info.relation, line_view, row, columns)
                     for column in columns:
                         facts.append(Fact(subject=f"{name} · {label}", label=line_view.label_of(column),
                                           value=str(row.shown.get(column, "(empty)"))))

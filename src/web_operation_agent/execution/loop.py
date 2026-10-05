@@ -20,6 +20,8 @@ from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted
 from ..privacy import safe_tool_arguments as _safe
 from .business_tools import apply_skill_first, business_tool, load_skill, prefill_form
+from .data_tools import data_tool
+from ..goal.read_tools import DATA_READ_NAMES
 from .form_tools import describe_form, prepare_form
 from .form_entries import find_form_entries, open_form_entry
 from .knowledge_tools import (ask_user_tool, check_capability_tool, capability_check_available,
@@ -70,6 +72,7 @@ def named_tools(session):
     if session._answers_pending_question:
         available["withdraw_request"] = session._tool_withdraw_request
     if (session.business_tools is not None
+            or session.data_reads is not None
             or session.evidence.has_application_evidence()):
         available["compute"] = session._tool_compute
     if session.allow_clarification:
@@ -79,6 +82,9 @@ def named_tools(session):
     if session.target_settlement_available():
         available["set_target"] = session._tool_set_target
     available["finish"] = session._tool_finish
+    if session.data_reads is not None:
+        for tool in DATA_READ_NAMES:
+            available[tool] = partial(data_tool, session)
     for tool in (session.business_tools.tool_names if session.business_tools is not None else ()):
         available[tool] = partial(business_tool, session)
     return available

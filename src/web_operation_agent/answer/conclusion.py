@@ -58,7 +58,7 @@ def _record_label(turn: TurnEvidence, item: RecordEvidence) -> str:
     for ref in turn.ids():
         other = turn.get(ref)
         if (isinstance(other, RecordEvidence) and other.origin == item.origin
-                and other.record_id == item.record_id and other.field_name == "name"
+                and other.record_id == item.record_id and other.field_name in ("name", "@name")
                 and other.field_was_read and other.value):
             return other.value
     return ""

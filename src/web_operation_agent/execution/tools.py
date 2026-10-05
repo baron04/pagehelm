@@ -13,6 +13,8 @@ from ..answer import answer_protocol, page_answer
 from ..business.forms import FORM_TOOL_SCHEMAS
 from ..business.form_entries import FORM_ENTRY_SCHEMAS
 from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
+from ..goal.read_schemas import DATA_READ_SCHEMAS
+from ..goal.read_tools import DATA_READ_NAMES
 from .knowledge_tools import capability_check_available
 from .request_contract import DECLARE_TASK_TOOL, finish_schema
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
@@ -76,8 +78,11 @@ class ToolSurface:
         # typed result on: a tool list that changes invalidates every cached message after
         # it. Without evidence the server refuses the call, as it always has.
         if (session.business_tools is not None
+                or session.data_reads is not None
                 or session.evidence.has_application_evidence()):
             tools += [answer_protocol.COMPUTE_TOOL]
+        if session.data_reads is not None:
+            tools += list(DATA_READ_SCHEMAS)
         if session.runtime_source:
             tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL]
             if session.source.reader_lookup() is not None:
@@ -166,4 +171,5 @@ def answer_repair_tools(session) -> frozenset[str]:
                     if session.runtime_source else frozenset())
     if session.runtime_source and session.source.reader_lookup() is not None:
         source_reads |= {"read_source"}
-    return frozenset({"finish", "compute", "observe"}) | reads | source_reads
+    data_reads = DATA_READ_NAMES if session.data_reads is not None else frozenset()
+    return frozenset({"finish", "compute", "observe"}) | reads | source_reads | data_reads

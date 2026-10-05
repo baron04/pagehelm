@@ -9,6 +9,8 @@ and it never follows a URL a response names.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 import threading
 import urllib.error
 import urllib.parse
@@ -19,6 +21,7 @@ from web_operation_agent.goal.data import DataRefused
 
 #: yudao's "not logged in" code.
 _UNAUTHORIZED = 401
+_READ_CHECKPOINT = ContextVar("yudao_read_checkpoint", default=None)
 
 
 class YudaoReadRefused(DataRefused):
@@ -83,7 +86,12 @@ class YudaoClient:
     def get(self, path: str, **params):
         """GET /admin-api/<path>; the `data` of a successful response."""
         for attempt in range(2):
+            check = _READ_CHECKPOINT.get()
+            if check is not None:
+                check()
             code, body = self._request("GET", path, params=params, token=self._login())
+            if check is not None:
+                check()
             if code == _UNAUTHORIZED and attempt == 0 and self._account is not None:
                 with self._lock:
                     self._token = None
@@ -91,6 +99,15 @@ class YudaoClient:
                 continue
             return self._data(path, code, body)
         raise DataRefused(f"{path}: not authorised")
+
+    @contextmanager
+    def read_window(self, checkpoint):
+        """Bound every paginated/detail subrequest without changing another thread's client."""
+        marker = _READ_CHECKPOINT.set(checkpoint)
+        try:
+            yield
+        finally:
+            _READ_CHECKPOINT.reset(marker)
 
     def _login(self) -> str:
         with self._lock:

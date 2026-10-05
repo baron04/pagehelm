@@ -103,6 +103,32 @@ class DomainReport:
 
 
 class ContactReportTests(unittest.TestCase):
+    def test_same_agent_data_tool_uses_source_free_rest_report_and_real_actor(self):
+        from web_operation_agent.answer.evidence import ComputationEvidence, RecordEvidence, TurnEvidence
+        from web_operation_agent.goal.read_tools import DataReadTools
+        from web_operation_agent.business.errors import BusinessToolIdentityError
+        with MinimalContactsApplication() as app:
+            data=self.bind(app,"ada-lovelace")
+            def factory(context, checkpoint):
+                report=DomainReport(data.contacts._adapter,context)
+                return ScopedData(report,{"domains":report.scope("example.test")})
+            tools=DataReadTools(factory,data.context.principal.application_id,"contacts:read")
+            result=tools.execute("resolve_data",{"deliverables":[
+                {"kind":"fact","entity":"domains","record":"example.test","fields":["Contacts"]},
+                {"kind":"aggregate","entity":"domains","metric":{"op":"sum","field":"Contacts"}}]},
+                context=data.context,checkpoint=lambda:None,user_request="How many contacts use example.test?")
+            count=next(e for e in result.evidence if isinstance(e,RecordEvidence) and e.field_name=="count")
+            total=next(e for e in result.evidence if isinstance(e,ComputationEvidence) and e.operation=="sum count")
+            self.assertEqual(("3","3"),(count.value,total.value))
+            self.assertTrue(count.record_id.startswith("domains:"))
+            TurnEvidence().capture(result.evidence,namespace="rest1")
+            self.assertEqual((),result.allowed_routes)
+            other=self.bind(app,"rosalind-franklin")
+            with self.assertRaises(BusinessToolIdentityError):
+                tools.execute("inspect_data",{"query":"domains"},context=other.context,
+                              checkpoint=lambda:None,user_request="domains")
+            self.assertEqual(0,app.write_requests)
+
     def test_rest_report_uses_authenticated_document_query_without_framework_or_source(self):
         from web_operation_agent.transport import RemoteSessionRegistry
         from web_operation_agent.schemas import ClientHello, PageObservation, ObservationEnvelope
