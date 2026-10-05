@@ -304,11 +304,16 @@ class ScopeMixin:
                     return Resolved(kind=d.kind, problem=f"cannot sort by {d.sort!r}")
                 order = ((order_field, d.descending),)
                 described.append(self.say.ordered(view.label_of(order_field), d.descending))
+            before = self._count(model, domain)
             rows = self._rows(model, domain, fields=columns, order=order, limit=limit + 1)
             names = []
             for row in rows[:limit]:
                 names.append(_listed_row(row, view, columns))
             total = self._count(model, domain)
+            if (before == total == len(rows) and len(rows) <= limit
+                    and len({r.id for r in rows}) == len(rows)
+                    and all(r.id and r.id != "None" for r in rows)):
+                self._listed_rows = (model, tuple(rows))
             if len(rows) == 1:
                 self._found_one = (model, rows[0].id, rows[0].display)
             # Keep a link to the list page; a separate page declaration, when requested,
@@ -357,9 +362,14 @@ class ScopeMixin:
                 # Preserve the requested display fields without changing the IDs,
                 # comparison values or unit bindings checked by resolve_extreme.
                 rows = tuple(replace(row, display=_listed_row(row, view, columns)) for row in rows)
-            return resolve_extreme(operation=metric.op, label=info.label, key=key,
+            result = resolve_extreme(operation=metric.op, label=info.label, key=key,
                                    subject=" · ".join(described), count=count,
                                    after=self._count(model, domain), rows=rows)
+            if d.kind == "list" and not result.problem and result.aggregate.extreme[2] is not None:
+                extreme = (max if metric.op == "max" else min)(
+                    r.values[key] for r in rows if r.values[key] not in (None, ""))
+                self._listed_rows = (model, tuple(r for r in rows if r.values[key] == extreme))
+            return result
         if metric.op == "sum":
             key = view.field_by_label(metric.field) if metric.field else None
             info = view.info(key)

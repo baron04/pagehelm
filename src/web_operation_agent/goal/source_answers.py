@@ -235,6 +235,12 @@ Each question has a basis:
 - implementation: actual guard, validator definition, code path or markup is required.
   An interface, message constant, caller alone or documentation does not establish it.
   Retrieve helpers when their behavior is needed; cite the guard and relevant rejection.
+Answer the requested predicate on its actual caller's path. A summary aggregate over
+other states does not establish a validator's states. Preserve numeric scale, units,
+operators and rounding, including any helper converting percentages. A server accepting
+an incoming value does not prove a disabled browser field is editable. If those details
+are missing, state the gap rather than inventing a formula or an affirmative conclusion.
+The opening conclusion must agree with the conditions in the rest of the answer.
 For button visibility, actual page markup and permission checks are required regardless
 of basis. Do not infer current permissions from source or engineering ownership.
 CURRENT_FACTS contains only requested values read under the same actor. Compare exact
@@ -538,6 +544,9 @@ def answer(chat, *, source, requests, retrieved, evidence, run_id, cancelled,
                 "implementation requires actual code/markup and any validation helper needed. "
                 "For implementation use only identifiers found in the matches; an error constant or "
                 "interface is not the rule, and a submit method is not an update method. "
+                "For a formula retrieve its arithmetic helper and percentage/unit conversion; "
+                "for state or quantity limits retrieve the validator on the requested caller's path, "
+                "not an unrelated summary aggregate. Backend acceptance does not prove UI editability. "
                 "For button visibility retrieve the indexed page's template and permission check. "
                 "For repository basis, an explicit document can already establish a documented definition, "
                 "field constraint, maintenance team or deployment rule: use queries_N=[] for that question. "

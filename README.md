@@ -47,8 +47,12 @@ agent.
   A named record
   that does not exist is never turned into a creation; a creation opens the page declared
   for the entity, else its widest page. A list that finds exactly one record binds a
-  later deliverable of the same turn that names none. The declaration is made knowing the
-  application's current date, so a month or day said without a year lands in the right
+  later deliverable of the same turn that names none.
+  A fact explicitly following a list's link can read the linked records by their
+  actor-read IDs, including all numeric ties. This requires a complete stable list,
+  at most 50 returned records, and a requested typed link column; truncated or failed
+  reads cannot become a global search for the related records.
+  The declaration is made knowing the application's current date, so a month or day said without a year lands in the right
   year. When the resolver finds something a different declaration would fix (a field the
   entity does not have, a description that matched several records, a change asked for
   with nothing to point at), it says so in the index's terms and the model declares once
@@ -611,6 +615,9 @@ agent.
   minutes. A session whose sign-in lapsed, that the page left idle, or that a host restart
   ended comes back unannounced with the next message; why a session could not be started
   is said in the panel, with Retry.
+  Focus transfers into the panel are isolated from host modal focusout handlers;
+  ordinary host-to-host focus remains with the application. This does not override
+  focus enforcement by earlier document capture listeners.
   The Runtime remembers the last session ID in local storage: with one, opening the panel
   restores the current actor's server history before showing the conversation; without one,
   it shows the default greeting immediately. A failed history fetch offers Retry rather than
@@ -762,6 +769,9 @@ and fresh visible-page reference context (at most 4 KiB). Neither supplies sourc
 current values or permissions. Retrieval refinement retains original caller/template
 evidence alongside new helper matches, deduplicated and renumbered per question, within
 12 references and 64 KiB of whole excerpts; omitted evidence is explicitly marked.
+The bounded lexical symbol hop can also admit allowlisted helper blocks that do not
+share the original question's words. It preserves primary lexical matches and does
+not establish a complete call graph or prove the model's semantic interpretation.
 Source scope declares whether qualified repository evidence or actual implementation
 proof is required, and carries that distinction through retrieval and answering without
 another model stage. Ordinary repository answers can cite explicit documentation;

@@ -229,9 +229,18 @@ class RepositorySourceLookup:
             if len(linked) == 3:
                 break
         if linked and not paths:
+            # A referenced implementation need not share any words with the
+            # original question (e.g. a translated error and its validator).
+            # Admit its allowlisted blocks through the existing bounded symbol
+            # index, rather than only re-ranking the original lexical pool.
+            candidates = {entry[3]: entry for entry in scored}
+            for symbol in linked:
+                for index in self._symbol_blocks[symbol]:
+                    ref = self._blocks[index].evidence
+                    candidates.setdefault(index, (0.0, ref.path, ref.start_line, index))
             expanded = sorted((score - 40 * sum(symbol in self._blocks[index].symbols
                                                 and path != origin for symbol, origin in linked.items()),
-                               path, start, index) for score, path, start, index in scored)
+                               path, start, index) for score, path, start, index in candidates.values())
             # Cross references supplement lexical hits; they cannot displace all
             # original page markup or other evidence that answered the query.
             first = scored[:(limit + 1) // 2]

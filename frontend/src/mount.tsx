@@ -89,6 +89,17 @@ export function mountPanel(options: MountOptions): PanelHandle {
   const shadow = element.attachShadow({mode: 'open'})
   const stopAtPanelBoundary = (event: Event) => event.stopPropagation()
   for (const type of HOST_EVENT_BARRIER) shadow.addEventListener(type, stopAtPanelBoundary)
+  // A modal's focusout originates outside this shadow root. Its bubble listener
+  // can otherwise pull focus back before the person types into the assistant.
+  // Isolate only entry into this panel; ordinary host-to-host focus stays intact.
+  const enteringPanel = (event: FocusEvent) => {
+    const target = event.relatedTarget
+    const NodeType = documentRef.defaultView?.Node
+    if (NodeType && target instanceof NodeType && element.contains(target)) {
+      event.stopPropagation()
+    }
+  }
+  documentRef.addEventListener('focusout', enteringPanel, true)
   adopt(shadow, css)
   const mountPoint = documentRef.createElement('div')
   mountPoint.className = 'woa-root'
@@ -116,6 +127,7 @@ export function mountPanel(options: MountOptions): PanelHandle {
     element,
     destroy() {
       themeWatch.disconnect()
+      documentRef.removeEventListener('focusout', enteringPanel, true)
       for (const type of HOST_EVENT_BARRIER) {
         shadow.removeEventListener(type, stopAtPanelBoundary)
       }

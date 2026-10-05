@@ -78,6 +78,25 @@ class LanguageNeutralRepositoryLookupTests(unittest.TestCase):
             hits = RepositorySourceLookup(_tree(root)).search("ARCHIVE_DELETE_BLOCKED", limit=2)
             self.assertEqual({"src/messages.py", "src/rules.py"}, {hit.evidence.path for hit in hits})
 
+    def test_symbol_hop_admits_helpers_without_original_query_words(self):
+        for suffix, implementation in (
+            ("py", "def validateCeiling(value, bound):\n    return value <= bound\n"),
+            ("java", "boolean validateCeiling(int value, int bound) { return value <= bound; }\n")):
+            with self.subTest(language=suffix), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                _write(root, {"src/caller.md": "采购金额超限: validateCeiling(value, bound)\n",
+                              f"src/rules.{suffix}": implementation,
+                              "src/guide.md": "采购金额超限 " * 20,
+                              "src/other.md": "采购金额超限 " * 10,
+                              "tests/hidden.py": implementation})
+                tree = _tree(root)
+                hits = RepositorySourceLookup(tree).search("采购金额超限", limit=4)
+                self.assertIn(f"src/rules.{suffix}", [h.evidence.path for h in hits])
+                self.assertTrue(all(tree.verify(h.evidence) for h in hits))
+                self.assertFalse(any(h.evidence.path.startswith("tests/") for h in hits))
+                explicit = RepositorySourceLookup(tree).search("src/caller.md 采购金额超限", limit=1)
+                self.assertEqual(explicit[0].evidence.path, "src/caller.md")
+
     def test_snapshot_search_survives_root_removal_but_live_verification_refuses(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

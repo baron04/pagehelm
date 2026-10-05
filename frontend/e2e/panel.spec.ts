@@ -93,6 +93,37 @@ test.describe('the launcher', () => {
     await panel.page.locator('.woa-launcher').waitFor({timeout: 3000})
     expect(panel.errors).toEqual([])
   })
+
+  test('a host modal cannot reclaim panel input, while its own focus trap stays active', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.page.locator('.woa-launcher').click()
+    await panel.page.evaluate(() => {
+      const modal = document.createElement('section')
+      modal.setAttribute('role', 'dialog')
+      const field = document.createElement('input')
+      field.id = 'host-modal-input'
+      modal.appendChild(field)
+      const outside = document.createElement('input')
+      outside.id = 'host-outside-input'
+      document.body.prepend(modal, outside)
+      modal.addEventListener('focusout', event => {
+        if (event.relatedTarget && !modal.contains(event.relatedTarget as Node)) {
+          setTimeout(() => field.focus(), 0)
+        }
+      })
+      field.focus()
+    })
+    await panel.page.locator('#woa-composer-input').click()
+    await panel.page.keyboard.type('填写客户邮箱')
+    await expect(panel.page.locator('#woa-composer-input')).toBeFocused()
+    await expect(panel.page.locator('#woa-composer-input')).toHaveValue('填写客户邮箱')
+    await panel.page.keyboard.press('Enter')
+    expect(await panel.calls()).toEqual([['submit', '填写客户邮箱']])
+    await panel.page.locator('#host-modal-input').focus()
+    await panel.page.locator('#host-outside-input').focus()
+    await expect(panel.page.locator('#host-modal-input')).toBeFocused()
+    expect(panel.errors).toEqual([])
+  })
 })
 
 test.describe('the default state', () => {

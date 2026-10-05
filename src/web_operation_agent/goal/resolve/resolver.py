@@ -11,7 +11,7 @@ from dataclasses import replace
 from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ..data import (EVERYTHING, ID, NAME, Compare, Cond, DataPort, DataRefused, Ref, Row, Schema,
+from ..data import (EVERYTHING, ID, NAME, Compare, Cond, DataPort, DataRefused, LinkValue, Ref, Row, Schema,
                     all_of)
 from ..index import ApplicationIndex, IndexPage
 from ..ports import Fact, PagePlan, Resolution, Resolved
@@ -64,6 +64,7 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         self._held_by: tuple = ()
         self._line_scope: list | None = None
         self._found_one: tuple | None = None
+        self._listed_rows: tuple[str, tuple[Row, ...]] | None = None
         self._today_cache: date | None = today
         #: How the scopes are described to the person (the spec's language).
         self.say = Phrases()
@@ -74,10 +75,15 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         self.say = Phrases(getattr(spec, "language", "") or "")
         self._chosen = frozenset(norm(self.port.name_of(n) or n)
                                  for n in getattr(spec, "chosen", ()) or ())
+        self._listed_rows = None
         resolved = []
         for deliverable in spec.deliverables:
+            previous_list, self._listed_rows = self._listed_rows, None
             try:
-                result = self._resolve_one(deliverable)
+                result = self._linked_list_facts(deliverable, previous_list,
+                    preceding_list=bool(resolved and resolved[-1].kind == "list"))
+                if result is None:
+                    result = self._resolve_one(deliverable)
                 if (result.kind != deliverable.kind and result.kind in _READS
                         and deliverable.kind in _READS):
                     # A fact about some lines is answered by listing them; it is still the
@@ -87,6 +93,45 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
             except DataRefused as exc:
                 resolved.append(self._refused_read(deliverable, exc))
         return Resolution(deliverables=tuple(resolved), reads=tuple(self._reads))
+
+    def _linked_list_facts(self, d, previous, *, preceding_list=False):
+        """Follow explicitly requested links of the preceding complete list by ID.
+
+        No unnamed global record selection, display-name lookup, new query scope,
+        navigation or mutation. An unsupported link remains a repairable failure.
+        """
+        if (d.kind != "fact" or not d.via or d.record
+                or d.metric is not None or not d.page.empty or d.section
+                or d.action or d.rules or d.value or d.field_values):
+            return None
+        if previous is None:
+            if preceding_list:
+                return Resolved(kind="fact", problem="the preceding list is not a stable complete read",
+                                repair="read a bounded complete list before following its links")
+            return None
+        model, rows = previous
+        view = self.view(model)
+        links = [f for f in view.schema.fields if f.kind == "link" and f.relation == d.entity
+                 and norm(d.via) in {norm(f.key), norm(f.label), *(norm(a) for a in f.aliases)}]
+        if len(links) != 1:
+            return Resolved(kind="fact", problem="the preceding list has no unique requested link",
+                            repair="via must name one link column of the preceding list")
+        key = links[0].key
+        if len(rows) > 50 or any(not isinstance(row.values.get(key), LinkValue)
+                               or not row.values[key].id for row in rows):
+            return Resolved(kind="fact", problem="the preceding list's requested links are unread or unbounded",
+                            repair="include the requested link column in a bounded complete list")
+        if not rows:
+            from ..ports import Aggregate
+            return Resolved(kind="fact", aggregate=Aggregate(subject=view.label, count=0))
+        facts = []
+        for row in rows:
+            link = row.values[key]
+            result = self._facts(d.entity, link.id, link.display, d.fields)
+            if result.problem or result.read_failure or result.denied:
+                return result
+            facts.extend(replace(f, subject=f"{row.display} · {link.display}") for f in result.facts)
+        return Resolved(kind="fact", facts=tuple(facts))
 
     def _refused_read(self, d: Deliverable, exc: DataRefused) -> Resolved:
         """A read the application refused. When a condition is the cause -- a field the

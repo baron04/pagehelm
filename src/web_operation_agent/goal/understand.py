@@ -25,6 +25,7 @@ UNDERSTAND_SYSTEM = """Translate the request into the application's vocabulary; 
 
 Use only entity keys, field labels, page keys, filters, groups, sections and actions in APPLICATION INDEX. Translate the person's language to those names; copy record numbers and names exactly. Record names come from the request or candidates and need not appear in this schema index; only application reads can establish nonexistence. If no capability fits, leave deliverables empty and explain unsupported in the person's language. Never invent an index name or substitute a neighbouring field for missing data.
 Preserve explicit owner and exclusion conditions. A similar name or a shared prefix must not replace the exact scope the person specifies; use the application-provided candidate names in a repair, without choosing for the person.
+Account-visible records do not mean records owned by the account; add an owner condition only when requested. A list's requested link-name columns belong in that list, not an additional unnamed fact on the related entity. For additional related fields use fact + via after the list, without copying the list's metric onto that fact.
 
 Kinds and required details:
 - fact: fields of a record; set entity, record if named, and fields. Preserve supplied date/amount/owner conditions in metric.filters even with record; candidate details do not replace filters. Datetime fields accept exact local YYYY-MM-DD HH:MM:SS instants.
