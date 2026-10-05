@@ -108,6 +108,22 @@ class ContactsEntityReadContractTests(unittest.TestCase):
             self.assertEqual(recovered.content["lookup_mode"], "bound_entity")
             self.assertEqual(application.write_requests, 0)
 
+    def test_unknown_record_type_can_be_discovered_from_the_live_rest_directory(self):
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
+            executor = adapter.business_tools._executor
+            miss = executor._reference_lookup.execute({
+                "entity_query": "compiler", "reference": "Grace Hopper"})
+            self.assertEqual(miss.content["candidates"], [])
+            directory = executor.execute("discover_entities", {}).content
+            self.assertIn("Contacts", directory["entity_labels"])
+            found = executor.execute("discover_entities", {"query": "Contacts"}).content
+            recovered = executor._reference_lookup.execute({
+                "entity_id": found["candidates"][0]["entity_id"], "reference": "Grace Hopper"})
+            self.assertEqual(recovered.allowed_routes, ("/contacts/grace-hopper",))
+            self.assertEqual(recovered.content["searched_entity_count"], 1)
+            self.assertEqual(application.write_requests, 0)
+
     def test_page_entry_contract_uses_the_rest_application_not_odoo_actions(self):
         with MinimalContactsApplication() as application:
             adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)

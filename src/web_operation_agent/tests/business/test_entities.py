@@ -277,7 +277,7 @@ class EntityReadContractTests(unittest.TestCase):
     def test_agent_schemas_accept_only_opaque_generic_bindings(self):
         self.assertEqual(
             set(DISCOVER_ENTITIES_SCHEMA["function"]["parameters"]["properties"]),
-            {"query", "limit"})
+            {"query", "limit", "cursor"})
         self.assertEqual(
             set(DESCRIBE_ENTITY_SCHEMA["function"]["parameters"]["properties"]),
             {"entity_id", "field_query", "limit"})

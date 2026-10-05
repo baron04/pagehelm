@@ -903,6 +903,13 @@ one transactional snapshot; a disagreement in counts is refused. Without a store
 binding an amount remains text and cannot be summed. References to an actor-readable catalog entity retain an opaque related-record
 binding for a follow-up read; the related record is not treated as readable until that read
 succeeds. This does not authorize writes.
+The generic discovery tool can also browse type labels without a search query. Each
+directory page contains at most 200 distinct labels and 4,000 characters of label JSON;
+an actor/catalog-bound continuation exposes the remainder. The directory supplies
+vocabulary, not records, field schemas, routes or permission to act. Searching a displayed
+label returns the ordinary opaque entity IDs; duplicate labels remain ambiguous. This
+helps discovery when a record name does not reveal its type, but does not establish
+that the model chooses the correct type or that an absent record does not exist.
 A record found this way carries where it opens (`/odoo/<model>/<id>`, which Odoo 18 opens for any actor who may read the record), and `goto` may use exactly that path. A related record must first be read by its returned opaque entity and exact ID; an unread relation label alone does not authorize opening it. Deterministic navigation reports arrival only after a fresh observation marks the destination rendered and the application reports the matching record identity, not merely when the URL changes.
 
 Provision the disposable local fixture from a checkout:
