@@ -56,9 +56,6 @@ _MAX_FILTERS = 8
 _MAX_QUERY_ROWS = 20
 _MAX_OFFSET = 10_000
 _MAX_VALUE_CHARS = 300
-_MAX_DIRECTORY_LABELS = 200
-_DIRECTORY_LABEL_CHARS = 4_000
-_DIRECTORY_CURSOR = re.compile(r"directory_[0-9a-f]{32}\Z")
 
 
 DISCOVER_ENTITIES_SCHEMA = {
@@ -68,22 +65,17 @@ DISCOVER_ENTITIES_SCHEMA = {
         "description": (
             "Search the signed-in actor's current application-provided catalog of readable "
             "business entities. Returns opaque entity IDs, not native resource authority. "
-            "If the entity kind is unknown, omit query to browse a compact directory of "
-            "current type labels before searching by a displayed label. Words inside a "
-            "record name are not its type. Directory pages contain metadata only, no "
-            "records; follow next_cursor when needed. Never invent a resource name."
+            "Use this before describe_entity and never invent a resource name."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "minLength": 1, "maxLength": 200,
-                          "description": "Optional entity/page words; omit to browse type labels."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": _MAX_DIRECTORY_LABELS,
-                          "description": "Search: 1–10, default 5. Directory: 1–200, default 200, bounded by text size."},
-                "cursor": {"type": "string", "pattern": r"^directory_[0-9a-f]{32}$",
-                           "description": "Directory next_cursor from this actor's unchanged catalog; omit query."},
+                          "description": "User-language entity or page description."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10,
+                          "description": "Maximum candidates; defaults to 5."},
             },
-            "required": [],
+            "required": ["query"],
             "additionalProperties": False,
         },
     },
@@ -739,11 +731,7 @@ class EntityReadTools:
 
     def _discover(self, args: object,
                   context: OperationContext | None) -> BusinessToolResult:
-        args = _exact_args(args, {"query", "limit", "cursor"}, DISCOVER_ENTITIES_TOOL)
-        if "query" not in args:
-            return self._directory(args, context)
-        if "cursor" in args:
-            raise BusinessToolRequestError("cursor is only for directory browsing without query")
+        args = _exact_args(args, {"query", "limit"}, DISCOVER_ENTITIES_TOOL)
         query = _request_text(args.get("query"), "query", 200)
         limit = _bounded_int(args.get("limit"), name="limit", default=5,
                              minimum=1, maximum=10)
@@ -786,72 +774,6 @@ class EntityReadTools:
                 "matched_count": len(ranked),
                 "returned_count": len(candidates),
                 "catalog_complete": catalog.complete,
-                "observed_at": observed_at,
-                **self._identity_audit(context),
-            },
-        )
-
-    def _directory(self, args: dict,
-                   context: OperationContext | None) -> BusinessToolResult:
-        """Browse display vocabulary, without reading or selecting any business record.
-
-        Labels need no native references or schema dump. Duplicated display labels remain
-        ambiguous: a later ordinary search returns their distinct actor-bound IDs. The
-        continuation binds the exact visible labels as well as the adapter's generation.
-        """
-        limit = _bounded_int(args.get("limit"), name="limit", default=_MAX_DIRECTORY_LABELS,
-                             minimum=1, maximum=_MAX_DIRECTORY_LABELS)
-        catalog = self._catalog(context)
-        labels = sorted({entity.label for entity in catalog.entities},
-                        key=lambda label: (label.casefold(), label))
-        binding = _json_digest({
-            "catalog": catalog.binding_digest, "labels": labels,
-            "actor": (context.principal.actor_authority_digest if context else None),
-        })
-        def cursor_for(position: int) -> str:
-            return _opaque("directory_", binding, str(position))
-        start = 0
-        if "cursor" in args:
-            cursor = args["cursor"]
-            if not isinstance(cursor, str) or not _DIRECTORY_CURSOR.fullmatch(cursor):
-                raise BusinessToolRequestError("cursor must come from a directory next_cursor")
-            found = next((index for index in range(1, len(labels))
-                          if cursor_for(index) == cursor), None)
-            if found is None:
-                raise BusinessToolRequestError(
-                    "directory cursor is absent or stale; browse again without cursor")
-            start = found
-        visible = []
-        size = 2  # JSON array brackets; count the escaped JSON, not just raw labels.
-        for label in labels[start:start + limit]:
-            increment = len(json.dumps(label, ensure_ascii=False)) + int(bool(visible))
-            if size + increment > _DIRECTORY_LABEL_CHARS:
-                break
-            visible.append(label)
-            size += increment
-        end = start + len(visible)
-        more = end < len(labels)
-        observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        return BusinessToolResult(
-            content={
-                "mode": "type_directory", "entity_labels": visible,
-                "visible_entity_count": len(catalog.entities),
-                "distinct_label_count": len(labels), "returned_count": len(visible),
-                "next_cursor": cursor_for(end) if more else None,
-                "catalog_complete": catalog.complete,
-                "truncated_or_incomplete": more or not catalog.complete,
-                "scope": catalog.scope,
-                "observed_at": observed_at,
-                "note": "Type vocabulary only. Search a displayed label for entity IDs, "
-                        "then read the original record name under that type. Duplicate "
-                        "labels may describe different types; this page cannot prove "
-                        "record existence or absence or authorize navigation.",
-            },
-            audit={
-                "application": self._application_id, "operation": DISCOVER_ENTITIES_TOOL,
-                "mode": "type_directory", "catalog_digest": catalog.binding_digest,
-                "visible_entity_count": len(catalog.entities), "returned_count": len(visible),
-                "catalog_complete": catalog.complete, "more_labels": more,
                 "observed_at": observed_at,
                 **self._identity_audit(context),
             },
@@ -1270,8 +1192,7 @@ class ReferenceLookupTools:
                 **({"recovery_hint": (
                     "These are only the types and reference actually searched. If no requested "
                     "record was found, verify the original name/number without added type words "
-                    "and discover the requested entity kind independently. If uncertain, call "
-                    "discover_entities without query to browse current type labels. Retry with its "
+                    "and discover the requested entity kind independently. Retry with its "
                     "current entity_id; do not substitute a collection for a requested record. "
                     "An empty or incomplete lookup is not proof of global absence.")}
                    if not visible or truncated else {}),

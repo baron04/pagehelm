@@ -277,7 +277,7 @@ class EntityReadContractTests(unittest.TestCase):
     def test_agent_schemas_accept_only_opaque_generic_bindings(self):
         self.assertEqual(
             set(DISCOVER_ENTITIES_SCHEMA["function"]["parameters"]["properties"]),
-            {"query", "limit", "cursor"})
+            {"query", "limit"})
         self.assertEqual(
             set(DESCRIBE_ENTITY_SCHEMA["function"]["parameters"]["properties"]),
             {"entity_id", "field_query", "limit"})
@@ -286,6 +286,18 @@ class EntityReadContractTests(unittest.TestCase):
                                       "aggregate_field_ids"})
         self.assertFalse({"model", "table", "endpoint", "method", "domain", "order"}
                          & set(query))
+
+    def test_discovery_refuses_unscoped_or_cursor_requests_before_catalog_read(self):
+        def unexpected_read(*, context=None):
+            self.fail("invalid discovery must not read the actor's catalog")
+
+        self.port.catalog = unexpected_read
+        for args in ({}, {"query": ""}, {"limit": 200},
+                     {"cursor": "directory_" + "0" * 32},
+                     {"query": "work items", "cursor": "directory_" + "0" * 32},
+                     {"query": "work items", "limit": 11}):
+            with self.subTest(args=args), self.assertRaises(BusinessToolRequestError):
+                self.tools.execute(DISCOVER_ENTITIES_TOOL, args)
 
     def test_native_references_do_not_cross_the_agent_facing_result(self):
         discovery = self.tools.execute(DISCOVER_ENTITIES_TOOL, {"query": "work items"})
