@@ -314,3 +314,23 @@ PYTHONPATH=src:examples/yudao/src python -m web_operation_agent_yudao.coverage \
 ## Offline qualification
 
 `scripts/qualify.sh` runs this adapter's tests, the native host lifecycle tests and the Yudao evaluation apparatus without an application connection or model call. The wheel gate builds the separate adapter, checks its conventions and modules, and composes it outside the checkout. CI installs this distribution alongside core and Odoo.
+
+A deployment may install a reviewed customer-bound contact creation entry with
+`--native-create-policy <contact-review.json>` and reference `contact-create`. Pin
+`ui/src/views/crm/contact/components/ContactList.vue`, `ContactForm.vue` in the
+same contact directory, the customer detail index, and the shared Dialog source. Review the real opener,
+create permissions and transient persistence before generating hashes. This admits
+an already-open contact creation dialog on a readable customer detail page, with
+its parent customer disabled and owner enabled; it never submits or changes the parent.
+
+`--native-filter-policy <query-review.json>` explicitly enables native Goal page
+filtering under the existing verified GET guard. The JSON has `schema_version: 1`,
+`release`, `entity`, `route`, `component`, `endpoint` (without `/admin-api/`) and
+`hashes` for the reviewed query component and its relevant API/helper dependencies.
+All bytes must match the allowlisted release and the endpoint must already be in
+`native-read-policy`. Review input handlers and query/persistence semantics; hashes
+alone grant no authority. The initial compiler accepts reviewed date ranges and
+single-choice dictionary/customer selectors, and verifies the successful applied
+query through application-owned observations. Calendar entry selects exact enabled days in its owned native popup, preserving the source-defined default endpoint times; dates outside its displayed months are refused. Unsupported fields or changed
+actors, form instances, choices, source bytes or query results prevent completion.
+No production review is supplied; browser/API writes and form submission remain closed.

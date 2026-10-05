@@ -124,6 +124,18 @@ def bind(spec: GoalSpec, candidates: tuple[Candidate, ...]) -> tuple[GoalSpec, i
             candidate = lookup(d.page.search)
             if candidate is not None:
                 changes["page"] = replace(d.page, search=candidate.display)
+        if d.page.conditions:
+            page_conditions = []
+            for condition in d.page.conditions:
+                values = []
+                for value in condition.values:
+                    candidate = lookup(value)
+                    values.append(candidate.display if candidate else value)
+                    if candidate:
+                        page_conditions.extend(Filter(label, (bound_value,))
+                            for label, bound_value in candidate.binds if bound_value != candidate.display)
+                page_conditions.append(replace(condition, values=tuple(values)))
+            changes["page"] = replace(changes.get("page", d.page), conditions=tuple(page_conditions))
         filters = list(d.metric.filters) if d.metric is not None else []
         for i, f in enumerate(filters):
             values = []

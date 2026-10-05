@@ -14,7 +14,7 @@ from typing import Protocol
 
 from ..state.identity import OperationContext
 from .index import ApplicationIndex
-from .spec import GoalSpec
+from .spec import GoalSpec, Filter
 
 
 @dataclass(frozen=True)
@@ -124,6 +124,7 @@ class PagePlan:
     #: Require the application's rendered main-page identity to match expected_path.
     #: Header controls and the address alone cannot verify such a destination.
     requires_page_route: bool = False
+    conditions: tuple[Filter, ...] = ()
 
     def __post_init__(self):
         if not isinstance(self.requires_page_route, bool):

@@ -17,6 +17,25 @@ class NativePageGoalPort(DataGoalPort):
     """
 
     page_reader = None
+    page_filters = None
+
+    def capabilities(self):
+        return super().capabilities() | ({"facets"} if self.page_filters is not None else set())
+
+    def prepare_page_filters(self, plan, observation, *, context):
+        from web_operation_agent.business.errors import BusinessToolRequestError
+        if self.page_filters is None:
+            raise BusinessToolRequestError("page query controls are not enabled")
+        from .client import YudaoReadRefused
+        from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
+        try:
+            return self.page_filters.prepare(plan, observation, context=context)
+        except YudaoReadRefused as exc:
+            if exc.permission_denied:
+                raise BusinessToolPermissionError("the application refused the query read") from exc
+            raise BusinessToolUnavailableError("the application query read failed") from exc
+        except (OSError, TimeoutError) as exc:
+            raise BusinessToolUnavailableError("the application query read is unavailable") from exc
 
     def candidates(self, *, entities=(), known=(), dates=(), context=None):
         """Prefer an actor-read current record within the existing values capability.

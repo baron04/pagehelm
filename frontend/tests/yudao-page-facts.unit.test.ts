@@ -1,6 +1,6 @@
 import {afterAll, beforeEach, describe, expect, it} from 'vitest'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -17,6 +17,24 @@ function ready(facts: ReturnType<typeof createPageFacts>) {
 }
 
 describe('native Yudao record and read completion facts', () => {
+  it('reports order filters only after the latest successful application read', () => {
+    mountedPage('/erp/sale/order', 'SaleOrder')
+    const facts = createPageFacts()
+    const url = '/admin-api/erp/sale-order/page?pageNo=1&pageSize=10&customerId=7&status=0'
+      + '&orderTime%5B0%5D=2026-10-01%2000%3A00%3A00&orderTime%5B1%5D=2026-10-31%2023%3A59%3A59'
+    const old = facts.begin(url)!
+    expect(facts.readPageQuery()).toBeUndefined()
+    const latest = facts.begin(url.replace('status=0', 'status=20'))!
+    old(200, {code:0,data:{list:[],total:0}})
+    expect(facts.readPageQuery()).toBeUndefined()
+    latest(200, {code:0,data:{list:[],total:0}})
+    expect(facts.readPageQuery()).toEqual({path:'/admin-api/erp/sale-order/page', parameters:{
+      customerId:'7',status:'20',orderTimeStart:'2026-10-01 00:00:00',orderTimeEnd:'2026-10-31 23:59:59'}})
+    facts.begin(url + '&remark=private')!(200,{code:0,data:{list:[]}})
+    expect(facts.readPageQuery()).toBeUndefined()
+    facts.begin(url)!(403,null)
+    expect(facts.readPageQuery()).toBeUndefined()
+  })
   it('waits before the cold route starts any read or paints tabs, without granting identity', () => {
     const facts = createPageFacts()
     document.body.innerHTML = ''
@@ -479,5 +497,30 @@ describe('native Yudao mounted navigation identity', () => {
       const state = mountedPage(); change(state)
       expect(createPageFacts().readPageRoute()).toBeUndefined()
     }
+  })
+})
+
+
+describe('native date range selection uses only an exact owned live calendar', () => {
+  it('rejects other months, disabled or duplicate days and unrelated popups', () => {
+    document.body.innerHTML = '<div class="el-date-editor--daterange"><input class="el-range-input" aria-controls="calendar" aria-haspopup="dialog"></div>'
+      + '<div id="calendar" role="dialog"><div class="el-date-range-picker__content"><div class="el-date-range-picker__header">'
+      + '<span role="button">2026 年</span><span role="button">10 月</span></div><table role="grid"><tbody><tr>'
+      + '<td class="prev-month"><span class="el-date-table-cell__text">31</span></td>'
+      + '<td class="available" aria-disabled="false"><span class="el-date-table-cell__text">31</span></td>'
+      + '</tr></tbody></table></div></div>'
+    const input = document.querySelector('input')!, cell = document.querySelector('td.available')!
+    expect(nativeRangeDateCell(input,'2026-10-31')).toBe(cell)
+    for (const value of ['2026-09-31','2026-11-31','2026-11-01','wrong']) {
+      expect(nativeRangeDateCell(input,value)).toBeNull()
+    }
+    cell.setAttribute('aria-disabled','true')
+    expect(nativeRangeDateCell(input,'2026-10-31')).toBeNull()
+    cell.setAttribute('aria-disabled','false')
+    cell.parentElement!.append(cell.cloneNode(true))
+    expect(nativeRangeDateCell(input,'2026-10-31')).toBeNull()
+    cell.parentElement!.lastChild!.remove()
+    input.setAttribute('aria-controls','other')
+    expect(nativeRangeDateCell(input,'2026-10-31')).toBeNull()
   })
 })

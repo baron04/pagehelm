@@ -206,6 +206,8 @@ class CreationEntryTests(unittest.TestCase):
             path.write_text('<template><el-form :model="formData"><el-form-item label="合成备注" prop="remark">'
                             '<el-input v-model="formData.remark" /></el-form-item></el-form></template>')
         files = (entry[4], entry[5], REVIEWED_FILES[2])
+        if reference == "contact-create":
+            files += (REVIEWED_FILES[0],)
         payload = {"schema_version": 1, "release": self.tree.release, "reference": reference,
                    "hashes": {p: hashlib.sha256(self.tree.read_text(p).encode()).hexdigest() for p in files}}
         review = NativeCreateReview.load(payload, self.tree)
@@ -215,6 +217,49 @@ class CreationEntryTests(unittest.TestCase):
                          elements=[replace(self.before.elements[0], name=entry[2])])
         after = replace(self.after, url=before.url, record_route="")
         return payload, client, verifier, before, after
+
+    def test_user_opened_contact_creation_is_bound_to_parent_actor_and_instance(self):
+        _, client, verifier, _, _ = self.creation("contact-create")
+        component = CREATE_ENTRIES["contact-create"][5]
+        path = self.tree.root / component
+        path.write_text('<template><el-form :model="formData">' + ''.join(
+            f'<el-form-item label="{label}" prop="{field}"><el-input v-model="formData.{field}" /></el-form-item>'
+            for field, label in (("name", "联系人姓名"), ("mobile", "手机"))) + '</el-form></template>')
+        files = dict(verifier.review.hashes)
+        files[component] = hashlib.sha256(path.read_bytes()).hexdigest()
+        review = NativeCreateReview.load({"schema_version": 1, "release": self.tree.release,
+            "reference": "contact-create", "hashes": files}, self.tree)
+        verifier = NativeCreateEntryVerifier(self.tree, review, client)
+        port = NativeEntryFormPort(NativeEntryVerifiers(verifier))
+        attrs = self.after.elements[0].attrs
+        elements = [ElementRef(f"f{i}", role, "", "input", 3,
+            {**attrs, "field_label": label, **({"disabled": "true"} if disabled else {})})
+            for i, (label, role, disabled) in enumerate((("联系人姓名", "textbox", False),
+                ("手机", "textbox", False), ("客户名称", "combobox", True), ("负责人", "combobox", False)))]
+        obs = replace(self.after, selected_controls=["联系人"], elements=elements + [self.after.elements[1]])
+        form = port.current_goal_form("crm/contact", obs, context=self.context)
+        self.assertIsNotNone(form)
+        tools = ApplicationFormTools(port, application_id="yudao")
+        draft, _ = tools.prepare_current(obs, reference=form.reference,
+            values=(("name", "Synthetic"), ("mobile", "00000000001")), context=self.context)
+        self.assertEqual([f.value for f in draft.fields], ["Synthetic", "00000000001"])
+        check = tools.take_verification(draft)
+        changed = replace(obs, elements=[replace(e, attrs={**e.attrs,
+            "form_instance": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}) for e in obs.elements])
+        with self.assertRaises(BusinessToolRequestError):
+            check.check(draft, changed, context=self.context)
+        verifier._current = None
+        second = replace(self.context, turn_id="next-turn")
+        self.assertIsNotNone(port.current_goal_form("crm/contact", obs, context=second))
+        self.assertNotEqual(port.describe_form(obs, context=second).reference, form.reference)
+        for changed in (replace(obs, record_route="/crm/customer/detail/13"),
+                        replace(obs, elements=[replace(e, attrs={**e.attrs, "disabled": "true"})
+                            if e.attrs.get("field_label") == "负责人" else e for e in obs.elements])):
+            verifier._current = None
+            self.assertIsNone(verifier.adopt_current(changed, context=self.context))
+        client.permission = "crm:contact:query"
+        with self.assertRaises(BusinessToolPermissionError):
+            verifier.adopt_current(obs, context=self.context)
 
     def test_separate_creation_policies_bind_exact_receipt_and_no_record(self):
         for reference in CREATE_ENTRIES:
@@ -238,6 +283,11 @@ class CreationEntryTests(unittest.TestCase):
         ready = replace(before, page_route='/crm/customer')
         rows = port.form_entries(ready, context=self.context)
         self.assertEqual([(r.reference, r.kind) for r in rows], [('customer-create', 'create')])
+        query_scoped = replace(ready, elements=[replace(e, attrs={"form_scope":"form_instance:query"})
+                                               for e in ready.elements])
+        self.assertEqual(port.form_entries(query_scoped, context=self.context), rows)
+        self.assertEqual(port.plan_entry("customer-create", query_scoped, context=self.context).reference,
+                         "customer-create")
         for changed in (before, replace(ready, page_route='/pms/pm/project/list'),
                         replace(ready, record_route=self.route),
                         replace(after, page_route='/crm/customer')):

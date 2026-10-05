@@ -9,6 +9,22 @@ import {
 const redactor = createRedactor()
 
 describe('observable form labels and scopes', () => {
+  it('binds an idless native search form to one DOM lifetime without inventing an id', () => {
+    const form = document.createElement('form')
+    form.innerHTML = '<label for="search-name">Name</label><input id="search-name"><button>Search</button>'
+    document.body.append(form)
+    try {
+      const input = form.querySelector('input')!, button = form.querySelector('button')!
+      const scope = formControlScope(input)
+      expect(scope).toMatch(/^form_instance:[0-9a-f-]{36}$/)
+      expect(formControlScope(button)).toBe(scope)
+      expect(form.id).toBe('')
+      const replacement = form.cloneNode(true) as HTMLFormElement
+      form.replaceWith(replacement)
+      expect(formControlScope(replacement.querySelector('input')!)).not.toBe(scope)
+      replacement.remove()
+    } finally {form.remove()}
+  })
   it('uses the unique ARIA body association when a custom header omits its title ID', () => {
     const dialog = document.createElement('section')
     dialog.setAttribute('role', 'dialog')

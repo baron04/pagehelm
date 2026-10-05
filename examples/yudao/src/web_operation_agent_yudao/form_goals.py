@@ -2,17 +2,25 @@
 from dataclasses import replace
 import re
 
-from web_operation_agent.goal.ports import FormPlan, Resolved
+from web_operation_agent.goal.ports import FormPlan, PagePlan, Resolved
 from .page_goals import NativePageGoalPort
 from .form_entries import REVIEWED_FILES
 
 
+def _form_field(entity, label):
+    wanted = "".join(label.casefold().split())
+    matches = [f for f in entity.fields if wanted in {
+        "".join(value.casefold().split()) for value in (f.key, f.label, *f.aliases)}]
+    return matches[0] if len(matches) == 1 else None
+
+
 class NativeFormsGoalPort(NativePageGoalPort):
-    def __init__(self, data, source, *, entries=(), updates=True, **kwargs):
+    def __init__(self, data, source, *, entries=(), updates=True, current_form=None, **kwargs):
         super().__init__(data, **kwargs)
         self._form_source = source
         self._entries = tuple(entries)
         self._updates = updates
+        self._current_form = current_form
 
     def index(self, *, context=None):
         index = super().index(context=context)
@@ -56,6 +64,20 @@ class NativeFormsGoalPort(NativePageGoalPort):
         for i in indices:
             d, resolved = spec.deliverables[i], out[i]
             entity = index.entity(d.entity)
+            if self._current_form and self.page_reader and context is not None:
+                observation = self.page_reader(context)
+                form = self._current_form(d.entity, observation, context=context)
+                if (form is not None and d.action.casefold() in {"", "create", "new", "edit", "update", "编辑", "修改"}
+                        and not (d.record or d.via or d.metric or d.section)):
+                    requested = d.field_values or ((d.action, d.value),)
+                    mapped = tuple((_form_field(entity, label), value) for label, value in requested) if entity else ()
+                    available = {f.reference for f in form.fields}
+                    if (mapped and all(f is not None and f.key in available for f, _ in mapped)
+                            and len({f.key for f, _ in mapped}) == len(mapped)):
+                        out[i] = Resolved(kind="handoff", page=PagePlan("", form.title,
+                            expected_path=form.route, form=FormPlan(form.reference,
+                                tuple((f.key, value) for f, value in mapped))))
+                        continue
             entry = next((e for e in self._entries if e[1] == d.entity and not d.record and d.action.casefold() in {"create", "new"} and spec.write_intent
                           and (not d.page.key or d.page.key == e[2])), None)
             component = entry[6] if entry else REVIEWED_FILES[1]
@@ -64,7 +86,7 @@ class NativeFormsGoalPort(NativePageGoalPort):
             fields = {f.reference for f in form_source.fields if
                       (not f.conditional or mode in f.modes) and not f.handlers} if form_source else set()
             requested = d.field_values or ((d.action, d.value),)
-            mapped = tuple((entity.field_by_label(label), value) for label, value in requested) if entity else ()
+            mapped = tuple((_form_field(entity, label), value) for label, value in requested) if entity else ()
             page = resolved.page
             match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", page.url) if page else None
             if resolved.problem or resolved.denied or resolved.unoffered:

@@ -370,6 +370,30 @@ class ScopedForms(unittest.TestCase):
         with self.assertRaises(BusinessToolRequestError):
             self.tools().prepare_current(missing_button, reference="create-v1", values=(("name", "Draft"),))
 
+    def test_goal_choice_labels_bind_exactly_and_ambiguous_codes_fail_closed(self):
+        class Choices(LabelForms):
+            choices = (FormChoice("17", "Synthetic person"),)
+            def describe_form(self, obs, *, context=None):
+                return replace(super().describe_form(obs), fields=(ApplicationFormField(
+                    "name", "Name", kind="choice", controls=("combobox",), binding="label",
+                    choices=self.choices),))
+            def prepare_form(self, form, values, *, context=None):
+                draft = super().prepare_form(form, values, context=context)
+                label = next(c.label for c in form.fields[0].choices if c.value == values[0].value)
+                return replace(draft, fields=(replace(draft.fields[0], option_label=label),))
+        obs = observation()
+        obs.elements[0] = replace(obs.elements[0], role="combobox")
+        port = Choices()
+        for value in ("17", "Synthetic person"):
+            draft, _ = self.tools(port).prepare_current(obs, reference="create-v1", values=(("name", value),))
+            self.assertEqual((draft.fields[0].value, draft.fields[0].option_label), ("17", "Synthetic person"))
+        for choices, value in ((port.choices, "Synthetic"),
+                ((FormChoice("17", "Duplicate"), FormChoice("18", "Duplicate")), "Duplicate"),
+                ((FormChoice("17", "18"), FormChoice("18", "Other")), "18")):
+            port.choices = choices
+            with self.assertRaisesRegex(BusinessToolRequestError, "unavailable or ambiguous"):
+                self.tools(port).prepare_current(obs, reference="create-v1", values=(("name", value),))
+
     def test_same_url_entry_change_during_approval_or_after_input_stops_the_flow(self):
         class Changing(LabelForms):
             revision = 1

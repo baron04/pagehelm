@@ -106,12 +106,15 @@ class YudaoHostConfig:
     native_read_policy: Path | None = None
     native_form_policy: Path | None = None
     native_create_policies: tuple[Path, ...] = ()
+    native_filter_policies: tuple[Path, ...] = ()
     native_guard_port: int = 48093
     native_navigation: bool = False
     #: Explicit read-only page-planning pilot; never selected by browser messages or fallback.
     executor_mode: str = "goal"
 
     def __post_init__(self):
+        if self.native_filter_policies and self.native_read_policy is None:
+            raise ValueError("native page filters require a reviewed read guard")
         if not isinstance(self.native_navigation, bool) or self.native_navigation and self.native_read_policy is None:
             raise ValueError("native navigation requires a reviewed native read policy and write guard")
         if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent"}:
@@ -140,6 +143,7 @@ class YudaoHost:
         self.form_review = None
         self.form_tree = None
         self.create_reviews = ()
+        self.filter_reviews = ()
         if config.native_form_policy is not None or config.native_create_policies:
             if config.native_read_policy is None or config.source_root is None:
                 raise ValueError("native forms require the verified guard and reviewed raw source")
@@ -163,6 +167,16 @@ class YudaoHost:
                     or policy["release"] != config.source_release or not self.ui or not self.ui.records
                     or not isinstance(policy["read_paths"], list)):
                 raise ValueError("native read policy must match the deployment and its UI routes")
+            if config.native_filter_policies:
+                from .repository import repository_tree
+                from .page_filters import NativePageFilterReview
+                if config.source_root is None:
+                    raise ValueError("native page filters require reviewed raw source")
+                self.form_tree = self.form_tree or repository_tree(config.source_root, config.source_release)
+                self.filter_reviews = tuple(NativePageFilterReview.load(json.loads(path.read_text()),
+                    self.form_tree, policy["read_paths"]) for path in config.native_filter_policies)
+                if len({r.route for r in self.filter_reviews}) != len(self.filter_reviews):
+                    raise ValueError("native page filter routes must be unique")
             self.native_proxy = NativeGuardProxy(
                 upstream=config.api_base, origin=config.public_origin,
                 guard=NativePageGuard(frozenset(policy["read_paths"]),
@@ -239,13 +253,19 @@ class YudaoHost:
             verifiers.extend(NativeCreateEntryVerifier(self.form_tree, review, client)
                              for review in self.create_reviews)
             forms = NativeEntryFormPort(NativeEntryVerifiers(*verifiers))
-        return YudaoApplication(self.config.public_origin, None, self.api_docs,
+        app = YudaoApplication(self.config.public_origin, None, self.api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
                                 native_tabs=self.native_proxy is not None,
                                 native_navigation=self.config.native_navigation,
                                 forms=forms,
                                 page_write_guard=GUARD_PATH if self.native_proxy is not None else "")
+        if self.filter_reviews:
+            from datetime import date
+            from .page_filters import NativePageFilters
+            app.goal_port.page_filters = NativePageFilters(app.goal_data, self.form_tree,
+                self.filter_reviews, date.fromisoformat(app.goal_port.today()))
+        return app
 
     def _open(self, app: YudaoApplication, principal, key):
         bound = bind_application(app)
@@ -280,7 +300,8 @@ class YudaoHost:
                 app.goal_port.page_reader = page_reader
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
                                            source=self.source, click_policy=app.native_tab_policy,
-                                           form_prefill=self.form_review is not None or bool(self.create_reviews))
+                                           form_prefill=self.form_review is not None or bool(self.create_reviews),
+                                           page_filtering=bool(self.filter_reviews))
             common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
@@ -399,6 +420,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-form-policy", type=Path)
     ap.add_argument("--native-create-policy", type=Path, action="append", default=[])
+    ap.add_argument("--native-filter-policy", type=Path, action="append", default=[])
     ap.add_argument("--native-guard-port", type=int, default=48093)
     ap.add_argument("--native-navigation", action="store_true")
     ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
@@ -419,6 +441,7 @@ def main(argv=None) -> int:
         native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
         native_navigation=a.native_navigation,
         native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
+        native_filter_policies=tuple(a.native_filter_policy),
         executor_mode=a.executor,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))

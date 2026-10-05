@@ -1974,6 +1974,10 @@ class GoalTurnExecutor:
         for name in plan.facets_off:
             if not self._facet(s, name, active=False):
                 out.unmet.append(_Unmet("filter_off", name))
+        if plan.conditions:
+            from .page_filters import apply_page_filters
+            if not apply_page_filters(self, s, plan):
+                out.unmet.append(_Unmet("filter_on", "requested page conditions"))
         if plan.section and not self._select_tab(s, plan.section):
             out.unmet.append(_Unmet("section", plan.section))
         if plan.form is not None:
@@ -2634,7 +2638,7 @@ def _search_as_record(spec: GoalSpec, offered: frozenset[str], index=None) -> Go
 def _needs_beyond(d, offered: frozenset[str]) -> frozenset[str]:
     """The optional capabilities a deliverable needs that the port does not offer."""
     needs = set()
-    if d.page.filters_on or d.page.filters_off or d.page.group_by or (
+    if d.page.conditions or d.page.filters_on or d.page.filters_off or d.page.group_by or (
             d.metric is not None and d.metric.page_filters):
         needs.add("facets")
     if d.section:
@@ -2662,7 +2666,7 @@ def _ask_what_it_can(spec: GoalSpec, offered: frozenset[str]) -> tuple[GoalSpec,
     for d in spec.deliverables:
         drop = frozenset({"facets"} & _needs_beyond(d, offered)) if d.kind == "page" else frozenset()
         if drop:
-            d = replace(d, page=replace(d.page, filters_on=(), filters_off=(), group_by=""))
+            d = replace(d, page=replace(d.page, filters_on=(), filters_off=(), group_by="", conditions=()))
         out.append(d)
         left.append(tuple(sorted(drop)))
     return replace(spec, deliverables=tuple(out)), tuple(left)

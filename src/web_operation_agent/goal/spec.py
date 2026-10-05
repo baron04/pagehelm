@@ -130,6 +130,7 @@ class PageSpec:
     filters_off: tuple[str, ...] = ()
     group_by: str = ""
     search: str = ""
+    conditions: tuple[Filter, ...] = ()
 
     @classmethod
     def from_json(cls, value: object) -> "PageSpec":
@@ -137,17 +138,21 @@ class PageSpec:
             return cls()
         if not isinstance(value, dict):
             raise ValueError("page must be an object")
+        conditions = value.get("conditions") or []
+        if not isinstance(conditions, list) or not 0 <= len(conditions) <= 6:
+            raise ValueError("page conditions require at most six filters")
         return cls(key=_text(value.get("key"), "page key"),
                    view=_text(value.get("view"), "view").lower(),
                    filters_on=_texts(value.get("filters_on"), "filters_on"),
                    filters_off=_texts(value.get("filters_off"), "filters_off"),
                    group_by=_text(value.get("group_by"), "group_by"),
-                   search=_text(value.get("search"), "search"))
+                   search=_text(value.get("search"), "search"),
+                   conditions=tuple(Filter.from_json(item) for item in conditions))
 
     @property
     def empty(self) -> bool:
         return not any((self.key, self.view, self.filters_on, self.filters_off,
-                        self.group_by, self.search))
+                        self.group_by, self.search, self.conditions))
 
 
 @dataclass(frozen=True)
@@ -200,6 +205,9 @@ class Deliverable:
         if pairs and (kind != "handoff" or value.get("value")):
             raise ValueError("field_values belongs to one form handoff, without a single-field value")
         metric = value.get("metric")
+        page = PageSpec.from_json(value.get("page"))
+        if page.conditions and kind != "page":
+            raise ValueError("applied page conditions require a page deliverable")
         limit = value.get("limit", 0) or 0
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0 or limit > 50:
             raise ValueError("limit must be an integer from 0 to 50")
@@ -209,7 +217,7 @@ class Deliverable:
                    via=_text(value.get("via"), "via"),
                    fields=_texts(value.get("fields"), "fields", limit=12),
                    metric=Metric.from_json(metric) if metric else None,
-                   page=PageSpec.from_json(value.get("page")),
+                   page=page,
                    section=_text(value.get("section"), "section"),
                    action=_text(value.get("action"), "action"),
                    value=_text(value.get("value"), "value"),
@@ -249,7 +257,9 @@ class Deliverable:
             out["page"] = {"key": self.page.key, "view": self.page.view,
                            "filters_on": list(self.page.filters_on),
                            "filters_off": list(self.page.filters_off),
-                           "group_by": self.page.group_by, "search": self.page.search}
+                           "group_by": self.page.group_by, "search": self.page.search,
+                           "conditions": [{"field": f.field, "values": list(f.values), "op": f.op}
+                                          for f in self.page.conditions]}
         return out
 
 
@@ -416,6 +426,12 @@ DECLARE_GOAL_TOOL = {
                                     "filters_on": {"type": "array", "items": {"type": "string"}},
                                     "filters_off": {"type": "array", "items": {"type": "string"}},
                                     "group_by": {"type": "string"},
+                                    "conditions": {"type": "array", "maxItems": 6, "items": {
+                                        "type": "object", "properties": {
+                                            "field": {"type": "string"},
+                                            "values": {"type": "array", "items": {"type": "string"}},
+                                            "op": {"type": "string"}}, "required": ["field", "values"]},
+                                        "description": "Conditions to APPLY to the actual page filter controls. Use kind page for requests to filter the page; metric.filters only queries records for a chat answer."},
                                     "search": {"type": "string",
                                                "description": "free text to search on the page, in the application's language"}}},
                             "section": {"type": "string",

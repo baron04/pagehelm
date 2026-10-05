@@ -229,6 +229,18 @@ agent.
   remains separate. Defaults stay closed. Final handoff can recheck this Runtime's own
   entered controls outside the viewport in the same live form instance; it never fills an
   unobserved or hidden control.
+  Goal form choice labels bind to one exact current actor-visible option before
+  preparation; duplicate labels or conflicting label/code matches are refused. The
+  opaque model tool still requires native option values. An explicitly reviewed
+  customer-bound contact creation dialog may be adopted after the user opens it;
+  reviewed parent/opener bindings preserve the customer, and an enabled owner distinguishes creation from editing.
+  Page filtering uses `page.conditions`, separately from chat-only `metric.filters`.
+  Applications offering `facets` may issue a bounded server-side query-control draft,
+  revalidated before each input. Completion requires a successful applied-query
+  observation, not draft inputs or a chat list. The native Yudao host can opt in with
+  repeatable `--native-filter-policy` source/read reviews; its initial qualified
+  control types are date ranges and reviewed single-choice selectors. Other query
+  controls fail closed. Date inputs select an exact enabled day in the owned native calendar to preserve default endpoint times; days outside the displayed calendar are refused. Defaults remain disabled; this is not a general accuracy claim.
   The `goal_run_receipt` audit event records
   stage times, request counts and serialized input bytes without prompt or result content;
   Business timing includes index preparation, name lookup and candidate reads;

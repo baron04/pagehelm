@@ -673,6 +673,14 @@ class ApplicationFormTools:
             item = visible.get(field)
             if item is None:
                 raise BusinessToolRequestError("a planned field is not available in this form")
+            if item.descriptor.kind == "choice":
+                # Goals carry the user's display text. Bind it only against fresh,
+                # actor-visible choices; the model-facing opaque API stays coded.
+                matches = {choice.value for choice in item.descriptor.choices
+                           if value in (choice.value, choice.label)}
+                if len(matches) != 1:
+                    raise BusinessToolRequestError("a planned choice is unavailable or ambiguous")
+                value = next(iter(matches))
             raw.append({"field_id": self._opaque("form_field_", binding, field, item.control),
                         "value": value})
         return self.prepare(observation, {"form_id": self._opaque("form_", binding),

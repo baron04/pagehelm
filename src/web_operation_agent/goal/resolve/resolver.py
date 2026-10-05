@@ -772,6 +772,7 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         return Resolved(kind="page", problem=problem, page=PagePlan(
             url=url, label=page.breadcrumb, expected_path=expected, view=view,
             facets_on=tuple(dict.fromkeys(on)), facets_off=tuple(dict.fromkeys(off)),
+            conditions=d.page.conditions,
             missing_view=d.page.view if problem else "", requires_page_route=not page.entity))
 
     def _names_repair(self, model: str) -> str:

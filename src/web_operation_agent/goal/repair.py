@@ -96,6 +96,13 @@ must survive. Runtime resolution still verifies every corrected name and conditi
                 lost(f"page {name} removed")
         if old.page.search and not (new.page.search or new.record):
             lost("page search removed")
+        if old.page.conditions:
+            if new.kind != "page":
+                lost("applied page filtering replaced with another deliverable")
+            if len(new.page.conditions) < len(old.page.conditions):
+                lost("applied page conditions removed")
+            if sum(c.op == "!=" for c in new.page.conditions) < sum(c.op == "!=" for c in old.page.conditions):
+                lost("applied page exclusion removed")
         for name in ("filters_on", "filters_off"):
             if len(getattr(new.page, name)) < len(getattr(old.page, name)):
                 lost(f"page {name} removed")

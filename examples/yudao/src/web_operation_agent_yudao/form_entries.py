@@ -213,6 +213,9 @@ class NativeCustomerEntryVerifier:
 # Explicit application distributions qualify each opener and persistence contract.
 # These declarations stay on the server; no app-specific schema enters the Agent.
 CREATE_ENTRIES = {
+    "contact-create": ("crm/contact", "/crm/contact", "创建联系人", "crm:contact:create",
+        "ui/src/views/crm/contact/components/ContactList.vue",
+        "ui/src/views/crm/contact/ContactForm.vue"),
     "customer-create": ("crm/customer", "/crm/customer", "新增", "crm:customer:create",
         "ui/src/views/crm/customer/index.vue", REVIEWED_FILES[1]),
     "project-create": ("pms/pm/project", "/pms/pm/project/list", "新建项目", "pms:pm:project:create",
@@ -235,6 +238,8 @@ class NativeCreateReview(NativeFormReview):
             raise ValueError("native creation needs a named reviewed entry")
         entry = CREATE_ENTRIES[payload["reference"]]
         required = {entry[4], entry[5], REVIEWED_FILES[2]}
+        if payload["reference"] == "contact-create":
+            required.add(REVIEWED_FILES[0])
         if (set(payload["hashes"]) != required or any(not isinstance(v,str)
                 or not re.fullmatch(r"[0-9a-f]{64}",v) for v in payload["hashes"].values())):
             raise ValueError("native creation must pin its own opener, form and dialog")
@@ -250,6 +255,55 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
             raise TypeError("creation cannot use a customer update review")
         super().__init__(tree, review, client)
         self.goal_entries = ((review.reference, *CREATE_ENTRIES[review.reference]),)
+
+    def adopt_current(self, observation, *, context):
+        """Admit the reviewed customer-bound contact creation dialog opened by its user.
+
+        Its enabled owner distinguishes creation from the update editor. Reviewed
+        parent/opener bytes bind the unobserved disabled customer to this record.
+        No receipt or submission is fabricated.
+        """
+        if self.review.reference != "contact-create":
+            return None
+        path = urlsplit(observation.url).path
+        match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
+        if (not match or urlsplit(observation.url).query or observation.render_state != "ready"
+                or observation.record_route != path):
+            return None
+        scope, instance = self._scope(observation)
+        def fields(label):
+            return [e for e in observation.elements if e.role in FORM_INPUT_CONTROLS
+                    and e.attrs.get("form_scope") == scope
+                    and e.attrs.get("field_label") == label]
+        name, mobile, owner = (fields(label) for label in ("联系人姓名", "手机", "负责人"))
+        if (any(len(items) != 1 for items in (name, mobile, owner))
+                or any(form_control_unavailable(e.attrs) for e in (*name, *mobile, *owner))):
+            return None
+        self._authorize("", context)
+        # Read the parent under this actor, never derive its authority from a URL.
+        parent = self.client.get("crm/customer/get", id=match[1])
+        if not isinstance(parent, dict) or str(parent.get("id")) != match[1]:
+            raise BusinessToolPermissionError("the contact parent is not readable")
+        component = CREATE_ENTRIES[self.review.reference][5]
+        source = self.source.read(component)
+        if source is None:
+            return None
+        self._current = NativeFormState(context.principal.actor_authority_digest,
+            context.session_id, context.turn_id, instance, "create", "", path, scope,
+            component, source.binding_digest, "新建联系人草稿", "确 定")
+        return self._current
+
+    def current(self, observation, *, context):
+        if (self.review.reference == "contact-create"
+                and urlsplit(observation.url).path.startswith("/crm/customer/detail/")):
+            previous = self._current
+            state = self.adopt_current(observation, context=context)
+            if (previous is not None and previous.turn_id == context.turn_id
+                    and previous.session_id == context.session_id and state != previous):
+                self._current = None
+                return None
+            return state
+        return super().current(observation, context=context)
 
     def _authorize(self, record, context):
         context.require_live(application_id="yudao", required_scope="yudao.read")
@@ -282,7 +336,8 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
             raise BusinessToolRequestError("the exact collection must be ready without an editor")
         self._authorize("",context)
         controls = [e for e in observation.elements if e.role == "button" and e.name == label
-                    and not e.attrs.get("form_scope") and not form_control_unavailable(e.attrs)]
+                    and not str(e.attrs.get("form_scope", "")).startswith("dialog")
+                    and not form_control_unavailable(e.attrs)]
         if len(controls) != 1:
             raise BusinessToolRequestError("the reviewed creation opener is not unique and enabled")
         entry = ApplicationFormEntry(reference,controls[0])
@@ -347,7 +402,15 @@ class NativeEntryVerifiers:
         if self.active: self.active.discard_entry(*args,**kwargs)
 
     def current(self, *args, **kwargs):
-        return self.active.current(*args,**kwargs) if self.active else None
+        if self.active:
+            return self.active.current(*args,**kwargs)
+        matches = [(v, v.adopt_current(*args, **kwargs)) for v in self.verifiers
+                   if isinstance(v, NativeCreateEntryVerifier) and v.review.reference == "contact-create"]
+        matches = [(v, state) for v, state in matches if state is not None]
+        if len(matches) != 1:
+            return None
+        self.active, state = matches[0]
+        return state
 
     def validate(self, *args, **kwargs):
         return self.active.validate(*args,**kwargs) if self.active else False
@@ -361,6 +424,14 @@ class NativeEntryFormPort(YudaoFormPort):
         self.goal_entries = getattr(verifier,"goal_entries",())
         self.goal_updates = getattr(verifier, "goal_updates",
             not isinstance(verifier, NativeCreateEntryVerifier))
+
+    def current_goal_form(self, entity, observation, *, context):
+        form = self.describe_form(observation, context=context)
+        active = getattr(self._verifier, "active", self._verifier)
+        if (form is not None and isinstance(active, NativeCreateEntryVerifier)
+                and CREATE_ENTRIES[active.review.reference][0] == entity):
+            return form
+        return None
 
     def click_policy(self, tabs):
         return NativeEntryClickPolicy(self._verifier, tabs)
@@ -390,7 +461,8 @@ class NativeEntryFormPort(YudaoFormPort):
                 record, kind = match[1], "update"
                 reference, label = "customer-update:" + record, "编辑"
             controls = [e for e in observation.elements if e.role == "button" and e.name == label
-                        and not e.attrs.get("form_scope") and not form_control_unavailable(e.attrs)]
+                        and not str(e.attrs.get("form_scope", "")).startswith("dialog")
+                        and not form_control_unavailable(e.attrs)]
             if len(controls) != 1:
                 continue
             verifier._authorize(record, context)

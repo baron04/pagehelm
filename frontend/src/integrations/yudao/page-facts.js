@@ -17,6 +17,21 @@ function ledgerQuery(url) {
   return null
 }
 
+function orderQuery(url) {
+  const patterns = {customerId: /^[1-9][0-9]{0,19}$/, status: /^(0|10|20)$/,
+    orderTimeStart: /^\d{4}-\d{2}-\d{2} 00:00:00$/, orderTimeEnd: /^\d{4}-\d{2}-\d{2} 23:59:59$/}
+  const keys = {'orderTime[0]': 'orderTimeStart', 'orderTime[1]': 'orderTimeEnd'}
+  const parameters = {}, pairs = Array.from(url.searchParams)
+  if (new Set(pairs.map(([key]) => key)).size !== pairs.length) return null
+  for (const [raw, value] of pairs) {
+    if (['pageNo', 'pageSize'].includes(raw)) continue
+    const key = keys[raw] || raw
+    if (!Object.hasOwn(patterns, key) || Object.hasOwn(parameters, key) || !patterns[key].test(value)) return null
+    parameters[key] = value
+  }
+  return {path: url.pathname, parameters}
+}
+
 export function createPageFacts({view = window, doc = document} = {}) {
   let route = '', locationKey = '', generation = 0, record = null, appliedQuery = null, disposed = false
   const reads = new Map()
@@ -36,12 +51,13 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/')) return null
     const heldGeneration = current()
     const ledger = route === '/fms/ledger/general' && url.pathname === '/admin-api/fms/ledger/general/list'
+    const order = route === '/erp/sale/order' && url.pathname === '/admin-api/erp/sale-order/page'
     let query = null
-    if (ledger) {
+    if (ledger || order) {
       appliedQuery = null
       // Application-owned scalar query observation for the first native report.
       // Retain only reviewed query fields, never headers, bodies or arbitrary URLs.
-      query = ledgerQuery(url)
+      query = ledger ? ledgerQuery(url) : orderQuery(url)
     }
     const detail = /^\/crm\/(customer|contract|business)\/detail\/([0-9]+)$/.exec(route)
     const isRecord = Boolean(detail && url.pathname === `/admin-api/crm/${detail[1]}/get`)
@@ -75,7 +91,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
       if (latest.serial !== serial) return
       const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
       latest.failed = !ok
-      if (ledger && ok && query && Array.isArray(body?.data)) appliedQuery = query
+      if ((ledger && ok && query && Array.isArray(body?.data)) ||
+          (order && ok && query && Array.isArray(body?.data?.list))) appliedQuery = query
       if (isRecord && ok) {
         const id = body?.data?.id, name = body?.data?.name
         if ((typeof id === 'number' && Number.isSafeInteger(id) || typeof id === 'string' && /^[0-9]+$/.test(id))
@@ -226,9 +243,10 @@ export function installPageFacts(view = window, doc = document) {
       if (target.origin === view.location.origin && target.pathname.startsWith('/admin-api/')) {
         const ids = target.searchParams.getAll('id'), id = ids.length === 1 ? ids[0] : ''
         const ledger = view.location.pathname === '/fms/ledger/general' && target.pathname === '/admin-api/fms/ledger/general/list'
+        const order = view.location.pathname === '/erp/sale/order' && target.pathname === '/admin-api/erp/sale-order/page'
         // Retain only a bounded scalar projection; open alone starts no read.
-        const query = ledger ? ledgerQuery(target) : null
-        requests.set(this, {method, path: target.pathname, ledger, query,
+        const query = ledger ? ledgerQuery(target) : order ? orderQuery(target) : null
+        requests.set(this, {method, path: target.pathname, ledger, order, query,
           id: /^[0-9]{1,20}$/.test(id) ? id : ''})
       }
     } catch { /* The original implementation owns invalid URL errors. */ }
@@ -240,8 +258,12 @@ export function installPageFacts(view = window, doc = document) {
     let target
     if (request) {
       target = new URL(request.path, view.location.href)
-      if (request.ledger) {
-        for (const [key, value] of Object.entries(request.query?.parameters || {})) target.searchParams.set(key, value)
+      if (request.ledger || request.order) {
+        const keys = {orderTimeStart: 'orderTime[0]', orderTimeEnd: 'orderTime[1]'}
+        if (!request.query) target.searchParams.set('invalidQuery', '1')
+        for (const [key, value] of Object.entries(request.query?.parameters || {})) {
+          target.searchParams.set(request.order && keys[key] || key, value)
+        }
       } else if (request.id) target.searchParams.set('id', request.id)
     }
     const settle = request && facts.begin(target.href, request.method)
@@ -332,4 +354,26 @@ export function nativeControlElement(element) {
   const inputs = element.querySelectorAll('input[role="combobox"][aria-haspopup="listbox"][aria-controls]')
   return inputs.length === 1 && inputs[0].closest('.el-select__wrapper') === element
     ? inputs[0] : element
+}
+
+/** Locate an exact enabled native calendar day without touching Vue state. */
+export function nativeRangeDateCell(element, value) {
+  if (!(element instanceof HTMLInputElement) || element.disabled || element.readOnly ||
+      !element.matches('.el-date-editor--daterange > .el-range-input') ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const id = element.getAttribute('aria-controls')
+  if (!id || !/^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(id) || element.getAttribute('aria-haspopup') !== 'dialog') return null
+  const popups = element.ownerDocument.querySelectorAll(`[id="${id}"]`)
+  if (popups.length !== 1 || popups[0].getAttribute('role') !== 'dialog') return null
+  const [year, month, day] = value.split('-').map(Number)
+  if (new Date(Date.UTC(year, month - 1, day)).toISOString().slice(0,10) !== value) return null
+  const matches = [...popups[0].querySelectorAll('.el-date-range-picker__content')].flatMap(panel => {
+    const labels = [...panel.querySelectorAll('.el-date-range-picker__header [role="button"]')]
+      .map(e => (e.textContent || '').replace(/\s/g, ''))
+    if (!labels.includes(`${year}年`) || !labels.includes(`${month}月`)) return []
+    return [...panel.querySelectorAll('table[role="grid"] td.available')].filter(cell =>
+      cell.getAttribute('aria-disabled') !== 'true' && !cell.classList.contains('disabled') &&
+      cell.querySelector('.el-date-table-cell__text')?.textContent?.trim() === String(day))
+  })
+  return matches.length === 1 ? matches[0] : null
 }

@@ -154,7 +154,11 @@ export function formControlScope(element: ElementLike | null | undefined): strin
   }
   const form = element.form || element.closest?.('form')
   const id = explicitAttribute(form, 'id')
-  return id && uniqueId(element.ownerDocument, id) === form ? `form:${id}` : null
+  if (id) return uniqueId(element.ownerDocument, id) === form ? `form:${id}` : null
+  // Ordinary native forms need not have an HTML id. Use their observed DOM
+  // lifetime rather than inventing an index, route or application-owned name.
+  const instance = formInstance(form as Element | null)
+  return instance ? `form_instance:${instance}` : null
 }
 
 /** Live identity can reveal a sensitive input that the controller summary left unnamed. */

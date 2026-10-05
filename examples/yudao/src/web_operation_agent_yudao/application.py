@@ -132,6 +132,7 @@ class YudaoApplication:
         if isinstance(forms, NativeEntryFormPort):
             from .form_goals import NativeFormsGoalPort
             self.goal_port = NativeFormsGoalPort(self.goal_data, forms.goal_source, entries=forms.goal_entries, updates=forms.goal_updates,
+                                                 current_form=forms.current_goal_form,
                                                  today=today, reference_workers=4)
             self.native_tab_policy = forms.click_policy(self.native_tab_policy)
         reads = YudaoReadTools(self.goal_data, application_id=APPLICATION_ID)
