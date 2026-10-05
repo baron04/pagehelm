@@ -2,7 +2,7 @@
   "schema_version": 1,
   "skill_id": "odoo.sales.customers-draft",
   "title": "Prepare an Odoo customer form",
-  "intent": "Prefill one customer form from a user-supplied name and email, then leave submission to the user.",
+  "intent": "Prepare an exact customer name and email proposal; Odoo can save on leaving, so input requires a fresh confirmed-write decision.",
   "triggers": [
     "预填客户",
     "填写客户",
@@ -17,8 +17,8 @@
   "instructions": [
     "Both customer name and email address are mandatory. If either is missing, ask the user for the missing value and end the turn. Never invent either value.",
     "Call prepare_customer_form with exactly the name and email the user supplied. It checks duplicates over a complete delegated-user scan and issues a one-turn form draft.",
-    "After a successful result, call prefill_form with no arguments. The server, not you, selects the exact route, fields and values from the current application-issued draft.",
-    "The draft is transient until submission. Stop after prefill_form; never click, submit, invoke a mutation, or claim the customer was created.",
+    "After a successful result, call prefill_form with no arguments only for a confirmed form handoff. The server shows the exact name, email and automatic-save warning before input; without the enabled write-confirmation channel, filling is refused.",
+    "The draft can save automatically when the page is left. Never describe it as transient or promise that it remains unsaved after leaving. Stop after prefill_form; never click Save, submit, invoke another mutation, or claim the customer was created.",
     "If preparation or prefill is refused, explain the short reason and do not retry unchanged input."
   ],
   "tool_names": [

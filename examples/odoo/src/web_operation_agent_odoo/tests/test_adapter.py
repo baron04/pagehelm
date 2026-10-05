@@ -1016,7 +1016,7 @@ class TheOneWrite(unittest.TestCase):
 
 
 class CustomerFormPreparation(unittest.TestCase):
-    def test_it_issues_exact_transient_bindings_without_creating_a_record(self):
+    def test_it_issues_exact_confirmation_bound_bindings_without_creating_a_record(self):
         executor = _FakeOdoo({"res.partner": []})
         result = executor.execute(
             PREPARE_CUSTOMER_FORM_TOOL,
@@ -1028,7 +1028,10 @@ class CustomerFormPreparation(unittest.TestCase):
             [(item.field, item.value) for item in result.form_draft.fields],
             [("name", "NovaForge Labs"), ("email", "ops@novaforge.example")])
         self.assertEqual(result.form_draft.fields[0].control, "combobox")
-        self.assertEqual(result.form_draft.persistence, "transient_until_submit")
+        self.assertEqual(result.form_draft.persistence, "application_saves_on_leave")
+        self.assertTrue(result.form_draft.needs_confirmation)
+        self.assertIn("NovaForge Labs", result.form_draft.targets[0])
+        self.assertIn("ops@novaforge.example", result.form_draft.targets[1])
         self.assertEqual(result.content["submission"], "user_only")
         self.assertEqual(executor.created, [])
 

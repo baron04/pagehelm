@@ -225,7 +225,7 @@ Nothing here is removed on the strength of "source could derive it". A Skill can
 | `query_entity_records` | opaque catalog entity | bounded actor-visible records; exact counts; fixed order | — |
 | `resolve_record_reference` | opaque catalog entity | bounded actor-visible name/number candidates | eligible record route, if available |
 | `find_page_entries` | actor-visible window action | bounded page candidates, including no-menu actions | reviewed standalone route only |
-| `prepare_customer_form` | `res.partner` | exact customer form draft; transient until user submission | `/odoo/customers/new` |
+| `prepare_customer_form` | `res.partner` | exact new-customer proposal; confirmed before possible save on leaving | `/odoo/customers/new` |
 | `prepare_customer_edit_form` | `res.partner` | exact existing-customer fields; confirmed before Odoo can autosave | `/odoo/customers/<id>` |
 | `create_customer` | `res.partner` | one customer, opt-in | `/odoo/customers/<id>` |
 | `archive_customer` | `res.partner` | one active customer, opt-in | `/odoo/customers` |
@@ -233,11 +233,13 @@ Nothing here is removed on the strength of "source could derive it". A Skill can
 | `invoice_sale_order` | `sale.advance.payment.inv` | one regular invoice workflow, opt-in | `/odoo/customer-invoices/<id>` |
 
 `prepare_customer_form` requires an exact user-supplied name and email, checks the complete
-customer scope for duplicates, and lets the server prefill those exact values. It neither
-creates a record nor clicks Save. The draft works without `--allow-mutations`; direct model
-`fill`, `select`, `click` and `submit` actions remain disabled. This contract is valid because
-this Odoo form does not persist the fields before Save. An integration with autosave must use
-the confirmed mutation path instead.
+customer scope for duplicates, and issues a proposal without creating a record. Standard
+Odoo create forms can save automatically when the page is left. Prefill therefore requires
+`--allow-mutations` and a fresh visible approval showing the exact name, email and automatic-save
+warning; without that confirmation channel no values are entered. The assistant never clicks
+Save or submits. Generic current-form discovery can describe inspected scalar fields, but
+its manual-submit prefill is refused because these forms are not transient. The earlier
+create-form DOM and immediate-count probes do not qualify behavior after leaving.
 
 Each read scans its whole scope and checks the row count against the application's own
 `search_count`, so "I saw all of them" is answered by a number that did not come from the
@@ -339,7 +341,7 @@ Things worth trying, in the order that shows the most:
 |---|---|
 | `哪些报价单还没确认？` | The answer is the typed projection, not the model's prose: a table of the records with the source, scope and observation time under it. `source_complete` in the audit line says the scan saw the whole collection |
 | `打开 Acme Corporation 的客户记录` | It queries first and navigates to the exact route the tool returned. It cannot invent a URL |
-| `填写客户名称 NovaForge Labs 和邮箱 ops@novaforge.example，但不要提交` | The server opens the new-customer form, fills only those two application-issued bindings, then stops with Save still under your control |
+| `填写客户名称 NovaForge Labs 和邮箱 ops@novaforge.example，但不要提交` | Without confirmed writes, input is refused. With them enabled, an exact approval warns that leaving can save; the assistant does not click Save |
 | `把报价单 S00002 确认掉` | **The approval card appears and waits for you.** Read the effect and the target, then click it — or dismiss it and watch the write not happen |
 | `归档客户 Acme Corporation` | It queries the exact active customer first, then shows an approval card; after approval it verifies the record is inactive and does not try to open the archived record |
 | `删除客户 Acme Corporation` | Refused — archive is reversible and explicitly supported, while permanent deletion is not on the tool surface |
@@ -349,8 +351,8 @@ Things worth trying, in the order that shows the most:
 each one still needs a fresh approval clicked in the page, and composition refuses to enable
 them at all without a durable journal.
 
-Without `--allow-mutations` persistent business tools remain read-only. The transient customer
-form handoff above is still available because it leaves the record unpersisted.
+Without `--allow-mutations` persistent business tools remain read-only, and customer-form
+input is refused before dispatch because Odoo can save it later on leaving.
 
 ## Running it non-interactively
 

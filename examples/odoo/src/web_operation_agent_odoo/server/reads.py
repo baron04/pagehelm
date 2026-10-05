@@ -282,6 +282,13 @@ class OdooReadTools:
                     FormDraftField("name", "客户名称", normalized["name"], "combobox"),
                     FormDraftField("email", "邮箱", normalized["email"]),
                 ),
+                persistence=APPLICATION_SAVES_ON_LEAVE,
+                effect="准备新客户的名称和邮箱；离开页面时 Odoo 可能自动保存",
+                targets=(
+                    f"客户名称：{normalized['name']}",
+                    f"邮箱：{normalized['email']}",
+                    "保存：需你确认；不要离开页面，除非同意 Odoo 自动保存",
+                ),
             )
             observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
             return BusinessToolResult(

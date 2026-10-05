@@ -75,8 +75,9 @@ def odoo_turn_config(*, adapter, run_dir: Path, allow_mutations: bool, scripted:
         deterministic_read_navigation=not scripted,
         require_identity=True,
         allow_business_mutations=allow_mutations,
-        # The adapter may issue an exact transient customer-form draft. Direct model
-        # fill/select/submit actions remain unavailable.
+        # Odoo forms can save on leaving. Typed drafts therefore need the separately
+        # enabled write-confirmation channel before input. Generic prefill is unqualified.
+        # Direct model fill/select/submit actions remain unavailable.
         allow_form_prefill=True,
         allow_page_facets=True,
         page_facet_policy=_ReviewedFacetPolicy(reviewed),

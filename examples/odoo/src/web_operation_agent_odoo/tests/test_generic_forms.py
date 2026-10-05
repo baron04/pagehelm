@@ -5,13 +5,10 @@ import copy
 import time
 import unittest
 
-from web_operation_agent.business.errors import BusinessToolPermissionError
+from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolRequestError
 from web_operation_agent.business.forms import ApplicationFormTools
 from web_operation_agent.schemas import ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
-from web_operation_agent.tests.support.form_contract import (
-    assert_current_form_contract,
-)
 from web_operation_agent_odoo.server.descriptors import _catalog_digest
 from web_operation_agent_odoo.server.generic_forms import (
     GENERIC_FORM_SCOPE,
@@ -78,12 +75,18 @@ def _observation():
 
 
 class OdooGenericFormTests(unittest.TestCase):
-    def test_shared_application_neutral_contract(self):
+    def test_persistence_descriptor_does_not_claim_a_transient_create_form(self):
         client = _Client()
-        assert_current_form_contract(
-            self, _qualified_port(client), application_id="odoo",
-            observation=_observation(), context=_context(), field_label="Reference",
-            native_field="name", value="WH/OUT/00042")
+        tools = ApplicationFormTools(
+            _qualified_port(client), application_id="odoo", binding_secret=b"o" * 32)
+        result = tools.describe(_observation(), {}, context=_context())
+        self.assertEqual(result["persistence"], "application_saves_on_leave")
+        field = next(item for item in result["fields"] if item["label"] == "Reference")
+        with self.assertRaisesRegex(BusinessToolRequestError, "saves automatically"):
+            tools.prepare(_observation(), {
+                "form_id": result["form_id"],
+                "values": [{"field_id": field["field_id"], "value": "WH/OUT/00042"}],
+            }, context=_context())
         self.assertTrue(any(call[1] == "fields_get" for call in client.calls))
 
     def test_only_runtime_page_intersection_and_safe_scalar_fields_are_returned(self):
@@ -104,7 +107,7 @@ class OdooGenericFormTests(unittest.TestCase):
             tools.describe(_observation(), {}, context=_context(("unrelated:read",)))
         self.assertEqual(client.calls, [])
 
-    def test_selection_value_is_normalized_to_odoo_native_option_encoding(self):
+    def test_selection_widget_does_not_bypass_the_autosave_refusal(self):
         client = _Client()
         client.fields["state"]["readonly"] = False
         observation = _observation()
@@ -116,12 +119,11 @@ class OdooGenericFormTests(unittest.TestCase):
                                    context=_context())
         field = next(item for item in described["fields"] if item["label"] == "Status")
 
-        draft, _prepared = tools.prepare(observation, {
-            "form_id": described["form_id"],
-            "values": [{"field_id": field["field_id"], "value": "done"}],
-        }, context=_context())
-
-        self.assertEqual(draft.fields[0].value, '"done"')
+        with self.assertRaisesRegex(BusinessToolRequestError, "saves automatically"):
+            tools.prepare(observation, {
+                "form_id": described["form_id"],
+                "values": [{"field_id": field["field_id"], "value": "done"}],
+            }, context=_context())
 
     def test_unknown_create_page_is_not_promoted_to_safe_prefill(self):
         client = _Client()

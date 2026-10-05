@@ -571,12 +571,14 @@ agent.
   and exact supporting span for internal audit. This verifies provenance, not the model's
   interpretation. Source cannot create a field, selector, choice, permission, or write
   authority.
-  The Odoo reference translation is available by default only for the exact scalar fields
-  covered by its three standard-module browser cases (customer name/email, product
-  name/price/invoicing policy, quotation expiration). Other create pages or fields are not
-  promoted to safe drafts from `fields_get` metadata alone: arbitrary deployment-specific
-  `onchange` code may have external effects that a read-only database transaction cannot stop.
-  The separate existing-customer edit path requires approval before filling. Its Odoo
+  The Odoo reference translation can describe inspected customer, product and quotation
+  scalar fields, but their standard create forms save automatically on leaving. Generic
+  manual-submit prefill is refused before a draft is issued; an immediate DOM check or
+  unchanged record count cannot prove safety after leaving. The separate typed customer
+  creation and existing-customer edit handoffs require an enabled write-confirmation channel
+  and a fresh approval naming the exact values and automatic-save warning before input.
+  Deployment-specific `onchange` may also have effects that a read-only database transaction
+  cannot stop. The existing-customer
   controller adapter delivers the form's `change` event so a value visible in the DOM also
   enters Odoo's pending record; the reference pilot verified an email remained unchanged
   until the person left the page, then saved. This does not qualify arbitrary edit forms,

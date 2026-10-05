@@ -1,11 +1,12 @@
 """Translate actor-scoped Odoo metadata to the generic current-form contract.
 
-Odoo details stop in this module.  The core sees a route, application-labelled scalar
-fields and a transient draft; it never sees a model name, action id or ``fields_get``.
+Odoo details stop in this module. The core sees a route, application-labelled scalar
+fields and the application's persistence contract; it never sees a model name, action id
+or ``fields_get``. Standard create forms save on leaving, so their generic prefill is
+not qualified as a manual-submit handoff.
 """
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from types import MappingProxyType
 from urllib.parse import urlsplit
@@ -18,7 +19,8 @@ from web_operation_agent.business.forms import (
     FormChoice,
 )
 from web_operation_agent.business.runtime import BusinessToolContractError
-from web_operation_agent.business.tools.contracts import FormDraft, FormDraftField
+from web_operation_agent.business.errors import BusinessToolRequestError
+from web_operation_agent.business.tools.contracts import APPLICATION_SAVES_ON_LEAVE, FormDraft
 
 from .descriptors import OdooRuntimeDescriptorReader
 from .generic_reads import OdooEntityReadPort, odoo_model_allowed
@@ -26,10 +28,10 @@ from .generic_reads import OdooEntityReadPort, odoo_model_allowed
 
 GENERIC_FORM_SCOPE = "generic_forms:prepare"
 
-# Browser-qualified standard create fields. Metadata proves that a field exists and the
+# Browser-inspected standard create fields. Metadata proves that a field exists and the
 # actor may create a record; it cannot prove that arbitrary onchange code has no external
 # effects. Unknown pages and fields remain discoverable through the page, but cannot be
-# promoted to a safe prefill draft by this adapter. This is an eligibility policy, not a
+# promoted to a safe prefill draft by this adapter. This is a discovery policy, not a
 # deployment-wide on/off switch or a Skill-owned permission.
 _QUALIFIED_CREATE_FIELDS = MappingProxyType({
     ("customers", "res.partner", "account.res_partner_action_customer"):
@@ -42,7 +44,7 @@ _QUALIFIED_CREATE_FIELDS = MappingProxyType({
 
 
 class OdooFormPort:
-    """Describe safe scalar fields on the actor's current create form."""
+    """Describe scalar fields without misclassifying Odoo's automatic persistence."""
 
     required_scopes = frozenset({GENERIC_FORM_SCOPE})
 
@@ -130,6 +132,9 @@ class OdooFormPort:
             fields=tuple(fields),
             scope=(f"scalar create fields exposed to the current actor on {action.name}"
                    )[:300],
+            persistence=APPLICATION_SAVES_ON_LEAVE,
+            effect="Preparing this new record can save it automatically when the page is left.",
+            targets=(f"New {action.name or model.label} at {path}"[:300],),
         )
 
     def prepare_form(self, form, values: tuple[ApplicationFormValue, ...], *,
@@ -147,24 +152,13 @@ class OdooFormPort:
             raise BusinessToolContractError(
                 "the current Odoo form fields are not qualified for prefill")
 
-        def browser_value(item: ApplicationFormValue) -> str:
-            value = item.value if item.field.kind == "text" else item.value.strip()
-            # Odoo 18's SelectionField renders native <option> values with
-            # JSON.stringify. The application value ``delivery`` is therefore the live DOM
-            # value ``"delivery"``. Keep that encoding inside the Odoo adapter; the core
-            # form contract and PageController remain application-neutral.
-            return (json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-                    if item.field.kind == "choice" else value)
-
-        return FormDraft(
-            route=form.route,
-            fields=tuple(FormDraftField(
-                item.field.reference,
-                item.field.label,
-                browser_value(item),
-                item.control,
-            ) for item in values),
-        )
+        # A DOM check after filling cannot prove that leaving later will not save.
+        # The generic descriptor cannot issue an exact value-bound write proposal;
+        # that operation belongs to separately reviewed typed preparation tools.
+        raise BusinessToolRequestError(
+            "This Odoo form saves automatically when the page is left. "
+            "Generic manual-submit prefill is unavailable; use a separately reviewed "
+            "confirmed form handoff or enter these values yourself.")
 
 
 __all__ = ["GENERIC_FORM_SCOPE", "OdooFormPort"]
