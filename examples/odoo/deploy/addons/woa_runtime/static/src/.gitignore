@@ -2,6 +2,8 @@
 # the npm release pinned in web_operation_agent/policies/page_controller.json and checked
 # by digest. They are deliberately not tracked: this repository serves them, it does not
 # redistribute them, and a committed copy would drift from the pin without anyone noticing.
+# view-bridge.js and page-read-state.js are generated first-party serving copies;
+# their canonical sources live under frontend/src/integrations/odoo/.
 *
 !.gitignore
 !loader.js

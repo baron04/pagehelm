@@ -24,6 +24,7 @@
         "web.assets_backend": [
             "woa_runtime/static/src/facet-bridge.js",
             "woa_runtime/static/src/record-bridge.js",
+            "woa_runtime/static/src/view-bridge.js",
         ],
     },
     "installable": True,

@@ -295,6 +295,19 @@ lock through commit; `/begin` takes it exclusively before acknowledging the read
 window. This fences requests already in flight. It does not stop effects outside the
 database or a client retry made after `/end`.
 
+The optional `OdooReadActions` effect-policy prototype uses the delegated actor's window
+catalog for navigation, mounted successful list reads for paging, and the actor's form
+architecture plus the selected runtime tab for notebook changes. It requires the deployment
+to review the common handlers and supply the reviewed installed-module digest; that digest
+contains names and versions, not source bytes. Dirty, pending, ambiguous and sample views
+provide no route proof. It does not admit search/filter actions, new forms or arbitrary
+workflow buttons, and the default factory keeps its existing policy.
+
+The observer source is in `frontend/src/integrations/odoo/`. Running
+`python scripts/build_runtime.py` copies its serving outputs into the local addon before
+Odoo restarts. These generated files are not committed. The browser reports state only;
+the server owns admission, actor checks and result verification.
+
 ### What is not committed
 
 `page-controller.js`, its mask chunk and its MIT `LICENSE` are fetched from the pinned npm

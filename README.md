@@ -447,6 +447,12 @@ agent.
   application or deployment coverage. The default integrations
   do not enable them. The Contacts native host has no page effect guard and correctly
   refuses this opt-in mode; it is not a positive guarded-browser qualification.
+  The optional Odoo `OdooReadActions` prototype covers actor-readable window navigation,
+  clean-list paging and form notebook tabs under a deployment review of standard handlers.
+  Its mounted-view observer binds completed reads across Owl's reactive wrappers and
+  refuses pending, dirty or ambiguous views. Installed-module versions detect drift but
+  do not attest source contents. Search/filter actions and arbitrary custom handlers are
+  not qualified by this prototype, and it is not enabled by the default Odoo factory.
   Integrations can set `require_page_route=True` in `AgentTurnConfig` for this loop:
   navigation and target completion then require a fresh application-owned `page_route`
   matching the current URL, with no pending render or blocking application error. A

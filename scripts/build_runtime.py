@@ -58,6 +58,12 @@ def main() -> int:
     for name in RETIRED:
         (TARGET.parent / name).unlink(missing_ok=True)
     print(f"runtime -> {TARGET} ({TARGET.stat().st_size} bytes)")
+    # The reference app loads its observation bridge through Odoo's asset pipeline.
+    # Source stays in frontend; these ignored outputs carry no server policy.
+    observers = FRONTEND / "src" / "integrations" / "odoo"
+    served = ROOT / "examples" / "odoo" / "deploy" / "addons" / "woa_runtime" / "static" / "src"
+    for source in observers.glob("*.js"):
+        shutil.copyfile(source, served / source.name)
     return 0
 
 

@@ -48,7 +48,8 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
         """Local modules ship here; third-party PageController remains provisioned."""
         first_party = {"loader.js", "page-controller-with-state.js", "page-facets.js",
                        "facet-bridge.js", "record-bridge.js", "page-record-route.js",
-                       "page-blocker.js", "page-active-view.js"}
+                       "page-blocker.js", "page-active-view.js", "view-bridge.js",
+                       "page-read-state.js"}
         tracked = sorted(path.name for path in deploy.SERVED_ASSETS.glob("*")
                          if path.name not in {".gitignore", *first_party})
         for name in tracked:
@@ -86,6 +87,8 @@ class OnlyFirstPartyBootstrapCodeIsCommitted(unittest.TestCase):
                             root / "page-blocker.js")
             shutil.copyfile(deploy.SERVED_ASSETS / "page-active-view.js",
                             root / "page-active-view.js")
+            shutil.copyfile(deploy.SERVED_ASSETS / "page-read-state.js",
+                            root / "page-read-state.js")
             (root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
             (root / "page-controller.js").write_text("""
 export class PageController {
@@ -156,7 +159,8 @@ await check('/odoo/customers/11', true, false, []);
         controller = (addon / "controllers" / "session.py").read_text()
         self.assertEqual(manifest["assets"], {
             "web.assets_backend": ["woa_runtime/static/src/facet-bridge.js",
-                               "woa_runtime/static/src/record-bridge.js"],
+                               "woa_runtime/static/src/record-bridge.js",
+                               "woa_runtime/static/src/view-bridge.js"],
         })
         self.assertIn("toggleSearchItem", (addon / "static/src/facet-bridge.js").read_text())
         self.assertIn("FormController", (addon / "static/src/record-bridge.js").read_text())
