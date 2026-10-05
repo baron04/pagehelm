@@ -12,6 +12,7 @@ from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.business.runtime import BusinessToolRuntime
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
+from web_operation_agent.execution.budget import TurnBudget
 from web_operation_agent.execution import turn
 from web_operation_agent.planning.repository_source import RepositorySourceLookup
 from web_operation_agent.planning.source_history import SourceHistoryHit
@@ -121,6 +122,78 @@ class ProductDeferredContextTests(unittest.TestCase):
                 ("lookup_source", {"query": "batch limit"}), ("finish", self.answer()),
             ], source=self.source(root), tools=tools)
             self.assertEqual("agent_finished", result.terminal_reason)
+
+    def test_original_helper_read_returns_to_same_agent_without_browser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            helper = root / "src/helper.py"
+            helper.write_text("def validateCeiling(value, bound):\n    return value <= bound\n")
+            source = self.source(root, text="from helper import validateCeiling\n")
+            result, events, chat = self.execute(root, [
+                ("lookup_source", {"query": "src/policy.py"}),
+                ("read_source", {"path": "src/helper.py", "start_line": 2, "end_line": 2}),
+                ("finish", self.answer(ref="source#3", statement="Values up to the bound pass validation.",
+                    support="return value <= bound")),
+            ], source=source)
+            self.assertEqual("agent_finished", result.terminal_reason)
+            self.assertEqual(3, result.agent.model_receipt["model_requests"])
+            self.assertIn("return value <= bound", chat.messages[2][-1]["content"])
+            self.assertTrue(any(e["event"] == "runtime_source_read" for e in events))
+            self.assertFalse(any(e["event"] == "action_receipt" for e in events))
+
+    def test_refused_raw_read_is_not_empty_answer_or_browser_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self.source(root)
+            result, events, chat = self.execute(root, [
+                ("read_source", {"path": "../.env", "start_line": 1, "end_line": 1}),
+                ("finish", {"outcome": "unable"}),
+            ], source=source)
+            self.assertEqual("agent_refused", result.terminal_reason)
+            self.assertIn("Source read refused", chat.messages[1][-1]["content"])
+            self.assertTrue(any(e["event"] == "runtime_source_read_refused" for e in events))
+            self.assertFalse(any(e["event"] == "runtime_source_read" for e in events))
+
+    def test_cancel_and_deadline_during_raw_read_prevent_next_model_or_page_call(self):
+        for kind in ("cancel", "deadline"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = self.source(root)
+                channel = _Channel(observation=False)
+                now = [0.0]
+                budget = TurnBudget(steps=8, seconds=10, clock=lambda: now[0])
+                original = source.lookup.read
+                def stopped_read(*args, **kwargs):
+                    hit = original(*args, **kwargs)
+                    if kind == "cancel":
+                        channel.cancelled = True
+                    else:
+                        now[0] = 11
+                    return hit
+                with (patch.object(source.lookup, "read", side_effect=stopped_read),
+                      patch.object(turn, "TurnBudget", return_value=budget)):
+                    result, events, chat = self.execute(root, [
+                        ("read_source", {"path": "src/policy.py", "start_line": 1, "end_line": 1}),
+                    ], source=source, channel=channel)
+                self.assertEqual("user_cancelled" if kind == "cancel" else "wall_clock_budget",
+                                 result.terminal_reason)
+                self.assertEqual(1, len(chat.messages))
+                self.assertTrue(any(e["event"] == "run_finished" for e in events))
+
+    def test_empty_source_control_does_not_read_raw_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lookup = self.source(root).lookup
+            source = SourceCapability(runtime_source=True, lookup=lookup, source_affordance_mode="empty")
+            with patch.object(lookup, "read", side_effect=AssertionError("control must not read source")):
+                result, events, chat = self.execute(root, [
+                    ("read_source", {"path": "src/policy.py", "start_line": 1, "end_line": 1}),
+                    ("finish", {"outcome": "unable"}),
+                ], source=source)
+            self.assertEqual("agent_refused", result.terminal_reason)
+            self.assertIn("No matching source evidence", chat.messages[1][-1]["content"])
+            self.assertFalse(any(e["event"] == "runtime_source_read" for e in events))
 
     def test_git_metadata_is_answered_and_audited_without_a_page(self):
         with tempfile.TemporaryDirectory() as tmp:

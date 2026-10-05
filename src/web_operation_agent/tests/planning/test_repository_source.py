@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from web_operation_agent.planning.repository_source import (
 )
 from web_operation_agent.planning.source_facts import SourceHit
 from web_operation_agent.planning.source_history import GitSourceHistory, HistoryUnavailable
+from web_operation_agent.planning.source_read import SourceReadError
 from web_operation_agent.planning.sourcetree import SourceTree
 
 
@@ -44,6 +46,77 @@ def _write(root: Path, files: dict[str, str] = FILES) -> None:
 
 
 class LanguageNeutralRepositoryLookupTests(unittest.TestCase):
+    def test_raw_read_returns_whole_lines_and_exact_bytes_in_two_source_shapes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {"src/helper.py": "# helper\r\nif locked:\r\n    deny()\r\n",
+                     "src/panel.vue": "<template>\n  <el-tab-pane label=\"回款\" />\n</template>\n"}
+            _write(root, files)
+            tree = _tree(root)
+            lookup = RepositorySourceLookup(tree)
+            for path, text in files.items():
+                with self.subTest(path=path):
+                    hit = lookup.read(path, start_line=2, end_line=3)
+                    body = "".join(text.splitlines(keepends=True)[1:3])
+                    self.assertEqual(body.rstrip(), hit.text)
+                    self.assertEqual(hashlib.sha256(body.encode()).hexdigest(), hit.evidence.sha256)
+                    self.assertTrue(tree.verify(hit.evidence))
+                    self.assertNotIn("…", hit.line)
+
+    def test_raw_read_cannot_bypass_filter_allowlist_or_indexed_surface(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root)
+            lookup = RepositorySourceLookup(_tree(root), path_filter=lambda p: p.endswith(".py"))
+            (root / "src/new.py").write_text("new = True\n")
+            for path in ("src/panel.js", "src/new.py", "tests/leak.py", ".env",
+                         "../outside.py", "/src/access.py", "src/../src/access.py"):
+                with self.subTest(path=path), self.assertRaises(SourceReadError):
+                    lookup.read(path, start_line=1, end_line=1)
+
+    def test_raw_read_rejects_file_drift_even_outside_the_requested_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"src/helper.py": "safe = True\nlimit = 25\n"})
+            lookup = RepositorySourceLookup(_tree(root))
+            (root / "src/helper.py").write_text("safe = True\nlimit = 30\n")
+            with self.assertRaises(SourceReadError) as caught:
+                lookup.read("src/helper.py", start_line=1, end_line=1)
+            self.assertEqual("source_changed", caught.exception.code)
+
+    def test_raw_read_rechecks_symlinks_and_does_not_expose_denied_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"src/helper.py": "safe = True\n", "tests/secret.py": "secret = True\n"})
+            lookup = RepositorySourceLookup(_tree(root))
+            (root / "src/helper.py").unlink()
+            (root / "src/helper.py").symlink_to(root / "tests/secret.py")
+            with self.assertRaises(SourceReadError) as caught:
+                lookup.read("src/helper.py", start_line=1, end_line=1)
+            self.assertEqual("source_unavailable", caught.exception.code)
+            self.assertNotIn("secret", str(caught.exception))
+
+    def test_raw_read_refuses_oversize_ranges_without_hiding_conditions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"src/helper.py": "x" * 2000 + "\n" + "y" * 2000 + "\n",
+                          "src/many.py": "value = 1\n" * 130,
+                          "src/blank.py": "\n"})
+            lookup = RepositorySourceLookup(_tree(root))
+            for path, start, end, code in (
+                ("src/helper.py", 1, 2, "slice_too_large"),
+                ("src/many.py", 1, 121, "invalid_range"),
+                ("src/helper.py", 0, 1, "invalid_range"),
+                ("src/helper.py", True, 1, "invalid_range"),
+                ("src/helper.py", 1, 9, "invalid_range"),
+                ("src/blank.py", 1, 1, "empty_slice"),
+            ):
+                with self.subTest(path=path, start=start, end=end):
+                    with self.assertRaises(SourceReadError) as caught:
+                        lookup.read(path, start_line=start, end_line=end)
+                    self.assertEqual(code, caught.exception.code)
+            self.assertEqual(2000, len(lookup.read("src/helper.py", start_line=1, end_line=1).text))
+
     def test_explicit_filename_outranks_incidental_directory_matches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

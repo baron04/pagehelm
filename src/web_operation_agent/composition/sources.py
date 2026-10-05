@@ -12,6 +12,7 @@ from typing import Protocol, runtime_checkable
 from ..schemas import SourceMap
 from ..planning.source_facts import CompiledSourceLookup, SourceLookup
 from ..planning.source_history import SourceHistoryLookup
+from ..planning.source_read import SourceReader
 
 
 @runtime_checkable
@@ -49,6 +50,9 @@ class SourceCapability:
     #: explicit because an extracted container tree commonly has no ``.git`` directory.
     history: SourceHistoryLookup | None = None
     history_unavailable_reason: str = "repository history is not configured"
+    #: Optional raw reader, separate from a compiled or combined search index. An
+    #: ordinary repository lookup implementing SourceReader is used automatically.
+    reader: SourceReader | None = None
 
     def __post_init__(self) -> None:
         if self.source_map is not None and not isinstance(self.source_map, SourceMap):
@@ -74,6 +78,13 @@ class SourceCapability:
             raise ValueError("runtime source requires a version-bound SourceMap or source lookup")
         if not isinstance(self.history_unavailable_reason, str):
             raise TypeError("history_unavailable_reason must be a string")
+        if self.reader is not None:
+            if not isinstance(self.reader, SourceReader):
+                raise TypeError("reader must implement SourceReader")
+            if not self.runtime_source:
+                raise ValueError("a source reader requires runtime source lookup")
+            if self.reader.release != self.release:
+                raise ValueError("a source reader must read the lookup's own release")
         if self.history is not None:
             if not isinstance(self.history, SourceHistoryLookup):
                 raise TypeError("history must implement SourceHistoryLookup")
@@ -110,6 +121,12 @@ class SourceCapability:
     def history_lookup(self) -> SourceHistoryLookup | None:
         """The deployment-bound Git provider, when the source extraction includes one."""
         return self.history
+
+    def reader_lookup(self) -> SourceReader | None:
+        """Only an explicitly configured raw reader, never a compiled-map file path."""
+        if self.reader is not None:
+            return self.reader
+        return self.lookup if isinstance(self.lookup, SourceReader) else None
 
     def control(self, *, lookup: SourceLookup | None = None) -> "SourceCapability":
         """Keep the interface and release, replacing compiled facts with an empty map."""

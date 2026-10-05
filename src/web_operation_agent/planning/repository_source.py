@@ -15,6 +15,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 
 from .source_facts import SourceHit, SourceLookup, terms
+from .source_read import (MAX_SOURCE_PATH_CHARS, MAX_SOURCE_READ_CHARS,
+                          MAX_SOURCE_READ_LINES, SourceReadError)
 from .sourcetree import AccessDenied, SourceTree
 from ..schemas import EvidenceRef
 
@@ -118,6 +120,7 @@ class RepositorySourceLookup:
         document_frequency: Counter[str] = Counter()
         skipped_oversize = 0
         skipped_non_utf8 = 0
+        file_digests: dict[str, str] = {}
         for path in files:
             try:
                 text = tree.read_text(path)
@@ -127,6 +130,7 @@ class RepositorySourceLookup:
             except UnicodeDecodeError:
                 skipped_non_utf8 += 1
                 continue
+            file_digests[path] = hashlib.sha256(text.encode("utf-8")).hexdigest()
             lines = text.splitlines(keepends=True)
             language = path.rsplit(".", 1)[-1].lower() if "." in path else "config"
             path_words = terms(path) * 3
@@ -144,6 +148,7 @@ class RepositorySourceLookup:
                 if len(blocks) > max_blocks:
                     raise ValueError(f"allowlisted source surface exceeds {max_blocks} blocks")
         self._tree = tree
+        self._file_digests = file_digests
         self._blocks = tuple(blocks)
         symbol_blocks: dict[str, set[int]] = {}
         for index, block in enumerate(blocks):
@@ -286,6 +291,44 @@ class RepositorySourceLookup:
 
     def verify(self, reference: EvidenceRef) -> bool:
         return self._tree.verify(reference)
+
+    def read(self, path: str, *, start_line: int, end_line: int) -> SourceHit:
+        """Read whole lines from this index's exact release and application-owned scope.
+
+        The file digest was captured when indexing, not supplied by the model. A
+        changed file cannot mix new bytes with an old release, even when the requested
+        lines themselves stayed unchanged. No truncation hides omitted conditions.
+        """
+        if (not isinstance(path, str) or not path or len(path) > MAX_SOURCE_PATH_CHARS
+                or re.search(r"[\\\x00-\x1f\x7f]", path)
+                or any(part in {"", ".", ".."} for part in path.split("/"))):
+            raise SourceReadError("invalid_path", "path must be a canonical repository-relative file")
+        if (isinstance(start_line, bool) or isinstance(end_line, bool)
+                or not isinstance(start_line, int) or not isinstance(end_line, int)
+                or not 1 <= start_line <= end_line
+                or end_line - start_line + 1 > MAX_SOURCE_READ_LINES):
+            raise SourceReadError("invalid_range", f"read 1-{MAX_SOURCE_READ_LINES} positive numbered lines")
+        if path not in self._file_digests:
+            raise SourceReadError("outside_surface", "file is outside the readable deployment surface")
+        try:
+            text = self._tree.read_text(path)
+        except (AccessDenied, OSError, UnicodeDecodeError) as exc:
+            raise SourceReadError("source_unavailable", "deployment source is no longer readable") from exc
+        if hashlib.sha256(text.encode("utf-8")).hexdigest() != self._file_digests[path]:
+            raise SourceReadError("source_changed", "source file no longer matches the indexed deployment")
+        lines = text.splitlines(keepends=True)
+        if end_line > len(lines):
+            raise SourceReadError("invalid_range", f"requested range exceeds the file's {len(lines)} lines")
+        body = "".join(lines[start_line - 1:end_line])
+        if len(body) > MAX_SOURCE_READ_CHARS:
+            raise SourceReadError("slice_too_large", f"request fewer lines; the limit is {MAX_SOURCE_READ_CHARS} characters")
+        if not body.strip():
+            raise SourceReadError("empty_slice", "the selected lines contain no source text")
+        reference = EvidenceRef(repository_id=self.repository_id, release=self.release,
+            path=path, start_line=start_line, end_line=end_line,
+            sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(), excerpt=body.rstrip())
+        return SourceHit(evidence=reference, text=reference.excerpt,
+                         verbatim=True, max_chars=4000, fact_type="implementation")
 
 
 class CombinedSourceLookup:

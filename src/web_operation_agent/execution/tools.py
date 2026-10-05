@@ -17,7 +17,7 @@ from .knowledge_tools import capability_check_available
 from .request_contract import DECLARE_TASK_TOOL, finish_schema
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
-                      SOURCE_TOOL, SOURCE_HISTORY_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL,
+                      SOURCE_TOOL, SOURCE_HISTORY_TOOL, SOURCE_READ_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL,
                       TARGET_TOOL, FACET_TOOL, TOOL_SCHEMAS,
                       WITHDRAW_TOOL, PREFILL_FORM_TOOL)
 
@@ -80,6 +80,8 @@ class ToolSurface:
             tools += [answer_protocol.COMPUTE_TOOL]
         if session.runtime_source:
             tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL]
+            if session.source.reader_lookup() is not None:
+                tools += [SOURCE_READ_TOOL]
             if session.source_map is not None:
                 tools += [SOURCE_NAV_TOOL]
         if session.source_affordance_mode in ("auto", "empty"):
@@ -162,4 +164,6 @@ def answer_repair_tools(session) -> frozenset[str]:
              if session.business_tools is not None else frozenset())
     source_reads = (frozenset({"lookup_source", "lookup_source_history"})
                     if session.runtime_source else frozenset())
+    if session.runtime_source and session.source.reader_lookup() is not None:
+        source_reads |= {"read_source"}
     return frozenset({"finish", "compute", "observe"}) | reads | source_reads

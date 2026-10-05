@@ -14,9 +14,11 @@ import time
 
 from ..answer.evidence import (CapabilityEvidence, Origin, SourceEvidence,
                                SourceHistoryEvidence)
-from ..transport.browser import TransportError
+from ..transport.browser import TransportError, TurnCancelled
+from ..modeling.spend import BudgetExhausted
 from ..planning.retrieval import EvidenceBundle
 from ..planning.source_facts import terms
+from ..planning.source_read import SourceReadError
 from ..privacy import redact_sensitive_assignments
 from ..schemas import BROWSER_ACTIONS, PageObservation, digest
 from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result
@@ -37,7 +39,7 @@ def _source_route_path(session, identity: str) -> str:
         return identity
 
 
-def _source_line(session, hit, query: str) -> str:
+def _source_line(session, hit, query: str, *, tool: str = "lookup_source") -> str:
     """Give quotable source bytes a turn-owned evidence reference."""
     reference = hit.evidence
     if not reference.excerpt.strip():
@@ -48,7 +50,7 @@ def _source_line(session, hit, query: str) -> str:
         ref = f"source#{session._source_evidence_count}"
         session.evidence.record(SourceEvidence(
             evidence_id=ref,
-            origin=Origin(kind="source", reference=f"lookup_source:{query[:120]}",
+            origin=Origin(kind="source", reference=f"{tool}:{query[:120]}",
                           observed_at=str(time.time()),
                           scope=f"the deployed release {reference.release}"),
             path=reference.path, start_line=reference.start_line,
@@ -116,21 +118,26 @@ def lookup_source(session, query: str, obs: PageObservation | None) -> EvidenceB
     return bundle
 
 
-def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
-    """Cited source evidence, and then a fresh look at the page it is about."""
-    query = args.get("query")
-    if not isinstance(query, str) or not query.strip() or len(query) > 1000:
-        return session._reply(turn, call,
-                           "query must be a nonempty string of at most 1000 characters")
-    bundle = lookup_source(session, query, turn.obs)
+def _source_feedback(session, turn, call, *, tool: str, offline_text: str,
+                     page_text: str, affordance_query: str = "") -> "_Next":
+    """Return every source result to the same agent under its existing lifecycle."""
     if session._cancel_requested():
         return _Next(session._finish(
             turn.result, turn.started_at, "user_cancelled",
             "the user stopped this task after source retrieval", steps=turn.step))
+    if session._turn_budget is not None:
+        try:
+            session._turn_budget.check()
+        except TurnCancelled as exc:
+            return _Next(session._finish(turn.result, turn.started_at,
+                "user_cancelled", str(exc), steps=turn.step))
+        except BudgetExhausted as exc:
+            reason = ("step_budget" if exc.kind == "step_budget" else
+                      "token_budget" if exc.kind == "token_budget" else "wall_clock_budget")
+            return _Next(session._finish(turn.result, turn.started_at,
+                reason, str(exc), steps=turn.step))
     if turn.obs is None:
-        return session._reply(turn, call, "SOURCE EVIDENCE (repository facts; not runtime "
-                              "permissions or execution proof):\n" +
-                              (bundle.render() or "No matching source evidence. Do not invent an answer."))
+        return session._reply(turn, call, offline_text)
     try:
         receipt = session.browser.execute("observe", {})
         session._browser_attempts += 1
@@ -140,7 +147,7 @@ def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict
                                   steps=turn.step))
     write = session._writes.write_outcome(receipt, turn.step)
     session.ledger.append("action_receipt", step=turn.step, tool="observe",
-                       command_id=receipt.command_id, after_tool="lookup_source",
+                       command_id=receipt.command_id, after_tool=tool,
                        ok=receipt.ok, error_code=receipt.error_code,
                        write=write["state"], write_attribution="unattributed")
     reason, detail = session._writes.settle_write(write)
@@ -150,6 +157,18 @@ def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict
     if receipt.observation is not None:
         turn.obs = receipt.observation
     note = session._ground(turn.obs, receipt, write["state"], write["refused_requests"])
+    render_args = {"affordance_query": affordance_query} if affordance_query else {}
+    return session._reply(turn, call, page_text + "\n\n" +
+                          session._render(turn.obs, receipt, note, write, **render_args))
+
+
+def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+    """Cited source evidence, and then a fresh look at the page it is about."""
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip() or len(query) > 1000:
+        return session._reply(turn, call,
+                           "query must be a nonempty string of at most 1000 characters")
+    bundle = lookup_source(session, query, turn.obs)
     empty_note = (
         "No searchable source terms in the query. Try a concrete label, identifier, or "
         "source phrase. Do not invent an answer."
@@ -160,11 +179,40 @@ def lookup_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict
         "Use the facts and current page, or ask a materially different source question.\n"
         if bundle.stats.get("facts_shown") and not bundle.stats.get("new_source_facts")
         else "")
-    return session._reply(turn, call,
-                       "SOURCE EVIDENCE (prior; current page wins):\n" +
-                       repeated_note + (bundle.render() or empty_note) +
-                       "\n\n" + session._render(turn.obs, receipt, note, write,
-                                              affordance_query=query))
+    return _source_feedback(session, turn, call, tool=name, affordance_query=query,
+        offline_text="SOURCE EVIDENCE (repository facts; not runtime "
+            "permissions or execution proof):\n" +
+            (bundle.render() or "No matching source evidence. Do not invent an answer."),
+        page_text="SOURCE EVIDENCE (prior; current page wins):\n" +
+            repeated_note + (bundle.render() or empty_note))
+
+
+def read_source_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+    reader = session.source.reader_lookup()
+    if reader is None or not session.runtime_source:
+        return session._reply(turn, call, "Original source reading is unavailable.")
+    if session.source_affordance_mode == "empty":
+        return _source_feedback(session, turn, call, tool=name,
+            offline_text="No matching source evidence. Do not invent an answer.",
+            page_text="No matching source evidence. Do not invent an answer.")
+    if set(args) != {"path", "start_line", "end_line"}:
+        return session._reply(turn, call, "path, start_line and end_line are required; no other arguments")
+    started = time.monotonic()
+    try:
+        hit = reader.read(args["path"], start_line=args["start_line"], end_line=args["end_line"])
+    except SourceReadError as exc:
+        session.ledger.append("runtime_source_read_refused", reason=exc.code)
+        result = f"Source read refused ({exc.code}): {exc}"
+    else:
+        ref = hit.evidence
+        result = _source_line(session, hit, ref.path, tool=name)
+        session.ledger.append("runtime_source_read", path=ref.path,
+            start_line=ref.start_line, end_line=ref.end_line, release=ref.release,
+            source_digest=session.source.content_digest, sha256=ref.sha256,
+            evidence=result, latency_ms=round((time.monotonic() - started) * 1000, 1))
+    return _source_feedback(session, turn, call, tool=name,
+        offline_text="SOURCE EVIDENCE (original code; not runtime permissions or execution proof):\n" + result,
+        page_text="SOURCE EVIDENCE (original code; current runtime facts win):\n" + result)
 
 
 def _source_history_line(session, hit) -> str:
@@ -213,7 +261,6 @@ def lookup_source_history(session, kind: str, *, path: str = "", start_line: int
 
 def lookup_source_history_tool(session, turn: "_Turn", call: dict, name: str,
                                args: dict) -> "_Next":
-    del name
     try:
         kind = args.get("kind")
         if not isinstance(kind, str):
@@ -235,34 +282,9 @@ def lookup_source_history_tool(session, turn: "_Turn", call: dict, name: str,
             target_commit=target)
     except ValueError as exc:
         return session._reply(turn, call, str(exc))
-    if session._cancel_requested():
-        return _Next(session._finish(
-            turn.result, turn.started_at, "user_cancelled",
-            "the user stopped this task after source history retrieval", steps=turn.step))
-    if turn.obs is None:
-        return session._reply(turn, call, "SOURCE HISTORY (version-bound Git metadata):\n" + result)
-    try:
-        receipt = session.browser.execute("observe", {})
-        session._browser_attempts += 1
-    except TransportError as exc:
-        return _Next(session._finish(turn.result, turn.started_at,
-                                  session._transport_terminal("observe"), str(exc),
-                                  steps=turn.step))
-    write = session._writes.write_outcome(receipt, turn.step)
-    session.ledger.append("action_receipt", step=turn.step, tool="observe",
-                       command_id=receipt.command_id, after_tool="lookup_source_history",
-                       ok=receipt.ok, error_code=receipt.error_code,
-                       write=write["state"], write_attribution="unattributed")
-    reason, detail = session._writes.settle_write(write)
-    if reason:
-        return _Next(session._finish(turn.result, turn.started_at, reason, detail,
-                                  steps=turn.step))
-    if receipt.observation is not None:
-        turn.obs = receipt.observation
-    note = session._ground(turn.obs, receipt, write["state"], write["refused_requests"])
-    return session._reply(
-        turn, call, "SOURCE HISTORY (prior; current runtime facts win):\n" + result
-        + "\n\n" + session._render(turn.obs, receipt, note, write))
+    return _source_feedback(session, turn, call, tool=name,
+        offline_text="SOURCE HISTORY (version-bound Git metadata):\n" + result,
+        page_text="SOURCE HISTORY (prior; current runtime facts win):\n" + result)
 
 
 # -- capability check ------------------------------------------------------------

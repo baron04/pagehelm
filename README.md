@@ -433,6 +433,14 @@ agent.
   source compiler. It retrieves bounded code blocks, including Vue components and Java
   services, under the deployment's source allowlist. Raw blocks authorize no navigation or
   API call; page actions still need current runtime evidence and the existing policy.
+  A repository lookup also offers `read_source(path, start_line, end_line)` in the step
+  Agent, allowing follow-up reads of helpers and nearby conditions. Each read returns
+  whole lines from the indexed release, bounded to 120 lines and 3,400 characters;
+  oversized ranges, changed files and paths outside the index's admitted scope are
+  refused. Combined search providers can supply an explicit `SourceCapability.reader`;
+  a compiled map alone does not expose file reads. Results retain source citations,
+  cancellation and the shared deadline, and refresh an already acquired page before
+  the next decision. The goal-directed composition does not yet use this tool.
   An optional local Git provider separately cites ownership, blame, commit, and version-diff
   metadata bound to the deployed commit. Source retrieval remains optional and is never a
   prerequisite for ordinary browser or API operation. A lookup that informs an operation

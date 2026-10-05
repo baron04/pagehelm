@@ -379,6 +379,7 @@ class OdooApplicationAdapter:
             source_affordance_mode="auto",
             lookup=CombinedSourceLookup(
                 CompiledSourceLookup(source_map), repository_lookup),
+            reader=repository_lookup,
             history=history,
             history_unavailable_reason=history_reason,
         )

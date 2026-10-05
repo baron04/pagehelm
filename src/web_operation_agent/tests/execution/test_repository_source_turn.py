@@ -84,6 +84,26 @@ class RepositorySourceTurns(unittest.TestCase):
             session.run()
             self.assertEqual(["observe"], [action for action, _ in browser.done])
 
+    def test_original_read_refreshes_already_bound_page_before_next_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._source(root, "src/policy.py", "batch_limit = 125\n")
+            chat = _Chat([
+                ("read_source", {"path": "src/policy.py", "start_line": 1, "end_line": 1}),
+                ("finish", self._answer("The declared batch limit is 125.", "batch_limit = 125")),
+            ])
+            browser = _Browser([_obs(1), _obs(2)])
+            session = ServerAgentSession(
+                task=TaskSpec("raw-read", "What batch limit does the code define?"),
+                chat=chat, browser=browser, control=_Control([[], [], []]), source=source,
+                ledger=SessionLedger(root / "audit.jsonl", "raw-read"))
+            session.entry_observation = _obs(1)
+            result = session.run()
+            self.assertEqual("agent_finished", result.terminal_reason)
+            self.assertEqual(["observe"], [action for action, _ in browser.done])
+            self.assertEqual("read_source", session.ledger.of_kind("action_receipt")[0]["after_tool"])
+            self.assertEqual("src/policy.py", session.evidence.get("source#1").path)
+
 
 if __name__ == "__main__":
     unittest.main()

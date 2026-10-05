@@ -209,6 +209,27 @@ class SourceCapabilityTests(unittest.TestCase):
         self.assertIn("source", accepted)
         self.assertEqual(accepted & set(SourceCapability.none().session_kwargs()), set())
 
+    def test_raw_reader_is_optional_and_bound_to_the_lookup_release(self):
+        class Lookup:
+            release = "v0"
+            def search(self, query, *, limit=8, route=None):
+                return ()
+
+        class Reader:
+            release = "v0"
+            def read(self, path, *, start_line, end_line):
+                raise AssertionError("configuration never reads source")
+
+        lookup, reader = Lookup(), Reader()
+        self.assertIsNone(SourceCapability(runtime_source=True, lookup=lookup).reader_lookup())
+        self.assertIs(reader, SourceCapability(runtime_source=True, lookup=lookup,
+                                              reader=reader).reader_lookup())
+        reader.release = "v1"
+        with self.assertRaisesRegex(ValueError, "own release"):
+            SourceCapability(runtime_source=True, lookup=lookup, reader=reader)
+        with self.assertRaisesRegex(TypeError, "SourceReader"):
+            SourceCapability(runtime_source=True, lookup=lookup, reader=object())
+
 
 if __name__ == "__main__":
     unittest.main()

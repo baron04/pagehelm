@@ -564,7 +564,8 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         self.cancelled = cancelled or (lambda: False)
         if business_tools is not None:
             reserved = set(BROWSER_ACTIONS) | {
-                "finish", "ask_user", "compute", "load_skill", "lookup_source", "open_source_route",
+                "finish", "ask_user", "compute", "load_skill", "lookup_source",
+                "lookup_source_history", "read_source", "open_source_route",
                 "open_source_candidate", "open_skill_route", "enter_skill_app",
                 "enter_application", "prefill_form",
                 "describe_form", "prepare_form",

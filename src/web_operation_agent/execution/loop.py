@@ -23,7 +23,7 @@ from .business_tools import apply_skill_first, business_tool, load_skill, prefil
 from .form_tools import describe_form, prepare_form
 from .form_entries import find_form_entries, open_form_entry
 from .knowledge_tools import (ask_user_tool, check_capability_tool, capability_check_available,
-                              lookup_source_history_tool, lookup_source_tool)
+                              lookup_source_history_tool, lookup_source_tool, read_source_tool)
 from .page_lifecycle import acquire_page, requires_page
 from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
@@ -55,6 +55,8 @@ def named_tools(session):
     if session.runtime_source:
         available["lookup_source"] = partial(lookup_source_tool, session)
         available["lookup_source_history"] = partial(lookup_source_history_tool, session)
+        if session.source.reader_lookup() is not None:
+            available["read_source"] = partial(read_source_tool, session)
     if session._task_business_skills:
         available["load_skill"] = partial(load_skill, session)
     if session.allow_form_prefill:
@@ -244,7 +246,7 @@ def run_loop(session) -> RunResult:
             return session._finish(
                 result, t0, "user_cancelled", "the user stopped this task",
                 steps=step)
-        if (last_tool_name in {"lookup_source", "lookup_source_history", "observe",
+        if (last_tool_name in {"lookup_source", "lookup_source_history", "read_source", "observe",
                                "click", "goto", "back", "scroll"}
                 and session.evidence.has_source_evidence()
                 and not session.evidence.has_typed_evidence()

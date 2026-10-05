@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from ..schemas import MAX_SCROLL_PAGES
+from ..planning.source_read import (MAX_SOURCE_PATH_CHARS, MAX_SOURCE_READ_LINES)
 
 _PLAN_PREAMBLE = {
     "compiled": "A plan compiled from this application's source code. It is a hint, not the "
@@ -245,6 +246,22 @@ SOURCE_HISTORY_TOOL = {"type": "function", "function": {
                        "end_line": {"type": "integer", "minimum": 1},
                        "target_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
                    }, "required": ["kind"]}}}
+
+SOURCE_READ_TOOL = {"type": "function", "function": {
+    "name": "read_source",
+    "description": (
+        "Read an exact bounded line range of original code in the deployed allowlisted "
+        "repository. Use paths discovered in search or imports to inspect helpers and "
+        "neighbouring conditions. Returns whole cited lines or an explicit refusal; "
+        "does not grant navigation, API permission, or prove runtime effects."),
+    "parameters": {"type": "object", "additionalProperties": False,
+                   "properties": {
+                       "path": {"type": "string", "minLength": 1,
+                                "maxLength": MAX_SOURCE_PATH_CHARS},
+                       "start_line": {"type": "integer", "minimum": 1},
+                       "end_line": {"type": "integer", "minimum": 1,
+                                    "description": f"At most {MAX_SOURCE_READ_LINES} lines per read."},
+                   }, "required": ["path", "start_line", "end_line"]}}}
 
 SOURCE_NAV_TOOL = {"type": "function", "function": {
     "name": "open_source_route",
