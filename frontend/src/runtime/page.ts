@@ -67,6 +67,7 @@ interface PageControllerModule {
   readActiveView?: () => unknown
   readPageRoute?: () => unknown
   readPageQuery?: () => unknown
+  readElementNavigation?: ElementNavigationReader
 }
 
 export type PageFacetReader = () => unknown
@@ -77,6 +78,8 @@ export type PageBlockerReader = () => unknown
 export type ActiveViewReader = () => unknown
 export type PageRouteReader = () => unknown
 export type PageQueryReader = () => unknown
+/** Application-owned target facts, never authorization to click. */
+export type ElementNavigationReader = (element: ElementLike | null | undefined) => unknown
 export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {
   ref?: string; field: string; control: string; value: string
@@ -147,7 +150,8 @@ export class Page {
               private readonly readActiveView?: ActiveViewReader,
               private readonly readPageRoute?: PageRouteReader,
               private readonly readPageQuery?: PageQueryReader,
-              private readonly interrupted: () => boolean = () => false) {}
+              private readonly interrupted: () => boolean = () => false,
+              private readonly readElementNavigation?: ElementNavigationReader) {}
 
   /** App-owned loading is distinct from an error; unknown values remain blocking. */
   readiness(): {blocked: boolean; pending: boolean} {
@@ -185,10 +189,24 @@ export class Page {
   /** What the element under `ref` is now, in the terms an action's meaning depends on. */
   fingerprint(ref: unknown): string {
     try {
-      return actionElementFingerprint(this.element(ref))
+      const fingerprint = actionElementFingerprint(this.element(ref)), navigation = this.navigation(ref)
+      return navigation ? JSON.stringify([fingerprint, navigation]) : fingerprint
     } catch {
       return 'missing'
     }
+  }
+
+  private navigation(ref: unknown): {kind: 'branch' | 'page'; path: string; expanded?: boolean} | undefined {
+    try {
+      const raw = this.readElementNavigation?.(this.element(ref)) as Record<string, unknown> | undefined
+      if (!raw || !['branch', 'page'].includes(String(raw.kind)) || typeof raw.path !== 'string' ||
+          raw.path.length > 500 || !/^\/(?!\/)[^?#\\\s]*$/.test(raw.path)) return undefined
+      const url = new URL(raw.path, location.href)
+      if (url.origin !== location.origin || url.pathname !== raw.path ||
+          this.redactor.redactString(raw.path) !== raw.path) return undefined
+      return {kind: raw.kind as 'branch' | 'page', path: raw.path,
+        ...(raw.kind === 'branch' && typeof raw.expanded === 'boolean' ? {expanded: raw.expanded} : {})}
+    } catch { return undefined }
   }
 
   click(ref: unknown): Promise<unknown> { return this.controller.clickElement(refIndex(ref)) }
@@ -540,7 +558,16 @@ export class Page {
         this.lookup, this.redactor), map, this.lookup, this.redactor), map, this.lookup,
     this.redactor), map, this.lookup), map, this.lookup)
     const fingerprints = new Map<string, string>()
-    for (const item of elements) fingerprints.set(item.ref, this.fingerprint(item.ref))
+    for (const item of elements) {
+      const navigation = this.navigation(item.ref)
+      if (navigation) {
+        item.attrs.navigation_kind = navigation.kind
+        item.attrs.navigation_path = navigation.path
+        if (navigation.expanded !== undefined) item.attrs['aria-expanded'] = String(navigation.expanded)
+        if (navigation.kind === 'page') item.attrs.href = navigation.path
+      }
+      fingerprints.set(item.ref, this.fingerprint(item.ref))
+    }
     const facets = this.readPageFacets ? this.boundedFacets() : undefined
     const candidates = this.readFacetCandidates ? this.boundedCandidates() : undefined
     const recordRoute = this.boundedRecordRoute()
@@ -698,6 +725,7 @@ export interface LoadedPageController {
   readActiveView?: ActiveViewReader
   readPageRoute?: PageRouteReader
   readPageQuery?: PageQueryReader
+  readElementNavigation?: ElementNavigationReader
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -754,5 +782,7 @@ export async function loadPageController(moduleUrl: string | undefined,
     ...(typeof module.readPageRoute === 'function'
       ? {readPageRoute: module.readPageRoute} : {}),
     ...(typeof module.readPageQuery === 'function'
-      ? {readPageQuery: module.readPageQuery} : {})}
+      ? {readPageQuery: module.readPageQuery} : {}),
+    ...(typeof module.readElementNavigation === 'function'
+      ? {readElementNavigation: module.readElementNavigation} : {})}
 }

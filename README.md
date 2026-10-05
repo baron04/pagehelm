@@ -54,7 +54,12 @@ agent.
   with nothing to point at), it says so in the index's terms and the model declares once
   more, for at most two repair rounds. A repair is accepted only when the unresolved
   work decreases, or at equal unresolved work when it enables a useful clarification;
-  the kind of record the person named is preserved. A handoff that carries the value the person gave for a field enters
+  the kind of record the person named is preserved. Form-field repair may relabel an API
+  alias to its UI label only when both uniquely identify the same field in the corrected
+  actor index; exact values, record and entry action are preserved. If the first entity
+  introduced an unindexed field label, correction instead requires every nonempty
+  assignment to match an explicit literal assignment in the user request; ambiguous,
+  negated and unsupported phrasing fails closed. A handoff that carries the value the person gave for a field enters
   it first (typed text, a date at day precision, a choice the field offers, or a linked
   record typed by name and chosen among the field's own suggestions) and checks what the
   field then shows; saving stays with the person, the page write guard holds throughout,
@@ -648,8 +653,8 @@ Its app-owned controller binds CRM detail response IDs to visible record headers
 keeps pending or failed panel reads blocked. A same-route detail read for another record,
 or a missing or repeated ID parameter, invalidates that record binding until the latest
 exact read succeeds and concurrent reads finish. It needs an early facts module; late
-installation or opaque response envelopes fail closed. Form entry and submission remain
-disabled. Full native-page qualification is pending.
+installation or opaque response envelopes fail closed. Without a separately reviewed form policy, form entry remains
+disabled; automatic submission stays disabled. Native qualification covers reviewed entries.
 The native host also has an explicit `--executor page-agent` read-only page-planning pilot
 (the default is `goal`). It reuses the existing step Agent and the actor's session,
 conversation, approval, audit and spend allowance. It requires a reviewed native read
@@ -666,6 +671,12 @@ retaining its receipt in the final answer. Arbitrary clicks, unreviewed fields,
 submission and page filters remain disabled; source grants none of those permissions.
 The pilot never runs automatically after a goal refusal. Its
 scripted isolated browser checks do not establish model accuracy or production readiness.
+With the separate `--native-navigation` opt-in and reviewed native read fence, the
+Yudao click policy also admits mounted default-menu branches and destinations present
+in the current actor's page index. App-owned observation supplies the live target;
+the server authorizes it, and target changes invalidate the browser ref. Custom menu
+handlers, arbitrary buttons and submission remain unavailable. This adds menu admission,
+not a new planner or automatic fallback from the default goal executor.
 This pilot enables the application-neutral `require_task_contract` option (off by default
 for other step executors). Before application tools, the same Agent quotes the user's
 operation and answer clauses in an immutable `declare_task`.

@@ -5,8 +5,67 @@ interaction, however, is not progress towards the original requested deliverable
 This checks typed declarations, not natural-language intent or runtime authority.
 """
 from __future__ import annotations
+import re
 
-from .spec import GoalSpec
+from .spec import Deliverable, GoalSpec
+from .index import ApplicationIndex
+
+
+def field_values_preserved(before: Deliverable, after: Deliverable,
+                           index: ApplicationIndex | None, request: str = "") -> bool:
+    """Relabel a draft only through unique fields of the corrected actor index.
+
+    A model declaration is not a field identity. An application can expose a UI
+    label and an API alias for the same field. Resolve both in the corrected
+    entity, without fuzzy matching; preserve exact values and the record/entry.
+    This grants neither form entry nor approval, which are checked later.
+    """
+    if not before.field_values:
+        return True
+    if (before.record, before.via, before.action) != (after.record, after.via, after.action):
+        return False
+    if before.field_values == after.field_values:
+        return True
+    entity = index.entity(after.entity) if index is not None else None
+    if entity is None or len(before.field_values) != len(after.field_values):
+        return False
+
+    def bindings(pairs):
+        result = {}
+        for label, value in pairs:
+            wanted = " ".join(label.split()).casefold()
+            matches = [f for f in entity.fields if wanted in {
+                " ".join(name.split()).casefold() for name in (f.key, f.label, *f.aliases)}]
+            if len(matches) != 1 or matches[0].key in result:
+                return None
+            result[matches[0].key] = value
+        return result
+
+    previous, corrected = bindings(before.field_values), bindings(after.field_values)
+    if previous is not None:
+        return previous == corrected
+    if corrected is None or sorted(v for _, v in before.field_values) != sorted(corrected.values()):
+        return False
+    # A wrong entity can introduce a label the requested entity never used. It
+    # cannot be canonically relabelled. Admit only nonempty, literal assignments
+    # the person actually wrote, each bound to one field in the corrected index.
+    # This deliberately leaves paraphrases and clearing to clarification.
+    for key, value in corrected.items():
+        field = next(f for f in entity.fields if f.key == key)
+        if not value:
+            return False
+        labels = sorted({field.label, *field.aliases}, key=len, reverse=True)
+        label = "(?:" + "|".join(re.escape(n) for n in labels) + ")"
+        pattern = (r"(?:^|[，,。；;的把]|(?i:\b(?:set|fill)\b))\s*(?i:" + label
+                   + r"\s*(?:字段)?\s*(?:改填|填写|填入|填|改成|改为|设置为|设为|[:：=]|to\b)\s*"
+                   + ")" + re.escape(value) + r"(?=$|[\s，,。；;、])")
+        matches = list(re.finditer(pattern, request))
+        if len(matches) != 1:
+            return False
+        clause = re.split(r"[。；;，,\n]", request[:matches[0].start()])[-1]
+        if re.search(r"不要|别|不必|无需|不能|不改|don't|do not|never|\bnot\b", clause, re.I):
+            return False
+    return True
 
 
 def lost_requirements(before: GoalSpec, after: GoalSpec) -> tuple[str, ...]:

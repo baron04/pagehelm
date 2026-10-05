@@ -99,10 +99,12 @@ class YudaoApplication:
                  api_base_url: str = "", ui: UiSource | None = None,
                  time_zone: str = "Asia/Shanghai", today: date | None = None, source=None,
                  conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None,
-                 native_tabs: bool = False, page_write_guard: str = "",
+                 native_tabs: bool = False, native_navigation: bool = False, page_write_guard: str = "",
                  forms: ApplicationFormPort | None = None):
         if not isinstance(native_tabs, bool) or (native_tabs and not page_write_guard):
             raise ValueError("native tabs require an explicitly configured page write guard")
+        if not isinstance(native_navigation, bool) or native_navigation and not (native_tabs and page_write_guard):
+            raise ValueError("native navigation requires native page observation and a write guard")
         if forms is not None and not page_write_guard:
             raise ValueError("native forms require an explicitly configured page write guard")
         self.origin = origin.rstrip("/")
@@ -113,6 +115,9 @@ class YudaoApplication:
                                       native_sections=native_tabs)
         from .native_tabs import NativeTabPolicy
         self.native_tab_policy = NativeTabPolicy((ui or UiSource.none()).records.values()) if native_tabs else None
+        if native_navigation:
+            from .native_tabs import NativeNavigationPolicy
+            self.native_tab_policy = NativeNavigationPolicy(self.origin, self.goal_data.index, self.native_tab_policy)
         self.read_only_tab_policy = self.native_tab_policy
         if source is not None:
             # The deployment's source rules: when a control shows, what an operation refuses.

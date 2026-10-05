@@ -35,3 +35,33 @@ describe('Element Plus accessible select input mapping', () => {
     expect(nativeControlElement(label)).toBe(label)
   })
 })
+
+describe('mounted default Yudao menu facts', () => {
+  it('uses current component identity and refuses overridden, stale or form-owned menus', async () => {
+    // @ts-expect-error Application-owned JS module.
+    const {readElementNavigation} = await import('../src/integrations/yudao/page-facts.js')
+    const container = document.createElement('nav')
+    container.innerHTML = '<li role="menuitem" class="el-sub-menu"><div role="menuitem" class="el-sub-menu__title">CRM</div></li>'
+    document.body.append(container)
+    const root = container.querySelector('li')!, title = root.firstElementChild!
+    const appContext = {}
+    const live = {isMounted:true,isUnmounted:false,isDeactivated:false,appContext}
+    const owner = {...live,type:{name:'Menu'},props:{},subTree:{el:container},parent:null}
+    const instance = {...live,type:{name:'ElSubMenu'},props:{index:'/crm'},subTree:{el:root},parent:owner}
+    container.id = 'app'
+    Object.assign(container,{__vue_app__:{_container:{_vnode:{component:instance}}}})
+    expect(readElementNavigation(root)).toEqual({kind:'branch',path:'/crm',expanded:false})
+    expect(nativeControlElement(root)).toBe(title)
+    instance.props.index = '/erp'
+    expect(readElementNavigation(title)).toEqual({kind:'branch',path:'/erp',expanded:false})
+    Object.assign(owner.props,{menuSelect:() => undefined})
+    expect(readElementNavigation(root)).toBeUndefined()
+    delete (owner.props as {menuSelect?:unknown}).menuSelect
+    instance.isDeactivated = true
+    expect(readElementNavigation(root)).toBeUndefined()
+    instance.isDeactivated = false
+    container.setAttribute('role','dialog')
+    expect(readElementNavigation(root)).toBeUndefined()
+    container.remove()
+  })
+})

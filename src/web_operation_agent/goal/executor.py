@@ -1245,14 +1245,14 @@ class GoalTurnExecutor:
             # A repair corrects names, fields and conditions; what the person asked
             # for -- a record to open, a list, a value -- stays what the readings said,
             # except a change asked for, which the repair may make a handoff.
+            from .repair import field_values_preserved, lost_requirements
             kept = len(repaired.deliverables) == len(spec.deliverables) and all(
                 after.kind in (before.kind, "handoff")
-                and (not before.field_values or before.field_values == after.field_values)
+                and field_values_preserved(before, after, s.full_index or s.index, s.message.text)
                 and (before.metric is None or before.metric.op not in ("min", "max")
                      or (after.kind in ("aggregate", "list") and after.metric is not None
                          and after.metric.op == before.metric.op))
                 for before, after in zip(spec.deliverables, repaired.deliverables))
-            from .repair import lost_requirements
             losses = lost_requirements(spec, repaired)
             kept = kept and not losses
             # A kind of record the person named ("这个客户") is the one they mean: a repair

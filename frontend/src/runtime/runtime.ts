@@ -26,7 +26,7 @@ import {Page, loadPageController, formFieldMatches, type FormHandoffField,
   type FormSubmitTarget, type PageControllerApi, type PageFacetReader,
   type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
   type ActiveViewReader, type FacetCandidateReader, type FacetApplier,
-  type PageRouteReader, type PageQueryReader} from './page'
+  type PageRouteReader, type PageQueryReader, type ElementNavigationReader} from './page'
 import type {ElementLookup} from './pageModel'
 import {createShell, type PanelShell} from './shell'
 import {DEFAULT_CONFIGURATION} from '../contract/panel'
@@ -101,6 +101,7 @@ export class EmbeddedWebRuntime {
   readActiveView: ActiveViewReader | undefined
   readPageRoute: PageRouteReader | undefined
   readPageQuery: PageQueryReader | undefined
+  readElementNavigation: ElementNavigationReader | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -228,7 +229,7 @@ export class EmbeddedWebRuntime {
     const page = new Page(this.controller, this.getElementByIndex, this.redactor,
       this.readPageFacets, this.readFacetCandidates, this.applyPageFacet,
       this.readPageRecordRoute, this.readPageBlocker, this.readActiveView, this.readPageRoute, this.readPageQuery,
-      () => this.userIntervened)
+      () => this.userIntervened, this.readElementNavigation)
     this.heldPage = {controller: this.controller, lookup: this.getElementByIndex, page}
     return page
   }
@@ -269,7 +270,8 @@ export class EmbeddedWebRuntime {
 
   async start(): Promise<this> {
     const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
-      readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute, readPageQuery} = await loadPageController(
+      readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute, readPageQuery,
+      readElementNavigation} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
@@ -281,6 +283,7 @@ export class EmbeddedWebRuntime {
     this.readActiveView = readActiveView
     this.readPageRoute = readPageRoute
     this.readPageQuery = readPageQuery
+    this.readElementNavigation = readElementNavigation
     return this._startConnectedRuntime()
   }
 

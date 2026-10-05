@@ -22,4 +22,42 @@ class NativeTabPolicy:
         return ""
 
 
-__all__ = ["NativeTabPolicy"]
+class NativeNavigationPolicy:
+    """Default-menu facts checked against the current actor's complete page index.
+
+    This grants neither writes nor arbitrary buttons. The existing visible approval,
+    stale-ref checks, navigation receipt and API write fence remain required.
+    """
+    def __init__(self, origin, page_index, tabs=None):
+        self._origin = origin.rstrip("/")
+        self._index, self._tabs = page_index, tabs
+
+    def decide(self, observation, element):
+        kind = element.attrs.get("navigation_kind")
+        if kind not in {"branch", "page"}:
+            return self._tabs.decide(observation, element) if self._tabs else "no verified menu target"
+        url = urlsplit(observation.url)
+        if (f"{url.scheme}://{url.netloc}" != self._origin
+                or observation.render_state != "ready" or observation.page_route != url.path
+                or element.epoch != observation.epoch
+                or element not in observation.elements
+                or element.role != "menuitem"
+                or element.attrs.get("form_scope")
+                or str(element.attrs.get("aria-disabled", "false")).lower() == "true"
+                or str(element.attrs.get("disabled", "false")).lower() not in {"", "false"}):
+            return "the application has not verified this current menu target"
+        path = element.attrs.get("navigation_path", "")
+        if (not isinstance(path, str) or not re.fullmatch(r"/(?!/)[^?#\\\s%]*", path)
+                or path == "/" or "/../" in path or "/./" in path or path.endswith(("/..", "/."))):
+            return "no canonical application menu destination"
+        try:
+            pages = {page.key for page in self._index().pages if page.key.startswith("/")}
+        except Exception:
+            return "the actor's page index is unavailable"
+        allowed = path in pages if kind == "page" else any(p.startswith(path.rstrip("/") + "/") for p in pages)
+        if not allowed or kind == "page" and element.attrs.get("href") != path:
+            return "this menu target is outside the actor's page index"
+        return ""
+
+
+__all__ = ["NativeTabPolicy", "NativeNavigationPolicy"]

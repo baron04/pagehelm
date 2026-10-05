@@ -268,8 +268,60 @@ export const readPageRecordRoute = () => installed?.readPageRecordRoute()
 export const readPageRoute = () => installed?.readPageRoute()
 export const readPageQuery = () => installed?.readPageQuery()
 export const disposeInstalledPageFacts = () => installed?.dispose()
+/** Observe only the mounted application's default menu, not arbitrary menu-shaped DOM. */
+export function readElementNavigation(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected || element.closest('form,[role="dialog"]')) return undefined
+  const root = element.closest('li.el-menu-item,li.el-sub-menu')
+  if (!root || root.classList.contains('is-disabled')) return undefined
+  const live = item => item?.isMounted === true && item.isUnmounted === false && item.isDeactivated === false
+  // Production Vue omits DOM component backreferences. Walk the mounted VNodes
+  // instead; component identity is not inferred from CSS or a stale cache.
+  const app = document.getElementById('app')?.__vue_app__
+  const stack = [app?._container?._vnode], nodes = new Set()
+  let instance
+  while (stack.length && nodes.size < 8192) {
+    const node = stack.pop()
+    if (!node || nodes.has(node)) continue
+    nodes.add(node)
+    if (node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root)) continue
+    if (node.component) {
+      const candidate = node.component
+      if (!live(candidate)) continue
+      if (['ElMenuItem', 'ElSubMenu'].includes(candidate.type?.name) && candidate.subTree?.el === root) {
+        if (instance && instance !== candidate) return undefined
+        instance = candidate
+      }
+      stack.push(candidate.subTree)
+    }
+    if (Array.isArray(node.children)) stack.push(...node.children)
+  }
+  if (stack.length) return undefined
+  const seen = new Set()
+  if (!live(instance) || instance.subTree?.el !== root) return undefined
+  const kind = instance.type.name === 'ElSubMenu' ? 'branch' : 'page'
+  const title = kind === 'branch' ? root.querySelector(':scope > .el-sub-menu__title') : root
+  if (!title || (element !== root && element !== title)) return undefined
+  if (root.getAttribute('role') !== 'menuitem') return undefined
+  const path = instance.props?.index
+  if (typeof path !== 'string' || path.length > 500 || !/^\/(?!\/)[^?#\\\s]*$/.test(path)) return undefined
+  let owner = instance.parent
+  while (owner && seen.size < 48) {
+    if (!live(owner) || owner.appContext !== instance.appContext || seen.has(owner)) return undefined
+    seen.add(owner)
+    if (owner.type?.name === 'Menu') {
+      if (owner.props?.menuSelect || owner.props?.rootOnly || owner.props?.menus !== undefined ||
+          !owner.subTree?.el?.contains(root)) return undefined
+      return {kind, path, ...(kind === 'branch' ? {expanded: root.getAttribute('aria-expanded') === 'true'} : {})}
+    }
+    owner = owner.parent
+  }
+  return undefined
+}
 /** Map one Element Plus select hit area to its own accessible form input. */
 export function nativeControlElement(element) {
+  if (readElementNavigation(element)?.kind === 'branch' && element.matches('li.el-sub-menu')) {
+    return element.querySelector(':scope > .el-sub-menu__title')
+  }
   if (element instanceof HTMLElement && element.matches('.el-radio,.el-radio-button')) {
     const radios = element.querySelectorAll('input[type="radio"]')
     return radios.length === 1 && radios[0].closest('.el-radio,.el-radio-button') === element

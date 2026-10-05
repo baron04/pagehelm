@@ -17,7 +17,7 @@ from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStat
 from web_operation_agent.goal import executor as module
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.goal.forms import combine_forms
-from web_operation_agent.goal.ports import FormPlan, PagePlan
+from web_operation_agent.goal.ports import FormPlan, PagePlan, Resolution, Resolved
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.tests.execution.product_support import _Channel
 from web_operation_agent.tests.support.business import _Chat
@@ -64,7 +64,7 @@ class FormBrowser:
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交"):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交", repair_label=False):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
         FormBrowser.submit_after_scroll = submit_after_scroll
@@ -90,6 +90,27 @@ class GoalFormsTests(unittest.TestCase):
             audit = Path(tmp) / "audit.jsonl"
             bound = bind_application(adapter)
             goal_port = ContactsGoalPort(adapter, form_prefill=True)
+            if repair_label:
+                old_label = "Wrong mail" if repair_label == "literal" else "Electronic mail"
+                class RepairGoals(ContactsGoalPort):
+                    def index(self, **kwargs):
+                        index = super().index(**kwargs)
+                        return replace(index, entities=tuple(replace(e, fields=tuple(
+                            replace(f, aliases=("Electronic mail",)) if f.key == "email" else f
+                            for f in e.fields)) for e in index.entities))
+                    def resolve(self, spec, **kwargs):
+                        if any(label == old_label for d in spec.deliverables
+                               for label, _ in d.field_values):
+                            return Resolution(deliverables=(Resolved(kind="handoff",
+                                problem="the form needs its current field label",
+                                repair="Electronic mail is indexed as Email on this form"),))
+                        return super().resolve(spec, **kwargs)
+                goal_port = RepairGoals(adapter, form_prefill=True)
+                final = {"write_intent": True, "deliverables": declarations}
+                first = {"write_intent": True, "deliverables": [{**d, "field_values": [
+                    {**v, "field": old_label} if v["field"] == "Email" else v
+                    for v in d["field_values"]]} for d in declarations]}
+                chat = _Chat([("declare_goal", first), ("declare_goal", final)])
             if open_entry:
                 delegate = bound.ports.forms
                 class EntryPort:
@@ -138,6 +159,38 @@ class GoalFormsTests(unittest.TestCase):
         self.assertNotIn("fill", browser.actions)
         self.assertNotIn("click", browser.actions)
         self.assertFalse(any(e['event'] == 'operation_control_requested' for e in events))
+
+    def test_alias_repair_reaches_verified_form_and_still_requires_approval(self):
+        for decision in ("approved", "denied"):
+            with self.subTest(decision=decision):
+                result, browser, channel, chat, events = self.run_goal(
+                    batch=True, repair_label=True, decision=decision)
+                self.assertTrue(next(e for e in events if e["event"] == "goal_repaired")["accepted"])
+                self.assertEqual(len(chat.messages), 2)
+                self.assertEqual(len(channel.approvals), 1)
+                self.assertNotIn("submit", browser.actions)
+                if decision == "approved":
+                    self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+                    self.assertEqual(browser.values, {"name": "Ada Byron", "email": "new@example.test"})
+                    self.assertEqual(browser.actions.count("handoff_form"), 1)
+                else:
+                    self.assertEqual(result.status, AgentTurnStatus.CANCELLED)
+                    self.assertNotIn("fill", browser.actions)
+
+    def test_unindexed_label_repair_requires_literal_assignments_and_fresh_approval(self):
+        for decision in ("approved", "denied"):
+            result, browser, channel, _, events = self.run_goal(batch=True, repair_label="literal",
+                values=(("Name", "Ada Byron"), ("Email", "new@example.test")),
+                decision=decision, prompt="Name to Ada Byron, Email to new@example.test; leave saving to me.")
+            self.assertTrue(next(e for e in events if e["event"] == "goal_repaired")["accepted"])
+            self.assertEqual(len(channel.approvals), 1)
+            self.assertNotIn("submit", browser.actions)
+            if decision == "approved":
+                self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+                self.assertEqual(browser.values, {"name": "Ada Byron", "email": "new@example.test"})
+            else:
+                self.assertEqual(result.status, AgentTurnStatus.CANCELLED)
+                self.assertNotIn("fill", browser.actions)
 
     def test_explicit_clear_still_obeys_application_required_fields(self):
         result, browser, _, _, _ = self.run_goal(batch=True, values=(("Email", ""),),

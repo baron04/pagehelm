@@ -241,6 +241,15 @@ ingress on this origin. A nonce probe checks both public routes before the host 
 native tabs; a failed probe aborts startup. The ordinary deployment is unchanged unless
 the option and ingress are installed together.
 
+`--native-navigation` separately enables default-menu clicks under this same fence.
+It requires `--native-read-policy`. The app-owned controller extracts mounted menu
+targets, while the server checks branches and destinations against the acting user's
+page index. It does not require source retrieval or per-page menu allowlists. Overrides
+such as custom `menuSelect`, root-only menus and supplied menu trees fail closed.
+Visible approval and fresh element refs are still required. This option does not
+enable arbitrary buttons, search fields, record-row clicks or submission, and does not
+switch the default `goal` executor to the `page-agent` pilot.
+
 During a window, only reviewed GETs reach the upstream. Begin waits for earlier admitted
 requests; end acknowledges only when no actor window remains. Lost mutation responses
 persist as uncertain admission in `native-guard.sqlite3`; acknowledged windows are also

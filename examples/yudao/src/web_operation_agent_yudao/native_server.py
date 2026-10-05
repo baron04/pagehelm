@@ -107,10 +107,13 @@ class YudaoHostConfig:
     native_form_policy: Path | None = None
     native_create_policies: tuple[Path, ...] = ()
     native_guard_port: int = 48093
+    native_navigation: bool = False
     #: Explicit read-only page-planning pilot; never selected by browser messages or fallback.
     executor_mode: str = "goal"
 
     def __post_init__(self):
+        if not isinstance(self.native_navigation, bool) or self.native_navigation and self.native_read_policy is None:
+            raise ValueError("native navigation requires a reviewed native read policy and write guard")
         if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent"}:
             raise ValueError("executor_mode must be goal or page-agent")
         if self.executor_mode == "page-agent" and self.native_read_policy is None:
@@ -240,6 +243,7 @@ class YudaoHost:
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
                                 native_tabs=self.native_proxy is not None,
+                                native_navigation=self.config.native_navigation,
                                 forms=forms,
                                 page_write_guard=GUARD_PATH if self.native_proxy is not None else "")
 
@@ -396,6 +400,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-form-policy", type=Path)
     ap.add_argument("--native-create-policy", type=Path, action="append", default=[])
     ap.add_argument("--native-guard-port", type=int, default=48093)
+    ap.add_argument("--native-navigation", action="store_true")
     ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
@@ -412,6 +417,7 @@ def main(argv=None) -> int:
         source_release=a.source_release, gateway_port=a.gateway_port,
         bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
         native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
+        native_navigation=a.native_navigation,
         native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
         executor_mode=a.executor,
         max_sessions=a.max_sessions,

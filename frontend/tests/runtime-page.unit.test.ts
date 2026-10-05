@@ -534,3 +534,50 @@ describe('Page refuses controls that are not writable at execution time', () => 
     expect(api.selectOption).not.toHaveBeenCalled()
   })
 })
+
+describe('application navigation facts', () => {
+  it('projects a plain HTML adapter target and invalidates a ref when it changes', async () => {
+    // @ts-expect-error The independent test application serves its own JS module.
+    const {readElementNavigation} = await import('../../testapps/contacts/assets/page_controller.js')
+    const nav = document.createElement('nav')
+    nav.innerHTML = '<a href="/contacts">Contacts</a>'
+    document.body.append(nav)
+    const link = nav.querySelector('a')!
+    const api = controller()
+    const page = new Page(api, () => link, createRedactor(),
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      () => false, readElementNavigation)
+    const state = {url:location.href,title:'',content:'[1]<a href="/contacts">Contacts />'}
+    const reading = page.describe(state, 1)
+    expect(reading.observation.elements[0]!.attrs.navigation_path).toBe('/contacts')
+    const fingerprint = reading.fingerprints.get('e1')
+    link.href = '/companies'
+    expect(page.fingerprint('e1')).not.toBe(fingerprint)
+    link.href = '//other.test/contacts'
+    expect(page.describe(state, 2).observation.elements[0]!.attrs.navigation_path).toBeUndefined()
+    nav.remove()
+  })
+  it('refuses malformed and secret-bearing target readers', () => {
+    const element = document.createElement('div')
+    const state = {url:location.href,title:'',content:'[1]<div role=menuitem>Menu />'}
+    for (const value of [{kind:'page',path:'//foreign.test/a'}, {kind:'page',path:'/a?token=secret'},
+      {kind:'page',path:'/a/../b'}, {kind:'execute',path:'/a'}, {kind:'page',path:'https://foreign.test/a'}]) {
+      const page = new Page(controller(), () => element, createRedactor(),
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        () => false, () => value)
+      expect(page.describe(state,1).observation.elements[0]!.attrs.navigation_path).toBeUndefined()
+    }
+  })
+})
+
+it('invalidates a menu ref when the app reports a changed expansion state', () => {
+    const element = document.createElement('div')
+    const facts = {kind:'branch',path:'/crm',expanded:false}
+    const page = new Page(controller(), () => element, createRedactor(),
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      () => false, () => facts)
+    const reading = page.describe({url:location.href,title:'',content:'[1]<div role=menuitem>CRM />'},1)
+    expect(reading.observation.elements[0]!.attrs['aria-expanded']).toBe('false')
+    facts.expanded = true
+    expect(page.fingerprint('e1')).not.toBe(reading.fingerprints.get('e1'))
+  })

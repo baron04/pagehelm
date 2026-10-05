@@ -39,6 +39,16 @@ export function getElementByIndex(selectorMap, index) {
   return element
 }
 
+// A second, plain HTML integration supplies the same observation-only contract.
+export function readElementNavigation(element) {
+  if (!(element instanceof HTMLAnchorElement) || !element.isConnected ||
+      !element.closest('nav') || element.closest('form,[role="dialog"]') ||
+      element.hasAttribute('download') || element.target && element.target !== '_self') return undefined
+  const path = element.getAttribute('href')
+  return typeof path === 'string' && /^\/(?!\/)[^?#\\\s]*$/.test(path)
+    ? {kind: 'page', path} : undefined
+}
+
 // The synthetic REST app reports a rendered view via its own main-element marker.
 // This deliberately shares no Odoo selector or route inference with the product core.
 export function readActiveView() {
