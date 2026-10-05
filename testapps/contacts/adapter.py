@@ -59,6 +59,7 @@ from web_operation_agent.business.runtime import (
     BusinessToolAuthenticationError,
     BusinessToolError,
     BusinessToolPermissionError,
+    BusinessToolRequestError,
     BusinessToolResult,
     BusinessToolRuntime,
     business_text_key,
@@ -600,6 +601,48 @@ class _ContactsFormPort:
 
     def __init__(self, executor: _ContactsToolExecutor):
         self._executor = executor
+        self._planned = None
+
+    def form_entries(self, observation, *, context):
+        from web_operation_agent.business.form_entries import FormEntryCandidate
+        if (observation.render_state != "ready" or observation.page_route != "/contacts"
+                or urllib.parse.urlsplit(observation.url).path != "/contacts"):
+            return ()
+        controls = [e for e in observation.elements if e.role == "link" and e.name == "New contact"
+                    and e.attrs.get("href") == "/contacts/new"]
+        return (FormEntryCandidate("contacts-create-entry", "New contact", "create"),) if len(controls) == 1 else ()
+
+    def plan_entry(self, reference, observation, *, context):
+        from web_operation_agent.business.forms import ApplicationFormEntry
+        self._planned = None
+        if reference != "contacts-create-entry" or not self.form_entries(observation, context=context):
+            raise BusinessToolRequestError("the contact create entry is not current")
+        control = next(e for e in observation.elements if e.role == "link" and e.name == "New contact"
+                       and e.attrs.get("href") == "/contacts/new")
+        entry = ApplicationFormEntry(reference, control)
+        self._planned = entry, context.principal.binding_digest, context.session_id, context.turn_id
+        return entry
+
+    def accept_entry(self, entry, before, receipt, observation, *, context):
+        planned, self._planned = self._planned, None
+        if (planned != (entry, context.principal.binding_digest, context.session_id, context.turn_id)
+                or not receipt.ok or receipt.action != "click"
+                or receipt.args_echo != {"ref": entry.control.ref, "epoch": before.epoch}
+                or observation.epoch <= before.epoch or observation.render_state != "ready"
+                or observation.page_route != "/contacts/new"
+                or urllib.parse.urlsplit(observation.url).path != "/contacts/new"):
+            raise BusinessToolRequestError("the contact form entry receipt was not verified")
+        return "contacts-create-v1"
+
+    def discard_entry(self, entry, *, context):
+        if self._planned is not None and self._planned[0] == entry:
+            self._planned = None
+
+    def decide(self, observation, element):
+        if (self._planned is not None and self._planned[0].control == element
+                and element in observation.elements and element.epoch == observation.epoch):
+            return ""
+        return "only a current reviewed contact form opener may be clicked"
 
     def describe_form(self, observation, *, context=None):
         if urllib.parse.urlsplit(observation.url).path != "/contacts/new":

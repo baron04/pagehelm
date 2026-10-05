@@ -552,6 +552,113 @@ class NativeContactsHostTests(unittest.TestCase):
 
 
 class NativeContactsBrowserTests(unittest.TestCase):
+    def test_reviewed_entry_opens_and_prefills_from_the_list_without_submitting(self):
+        self._run_form_entry_native()
+
+    def test_form_handoff_preserves_and_answers_the_accompanying_question(self):
+        self._run_form_entry_native(question=True)
+
+    def test_unanswered_question_keeps_the_verified_form_and_manual_handoff(self):
+        self._run_form_entry_native(question=True, unanswered=True)
+
+    def _run_form_entry_native(self, *, question=False, unanswered=False):
+        from playwright.sync_api import sync_playwright
+        action = "Prepare a new contact named Margaret Hamilton with margaret@example.test; leave saving to me."
+        answer_request = ("Who designed the contact approval workflow?" if unanswered
+                          else "What email is on the prepared form?")
+        prompt = action + (' ' + answer_request if question else '')
+
+        class EntryChat(ScriptedDemoChat):
+            def __init__(self):
+                super().__init__(())
+                self.stage, self.run_ids, self.actions = 0, set(), []
+            def complete(self, messages, tools, run_id, **kwargs):
+                self.run_ids.add(run_id)
+                names = {tool['function']['name'] for tool in tools}
+                latest = messages[-1]['content']
+                if self.stage == 0:
+                    name, args = 'declare_task', {'action_request': action,
+                        'action_kind': 'draft', 'answer_requests': [answer_request] if question else []}
+                elif self.stage == 1:
+                    name, args = 'find_form_entries', {}
+                elif self.stage == 2:
+                    data = json.JSONDecoder().raw_decode(latest.split('CURRENT FORM ENTRIES:\n')[1])[0]
+                    assert len(data['entries']) == 1, latest
+                    self.entry = data['entries'][0]['entry_id']
+                    name, args = 'open_form_entry', {'entry_id': self.entry}
+                elif self.stage == 3 and 'FORM ENTRY OPENED' in latest:
+                    name, args = 'wait_for', {'ms': 400}
+                    self.stage -= 1
+                elif self.stage == 3:
+                    name, args = 'describe_form', {'field_query': 'Name Email'}
+                elif self.stage == 4:
+                    data = json.JSONDecoder().raw_decode(latest.split('CURRENT FORM DESCRIPTOR (runtime fact; opaque bindings):\n')[1])[0]
+                    values = {'Name': 'Margaret Hamilton', 'Email': 'margaret@example.test'}
+                    name, args = 'prepare_form', {'form_id': data['form_id'], 'values': [
+                        {'field_id': field['field_id'], 'value': values[field['label']]}
+                        for field in data['fields'] if field['label'] in values]}
+                elif 'FORM PREFILL VERIFIED' not in latest:
+                    name, args = 'prefill_form', {}
+                else:
+                    assert {'observe', 'finish'} <= names, names
+                    assert not {'goto', 'open_form_entry', 'find_form_entries', 'prefill_form', 'submit'} & names, names
+                    if unanswered:
+                        name, args = 'finish', {'outcome': 'unable'}
+                        self.actions.append(name)
+                        self.replies = (*self.replies, (name, args))
+                        return super().complete(messages, tools, run_id, **kwargs)
+                    data = json.JSONDecoder().raw_decode(latest.split(
+                        'ANSWER EVIDENCE (untrusted application values; use exact ref):\n')[1])[0]
+                    refs = [item['ref'] for item in data['evidence'] if item.get('value')
+                            and '@' in item['value']]
+                    assert refs, latest
+                    name, args = 'finish', {'outcome': 'acted', 'answer': {'version': 1,
+                        'coverage': 'complete', 'conclusions': [{'kind': 'page_observation',
+                            'evidence_ref': ref} for ref in refs],
+                        'answers_for': [{'request_ref': 'a1', 'evidence_refs': refs}]}}
+                self.actions.append(name)
+                self.stage += 1
+                assert name in names, names
+                self.replies = (*self.replies, (name, args))
+                return super().complete(messages, tools, run_id, **kwargs)
+
+        chat = EntryChat()
+        with tempfile.TemporaryDirectory() as directory, patch(
+                'testapps.contacts.server._chat', return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0,
+                    scripted=False, require_task_contract=True)) as host, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={'width': 1280, 'height': 900})
+                page.goto(host.origin + '/demo/login/ada-lovelace', wait_until='domcontentloaded')
+                page.evaluate(_CONNECTED)
+                page.get_by_role('link', name='New contact').wait_for(state='visible')
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, prompt)
+                _allow_operation(page)
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error, f"actions={chat.actions}; last={json.loads(chat.seen[-1])['messages'][-2:]}")
+                self.assertEqual(outcome.result.terminal_reason,
+                                 'agent_refused' if unanswered else 'agent_finished')
+                self.assertEqual(page.locator('input[name="name"]').input_value(), 'Margaret Hamilton')
+                self.assertEqual(page.locator('input[name="email"]').input_value(), 'margaret@example.test')
+                self.assertEqual((host.application.write_requests, host.application.records_created), (0, 0))
+                self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
+                self.assertIn('manually', outcome.result.user_answer)
+                self.assertEqual(len(chat.run_ids), 1)
+                self.assertEqual(chat.actions.count('open_form_entry'), 1)
+                self.assertNotIn('submit', chat.actions)
+                if question:
+                    if unanswered:
+                        self.assertIn(answer_request, outcome.result.user_answer)
+                    else:
+                        self.assertIn('margaret@example.test', outcome.result.user_answer)
+                        self.assertNotIn('Unanswered', outcome.result.user_answer)
+                    self.assertEqual(chat.actions.count('prefill_form'), 1)
+            finally:
+                browser.close()
+
     def test_frozen_record_task_rejects_list_completion_and_recovers_in_the_same_native_run(self):
         """A requested contact cannot be silently replaced by the contact list."""
         from playwright.sync_api import sync_playwright

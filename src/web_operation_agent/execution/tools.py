@@ -11,6 +11,7 @@ from copy import deepcopy
 
 from ..answer import answer_protocol, page_answer
 from ..business.forms import FORM_TOOL_SCHEMAS
+from ..business.form_entries import FORM_ENTRY_SCHEMAS
 from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
 from .knowledge_tools import capability_check_available
 from .request_contract import DECLARE_TASK_TOOL, finish_schema
@@ -132,6 +133,8 @@ class ToolSurface:
         if (session.allow_form_prefill
                 and session._application_form_tools is not None):
             tools += list(FORM_TOOL_SCHEMAS)
+            if session._form_entry_tools is not None:
+                tools += list(FORM_ENTRY_SCHEMAS)
         if (session.allow_form_prefill
                 and (session._application_form_tools is not None
                      or session.business_tools is not None)):
@@ -157,4 +160,6 @@ def answer_repair_tools(session) -> frozenset[str]:
     """
     reads = (session.business_tools.read_tool_names
              if session.business_tools is not None else frozenset())
-    return frozenset({"finish", "compute", "observe"}) | reads
+    source_reads = (frozenset({"lookup_source", "lookup_source_history"})
+                    if session.runtime_source else frozenset())
+    return frozenset({"finish", "compute", "observe"}) | reads | source_reads

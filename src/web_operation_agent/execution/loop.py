@@ -21,6 +21,7 @@ from ..modeling.spend import BudgetExhausted
 from ..privacy import safe_tool_arguments as _safe
 from .business_tools import apply_skill_first, business_tool, load_skill, prefill_form
 from .form_tools import describe_form, prepare_form
+from .form_entries import find_form_entries, open_form_entry
 from .knowledge_tools import ask_user_tool, lookup_source_history_tool, lookup_source_tool
 from .page_actions import take_page_action
 from .prompts import (AGENT_SYSTEM, APPLICATION_ENTRY_SYSTEM, BUSINESS_SKILL_SYSTEM,
@@ -59,6 +60,9 @@ def named_tools(session):
         if session._application_form_tools is not None:
             available["describe_form"] = partial(describe_form, session)
             available["prepare_form"] = partial(prepare_form, session)
+        if session._form_entry_tools is not None:
+            available["find_form_entries"] = partial(find_form_entries, session)
+            available["open_form_entry"] = partial(open_form_entry, session)
     if session._answers_pending_question:
         available["withdraw_request"] = session._tool_withdraw_request
     if (session.business_tools is not None

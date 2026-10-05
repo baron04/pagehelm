@@ -12,6 +12,7 @@ from web_operation_agent.business.goal_candidates import (
     RESOLVE_GOAL_CANDIDATES_SCHEMA, RESOLVE_GOAL_CANDIDATES_TOOL)
 from web_operation_agent.execution.business_tools import business_tool
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
+from web_operation_agent.execution.tools import answer_repair_tools
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
 
@@ -37,6 +38,26 @@ class _GenericExecutor:
 
 
 class ToolSurfaceTests(unittest.TestCase):
+    def test_answer_phase_keeps_optional_source_reads_and_blocks_action_tools(self):
+        tools = BusinessToolRuntime((), _GenericExecutor(), numeric_goal_binding=True)
+        with tempfile.TemporaryDirectory() as directory:
+            session = ServerAgentSession(
+                task=TaskSpec('mixed', 'Prefill this form and explain its rule.'),
+                chat=_Chat([]), browser=_Browser([_obs(1)]), control=_Control([[], []]),
+                ledger=SessionLedger(Path(directory) / 'audit.jsonl', 'mixed'),
+                business_tools=tools, allow_form_prefill=True)
+            session._finalizing = True
+            for runtime_source in (False, True):
+                session.runtime_source = runtime_source
+                exposed = {s['function']['name'] for s in session.tool_schemas()}
+                permitted = answer_repair_tools(session)
+                self.assertTrue({'observe', 'finish', 'query_records'} <= exposed)
+                self.assertTrue(exposed <= permitted)
+                self.assertEqual('lookup_source' in exposed, runtime_source)
+                self.assertEqual('lookup_source_history' in permitted, runtime_source)
+                self.assertFalse({'goto', 'click', 'fill', 'submit', 'prefill_form',
+                    'find_form_entries', 'open_form_entry', 'prepare_form'} & permitted)
+
     def test_page_location_request_keeps_the_full_authorized_surface(self):
         tools = BusinessToolRuntime((), _GenericExecutor(), numeric_goal_binding=True)
         with tempfile.TemporaryDirectory() as directory:

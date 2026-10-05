@@ -41,7 +41,8 @@ def _record_navigation(session, url: str) -> None:
         session._answer_action_receipt = {"kind": "navigation", "url": url}
 
 
-def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
+def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
+                     *, receipt_sink=None) -> "_Next":
     """Everything a page action is: refuse it, route it, dispatch it, report what it did.
 
     The tools above answer for themselves; this is the path the browser is on, and the
@@ -431,6 +432,8 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict) 
         session.page_actions += 1
     write = session._writes.write_outcome(
         receipt, step, action_may_write=action_may_write)
+    if receipt_sink is not None:
+        receipt_sink(receipt)
     session.ledger.append("action_receipt", step=step, tool=receipt.action,
                        command_id=receipt.command_id, write_attribution="unattributed",
                        ok=receipt.ok, error_code=receipt.error_code,

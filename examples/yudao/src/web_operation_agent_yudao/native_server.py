@@ -282,18 +282,21 @@ class YudaoHost:
                 conversation_state=SQLiteConversationState(
                     self.config.state_dir / "conversation-state.sqlite3", session_id))
             if self.config.executor_mode == "page-agent":
-                # Keep the existing single Agent, identity, meter, approval, audit and
-                # conversation. This pilot cannot enter forms or expose source authority.
+                # The same Agent receives optional source evidence and reviewed form
+                # entries. Source grants no actions; form review grants no submission.
                 turn_config = replace(turn_config, require_page_route=True, require_task_contract=True,
-                    source=SourceCapability.none(), allow_form_prefill=False,
                     allow_application_entry=False, allow_page_facets=False,
                     disabled_actions=turn_config.disabled_actions | {"fill", "select", "submit", "back", "apply_facet"},
-                    click_policy=app.read_only_tab_policy,
-                    supported_scope="Open pages from the current actor's catalog or exact record references, "
+                    click_policy=app.native_tab_policy,
+                    supported_scope=turn_config.supported_scope + " "
+                        "Open pages from the current actor's catalog or exact record references, "
                         "then select enabled native record tabs from the fresh page. Runtime results "
                         "must verify every requested page state. Missing candidates are not proof "
-                        "of absence; ask for clarification when ambiguous. Form entry, mutations, "
-                        "page filtering and source knowledge questions are outside this page pilot.")
+                        "of absence; ask for clarification when ambiguous. If reviewed forms are "
+                        "configured, find_form_entries discovers current openers; open_form_entry "
+                        "uses one exact reviewed receipt, then describe/prepare/prefill and hand "
+                        "over with submission left to the user. Arbitrary fill/select/click, "
+                        "mutations and page filtering remain disabled.")
                 executor = AgentTurnExecutor(**common, config=turn_config)
             else:
                 executor = GoalTurnExecutor(**common, config=turn_config,

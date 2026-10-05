@@ -189,6 +189,18 @@ update review and creation reviews compose in the same actor session; creation a
 does not enable updates. Duplicate references or changed source abort startup. Both
 require the verified native guard.
 
+The explicit `--executor page-agent` pilot uses the same configured optional source
+lookup and reviewed forms as the goal composition. Its same server Agent discovers
+current reviewed entries with `find_form_entries`, opens one opaque candidate with
+`open_form_entry` under the ordinary visible page approval, and feeds the actual
+receipt and fresh observation back before describing or preparing fields. A pending
+render retains that acknowledged receipt; it does not repeat the opener. Prefill checks
+the values and highlights submission for the person. Declared accompanying questions
+may continue using only read tools after handoff, preserving the form receipt in the
+answer. Arbitrary buttons, unreviewed fields, form submission and page filters remain
+unavailable. Source lookup supplies evidence, never action authority. This is a measured
+prototype, not a claim of general native-form coverage or model accuracy.
+
 The server checks the acting API identity, `crm:customer:update` (or the application's
 wildcard), the exact customer's read and its actor-scoped owner/write membership. It
 issues only the unique enabled Edit button on that verified detail route, consumes its

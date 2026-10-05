@@ -418,6 +418,9 @@ this run, answer where it is and say that it was not opened.
 """
 
 FORM_SYSTEM = """\
+If offered, find_form_entries returns opaque candidates for reviewed forms not yet open
+on the current page. Use open_form_entry once for an exact candidate; if rendering
+is pending, observe/wait before describe_form. Never replay an acknowledged opener.
 The application installs a generic current-form capability. Use describe_form to intersect
 the latest observed controls with current actor-scoped application metadata. Use only its
 opaque IDs in prepare_form, then call prefill_form with no arguments. The browser handoff

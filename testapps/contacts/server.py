@@ -171,7 +171,8 @@ class NativeContactsHost:
                         supported_scope=(
                             "Read current contacts through the typed API and open only an "
                             "exact route returned by that API. Do not modify records or "
-                            "submit forms."
+                            "submit forms. Reviewed temporary form entry and prefill are "
+                            "allowed for the current actor; highlight Save for manual submission."
                             if not self.config.allow_mutations else
                             "Read current contacts through the typed API, and create at most "
                             "the one contact the user confirms. Do not submit page forms."),
@@ -188,6 +189,7 @@ class NativeContactsHost:
                         require_task_contract=self.config.require_task_contract,
                         require_identity=True,
                         allow_form_prefill=True,
+                        click_policy=bound.ports.forms,
                         allow_business_mutations=self.config.allow_mutations,
                         deployment_profile="production",
                     ),

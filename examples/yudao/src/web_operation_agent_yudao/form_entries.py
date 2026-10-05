@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from web_operation_agent.business.errors import (BusinessToolRequestError,
     BusinessToolPermissionError, BusinessToolIdentityError, BusinessToolUnavailableError)
 from web_operation_agent.business.forms import ApplicationFormEntry
+from web_operation_agent.business.form_entries import FormEntryCandidate
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.planning.sourcetree import AccessDenied
 from web_operation_agent.business.tools.contracts import form_control_unavailable
@@ -342,6 +343,38 @@ class NativeEntryFormPort(YudaoFormPort):
 
     def click_policy(self, tabs):
         return NativeEntryClickPolicy(self._verifier, tabs)
+
+    def form_entries(self, observation, *, context):
+        if (observation.render_state != "ready"
+                or any(str(e.attrs.get("form_scope", "")).startswith("dialog")
+                       for e in observation.elements)):
+            return ()
+        path = urlsplit(observation.url).path
+        if observation.page_route != path or urlsplit(observation.url).query:
+            return ()
+        candidates = []
+        verifiers = (self._verifier.verifiers if isinstance(self._verifier, NativeEntryVerifiers)
+                     else (self._verifier,))
+        for verifier in verifiers:
+            if isinstance(verifier, NativeCreateEntryVerifier):
+                reference = verifier.review.reference
+                _, route, label, *_ = CREATE_ENTRIES[reference]
+                if path != route or observation.record_route:
+                    continue
+                record, kind = "", "create"
+            else:
+                match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
+                if not match or observation.record_route != path:
+                    continue
+                record, kind = match[1], "update"
+                reference, label = "customer-update:" + record, "编辑"
+            controls = [e for e in observation.elements if e.role == "button" and e.name == label
+                        and not e.attrs.get("form_scope") and not form_control_unavailable(e.attrs)]
+            if len(controls) != 1:
+                continue
+            verifier._authorize(record, context)
+            candidates.append(FormEntryCandidate(reference, label, kind))
+        return tuple(candidates)
 
     def plan_entry(self, reference, observation, *, context):
         return self._verifier.plan_entry(reference, observation, context=context)

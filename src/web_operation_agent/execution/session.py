@@ -36,6 +36,7 @@ from ..transport.browser import BrowserExecutor
 from ..business.runtime import (BUSINESS_SKILL_MATCHER_VERSION, BusinessSkill,
                                BusinessSkillSelection, FormDraft, BusinessToolRuntime)
 from ..business.forms import ApplicationFormPort, ApplicationFormTools
+from ..business.form_entries import FormEntryDiscoveryPort, FormEntryTools
 from ..business.errors import BusinessToolPermissionError
 from ..business.text import trigger_requests_action
 from ..planning.contract import (ContractPlanner, PlanningFailed, _segment_from_template,
@@ -362,6 +363,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             ApplicationFormTools(
                 application_forms, application_id=application_routes.application_id)
             if application_forms is not None else None)
+        self._form_entry_tools = (FormEntryTools(application_forms,
+            application_id=application_routes.application_id, require_write_guard=bool(page_write_guard))
+            if isinstance(application_forms, FormEntryDiscoveryPort) else None)
         if not isinstance(require_page_route, bool):
             raise ValueError("require_page_route must be a boolean")
         self.require_page_route = require_page_route
@@ -652,7 +656,14 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         try:
             return run_loop(self)
         finally:
-            self._writes.end_control()
+            try:
+                if self._form_entry_tools is not None:
+                    try:
+                        self._form_entry_tools.close()
+                    except Exception as exc:  # cleanup must preserve the settled terminal
+                        self.ledger.append("form_entry_release_failed", error_type=type(exc).__name__)
+            finally:
+                self._writes.end_control()
 
     # -- declared target state -----------------------------------------------------------
     def target_settlement_available(self) -> bool:
@@ -676,9 +687,10 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             return self._reply(turn, call, "TASK DECLARATION REFUSED: " + str(exc))
         self._task_requirements = requirements
         self._answers.answer_mode = True
+        if requirements.answer_requests or requirements.action_kind in {"draft", "mutation"}:
+            self._navigation_only = False
         if requirements.answer_requests:
             self._answers.action_answer_required = True
-            self._navigation_only = False
         self.ledger.append("task_requirements_frozen", step=turn.step,
             action=bool(requirements.action_request), answers=len(requirements.answer_requests))
         # Keep this separate from snapshots, which may be compacted after actions.

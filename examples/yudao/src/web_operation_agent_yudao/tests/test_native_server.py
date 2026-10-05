@@ -87,10 +87,10 @@ class NativeHostTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reviewed native read policy"):
             replace(self.config, executor_mode="page-agent")
 
-    def test_page_agent_reuses_the_actor_session_but_cannot_inherit_form_openers(self):
+    def test_page_agent_reuses_the_actor_session_and_only_reviewed_form_openers(self):
         from web_operation_agent.execution.product import AgentTurnExecutor
         from web_operation_agent.schemas import ElementRef, PageObservation
-        from web_operation_agent_yudao.native_tabs import NativeTabPolicy
+        from web_operation_agent_yudao.form_entries import NativeEntryClickPolicy
         from web_operation_agent_yudao.ui_source import UiSource
         self.config = replace(self._native_form_config(), executor_mode="page-agent")
         with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
@@ -103,13 +103,14 @@ class NativeHostTests(unittest.TestCase):
             self.assertIsInstance(executor, AgentTurnExecutor)
             self.assertTrue(executor.config.require_page_route)
             self.assertTrue(executor.config.require_task_contract)
-            self.assertFalse(executor.config.source.runtime_source)
-            self.assertFalse(executor.config.allow_form_prefill)
+            self.assertIs(executor.config.source, host.source)
+            self.assertTrue(executor.config.source.runtime_source)
+            self.assertTrue(executor.config.allow_form_prefill)
             self.assertFalse(executor.config.allow_application_entry)
             self.assertFalse(executor.config.allow_page_facets)
             self.assertTrue({"click", "fill", "select", "submit", "apply_facet"}
                             <= executor.config.disabled_actions)
-            self.assertIsInstance(executor.config.click_policy, NativeTabPolicy)
+            self.assertIsInstance(executor.config.click_policy, NativeEntryClickPolicy)
             page = PageObservation(1, 1, "https://yudao.invalid/crm/customer/detail/1",
                 "Customer", [], [], render_state="ready", record_route="/crm/customer/detail/1")
             tab = ElementRef("e1", "tab", "Contacts", "button", 1,

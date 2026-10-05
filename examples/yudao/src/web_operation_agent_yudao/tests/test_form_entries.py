@@ -119,6 +119,23 @@ class EntryTests(unittest.TestCase):
         with self.assertRaises(BusinessToolRequestError):
             self.port.plan_entry("customer-update:12",self.after,context=self.context)
 
+    def test_discovery_requires_rendered_record_unique_enabled_control_and_live_authority(self):
+        ready = replace(self.before, page_route=self.route)
+        rows = self.port.form_entries(ready, context=self.context)
+        self.assertEqual([(r.reference, r.label, r.kind) for r in rows],
+                         [('customer-update:12', '编辑', 'update')])
+        for changed in (self.before, replace(ready, record_route=''),
+                        replace(ready, render_state='pending'),
+                        replace(ready, elements=[ready.elements[0], replace(ready.elements[0], ref='other')]),
+                        replace(ready, elements=[replace(ready.elements[0], attrs={'disabled': 'true'})]),
+                        replace(self.after, page_route=self.route),
+                        replace(ready, url=ready.url + '?id=12')):
+            with self.subTest(page=changed):
+                self.assertEqual(self.port.form_entries(changed, context=self.context), ())
+        self.client.level = 2
+        with self.assertRaises(BusinessToolPermissionError):
+            self.port.form_entries(ready, context=self.context)
+
     def test_missing_instance_conflicting_scope_and_wrong_record_refuse(self):
         for change in ({"form_instance":""}, {"form_scope":"dialog:other"}):
             with self.subTest(change=change):
@@ -201,6 +218,21 @@ class CreationEntryTests(unittest.TestCase):
                 client.permission = "crm:customer:update"
                 with self.assertRaises(BusinessToolPermissionError):
                     verifier.validate(verifier._current, context=self.context)
+
+    def test_creation_discovery_is_limited_to_its_reviewed_rendered_collection(self):
+        _, client, verifier, before, after = self.creation()
+        port = NativeEntryFormPort(verifier)
+        ready = replace(before, page_route='/crm/customer')
+        rows = port.form_entries(ready, context=self.context)
+        self.assertEqual([(r.reference, r.kind) for r in rows], [('customer-create', 'create')])
+        for changed in (before, replace(ready, page_route='/pms/pm/project/list'),
+                        replace(ready, record_route=self.route),
+                        replace(after, page_route='/crm/customer')):
+            with self.subTest(page=changed):
+                self.assertEqual(port.form_entries(changed, context=self.context), ())
+        client.permission = 'crm:customer:update'
+        with self.assertRaises(BusinessToolPermissionError):
+            port.form_entries(ready, context=self.context)
 
     def test_creation_cannot_borrow_update_review_or_other_entry_authority(self):
         with self.assertRaises(TypeError):

@@ -144,6 +144,23 @@ def unavailable_answer(user_text: str) -> str:
             "Try narrowing the scope or specifying the record to look up.")
 
 
+def form_handoff_answer(*, user_text: str, needs_confirmation: bool, submit_label: str) -> str:
+    zh = _language(user_text) == "zh"
+    if needs_confirmation:
+        return ("已按你的确认填好，尚未保存。请在页面上核对后自己保存；"
+                "离开这个页面时，应用会保存这些改动。" if zh else
+                "Filled as you confirmed and not saved yet. Check it on the page and "
+                "save it yourself; leaving this page lets the application save these changes.")
+    if submit_label:
+        return (f"表单已填写，尚未提交。请检查后手动点击页面高亮的‘{_literal(submit_label)}’。" if zh else
+                f"The form is filled and has not been submitted. Review it, then manually "
+                f"click the highlighted '{_literal(submit_label)}' on the page.")
+    return ("表单已预填，尚未提交。请检查或修改后由你继续。"
+            "离开这个页面时，应用可能会自动保存或丢弃这些内容。" if zh else
+            "The form is prefilled and has not been submitted. Review or edit it, "
+            "then continue yourself. Leaving this page may let the application save or discard it.")
+
+
 def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
     data = dict(payload)
     presentation = data.pop("presentation", "brief")
@@ -159,6 +176,9 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
                            else "Interacted with the current page.")
         elif action["kind"] == "target_state":
             action_text = _target_state_text(action, _language(user_text) == "zh")
+        elif action["kind"] == "form_prefill":
+            action_text = form_handoff_answer(user_text=user_text,
+                needs_confirmation=action["needs_confirmation"], submit_label=action["submit_label"])
         else:
             label = "已完成已批准的操作" if _language(user_text) == "zh" else "Completed the approved action"
             action_text = (f"{label}：{_literal(action['effect'])}\n" +

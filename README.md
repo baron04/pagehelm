@@ -646,9 +646,18 @@ disabled. Full native-page qualification is pending.
 The native host also has an explicit `--executor page-agent` read-only page-planning pilot
 (the default is `goal`). It reuses the existing step Agent and the actor's session,
 conversation, approval, audit and spend allowance. It requires a reviewed native read
-policy and verified guard, checks rendered arrival, and admits only reviewed native
-record-tab clicks from fresh observations. Source Q&A, form entry, submission and page
-filters are outside this pilot; it never runs automatically after a goal refusal. Its
+policy and verified guard, checks rendered arrival, and admits reviewed native
+record-tab clicks from fresh observations. It also retains the deployment's optional
+allowlisted source lookup and reviewed transient forms. `find_form_entries` discovers
+current actor-visible openers; `open_form_entry` uses an opaque snapshot-bound ID and
+the normal visible page approval, then retains the actual receipt until a fresh
+observation lets `describe_form` bind the rendered form, never a repeated opening.
+Describe, prepare and prefill use the existing application-owned form contract;
+the Runtime checks entered values and highlights submission for the person. Accompanying
+declared questions continue in the same Agent with only read tools after the handoff,
+retaining its receipt in the final answer. Arbitrary clicks, unreviewed fields,
+submission and page filters remain disabled; source grants none of those permissions.
+The pilot never runs automatically after a goal refusal. Its
 scripted isolated browser checks do not establish model accuracy or production readiness.
 This pilot enables the application-neutral `require_task_contract` option (off by default
 for other step executors). Before application tools, the same Agent quotes the user's

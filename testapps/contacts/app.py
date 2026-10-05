@@ -233,7 +233,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
           <section class="record"><div class="eyebrow">Contact record</div>
           <h1>New contact</h1><p class="lede">Review the values before you save.</p>
-          <form id="contact-create"><label>Name<input name="name" autocomplete="name"
+          <form id="contact-create" data-page-route="/contacts/new"><label>Name<input name="name" autocomplete="name"
             required maxlength="120"></label><label>Email<input name="email" type="email"
             autocomplete="email" required maxlength="200"></label>
             <button type="submit">Save contact</button><p class="status" role="status"></p>
@@ -299,7 +299,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         <p class="lede">A small first-party app whose current records come from a typed API.
         Ask the embedded assistant to list a contact or open a record.</p>${{
           canWrite ? '<a class="primary" href="/contacts/new" data-route>New contact</a>' : ''
-        }}<section class="grid" style="margin-top: 20px">${{
+        }}<section class="grid" data-page-route="/contacts" style="margin-top: 20px">${{
           contacts.map(item => `<a class="card" href="/contacts/${{item.id}}" data-route>
             <span class="name">${{item.name}}</span><span class="email">${{item.email}}</span></a>`).join('')
         }}</section>`;

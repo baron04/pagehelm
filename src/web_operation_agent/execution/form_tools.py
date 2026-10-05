@@ -8,6 +8,7 @@ import time
 
 from ..transport.browser import TransportError, TurnCancelled
 from ..answer.evidence import EvidenceUnknown, SourceEvidence
+from ..answer.answer_view import form_handoff_answer
 from ..business.errors import (BusinessToolError, BusinessToolPermissionError,
                                BusinessToolRequestError, BusinessToolContractError,
                                BusinessToolIdentityError)
@@ -15,6 +16,7 @@ from ..business.runtime import FormDraft
 from ..business.tools.contracts import matches_form_control, form_control_unavailable
 from ..schemas import PageObservation
 from .routes import observation_is_at_route
+from .page_evidence import capture_page_snapshot
 from .runstate import _Next, _Turn
 from .budget import TurnBudget
 from ..modeling.spend import BudgetExhausted
@@ -71,6 +73,8 @@ def describe_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
     session._form_draft_verification = None
     context, identity = _form_identity(session, turn.step, name)
     try:
+        if session._form_entry_tools is not None:
+            session._form_entry_tools.accept_current(turn.obs, context=context)
         content = session._application_form_tools.describe(
             turn.obs, args, context=context)
     except BusinessToolPermissionError as exc:
@@ -136,8 +140,8 @@ def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
 def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Fill the application's own draft into its form, and hand the page to the person.
 
-    The turn ends here whatever happens: a verified prefilled form is the person's to
-    check and save, and nothing the assistant does afterwards would be about it.
+    After a verified handoff, only any accompanying read-only questions may continue;
+    the assistant cannot navigate away, fill again, or submit while completing them.
     """
     if args:
         return session._reply(turn, call,
@@ -184,36 +188,30 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
         return _Next(session._finish(
             turn.result, turn.started_at, reason,
             turn.result.agent_said + (f" {detail}" if detail else ""), steps=turn.step))
-    if draft.needs_confirmation:
-        # This one the application commits by itself once the page is left, so the
-        # sentence says that plainly rather than "may save or discard".
-        turn.result.agent_said = (
-            "已按你的确认填好，尚未保存。请在页面上核对后自己保存；"
-            "离开这个页面时，应用会保存这些改动。"
-            if chinese
-            else "Filled as you confirmed and not saved yet. Check it on the page and "
-                 "save it yourself; leaving this page lets the application save these "
-                 "changes.")
-    elif draft.submit_label:
-        turn.result.agent_said = (
-            f"表单已填写，尚未提交。请检查后手动点击页面高亮的‘{draft.submit_label}’。"
-            if chinese else
-            f"The form is filled and has not been submitted. Review it, then manually "
-            f"click the highlighted '{draft.submit_label}' on the page.")
-    else:
-        turn.result.agent_said = (
-            "表单已预填，尚未提交。请检查或修改后由你继续。"
-            "离开这个页面时，应用可能会自动保存或丢弃这些内容。"
-            if chinese
-            else "The form is prefilled and has not been submitted. Review or edit it, "
-                 "then continue yourself. Leaving this page may let the application save "
-                 "or discard it.")
+    turn.result.agent_said = form_handoff_answer(user_text=session.task.prompt,
+        needs_confirmation=draft.needs_confirmation, submit_label=draft.submit_label)
+    session._answer_action_receipt = {"kind": "form_prefill", "url": prefilled.url,
+        "needs_confirmation": draft.needs_confirmation, "submit_label": draft.submit_label}
     session.ledger.append(
         "form_prefill_completed", step=turn.step,
         draft_digest=draft.content_digest,
         route_digest=hashlib.sha256(draft.route.encode()).hexdigest(),
         fields=[item.field for item in draft.fields],
         submitted=False, persisted=False, user_takeover=True)
+    if session._task_requirements is not None and session._task_requirements.answer_requests:
+        session._finalizing = True
+        session._answers.action_answer_required = True
+        try:
+            _, evidence_feedback = capture_page_snapshot(session, turn.obs, step=turn.step)
+        except (ValueError, TypeError, EvidenceUnknown):
+            evidence_feedback = "Use a fresh observation or registered read for missing facts."
+        return session._reply(turn, call, turn.result.agent_said + "\n"
+            "FORM PREFILL VERIFIED. Complete the frozen accompanying questions using "
+            "only observation, registered reads, offered source lookup, compute and finish. No navigation, "
+            "opening, filling or submission is permitted after this handoff. "
+            "Report the observed form_prefill action with valid answers in finish, "
+            "or preserve the handoff and unresolved questions in a partial result.\n"
+            + evidence_feedback)
     return _Next(session._finish(turn.result, turn.started_at, "agent_finished",
                               turn.result.agent_said, steps=turn.step))
 
