@@ -20,11 +20,16 @@ class NativeReadActions:
     required_scope = "yudao.read"
     actions = frozenset({"click", "goto"})
 
-    def __init__(self, origin, data, record_routes, *, review):
+    def __init__(self, origin, data, record_routes, *, review, list_actions=None):
         if not isinstance(review, str) or not review.strip() or len(review) > 200:
             raise ValueError("native action effects require a deployment handler review")
         self.origin, self.data, self.review = origin.rstrip("/"), data, review
         self.record_routes = dict(record_routes)
+        self.list_actions = list_actions
+        if list_actions is not None:
+            self.actions = self.actions | list_actions.actions
+        self._list_permits = {}
+        self._list_turn = None
 
     def _index(self, context, checkpoint):
         context.require_live(application_id=self.application_id, required_scope=self.required_scope)
@@ -56,6 +61,16 @@ class NativeReadActions:
         else:
             element = next(e for e in before.elements if e.ref == intent.arguments["ref"])
             attrs = element.attrs
+            if self.list_actions is not None and (
+                    intent.action == "fill" or attrs.get("form_scope")
+                    or attrs.get("page_control") == "pagination"):
+                permit = self.list_actions.admit(intent, index, context=context, checkpoint=checkpoint)
+                turn = (context.principal.binding_digest, context.session_id, context.turn_id)
+                if self._list_turn != turn:
+                    self._list_turn = turn
+                    self._list_permits.clear()
+                self._list_permits[permit.binding_digest] = self.data._client.read_generation
+                return permit
             if attrs.get("form_scope") or attrs.get("target", "") not in {"", "_self"}:
                 raise ActionAdmissionRefused("invalid_target")
             policy = NativeNavigationPolicy(self.origin, lambda: index)
@@ -80,6 +95,11 @@ class NativeReadActions:
 
     def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
         index = self._index(context, checkpoint)
+        if permit.binding_digest in self._list_permits:
+            if self._list_permits[permit.binding_digest] != self.data._client.read_generation:
+                return False
+            return self.list_actions.verify(permit, intent, observation,
+                                            index=index, context=context, checkpoint=checkpoint)
         generation, expected = json.loads(permit.postcondition)
         if generation != self.data._client.read_generation:
             return False

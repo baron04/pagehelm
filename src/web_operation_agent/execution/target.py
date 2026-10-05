@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from ..schemas import PageObservation
+from .query_target import QueryCondition, bind_query, query_unmet
 
 #: How often one turn may restate its target. New evidence can change a goal once or twice;
 #: a turn that keeps redefining "done" is flailing, and the ordinary budgets end it.
@@ -122,13 +123,23 @@ class TargetState:
     groups: tuple[str, ...] = ()
     #: A filter to remove must first have been observed active in this turn.
     filters_absent: tuple[str, ...] = ()
+    query: tuple[QueryCondition, ...] = ()
 
     def to_json(self) -> dict:
         return {"path": self.path, "selected": list(self.selected),
                 **({"filters": list(self.filters)} if self.filters else {}),
                 **({"groups": list(self.groups)} if self.groups else {}),
                 **({"filters_absent": list(self.filters_absent)}
-                   if self.filters_absent else {})}
+                   if self.filters_absent else {}),
+                **({"query": [{"ref": c.ref, "value": c.value} for c in self.query]}
+                   if self.query else {})}
+
+    def audit_projection(self) -> dict:
+        data = self.to_json()
+        if self.query:
+            data["query"] = [{"ref": c.ref, "field": c.field, "value_digest": c.value_digest}
+                             for c in self.query]
+        return data
 
 
 def _normalise_name(name: str) -> str:
@@ -140,7 +151,7 @@ def _normalise_path(path: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def parse_target(args: object) -> TargetState:
+def parse_target(args: object, observation: PageObservation | None = None) -> TargetState:
     """Validate the model's declaration, refusing anything the server could not check.
 
     The check is exact by construction: a path either equals the page's or it does not,
@@ -148,8 +159,8 @@ def parse_target(args: object) -> TargetState:
     weak target that would be satisfied by an unrelated page cannot be expressed.
     """
     if (not isinstance(args, dict)
-            or set(args) - {"path", "selected", "filters", "groups", "filters_absent"}):
-        raise ValueError("set_target accepts only path, selected and facet conditions")
+            or set(args) - {"path", "selected", "filters", "groups", "filters_absent", "query"}):
+        raise ValueError("set_target accepts only path, selected, facet and query conditions")
     path = args.get("path", "")
     if not isinstance(path, str):
         raise ValueError("path must be a string")
@@ -197,10 +208,11 @@ def parse_target(args: object) -> TargetState:
     if {_normalise_name(name) for name in filters} & {
             _normalise_name(name) for name in filters_absent}:
         raise ValueError("a filter cannot be both present and absent")
-    if not path and not selected and not filters and not groups and not filters_absent:
+    query = bind_query(args.get("query", ()), observation, MAX_SELECTED_CONTROLS)
+    if not path and not selected and not filters and not groups and not filters_absent and not query:
         raise ValueError("a target needs a path, selected controls or facet conditions")
     return TargetState(path=path, selected=tuple(selected), filters=filters, groups=groups,
-                       filters_absent=filters_absent)
+                       filters_absent=filters_absent, query=query)
 
 
 def _is_selected(element) -> bool:
@@ -216,7 +228,8 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
                      required_selected: tuple[str, ...] = (),
                      required_effects: frozenset[str] = frozenset(),
                      seen_active_filters: dict[str, set[str]] | None = None,
-                     require_page_route: bool = False
+                     require_page_route: bool = False,
+                     verified_query: bool = False
                      ) -> tuple[str, ...]:
     """Which parts of the target the observation does not show, in the order declared.
 
@@ -278,7 +291,8 @@ def unmet_conditions(target: TargetState, obs: PageObservation, *,
             unmet.append(f'filter removal "{name}" (application state unavailable)')
         elif normalised in active_filters:
             unmet.append(f'filter "{name}" is still active')
-    for effect, declared in (("filter", target.filters), ("group", target.groups),
+    unmet.extend(query_unmet(target.query, obs, verified=verified_query))
+    for effect, declared in (("filter", target.filters or target.query), ("group", target.groups),
                              ("clear_filter", target.filters_absent)):
         if effect in required_effects and not declared:
             unmet.append(f"{effect} condition not declared")
@@ -299,4 +313,6 @@ def describe_target(target: TargetState) -> str:
     if target.filters_absent:
         parts.append("filters absent: " + ", ".join(
             f'"{name}"' for name in target.filters_absent))
+    if target.query:
+        parts.append("applied query: " + ", ".join(f'"{c.label}"' for c in target.query))
     return "; ".join(parts)

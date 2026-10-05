@@ -521,9 +521,14 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
                               dispatched=False, binding_digest=admitted.intent.binding_digest)
     elif admitted is not None:
         try:
-            verify_action(session, turn, admitted, receipt)
+            verified = verify_action(session, turn, admitted, receipt)
         except Exception as exc:
             return _admission_failure(session, turn, call, name, exc, dispatched=True)
+        if verified:
+            if admitted.permit.effect.value == "navigation":
+                _record_navigation(session, obs.url)
+            else:
+                session._answer_action_receipt = {"kind": "page_interaction", "action": name, "url": obs.url}
     elif session._pending_action is not None and name in {"observe", "wait_for"}:
         pending = session._pending_action
         try:

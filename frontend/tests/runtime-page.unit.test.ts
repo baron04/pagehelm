@@ -117,6 +117,59 @@ describe('the product PageController extraction policy', () => {
 })
 
 describe('Page.describe bounds an observation before it crosses the browser boundary', () => {
+  it('projects only a bounded successful list receipt, keeping filter values as digests', () => {
+    const proof = {path: '/api/contacts', query_digest: 'a'.repeat(64),
+      query_fields: {domain: 'b'.repeat(64)}, revision: 2, page: 2, page_size: 10, total: 25, rows: 10}
+    const read = (value: unknown, route: string | undefined = '/contacts') =>
+      new Page(controller(), () => null, createRedactor(), undefined, undefined, undefined,
+        undefined, undefined, undefined, () => route, undefined, undefined, undefined,
+        () => value).describe({url: 'https://app.test/contacts', title: '', content: ''}, 1).observation
+    expect(read(proof).page_read).toEqual(proof)
+    expect(read(proof, '').page_read).toBeUndefined()
+    for (const value of [null, {...proof, path: '//other/api'}, {...proof, revision: 0},
+      {...proof, page: Number.MAX_SAFE_INTEGER + 1}, {...proof, rows: 11},
+      {...proof, query_fields: {password: 'a'.repeat(64)}},
+      {...proof, query_fields: {domain: 'raw-value'}}, {...proof, raw_query: 'private'}]) {
+      expect(read(value).page_read).toBeUndefined()
+    }
+  })
+  it('attaches application pagination facts only to observed elements with valid numeric targets', () => {
+    const element = document.createElement('button')
+    element.textContent = 'Next'
+    document.body.append(element)
+    try {
+      const read = (value: unknown) => new Page(controller(), () => element, createRedactor(),
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined, undefined, undefined, () => value).describe({url: 'https://app.test/contacts',
+        title: '', content: '[1]<button>Next />'}, 1).observation.elements[0]?.attrs
+      expect(read({kind: 'pagination', page: 2, pageSize: 10})).toMatchObject({
+        page_control: 'pagination', page_number: '2', page_size: '10'})
+      for (const invalid of [{kind: 'pagination', page: 0, pageSize: 10},
+        {kind: 'pagination', page: 2, pageSize: NaN}, {kind: 'submit', page: 2, pageSize: 10}]) {
+        expect(read(invalid)?.page_control).toBeUndefined()
+      }
+    } finally { element.remove() }
+  })
+  it('projects the application query binding only for a currently observed control', () => {
+    const element = document.createElement('input')
+    document.body.append(element)
+    try {
+      const read = (value: unknown, present = true) => new Page(controller(),
+        () => present ? element : null, createRedactor(), undefined, undefined, undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined, () => value).describe({url: 'https://app.test/contacts', title: '',
+        content: '[1]<input />'}, 1).observation.elements[0]?.attrs
+      expect(read({kind: 'query'})).toMatchObject({page_control: 'query'})
+      expect(read({kind: 'query', field: 'searchTerm'})).toMatchObject({query_field: 'searchTerm'})
+      for (const field of ['password', 'accessToken', '../outside', 'x'.repeat(500), 1]) {
+        expect(read({kind: 'query', field})?.query_field).toBeUndefined()
+      }
+      expect(read({kind: 'query'}, false)?.page_control).toBeUndefined()
+      for (const invalid of [null, {kind: 'submit'}, {}, 'query']) {
+        expect(read(invalid)?.page_control).toBeUndefined()
+      }
+    } finally { element.remove() }
+  })
   it('projects an application query only with page identity and intact bounded nonsecret values', () => {
     const query = {path: '/api/contacts', parameters: {domain: 'example.test'}}
     const read = (value: unknown, path: string | undefined = '/contacts') => new Page(controller(), () => null,

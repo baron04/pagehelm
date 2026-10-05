@@ -32,24 +32,49 @@ function orderQuery(url) {
   return {path: url.pathname, parameters}
 }
 
+// Retain a digest and paging numbers, never arbitrary query values.
+function listReadQuery(url, view) {
+  const pairs = Array.from(url.searchParams)
+  const page = url.searchParams.get('pageNo'), size = url.searchParams.get('pageSize')
+  if (!url.pathname.endsWith('/page') || pairs.length > 32 ||
+      !/^[1-9][0-9]*$/.test(page || '') || !/^[1-9][0-9]*$/.test(size || '') ||
+      !Number.isSafeInteger(Number(page)) || !Number.isSafeInteger(Number(size)) ||
+      url.searchParams.getAll('pageNo').length !== 1 || url.searchParams.getAll('pageSize').length !== 1 ||
+      !view.crypto?.subtle) return null
+  const filters = pairs.filter(([key]) => !['pageNo', 'pageSize'].includes(key))
+  filters.sort(([a, av], [b, bv]) => a < b ? -1 : a > b ? 1 : av < bv ? -1 : av > bv ? 1 : 0)
+  const canonical = JSON.stringify(filters)
+  if (canonical.length > 8192) return null
+  const hash = text => view.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+    .then(bytes => Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2, '0')).join(''))
+  const fields = new Map()
+  for (const [key, value] of filters) fields.set(key, [...(fields.get(key) || []), value])
+  const digest = Promise.all([hash(canonical), Promise.all([...fields].map(async ([key, values]) =>
+    [key, await hash(JSON.stringify(values))]))]).then(([query_digest, entries]) =>
+    ({query_digest, query_fields: Object.fromEntries(entries)}))
+  return {page: Number(page), size: Number(size), digest: digest.catch(() => null)}
+}
+
 export function createPageFacts({view = window, doc = document} = {}) {
-  let route = '', locationKey = '', generation = 0, record = null, appliedQuery = null, disposed = false
+  let route = '', locationKey = '', generation = 0, record = null, appliedQuery = null, appliedRead = null, disposed = false
   const reads = new Map()
   const visible = element => Boolean(element && element.getBoundingClientRect().width
     && element.getBoundingClientRect().height && !element.closest('[hidden],[aria-hidden="true"]'))
   function current() {
     const next = view.location.pathname + view.location.search + view.location.hash
     if (next !== locationKey) {
-      locationKey = next; route = view.location.pathname; generation++; record = null; appliedQuery = null; reads.clear()
+      locationKey = next; route = view.location.pathname; generation++; record = null; appliedQuery = null; appliedRead = null; reads.clear()
     }
     return generation
   }
-  function begin(input, method = 'GET') {
+  function begin(input, method = 'GET', readQuery) {
     if (disposed || String(method).toUpperCase() !== 'GET') return null
     let url
     try { url = new URL(input, view.location.href) } catch { return null }
     if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/')) return null
     const heldGeneration = current()
+    readQuery = readQuery === undefined ? listReadQuery(url, view) : readQuery
+    if (url.pathname.endsWith('/page')) appliedRead = null
     const ledger = route === '/fms/ledger/general' && url.pathname === '/admin-api/fms/ledger/general/list'
     const order = route === '/erp/sale/order' && url.pathname === '/admin-api/erp/sale-order/page'
     let query = null
@@ -100,6 +125,25 @@ export function createPageFacts({view = window, doc = document} = {}) {
             && name.length <= 200) record = {route, name: name.trim()}
         else latest.failed = true
       }
+      if (readQuery && ok && Array.isArray(body?.data?.list) &&
+          Number.isSafeInteger(body.data.total) && body.data.total >= body.data.list.length &&
+          body.data.list.length <= readQuery.size) {
+        latest.pending++
+        const total = body.data.total, rows = body.data.list.length, path = url.pathname
+        return readQuery.digest.then(digest => {
+          if (digest && !disposed && current() === heldGeneration && reads.get(key)?.serial === serial && !latest.failed) {
+            appliedRead = {path, ...digest, revision: serial,
+              page: readQuery.page, page_size: readQuery.size, total, rows}
+          }
+        }).finally(() => {
+          // Another request can replace this endpoint's state while hashing.
+          // Its inherited pending count still includes this digest operation.
+          if (!disposed && current() === heldGeneration) {
+            const active = reads.get(key)
+            if (active) active.pending = Math.max(0, active.pending - 1)
+          }
+        })
+      }
     }
   }
   function readPageBlocker() {
@@ -133,6 +177,11 @@ export function createPageFacts({view = window, doc = document} = {}) {
     current()
     if (!appliedQuery || readPageBlocker() || readPageRoute() !== route) return undefined
     return {path: appliedQuery.path, parameters: {...appliedQuery.parameters}}
+  }
+  function readPageRead() {
+    current()
+    if (!appliedRead || readPageBlocker() || readPageRoute() !== route) return undefined
+    return {...appliedRead}
   }
   function readPageRoute() {
     if (disposed) return undefined
@@ -213,8 +262,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
       return route
     } catch { return undefined }
   }
-  return {begin, readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery,
-    dispose() {disposed = true; reads.clear(); record = null; appliedQuery = null}}
+  return {begin, readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
+    dispose() {disposed = true; reads.clear(); record = null; appliedQuery = null; appliedRead = null}}
 }
 
 export function installPageFacts(view = window, doc = document) {
@@ -231,7 +280,7 @@ export function installPageFacts(view = window, doc = document) {
       if (settle) {
         let body
         try { body = await response.clone().json() } catch { /* invalid envelopes fail closed */ }
-        settle(response.status, body)
+        await settle(response.status, body)
       }
       return response
     } catch (error) { settle?.(0, null); throw error }
@@ -246,7 +295,7 @@ export function installPageFacts(view = window, doc = document) {
         const order = view.location.pathname === '/erp/sale/order' && target.pathname === '/admin-api/erp/sale-order/page'
         // Retain only a bounded scalar projection; open alone starts no read.
         const query = ledger ? ledgerQuery(target) : order ? orderQuery(target) : null
-        requests.set(this, {method, path: target.pathname, ledger, order, query,
+        requests.set(this, {method, path: target.pathname, ledger, order, query, readQuery: listReadQuery(target, view),
           id: /^[0-9]{1,20}$/.test(id) ? id : ''})
       }
     } catch { /* The original implementation owns invalid URL errors. */ }
@@ -266,7 +315,7 @@ export function installPageFacts(view = window, doc = document) {
         }
       } else if (request.id) target.searchParams.set('id', request.id)
     }
-    const settle = request && facts.begin(target.href, request.method)
+    const settle = request && facts.begin(target.href, request.method, request.readQuery)
     if (settle) this.addEventListener('loadend', () => {
       let body
       try { body = this.responseType === 'json' ? this.response : JSON.parse(this.responseText) } catch { /* blocked */ }
@@ -289,6 +338,7 @@ export const readPageBlocker = () => installed ? installed.readPageBlocker() : t
 export const readPageRecordRoute = () => installed?.readPageRecordRoute()
 export const readPageRoute = () => installed?.readPageRoute()
 export const readPageQuery = () => installed?.readPageQuery()
+export const readPageRead = () => installed?.readPageRead()
 export const disposeInstalledPageFacts = () => installed?.dispose()
 /** Observe only the mounted application's default menu, not arbitrary menu-shaped DOM. */
 export function readElementNavigation(element) {
@@ -339,6 +389,87 @@ export function readElementNavigation(element) {
   }
   return undefined
 }
+/** Current page component, excluding cached/deactivated route instances. */
+function currentPageComponent() {
+  const app = document.getElementById('app')?.__vue_app__
+  const active = app?.config?.globalProperties?.$router?.currentRoute?.value
+  const matched = active?.matched?.at(-1), instance = matched?.instances?.default?.$
+  if (!matched || matched.redirect || active.path !== location.pathname ||
+      instance?.isMounted !== true || instance.isUnmounted !== false || instance.isDeactivated !== false ||
+      instance.appContext?.app !== app || instance.type !== matched.components?.default ||
+      instance.vnode?.component !== instance || instance.vnode?.key !== active.fullPath) return undefined
+  return instance
+}
+
+/** Bind a real framework root to the active page's mounted VNode tree. */
+function pageComponentForRoot(root, name) {
+  const owner = currentPageComponent()
+  if (!owner) return undefined
+  let ancestor = owner.parent, appView
+  for (let depth = 0; ancestor && depth < 24; depth++, ancestor = ancestor.parent) {
+    if ((ancestor.type?.name || ancestor.type?.__name) === 'AppView') { appView = ancestor; break }
+  }
+  const roots = appView?.subTree?.type === 'section' ? [appView.subTree]
+    : Array.isArray(appView?.subTree?.children) ? appView.subTree.children : []
+  const sections = roots.filter(node => node?.type === 'section' && node.el?.isConnected)
+  if (sections.length !== 1 || !sections[0].el.contains(root)) return undefined
+  const live = item => item?.isMounted === true && item.isUnmounted === false && item.isDeactivated === false
+  const stack = [owner.subTree], seen = new Set()
+  let instance
+  const owned = []
+  while (stack.length && seen.size < 8192) {
+    const node = stack.pop()
+    if (!node || seen.has(node)) continue
+    seen.add(node)
+    if (name !== 'ElForm' && node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root)) continue
+    if (node.component && live(node.component)) {
+      if ((node.component.type?.name || node.component.type?.__name) === name &&
+          node.component.appContext === owner.appContext) {
+        if (node.component.vnode?.ctx === owner && !node.component.subTree?.el?.closest('[role="dialog"],dialog')) {
+          owned.push(node.component)
+        }
+        if (node.component.subTree?.el === root) {
+          if (instance && instance !== node.component) return undefined
+          instance = node.component
+        }
+      }
+      stack.push(node.component.subTree)
+    }
+    if (Array.isArray(node.children)) stack.push(...node.children)
+  }
+  return stack.length || !instance ? undefined : {owner, instance, owned}
+}
+
+/** Local binding facts only; application effect review still owns action authority. */
+export function readElementPageControl(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected || element.closest('[role="dialog"],dialog')) return undefined
+  const form = element.closest('form')
+  if (form) {
+    const binding = pageComponentForRoot(form, 'ElForm')
+    const model = binding?.instance.props?.model
+    // Production script-setup closes over its variables; setupState is not a
+    // reliable identity. The source-reviewed single query form must be rendered
+    // by this exact active component, not a child editor or cached view.
+    if (!binding || binding.owned.length !== 1 || binding.owned[0] !== binding.instance ||
+        !model || typeof model !== 'object' || !Number.isSafeInteger(model.pageNo) ||
+        model.pageNo < 1 || !Number.isSafeInteger(model.pageSize) || model.pageSize < 1) return undefined
+    const itemRoot = element.closest('.el-form-item')
+    const item = itemRoot && pageComponentForRoot(itemRoot, 'ElFormItem')
+    const field = item?.instance.props?.prop
+    return {kind: 'query', ...(typeof field === 'string' ? {field} : {})}
+  }
+  const root = element.closest('.el-pagination'), target = element.closest('button.btn-prev,button.btn-next,li.number')
+  if (!root || !target || !root.contains(target) || target.matches(':disabled,.is-disabled,[aria-disabled="true"]')) return undefined
+  const binding = pageComponentForRoot(root, 'ElPagination')
+  if (!binding) return undefined
+  const instance = binding.instance
+  const {currentPage, pageSize, total} = instance.props
+  if (![currentPage, pageSize, total].every(Number.isSafeInteger) || currentPage < 1 || pageSize < 1 || total < 0) return undefined
+  const page = target.matches('.btn-prev') ? currentPage - 1 : target.matches('.btn-next') ? currentPage + 1 : Number(target.textContent.trim())
+  if (!Number.isSafeInteger(page) || page < 1 || page > Math.ceil(total / pageSize) || page === currentPage) return undefined
+  return {kind: 'pagination', page, pageSize}
+}
+
 /** Map one Element Plus select hit area to its own accessible form input. */
 export function nativeControlElement(element) {
   if (readElementNavigation(element)?.kind === 'branch' && element.matches('li.el-sub-menu')) {

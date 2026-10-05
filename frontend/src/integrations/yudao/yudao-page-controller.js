@@ -32,4 +32,5 @@ export class PageController extends GenericPageController {
 export function getElementByIndex(selectorMap, index) {
   return nativeControlElement(controllerElement(selectorMap, index))
 }
-export {readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readElementNavigation} from './page-facts.js'
+export {readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
+  readElementNavigation, readElementPageControl} from './page-facts.js'

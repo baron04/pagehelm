@@ -13,6 +13,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.goal.test_data_read_tools import context
 from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control
 from web_operation_agent.tests.support.route_fixture import FIXTURE_ROUTE_PORT
+from web_operation_agent.transport.protocol import _remote_args_echo
 
 
 def page(epoch=1, path="/list", selected=False):
@@ -114,6 +115,23 @@ class ActionAdmissionTests(unittest.TestCase):
             with self.subTest(receipt=bad.command_id), self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
                 self.runtime.verify(intent, permit, bad, context=self.context, checkpoint=lambda: None)
 
+    def test_redacted_input_echo_is_bound_to_the_command_and_requires_exact_application_value(self):
+        value = "Synthetic filter"
+        self.policy.verify = lambda permit, intent, receipt, *, observation, **kw: (
+            observation.elements[1].attrs.get("value") == intent.arguments["value"])
+        intent, permit = self.prepare("fill", {"ref": "e2", "value": value})
+        self.runtime.consume(intent, permit, self.before, context=self.context, checkpoint=lambda: None)
+        after = page(2)
+        after.elements[1].attrs["value"] = value
+        receipt = self.receipt("fill", _remote_args_echo({"ref": "e2", "epoch": 1, "value": value}))
+        receipt.observation = after
+        self.runtime.verify(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
+        for bad in (replace(receipt, args_echo={**receipt.args_echo, "ref": "e1"}),
+                    replace(receipt, args_echo={**receipt.args_echo, "value": value}),
+                    replace(receipt, observation=page(3))):
+            with self.subTest(echo=bad.args_echo), self.assertRaises(ActionAdmissionRefused):
+                self.runtime.verify(intent, permit, bad, context=self.context, checkpoint=lambda: None)
+
     def test_consumption_is_required_before_verification(self):
         intent, permit = self.prepare()
         with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
@@ -165,20 +183,25 @@ class ActionAdmissionTests(unittest.TestCase):
 
 
 class GuardedBrowser(_Browser):
+    navigated = True
+
     def execute(self, action, args=None, expect_navigation=False):
         receipt = super().execute(action, args, expect_navigation=expect_navigation)
         receipt.write_guard_held = True
         receipt.url_after = receipt.observation.url
+        receipt.navigated = self.navigated
         return receipt
 
 
 class EffectLoopTests(unittest.TestCase):
-    def execute(self, policy, calls, after=None, **kwargs):
+    def execute(self, policy, calls, after=None, navigated=True, before=None,
+                prompt="Use the page controls", **kwargs):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        browser = GuardedBrowser([page(), after or page(2, selected=True), page(3, selected=True)])
+        browser = GuardedBrowser([before or page(), after or page(2, selected=True), page(3, selected=True)])
+        browser.navigated = navigated
         chat = _Chat(calls)
-        session = ServerAgentSession(task=TaskSpec("task", "Use the page controls"), chat=chat,
+        session = ServerAgentSession(task=TaskSpec("task", prompt), chat=chat,
             browser=browser, control=_Control([[] for _ in range(8)]),
             ledger=SessionLedger(Path(directory.name) / "audit", "run"),
             disabled_actions=frozenset(), action_policy=policy, page_write_guard=True,
@@ -205,6 +228,19 @@ class EffectLoopTests(unittest.TestCase):
             ("finish", {"done": False, "why": "stop"})])
         self.assertEqual(["observe"], [n for n, _ in browser.done])
         self.assertEqual("unsafe_effect", session.ledger.of_kind("action_effect_refused")[0]["error_code"])
+
+    def test_verified_identical_rows_still_record_a_completed_read_interaction(self):
+        policy = Policy()
+        policy.verify = lambda permit, intent, receipt, *, observation, **kw: bool(
+            observation.page_read and observation.page_read["revision"] == 2)
+        after = replace(page(2), page_read={"path": "/api/records", "query_digest": "a" * 64,
+            "query_fields": {}, "revision": 2, "page": 2, "page_size": 10, "rows": 10, "total": 20})
+        _, session, browser, _ = self.execute(policy, [
+            ("click", {"ref": "e1"}), ("finish", {"done": False, "why": "stop"})], after=after, navigated=False)
+        self.assertEqual(["click"], [n for n, _ in browser.done])
+        self.assertEqual({"kind": "page_interaction", "action": "click", "url": after.url},
+                         session._answer_action_receipt)
+        self.assertEqual(1, len(session.ledger.of_kind("action_effect_verified")))
 
     def test_unverified_acknowledged_action_is_not_repeated_or_reported_complete(self):
         result, session, browser, chat = self.execute(Policy(), [

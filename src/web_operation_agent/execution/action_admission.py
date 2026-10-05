@@ -16,6 +16,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..schemas import ActionReceipt, PageObservation
 from ..state.identity import OperationContext
+from ..transport.protocol import _remote_args_echo
 
 
 ADMITTED_ACTIONS = frozenset({"click", "fill", "select", "goto"})
@@ -154,6 +155,12 @@ class ActionAdmission:
         self.actions = policy.actions
         self._issued: dict[str, ActionPermit] = {}
         self._consumed: set[str] = set()
+        self._verified_query = None
+
+    def query_verified(self, observation: PageObservation) -> bool:
+        """A read snapshot counts only after this turn's guarded application check."""
+        return self._verified_query is not None and self._verified_query == (
+            observation.url, observation.page_route, _encoded(observation.page_read))
 
     def _check(self, context, checkpoint):
         checkpoint()
@@ -194,6 +201,7 @@ class ActionAdmission:
         echoed_epoch = echo.pop("epoch", None)
         expected = intent.arguments
         expected.pop("expect_navigation", None)
+        expected = _remote_args_echo(expected)
         if (intent.operation_binding not in self._consumed
                 or permit.binding_digest != intent.binding_digest
                 or self._issued.get(intent.binding_digest) != permit
@@ -231,3 +239,8 @@ class ActionAdmission:
         self._check(context, checkpoint)
         if verified is not True:
             raise ActionAdmissionRefused("unverified")
+        if (intent.action == "click" and permit.effect == ActionEffect.READ_ONLY
+                and before.page_read is not None and after.page_read is not None
+                and before.page_read["path"] == after.page_read["path"]
+                and after.page_read["revision"] > before.page_read["revision"]):
+            self._verified_query = (after.url, after.page_route, _encoded(after.page_read))

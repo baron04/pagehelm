@@ -427,8 +427,18 @@ agent.
   follow until the application verifies a fresh result. It is never redispatched.
   Persistent/unknown effects are refused; business drafts still use
   the approved FormPort. An HTTP fence or control label alone proves no effect.
-  The current prototypes cover native menus/tabs and plain-HTML navigation contract
-  tests, not general search/paging or deployment coverage. The default integrations
+  An integration may provide a bounded `page_read` receipt containing a successful
+  list request's path, filter digests, revision and paging counts, plus live pagination
+  targets. Raw filter values are omitted. These observations grant no authority;
+  the application policy must bind and verify the reviewed query's result.
+  `set_target.query` binds requested text values to current application query controls;
+  a draft or click alone cannot settle it. Completion requires a guarded,
+  application-verified applied read matching every declared condition. Target audits
+  retain value digests. The Runtime excludes its own panel's hit targets only during
+  the controller's synchronous extraction; application occlusion remains in effect.
+  The current prototypes cover native menus/tabs, release-reviewed standard text queries
+  and pagination, plus plain-HTML contracts. Isolated native list checks are not general
+  application or deployment coverage. The default integrations
   do not enable them. The Contacts native host has no page effect guard and correctly
   refuses this opt-in mode; it is not a positive guarded-browser qualification.
   Integrations can set `require_page_route=True` in `AgentTurnConfig` for this loop:

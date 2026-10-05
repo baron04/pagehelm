@@ -70,6 +70,8 @@ export interface PageObservation {
   page_route?: string
   /** Successful application-owned applied query; not a draft or authorization. */
   page_query?: {path: string; parameters: Record<string, string>}
+  page_read?: {path: string; query_digest: string; query_fields: Record<string, string>; revision: number; page: number;
+    page_size: number; total: number; rows: number}
 }
 
 export interface ObservationEnvelope {

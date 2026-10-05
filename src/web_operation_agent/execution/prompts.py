@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from ..schemas import MAX_SCROLL_PAGES
+from ..schemas.browser import MAX_QUERY_VALUE_CHARS
 from ..planning.source_read import (MAX_SOURCE_PATH_CHARS, MAX_SOURCE_READ_LINES)
 
 _PLAN_PREAMBLE = {
@@ -340,6 +341,15 @@ TARGET_TOOL = {"type": "function", "function": {
                                    "items": {"type": "string", "minLength": 1,
                                              "maxLength": 120},
                                    "description": "exact names of active page filters"},
+                       "query": {"type": "array", "maxItems": 4,
+                                 "items": {"type": "object", "additionalProperties": False,
+                                           "properties": {"ref": {"type": "string"},
+                                                          "value": {"type": "string", "minLength": 1,
+                                                                    "maxLength": MAX_QUERY_VALUE_CHARS}},
+                                           "required": ["ref", "value"]},
+                                 "description": ("text query conditions: current textbox ref and "
+                                                 "requested value; only application-bound query "
+                                                 "controls and a verified applied read count")},
                        "groups": {"type": "array", "maxItems": 4,
                                   "items": {"type": "string", "minLength": 1,
                                             "maxLength": 120},
@@ -421,6 +431,9 @@ the complete state that finishes
 it: the exact path (an href on the current page, a route a typed result returned, or a
 cited source route), names of controls that must be selected, and/or names of active
 filters and groups reported by the application. A menu option's presence alone does not
+establish application. For a text query, use query with its current textbox ref and requested
+value, then fill and apply it. Filling alone does not settle a query condition. Application-
+verified successful list reads, not the draft input or a search button click alone,
 establish that a filter or group was applied. For a request to remove an existing
 restriction, first observe its active filter, then declare filters_absent with that exact
 name; its later absence alone is not proof it was removed. A request with

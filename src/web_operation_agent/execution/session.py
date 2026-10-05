@@ -733,7 +733,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                                f"{MAX_TARGET_DECLARATIONS} times. Act on the target you "
                                "have, or finish.")
         try:
-            target = parse_target(args)
+            target = parse_target(args, turn.obs)
             # An application may expose a reviewed, deployment-bound alias for a page
             # it canonicalises after navigation. This changes only the equality check;
             # it never authorises a browser action or declares the page rendered.
@@ -743,7 +743,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 if not isinstance(resolved, str):
                     raise ValueError("the application returned an invalid target path")
                 if resolved != target.path:
-                    target = parse_target({**target.to_json(), "path": resolved})
+                    target = parse_target({**target.to_json(), "path": resolved}, turn.obs)
         except Exception as exc:  # noqa: BLE001 -- an application alias must fail closed
             reason = str(exc) if isinstance(exc, ValueError) else "invalid application target alias"
             self.ledger.append("target_state_refused", step=turn.step,
@@ -759,7 +759,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 and self._answer_action_receipt["kind"] == "target_state"):
             self._answer_action_receipt = None
         unmet = self._page_goal_unmet(turn.obs)
-        self.ledger.append("target_state_declared", step=turn.step, target=target.to_json(),
+        self.ledger.append("target_state_declared", step=turn.step, target=target.audit_projection(),
                            declaration=self._target_declarations,
                            unmet=list(unmet), page_url=turn.obs.url,
                            page_epoch=turn.obs.epoch)
@@ -799,9 +799,10 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             **({"groups": list(self._target.groups)} if self._target.groups else {}),
             **({"filters_absent": list(self._target.filters_absent)}
                if self._target.filters_absent else {}),
+            **({"query": [c.label for c in self._target.query]} if self._target.query else {}),
             "acted": bool(acted), "page_actions": self.page_actions}
         self.ledger.append("target_state_reached", step=step,
-                           target=self._target.to_json(), url=obs.url,
+                           target=self._target.audit_projection(), url=obs.url,
                            page_epoch=obs.epoch, acted=bool(acted),
                            page_actions=self.page_actions, side_effect_possible=False)
         return True

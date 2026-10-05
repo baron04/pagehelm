@@ -102,7 +102,8 @@ class FinishHandler:
                                        and self._task_requirements.action_request
                                        and args.get("outcome") == "answered")
                                    or (args.get("done") is True
-                                       and self._answer_action_receipt is not None))
+                                       and (self._answer_action_receipt is not None
+                                            or self._target is not None)))
                               and (self._answer_action_receipt is None
                                    or self._answer_action_receipt["kind"] in {
                                        "target_state", "navigation", "page_interaction"}))

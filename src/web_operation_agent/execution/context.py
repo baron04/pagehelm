@@ -38,7 +38,9 @@ class SessionContext:
                                 required_selected=self._required_page_controls,
                                 required_effects=self._required_page_effects,
                                 seen_active_filters=self._seen_active_filters,
-                                require_page_route=self.require_page_route)
+                                require_page_route=self.require_page_route,
+                                verified_query=bool(getattr(self, "action_admission", None)
+                                    and self.action_admission.query_verified(obs)))
         current_path = urlsplit(obs.url).path.rstrip("/") or "/"
         if (current_path in self._business_record_routes
                 and (self._navigation_only or target.path == current_path)
@@ -371,6 +373,10 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
         lines.append("selected controls: " + " | ".join(obs.selected_controls))
     if obs.active_view:
         lines.append("active view: " + obs.active_view)
+    if obs.page_read is not None:
+        read = obs.page_read
+        lines.append(f'applied list read: page {read["page"]}, page size {read["page_size"]}, '
+                     f'{read["rows"]} returned rows, total {read["total"]}; query digests retained by server')
     if obs.page_facets is not None:
         lines.append("active page facets: " + (" | ".join(
             f'{item["kind"]}: {item["name"]}' for item in obs.page_facets) or "none"))
@@ -391,7 +397,7 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
         if e.name:
             bits.append(f'"{e.name}"')
         for k in ("href", "target", "name", "value", "action", "options", "checked",
-                  "disabled"):
+                  "disabled", "field_label", "page_control", "page_number", "page_size"):
             if k in e.attrs and e.attrs[k]:
                 v = e.attrs[k]
                 if isinstance(v, list):

@@ -1,6 +1,7 @@
 import {afterAll, beforeEach, describe, expect, it} from 'vitest'
+import {createHash} from 'node:crypto'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, readElementPageControl} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -17,7 +18,7 @@ function ready(facts: ReturnType<typeof createPageFacts>) {
 }
 
 describe('native Yudao record and read completion facts', () => {
-  it('reports order filters only after the latest successful application read', () => {
+  it('reports order filters only after the latest successful application read', async () => {
     mountedPage('/erp/sale/order', 'SaleOrder')
     const facts = createPageFacts()
     const url = '/admin-api/erp/sale-order/page?pageNo=1&pageSize=10&customerId=7&status=0'
@@ -27,13 +28,46 @@ describe('native Yudao record and read completion facts', () => {
     const latest = facts.begin(url.replace('status=0', 'status=20'))!
     old(200, {code:0,data:{list:[],total:0}})
     expect(facts.readPageQuery()).toBeUndefined()
-    latest(200, {code:0,data:{list:[],total:0}})
+    await latest(200, {code:0,data:{list:[],total:0}})
     expect(facts.readPageQuery()).toEqual({path:'/admin-api/erp/sale-order/page', parameters:{
       customerId:'7',status:'20',orderTimeStart:'2026-10-01 00:00:00',orderTimeEnd:'2026-10-31 23:59:59'}})
     facts.begin(url + '&remark=private')!(200,{code:0,data:{list:[]}})
     expect(facts.readPageQuery()).toBeUndefined()
     facts.begin(url)!(403,null)
     expect(facts.readPageQuery()).toBeUndefined()
+  })
+  it('binds any standard list read to query digests and paging without retaining raw values', async () => {
+    mountedPage('/erp/sale/order', 'SaleOrder')
+    const facts = createPageFacts()
+    const url = '/admin-api/erp/sale-order/page?pageNo=2&pageSize=10&no=SO-SYNTHETIC&remark=synthetic'
+    const finish = facts.begin(url)!
+    expect(facts.readPageRead()).toBeUndefined()
+    await finish(200, {code:0,data:{list:[{id:1}],total:25}})
+    const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    expect(facts.readPageRead()).toEqual({path:'/admin-api/erp/sale-order/page', page:2,
+      page_size:10,total:25,rows:1,revision:1,
+      query_digest:hash([['no','SO-SYNTHETIC'],['remark','synthetic']]),
+      query_fields:{no:hash(['SO-SYNTHETIC']),remark:hash(['synthetic'])}})
+    expect(JSON.stringify(facts.readPageRead())).not.toContain('SO-SYNTHETIC')
+    const next = facts.begin(url.replace('pageNo=2','pageNo=3'))!
+    expect(facts.readPageRead()).toBeUndefined()
+    await next(200,{code:0,data:{list:[],total:25}})
+    expect(facts.readPageRead()?.revision).toBe(2)
+    expect(facts.readPageRead()?.query_digest).toBe(hash([['no','SO-SYNTHETIC'],['remark','synthetic']]))
+    const failure = facts.begin(url)!
+    failure(200,{code:500,data:{list:[],total:25}})
+    expect(facts.readPageRead()).toBeUndefined()
+  })
+  it('settles the current pending count when another list read starts before hashing completes', async () => {
+    mountedPage('/erp/sale/order', 'SaleOrder')
+    const facts = createPageFacts()
+    const first = facts.begin('/admin-api/erp/sale-order/page?pageNo=1&pageSize=10')!
+    const oldDigest = first(200, {code:0,data:{list:[],total:0}})
+    const next = facts.begin('/admin-api/erp/sale-order/page?pageNo=2&pageSize=10')!
+    const latestDigest = next(200, {code:0,data:{list:[],total:0}})
+    await Promise.all([oldDigest, latestDigest])
+    expect(facts.readPageBlocker()).toBe(false)
+    expect(facts.readPageRead()).toMatchObject({revision:2,page:2,total:0,rows:0})
   })
   it('waits before the cold route starts any read or paints tabs, without granting identity', () => {
     const facts = createPageFacts()
@@ -291,6 +325,54 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
 }
 
 describe('native Yudao mounted navigation identity', () => {
+  it('binds query controls to the one source-owned live form without production setupState', () => {
+    const state=mountedPage('/erp/sale/order', 'SaleOrder')
+    state.element.innerHTML='<form><input><button>Search</button></form>'
+    const form=state.element.querySelector('form')!, input=form.querySelector('input')!
+    const component={...state.instance,type:{name:'ElForm'},props:{model:{pageNo:1,pageSize:10}},
+      subTree:{type:'form',el:form},vnode:{ctx:state.instance},parent:state.instance}
+    state.instance.subTree.children=[{component} as unknown as NativeVNode]
+    expect(readElementPageControl(input)).toEqual({kind:'query'})
+    const itemRoot=document.createElement('div');itemRoot.className='el-form-item'
+    input.replaceWith(itemRoot);itemRoot.append(input)
+    const item={...state.instance,type:{name:'ElFormItem'},props:{prop:'no'},subTree:{type:'div',el:itemRoot}}
+    Object.assign(component.subTree,{children:[{component:item}]})
+    expect(readElementPageControl(input)).toEqual({kind:'query',field:'no'})
+    component.vnode.ctx={} as typeof state.instance
+    expect(readElementPageControl(input)).toBeUndefined()
+    component.vnode.ctx=state.instance
+    document.querySelector('header')!.append(form)
+    expect(readElementPageControl(input)).toBeUndefined()
+  })
+  it('rejects ambiguous or replaced query forms and unmounted route owners', () => {
+    const state=mountedPage('/erp/sale/order', 'SaleOrder')
+    state.element.innerHTML='<form><input></form><form><input></form>'
+    const forms=[...state.element.querySelectorAll('form')]
+    const components=forms.map(form=>({...state.instance,type:{name:'ElForm'},
+      props:{model:{pageNo:1,pageSize:10}},subTree:{type:'form',el:form},
+      vnode:{ctx:state.instance},parent:state.instance}))
+    state.instance.subTree.children=components.map(component=>({component})) as unknown as NativeVNode[]
+    expect(readElementPageControl(forms[0]!.querySelector('input'))).toBeUndefined()
+    state.instance.subTree.children=[{component:components[0]}] as unknown as NativeVNode[]
+    expect(readElementPageControl(forms[0]!.querySelector('input'))).toEqual({kind:'query'})
+    state.instance.isDeactivated=true
+    expect(readElementPageControl(forms[0]!.querySelector('input'))).toBeUndefined()
+  })
+  it('binds pagination targets to the active page and preserves current/disabled controls', () => {
+    const state=mountedPage('/erp/sale/order', 'SaleOrder')
+    state.element.innerHTML='<div class="el-pagination"><button class="btn-prev" disabled></button>'
+      +'<ul><li class="number">1</li><li class="number">2</li></ul></div>'
+    const root=state.element.firstElementChild!
+    const component={...state.instance,type:{name:'ElPagination'},props:{currentPage:1,pageSize:10,total:25},
+      subTree:{type:'div',el:root},parent:state.instance}
+    state.instance.subTree.children=[{component}] as unknown as NativeVNode[]
+    const numbers=root.querySelectorAll('li')
+    expect(readElementPageControl(numbers[1])).toEqual({kind:'pagination',page:2,pageSize:10})
+    expect(readElementPageControl(numbers[0])).toBeUndefined()
+    expect(readElementPageControl(root.querySelector('button'))).toBeUndefined()
+    component.isUnmounted=true
+    expect(readElementPageControl(numbers[1])).toBeUndefined()
+  })
   it('retains only the successful applied ledger query, independent of draft inputs and other documents', () => {
     mountedPage('/fms/ledger/general', 'FmsLedgerGeneral')
     const facts = createPageFacts(), other = createPageFacts()

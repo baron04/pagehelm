@@ -165,9 +165,38 @@ class PageObservation:
     page_route: str = ""
     # Application-reported successful applied read, never draft inputs or authority.
     page_query: dict | None = None
+    # Successful application list read, with a digest instead of raw query values.
+    # It verifies a reviewed result; it grants neither a route nor an action.
+    page_read: dict | None = None
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "PageObservation")
+        if self.page_read is not None:
+            read = self.page_read
+            _require(isinstance(read, dict) and set(read) == {
+                "path", "query_digest", "query_fields", "revision", "page", "page_size", "total", "rows"},
+                "invalid page_read")
+            path = read["path"]
+            _require(isinstance(path, str) and len(path) <= MAX_PAGE_ROUTE_CHARS
+                and path.startswith("/") and not path.startswith("//")
+                and not re.search(r"[?#\\\x00-\x20\x7f]", path)
+                and not any(p in {".", ".."} for p in path.split("/")), "invalid read path")
+            _require(isinstance(read["query_digest"], str)
+                and re.fullmatch(r"[0-9a-f]{64}", read["query_digest"]) is not None,
+                "invalid read digest")
+            fields = read["query_fields"]
+            _require(isinstance(fields, dict) and len(fields) <= MAX_QUERY_PARAMETERS
+                and all(isinstance(k, str) and len(k) <= MAX_QUERY_KEY_CHARS
+                    and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\[[0-9]{1,2}\])?", k)
+                    and not SENSITIVE_CREDENTIAL_NAME.search(k)
+                    and isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)
+                    for k, v in fields.items()), "invalid read field digests")
+            _require(all(type(read[k]) is int and 0 <= read[k] < 2**53 for k in
+                         ("revision", "page", "page_size", "total", "rows"))
+                and min(read["revision"], read["page"], read["page_size"]) > 0
+                and read["rows"] <= read["page_size"] and read["rows"] <= read["total"],
+                "invalid read paging")
+            self.page_read = copy.deepcopy(read)
         if self.page_query is not None:
             q = self.page_query
             _require(isinstance(q, dict) and set(q) == {"path", "parameters"}, "invalid page_query")
@@ -290,6 +319,8 @@ class PageObservation:
             out["page_route"] = self.page_route
         if self.page_query is not None:
             out["page_query"] = copy.deepcopy(self.page_query)
+        if self.page_read is not None:
+            out["page_read"] = copy.deepcopy(self.page_read)
         return out
 
     @staticmethod
@@ -297,7 +328,7 @@ class PageObservation:
         allowed = {"schema_version", "epoch", "url", "title", "landmarks", "elements",
                    "content", "messages", "truncated", "render_state", "selected_controls",
                    "active_view",
-                   "page_facets", "facet_candidates", "record_route", "page_route", "page_query"}
+                   "page_facets", "facet_candidates", "record_route", "page_route", "page_query", "page_read"}
         required = {"schema_version", "epoch", "url", "title", "landmarks", "elements"}
         d = _strict_object(d, "PageObservation", allowed=allowed, required=required)
         _require(isinstance(d["landmarks"], list), "landmarks must be an array")
@@ -317,7 +348,8 @@ class PageObservation:
                                page_facets=copy.deepcopy(d.get("page_facets")),
                                facet_candidates=copy.deepcopy(d.get("facet_candidates")),
                                record_route=d.get("record_route", ""),
-                               page_route=d.get("page_route", ""), page_query=copy.deepcopy(d.get("page_query")))
+                               page_route=d.get("page_route", ""), page_query=copy.deepcopy(d.get("page_query")),
+                               page_read=copy.deepcopy(d.get("page_read")))
 
     @property
     def content_digest(self) -> str:

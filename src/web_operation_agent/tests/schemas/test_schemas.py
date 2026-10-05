@@ -65,6 +65,22 @@ def _reasons_emitted_by(*classes) -> set[str]:
 
 
 class WireTypes(unittest.TestCase):
+    def test_list_read_proof_is_optional_bounded_and_does_not_accept_credentials(self):
+        base = dict(schema_version=1, epoch=1, url="https://app.test/contacts",
+                    title="", landmarks=[], elements=[])
+        proof = dict(path="/api/contacts/page", query_digest="a"*64, query_fields={"name":"b"*64},
+                     revision=1, page=2, page_size=10, total=15, rows=5)
+        self.assertNotIn("page_read", S.PageObservation(**base).to_json())
+        page = S.PageObservation(**base, page_read=proof)
+        proof["query_fields"]["name"] = "changed"
+        self.assertEqual("b"*64, S.PageObservation.from_json(page.to_json()).page_read["query_fields"]["name"])
+        valid = page.page_read
+        for bad in ({**valid,"path":"//foreign/page"}, {**valid,"page":True},
+                    {**valid,"query_fields":{"token":"a"*64}}, {**valid,"rows":11},
+                    {**valid,"revision":0}, {**valid,"query_digest":"raw value"}):
+            with self.subTest(proof=bad), self.assertRaises(S.SchemaError):
+                S.PageObservation(**base, page_read=bad)
+
     def test_applied_query_is_optional_bounded_and_rejects_credential_keys(self):
         base = dict(schema_version=1, epoch=1, url="https://app.test/contacts",
                     title="", landmarks=[], elements=[])
