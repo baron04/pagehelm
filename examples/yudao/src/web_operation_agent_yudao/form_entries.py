@@ -151,8 +151,7 @@ class NativeCustomerEntryVerifier:
             raise BusinessToolRequestError("the current editor has no live instance")
         return scope, instance
 
-    def accept_entry(self, entry, before, receipt, observation, *, context):
-        planned, self._planned = self._planned, None
+    def _checked_entry(self, planned, entry, before, receipt, observation, context):
         if (planned is None or planned[:4] != (entry, context.principal.binding_digest,
                 context.session_id, context.turn_id) or entry.control not in before.elements
                 or not receipt.ok or receipt.action != "click" or receipt.navigated
@@ -160,17 +159,30 @@ class NativeCustomerEntryVerifier:
                 or receipt.args_echo != {"ref": entry.control.ref, "epoch": before.epoch}
                 or observation.epoch <= before.epoch or observation.render_state != "ready"
                 or observation.record_route != planned[5]
-                or urlsplit(observation.url).path != planned[4] or urlsplit(observation.url).query):
+                or _location(observation.url) != planned[4]):
             raise BusinessToolRequestError("the editor receipt did not bind this entry")
-        scope, instance = self._scope(observation)
+        return planned, *self._scope(observation)
+
+    def _entry_state(self, planned, entry, before, receipt, observation, context):
+        planned, scope, instance = self._checked_entry(
+            planned, entry, before, receipt, observation, context)
         record = _TARGET.fullmatch(entry.reference)[1]
         self._authorize(record, context)
         source = self.source.read(REVIEWED_FILES[1])
         if source is None:
             raise BusinessToolRequestError("the reviewed editor source is unavailable")
-        self._current = NativeFormState(context.principal.actor_authority_digest,
+        return NativeFormState(context.principal.actor_authority_digest,
             context.session_id, context.turn_id, instance, "update", record, planned[4], scope,
             REVIEWED_FILES[1], source.binding_digest, "客户编辑", "确 定")
+
+    def verify_entry(self, entry, before, receipt, observation, *, context):
+        """Check the guarded opener without consuming FormPort's pending binding."""
+        self._entry_state(self._planned, entry, before, receipt, observation, context)
+        return True
+
+    def accept_entry(self, entry, before, receipt, observation, *, context):
+        planned, self._planned = self._planned, None
+        self._current = self._entry_state(planned, entry, before, receipt, observation, context)
         return "native-" + self._current.digest
 
     def discard_entry(self, entry, *, context):
@@ -344,24 +356,16 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         self._planned = entry,context.principal.binding_digest,context.session_id,context.turn_id,_location(observation.url),""
         return entry
 
-    def accept_entry(self, entry, before, receipt, observation, *, context):
-        planned,self._planned = self._planned,None
-        if (planned is None or planned[:4] != (entry,context.principal.binding_digest,context.session_id,context.turn_id)
-                or entry.control not in before.elements or not receipt.ok or receipt.action != "click"
-                or receipt.navigated or not receipt.write_guard_held
-                or receipt.args_echo != {"ref":entry.control.ref,"epoch":before.epoch}
-                or observation.epoch <= before.epoch or observation.render_state != "ready"
-                or observation.record_route or _location(observation.url) != planned[4]):
-            raise BusinessToolRequestError("the creation receipt did not bind this entry")
-        scope,instance = self._scope(observation)
+    def _entry_state(self, planned, entry, before, receipt, observation, context):
+        planned, scope, instance = self._checked_entry(
+            planned, entry, before, receipt, observation, context)
         self._authorize("",context)
         component = CREATE_ENTRIES[entry.reference][5]
         source = self.source.read(component)
         if source is None:
             raise BusinessToolRequestError("the reviewed creation source is unavailable")
-        self._current = NativeFormState(context.principal.actor_authority_digest,context.session_id,
+        return NativeFormState(context.principal.actor_authority_digest,context.session_id,
             context.turn_id,instance,"create","",planned[4],scope,component,source.binding_digest,"新建草稿","确 定")
-        return "native-" + self._current.digest
 
 
 class NativeEntryVerifiers:
@@ -397,6 +401,10 @@ class NativeEntryVerifiers:
     def accept_entry(self, *args, **kwargs):
         if self.active is None: raise BusinessToolRequestError("no native entry was planned")
         return self.active.accept_entry(*args,**kwargs)
+
+    def verify_entry(self, *args, **kwargs):
+        if self.active is None: raise BusinessToolRequestError("no native entry was planned")
+        return self.active.verify_entry(*args, **kwargs)
 
     def discard_entry(self, *args, **kwargs):
         if self.active: self.active.discard_entry(*args,**kwargs)

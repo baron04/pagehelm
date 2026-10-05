@@ -1,10 +1,12 @@
 """Native framework facts do not replace exact effect/result/actor binding."""
 from dataclasses import replace
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from web_operation_agent.execution.action_admission import ActionAdmission, ActionAdmissionRefused
+from web_operation_agent.execution.action_admission import (
+    ActionAdmission, ActionAdmissionRefused, ActionPermit, ActionEffect)
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.business.errors import BusinessToolIdentityError
@@ -95,3 +97,31 @@ class NativeReadActionTests(unittest.TestCase):
             with self.subTest(role=role), self.assertRaises(ActionAdmissionRefused):
                 self.runtime.prepare("click", {"ref": "e1"}, self.page(elements=(element,)),
                     context=self.context, checkpoint=lambda: None)
+
+    def test_form_subreads_stop_when_delegated_credential_renews(self):
+        invoked = []
+        def changed(check):
+            invoked.append('first')
+            self.client.renew('synthetic-renewed')
+            check()
+            invoked.append('second')
+        with self.assertRaises(BusinessToolIdentityError):
+            self.policy._form_read(lambda:None,changed)
+        self.assertEqual(invoked,['first'])
+
+    def test_reviewed_editor_path_checks_actor_without_loading_business_catalog(self):
+        # This isolates the effect-policy routing dependency. Real opener review and
+        # field binding are qualified in test_form_open_actions and native Chromium.
+        self.policy.form_open_actions = SimpleNamespace(
+            matches=lambda intent: intent.action == 'click',
+            admit=lambda intent, **kw: ActionPermit(intent.binding_digest,
+                ActionEffect.NAVIGATION,'synthetic-reviewed-editor','exact-editor'),
+            verify=lambda *args, **kw: True)
+        opener=ElementRef('e1','button','Open reviewed editor','button',1)
+        with patch.object(self.policy.data,'index',side_effect=AssertionError('catalog unavailable')):
+            self.settle(self.page(elements=(opener,)),self.page(2))
+        self.runtime=ActionAdmission(self.policy,'yudao')
+        self.user={'id':2,'deptId':10}
+        with self.assertRaises(BusinessToolIdentityError):
+            self.runtime.prepare('click',{'ref':'e1'},self.page(elements=(opener,)),
+                                 context=self.context,checkpoint=lambda:None)

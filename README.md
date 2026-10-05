@@ -437,7 +437,13 @@ agent.
   retain value digests. The Runtime excludes its own panel's hit targets only during
   the controller's synchronous extraction; application occlusion remains in effect.
   The current prototypes cover native menus/tabs, release-reviewed standard text queries
-  and pagination, plus plain-HTML contracts. Isolated native list checks are not general
+  and pagination, plus plain-HTML contracts. The Yudao effect policy may also receive its
+  reviewed FormPort through `NativeReadActions(form_entries=...)` to open an exact current
+  editor. Its live actor checks do not load the business catalog. Opener verification
+  preserves the one-use form binding; field entry stays on
+  the approved FormPort and submission remains manual. The complete reviewed form location,
+  including its declared collection-tab query, is preserved; this does not enable arbitrary
+  query navigation or raw business-field fills. Isolated native checks are not general
   application or deployment coverage. The default integrations
   do not enable them. The Contacts native host has no page effect guard and correctly
   refuses this opt-in mode; it is not a positive guarded-browser qualification.

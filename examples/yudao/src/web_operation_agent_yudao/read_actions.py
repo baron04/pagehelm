@@ -3,7 +3,7 @@
 This does not translate a legacy allow-click decision into effect authority. The
 integration must supply a deployment review of its menu/tab handlers and ancillary
 effects. Source/DOM recognition and the native HTTP fence are insufficient alone.
-Search, paging and form openers have not yet passed this effect qualification.
+Optional list and FormPort opener qualifications remain deployment-owned.
 """
 import json
 import re
@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from web_operation_agent.execution.action_admission import (
     ActionEffect, ActionPermit, ActionAdmissionRefused)
 from .bound_data_reads import BoundDataReads
+from web_operation_agent.business.errors import BusinessToolIdentityError
 from .native_tabs import NativeNavigationPolicy, NativeTabPolicy
 
 
@@ -20,7 +21,7 @@ class NativeReadActions:
     required_scope = "yudao.read"
     actions = frozenset({"click", "goto"})
 
-    def __init__(self, origin, data, record_routes, *, review, list_actions=None):
+    def __init__(self, origin, data, record_routes, *, review, list_actions=None, form_entries=None):
         if not isinstance(review, str) or not review.strip() or len(review) > 200:
             raise ValueError("native action effects require a deployment handler review")
         self.origin, self.data, self.review = origin.rstrip("/"), data, review
@@ -30,11 +31,30 @@ class NativeReadActions:
             self.actions = self.actions | list_actions.actions
         self._list_permits = {}
         self._list_turn = None
+        from .form_open_actions import NativeFormOpenActions
+        self.form_open_actions = NativeFormOpenActions(form_entries) if form_entries is not None else None
+        self._form_permits = {}
+        self._form_turn = None
+
+    def _actor(self, context, checkpoint):
+        context.require_live(application_id=self.application_id, required_scope=self.required_scope)
+        return BoundDataReads(self.data, context, checkpoint)
 
     def _index(self, context, checkpoint):
-        context.require_live(application_id=self.application_id, required_scope=self.required_scope)
-        bound = BoundDataReads(self.data, context, checkpoint)
-        return bound.index(context=context)
+        return self._actor(context, checkpoint).index(context=context)
+
+    def _form_read(self, checkpoint, call):
+        client = self.data._client
+        generation = client.read_generation
+        def check():
+            checkpoint()
+            if client.read_generation != generation:
+                raise BusinessToolIdentityError("the editor credential changed during verification")
+        check()
+        with client.read_window(check):
+            result = call(check)
+        check()
+        return result
 
     def _path(self, url):
         parsed = urlsplit(url)
@@ -45,8 +65,23 @@ class NativeReadActions:
         return parsed.path
 
     def admit(self, intent, *, context, checkpoint):
-        index = self._index(context, checkpoint)
         before = intent.observation
+        if self.form_open_actions is not None and self.form_open_actions.matches(intent):
+            self._actor(context, checkpoint)
+            parsed = urlsplit(before.url)
+            # The FormPort's reviewed entry binds its complete query location.
+            # Retain the ordinary same-origin/path checks without weakening raw goto.
+            path = self._path(parsed._replace(query="").geturl())
+            if before.page_route != path:
+                raise ActionAdmissionRefused("invalid_target")
+            permit = self._form_read(checkpoint, lambda check: self.form_open_actions.admit(
+                intent, context=context, checkpoint=check))
+            turn = context.principal.binding_digest, context.session_id, context.turn_id
+            if turn != self._form_turn:
+                self._form_permits.clear(); self._form_turn = turn
+            self._form_permits[permit.binding_digest] = self.data._client.read_generation
+            return permit
+        index = self._index(context, checkpoint)
         path = self._path(before.url)
         if before.page_route != path:
             raise ActionAdmissionRefused("invalid_target")
@@ -94,6 +129,12 @@ class NativeReadActions:
         return ActionPermit(intent.binding_digest, effect, self.review, encoded)
 
     def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
+        if permit.binding_digest in self._form_permits:
+            self._actor(context, checkpoint)
+            if self._form_permits[permit.binding_digest] != self.data._client.read_generation:
+                return False
+            return self._form_read(checkpoint, lambda check: self.form_open_actions.verify(
+                permit, intent, receipt, observation=observation, context=context, checkpoint=check))
         index = self._index(context, checkpoint)
         if permit.binding_digest in self._list_permits:
             if self._list_permits[permit.binding_digest] != self.data._client.read_generation:
