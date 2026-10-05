@@ -74,6 +74,28 @@ class RequestContractShape(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_requirements({**exact, "answer_requests": ["回款金额"]}, prompt)
 
+    def test_operation_cannot_be_redeclared_as_an_independent_answer(self):
+        prompt = "查看公司详情"
+        for answers in ([prompt], ["公司详情"]):
+            with self.subTest(answers=answers), self.assertRaises(ValueError):
+                parse_requirements({"action_request": prompt, "action_kind": "record",
+                    "answer_requests": answers, "answer_kinds": ["data"]}, prompt)
+        self.assertEqual(parse_requirements({"action_request": prompt, "action_kind": "record",
+            "answer_requests": [], "answer_kinds": []}, prompt).answer_ids, ())
+
+    def test_separate_repeated_words_and_actual_mixed_clauses_are_preserved(self):
+        prompt = "打开公司详情，并回答打开公司详情需要什么权限"
+        declaration = {"action_request": "打开公司详情", "action_kind": "record",
+            "answer_requests": ["回答打开公司详情需要什么权限"], "answer_kinds": ["knowledge"]}
+        self.assertEqual(parse_requirements(declaration, prompt).answer_ids, ("a1",))
+        # The first occurrence of the longer action overlaps the only answer; its
+        # later occurrence is a valid independent quotation.
+        self.assertEqual(parse_requirements({"action_request": "ABCDE", "action_kind": "page",
+            "answer_requests": ["DEF"], "answer_kinds": ["knowledge"]},
+            "ABCDEF, ABCDE").answer_ids, ("a1",))
+        with self.assertRaises(ValueError):
+            parse_requirements({**declaration, "action_request": prompt}, prompt)
+
     def test_only_selected_answer_evidence_can_settle_frozen_question_ids(self):
         req = parse_requirements(DECLARATION, REQUEST)
         value = answer()
@@ -219,6 +241,19 @@ class RequestContractProduct(unittest.TestCase):
                                                "answer_requests": [], "answer_kinds": []})
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertIn("已打开页面", result.user_answer)
+
+    def test_overlapping_declaration_repairs_before_any_application_tool(self):
+        prompt = "查看公司详情"
+        declaration = {"action_request": prompt, "action_kind": "record",
+                       "answer_requests": [], "answer_kinds": []}
+        result, chat = self.execute([
+            ("goto", {"url": "/object/company/company-1"}), ("finish", {"outcome": "acted"})],
+            prompt=prompt, declaration=declaration,
+            prefix=(("declare_task", {**declaration, "answer_requests": [prompt], "answer_kinds": ["data"]}),))
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(chat.tool_names[:2], [{"declare_task"}, {"declare_task"}])
+        self.assertIn("nonoverlapping", str(chat.messages))
+        self.assertEqual(_RemoteBrowser.instances[-1].actions.count("goto"), 1)
 
     def test_record_task_cannot_finish_on_a_collection_but_can_recover_with_the_same_agent(self):
         prompt = "打开公司详情"

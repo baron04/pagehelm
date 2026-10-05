@@ -61,6 +61,8 @@ Freeze action_kind from the requested result, before feasibility is known. A rec
 detail/tab needs an application-verified rendered record; an empty lookup cannot make
 a list page complete it. Recover its name/type, or report partial/unable. For a general
 page use page, for prefill use draft, for a persisted change use mutation, else none.
+Quote separate, nonoverlapping operation and answer clauses. Do not declare the same
+page-opening clause again as a factual question; questions-only requests use no action.
 """
 
 _CONNECTORS = re.compile(r"(?:(?:并且?|以及|和|然后|同时|顺便|还|再|也|请|帮我|麻烦)|"
@@ -107,8 +109,28 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
     if len(set(answers)) != len(answers) or not (action or answers):
         raise ValueError("request clauses must be nonempty and questions must not repeat")
     prompt = redact_sensitive_assignments(prompt)
+    clauses = ((action,) if action else ()) + answers
+    # Require distinct original spans without interpreting intent or application
+    # nouns. For each subset keep its earliest possible end; later ends cannot help
+    # remaining clauses. At most nine clauses give 512 states, including repeats at
+    # different positions, without greedy false refusals or unbounded backtracking.
+    ends = {0: 0}
+    for mask in range(1 << len(clauses)):
+        if mask not in ends:
+            continue
+        for index, clause in enumerate(clauses):
+            if mask & (1 << index):
+                continue
+            start = prompt.find(clause, ends[mask])
+            if start >= 0:
+                following = mask | (1 << index)
+                end = start + len(clause)
+                ends[following] = min(end, ends.get(following, len(prompt) + 1))
+    if (1 << len(clauses)) - 1 not in ends:
+        raise ValueError("quote separate nonoverlapping original operation and answer clauses; "
+                         "a page-opening clause is not an additional factual question")
     covered = [False] * len(prompt)
-    for clause in ((action,) if action else ()) + answers:
+    for clause in clauses:
         start = prompt.find(clause)
         if start < 0:
             raise ValueError("each clause must quote exact original USER REQUEST text")

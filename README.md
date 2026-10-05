@@ -668,7 +668,10 @@ The pilot never runs automatically after a goal refusal. Its
 scripted isolated browser checks do not establish model accuracy or production readiness.
 This pilot enables the application-neutral `require_task_contract` option (off by default
 for other step executors). Before application tools, the same Agent quotes the user's
-operation and answer clauses in an immutable `declare_task`. A complete finish must map
+operation and answer clauses in an immutable `declare_task`.
+Each independent clause must quote a separate part of the request; redeclaring a page-opening
+clause as an extra question is rejected before application tools, allowing the same Agent to repair.
+A complete finish must map
 each declared question to evidence selected by its validated conclusions and carry an
 observed receipt for the operation. Partial or unable outcomes preserve observed actions
 and identify missing clauses; answer repair cannot repeat page actions. This accounts for

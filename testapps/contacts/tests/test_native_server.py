@@ -866,6 +866,8 @@ class NativeContactsBrowserTests(unittest.TestCase):
         from playwright.sync_api import sync_playwright
         prompt = "Open Grace Hopper's contact record and show her email."
         chat = ScriptedDemoChat((
+            ("declare_task", {"action_request": prompt, "action_kind": "record",
+                              "answer_requests": ["show her email"], "answer_kinds": ["data"]}),
             ("declare_task", {"action_request": "Open Grace Hopper's contact record",
                               "action_kind": "record",
                               "answer_requests": ["show her email"], "answer_kinds": ["data"]}),
@@ -876,8 +878,8 @@ class NativeContactsBrowserTests(unittest.TestCase):
             ("finish", {"outcome": "acted"}),
             ("finish", {"outcome": "acted", "answer": {"version": 1,
                 "coverage": "complete", "conclusions": [{"kind": "field_value",
-                "evidence_ref": "call3-record#2"}], "answers_for": [
-                {"request_ref": "a1", "evidence_refs": ["call3-record#2"]}]}}),
+                "evidence_ref": "call4-record#2"}], "answers_for": [
+                {"request_ref": "a1", "evidence_refs": ["call4-record#2"]}]}}),
         ))
         with tempfile.TemporaryDirectory() as directory, patch(
                 "testapps.contacts.server._chat", return_value=(chat, None)), \
@@ -903,9 +905,11 @@ class NativeContactsBrowserTests(unittest.TestCase):
                 self.assertEqual(host.application.write_requests, 0)
                 snapshots = list(map(json.loads, chat.seen))
                 self.assertEqual([t["function"]["name"] for t in snapshots[0]["tools"]], ["declare_task"])
+                self.assertEqual([t["function"]["name"] for t in snapshots[1]["tools"]], ["declare_task"])
+                self.assertIn("nonoverlapping", str(snapshots[1]["messages"]))
                 self.assertIn("Unanswered request: show her email", str(snapshots[-1]["messages"]))
                 self.assertNotIn("goto", {t["function"]["name"] for t in snapshots[-1]["tools"]})
-                self.assertEqual(chat.calls, 7)
+                self.assertEqual(chat.calls, 8)
             finally:
                 browser.close()
 
