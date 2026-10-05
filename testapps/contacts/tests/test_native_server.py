@@ -1142,6 +1142,34 @@ class NativeContactsBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_source_free_radio_draft_selects_exactly_one_option_without_saving(self):
+        from playwright.sync_api import sync_playwright
+        chat = _GenericFormChat({"Contact method": "phone"})
+        with tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0, scripted=False)) as host, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 1100})
+                page.goto(host.origin + "/demo/login/ada-lovelace", wait_until="domcontentloaded")
+                page.goto(host.origin + "/contacts/new", wait_until="domcontentloaded")
+                page.evaluate(_CONNECTED)
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, "Select phone call as contact method; I will save it.")
+                _allow_operation(page)
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error)
+                self.assertEqual(outcome.result.terminal_reason, "agent_finished", outcome.result.user_answer)
+                self.assertTrue(page.get_by_role('radio', name='Phone call').is_checked())
+                self.assertFalse(page.get_by_role('radio', name='Email only').is_checked())
+                self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
+                self.assertEqual(host.application.write_requests, 0)
+                self.assertEqual(host.application.records_created, 0)
+            finally:
+                browser.close()
+
     def test_unreviewed_onchange_form_is_not_exposed_to_generic_prefill(self):
         """P8.6d: DOM similarity cannot grant authority over application events."""
         from playwright.sync_api import sync_playwright

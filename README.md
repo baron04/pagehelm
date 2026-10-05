@@ -470,7 +470,7 @@ agent.
   rechecks both sides and retains the exact native bindings on the server; `prefill_form`
   types that draft, checks the live field values and, where an application declares a
   read-only window, requires its acknowledgement of release before ending the turn.
-  It never clicks or submits the form.
+  It never clicks the submit control or submits the form.
   Fixed prefill steps inherit elapsed turn time, recheck cancellation after approval,
   and stop after a late receipt without replaying entered fields or issuing the next step.
   Drafts prepared through this contract retain a server-only check of the actor, turn and
@@ -703,6 +703,14 @@ pattern from current allowlisted source. Choice data is re-read under the same a
 preparation; changed source or choices invalidate the draft. Element Plus hit-area translation
 stays in the application controller. Contacts exercises the same contract with a source-free
 HTML combobox. This is bounded capability coverage, not a model accuracy result.
+The same contract accepts native and ARIA radio groups with exact adapter-issued option
+labels, verifies that exactly one option is selected, and stops on replacement or ambiguous
+options. Contacts qualifies this without source access. Yudao can translate literal Boolean
+and integer radio values plus shallow allowlisted view-local constants; source bytes remain
+bound to the draft. A source `formType === 'create'` or `'update'` condition is accepted only
+when the application's entry verifier attests that mode; other conditions remain excluded.
+The current Yudao public-visibility choice removes a member control and invalidates the form
+instance: values may be entered, but handoff stops. That dependent-control flow remains incomplete.
 Dynamic numeric constraints, date ranges, custom date formats, datetime fields, multi-select,
 cascaders, remote option search and editable detail rows remain unsupported by this translation.
 One scope declaration

@@ -31,6 +31,22 @@ class Verifier:
 
 
 class FormsTests(unittest.TestCase):
+    def test_radio_choice_is_bound_to_verified_mode_and_exact_declared_value(self):
+        self.path.write_text(_SOURCE.replace('<el-input v-model="formData.name" maxlength="31" clearable />',
+            '<el-radio-group v-model="formData.name"><el-radio :value="false">私有</el-radio><el-radio :value="true">公开</el-radio></el-radio-group>')
+            .replace('label="合成名称"', 'v-if="formType === \'create\'" label="合成名称"'))
+        self.verifier.state = replace(self.state, source_digest=self.reader.read(_PATH).binding_digest)
+        self.obs.elements[0] = replace(self.obs.elements[0], role='radiogroup', tag='div')
+        self.assertNotIn('合成名称', [f['label'] for f in self.describe()['fields']])
+        self.verifier.state = replace(self.verifier.state, mode='create', record_id='')
+        result = self.describe()
+        draft, _ = self.tools.prepare(self.obs, self.args(result, 'true'), context=self.context)
+        self.assertEqual((draft.fields[0].control, draft.fields[0].value, draft.fields[0].option_label),
+                         ('radiogroup', 'true', '公开'))
+        self.path.write_text(self.path.read_text().replace("formType === 'create'", 'canEdit'))
+        self.verifier.state = replace(self.verifier.state, source_digest=self.reader.read(_PATH).binding_digest)
+        self.assertNotIn('合成名称', [f['label'] for f in self.describe()['fields']])
+
     def test_literal_choices_use_opaque_field_ids_and_reject_source_replacement(self):
         self.path.write_text(_SOURCE.replace('<el-input v-model="formData.name" maxlength="31" clearable />',
             '<el-select v-model="formData.name"><el-option label="合成负责人" value="17"/></el-select>'))

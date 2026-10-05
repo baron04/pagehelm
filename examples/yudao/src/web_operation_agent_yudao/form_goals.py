@@ -60,7 +60,9 @@ class NativeFormsGoalPort(NativePageGoalPort):
                           and (not d.page.key or d.page.key == e[2])), None)
             component = entry[6] if entry else REVIEWED_FILES[1]
             form_source = self._form_source.read(component)
-            fields = {f.reference for f in form_source.fields if not f.conditional and not f.handlers} if form_source else set()
+            mode = "create" if entry else "update"
+            fields = {f.reference for f in form_source.fields if
+                      (not f.conditional or mode in f.modes) and not f.handlers} if form_source else set()
             requested = d.field_values or ((d.action, d.value),)
             mapped = tuple((entity.field_by_label(label), value) for label, value in requested) if entity else ()
             page = resolved.page

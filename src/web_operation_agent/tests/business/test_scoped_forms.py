@@ -65,6 +65,25 @@ def session_for(execute):
 
 
 class ScopedForms(unittest.TestCase):
+    def test_radio_draft_selects_the_declared_label_and_cannot_omit_it(self):
+        obs = observation()
+        obs.elements[0] = replace(obs.elements[0], role="radiogroup")
+        calls = []
+        def execute(action, args):
+            calls.append((action, args))
+            return ActionReceipt(1, "cmd" + str(len(calls)), action, {}, True,
+                observation=replace(obs, epoch=len(calls) + 1,
+                    elements=[replace(e, epoch=len(calls) + 1) for e in obs.elements]))
+        with self.assertRaises(ValueError):
+            FormDraftField("name", "Name", "true", "radiogroup", binding="label")
+        draft = FormDraft("/records", (FormDraftField("name", "Name", "true", "radiogroup",
+            binding="label", option_label="Public"),), control_scope=SCOPE, submit_label="Confirm")
+        _, reason, _ = apply_form_draft(session_for(execute), draft, obs, 1)
+        self.assertEqual(reason, "")
+        self.assertEqual([c[0] for c in calls], ["select", "handoff_form"])
+        self.assertEqual(calls[0][1]["option_label"], "Public")
+        self.assertEqual(calls[1][1]["fields"][0]["control"], "radiogroup")
+
     def test_combobox_draft_uses_select_and_retains_label_in_handoff(self):
         obs = observation()
         obs.elements[0] = replace(obs.elements[0], role="combobox")

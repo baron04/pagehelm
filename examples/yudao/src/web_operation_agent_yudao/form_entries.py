@@ -30,6 +30,20 @@ _TARGET = re.compile(r"customer-update:([1-9][0-9]{0,19})\Z")
 _INSTANCE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 
 
+def _location(url):
+    parts = urlsplit(url)
+    return parts.path + ("?" + parts.query if parts.query else "")
+
+
+def _creation_location(reference, url):
+    parts = urlsplit(url)
+    # The reviewed PMS opener belongs to these source-declared collection tabs.
+    # Extra parameters and duplicate keys are not an entry identity.
+    return (parts.path == CREATE_ENTRIES[reference][1] and not parts.fragment
+            and (not parts.query or reference == "project-create"
+                 and parts.query in {"tabs=participate", "tabs=owner", "tabs=all"}))
+
+
 @dataclass(frozen=True)
 class NativeFormReview:
     release: str
@@ -170,7 +184,7 @@ class NativeCustomerEntryVerifier:
         try:
             scope, instance = self._scope(observation)
             if (observation.render_state != "ready" or observation.record_route != (state.route if state.mode == "update" else "")
-                    or urlsplit(observation.url).path != state.route or urlsplit(observation.url).query
+                    or _location(observation.url) != state.route
                     or (scope, instance) != (state.control_scope, state.entry_id)):
                 self._current = None
                 return None
@@ -263,7 +277,7 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
             raise BusinessToolRequestError("this creation entry is not reviewed")
         _, route, label, *_ = CREATE_ENTRIES[reference]
         if (observation.render_state != "ready" or observation.record_route
-                or urlsplit(observation.url).path != route or urlsplit(observation.url).query
+                or not _creation_location(reference, observation.url)
                 or any(str(e.attrs.get("form_scope", "")).startswith("dialog") for e in observation.elements)):
             raise BusinessToolRequestError("the exact collection must be ready without an editor")
         self._authorize("",context)
@@ -272,7 +286,7 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         if len(controls) != 1:
             raise BusinessToolRequestError("the reviewed creation opener is not unique and enabled")
         entry = ApplicationFormEntry(reference,controls[0])
-        self._planned = entry,context.principal.binding_digest,context.session_id,context.turn_id,route,""
+        self._planned = entry,context.principal.binding_digest,context.session_id,context.turn_id,_location(observation.url),""
         return entry
 
     def accept_entry(self, entry, before, receipt, observation, *, context):
@@ -282,8 +296,7 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
                 or receipt.navigated or not receipt.write_guard_held
                 or receipt.args_echo != {"ref":entry.control.ref,"epoch":before.epoch}
                 or observation.epoch <= before.epoch or observation.render_state != "ready"
-                or observation.record_route or urlsplit(observation.url).path != planned[4]
-                or urlsplit(observation.url).query):
+                or observation.record_route or _location(observation.url) != planned[4]):
             raise BusinessToolRequestError("the creation receipt did not bind this entry")
         scope,instance = self._scope(observation)
         self._authorize("",context)
@@ -358,7 +371,7 @@ class NativeEntryFormPort(YudaoFormPort):
                        for e in observation.elements)):
             return ()
         path = urlsplit(observation.url).path
-        if observation.page_route != path or urlsplit(observation.url).query:
+        if observation.page_route != path:
             return ()
         candidates = []
         verifiers = (self._verifier.verifiers if isinstance(self._verifier, NativeEntryVerifiers)
@@ -367,12 +380,12 @@ class NativeEntryFormPort(YudaoFormPort):
             if isinstance(verifier, NativeCreateEntryVerifier):
                 reference = verifier.review.reference
                 _, route, label, *_ = CREATE_ENTRIES[reference]
-                if path != route or observation.record_route:
+                if not _creation_location(reference, observation.url) or observation.record_route:
                     continue
                 record, kind = "", "create"
             else:
                 match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
-                if not match or observation.record_route != path:
+                if not match or observation.record_route != path or urlsplit(observation.url).query:
                     continue
                 record, kind = match[1], "update"
                 reference, label = "customer-update:" + record, "编辑"
@@ -404,6 +417,6 @@ class NativeEntryClickPolicy:
         if (planned is not None and element == planned[0].control
                 and element.epoch == observation.epoch and observation.render_state == "ready"
                 and observation.record_route == planned[5]
-                and urlsplit(observation.url).path == planned[4]):
+                and _location(observation.url) == planned[4]):
             return ""
         return self.tabs.decide(observation, element) if self.tabs else "only a reviewed current form entry is allowed"

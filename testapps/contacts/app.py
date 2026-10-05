@@ -236,6 +236,10 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
           <form id="contact-create" data-page-route="/contacts/new"><label>Name<input name="name" autocomplete="name"
             required maxlength="120"></label><label>Email<input name="email" type="email"
             autocomplete="email" required maxlength="200"></label>
+            <div role="radiogroup" aria-label="Contact method">
+              <label>Email only<input type="radio" name="local-contact-method" value="email" checked></label>
+              <label>Phone call<input type="radio" name="local-contact-method" value="phone"></label>
+            </div>
             <label>Daily limit<input id="contact-draft-limit" type="number"></label>
             <label>Follow-up date<input id="contact-draft-date" type="date"></label>
             <label>Priority<input id="contact-draft-priority" role="combobox" readonly

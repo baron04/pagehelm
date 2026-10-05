@@ -117,19 +117,20 @@ class YudaoFormPort:
         fields = []
         for item in source.fields:
             # Conditional/handler-bearing fields need their own qualified translation.
-            if item.conditional or item.handlers:
+            if (item.conditional and state.mode not in item.modes) or item.handlers:
                 continue
             try:
                 options = (self._choices(item, state, context) if self._choices else
-                           tuple(FormChoice(v, l) for v, l in item.choices)) if item.input_type == "choice" else ()
-                if item.input_type == "choice" and not options:
+                           tuple(FormChoice(v, l) for v, l in item.choices)) if item.input_type in {"choice", "radio"} else ()
+                if item.input_type in {"choice", "radio"} and not options:
                     continue
                 fields.append(ApplicationFormField(item.reference, item.label,
                     kind={"email": "email", "tel": "phone", "url": "url", "date": "date",
-                          "integer": "integer", "number": "number", "choice": "choice"}.get(item.input_type, "text"),
+                          "integer": "integer", "number": "number", "choice": "choice", "radio": "choice"}.get(item.input_type, "text"),
                     controls=(("spinbutton",) if item.input_type in {"number", "integer"}
                               else ("textbox", "combobox") if item.input_type == "date"
-                              else ("combobox",) if item.input_type == "choice" else ("textbox",)),
+                              else ("combobox",) if item.input_type == "choice"
+                              else ("radiogroup",) if item.input_type == "radio" else ("textbox",)),
                     choices=options, binding="label"))
             except ValueError:
                 # Credential-like semantics never enter the generic draft contract.

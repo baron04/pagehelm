@@ -148,13 +148,22 @@ identify the current create/update target, or enable native form entry in the ho
 `YudaoFormPort` translates those facts through the existing `ApplicationFormPort` contract,
 using a server-owned `NativeFormVerifier` that must revalidate the actor, session/turn,
 entry instance, exact create/update record, dialog scope and reviewed transient component
-bytes. It refuses missing or changed attestations and source, excludes conditional or
-handler-bearing fields, and checks literal length limits in UTF-16 units before issuing
+bytes. It refuses missing or changed attestations and source, excludes handler-bearing
+fields and conditions other than exact create/update mode gates attested by the verifier,
+and checks literal length limits in UTF-16 units before issuing
 a draft. `YudaoApplication(forms=..., page_write_guard=...)` permits explicit composition;
 the native host does not install a verifier or enable form actions by default. A verifier
 must come from application-owned live entry verification, never model output or a browser
 claim. The optional customer-update prototype below has a complete scripted browser
 qualification; that does not establish real-model accuracy or general form coverage.
+Single-choice radio groups reuse the same current-form contract and exact option-label
+verification. The source reader accepts literal Boolean/integer values and bounded direct
+imports of literal constants from allowlisted view-local TypeScript files; it executes no
+scripts and binds dependency bytes to the draft. Multi-select and datetime inputs remain
+excluded. Reviewed project creation admits only the source-declared `tabs=participate`,
+`tabs=owner` and `tabs=all` collection queries, bound unchanged through handoff. This does
+not enable automatic navigation: the project-group GET can initialize persisted defaults
+and cannot be admitted as read-only merely because it is a GET.
 Source questions use one small retrieval declaration and one answer declaration, with
 at most one shared format repair. Answers include selected release-bound citations. Literal support checks establish attribution, not semantic correctness.
 Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.

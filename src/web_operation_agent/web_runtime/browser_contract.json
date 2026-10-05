@@ -24,7 +24,8 @@
       "textbox",
       "combobox",
       "select",
-      "spinbutton"
+      "spinbutton",
+      "radiogroup"
     ]
   }
 }

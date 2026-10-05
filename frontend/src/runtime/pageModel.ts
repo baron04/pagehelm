@@ -12,6 +12,7 @@ import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance} from './formInstance'
 import {listboxCombobox} from './combobox'
+import {radioGroup, radioChoices, selectedRadio} from './radio'
 
 /** Maximum live controls one observation may expose across the browser boundary. */
 export const MAX_OBSERVATION_ELEMENTS = browserContract.observation.max_elements
@@ -367,9 +368,19 @@ export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unkno
  */
 export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
                                  getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {
+  const groups = new Set<HTMLElement>()
   for (const item of elements) {
     try {
-      const element = getByIndex(selectorMap, refIndex(item.ref))
+      let element = getByIndex(selectorMap, refIndex(item.ref))
+      const group = radioGroup(element)
+      if (group && radioChoices(group).length) {
+        if (groups.has(group)) continue
+        groups.add(group)
+        element = group
+        item.role = 'radiogroup'
+        item.tag = group.tagName.toLowerCase()
+        item.name = redactor.redactString(formControlLabel(group) || '')
+      }
       // An application controller may map an annotated hit area to its accessible input.
       // Keep its live semantic role; no framework selector or invented label is used here.
       if (typeof HTMLInputElement !== 'undefined' && element instanceof HTMLInputElement &&
@@ -415,6 +426,11 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // bounded, and never for a field whose name marks it sensitive.
       if (item.role !== 'select' && typeof element?.value === 'string' && element.value) {
         item.attrs.value = redactor.redactString(element.value).slice(0, 120)
+      }
+      if (group) {
+        delete item.attrs.value
+        const selected = selectedRadio(group)
+        if (selected && !sensitive) item.attrs.value = redactor.redactString(selected).slice(0, 120)
       }
       if (rawField !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(rawField)
           && !redactor.isSensitiveName(rawField)) {

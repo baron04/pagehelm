@@ -3,8 +3,8 @@
 This compiler supplies evidence, not permission to type. A form port must still bind an
 application-verified entry, actor, create/update target and fresh visible dialog before
 using these facts. No source map, global form directory or framework code enters the core.
-Scripts are never executed. Single-choice literals, integer dictionary bindings and the
-fixed user-list read pattern may describe options; other dynamic/custom controls remain
+Scripts are never executed. Single-choice literals, shallow view-local radio constants,
+integer dictionary bindings and the fixed user-list read pattern may describe options; other dynamic/custom controls remain
 uncompiled. These facts never authorize a request extracted from source.
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from threading import RLock
 from web_operation_agent.planning.sourcetree import AccessDenied, SourceTree
 from web_operation_agent.schemas import EvidenceRef
 from web_operation_agent.schemas.browser import MAX_FORM_LABEL_CHARS
+from .form_radio import constant_imports, radio_choices
 
 _COMPONENT = re.compile(r"ui/src/views/(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.vue\Z")
 _FIELD = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,79}\Z")
@@ -43,6 +44,7 @@ class ScalarSourceField:
     choices: tuple[tuple[str, str], ...] = ()
     choice_source: str = ""
     choice_reference: str = ""
+    modes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +69,7 @@ class _Node:
     start: int
     end: int = 0
     children: list[_Node] = field(default_factory=list)
+    text: str = ""
 
 
 class _Template(HTMLParser):
@@ -102,6 +105,10 @@ class _Template(HTMLParser):
             self.valid = False
             return
         self.stack.pop().end = self.getpos()[0]
+
+    def handle_data(self, data):
+        if self.stack:
+            self.stack[-1].text += data
 
 
 def _walk(node: _Node, ancestors: tuple[_Node, ...] = ()):
@@ -187,7 +194,8 @@ def _select_choices(control: _Node, text: str, dictionary: str):
     return tuple(choices), "literal", ""
 
 
-def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "") -> ScalarFormSource | None:
+def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "", *,
+             constants=None, dependencies=()) -> ScalarFormSource | None:
     parser = _Template()
     try:
         parser.feed(text)
@@ -212,7 +220,7 @@ def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "") -> Sc
                 or _dynamic(item.attrs, "label", "prop")):
             continue
         controls = [(node, parents) for node, parents in _walk(item)
-                    if node.tag in {"el-input", "el-input-number", "el-date-picker", "el-select"}]
+                    if node.tag in {"el-input", "el-input-number", "el-date-picker", "el-select", "el-radio-group"}]
         if len(controls) != 1:
             continue
         control, parents = controls[0]
@@ -223,7 +231,14 @@ def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "") -> Sc
             continue
         minimum = maximum = precision = None
         choices, choice_source, choice_reference = (), "", ""
-        if control.tag == "el-select":
+        if control.tag == "el-radio-group":
+            if _dynamic(attrs, "disabled") or 'disabled' in attrs or 'v-bind' in attrs:
+                continue
+            compiled = radio_choices(control, constants or {})
+            if compiled is None:
+                continue
+            choices, choice_source, input_type = compiled, "literal", "radio"
+        elif control.tag == "el-select":
             compiled = _select_choices(control, text, dictionary)
             if compiled is None:
                 continue
@@ -265,6 +280,11 @@ def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "") -> Sc
                                   or not 1 <= int(limit) <= 4000):
             continue
         chain = ancestors + parents + (control,)
+        conditions = [(key, node.attrs[key]) for node in chain for key in _CONDITIONAL.intersection(node.attrs)]
+        modes = {'create', 'update'}
+        for key, value in conditions:
+            match = re.fullmatch(r"formType\s*===\s*(['\"])(create|update)\1", value or '') if key == 'v-if' else None
+            modes.intersection_update({match[2]} if match else set())
         fields.append(ScalarSourceField(
             reference, " ".join(label.split()), input_type,
             int(limit) if limit is not None else None,
@@ -274,6 +294,7 @@ def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "") -> Sc
             _evidence(tree, path, lines, item.start, item.end),
             minimum, maximum, precision,
             choices, choice_source, choice_reference,
+            tuple(sorted(modes)) if conditions else (),
         ))
     # Repeated fields/labels cannot establish a unique semantic binding, even if their
     # source branches appear mutually exclusive. The compiler never evaluates Vue code.
@@ -281,9 +302,11 @@ def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "") -> Sc
             or len({item.reference for item in fields}) != len(fields)
             or len({item.label for item in fields}) != len(fields)):
         return None
-    dependencies = (_evidence(tree, "ui/src/utils/dict.ts", dictionary.splitlines(keepends=True),
-                             1, len(dictionary.splitlines())),) if dictionary else ()
-    return ScalarFormSource(tuple(fields), _evidence(tree, path, lines, 1, len(lines)), dependencies)
+    refs = (_evidence(tree, "ui/src/utils/dict.ts", dictionary.splitlines(keepends=True),
+                      1, len(dictionary.splitlines())),) if dictionary else ()
+    refs += tuple(_evidence(tree, dep_path, body.splitlines(keepends=True), 1, len(body.splitlines()))
+                  for dep_path, body in dependencies)
+    return ScalarFormSource(tuple(fields), _evidence(tree, path, lines, 1, len(lines)), refs)
 
 
 class SourceFormReader:
@@ -313,13 +336,15 @@ class SourceFormReader:
                 dictionary = self._tree.read_text("ui/src/utils/dict.ts")
             except (AccessDenied, OSError, UnicodeError):
                 pass
-        digest = hashlib.sha256((text + "\0" + dictionary).encode("utf-8")).hexdigest()
+        constants, dependencies = constant_imports(self._tree, text) if '<el-radio-group' in text else ({}, ())
+        digest = hashlib.sha256((text + "\0" + dictionary + ''.join(
+            '\0' + p + '\0' + body for p, body in dependencies)).encode("utf-8")).hexdigest()
         with self._lock:
             cached = self._cache.get(path)
             if cached is not None and cached[0] == digest:
                 self._cache.move_to_end(path)
                 return cached[1]
-            result = _compile(self._tree, path, text, dictionary)
+            result = _compile(self._tree, path, text, dictionary, constants=constants, dependencies=dependencies)
             self._cache[path] = (digest, result)
             self._cache.move_to_end(path)
             while len(self._cache) > 128:

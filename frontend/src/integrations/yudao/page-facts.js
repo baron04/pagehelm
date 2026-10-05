@@ -270,6 +270,11 @@ export const readPageQuery = () => installed?.readPageQuery()
 export const disposeInstalledPageFacts = () => installed?.dispose()
 /** Map one Element Plus select hit area to its own accessible form input. */
 export function nativeControlElement(element) {
+  if (element instanceof HTMLElement && element.matches('.el-radio,.el-radio-button')) {
+    const radios = element.querySelectorAll('input[type="radio"]')
+    return radios.length === 1 && radios[0].closest('.el-radio,.el-radio-button') === element
+      ? radios[0] : element
+  }
   if (!(element instanceof HTMLElement) || !element.matches('.el-select__wrapper') ||
       element.classList.contains('is-disabled') || element.getAttribute('aria-disabled') === 'true') return element
   const inputs = element.querySelectorAll('input[role="combobox"][aria-haspopup="listbox"][aria-controls]')

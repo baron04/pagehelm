@@ -259,10 +259,12 @@ class FormDraftField:
         if self.binding not in {"field", "label"}:
             raise ValueError("form draft binding must be field or label")
         if (not isinstance(self.option_label, str) or len(self.option_label) > MAX_FORM_LABEL_CHARS
-                or self.option_label and (self.control != "combobox"
+                or self.option_label and (self.control not in {"combobox", "radiogroup"}
                     or not self.option_label.strip()
                     or re.search(r"[\x00-\x1f\x7f]", self.option_label))):
             raise ValueError("form draft option label is invalid")
+        if self.control == "radiogroup" and not self.option_label:
+            raise ValueError("radio form drafts require a declared option label")
         for name, value, maximum, allow_empty in (
                 ("label", self.label, MAX_FORM_LABEL_CHARS, False),
                 ("value", self.value, 4_000, True)):

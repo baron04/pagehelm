@@ -247,6 +247,27 @@ class CreationEntryTests(unittest.TestCase):
         with self.assertRaises(BusinessToolPermissionError):
             port.form_entries(ready, context=self.context)
 
+    def test_project_tabs_are_reviewed_and_bound_through_the_entry_lifetime(self):
+        _, client, verifier, before, after = self.creation("project-create")
+        route = "/pms/pm/project/list"
+        port = NativeEntryFormPort(verifier)
+        ready = replace(before, url=before.url + "?tabs=participate", page_route=route)
+        self.assertEqual(len(port.form_entries(ready, context=self.context)), 1)
+        for suffix in ("?tabs=owner", "?tabs=all"):
+            self.assertEqual(len(port.form_entries(replace(ready, url=before.url + suffix), context=self.context)), 1)
+        for suffix in ("?tabs=unknown", "?tabs=participate&tabs=all", "?tabs=participate&id=1", "?tabs=created", "#other"):
+            changed = replace(ready, url=before.url + suffix)
+            self.assertEqual(port.form_entries(changed, context=self.context), ())
+            with self.assertRaises(BusinessToolRequestError):
+                port.plan_entry("project-create", changed, context=self.context)
+        entry = port.plan_entry("project-create", ready, context=self.context)
+        shown = replace(after, url=ready.url)
+        reference = port.accept_entry(entry, ready, self.receipt, shown, context=self.context)
+        draft, _ = ApplicationFormTools(port, application_id="yudao").prepare_current(
+            shown, reference=reference, values=(("remark", "Draft"),), context=self.context)
+        self.assertEqual(draft.route, route + "?tabs=participate")
+        self.assertIsNone(verifier.current(replace(shown, url=before.url + "?tabs=all"), context=self.context))
+
     def test_creation_cannot_borrow_update_review_or_other_entry_authority(self):
         with self.assertRaises(TypeError):
             NativeCreateEntryVerifier(self.tree, self.review, self.client)
@@ -299,6 +320,13 @@ class CreationEntryTests(unittest.TestCase):
         with patch.object(DataGoalPort, "resolve", return_value=result), patch.object(port, "index", return_value=index):
             resolved = port.resolve(spec, context=self.context)
             self.assertEqual(resolved.deliverables[0].page.form.reference, "customer-create")
+            source_path = self.tree.root / CREATE_ENTRIES["customer-create"][5]
+            original = source_path.read_text()
+            source_path.write_text(original.replace('<el-form-item label=', '<el-form-item v-if="formType === \'create\'" label='))
+            self.assertEqual(port.resolve(spec, context=self.context).deliverables[0].page.form.reference, "customer-create")
+            source_path.write_text(original.replace('<el-form-item label=', '<el-form-item v-if="canEdit" label='))
+            self.assertTrue(port.resolve(spec, context=self.context).deliverables[0].problem)
+            source_path.write_text(original)
             unknown = replace(spec, deliverables=(replace(spec.deliverables[0], action=""),))
             self.assertTrue(port.resolve(unknown, context=self.context).deliverables[0].problem)
 

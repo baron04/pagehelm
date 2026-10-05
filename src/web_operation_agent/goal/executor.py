@@ -39,7 +39,7 @@ from ..modeling.egress import AuditedChat
 from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
-from ..schemas.browser import PageObservation
+from ..schemas.browser import FORM_INPUT_CONTROLS, PageObservation
 from ..transport.protocol import RemoteProtocolError
 from ..state.conversation import ConversationState
 from ..state.identity import PrincipalError
@@ -104,7 +104,7 @@ _SAME_REFUSAL_ELSEWHERE = 4
 _REFUSAL_MESSAGE = re.compile(r'refuses with "(.{20,}?)" when')
 _PLACEHOLDER = re.compile(r"%\([^)]*\)[sd]|%[sd]|\{[^}]*\}")
 #: Roles of elements a value can be entered into.
-_INPUT_ROLES = frozenset({"textbox", "combobox", "select", "searchbox", "spinbutton"})
+_INPUT_ROLES = FORM_INPUT_CONTROLS | {"searchbox"}
 #: Roles a field's own suggestion list uses for the records it proposes.
 _SUGGESTION_ROLES = frozenset({"option", "menuitem", "listitem", "link"})
 

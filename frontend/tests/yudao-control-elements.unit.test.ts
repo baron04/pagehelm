@@ -24,4 +24,14 @@ describe('Element Plus accessible select input mapping', () => {
     area.innerHTML = '<div class="el-select__wrapper"><input role="combobox" aria-haspopup="listbox" aria-controls="options"></div>'
     expect(nativeControlElement(area)).toBe(area)
   })
+  it('resolves a radio hit area only to its one owned native option', () => {
+    const label = document.createElement('label')
+    label.className = 'el-radio'
+    label.innerHTML = '<span><input type="radio" name="visibility" value="true"></span><span>Public</span>'
+    expect(nativeControlElement(label)).toBe(label.querySelector('input'))
+    label.append(label.firstElementChild!.cloneNode(true))
+    expect(nativeControlElement(label)).toBe(label)
+    label.innerHTML = '<label class="el-radio"><input type="radio"></label>'
+    expect(nativeControlElement(label)).toBe(label)
+  })
 })

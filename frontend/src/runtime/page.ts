@@ -20,6 +20,7 @@ import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance} from './formInstance'
 import {listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
+import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
@@ -228,6 +229,8 @@ export class Page {
       throw new Error('bad_arguments: select target is no longer on the page')
     }
     if (optionLabel !== undefined) {
+      const group = radioGroup(element)
+      if (group) return this.selectRadio(group, optionLabel, text)
       if (!listboxCombobox(element) || !optionLabel.trim() ||
           optionLabel.length > browserContract.form_handoff.max_label_chars ||
           isSensitiveFormControl(element, this.redactor)) {
@@ -260,6 +263,42 @@ export class Page {
       if (result && (result as {success?: unknown}).success === true) this.rememberEntered(element)
       return result
     })
+  }
+  private async selectRadio(group: HTMLElement, label: string, value: string): Promise<unknown> {
+    const scope = formControlScope(group), instance = formInstance(group), url = location.href
+    const name = formFieldName(group), fieldLabel = formControlLabel(group)
+    const options = radioChoices(group), matches = options.filter(e => radioLabel(e) === label)
+    const current = () => !this.interrupted() && location.href === url && radioGroup(group) === group &&
+      formControlScope(group) === scope && formInstance(group) === instance &&
+      formFieldName(group) === name && formControlLabel(group) === fieldLabel &&
+      radioChoices(group).length === options.length && radioChoices(group).every((e, i) => e === options[i]) &&
+      radioChoices(group).filter(e => radioLabel(e) === label).length === 1 &&
+      radioLabel(matches[0]!) === label &&
+      (!(matches[0] instanceof HTMLInputElement) || matches[0].value === value)
+    if (!scope || !instance || !label.trim() || label.length > browserContract.form_handoff.max_label_chars ||
+        isSensitiveFormControl(group, this.redactor) || matches.length !== 1 ||
+        !radioEnabled(matches[0]!) || matches[0] instanceof HTMLInputElement && matches[0].value !== value ||
+        !visibleElement(group) || !current()) {
+      throw new Error('bad_arguments: radio choice is absent, ambiguous, unavailable, or changed')
+    }
+    if (radioSelectionMatches(group, label, value)) {
+      this.rememberEntered(group)
+      return {success: true}
+    }
+    const state = await this.controller.getBrowserState()
+    const indexes = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
+      .filter(i => this.lookup(this.controller.selectorMap, i) === matches[0])
+    if (indexes.length !== 1 || !current() || !radioEnabled(matches[0]!)) {
+      throw new Error('execution_failed: radio choice has no unique fresh action reference')
+    }
+    const result = await this.controller.clickElement(indexes[0]!)
+    if (!result || (result as {success?: unknown}).success !== true) return result
+    await sleep(50)
+    if (!current() || !radioSelectionMatches(group, label, value)) {
+      throw new Error('execution_failed: radio selection was not verified')
+    }
+    this.rememberEntered(group)
+    return result
   }
   private async selectCombobox(index: number, element: HTMLInputElement, label: string): Promise<unknown> {
     const scope = formControlScope(element), instance = formInstance(element), url = location.href
@@ -357,6 +396,7 @@ export class Page {
         if (matches.length > 1) return false
         live = this.enteredControl(binding, observed)
       }
+      if (binding.control === 'radiogroup') live = radioGroup(live)
       if (!live || live.isConnected === false || live.disabled ||
           live.readOnly && !(binding.option_label && listboxCombobox(live))) return false
       if (binding.scope && formControlScope(live) !== binding.scope) return false
@@ -366,14 +406,18 @@ export class Page {
       } else if (formFieldName(live) !== binding.field) return false
       const tag = String(live.tagName || '').toLowerCase()
       const declared = live.getAttribute?.('role')
-      const control = tag === 'select' ? 'select' : declared === 'combobox' ? 'combobox'
+      const control = declared === 'radiogroup' ? 'radiogroup' : tag === 'select' ? 'select' : declared === 'combobox' ? 'combobox'
         : declared === 'spinbutton' || tag === 'input' && live.type === 'number' ? 'spinbutton' : 'textbox'
-      if (!binding.ref && (!['input', 'textarea', 'select'].includes(tag) || control !== binding.control)) return false
+      if (!binding.ref && (control !== binding.control ||
+          !['input', 'textarea', 'select'].includes(tag) && control !== 'radiogroup')) return false
       if (binding.control === 'select' && tag !== 'select') {
         return false
       }
       const shown = String(live.value ?? '')
       if (binding.option_label !== undefined) {
+        if (binding.control === 'radiogroup') return typeof binding.option_label === 'string' &&
+          binding.option_label.length <= browserContract.form_handoff.max_label_chars &&
+          live instanceof HTMLElement && radioSelectionMatches(live, binding.option_label, binding.value)
         return typeof binding.option_label === 'string' && binding.control === 'combobox' &&
           binding.option_label.length <= browserContract.form_handoff.max_label_chars &&
           listboxCombobox(live) && selectedOption(live) === binding.option_label

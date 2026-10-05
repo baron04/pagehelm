@@ -36,6 +36,40 @@ const formData = ref({ name: '', description: '', remark: '', memberIds: [] })
 
 
 class SourceFormTests(unittest.TestCase):
+    def test_radio_literals_preserve_boolean_values_and_known_mode_gate(self):
+        radio = '<el-radio-group v-model="formData.remark"><el-radio :value="false">私有</el-radio><el-radio :value="true">公开</el-radio></el-radio-group>'
+        self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />', radio)
+            .replace('label="合成备注"', 'v-if="formType === \'create\'" label="合成备注"'))
+        fact = self.reader.read(_PATH).fields[-1]
+        self.assertEqual((fact.input_type, fact.choices, fact.modes),
+                         ('radio', (('false', '私有'), ('true', '公开')), ('create',)))
+        self.assertTrue(fact.conditional)
+        for bad in (radio.replace('公开', '私有'), radio.replace(':value="true"', ':value="expression()"'),
+                    radio.replace('>公开', '@change="persist">公开'), radio.replace('>公开', 'v-if="canEdit">公开')):
+            self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />', bad))
+            self.assertNotIn('remark', [f.reference for f in self.reader.read(_PATH).fields])
+
+    def test_radio_shallow_constant_import_is_fresh_and_never_executed(self):
+        dependency = self.root/'ui/src/views/demo/constants.ts'
+        dependency.write_text('export const Mode = { NORMAL: 1, AGILE: 2 } as const\n')
+        body = _SOURCE.replace('<el-input v-model="formData.remark" />',
+            '<el-radio-group v-model="formData.remark"><el-radio-button :value="Mode.NORMAL">普通</el-radio-button><el-radio-button :value="Mode.AGILE">敏捷</el-radio-button></el-radio-group>')
+        body = body.replace('// Do not execute', "import { Mode } from '@/views/demo/constants'\n// Do not execute")
+        self.path.write_text(body)
+        first = self.reader.read(_PATH)
+        self.assertEqual(first.fields[-1].choices, (('1', '普通'), ('2', '敏捷')))
+        self.assertTrue(self.tree.verify(first.dependencies[0]))
+        dependency.write_text(dependency.read_text().replace('AGILE: 2', 'AGILE: 3'))
+        second = self.reader.read(_PATH)
+        self.assertEqual(second.fields[-1].choices[-1][0], '3')
+        self.assertNotEqual(first.binding_digest, second.binding_digest)
+        for content in ['export const Mode = { NORMAL: 1, AGILE: run() } as const',
+                        'export { Mode } from "./other"']:
+            dependency.write_text(content)
+            self.assertNotIn('remark', [f.reference for f in self.reader.read(_PATH).fields])
+        dependency.unlink()
+        self.assertNotIn('remark', [f.reference for f in self.reader.read(_PATH).fields])
+
     def test_literal_single_choices_and_dynamic_multiple_or_duplicate_choices(self):
         select = '<el-select v-model="formData.remark"><el-option label="普通" value="normal"/><el-option label="加急" :value="2"/></el-select>'
         self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />', select))

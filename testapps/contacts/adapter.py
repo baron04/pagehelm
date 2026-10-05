@@ -658,12 +658,14 @@ class _ContactsFormPort:
                 ApplicationFormField(
                     "email", "Email", kind="email", controls=("textbox",),
                     required=True),
-                # Local preferences have no name attribute and never enter the save payload.
+                # Local preferences never enter the save payload.
                 ApplicationFormField("daily_limit", "Daily limit", kind="integer",
                                      controls=("spinbutton",), binding="label"),
                 ApplicationFormField("follow_up_date", "Follow-up date", kind="date", binding="label"),
                 ApplicationFormField("priority", "Priority", kind="choice", controls=("combobox",),
                     choices=(FormChoice("normal", "Normal"), FormChoice("urgent", "Urgent")), binding="label"),
+                ApplicationFormField("contact_method", "Contact method", kind="choice", controls=("radiogroup",),
+                    choices=(FormChoice("email", "Email only"), FormChoice("phone", "Phone call")), binding="label"),
             ),
             scope="fields writable by the current actor on the new-contact page",
             control_scope="form:contact-create", submit_label="Save contact",
