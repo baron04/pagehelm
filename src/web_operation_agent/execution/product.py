@@ -26,6 +26,7 @@ from ..schemas import BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, PageObservat
 from ..transport.panel_view import panel_limits
 from ..transport.protocol import RemoteProtocolError, ensure_safe_browser_payload
 from .session import RunResult
+from .page_context import DEFAULT_KEEP_OBSERVATIONS
 
 
 class AgentTurnStatus(str, Enum):
@@ -135,7 +136,7 @@ class AgentTurnConfig:
     #: Letting the assistant work the page waits longer than a write: working the page is
     #: reversible, and the person may be finishing something on the page first.
     operation_approval_ttl_s: int = 300
-    keep_observations: int = 3
+    keep_observations: int = DEFAULT_KEEP_OBSERVATIONS
     allow_application_entry: bool = False
     allow_business_mutations: bool = False
     allow_clarification: bool = True

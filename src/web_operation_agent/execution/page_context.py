@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+DEFAULT_KEEP_OBSERVATIONS = 1
+
 
 @dataclass(frozen=True)
 class SnapshotSpan:

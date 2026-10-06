@@ -289,6 +289,15 @@ def run_loop(session) -> RunResult:
             return session._finish(result, t0, "wall_clock_budget",
                                 f"exceeded {session.wall_budget_s}s", steps=step)
         session._feed.note(stage="thinking", step=step + 1)
+        if session.require_task_contract:
+            # Only declare_task is offered before interpretation. Source, page,
+            # form and answer instructions belong to execution, and distracting
+            # the declaration with them also pays for them unnecessarily. Restore
+            # the ordinary complete execution contract as soon as it is accepted.
+            from .request_contract import declaration_system
+            content = (declaration_system(session)
+                       if session._task_requirements is None else system)
+            messages[0] = {"role": "system", "content": content}
         try:
             reply = _complete_once_more_if_transient(session, messages, step, t0)
         except TurnCancelled:

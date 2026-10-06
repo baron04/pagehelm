@@ -60,11 +60,14 @@ def acquire_page(session, turn, call, name: str) -> _Next | None:
     turn.obs = obs
     session.ledger.append("page_context_acquired", step=turn.step, tool=name,
                           page_epoch=obs.epoch, page_url=obs.url)
-    if name in {"observe", "set_target"}:
+    if name in {"observe", "set_target", "goto"}:
         # A target is a server-owned declaration, not a browser command. Binding
         # context must not swallow its path/conditions and leave only navigation
-        # as the completion obligation. Its parser checks any observation refs
-        # against the freshly bound page; guessed element actions still stop here.
+        # as the completion obligation. Goto takes a path, not an observation ref:
+        # the normal action path still checks that exact destination against the
+        # freshly acquired page and this turn's authorized reads before dispatch.
+        # Acquiring context alone must not make the model repeat that proposal.
+        # Guessed element actions still stop here.
         return None
     session.ledger.append("page_context_before_dispatch", step=turn.step,
                           tool=name, dispatched=False, side_effect_possible=False)

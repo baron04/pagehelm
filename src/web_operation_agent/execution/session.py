@@ -71,6 +71,7 @@ from .action_admission import ActionAdmission, ApplicationActionPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
                      required_page_controls, required_page_effects)
 from .request_contract import parse_requirements, revise_requirements
+from .page_context import DEFAULT_KEEP_OBSERVATIONS
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
@@ -150,7 +151,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  lab: LabApparatus = NO_LAB,
                  step_budget: int = 20, wall_budget_s: int = 300, run_id: str | None = None,
                  turn_budget: TurnBudget | None = None,
-                 keep_observations: int = 3,
+                 keep_observations: int = DEFAULT_KEEP_OBSERVATIONS,
                  disabled_actions: frozenset[str] | set[str] | None = None,
                  click_policy: ClickPolicy | None = None,
                  action_policy: ApplicationActionPolicy | None = None,

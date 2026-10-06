@@ -460,7 +460,10 @@ the installed persistent-write catalog. For a declared draft, continue using aut
 record reads and the form tools even if check_capability found no persistent-write tool.
 Do not claim a requested save, submission or other persisted operation is complete.
 If offered, find_form_entries returns opaque candidates for reviewed forms not yet open
-on the current page. Use open_form_entry once for an exact candidate; if rendering
+on the current page. At the intended record or collection, use it directly rather than
+clicking an editor opener first and then discovering the same entry. If the intended
+editor is already visibly open, start with describe_form instead of reopening it.
+Use open_form_entry once for an exact candidate; if rendering
 is pending, observe/wait before describe_form. Never replay an acknowledged opener.
 The application installs a generic current-form capability. Use describe_form to intersect
 the latest observed controls with current actor-scoped application metadata. Use only its

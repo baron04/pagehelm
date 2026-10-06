@@ -11,6 +11,14 @@ The repository has one public reference implementation: [Odoo 18](examples/odoo/
 It is not a hosted service, a general browser extension, or a production-ready autonomous
 agent.
 
+In task-accounted step-by-step turns, the initial declaration receives only the task
+interpretation instructions; execution receives the full tool and policy contract.
+The server retains one latest page observation by default, replacing only its own
+superseded snapshot spans while preserving action receipts, typed facts and citations.
+The retained observation count remains configurable. Lazy browser initialization can
+continue an exact-path navigation through the ordinary admission checks in the same
+step; guessed element actions still require a new decision from the fresh observation.
+
 ## Current capabilities
 
 - A goal-directed turn asks the model to declare the request against the application's index (entities,

@@ -72,11 +72,13 @@ class RequestContractShape(unittest.TestCase):
             _approvals=SimpleNamespace(mutations_enabled=False))
         original = deepcopy(DECLARE_TASK_TOOL)
         scoped = declaration_schema(session)
-        self.assertIn(MANUAL_SUBMIT_TASK_SYSTEM.strip(), scoped['function']['description'])
+        self.assertIn('DEFAULT FORM EXECUTION MODE', scoped['function']['description'])
+        self.assertNotIn(MANUAL_SUBMIT_TASK_SYSTEM.strip(), scoped['function']['description'])
         self.assertIn(MANUAL_SUBMIT_TASK_SYSTEM, declaration_system(session))
         self.assertIn('action_kind=draft', scoped['function']['description'])
-        self.assertIn('An explicit request to save, submit or persist',
+        self.assertIn('Explicit persistence remains mutation',
                       scoped['function']['description'])
+        self.assertEqual(original['function']['parameters'], scoped['function']['parameters'])
         self.assertEqual(original, DECLARE_TASK_TOOL)
 
     def test_disabling_writes_alone_does_not_reclassify_persistence_as_draft(self):
@@ -85,7 +87,10 @@ class RequestContractShape(unittest.TestCase):
             session = SimpleNamespace(allow_form_prefill=prefill, _application_form_tools=forms,
                 _approvals=SimpleNamespace(mutations_enabled=writes))
             with self.subTest(prefill=prefill, forms=bool(forms), writes=writes):
-                self.assertEqual(DECLARE_TASK_TOOL, declaration_schema(session))
+                scoped = declaration_schema(session)
+                self.assertEqual(DECLARE_TASK_TOOL['function']['parameters'],
+                                 scoped['function']['parameters'])
+                self.assertNotIn('action_kind=draft', scoped['function']['description'])
                 self.assertNotIn(MANUAL_SUBMIT_TASK_SYSTEM, declaration_system(session))
 
     def test_all_user_clauses_are_required_and_application_text_cannot_replace_them(self):
@@ -286,6 +291,21 @@ class RequestContractProduct(unittest.TestCase):
         self.assertEqual(result.status, AgentTurnStatus.REFUSED)
         self.assertTrue(all(names == {"declare_task"} for names in chat.tool_names[:5]))
         self.assertNotIn("goto", _RemoteBrowser.instances[-1].actions)
+        self.assertIn("未完成操作", result.user_answer)
+
+    def test_declaration_has_only_its_contract_then_execution_restores_full_instructions(self):
+        from web_operation_agent.execution.prompts import AGENT_SYSTEM, TARGET_SYSTEM
+        from web_operation_agent.execution.request_contract import TASK_SYSTEM
+        result, chat = self.execute([("finish", {"outcome": "unable"})], reads=False)
+        first = chat.messages[0][0]["content"]
+        execution = chat.messages[1][0]["content"]
+        self.assertIn(TASK_SYSTEM, first)
+        self.assertNotIn(AGENT_SYSTEM, first)
+        self.assertIn(AGENT_SYSTEM, execution)
+        self.assertIn(TARGET_SYSTEM, execution)
+        self.assertIn(TASK_SYSTEM, execution)
+        self.assertLess(len(first), len(execution))
+        self.assertEqual(chat.tool_names[0], {"declare_task"})
         self.assertIn("未完成操作", result.user_answer)
 
     def test_navigation_only_first_finish_cannot_erase_requested_answers(self):

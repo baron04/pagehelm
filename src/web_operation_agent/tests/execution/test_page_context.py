@@ -42,6 +42,26 @@ class PageContextComposition(unittest.TestCase):
 
 
 class PageContextCompaction(unittest.TestCase):
+    def test_product_and_session_defaults_keep_latest_controls_without_removing_facts(self):
+        from web_operation_agent.execution.product import AgentTurnConfig
+        from web_operation_agent.tests.support.session_fixture import SessionFixture
+        fixture = SessionFixture()
+        self.addCleanup(fixture.close)
+        session = fixture.session()
+        config = AgentTurnConfig(supported_scope="Read", ledger_path=fixture.root / "product.jsonl")
+        self.assertEqual(session.keep_observations, config.keep_observations)
+        messages = [{"role": "tool", "content": f"fact#{i}\n" + snapshot(i)}
+                    for i in range(1, 4)]
+        _trim(messages, session.keep_observations)
+        self.assertEqual(sum(bool(m["content"].snapshots) for m in messages), 1)
+        self.assertEqual(messages[-1]["content"], "fact#3\nPAGE-3")
+        for i, message in enumerate(messages, 1):
+            self.assertTrue(message["content"].startswith(f"fact#{i}\n"))
+        wider = fixture.session(keep_observations=3)
+        messages = [{"content": snapshot(i)} for i in range(1, 4)]
+        _trim(messages, wider.keep_observations)
+        self.assertEqual([m["content"] for m in messages], ["PAGE-1", "PAGE-2", "PAGE-3"])
+
     def test_only_obsolete_snapshot_is_removed_from_mixed_feedback(self):
         facts = ('BUSINESS TOOL RESULT {"value":42,"ref":"record#1"}\n'
                  'Source citation source#2\nWrite refused: no dispatch\n'

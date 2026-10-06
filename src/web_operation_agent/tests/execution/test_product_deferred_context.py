@@ -255,6 +255,29 @@ class ProductDeferredContextTests(unittest.TestCase):
             event = next(e for e in events if e["event"] == "page_context_before_dispatch")
             self.assertFalse(event["dispatched"])
 
+    def test_first_authorized_path_dispatches_after_lazy_binding_without_another_model_call(self):
+        from web_operation_agent.schemas import ElementRef, POTENTIALLY_WRITING_ACTIONS
+        class ArrivingBrowser(_RemoteBrowser):
+            def start(self):
+                self.channel.latest_observation_envelope = self.channel.envelope(
+                    1, "http://app.test/companies")
+                obs = self.channel.latest_observation_envelope.observation
+                obs.elements.append(ElementRef("entry", "link", "Companies", "a",
+                                              obs.epoch, {"href": "/companies"}))
+                return super().start()
+        for destination, dispatched in (("/companies", True), ("/invented", False)):
+            with self.subTest(destination=destination), tempfile.TemporaryDirectory() as tmp:
+                result, events, chat = self.execute(Path(tmp), [
+                    ("goto", {"url": destination}), ("finish", {"outcome": "unable"}),
+                ], browser=ArrivingBrowser, control=ReadOnlyControl(),
+                    config={"disabled_actions": POTENTIALLY_WRITING_ACTIONS - {"goto"}},
+                    prompt="Open companies")
+                actions = ArrivingBrowser.instances[-1].actions
+                self.assertEqual(actions.count("goto"), int(dispatched))
+                self.assertEqual(len(chat.messages), 2)
+                self.assertTrue(any(e["event"] == "page_context_acquired" for e in events))
+                self.assertFalse(any(e["event"] == "page_context_before_dispatch" for e in events))
+
     def test_first_target_keeps_conditions_across_lazy_page_acquisition(self):
         from web_operation_agent.schemas import POTENTIALLY_WRITING_ACTIONS
         class ArrivingBrowser(_RemoteBrowser):
