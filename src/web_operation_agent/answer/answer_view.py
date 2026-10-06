@@ -515,7 +515,8 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         head = _selection_head(words, item)
         if item.get("fields"):
             rows = []
-            names = [_field_label(words, name, name) for name in item["fields"]]
+            names = [_field_label(words, name, meaning) for name, meaning in zip(
+                item["fields"], item.get("field_labels", item["fields"]), strict=True)]
             if presentation != "list":
                 rows += ["| " + " | ".join(_literal(x) for x in names) + " |",
                          "| " + " | ".join("---" for _ in names) + " |"]

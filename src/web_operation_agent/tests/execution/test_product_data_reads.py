@@ -70,6 +70,22 @@ class ProductDataReadsTests(unittest.TestCase):
             self.assertEqual("agent_refused", result.terminal_reason)
             self.assertNotIn("1000", result.user_answer)
 
+    def test_data_label_calculation_and_selected_columns_reach_the_product(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _, _ = self.execute(Path(tmp), [
+                ("resolve_data", {"deliverables":[{"kind":"list", "entity":"records",
+                    "fields":["Amount", "Email"]}]}),
+                ("compute", {"operation":"argmax", "dataset_ref":"call1-data#1", "field":"Amount"}),
+                ("finish", self.finish({"kind":"selection", "evidence_ref":"calc#2",
+                    "fields":["Amount", "Email"]})),
+            ])
+            self.assertEqual("agent_finished", result.terminal_reason)
+            self.assertIn("Amount", result.user_answer)
+            self.assertIn("Email", result.user_answer)
+            self.assertIn("12", result.user_answer)
+            self.assertIn("one@example.test", result.user_answer)
+            self.assertNotIn("three@example.test", result.user_answer)
+
     def test_permission_denial_stays_typed_and_does_not_open_browser_fallback(self):
         data = Data()
         def refused(*args):

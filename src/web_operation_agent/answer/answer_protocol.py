@@ -114,7 +114,9 @@ When a tool returns ANSWER EVIDENCE, use its current server-issued references to
 Use a returned, fully scoped aggregate evidence reference directly when it supplies the
 requested count or total. Otherwise call compute for filtering, counts, totals or extrema; it is a server calculation and does
 not require another page observation. To list records cite a query or selection with kind
-selection and its actual field names; after a compute filter, cite the selection it returned,
+selection and its actual field keys or exact, unique displayed labels; compute accepts the
+same binding. Opaque discovery field_ids select reads, not answer columns. After a compute
+filter, cite the selection it returned,
 not its records' field values one by one, so the answer shows the filter it stands on. To
 give one field of one record cite its field_value reference.
 Finish using the answer schema, not plain content or a raw result table. Only selection

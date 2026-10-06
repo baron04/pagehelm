@@ -20,7 +20,7 @@ a total that quietly dropped a constraint is indistinguishable from one that nev
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation, localcontext
 
 from .evidence import (
@@ -117,6 +117,10 @@ def _partition(turn: TurnEvidence, over: tuple[str, ...], field_name: str):
         query = turn.query_for(dataset.evidence_id)
     except ValueError as exc:
         raise ComputationRefused(str(exc)) from None
+    try:
+        field_name = turn.field_for(query, field_name) if field_name else ""
+    except ValueError as exc:
+        raise ComputationRefused(str(exc)) from None
     if not records and field_name:
         records = [item for name in turn.ids()
                    if isinstance(item := turn.get(name), RecordEvidence)
@@ -126,7 +130,7 @@ def _partition(turn: TurnEvidence, over: tuple[str, ...], field_name: str):
     if isinstance(dataset, SelectionEvidence):
         if any(item.record_id not in dataset.members for item in records):
             raise ComputationRefused("a record is outside the selected population")
-    return query, dataset, records
+    return query, dataset, records, field_name
 
 
 def _combinable(query: QueryEvidence, records: list[RecordEvidence],
@@ -173,7 +177,8 @@ def run(turn: TurnEvidence, request: ComputationRequest, *,
     renders it: a sum over one page of records is a subtotal, and the distance between
     "subtotal" and "total" is the distance between a useful answer and a wrong one.
     """
-    query, dataset, records = _partition(turn, request.over, request.field_name)
+    query, dataset, records, field_name = _partition(turn, request.over, request.field_name)
+    request = replace(request, field_name=field_name)
     unit = _combinable(query, records, request.field_name) if request.field_name else ""
     if any(item.origin != query.origin for item in records):
         raise ComputationRefused("records came from a different read than this query")

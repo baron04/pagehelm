@@ -128,6 +128,10 @@ class Selection:
         records = [record for name in turn.ids()
                    if isinstance(record := turn.get(name), RecordEvidence)
                    and record.origin == query.origin]
+        try:
+            fields = tuple(turn.field_for(query, name) for name in self.fields)
+        except ValueError as exc:
+            raise ConclusionRefused(str(exc)) from None
         members = (item.members if isinstance(item, SelectionEvidence)
                    else tuple(dict.fromkeys(record.record_id for record in records)))
         condition = (item.condition if isinstance(item, SelectionEvidence)
@@ -141,7 +145,7 @@ class Selection:
         rows = []
         for member in members:
             values = []
-            for field_name in self.fields:
+            for field_name in fields:
                 record = cells.get((member, field_name))
                 if record is None or not record.field_was_read:
                     # Name what was read. A turn that guessed a field spent a repair
@@ -162,9 +166,14 @@ class Selection:
         # exact only when what was read was everything.
         total, count_exact = ((len(members), covers) if isinstance(item, SelectionEvidence)
                               else (query.matched_count, query.count_exact or covers))
+        meanings = {name: {r.field_meaning for r in records if r.field_name == name}
+                    for name in fields}
+        labels = tuple(next(iter(meanings[name])) if len(meanings[name]) == 1 else name
+                       for name in fields)
         return {"kind": self.kind, "condition": condition,
                 "looked_for": query.looked_for, "exact_matches": query.exact_matches,
-                "members": members, "matched": len(members), "fields": self.fields,
+                "members": members, "matched": len(members), "fields": fields,
+                "field_labels": labels,
                 "rows": rows, "total": total, "count_exact": count_exact,
                 "covers_whole_scope": covers,
                 "scope": _answer_scope(turn, query.origin),

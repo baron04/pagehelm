@@ -414,6 +414,9 @@ agent.
   Metadata alone cannot settle a factual answer. These tools grant no page route,
   source-rule access, form draft or write authority. Truncated lists/groups and
   unread fields stay distinguishable from complete reads and known-empty fields.
+  Answer selections and calculations accept either a read's exact field key or its
+  unique displayed label. Bindings stay within that read; ambiguous labels and
+  fields that were not read cannot be guessed. Selection headings use the read labels.
   Reads are separate application operations, not a transactional snapshot. This
   path is opt-in; it does not migrate the default goal executor or establish natural
   task accuracy. The neutral contract is also tested against a source-free Contacts

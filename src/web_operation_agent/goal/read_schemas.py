@@ -30,6 +30,8 @@ DATA_READ_SCHEMAS = (
     {"type": "function", "function": {"name": "resolve_data", "description":
         "Read facts, scoped counts/sums, numeric min/max (all ties), or lists through the "
         "application's deterministic resolver. Use entity keys and actual indexed field labels; "
+        "Prefer inspect_data then this tool for business answers, including linked names, "
+        "full-scope aggregates and extrema, rather than rebuilding those reads with opaque IDs. "
         "copy record references and conditions from the user. A page key scopes data; it does "
         "not navigate. Every result returns to this same Agent with typed evidence and failures. "
         "No writes, source rules, form entry or page operations. Mixed tasks keep all raw requirements.",

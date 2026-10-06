@@ -645,6 +645,24 @@ class TurnEvidence:
             raise ValueError("evidence has no query root")
         return item
 
+    def field_for(self, query: QueryEvidence, name: str) -> str:
+        """Bind an exact read key or unique displayed label within one read only.
+
+        Business discovery exposes labels and opaque IDs; an answer must not have
+        to guess another identifier for the very same field. No synonyms, fields
+        from another read, or ambiguous labels establish this binding.
+        """
+        records = [item for item in self._items.values()
+                   if isinstance(item, RecordEvidence) and item.origin == query.origin]
+        if not records or any(item.field_name == name for item in records):
+            return name
+        keys = {item.field_name for item in records if item.field_meaning == name}
+        if len(keys) == 1:
+            return keys.pop()
+        if keys:
+            raise ValueError(f"field label {name!r} is ambiguous in this read; use its exact field key")
+        return name  # Existing unread-field checks retain their typed failure.
+
     def __len__(self) -> int:
         return len(self._items)
 
