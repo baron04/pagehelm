@@ -658,14 +658,14 @@ class ApplicationFormTools:
             raise BusinessToolRequestError("this goal form requires manual submission")
         buttons = [element for element in observation.elements
                    if element.role == "button" and element.name == form.submit_label
-                   and element.attrs.get("form_scope") == form.control_scope
-                   and not self._unavailable(element.attrs)]
-        if (form.submit_label and form.control_scope and not buttons and not any(
-                e.role == "button" and e.name == form.submit_label
-                and e.attrs.get("form_scope") == form.control_scope for e in observation.elements)):
+                   and element.attrs.get("form_scope") == form.control_scope]
+        if form.submit_label and form.control_scope and not buttons:
             raise FormSubmitUnobserved("the verified form submit control is not observed")
         if not form.submit_label or not form.control_scope or len(buttons) != 1:
-            raise BusinessToolRequestError("the planned form has no unique enabled submit target")
+            raise BusinessToolRequestError("the planned form has no unique observed submit target")
+        # A transient draft need not satisfy all required fields. The exact current
+        # submit control is only highlighted for the person, never activated; its
+        # disabled state is not authority to reject otherwise writable requested fields.
         binding = self._binding(form, observation, context)
         visible = {item.descriptor.reference: item for item in self._visible(form, observation)}
         raw = []

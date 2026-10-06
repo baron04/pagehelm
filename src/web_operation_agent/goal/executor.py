@@ -2831,9 +2831,11 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
             if outcome.form_complete:
                 fields = ("、" if zh else ", ").join(outcome.form_fields)
                 submit = outcome.form_submit
-                lines.append((f"已填写：{fields}，尚未提交。请核对后手动点击页面高亮的‘{submit}’。"
-                              if submit else f"已填写：{fields}，尚未提交。请核对后自行提交。") if zh else
-                             (f"Filled: {fields}. The form has not been submitted. Review it, then "
+                lines.append((f"已预填：{fields}，尚未提交。请核对并完善其余必填内容，"
+                              f"再手动点击页面高亮的‘{submit}’。"
+                              if submit else f"已预填：{fields}，尚未提交。请核对并完善其余必填内容后自行提交。") if zh else
+                             (f"Prefilled: {fields}. The form has not been submitted. Review the values "
+                              "and complete any remaining required fields, then "
                               + (f"manually click the highlighted '{submit}'." if submit else "submit it yourself.")))
             elif not outcome.form_input_dispatched:
                 lines.append("表单操作未完成，没有填写或提交。" if zh else

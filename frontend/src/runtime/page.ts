@@ -217,7 +217,13 @@ export class Page {
     } catch { return undefined }
   }
 
-  click(ref: unknown): Promise<unknown> { return this.controller.clickElement(refIndex(ref)) }
+  click(ref: unknown): Promise<unknown> {
+    const target = this.element(ref)
+    if (target instanceof HTMLButtonElement && target.disabled) {
+      throw new Error('bad_arguments: disabled buttons may only be observed or highlighted')
+    }
+    return this.controller.clickElement(refIndex(ref))
+  }
   /** Open a menu the control declares collapsed; refuse anything else (see `revealable`). */
   reveal(ref: unknown): Promise<unknown> {
     if (!revealable(this.element(ref))) {
@@ -462,7 +468,9 @@ export class Page {
     })
   }
 
-  /** Verify one server-owned submit target; highlighting never activates it. */
+  /** Verify one visible server-owned submit target, including a disabled button.
+   * Highlighting a partial draft never activates it or proves submission readiness.
+   */
   verifyFormSubmit(target: unknown, fields: unknown, observed: ElementRef[]): target is FormSubmitTarget {
     if (!target || typeof target !== 'object' || !Array.isArray(fields)) return false
     const candidate = target as FormSubmitTarget
@@ -474,7 +482,7 @@ export class Page {
     if (matches.length !== 1 || matches[0]!.ref !== candidate.ref) return false
     let live: ElementLike | null | undefined
     try { live = this.element(candidate.ref) } catch { return false }
-    if (!live || live.isConnected === false || live.disabled || live.readOnly ||
+    if (!(live instanceof HTMLElement) || !visibleElement(live) || ('readOnly' in live && live.readOnly === true) ||
         String(live.tagName || '').toLowerCase() !== 'button' ||
         formControlScope(live) !== candidate.scope) return false
     const label = String(live.textContent || '').replace(/\s+/g, ' ').trim()
@@ -806,6 +814,7 @@ export interface LoadedPageController {
 
 /** The fixed extraction policy qualified by the product Runtime. */
 export function pageControllerOptions(exclude: Element[]): Record<string, unknown> {
+  let disabledButtons: HTMLButtonElement[] = []
   return {
     enableMask: false,
     highlightOpacity: 0,
@@ -815,6 +824,16 @@ export function pageControllerOptions(exclude: Element[]): Record<string, unknow
     // reason from a fresh observation.
     viewportExpansion: browserContract.observation.viewport_expansion,
     keepSemanticTags: true,
+    // PageController otherwise omits disabled buttons entirely. Its own dynamic
+    // whitelist supplies real indexed elements for observation/highlight only;
+    // ordinary visibility/top-layer checks and the disabled click guard still apply.
+    interactiveWhitelist: Array.from({length: browserContract.observation.max_elements}, (_, index) => () => {
+      if (index === 0) disabledButtons = [...document.querySelectorAll<HTMLButtonElement>('button:disabled')]
+        .filter(button => Boolean(formControlScope(button)) && visibleElement(button)
+          && !exclude.some(root => root.contains(button)))
+        .slice(0, browserContract.observation.max_elements)
+      return disabledButtons[index]
+    }),
     includeAttributes: [
       'href', 'action', 'method', 'target', 'formaction', 'formmethod', 'formtarget',
       'type', 'name', 'id', 'value',

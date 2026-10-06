@@ -295,6 +295,7 @@ interface NativeRoute {
 }
 interface NativeApp {
   config: {globalProperties: {$router?: {currentRoute: {value: NativeRoute}}}}
+  _container?: {_vnode: NativeVNode}
 }
 function mountedPage(path = '/system/role', componentName = 'SystemRole') {
   window.history.replaceState({}, '', path)
@@ -317,6 +318,8 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
   instance.vnode.component = instance
   keepAlive.subTree = instance.vnode
   routerView.subTree = {type: keepAlive.type, component: keepAlive}
+  appView.subTree.children = [{type: routerView.type, component: routerView}]
+  app._container = {_vnode: {type: appView.type, component: appView}}
   const matched: NativeMatch = {path, components: {default: component}, instances: {default: {$: instance}}}
   const active: NativeRoute = {path, fullPath: path, matched: [matched], meta: {title: 'Source menu title'}}
   app.config.globalProperties.$router = {currentRoute: {value: active}}
@@ -325,6 +328,38 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
 }
 
 describe('native Yudao mounted navigation identity', () => {
+  it('proves the active keyed page after query replacement clears the route instance table', () => {
+    const state = mountedPage('/pms/pm/project/list', 'ProjectList')
+    delete state.matched.instances
+    window.history.replaceState({}, '', '/pms/pm/project/list?tabs=participate')
+    state.active.fullPath = '/pms/pm/project/list?tabs=participate'
+    state.instance.vnode.key = state.active.fullPath
+    expect(createPageFacts().readPageRoute()).toBe('/pms/pm/project/list')
+    // The same recovery is used to bind generic query controls to their live page.
+    state.element.innerHTML = '<form><input></form>'
+    const form = state.element.querySelector('form')!
+    const owner = {...state.instance, type: {name: 'ElForm'}, props: {model: {pageNo: 1, pageSize: 10}},
+      subTree: {type: 'form', el: form}, vnode: {ctx: state.instance}, parent: state.instance}
+    state.instance.subTree.children = [{component: owner}] as unknown as NativeVNode[]
+    expect(readElementPageControl(form.querySelector('input'))).toEqual({kind: 'query'})
+  })
+  it('does not recover a cached, ambiguous, unkeyed or incomplete active page', () => {
+    for (const change of [
+      (state: ReturnType<typeof mountedPage>) => {state.instance.isDeactivated = true},
+      (state: ReturnType<typeof mountedPage>) => {state.instance.vnode.key = '/another'},
+      (state: ReturnType<typeof mountedPage>) => {state.keepAlive.subTree = {type: 'div', el: state.element}},
+      (state: ReturnType<typeof mountedPage>) => {state.app._container!._vnode.suspense = {pendingBranch: {}}},
+      (state: ReturnType<typeof mountedPage>) => {state.appView.subTree.children!.push(...Array.from({length: 64}, () => ({})))},
+      (state: ReturnType<typeof mountedPage>) => {
+        const other = {...state.instance, vnode: {...state.instance.vnode}}
+        other.vnode.component = other
+        state.keepAlive.subTree = {children: [state.instance.vnode, other.vnode]}
+      },
+    ]) {
+      const state = mountedPage(); delete state.matched.instances; change(state)
+      expect(createPageFacts().readPageRoute()).toBeUndefined()
+    }
+  })
   it('binds query controls to the one source-owned live form without production setupState', () => {
     const state=mountedPage('/erp/sale/order', 'SaleOrder')
     state.element.innerHTML='<form><input><button>Search</button></form>'

@@ -27,10 +27,12 @@ class FormBrowser:
     instances = []
     fail = ""
     submit_after_scroll = 0
+    submit_requires_values = False
 
     def __init__(self, channel, **kwargs):
         self.url = channel.latest_observation_envelope.observation.url
         self.epoch, self.values, self.actions = 1, {"name": "", "email": ""}, []
+        self.submit_states = []
         self.instances.append(self)
 
     def start(self):
@@ -46,12 +48,14 @@ class FormBrowser:
             self.values["name" if args["ref"] == "e1" else "email"] = args["value"]
         self.epoch += 1
         scope = "form:contact-create"
+        submit_disabled = self.submit_requires_values and not all(self.values.values())
+        self.submit_states.append((action, submit_disabled))
         elements = [ElementRef("e1", "textbox", "Name", "input", self.epoch,
                     {"field": "name", "form_scope": scope, "value": self.values["name"]}),
                     ElementRef("e2", "textbox", "Email", "input", self.epoch,
                     {"field": "email", "form_scope": scope, "value": self.values["email"]}),
                     ElementRef("e3", "button", "Save contact", "button", self.epoch,
-                    {"form_scope": scope}),
+                    {"form_scope": scope, **({"disabled": "true"} if submit_disabled else {})}),
                     ElementRef("e4", "button", "Prepare contact", "button", self.epoch)]
         if self.actions.count("scroll") < self.submit_after_scroll:
             elements = [e for e in elements if e.ref != "e3"]
@@ -64,11 +68,13 @@ class FormBrowser:
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交", repair_label=False):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交", repair_label=False, submit_requires_values=False):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
         FormBrowser.submit_after_scroll = submit_after_scroll
+        FormBrowser.submit_requires_values = submit_requires_values
         self.addCleanup(setattr, FormBrowser, "submit_after_scroll", 0)
+        self.addCleanup(setattr, FormBrowser, "submit_requires_values", False)
         self.addCleanup(setattr, FormBrowser, "fail", "")
         with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
             actor = ACTORS_BY_ID[actor_id]
@@ -224,6 +230,32 @@ class GoalFormsTests(unittest.TestCase):
         self.assertLess(browser.actions.index("scroll"), browser.actions.index("fill"))
         self.assertEqual(browser.actions.count("handoff_form"), 1)
 
+    def test_contacts_prefill_can_enable_an_initially_disabled_submit(self):
+        result, browser, channel, _, events = self.run_goal(batch=True, submit_requires_values=True)
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertTrue(browser.submit_states[0][1])
+        self.assertEqual(browser.submit_states[-1], ("handoff_form", False))
+        self.assertEqual(browser.values, {"name": "Ada Byron", "email": "new@example.test"})
+        self.assertEqual(len(channel.approvals), 1)
+        self.assertEqual(browser.actions.count("handoff_form"), 1)
+        self.assertFalse({"click", "submit"} & set(browser.actions))
+        self.assertTrue(any(e['event'] == 'goal_form_handoff' and e['complete'] for e in events))
+
+    def test_contacts_partial_prefill_hands_over_even_when_submit_remains_disabled(self):
+        result, browser, channel, _, events = self.run_goal(batch=True,
+            values=(("Name", "Ada Byron"),), submit_requires_values=True,
+            prompt="把 Name 填成 Ada Byron，剩下我来填")
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertEqual(browser.values, {"name": "Ada Byron", "email": ""})
+        self.assertEqual(browser.submit_states[-1], ("handoff_form", True))
+        self.assertEqual(len(channel.approvals), 1)
+        self.assertEqual(browser.actions.count("fill"), 1)
+        self.assertEqual(browser.actions.count("handoff_form"), 1)
+        self.assertFalse({"click", "submit"} & set(browser.actions))
+        self.assertIn("已预填：Name", result.user_answer)
+        self.assertIn("完善其余必填内容", result.user_answer)
+        self.assertTrue(any(e['event'] == 'goal_form_handoff' and e['complete'] for e in events))
+
     def test_submit_scroll_is_bounded_and_never_fills_without_observed_submit(self):
         result, browser, _, _, events = self.run_goal(batch=True, submit_after_scroll=4)
         self.assertEqual(result.status, AgentTurnStatus.REFUSED)
@@ -297,7 +329,7 @@ class GoalFormsTests(unittest.TestCase):
             with self.subTest(args=args):
                 result, browser, *_ = self.run_goal(**args)
                 self.assertNotEqual(result.status, AgentTurnStatus.FINISHED)
-                self.assertNotIn("已填写：", result.user_answer)
+                self.assertNotIn("已预填：", result.user_answer)
                 if args.get("fail") == "fill":
                     self.assertEqual(browser.actions.count("fill"), 1)
                 if not args.get("fail"):

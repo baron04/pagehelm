@@ -152,8 +152,10 @@ def form_handoff_answer(*, user_text: str, needs_confirmation: bool, submit_labe
                 "Filled as you confirmed and not saved yet. Check it on the page and "
                 "save it yourself; leaving this page lets the application save these changes.")
     if submit_label:
-        return (f"表单已填写，尚未提交。请检查后手动点击页面高亮的‘{_literal(submit_label)}’。" if zh else
-                f"The form is filled and has not been submitted. Review it, then manually "
+        return (f"请求字段已预填，尚未提交。请核对并完善其余必填内容，"
+                f"再手动点击页面高亮的‘{_literal(submit_label)}’。" if zh else
+                f"The requested fields are prefilled and have not been submitted. "
+                f"Review them and complete any remaining required fields, then manually "
                 f"click the highlighted '{_literal(submit_label)}' on the page.")
     return ("表单已预填，尚未提交。请检查或修改后由你继续。"
             "离开这个页面时，应用可能会自动保存或丢弃这些内容。" if zh else

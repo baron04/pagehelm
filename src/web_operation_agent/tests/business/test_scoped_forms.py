@@ -370,6 +370,40 @@ class ScopedForms(unittest.TestCase):
         with self.assertRaises(BusinessToolRequestError):
             self.tools().prepare_current(missing_button, reference="create-v1", values=(("name", "Draft"),))
 
+    def test_disabled_submit_can_identify_a_transient_draft_but_ambiguity_cannot(self):
+        obs = observation()
+        obs.elements[1].attrs["disabled"] = "true"
+        draft, prepared = self.tools().prepare_current(
+            obs, reference="create-v1", values=(("name", "Draft"),))
+        self.assertTrue(prepared["draft_ready"])
+        self.assertEqual(draft.submit_label, "Confirm")
+        # An enabled duplicate must not hide a disabled button's ambiguity.
+        obs.elements.append(replace(obs.elements[1], ref="e6", attrs={"form_scope": SCOPE}))
+        with self.assertRaisesRegex(BusinessToolRequestError, "unique observed submit"):
+            self.tools().prepare_current(obs, reference="create-v1", values=(("name", "Draft"),))
+
+    def test_disabled_submit_handoff_preserves_exact_values_without_pressing_it(self):
+        calls = []
+        def execute(action, args):
+            calls.append((action, args))
+            obs = observation(len(calls) + 1)
+            obs.elements[1].attrs["disabled"] = "true"
+            obs.elements[0].attrs["value"] = "Draft"
+            return ActionReceipt(1, str(len(calls)), action, dict(args), True,
+                                 observation=obs)
+        obs = observation()
+        obs.elements[1].attrs["disabled"] = "true"
+        tools = self.tools()
+        draft, _ = tools.prepare_current(obs, reference="create-v1", values=(("name", "Draft"),))
+        verification = tools.take_verification(draft)
+        final, reason, _ = apply_form_draft(session_for(execute), draft, obs, 1,
+            verify=lambda current: verification.check(draft, current))
+        self.assertEqual(reason, "")
+        self.assertEqual([name for name, _ in calls], ["fill", "handoff_form"])
+        self.assertEqual(calls[-1][1]["fields"][0]["value"], "Draft")
+        self.assertEqual(calls[-1][1]["submit"], {"ref": "e2", "label": "Confirm", "scope": SCOPE})
+        self.assertEqual(final.elements[1].attrs["disabled"], "true")
+
     def test_goal_choice_labels_bind_exactly_and_ambiguous_codes_fail_closed(self):
         class Choices(LabelForms):
             choices = (FormChoice("17", "Synthetic person"),)

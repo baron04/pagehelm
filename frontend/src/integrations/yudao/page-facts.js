@@ -55,6 +55,66 @@ function listReadQuery(url, view) {
   return {page: Number(page), size: Number(size), digest: digest.catch(() => null)}
 }
 
+/** Vue may leave the route record's instance table empty after a query replacement.
+ * Recover only the one exact keyed component in the application's active VNode tree;
+ * never inspect KeepAlive caches or infer arrival from the URL/component name.
+ */
+function matchedPageInstance(app, active, matched) {
+  const registered = matched?.instances?.default?.$
+  if (registered) return registered
+  const component = matched?.components?.default
+  const root = app?._container?._vnode
+  if (!component || !root) return undefined
+  const live = item => item?.isMounted === true && item.isUnmounted === false && item.isDeactivated === false
+  // Bind the nearest rendered AppView under the current route's mounted parent.
+  // Do not exhaustively scan menus or descend into the page's thousands of VNodes.
+  const parent = active.matched.slice(0, -1).reverse().map(item => item.instances?.default?.$)
+    .find(item => live(item) && item.appContext?.app === app)
+  const ancestors = [parent ? parent.subTree : root], visited = new Set()
+  let appView
+  while (ancestors.length && visited.size < 256) {
+    const node = ancestors.shift()
+    if (!node || visited.has(node)) continue
+    visited.add(node)
+    if (node.suspense?.pendingBranch) return undefined
+    if (node.component) {
+      const item = node.component
+      if (!live(item)) continue
+      if (item.appContext?.app !== app) return undefined
+      if ((item.type?.name || item.type?.__name) === 'AppView') { appView = item; break }
+      ancestors.push(item.subTree)
+    }
+    if (Array.isArray(node.children)) {
+      if (node.children.length + ancestors.length > 256) return undefined
+      ancestors.push(...node.children)
+    }
+  }
+  if (!appView) return undefined
+  const stack = [appView.subTree], seen = new Set(), candidates = new Set()
+  while (stack.length && seen.size < 64) {
+    const node = stack.pop()
+    if (!node || seen.has(node)) continue
+    seen.add(node)
+    if (node.suspense?.pendingBranch) return undefined
+    if (node.component) {
+      const item = node.component
+      if (!live(item)) continue
+      if (item.appContext?.app !== app) return undefined
+      if (item.type === component && node.type === component && node.key === active.fullPath
+          && item.vnode === node && node.component === item) {
+        candidates.add(item)
+        continue
+      }
+      stack.push(item.subTree)
+    }
+    if (Array.isArray(node.children)) {
+      if (node.children.length + stack.length > 64) return undefined
+      stack.push(...node.children)
+    }
+  }
+  return !stack.length && candidates.size === 1 ? candidates.values().next().value : undefined
+}
+
 export function createPageFacts({view = window, doc = document} = {}) {
   let route = '', locationKey = '', generation = 0, record = null, appliedQuery = null, appliedRead = null, disposed = false
   const reads = new Map()
@@ -199,7 +259,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
       const pattern = segments.map(segment => segment.startsWith(':') ? '[^/]+'
         : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('/')
       if (!new RegExp('^' + pattern + '$').test(route)) return undefined
-      const instance = matched.instances?.default?.$
+      const instance = matchedPageInstance(app, active, matched)
       const component = matched.components?.default
       const mounted = item => item?.isMounted === true && item.isUnmounted === false && item.isDeactivated === false
       const name = item => item?.type?.name || item?.type?.__name || ''
@@ -393,7 +453,7 @@ export function readElementNavigation(element) {
 function currentPageComponent() {
   const app = document.getElementById('app')?.__vue_app__
   const active = app?.config?.globalProperties?.$router?.currentRoute?.value
-  const matched = active?.matched?.at(-1), instance = matched?.instances?.default?.$
+  const matched = active?.matched?.at(-1), instance = matchedPageInstance(app, active, matched)
   if (!matched || matched.redirect || active.path !== location.pathname ||
       instance?.isMounted !== true || instance.isUnmounted !== false || instance.isDeactivated !== false ||
       instance.appContext?.app !== app || instance.type !== matched.components?.default ||

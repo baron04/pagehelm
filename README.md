@@ -219,7 +219,10 @@ agent.
   If the operation stops before input dispatch, the reply states that no values were entered; uncertain input keeps the partial-entry warning.
   Before any value is prepared, an unobserved submit control on an application-verified
   transient form permits at most three fixed read-only scrolls. Each fresh descriptor
-  must bind the same entry; ambiguous or disabled buttons remain refusals.
+  must bind the same entry; ambiguous or hidden buttons remain refusals. A unique
+  visible submit button may be disabled when a requested partial draft leaves other
+  required fields empty. It is highlighted without activation; the handoff confirms
+  only the requested values and asks the person to review and complete the form.
   A reviewed opener may use `open_entry=True` and an
   application-owned entry port: the server clicks the exact observed control under the
   ordinary page approval, then binds its successful receipt to the fresh form before

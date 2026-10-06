@@ -265,7 +265,7 @@ describe('a page action in an application that names a write guard', () => {
       .toEqual(['/woa/page-guard/begin'])
   })
 
-  it.each(['ready', 'button-disabled', 'field-reset', 'scope-replaced', 'release-refused'])(
+  it.each(['ready', 'button-disabled', 'initially-disabled', 'button-hidden', 'field-reset', 'scope-replaced', 'release-refused'])(
     'hands over a scoped form with a highlight only when %s', async mode => {
       const form = document.createElement('form')
       form.id = 'handoff-editor'
@@ -274,6 +274,7 @@ describe('a page action in an application that names a write guard', () => {
       document.body.append(form)
       const input = form.querySelector('input')!, button = form.querySelector('button')!
       input.value = 'Draft'
+      button.disabled = mode === 'initially-disabled'
       button.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
       const clicked = vi.fn(); button.addEventListener('click', clicked)
       try {
@@ -281,6 +282,7 @@ describe('a page action in an application that names a write guard', () => {
           if (url.endsWith('/begin')) return reply(200, {active: true, expires_at: Date.now() / 1000 + 120})
           if (mode === 'release-refused') return reply(503, {})
           if (mode === 'button-disabled') button.disabled = true
+          if (mode === 'button-hidden') button.hidden = true
           if (mode === 'field-reset') input.value = ''
           if (mode === 'scope-replaced') form.id = 'different'
           return reply(200, {active: false})
@@ -303,11 +305,12 @@ describe('a page action in an application that names a write guard', () => {
           control: 'textbox', value: 'Draft'}],
           submit: {ref: 'e2', label: 'Confirm', scope: 'form:handoff-editor'}}
         await runtime._handleAction(action as never)
-        expect((posts[1]?.body.receipt as Record<string, unknown>).ok).toBe(mode === 'ready')
-        expect(button.style.outline !== '').toBe(mode === 'ready')
-        expect(state.handoffGranted === true).toBe(mode === 'ready')
+        const handedOver = ['ready', 'button-disabled', 'initially-disabled'].includes(mode)
+        expect((posts[1]?.body.receipt as Record<string, unknown>).ok).toBe(handedOver)
+        expect(button.style.outline !== '').toBe(handedOver)
+        expect(state.handoffGranted === true).toBe(handedOver)
         expect(clicked).not.toHaveBeenCalled()
-        if (mode === 'ready') (state.highlightHandle as {clear(): void}).clear()
+        if (handedOver) (state.highlightHandle as {clear(): void}).clear()
       } finally { form.remove() }
     })
 

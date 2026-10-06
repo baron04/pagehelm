@@ -310,6 +310,31 @@ describe('Page.describe bounds an observation before it crosses the browser boun
 })
 
 describe('Page refuses controls that are not writable at execution time', () => {
+  it('observes disabled form buttons through the controller whitelist without allowing a click', () => {
+    const form = document.createElement('form')
+    form.id = 'draft'
+    form.innerHTML = '<button disabled>Save</button><button hidden disabled>Hidden</button>'
+    document.body.append(form)
+    try {
+      const button = form.querySelector('button')!
+      for (const element of form.querySelectorAll('button'))
+        element.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
+      const options = pageControllerOptions([])
+      const whitelist = options.interactiveWhitelist as (() => HTMLElement | undefined)[]
+      expect(whitelist[0]!()).toBe(button)
+      expect(whitelist[1]!()).toBeUndefined()
+      const api = controller()
+      const page = new Page(api, () => button, createRedactor())
+      expect(() => page.click('e1')).toThrow('disabled buttons')
+      expect(api.clickElement).not.toHaveBeenCalled()
+      const replaced = button.cloneNode(true) as HTMLButtonElement
+      replaced.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
+      button.replaceWith(replaced)
+      expect(whitelist[0]!()).toBe(replaced)
+      const excluded = pageControllerOptions([form]).interactiveWhitelist as (() => HTMLElement | undefined)[]
+      expect(excluded[0]!()).toBeUndefined()
+    } finally { form.remove() }
+  })
   it('commits a local numeric or date draft while ordinary typing keeps its current focus', async () => {
     const form = document.createElement('form')
     form.id = 'draft-types'
@@ -358,6 +383,7 @@ describe('Page refuses controls that are not writable at execution time', () => 
     document.body.append(form)
     try {
       const input = form.querySelector('input')!, button = form.querySelector('button')!
+      button.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
       input.value = 'Draft'
       const clicked = vi.fn(); button.addEventListener('click', clicked)
       const page = new Page(controller(), (_map, index) => index === 1 ? input : button, createRedactor())
@@ -377,11 +403,53 @@ describe('Page refuses controls that are not writable at execution time', () => 
       expect(page.verifyFormFields(fields, observed)).toBe(false)
       input.removeAttribute('name')
       button.disabled = true
+      expect(page.verifyFormSubmit(submit, fields, observed)).toBe(true)
+      button.hidden = true
       expect(page.verifyFormSubmit(submit, fields, observed)).toBe(false)
+      button.hidden = false
       button.disabled = false
       expect(page.verifyFormSubmit(submit, fields, [...observed, {...observed[1]!, ref: 'e3'}])).toBe(false)
       form.id = 'replaced'
       expect(page.verifyFormFields(fields, observed)).toBe(false)
+    } finally { form.remove() }
+  })
+
+  it.each([false, true])('verifies requested prefill while submit enabled is %s, without activating it', async fillEmail => {
+    const form = document.createElement('form')
+    form.id = 'partial-editor'
+    form.innerHTML = '<label>Name<input name="name" required></label>' +
+      '<label>Email<input name="email" type="email" required></label><button type="submit" disabled>Save</button>'
+    document.body.append(form)
+    try {
+      const inputs = [...form.querySelectorAll('input')], button = form.querySelector('button')!
+      button.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
+      const clicked = vi.fn(), submitted = vi.fn()
+      button.addEventListener('click', clicked); form.addEventListener('submit', submitted)
+      for (const input of inputs) input.addEventListener('change', () => {
+        button.disabled = !inputs.every(field => field.checkValidity())
+      })
+      const api = controller()
+      api.inputText = vi.fn(async (index, value) => {inputs[index - 1]!.value = value; return {success: true}})
+      const page = new Page(api, (_map, index) => index === 3 ? button : inputs[index - 1], createRedactor())
+      expect(button.disabled).toBe(true)
+      await page.input('e1', 'Ada Byron', true)
+      if (fillEmail) await page.input('e2', 'ada@example.test', true)
+      const observed = [
+        ...inputs.map((input, index) => ({ref: `e${index + 1}`, role: 'textbox', name: input.name,
+          tag: 'input', epoch: 2, attrs: {field: input.name, form_scope: 'form:partial-editor'}})),
+        {ref: 'e3', role: 'button', name: 'Save', tag: 'button', epoch: 2,
+          attrs: {form_scope: 'form:partial-editor', ...(button.disabled ? {disabled: 'true'} : {})}},
+      ]
+      const fields = inputs.slice(0, fillEmail ? 2 : 1).map((input, index) => ({ref: `e${index + 1}`,
+        field: input.name, control: 'textbox', scope: 'form:partial-editor', value: input.value}))
+      expect(page.verifyFormFields(fields, observed)).toBe(true)
+      expect(page.verifyFormSubmit({ref: 'e3', label: 'Save', scope: 'form:partial-editor'}, fields, observed)).toBe(true)
+      const highlight = page.highlight('e3')
+      expect(highlight.active()).toBe(true)
+      expect(button.disabled).toBe(!fillEmail)
+      expect(clicked).not.toHaveBeenCalled(); expect(submitted).not.toHaveBeenCalled()
+      expect(api.clickElement).not.toHaveBeenCalled()
+      highlight.clear()
     } finally { form.remove() }
   })
   it('rechecks only actually entered controls outside the viewport in the same live form', async () => {

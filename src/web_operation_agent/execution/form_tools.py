@@ -14,7 +14,7 @@ from ..business.errors import (BusinessToolError, BusinessToolPermissionError,
                                BusinessToolRequestError, BusinessToolContractError,
                                BusinessToolIdentityError)
 from ..business.runtime import FormDraft
-from ..business.tools.contracts import matches_form_control, form_control_unavailable
+from ..business.tools.contracts import matches_form_control
 from ..schemas import PageObservation
 from .routes import observation_is_at_route
 from .page_evidence import capture_page_snapshot
@@ -483,8 +483,7 @@ def apply_form_draft(
         def submit_buttons():
             return [element for element in current.elements
                     if element.role == "button" and element.name == draft.submit_label
-                    and element.attrs.get("form_scope") == draft.control_scope
-                    and not form_control_unavailable(element.attrs)]
+                    and element.attrs.get("form_scope") == draft.control_scope]
 
         buttons = submit_buttons()
         # Input focus can move the reviewed footer outside the viewport. Use the
@@ -502,7 +501,7 @@ def apply_form_draft(
                 return current, reason, detail
             buttons = submit_buttons()
         if len(buttons) != 1:
-            return current, "agent_refused", "the form has no unique enabled submit control"
+            return current, "agent_refused", "the form has no unique observed submit control"
         submit_target = {"ref": buttons[0].ref, "label": draft.submit_label,
                          "scope": draft.control_scope}
     handoff_fields = []

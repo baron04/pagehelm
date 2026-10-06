@@ -1136,6 +1136,8 @@ class EmbeddedRuntimeTests(unittest.TestCase):
           globalThis.location = pageLocation;
           globalThis.window = {location:pageLocation,
             __WOA_EMBEDDED_RUNTIME_STARTED__:false};
+          // The browser-only click guard reads the DOM constructor even for link targets.
+          globalThis.HTMLButtonElement = class HTMLButtonElement extends EventTarget {};
           let inheritedTarget = '';
           globalThis.document = {querySelector: selector => selector === 'base[target]' &&
             inheritedTarget ? {getAttribute:() => inheritedTarget} : null};
@@ -1595,6 +1597,116 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    def _required_form_handoff(self, *, fill_email: bool, refuse_click: bool = False):
+        """Use the real controller's references, including its disabled-button projection."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        _runtime_bytes()
+
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(allowed_origins=[app.origin])
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.goto(app.origin + "/required-form", wait_until="domcontentloaded")
+                    remote = RemoteBrowserClient(channel, timeout_s=8)
+                    remote.start()
+                    observation = remote.observe()
+
+                    def submit_at(current):
+                        candidates = [item for item in current.elements
+                                      if item.role == "button" and item.name == "Save contact"]
+                        self.assertEqual(len(candidates), 1)
+                        self.assertEqual(candidates[0].attrs["form_scope"], "form:required-contact")
+                        return candidates[0]
+
+                    submit = submit_at(observation)
+                    self.assertEqual(submit.attrs.get("disabled"), "true")
+                    self.assertTrue(page.locator("#save-contact").is_disabled())
+                    if refuse_click:
+                        refused = remote.execute("click", {"ref": submit.ref})
+                        self.assertFalse(refused.ok)
+                        self.assertEqual(refused.error_code, "bad_arguments")
+                        self.assertTrue(page.locator("#save-contact").is_disabled())
+                    else:
+                        values = {"name": "Ada Byron"}
+                        if fill_email:
+                            values["email"] = "ada@example.test"
+                        for field_name, value in values.items():
+                            field = next(item for item in observation.elements
+                                         if item.attrs.get("field") == field_name)
+                            filled = remote.execute("fill", {
+                                "ref": field.ref, "value": value, "commit": True})
+                            self.assertTrue(filled.ok, filled.error_detail)
+                            observation = filled.observation
+                            # The partial form must retain an actual indexed disabled target;
+                            # completing the last required value makes that same control usable.
+                            submit = submit_at(observation)
+                            disabled = field_name == "name"
+                            self.assertEqual(submit.attrs.get("disabled") == "true", disabled)
+                            self.assertEqual(page.locator("#save-contact").is_disabled(), disabled)
+
+                        fields = []
+                        for field_name, value in values.items():
+                            field = next(item for item in observation.elements
+                                         if item.attrs.get("field") == field_name)
+                            fields.append({"ref": field.ref, "field": field_name,
+                                "control": field.role, "value": value,
+                                "scope": field.attrs["form_scope"]})
+                        handed = remote.execute("handoff_form", {
+                            "fields": fields,
+                            "submit": {"ref": submit.ref, "label": submit.name,
+                                       "scope": submit.attrs["form_scope"]}})
+                        self.assertTrue(handed.ok, handed.error_detail)
+                        self.assertFalse(handed.navigated)
+                        self.assertEqual(len(handed.args_echo["fields"]), len(values))
+                        self.assertTrue(all(item["value"] == "[redacted]"
+                                            for item in handed.args_echo["fields"]))
+                        self.assertNotEqual(page.locator("#save-contact").evaluate(
+                            "element => element.style.outline"), "")
+                        self.assertEqual(page.locator('[name="name"]').input_value(), "Ada Byron")
+                        self.assertEqual(page.locator('[name="email"]').input_value(),
+                                         "ada@example.test" if fill_email else "")
+                        self.assertEqual(page.locator("#save-contact").is_disabled(), not fill_email)
+                        self.assertEqual(submit_at(handed.observation).attrs.get("disabled") == "true",
+                                         not fill_email)
+                    self.assertEqual(page.evaluate("window.requiredFormEvents"),
+                                     {"click": 0, "submit": 0})
+                    self.assertEqual(app.form_submissions, 0)
+                    self.assertEqual(errors, [])
+                finally:
+                    browser.close()
+        finally:
+            gateway.close()
+            app.close()
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_real_partial_prefill_hands_over_an_observed_disabled_submit(self):
+        self._required_form_handoff(fill_email=False)
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_real_complete_prefill_enables_submit_without_activating_it(self):
+        self._required_form_handoff(fill_email=True)
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_real_observed_disabled_submit_cannot_be_clicked(self):
+        self._required_form_handoff(fill_email=False, refuse_click=True)
+
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_pagecontroller_observation_is_viewport_bounded_and_scrollable(self):
@@ -1862,6 +1974,31 @@ class _FixtureApplication:
                     return self.page('<h1>Customer</h1><form method="post" action="/saved">'
                                      '<label>Phone <input name="phone" value="old"></label>'
                                      '<button type="submit">Save</button></form>')
+                if self.path == "/required-form":
+                    return self.page('''
+                      <h1>New contact</h1>
+                      <form id="required-contact" method="post" action="/saved">
+                        <label>Name <input name="name" required></label>
+                        <label>Email <input name="email" type="email" required></label>
+                        <button id="save-contact" type="submit" disabled
+                          style="cursor:not-allowed">Save contact</button>
+                      </form>
+                      <script>
+                        window.requiredFormEvents = {click: 0, submit: 0};
+                        const form = document.querySelector('#required-contact');
+                        const button = document.querySelector('#save-contact');
+                        form.addEventListener('change', () => {
+                          button.disabled = ![...form.querySelectorAll('input')]
+                            .every(field => field.checkValidity());
+                          button.style.cursor = button.disabled ? 'not-allowed' : 'pointer';
+                        });
+                        button.addEventListener('click', () => window.requiredFormEvents.click++);
+                        form.addEventListener('submit', event => {
+                          window.requiredFormEvents.submit++;
+                          event.preventDefault();
+                        });
+                      </script>
+                    ''')
                 if self.path == "/large":
                     controls = "".join(
                         f'<button style="display:block;width:240px;height:28px;margin:2px">'
