@@ -1,4 +1,6 @@
 import {afterEach, expect, it} from 'vitest'
+import {webcrypto, createHash} from 'node:crypto'
+import {TextEncoder} from 'node:util'
 import source from '../src/integrations/odoo/view-bridge.js?raw'
 
 // Exercise the application module with Owl's raw/proxy identity contract and lifecycle.
@@ -10,19 +12,20 @@ function fixture() {
   class Form extends Controller {}
   class List extends Controller {}
   class Kanban extends Controller {}
+  class SearchBar extends Controller {}
   function patch(target, extension) {
     const parent = Object.create(Object.getPrototypeOf(target))
     Object.defineProperties(parent, Object.getOwnPropertyDescriptors(target))
     Object.setPrototypeOf(extension, parent)
     Object.defineProperties(target, Object.getOwnPropertyDescriptors(extension))
   }
-  const fakeCrypto = {subtle: {digest: async () => new Uint8Array(32).buffer}}
+  const fakeCrypto = webcrypto
   new Function('FormController', 'ListController', 'KanbanController', 'RelationalModel',
-    'DynamicList', 'patch', 'onMounted', 'onWillUnmount', 'toRaw', 'crypto', 'location', 'TextEncoder',
+    'DynamicList', 'SearchBar', 'patch', 'onMounted', 'onWillUnmount', 'toRaw', 'crypto', 'location', 'TextEncoder',
     source.replace(/^import .*;\n/gm, ''))(
-    Form, List, Kanban, Model, DynamicList, patch, fn => mounted.push(fn), () => {},
+    Form, List, Kanban, Model, DynamicList, SearchBar, patch, fn => mounted.push(fn), () => {},
     value => rawOf.get(value) || value, fakeCrypto, {pathname: '/odoo/products'},
-    class {encode(value) {return new Uint8Array(value.length)}},
+    TextEncoder,
   )
   const element = document.createElement('div')
   element.getClientRects = () => [{}]
@@ -39,7 +42,17 @@ function fixture() {
       id: 8, path: 'products', res_model: 'product.template'}}}})
   controller.setup()
   mounted.forEach(fn => fn())
-  return {raw, proxy, controller}
+  function mountSearch(model) {
+    const el = document.createElement('div')
+    el.getClientRects = () => [{}]
+    element.append(el)
+    const bar = new SearchBar()
+    Object.assign(bar, {root: {el}, env: {searchModel: model}})
+    bar.setup()
+    mounted.at(-1)()
+    return bar
+  }
+  return {raw, proxy, controller, mountSearch}
 }
 
 afterEach(() => {delete window.__woaViewBridge; document.body.replaceChildren()})
@@ -68,4 +81,38 @@ it('does not certify a pending read or missing model as rendered state', async (
   raw.root = null
   await raw.load()
   expect(window.__woaViewBridge.current()).toBeNull()
+})
+
+it('projects only scalar search terms read by the mounted view, never draft or duplicate OR terms', async () => {
+  const {raw, mountSearch} = fixture()
+  const hash = value => createHash('sha256').update(JSON.stringify([value])).digest('hex')
+  const field = {id: 1, type: 'field', fieldName: 'name', fieldType: 'char'}
+  const filter = {type: 'filter', name: 'active', isActive: false}
+  const model = {resModel: 'product.template', domain: [], query: [], searchItems: {1: field},
+    getSearchItems: predicate => [field, filter].filter(predicate)}
+  mountSearch(model)
+  await raw.load()
+  expect(window.__woaViewBridge.current().query_fields).toEqual({filter_active: hash('false')})
+  model.query = [{searchItemId: 1, autocompleteValue: {value: 'Blue', operator: 'ilike'}}]
+  model.domain = [['name', 'ilike', 'Blue']]
+  expect(window.__woaViewBridge.current().query_fields).toEqual({})
+  raw.root.domain = model.domain
+  await raw.load()
+  expect(window.__woaViewBridge.current().query_fields).toEqual({filter_active: hash('false'), search_name: hash('Blue')})
+  model.query.push({searchItemId: 1, autocompleteValue: {value: 'Red', operator: 'ilike'}})
+  expect(window.__woaViewBridge.current()).toBeNull()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(window.__woaViewBridge.current().query_fields).toEqual({filter_active: hash('false')})
+})
+
+it('refuses an unrelated search model and several visible search bars', async () => {
+  const {raw, mountSearch} = fixture()
+  const model = {resModel: 'res.partner', domain: [], query: [], getSearchItems: () => []}
+  mountSearch(model)
+  await raw.load()
+  expect(window.__woaViewBridge.search()).toBeNull()
+  model.resModel = 'product.template'
+  expect(window.__woaViewBridge.search()).not.toBeNull()
+  mountSearch(model)
+  expect(window.__woaViewBridge.search()).toBeNull()
 })

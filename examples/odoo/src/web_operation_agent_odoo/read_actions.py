@@ -23,7 +23,7 @@ from .server.generic_reads import odoo_model_allowed
 class OdooReadActions:
     application_id = 'odoo'
     required_scope = 'generic_records:read'
-    actions = frozenset({'goto', 'click'})
+    actions = frozenset({'goto', 'click', 'fill'})
 
     def __init__(self, client, *, review: str, module_digest: str):
         if not isinstance(review, str) or not review.strip() or len(review) > 200:
@@ -83,7 +83,64 @@ class OdooReadActions:
             raise ActionAdmissionRefused('unreviewed')
         return candidates[0]
 
+    def _view(self, action, kind, checkpoint):
+        checkpoint()
+        view = self.client.call(action.model, 'get_view', [], {'view_type': kind})
+        checkpoint()
+        arch = view.get('arch') if isinstance(view, dict) else None
+        if not isinstance(arch, str) or len(arch) > 512000 or re.search(r'<!\s*(?:DOCTYPE|ENTITY)', arch, re.I):
+            raise ActionAdmissionRefused('unreviewed')
+        try:
+            return ET.fromstring(arch)
+        except ET.ParseError:
+            raise ActionAdmissionRefused('unreviewed') from None
+
+    def _query(self, intent, current, element, path, checkpoint):
+        before, attrs = intent.observation, element.attrs
+        read, field = before.page_read, attrs.get('query_field', '')
+        if (not read or read['path'] != path or before.active_view not in {'List', 'Kanban'}
+                or attrs.get('form_scope')):
+            raise ActionAdmissionRefused('invalid_target')
+        if intent.action == 'click' and field == 'search_menu' and element.role == 'button':
+            expanded = attrs.get('aria-expanded')
+            if expanded in {'true', 'false'}:
+                return ['menu', path, read['query_digest'], 'false' if expanded == 'true' else 'true']
+            raise ActionAdmissionRefused('invalid_target')
+        match = re.fullmatch(r'(search|filter)_([A-Za-z][A-Za-z0-9_]{0,56})', field)
+        if not match:
+            raise ActionAdmissionRefused('invalid_target')
+        kind, name = match.groups()
+        root = self._view(current, 'search', checkpoint)
+        nodes = [n for n in root.iter('field' if kind == 'search' else 'filter') if n.get('name') == name]
+        if len(nodes) != 1:
+            raise ActionAdmissionRefused('unreviewed')
+        if intent.action == 'fill':
+            value = intent.arguments['value']
+            if kind != 'search' or element.role not in {'textbox', 'searchbox'} or not value.strip() or len(value) > 120:
+                raise ActionAdmissionRefused('invalid_target')
+            return ['text', path, field, value, read['query_digest']]
+        if kind == 'search':
+            inputs = [e for e in before.elements if e.role in {'textbox', 'searchbox'} and
+                      e.attrs.get('page_control') == 'query' and e.attrs.get('value')]
+            if len(inputs) != 1 or element.role not in {'link', 'menuitem', 'li'}:
+                raise ActionAdmissionRefused('invalid_target')
+            value = inputs[0].attrs['value']
+        else:
+            value = read['query_fields'].get(field)
+            flags = {self._value_digest('true'): 'false', self._value_digest('false'): 'true'}
+            if (element.role != 'menuitemcheckbox' or value not in flags
+                    or nodes[0].get('string', name) != element.name):
+                raise ActionAdmissionRefused('invalid_target')
+            value = flags[value]
+        return ['query', path, field, self._value_digest(value), read['revision'], read['query_fields']]
+
+    @staticmethod
+    def _value_digest(value):
+        return hashlib.sha256(json.dumps([value], ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+
     def admit(self, intent, *, context, checkpoint):
+        if intent.action not in self.actions:
+            raise ActionAdmissionRefused('unreviewed')
         catalog = self._catalog(context, checkpoint)
         before = intent.observation
         path, _ = self._path(before.url)
@@ -102,7 +159,12 @@ class OdooReadActions:
             attrs = element.attrs
             if attrs.get('disabled') == 'true':
                 raise ActionAdmissionRefused('invalid_target')
-            if attrs.get('page_control') == 'pagination' and before.page_read:
+            if attrs.get('page_control') == 'query':
+                expected = self._query(intent, current, element, path, checkpoint)
+                effect = ActionEffect.READ_ONLY
+            elif intent.action != 'click':
+                raise ActionAdmissionRefused('unreviewed')
+            elif attrs.get('page_control') == 'pagination' and before.page_read:
                 page, size = int(attrs['page_number']), int(attrs['page_size'])
                 if (before.active_view not in {'List', 'Kanban'} or page < 1
                         or size != before.page_read['page_size']
@@ -112,16 +174,7 @@ class OdooReadActions:
                 expected = ['pager', path, page, size, before.page_read['query_digest'],
                             before.page_read['revision']]
             elif element.role == 'tab' and before.record_route:
-                checkpoint()
-                view = self.client.call(current.model, 'get_view', [], {'view_type': 'form'})
-                checkpoint()
-                arch = view.get('arch') if isinstance(view, dict) else None
-                if not isinstance(arch, str) or len(arch) > 512000 or re.search(r'<!\s*(?:DOCTYPE|ENTITY)', arch, re.I):
-                    raise ActionAdmissionRefused('unreviewed')
-                try:
-                    root = ET.fromstring(arch)
-                except ET.ParseError:
-                    raise ActionAdmissionRefused('unreviewed') from None
+                root = self._view(current, 'form', checkpoint)
                 names = [p.get('string') for p in root.iter('page')]
                 if names.count(element.name) != 1 or sum(e.role == 'tab' and e.name == element.name for e in before.elements) != 1:
                     raise ActionAdmissionRefused('unreviewed')
@@ -155,6 +208,24 @@ class OdooReadActions:
             return not expected[2] or (observation.active_view or '').casefold() == expected[2]
         if path != expected[1] or observation.url != intent.observation.url:
             return False
+        if expected[0] in {'menu', 'text', 'query'}:
+            read = observation.page_read
+            if not read:
+                raise ActionResultPending()
+            if read['path'] != path:
+                return False
+            if expected[0] == 'menu':
+                matches = [e for e in observation.elements if e.role == 'button' and
+                    e.attrs.get('query_field') == 'search_menu' and e.attrs.get('aria-expanded') == expected[3]]
+                return read['query_digest'] == expected[2] and len(matches) == 1
+            if expected[0] == 'text':
+                matches = [e for e in observation.elements if e.role in {'textbox', 'searchbox'} and
+                    e.attrs.get('query_field') == expected[2] and e.attrs.get('value') == expected[3]]
+                return read['query_digest'] == expected[4] and len(matches) == 1
+            if read['revision'] <= expected[4]:
+                raise ActionResultPending()
+            values = {**expected[5], expected[2]: expected[3]}
+            return all(read['query_fields'].get(key) == value for key, value in values.items())
         if expected[0] == 'pager':
             read = observation.page_read
             if not read or read['revision'] <= expected[5]:

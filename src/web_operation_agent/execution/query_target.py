@@ -43,11 +43,12 @@ def bind_query(raw, observation: PageObservation | None, maximum: int):
             raise ValueError("query control is not uniquely observed")
         element = elements[0]
         field = element.attrs.get("query_field")
-        label = element.attrs.get("field_label")
-        if (element.epoch != observation.epoch or element.role != "textbox"
+        label = element.attrs.get("field_label", element.name)
+        scope, instance = element.attrs.get("form_scope"), element.attrs.get("form_instance")
+        if (element.epoch != observation.epoch or element.role not in {"textbox", "searchbox"}
                 or element.attrs.get("page_control") != "query"
-                or not element.attrs.get("form_instance") or not element.attrs.get("form_scope")
-                or str(element.attrs["form_scope"]).startswith("dialog")
+                or (scope is not None or instance is not None) and (not scope or not instance)
+                or str(scope or "").startswith("dialog")
                 or element.attrs.get("disabled") == "true" or element.attrs.get("readonly") == "true"
                 or not isinstance(field, str) or len(field) > MAX_QUERY_KEY_CHARS
                 or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", field) is None

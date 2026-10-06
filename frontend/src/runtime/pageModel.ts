@@ -392,7 +392,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
         item.role = 'combobox'
         item.tag = 'input'
       }
-      if (![...browserContract.form_handoff.input_controls, 'button'].includes(item.role)) continue
+      if (![...browserContract.form_handoff.input_controls, 'searchbox', 'button'].includes(item.role)) continue
       delete item.attrs.form_scope
       delete item.attrs.form_instance
       delete item.attrs.field_label

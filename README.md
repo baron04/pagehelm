@@ -432,7 +432,9 @@ agent.
   targets. Raw filter values are omitted. These observations grant no authority;
   the application policy must bind and verify the reviewed query's result.
   `set_target.query` binds requested text values to current application query controls;
-  a draft or click alone cannot settle it. Completion requires a guarded,
+  standard textboxes and ARIA searchboxes can bind without an HTML form. An observed
+  form identity is preserved when present; the application query field and read scope remain required.
+  A draft or click alone cannot settle it. Completion requires a guarded,
   application-verified applied read matching every declared condition. Target audits
   retain value digests. The Runtime excludes its own panel's hit targets only during
   the controller's synchronous extraction; application occlusion remains in effect.
@@ -448,11 +450,14 @@ agent.
   do not enable them. The Contacts native host has no page effect guard and correctly
   refuses this opt-in mode; it is not a positive guarded-browser qualification.
   The optional Odoo `OdooReadActions` prototype covers actor-readable window navigation,
-  clean-list paging and form notebook tabs under a deployment review of standard handlers.
+  clean-list paging, form notebook tabs, single text-search suggestions and static filters
+  under a deployment review of standard handlers.
   Its mounted-view observer binds completed reads across Owl's reactive wrappers and
   refuses pending, dirty or ambiguous views. Installed-module versions detect drift but
-  do not attest source contents. Search/filter actions and arbitrary custom handlers are
-  not qualified by this prototype, and it is not enabled by the default Odoo factory.
+  do not attest source contents. Search/filter completion additionally requires a fresh
+  applied read and every prior bound condition. Custom/date filters, saved-search changes,
+  multiple OR terms and arbitrary custom handlers remain outside the qualified scope.
+  The default Odoo factory does not enable this prototype.
   Integrations can set `require_page_route=True` in `AgentTurnConfig` for this loop:
   navigation and target completion then require a fresh application-owned `page_route`
   matching the current URL, with no pending render or blocking application error. A

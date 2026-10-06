@@ -297,11 +297,15 @@ database or a client retry made after `/end`.
 
 The optional `OdooReadActions` effect-policy prototype uses the delegated actor's window
 catalog for navigation, mounted successful list reads for paging, and the actor's form
-architecture plus the selected runtime tab for notebook changes. It requires the deployment
+architecture plus the selected runtime tab for notebook changes. Single character/text search
+suggestions and static filters bind the current SearchBar, actor-readable search architecture
+and applied list conditions. Typing alone is not an applied search; query completion needs
+a new successful read preserving every prior bound condition. It requires the deployment
 to review the common handlers and supply the reviewed installed-module digest; that digest
 contains names and versions, not source bytes. Dirty, pending, ambiguous and sample views
-provide no route proof. It does not admit search/filter actions, new forms or arbitrary
-workflow buttons, and the default factory keeps its existing policy.
+provide no route proof. Custom/date filters, saved-search changes, multiple OR terms,
+new forms and arbitrary workflow buttons are outside this qualified scope; the default
+factory keeps its existing policy.
 
 The observer source is in `frontend/src/integrations/odoo/`. Running
 `python scripts/build_runtime.py` copies its serving outputs into the local addon before

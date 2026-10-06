@@ -27,6 +27,25 @@ def rest_list(epoch=1, *, value="", applied=False):
 
 
 class QueryTargetTests(unittest.TestCase):
+    def test_agent_observation_exposes_live_query_binding_but_not_applied_value_digests(self):
+        from web_operation_agent.execution.context import _render_observation
+        before = rest_list(value="Synthetic", applied=True)
+        rendered = _render_observation(before)
+        self.assertIn("page_control=query query_field=term", rendered)
+        self.assertNotIn(digest("Synthetic"), rendered)
+        self.assertEqual("term", parse_target({"query":[{"ref":"e2", "value":"Synthetic"}]}, before).query[0].field)
+
+    def test_source_free_searchbox_without_html_form_still_needs_exact_applied_actor_read(self):
+        before = rest_list()
+        attrs = {key:value for key,value in before.elements[1].attrs.items()
+                 if key not in {'form_scope', 'form_instance', 'field_label'}}
+        before.elements[1] = replace(before.elements[1], role='searchbox', name='Contact search', attrs=attrs)
+        target = parse_target({'query':[{'ref':'e2','value':'Synthetic'}]}, before)
+        self.assertEqual('Contact search', target.query[0].label)
+        after = rest_list(2, value='Synthetic', applied=True)
+        self.assertTrue(unmet_conditions(target, after))
+        self.assertFalse(unmet_conditions(target, after, verified_query=True))
+
     def test_query_binds_exact_live_control_and_checks_applied_value_not_draft(self):
         before = rest_list(value="澄海测绘")
         args = {"query": [{"ref": "e2", "value": "澄海测绘"}]}
@@ -63,6 +82,23 @@ class QueryTargetTests(unittest.TestCase):
 
 class RestQueryLoopTests(unittest.TestCase):
     execute = fixture.EffectLoopTests.execute
+    def test_body_searchbox_uses_the_same_guarded_full_query_contract_without_source(self):
+        policy = Policy(ActionEffect.READ_ONLY)
+        policy.verify = lambda permit, intent, receipt, *, observation, **kw: (
+            intent.action == 'click' and observation.page_read['revision'] == 2)
+        before = rest_list()
+        before.elements[1] = replace(before.elements[1], role='searchbox', name='Search contacts',
+            attrs={key:value for key,value in before.elements[1].attrs.items()
+                   if key not in {'form_scope','form_instance','field_label'}})
+        after = rest_list(2, value='Synthetic', applied=True)
+        result, session, browser, _ = self.execute(policy, [
+            ('set_target', {'query':[{'ref':'e2','value':'Synthetic'}]}),
+            ('click', {'ref':'e1'}), ('finish', {'done':True})], before=before, after=after,
+            navigated=False, prompt='Filter contacts by Synthetic')
+        self.assertEqual('agent_finished', result.terminal_reason)
+        self.assertEqual(['click'], [name for name,_ in browser.done])
+        self.assertTrue(session.action_admission.query_verified(after))
+
     def test_flat_rest_query_full_task_settles_only_after_application_verification(self):
         policy = Policy(ActionEffect.READ_ONLY)
         policy.verify = lambda permit, intent, receipt, *, observation, **kw: (

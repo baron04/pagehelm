@@ -20,3 +20,40 @@ it('only projects enabled standard pagers belonging to the current controller', 
     buttons[0].type='button';buttons[0].disabled=true
     expect(readElementPageControl(buttons[0])).toBeUndefined()
 })
+
+function searchFixture() {
+    document.body.innerHTML='<div id="search"><input class="o_searchview_input"><button class="o_searchview_dropdown_toggler" aria-expanded="false"></button><ul class="o_searchview_autocomplete"><li class="o_menu_item" id="7"><a>Search Name for Blue</a></li><li class="o_menu_item" id="8"><a>Add Custom Filter</a></li></ul></div><div class="o_search_bar_menu"><div class="o_filter_menu"><span class="o_menu_item" role="menuitemcheckbox">Active</span></div></div><button id="outside">Active</button>'
+    for(const e of document.querySelectorAll('*'))e.getClientRects=()=>[{}]
+    const root=document.querySelector('#search'),input=root.querySelector('input')
+    const field={id:1,type:'field',fieldName:'name',fieldType:'char'}
+    const filter={type:'filter',name:'active',description:'Active'}
+    const bar={root:{el:root},inputRef:{el:input},state:{query:'Blue'},searchBarDropdownState:{isOpen:true},
+        searchItemsFields:[field],items:[{id:7,searchItemId:1,value:'Blue',operator:'ilike'},
+        {id:8,isAddCustomFilterButton:true}],env:{searchModel:{searchItems:{1:field},
+        getSearchItems:predicate=>[field,filter].filter(predicate)}}}
+    window.__woaViewBridge={current:()=>({page:1,page_size:20,total:40}),
+        search:()=>({bar,fields:{}}),contains:e=>root.contains(e)}
+    return {bar,input}
+}
+
+it('binds actual text search choices and rejects custom or unrelated controls', () => {
+    const {bar,input}=searchFixture()
+    expect(readElementPageControl(input)).toEqual({kind:'query',field:'search_name'})
+    expect(readElementPageControl(document.querySelector('[id="7"] a'))).toEqual({kind:'query',field:'search_name'})
+    expect(readElementPageControl(document.querySelector('[id="8"] a'))).toBeUndefined()
+    expect(readElementPageControl(document.querySelector('#outside'))).toBeUndefined()
+    bar.state.query='Red'
+    expect(readElementPageControl(document.querySelector('[id="7"] a'))).toBeUndefined()
+})
+
+it('binds only the sole open stock filter menu to its mounted SearchBar', () => {
+    const {bar}=searchFixture(),filter=document.querySelector('[role=menuitemcheckbox]')
+    expect(readElementPageControl(filter)).toEqual({kind:'query',field:'filter_active'})
+    bar.searchBarDropdownState.isOpen=false
+    expect(readElementPageControl(filter)).toBeUndefined()
+    bar.searchBarDropdownState.isOpen=true
+    const other=document.querySelector('.o_search_bar_menu').cloneNode(true)
+    other.getClientRects=()=>[{}]
+    document.body.append(other)
+    expect(readElementPageControl(filter)).toBeUndefined()
+})

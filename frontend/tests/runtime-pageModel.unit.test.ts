@@ -262,6 +262,22 @@ describe('hydrateLinkFacts replaces the lossy display href/target with the live 
 })
 
 describe('hydrateFormFacts adds a bounded application field identifier', () => {
+  it('observes live searchbox text without inventing a form and redacts sensitive search controls', () => {
+    const fixture = document.createElement('div')
+    fixture.innerHTML = '<input role="searchbox" aria-label="Search"><input role="searchbox" name="password">'
+    document.body.append(fixture)
+    try {
+      const inputs = fixture.querySelectorAll('input')
+      inputs[0]!.value = 'Blue'
+      inputs[1]!.value = 'private'
+      const elements = elementsFrom('[0]<input role=searchbox />\n[1]<input role=searchbox name=password value=stale />', 1, redactor)
+      hydrateFormFacts(elements, {}, (_map, index) => inputs[index], redactor)
+      expect(elements[0]?.attrs.value).toBe('Blue')
+      expect(elements[0]?.attrs.form_scope).toBeUndefined()
+      expect(elements[1]?.attrs.value).toBeUndefined()
+      expect(elements[1]?.name).toBe('')
+    } finally {fixture.remove()}
+  })
   it('does not turn a named HTML form into the identity of an unnamed field', () => {
     const fixture = document.createElement('form')
     fixture.name = 'customer'

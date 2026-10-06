@@ -30,7 +30,9 @@ class Client:
             issued_at=p.issued_at,expires_at=p.expires_at)
     def call(self, model, method, args, kwargs=None):
         if method=='catalog':return copy.deepcopy(self.payload)
-        if method=='get_view':return {'arch':'<form><notebook><page string="Details"/></notebook></form>'}
+        if method=='get_view':return {'arch': (
+            '<search><field name="name"/><filter name="active" string="Active" domain="[]"/></search>'
+            if kwargs['view_type']=='search' else '<form><notebook><page string="Details"/></notebook></form>')}
         raise AssertionError(method)
 
 
@@ -117,3 +119,64 @@ class StandardReadActions(unittest.TestCase):
         after=observation(path='/odoo/inventory/transfers/7');after.page_route=None
         with self.assertRaises(ActionResultPending):
             self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None)
+
+    def test_search_text_is_local_input_not_an_applied_search(self):
+        el=ElementRef('e1','textbox','Search','input',1,{'page_control':'query','query_field':'search_name'})
+        before=observation(elements=(el,))
+        intent=self.intent('fill',{'ref':'e1','value':'Blue'},before)
+        permit=self.policy.admit(intent,context=self.ctx,checkpoint=lambda:None)
+        self.assertEqual(permit.effect,ActionEffect.READ_ONLY)
+        after=observation(revision=2,elements=(ElementRef('e1','textbox','Search','input',2,
+            {**el.attrs,'value':'Blue'}),))
+        self.assertTrue(self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None))
+        self.assertNotIn('search_name',after.page_read['query_fields'])
+        after.page_read['path']='/odoo/other'
+        self.assertFalse(self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None))
+        before.page_read['path']='/odoo/other'
+        with self.assertRaises(ActionAdmissionRefused):
+            self.policy.admit(self.intent('fill',{'ref':'e1','value':'Blue'},before),
+                              context=self.ctx,checkpoint=lambda:None)
+        before.page_read['path']=before.page_route
+        for attrs in ({**el.attrs,'form_scope':'dialog:editor'}, {**el.attrs,'query_field':'search_unread'}):
+            before.elements=[ElementRef('e1','textbox','Search','input',1,attrs)]
+            with self.assertRaises(ActionAdmissionRefused):
+                self.policy.admit(self.intent('fill',{'ref':'e1','value':'Blue'},before),context=self.ctx,checkpoint=lambda:None)
+
+    def test_search_choice_requires_fresh_exact_applied_query_and_preserves_prior_conditions(self):
+        elements=(ElementRef('e1','textbox','Search','input',1,
+            {'page_control':'query','query_field':'search_name','value':'Blue'}),
+            ElementRef('e2','link','Search Name for Blue','a',1,
+            {'page_control':'query','query_field':'search_name'}))
+        before=observation(elements=elements);before.page_read['query_fields']={'filter_active':self.policy._value_digest('false')}
+        intent=self.intent('click',{'ref':'e2'},before)
+        permit=self.policy.admit(intent,context=self.ctx,checkpoint=lambda:None)
+        with self.assertRaises(ActionResultPending):
+            self.policy.verify(permit,intent,None,observation=before,context=self.ctx,checkpoint=lambda:None)
+        after=observation(revision=2)
+        after.page_read['query_fields']={'search_name':self.policy._value_digest('Blue'),'filter_active':self.policy._value_digest('false')}
+        self.assertTrue(self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None))
+        for fields in ({'search_name':self.policy._value_digest('Red'),'filter_active':self.policy._value_digest('false')}, {'search_name':self.policy._value_digest('Blue'),'filter_active':self.policy._value_digest('true')}):
+            after.page_read['query_fields']=fields
+            self.assertFalse(self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None))
+
+    def test_filter_and_menu_have_distinct_verified_postconditions(self):
+        toggle=ElementRef('e1','button','Toggle Search Panel','button',1,
+            {'page_control':'query','query_field':'search_menu','aria-expanded':'false'})
+        before=observation(elements=(toggle,))
+        intent=self.intent('click',{'ref':'e1'},before)
+        permit=self.policy.admit(intent,context=self.ctx,checkpoint=lambda:None)
+        after=observation(revision=2,elements=(ElementRef('e1','button',toggle.name,'button',2,
+            {**toggle.attrs,'aria-expanded':'true'}),))
+        self.assertTrue(self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None))
+        filter=ElementRef('e2','menuitemcheckbox','Active','span',1,
+            {'page_control':'query','query_field':'filter_active'})
+        before.elements=[filter];before.page_read['query_fields']={'filter_active':self.policy._value_digest('false')}
+        intent=self.intent('click',{'ref':'e2'},before)
+        permit=self.policy.admit(intent,context=self.ctx,checkpoint=lambda:None)
+        after=observation(revision=2);after.page_read['query_fields']={'filter_active':self.policy._value_digest('true')}
+        self.assertTrue(self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None))
+        after.page_read['query_fields']={}
+        self.assertFalse(self.policy.verify(permit,intent,None,observation=after,context=self.ctx,checkpoint=lambda:None))
+        before.elements=[ElementRef('e2','button','Add Custom Filter','button',1,filter.attrs)]
+        with self.assertRaises(ActionAdmissionRefused):
+            self.policy.admit(self.intent('click',{'ref':'e2'},before),context=self.ctx,checkpoint=lambda:None)
