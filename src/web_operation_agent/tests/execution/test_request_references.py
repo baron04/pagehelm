@@ -59,6 +59,27 @@ class ReferenceContract(unittest.TestCase):
         req = parse_plan(plan(action=("r2",), kind="record", answers=(("r1",),)), prompt)
         self.assertEqual(("查客户电话",), req.answer_requests)
 
+    def test_none_redundant_action_refs_cannot_drop_any_question_or_grant_an_effect(self):
+        prompt = "查订单状态，解释审核权限"
+        args = {"action_refs": ["r1", "r2"], "action_kind": "none", "answers": [
+            {"refs": ["r1"], "kind": "data"}, {"refs": ["r2"], "kind": "knowledge"}]}
+        req = parse_plan(args, prompt)
+        self.assertEqual("", req.action_request)
+        self.assertEqual(("查订单状态", "解释审核权限"), req.answer_requests)
+        self.assertEqual(("data", "knowledge"), req.answer_kinds)
+        self.assertEqual(parse_plan({**args, "action_refs": []}, prompt), req)
+        for invalid in (
+            {**args, "answers": args["answers"][:1]}, {**args, "answers": []},
+            {**args, "action_refs": ["r999"]}, {**args, "action_refs": ["r1", "r1"]},
+            {**args, "action_refs": ["r0", "r1"]},
+            {**args, "action_kind": "record"},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                parse_plan(invalid, prompt)
+        prior = parse_plan(plan(action=("r0",), kind="draft", answers=()), prompt)
+        with self.assertRaises(ValueError):
+            revise_requirements(prior, req, committed=True)
+
     def evidence(self):
         evidence = TurnEvidence()
         typed = Origin("typed", "customer", "2026-10-06T00:00:00Z", "actor-visible customer")
@@ -107,6 +128,20 @@ class ReferenceContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             compile_finish({"outcome": "answered", "conclusions": [
                 {"evidence_ref": "record#1", "request_refs": ["a1"]}]}, req, evidence)
+
+    def test_only_pure_acted_discards_unrequested_claims_without_rendering_them(self):
+        req = parse_plan(plan(action=("r0",), kind="record", answers=()), "打开客户详情")
+        facts = [{"evidence_ref": "forged", "request_refs": ["r0"], "statement": "Invented fact"}]
+        self.assertEqual({"outcome": "acted"}, compile_finish(
+            {"outcome": "acted", "conclusions": facts}, req, self.evidence()))
+        mixed = parse_plan(plan(action=("r1",), kind="record", answers=(("r2",),)), "打开客户详情，查电话")
+        for requirements, args in (
+            (mixed, {"outcome": "acted", "conclusions": facts}),
+            (req, {"outcome": "answered", "conclusions": facts}),
+            (req, {"outcome": "acted", "conclusions": "Invented fact"}),
+        ):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                compile_finish(args, requirements, self.evidence())
 
 
 class ReferenceProduct(unittest.TestCase):
@@ -184,6 +219,31 @@ class ReferenceProduct(unittest.TestCase):
         self.assertNotIn("goto", _RemoteBrowser.instances[-1].actions)
         self.assertNotEqual(AgentTurnStatus.FINISHED, result.status)
         self.assertIn("未完成操作", result.user_answer)
+
+    def test_pure_operation_reports_real_receipt_and_discards_unrequested_prose(self):
+        result, _ = self.execute([
+            ("plan_task", plan(action=("r0",), kind="record", answers=())),
+            ("load_skill", {"skill_id": "fixture.companies-query"}), ("query_companies", {}),
+            ("goto", {"url": "/object/company/company-1"}),
+            ("finish", {"outcome": "acted", "conclusions": [{"evidence_ref": "made-up",
+                "request_refs": ["r0"], "statement": "Invented balance"}]})], prompt="打开公司 Acme")
+        self.assertEqual(AgentTurnStatus.FINISHED, result.status)
+        self.assertNotIn("Invented balance", result.user_answer)
+        self.assertEqual("navigation", result.agent.verified_answer["action"]["kind"])
+
+    def test_unrequested_prose_cannot_replace_missing_record_or_draft_effect(self):
+        for kind, route in (("record", "/companies"), ("draft", "/object/company/company-1")):
+            with self.subTest(kind=kind):
+                result, _ = self.execute([
+                    ("plan_task", plan(action=("r0",), kind=kind, answers=())),
+                    ("load_skill", {"skill_id": "fixture.companies-query"}), ("query_companies", {}),
+                    ("goto", {"url": route}),
+                    ("finish", {"outcome": "acted", "conclusions": [{"request_refs": ["r0"],
+                        "evidence_ref": "forged", "statement": "Filled and submitted"}]}),
+                    ("finish", {"outcome": "partial"})], prompt="打开公司 Acme" if kind == "record" else "预填公司名称 Acme")
+                self.assertNotEqual(AgentTurnStatus.FINISHED, result.status)
+                self.assertNotIn("Filled and submitted", result.user_answer)
+                self.assertIn("未完成操作", result.user_answer)
 
 
 if __name__ == "__main__":

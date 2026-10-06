@@ -22,6 +22,7 @@ to separate questions and operations. Read the whole request when a clause has a
 implicit subject. Instructions about how/why an operation works are knowledge
 questions, not permission to perform it. A record detail/tab is record, form prefill
 is draft, persisted change is mutation, general navigation is page.
+For questions only set action_kind=none and action_refs=[]; references belong in answers.
 Plan before page effects or completion. Correct a mistaken plan at most twice, using
 the existing rules for committed effects; never discard requested work after effects.
 finish is FLAT: outcome and conclusions. Each conclusion cites evidence_ref and the
@@ -31,6 +32,8 @@ version, coverage and answer bindings; do not send answer/answers_for/done/why.
 Page receipts cannot answer data/source questions. Partial/unable preserves observed
 actions and verified facts and explicitly reports the unsettled clauses. All actions
 remain subject to the application's policy, approval and postcondition checks.
+For a pure operation with no questions, finish with {"outcome":"acted"}; the server
+reports its verified action receipt. Do not add unrequested facts or page prose.
 """
 
 
@@ -51,7 +54,8 @@ def plan_tool(prompt: str) -> dict:
         "description": "Assign original USER REQUEST refs; do not retype text. This grants no authority. "
             "Use r0 for a question-only request; for mixed work preserve each clause and its implicit subject.",
         "parameters": {"type": "object", "additionalProperties": False,
-            "properties": {"action_refs": refs,
+            "properties": {"action_refs": {**refs,
+                "description": "Only requested operations. For action_kind=none use []; put question refs in answers."},
                 "action_kind": {"type": "string", "enum": ["none", "page", "record", "draft", "mutation"]},
                 "answers": {"type": "array", "maxItems": MAX_ANSWERS, "items": {
                     "type": "object", "additionalProperties": False,
@@ -75,9 +79,15 @@ def parse_plan(args: dict, prompt: str) -> TaskRequirements:
         return value
     action = selected(args["action_refs"])
     kind = args["action_kind"]
-    if (not isinstance(kind, str) or kind not in {"none", "page", "record", "draft", "mutation"}
-            or bool(action) != (kind != "none")):
-        raise ValueError("action_kind must match action_refs; use none for questions only")
+    if not isinstance(kind, str) or kind not in {"none", "page", "record", "draft", "mutation"}:
+        raise ValueError("action_kind must be none/page/record/draft/mutation")
+    if kind != "none" and not action:
+        raise ValueError("an operation needs nonempty action_refs; questions use action_kind=none and action_refs=[]")
+    # Explicit `none` has no operation. Validated refs redundantly copied into the
+    # action slot cannot add authority or remove a question. The answer groups
+    # below must still cover the complete original request on their own.
+    if kind == "none":
+        action = []
     answers = args["answers"]
     if not isinstance(answers, list) or len(answers) > MAX_ANSWERS:
         raise ValueError("answers must be bounded")
@@ -117,7 +127,8 @@ def finish_tool(session) -> dict:
         "uniqueItems": True, "items": {"type": "string", **({"enum": list(ids)} if ids else {})},
         "description": "Current question IDs this conclusion answers; [] for an evidence gap."}
     return {"type": "function", "function": {"name": "finish",
-        "description": "Report verified facts/actions. Cite references; the server builds the answer envelope. "
+        "description": "Report verified facts/actions. For a pure action without questions use only outcome=acted. "
+            "For requested facts cite references; the server builds the answer envelope. "
             "Source evidence needs statement and exact support. Unsettled work requires partial/unable.",
         "parameters": {"type": "object", "additionalProperties": False,
             "properties": {"outcome": {"type": "string", "enum": ["answered", "partial", "unable", "acted"]},
@@ -140,17 +151,24 @@ def compile_finish(args: dict, requirements: TaskRequirements, evidence) -> dict
     entries = args.get("conclusions", [])
     if not isinstance(entries, list) or len(entries) > answer_protocol.MAX_CONCLUSIONS:
         raise ValueError("invalid conclusions")
+    if args["outcome"] == "acted" and not requirements.answer_requests:
+        # Unrequested prose is not a deliverable. Ignore it completely and let the
+        # ordinary action/target/approval checks render only the actual receipt.
+        # Mixed tasks retain every requested answer and its evidence verification.
+        return {"outcome": "acted"}
     conclusions, bindings = [], {}
     for entry in entries:
         if (not isinstance(entry, dict) or set(entry) - {
                 "evidence_ref", "request_refs", "fields", "statement", "support"}
                 or not {"evidence_ref", "request_refs"} <= set(entry)):
-            raise ValueError("a conclusion needs evidence_ref and request_refs; source also needs statement/support")
+            raise ValueError("each conclusion takes evidence_ref, request_refs, optional fields, statement, support only; "
+                             "use request_refs, not refs/answer_request_refs, and support, not support_span")
         request_refs = entry["request_refs"]
         if (not isinstance(request_refs, list) or len(request_refs) > MAX_ANSWERS
                 or any(not isinstance(ref, str) or ref not in requirements.answer_ids for ref in request_refs)
                 or len(set(request_refs)) != len(request_refs)):
-            raise ValueError("use only the current plan's unique answer IDs")
+            raise ValueError("request_refs must use the current question IDs "
+                             + repr(list(requirements.answer_ids)) + "; r0/r1 are planning refs, not answer IDs")
         ref = entry["evidence_ref"]
         if not isinstance(ref, str):
             raise ValueError("evidence_ref must be a string")

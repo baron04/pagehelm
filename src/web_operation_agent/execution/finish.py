@@ -91,7 +91,12 @@ class FinishHandler:
         if self.request_protocol == "references" and self._task_requirements is not None:
             try:
                 from .request_references import compile_finish
+                original = args
                 args = compile_finish(args, self._task_requirements, self.evidence)
+                if (not self._task_requirements.answer_requests and args.get("outcome") == "acted"
+                        and original.get("conclusions")):
+                    self.ledger.append("unrequested_answer_ignored", step=step,
+                                       conclusion_count=len(original["conclusions"]))
             except (ValueError, EvidenceUnknown) as exc:
                 compile_error = exc
                 # Shape errors enter the same bounded repair path as evidence
