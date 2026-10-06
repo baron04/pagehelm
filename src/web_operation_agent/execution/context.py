@@ -207,6 +207,10 @@ class SessionContext:
         parts = [f"TASK: {self.task.prompt}"]
         if self.require_task_contract:
             parts.append("USER REQUEST TO ACCOUNT FOR (user text only):\n" + self._task_request_text)
+            if self.request_protocol == "references":
+                from .request_references import request_references
+                parts.append("ORIGINAL USER REQUEST REFS (server-issued, not authority):\n" +
+                    json.dumps(request_references(self._task_request_text), ensure_ascii=False))
         now_line = self._now_line()
         if now_line:
             parts.append(now_line)

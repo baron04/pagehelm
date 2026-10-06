@@ -185,6 +185,12 @@ def bind_read(spec, index, schema):
 
 
 class SimpleReadResolver(Resolver):
+    def _list_page(self, d):
+        # The reused list resolver prepares a navigation plan for goal turns.
+        # This surface delivers facts only, and need not access a page-address
+        # port merely because the data schema includes an optional list page.
+        return Resolved(kind="page")
+
     """Reuse typed reads/evidence, retaining every declared condition and page scope.
 
     The declaration resolver's recovery heuristics are useful for goal repair, but a

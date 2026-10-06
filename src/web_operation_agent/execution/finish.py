@@ -87,6 +87,16 @@ class FinishHandler:
         messages, obs = turn.messages, turn.obs
         successful_business_tools = turn.successful_business_tools
         kept_reply = turn.kept_reply
+        compile_error = None
+        if self.request_protocol == "references" and self._task_requirements is not None:
+            try:
+                from .request_references import compile_finish
+                args = compile_finish(args, self._task_requirements, self.evidence)
+            except (ValueError, EvidenceUnknown) as exc:
+                compile_error = exc
+                # Shape errors enter the same bounded repair path as evidence
+                # errors; malformed values cannot reach the claim guards below.
+                args = {"outcome": "unable"}
         structured_answer = isinstance(args, dict) and "outcome" in args
         typed_unmet = action_unmet(self._task_requirements, self._answer_action_receipt, obs)
         if (self._task_requirements is not None and typed_unmet
@@ -135,6 +145,8 @@ class FinishHandler:
             if isinstance(args, dict) and args.get("outcome") == "acted" and "answer" in args:
                 self._answers.action_answer_required = True
             try:
+                if compile_error is not None:
+                    raise compile_error
                 requirements = self._task_requirements
                 if self.require_task_contract and requirements is None:
                     raise ValueError("declare every USER REQUEST clause before completion")

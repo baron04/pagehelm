@@ -175,7 +175,8 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
         # record's page ("the customer of order S1"). The record this read found is
         # then only the way there, so the model, not this shortcut, decides what
         # to open.
-        if (session.deterministic_read_navigation and session._navigation_only
+        if (session.deterministic_read_navigation and not session.require_task_contract
+                and session._navigation_only
                 and sum(skill.read_only for skill in session._task_business_skills) == 1
                 and "goto" not in session.disabled_actions
                 and tool_result.navigation_target):

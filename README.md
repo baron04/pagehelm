@@ -798,20 +798,26 @@ in the current actor's page index. App-owned observation supplies the live targe
 the server authorizes it, and target changes invalidate the browser ref. Custom menu
 handlers, arbitrary buttons and submission remain unavailable. This adds menu admission,
 not a new planner or automatic fallback from the default goal executor.
-This pilot enables the application-neutral `require_task_contract` option (off by default
-for other step executors). Before application tools, the same Agent quotes the user's
-operation and answer clauses in `declare_task`, preserving the original request and
-using the bounded interpretation corrections described above.
-Question clauses may share their original subject; redeclaring the entire page-opening
-operation as an extra question is rejected before application tools, allowing the same Agent to repair.
-A complete finish must map
-each declared question to evidence selected by its validated conclusions and carry an
-observed receipt for the operation. Partial or unable outcomes preserve observed actions
-and identify missing clauses; answer repair cannot repeat page actions. This accounts for
-declared obligations, not semantic entailment: clause classification and evidence relevance
-still depend on the model, and one receipt cannot prove every operation inside a clause.
-The extra declaration uses the existing request/time allowance. Native Contacts tests
-exercise the same option without source access; this is not an accuracy improvement claim.
+This pilot enables application-neutral `require_task_contract` with
+`request_protocol="references"`. The server supplies stable references to the original
+request. The same Agent assigns them with `plan_task`, preserving implicit subjects
+without copying text into a second declaration. Read-only tools can run before planning;
+page effects and completion require a complete plan. Bounded interpretation corrections
+still invalidate target, draft and consent bindings. The default literal protocol remains
+available to existing integrations. In the reference protocol, `finish` takes flat
+conclusions with evidence and question references; the server derives evidence kinds,
+the answer envelope and coverage bindings, then applies the existing verifier. A complete
+finish needs every question covered and an observed operation receipt. Partial/unable
+preserves settled facts/actions and identifies missing clauses; answer repair cannot repeat
+actions. This is obligation accounting, not proof of semantic relevance or of every step
+inside one operation clause. Planning uses the same request/time allowance. The pilot also
+selects `DataReadTools(surface="simple")`: one flat `read_data` operation for record fields,
+lists, counts, sums and numeric extremes. It requires exact indexed fields, preserves all
+conditions and never lifts an empty page scope. Sum scope and total semantics are compiled
+on the server. Unsupported distinct counts stay unsupported. Default `resolve_data` remains
+available. Both surfaces use actor-bound reads and give evidence back to the same Agent;
+neither grants browser actions or writes. Tests include a source-independent Contacts
+REST report. These protocol changes alone do not establish a model accuracy improvement.
 Product step turns bound planning, planner repairs, execution and turn-level provider retries
 by one model-request allowance and monotonic deadline. Authenticated approval waits are
 excluded from that deadline; a reply arriving after it cannot trigger the next action.
