@@ -74,7 +74,7 @@ class ProductDeferredContextTests(unittest.TestCase):
             }]}}
 
     def execute(self, root, calls, *, source=None, channel=None, browser=UnavailableBrowser,
-                control=None, tools=None, steps=8):
+                control=None, tools=None, steps=8, prompt=None, config=None):
         chat = _Chat(calls)
         channel = channel or _Channel(observation=False)
         executor = AgentTurnExecutor(channel=channel, chat=chat,
@@ -83,8 +83,8 @@ class ProductDeferredContextTests(unittest.TestCase):
             config=AgentTurnConfig(supported_scope="Read data and guide the user; never submit.",
                 ledger_path=root / "audit.jsonl", defer_page_context=True, step_budget=steps,
                 source=source or SourceCapability.none(), skill_first=False,
-                plain_business_answer_min_page_actions=0))
-        message = {**_message(), "text": "What batch limit does the code define?"}
+                plain_business_answer_min_page_actions=0, **(config or {})))
+        message = {**_message(), "text": prompt or "What batch limit does the code define?"}
         with patch.object(turn, "RemoteBrowserClient", browser):
             result = executor.execute(message)
         events = [json.loads(line) for line in (root / "audit.jsonl").read_text().splitlines()]
@@ -254,6 +254,35 @@ class ProductDeferredContextTests(unittest.TestCase):
             self.assertEqual([], ArrivingBrowser.instances[-1].actions)
             event = next(e for e in events if e["event"] == "page_context_before_dispatch")
             self.assertFalse(event["dispatched"])
+
+    def test_first_target_keeps_conditions_across_lazy_page_acquisition(self):
+        from web_operation_agent.schemas import POTENTIALLY_WRITING_ACTIONS
+        class ArrivingBrowser(_RemoteBrowser):
+            def start(self):
+                self.channel.latest_observation_envelope = self.channel.envelope(
+                    1, "http://app.test/companies")
+                return super().start()
+            def execute(self, *args, **kwargs):
+                receipt = super().execute(*args, **kwargs)
+                if receipt.observation is not None:
+                    receipt.observation.page_facets = []
+                return receipt
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result, events, chat = self.execute(root, [
+                ("set_target", {"path": "/companies", "filters": ["Unpaid"]}),
+                ("goto", {"url": "/companies"}),
+                ("finish", {"outcome": "acted"}),
+                ("finish", {"outcome": "unable"}),
+            ], browser=ArrivingBrowser, control=ReadOnlyControl(),
+                config={"disabled_actions": POTENTIALLY_WRITING_ACTIONS - {"goto"}},
+                prompt="Open unpaid companies")
+            declared = [e for e in events if e["event"] == "target_state_declared"]
+            self.assertEqual(1, len(declared))
+            self.assertEqual(["Unpaid"], declared[0]["target"]["filters"])
+            self.assertEqual("agent_refused", result.terminal_reason)
+            self.assertTrue(any(e["event"] == "page_target_claim_refused" for e in events))
+            self.assertNotIn("tool was not dispatched", chat.messages[1][-1]["content"])
 
     def test_unknown_tool_does_not_start_browser_context(self):
         with tempfile.TemporaryDirectory() as tmp:

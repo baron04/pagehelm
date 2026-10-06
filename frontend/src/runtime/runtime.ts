@@ -20,7 +20,8 @@ import {
   type CommandOutcome, type NavigationExpectation,
 } from './executor'
 import {
-  absoluteUrl, armChildFrameNavigation, canonicalUrl, navigationWal, recoveryProvesNavigation,
+  absoluteUrl, armChildFrameNavigation, canonicalUrl, documentNavigation, navigationWal,
+  recoveryProvesNavigation,
 } from './navigation'
 import {Page, loadPageController, formFieldMatches, type FormHandoffField,
   type FormSubmitTarget, type PageControllerApi, type PageFacetReader,
@@ -1070,6 +1071,13 @@ export class EmbeddedWebRuntime {
     // stable iframe element first so a fast server response cannot escape observation.
     const signal = armChildFrameNavigation(navigation.frameElement)
     try {
+      // The successor document must have started after this exact claimed command reached
+      // dispatch. Persist before execution, which can destroy this JavaScript context.
+      executing.dispatched_at = Date.now()
+      if (this.stored.inFlight?.action_id === executing.action_id) {
+        this.stored.inFlight.dispatched_at = executing.dispatched_at
+      }
+      this._save()
       const result = await this._execute(action.command) as CommandOutcome | null
       if (result?.native_navigation_expected || this._mayNavigate(action.command)) {
         // What the expectation did not name is left to the wait's defaults: the top-level
@@ -1229,7 +1237,8 @@ export class EmbeddedWebRuntime {
     if (action.phase === 'prepared') {
       result = results.rejected(action, observation, 'runtime_replaced',
         'The previous runtime ended before the action was dispatched.')
-    } else if (await recoveryProvesNavigation(action, location.href, this.documentId)) {
+    } else if (await recoveryProvesNavigation(
+      action, location.href, this.documentId, documentNavigation())) {
       const guardExpiry = action.write_guard_expires_at_ms
       const receipt = results.receipt(action, {
         ok: true, code: '', detail: '', observation,

@@ -76,10 +76,13 @@ def finish_answer_tool(*, source: bool = False, skill: bool = False) -> dict:
         "Answer only what was asked: for a total, one aggregate is enough, without a table. "
         "Use outcome=acted for a completed navigation or approved mutation, optionally "
         "including additional evidence-backed conclusions in answer. "
-        "When the user asked to change data and the capability check found nothing in this "
-        "session that performs it, finish with outcome=unable and a single capability_gap "
-        "conclusion citing that check: do not search for the record first, do not answer with "
-        "a related query, and do not substitute a different change. "
+        "When a requested persistent change has no capability, use outcome=unable and a "
+        "single capability_gap for a standalone operation. The persistent capability check "
+        "does not disable an enabled manual-submit draft. For independently declared "
+        "questions accompanying an unavailable operation, retain their verified answers "
+        "with outcome/coverage=partial and the capability_gap; bind answers_for only to "
+        "the questions' selected non-gap refs. Never substitute an unrelated query for "
+        "the unavailable operation. "
         "Use outcome=unable without an answer if the available evidence cannot answer."),
         "parameters": {"type": "object", "additionalProperties": False,
                        "properties": {"outcome": {"type": "string", "enum": [
@@ -126,9 +129,12 @@ Use exactly the ref shown in the index, never a source label, record ID or tool 
 The server renders
 the facts you select. Empty read fields differ from unread fields. A zero-result query
 establishes absence only in its executed conditions. Missing tools do not establish absence:
-when the change the user asked for has no capability in this session, the capability check
-gives you a reference, and capability_gap citing it is the entire answer. Do not look the
-record up first and do not answer with what a related query returned.
+when a persistent operation has no capability in this session, the capability check
+gives you a reference. For a standalone operation, capability_gap citing it is the entire
+answer. It does not disable enabled manual-submit drafts. If independently declared
+questions accompany an unavailable operation, retain their verified facts with
+outcome=partial and coverage=partial, plus that gap; answers_for cites only their selected
+non-gap conclusion refs. Do not replace the unavailable operation with unrelated reads.
 For an explicit navigation request, navigate to the authorized route; page receipts still
 decide execution state. Use outcome=acted only after a successful navigation or approved
 mutation; the server supplies that action's actual result, without a model-written claim.
@@ -205,7 +211,8 @@ def _compute_hint(ref: str) -> str:
             "(or sum/average with a field), then cite the calc# ref its result names")
 
 
-def submit(turn: TurnEvidence, args: dict, *, ignored: list | None = None) -> dict | None:
+def submit(turn: TurnEvidence, args: dict, *, ignored: list | None = None,
+           allow_partial_capability_gap: bool = False) -> dict | None:
     """Resolve IDs, never accept record/value/scope assertions supplied by the model.
 
     `ignored` collects fields dropped rather than refused, for the caller's audit.
@@ -276,10 +283,13 @@ def submit(turn: TurnEvidence, args: dict, *, ignored: list | None = None) -> di
                 raise ConclusionRefused("a partial search cannot establish not_found")
             conclusions.append(NotFound(item.looked_for or item.collection, ref))
         elif kind == "capability_gap" and isinstance(item, CapabilityEvidence):
-            # A declined change is the whole answer or it is not one. Mixed with field values
-            # it becomes "I cannot do that, but here is what I found", which is the substitute
-            # answer this conclusion exists to replace.
-            if len(entries) != 1:
+            # Standalone changes cannot substitute an unrelated read for the missing
+            # operation. The task executor may explicitly admit a partial result
+            # for independently frozen questions accompanying that operation.
+            if len(entries) != 1 and not (allow_partial_capability_gap
+                    and args["outcome"] == "partial" and payload["coverage"] == "partial"
+                    and sum(isinstance(other, dict) and other.get("kind") == "capability_gap"
+                            for other in entries) == 1):
                 raise ConclusionRefused(
                     "a capability gap is the entire answer and carries no other conclusion")
             conclusions.append(CapabilityGap(ref))

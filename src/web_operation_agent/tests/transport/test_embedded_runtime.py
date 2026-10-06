@@ -15,7 +15,7 @@ from web_operation_agent.transport.gateway import EmbeddedGateway
 from web_operation_agent.transport.panel_view import panel_contract
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.transport import (RemoteBrowserClient, RemoteSessionChannel,
-                                        RemoteSessionRegistry)
+                                        RemoteSessionRegistry, TransportError)
 from web_operation_agent.schemas import ApprovalRequest
 from web_operation_agent.execution.session import LabApparatus, ServerAgentSession, TaskSpec
 from web_operation_agent.tests.support.execution import _Chat, _Control
@@ -1860,6 +1860,87 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_document_navigation_receipt_survives_history_canonicalization_without_retry(self):
+        """The application adds its default query before the successor Runtime starts."""
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Playwright is not installed")
+        _runtime_bytes()
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(allowed_origins=[app.origin])
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(app.origin + "/page1", wait_until="domcontentloaded")
+                remote = RemoteBrowserClient(channel, timeout_s=8)
+                remote.start()
+                first = remote.observe()
+                received_results = []
+                wait_for_result = channel.wait_for_result
+
+                def record_result(*args, **kwargs):
+                    result = wait_for_result(*args, **kwargs)
+                    received_results.append(result)
+                    return result
+
+                channel.wait_for_result = record_result
+                before_commands = remote.command_count
+                try:
+                    receipt = remote.execute("goto", {"url": "/directory"})
+                except TransportError as error:
+                    facts = page.evaluate("""() => {
+                      const runtime = window.__WOA_EMBEDDED_RUNTIME_STARTED__;
+                      const action = runtime?.stored?.inFlight;
+                      return {url: location.href, timeOrigin: performance.timeOrigin,
+                        navigation: performance.getEntriesByType('navigation').map(entry =>
+                          ({name:entry.name, type:entry.type, entryType:entry.entryType,
+                            redirectCount:entry.redirectCount, startTime:entry.startTime})),
+                        documentId: runtime?.documentId,
+                        action: action && {phase:action.phase, documentId:action.document_id,
+                          dispatchedAt:action.dispatched_at,
+                          expectedDigest:action.expected_url_digest,
+                          startedDigest:action.started_url_digest}};
+                    }""")
+                    self.fail(f"{error}; browser recovery facts: {facts}")
+                self.assertTrue(receipt.ok, receipt.error_detail)
+                self.assertTrue(receipt.navigated)
+                self.assertEqual(receipt.url_before, first.url)
+                self.assertEqual(receipt.url_after, app.origin + "/directory?group=mine")
+                self.assertEqual(receipt.args_echo, {"url": "/directory"})
+                self.assertEqual(remote.command_count - before_commands, 1)
+                self.assertEqual(app.directory_requests, 1)
+                self.assertEqual(page.evaluate(
+                    "performance.getEntriesByType('navigation')[0].name"),
+                    app.origin + "/directory")
+                result = received_results[-1]
+                self.assertEqual(result.action_id, receipt.command_id)
+                self.assertEqual(result.observation_after.caused_by_action_id, receipt.command_id)
+
+                # Loading another destination through an HTTP redirect is not this proof.
+                before_commands = remote.command_count
+                with self.assertRaises(TransportError):
+                    remote.execute("goto", {"url": "/directory-redirect"})
+                self.assertEqual(remote.command_count - before_commands, 1)
+                self.assertEqual(app.directory_redirect_requests, 1)
+                self.assertEqual(app.directory_requests, 2)
+                self.assertEqual(app.form_submissions, 0)
+                self.assertEqual(len([result for result in received_results
+                                      if result.status == "indeterminate"]), 1)
+                browser.close()
+        finally:
+            gateway.close()
+            app.close()
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_same_origin_iframe_form_navigation_is_observed_without_top_level_change(self):
         try:
             from playwright.sync_api import sync_playwright
@@ -1942,6 +2023,8 @@ class _FixtureApplication:
         self.runtime_url = ""
         self.runtime_config = {}
         self.page2_requests = 0
+        self.directory_requests = 0
+        self.directory_redirect_requests = 0
         self.iframe_result_requests = 0
         self.form_submissions = 0
         owner = self
@@ -2007,6 +2090,19 @@ class _FixtureApplication:
                 if self.path.startswith("/page2?"):
                     owner.page2_requests += 1
                     return self.page("<h1>Order details</h1><button>Done</button>")
+                if self.path == "/directory-redirect":
+                    owner.directory_redirect_requests += 1
+                    self.send_response(302)
+                    self.send_header("Location", "/directory")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if self.path == "/directory":
+                    owner.directory_requests += 1
+                    return self.page('''
+                      <script>history.replaceState({}, '', '/directory?group=mine')</script>
+                      <h1>Project directory</h1><button>My projects</button>
+                    ''')
                 if self.path == "/accounting/control/FindInvoices":
                     return self.page("""
                       <h1>Invoice workspace</h1>

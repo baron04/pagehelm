@@ -372,6 +372,70 @@ describe('a page action in an application that names a write guard', () => {
 })
 
 describe('a confirmed write guard across document navigation', () => {
+  it('durably correlates the claimed action before its dispatch can end the document', async () => {
+    const {runtime, action} = actingRuntime()
+    const state = runtime as unknown as Record<string, unknown>
+    const saved: ActionEnvelope[] = []
+    state._save = () => {
+      const inFlight = runtime.stored.inFlight
+      if (inFlight) saved.push(structuredClone(inFlight))
+    }
+    state._execute = async () => {
+      const last = saved.at(-1)!
+      expect(last.action_id).toBe(action.action_id)
+      expect(last.phase).toBe('claimed')
+      expect(last.dispatched_at).toBeTypeOf('number')
+      expect(last.dispatched_at).toBeLessThanOrEqual(Date.now())
+      return {success: true}
+    }
+    await runtime._handleAction(action as ActionEnvelope)
+  })
+
+  it.each(['exact-load', 'wrong-load', 'reload', 'redirect'])(
+    'recovers a canonicalized destination only from its exact document load: %s', async mode => {
+      const requested = 'https://app.test/projects', current = requested + '?group=mine'
+      const dispatchedAt = Date.now() - 1000
+      vi.stubGlobal('location', {href: current})
+      vi.stubGlobal('performance', {timeOrigin: dispatchedAt + 10,
+        getEntriesByType: () => [{entryType: 'navigation', startTime: 0,
+          name: mode === 'wrong-load' ? current : requested,
+          type: mode === 'reload' ? 'reload' : 'navigate',
+          redirectCount: mode === 'redirect' ? 1 : 0}]})
+      const {runtime, action, posts} = actingRuntime('/woa/page-guard')
+      const state = runtime as unknown as Record<string, unknown>
+      state.documentId = 'new-document'
+      const saved = {...action, phase: 'claimed', navigation_kind: 'goto', document_id: 'old-document',
+        dispatched_at: dispatchedAt, expected_url_digest: await urlDigest(requested),
+        started_url_digest: await urlDigest('https://app.test/home'),
+        started_url_display: 'https://app.test/home',
+        write_guard_path: '/woa/page-guard', write_guard_expires_at_ms: Date.now() + 60_000,
+        command: {...action.command, action: 'goto', args: {url: requested}}}
+      state.stored = {inFlight: saved}
+      const execute = vi.fn()
+      state._execute = execute
+      const observation = {session_id: 's', observation_id: 'o-2', page_epoch: 2,
+        caused_by_action_id: action.action_id,
+        observation: {url: current, elements: [], render_state: 'ready'}} as unknown as ObservationEnvelope
+      await runtime._recoverAfterNavigation(observation)
+      expect(execute).not.toHaveBeenCalled()
+      expect(posts.map(row => row.path)).toEqual(['/results'])
+      const result = posts[0]!.body as unknown as ActionResultEnvelope
+      expect(result.action_id).toBe(action.action_id)
+      expect(result.command_digest).toBe(action.command_digest)
+      expect(result.based_on_observation_id).toBe(action.based_on_observation_id)
+      expect(result.observation_after?.caused_by_action_id).toBe(action.action_id)
+      expect(result.status).toBe(mode === 'exact-load' ? 'completed' : 'indeterminate')
+      if (mode === 'exact-load') {
+        expect(result.receipt?.write_guard_held).toBe(true)
+        expect(result.receipt?.url_after).toBe(current)
+        expect(result.receipt?.args_echo).toEqual({url: requested})
+      } else {
+        expect(result.receipt).toBeNull()
+        expect(result.error_code).toBe('execution_state_unknown')
+      }
+      expect(JSON.stringify(result)).not.toContain('dispatched_at')
+    })
+
   it('persists only the confirmed window before dispatch, including a prepared replay', async () => {
     const {runtime, action} = actingRuntime('/woa/page-guard')
     const state = runtime as unknown as Record<string, unknown>

@@ -177,6 +177,11 @@ class FinishHandler:
                 if requirements is not None:
                     check_answer_evidence(requirements, bindings, self.evidence)
                 action_missing = bool(typed_unmet)
+                independent_partial_gap = bool(requirements is not None
+                    and requirements.action_request and requirements.answer_requests
+                    and args.get("outcome") == "partial"
+                    and any(isinstance(entry, dict) and entry.get("kind") == "capability_gap"
+                            for entry in conclusions or ()))
                 if requirements is not None and (
                         args.get("outcome") in {"acted", "answered"}
                         or (args.get("outcome") not in {"partial", "unable"}
@@ -192,7 +197,8 @@ class FinishHandler:
                 if (self._explicit_mutation_intent and claims_read_only_result
                         and self._approvals.business_counts["mutation_completed"] == 0
                         and isinstance(args, dict)
-                        and args.get("outcome") in ("answered", "partial")):
+                        and args.get("outcome") in ("answered", "partial")
+                        and not independent_partial_gap):
                     raise ValueError(
                         "a read-only result is only a mutation preflight for this explicit "
                         "write request; call the mutation tool so its authoritative "
@@ -238,7 +244,8 @@ class FinishHandler:
                     verified["action"] = self._answer_action_receipt
                 else:
                     ignored: list[str] = []
-                    verified = answer_protocol.submit(self.evidence, args, ignored=ignored)
+                    verified = answer_protocol.submit(self.evidence, args, ignored=ignored,
+                        allow_partial_capability_gap=independent_partial_gap)
                     if ignored:
                         self.ledger.append("answer_fields_ignored", step=step,
                                            fields=ignored[:12])
@@ -325,6 +332,21 @@ class FinishHandler:
                 ref_hint = (
                     " Current answer evidence refs: " + ", ".join(refs[:24]) + "."
                     if refs else " No answer evidence has been recorded yet.")
+                if self._task_requirements is not None:
+                    # Name the exact intersection instead of listing all read
+                    # fields again: query children are not selected conclusions,
+                    # and capability gaps cannot settle an independent question.
+                    entries = ((args.get("answer") or {}).get("conclusions")
+                               if isinstance(args, dict) and
+                                  isinstance(args.get("answer"), dict) else ())
+                    selected = tuple(dict.fromkeys(entry["evidence_ref"]
+                        for entry in entries or () if isinstance(entry, dict)
+                        and isinstance(entry.get("evidence_ref"), str)
+                        and entry.get("kind") not in {"capability_gap", "undetermined"}))
+                    ref_hint = (" answers_for evidence_refs must contain 1–12 refs selected "
+                        "by the non-gap conclusions of this answer, not their child "
+                        "fields or the capability check. Eligible selected refs: "
+                        + (", ".join(selected[:24]) or "none") + ".")
                 page_hint = ""
                 entries = ((args.get("answer") or {}).get("conclusions")
                            if isinstance(args, dict) and

@@ -60,8 +60,12 @@ def acquire_page(session, turn, call, name: str) -> _Next | None:
     turn.obs = obs
     session.ledger.append("page_context_acquired", step=turn.step, tool=name,
                           page_epoch=obs.epoch, page_url=obs.url)
-    if name == "observe":
-        return None  # The ordinary observation tool owns its evidence options.
+    if name in {"observe", "set_target"}:
+        # A target is a server-owned declaration, not a browser command. Binding
+        # context must not swallow its path/conditions and leave only navigation
+        # as the completion obligation. Its parser checks any observation refs
+        # against the freshly bound page; guessed element actions still stop here.
+        return None
     session.ledger.append("page_context_before_dispatch", step=turn.step,
                           tool=name, dispatched=False, side_effect_possible=False)
     return session._reply(turn, call,

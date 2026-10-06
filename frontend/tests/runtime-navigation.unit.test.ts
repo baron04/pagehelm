@@ -1,11 +1,13 @@
-import {describe, expect, it} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
 import {
-  absoluteUrl, canonicalUrl, isSameDocumentFragment, isSubmitControl, navigationWal,
+  absoluteUrl, canonicalUrl, documentNavigation, isSameDocumentFragment, isSubmitControl, navigationWal,
   recoveryProvesNavigation,
-  sameOriginUrl, scrubLegacyNavigationUrls, targetsCurrentPage,
+  sameOriginUrl, scrubLegacyNavigationUrls, targetsCurrentPage, urlDigest,
 } from '../src/runtime/navigation'
 import type {ActionEnvelope} from '../src/runtime/types'
+
+afterEach(() => { vi.unstubAllGlobals() })
 
 describe('URL helpers', () => {
   it('canonicalUrl drops the fragment: a hash change is not a page change', () => {
@@ -99,6 +101,58 @@ describe('recoveryProvesNavigation only trusts a digest match, not what the page
   it('an action that was never claimed proves nothing', async () => {
     const action = {phase: 'prepared', navigation_kind: 'link'} as unknown as ActionEnvelope
     expect(await recoveryProvesNavigation(action, 'https://app.test/next')).toBe(false)
+  })
+
+  it('proves an exact document load when the application subsequently adds a query', async () => {
+    const requested = 'https://app.test/projects', current = requested + '?group=mine'
+    const dispatchedAt = Date.now() - 1000
+    const action = {phase: 'claimed', navigation_kind: 'goto', document_id: 'old-document',
+      dispatched_at: dispatchedAt, expected_url_digest: await urlDigest(requested),
+      started_url_digest: await urlDigest('https://app.test/home')} as unknown as ActionEnvelope
+    const loaded = {url: requested, startedAt: dispatchedAt + 1}
+    expect(await recoveryProvesNavigation(action, current, 'new-document', loaded)).toBe(true)
+    expect(await recoveryProvesNavigation(action, current, 'old-document', loaded)).toBe(false)
+    expect(await recoveryProvesNavigation(action, current, '', loaded)).toBe(false)
+    expect(await recoveryProvesNavigation(action, current, 'new-document', null)).toBe(false)
+  })
+
+  it('does not turn a different loaded query, old load or missing dispatch into success', async () => {
+    const requested = 'https://app.test/projects?group=all', current = 'https://app.test/projects?group=mine'
+    const dispatchedAt = Date.now() - 1000
+    const action = {phase: 'claimed', navigation_kind: 'goto', document_id: 'old-document',
+      dispatched_at: dispatchedAt, expected_url_digest: await urlDigest(requested),
+      started_url_digest: await urlDigest('https://app.test/home')} as unknown as ActionEnvelope
+    for (const loaded of [{url: current, startedAt: dispatchedAt + 1},
+      {url: requested, startedAt: dispatchedAt - 1},
+      {url: requested, startedAt: Number.NaN},
+      {url: requested, startedAt: Date.now() + 60_000}]) {
+      expect(await recoveryProvesNavigation(action, current, 'new-document', loaded)).toBe(false)
+    }
+    expect(await recoveryProvesNavigation({...action, dispatched_at: undefined}, current,
+      'new-document', {url: requested, startedAt: dispatchedAt + 1})).toBe(false)
+    expect(await recoveryProvesNavigation(action, 'https://other.test/projects',
+      'new-document', {url: requested, startedAt: dispatchedAt + 1})).toBe(false)
+  })
+})
+
+describe('the browser document navigation entry', () => {
+  it('reads the loaded URL without storing it, and refuses redirects, reloads and history', () => {
+    const startedAt = Date.now() - 1000
+    const entry = {entryType: 'navigation', type: 'navigate', redirectCount: 0, startTime: 0,
+      name: 'https://app.test/projects?token=private'}
+    const getEntriesByType = vi.fn(() => [entry])
+    vi.stubGlobal('performance', {timeOrigin: startedAt, getEntriesByType})
+    expect(documentNavigation()).toEqual({url: entry.name, startedAt})
+    expect(getEntriesByType).toHaveBeenCalledWith('navigation')
+    for (const changed of [{...entry, redirectCount: 1}, {...entry, type: 'reload'},
+      {...entry, type: 'back_forward'}]) {
+      getEntriesByType.mockReturnValue([changed])
+      expect(documentNavigation()).toBeNull()
+    }
+    getEntriesByType.mockReturnValue([])
+    expect(documentNavigation()).toBeNull()
+    getEntriesByType.mockImplementation(() => { throw new Error('not available') })
+    expect(documentNavigation()).toBeNull()
   })
 })
 

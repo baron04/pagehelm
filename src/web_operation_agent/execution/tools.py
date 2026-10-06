@@ -16,7 +16,7 @@ from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
 from ..goal.read_schemas import DATA_READ_SCHEMAS, DATA_READ_REPLACED_TOOLS
 from ..goal.read_tools import DATA_READ_NAMES
 from .knowledge_tools import capability_check_available
-from .request_contract import DECLARE_TASK_TOOL, finish_schema
+from .request_contract import declaration_schema, finish_schema
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
                       LOAD_SKILL_TOOL, SOURCE_CANDIDATE_TOOL, SOURCE_NAV_TOOL,
                       SOURCE_TOOL, SOURCE_HISTORY_TOOL, SOURCE_READ_TOOL, SKILL_APP_TOOL, SKILL_ROUTE_TOOL,
@@ -33,7 +33,7 @@ class ToolSurface:
     def schemas(self) -> list[dict]:
         session = self._session
         if session.require_task_contract and session._task_requirements is None:
-            return [deepcopy(DECLARE_TASK_TOOL)]
+            return [declaration_schema(session)]
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in session.disabled_actions
                  or (tool["function"]["name"] == "click"
@@ -42,7 +42,7 @@ class ToolSurface:
                      and tool["function"]["name"] in session.action_admission.actions)]
         skill = bool(session._loaded_business_skill_ids)
         if session.require_task_contract:
-            tools += [deepcopy(DECLARE_TASK_TOOL)]
+            tools += [declaration_schema(session)]
         if session._finalizing:
             # Answer repair may need one missing typed read or a fresh snapshot.
             # Build the ordinary actor-scoped schemas below, then retain only reads.

@@ -186,8 +186,13 @@ def run_loop(session) -> RunResult:
 
     system = AGENT_SYSTEM
     if session.require_task_contract:
-        from .request_contract import TASK_SYSTEM
-        system += "\n" + TASK_SYSTEM
+        from .request_contract import declaration_system
+        system += "\n" + declaration_system(session)
+    else:
+        from .request_contract import form_execution_system
+        form_mode = form_execution_system(session)
+        if form_mode:
+            system += "\n" + form_mode
     if session.target_settlement_available():
         system += "\n" + TARGET_SYSTEM
     if session.page_answer_evidence:

@@ -44,7 +44,8 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
         "data/knowledge to UI or record/draft/mutation to a lesser outcome. A revision issues "
         "new answer IDs and invalidates target/draft/consent bindings. Runtime results decide "
         "what can be fulfilled; only evidence-backed answers can settle these questions. "
-        "Set action_kind from the requested result: record for a specific record's "
+        "Set action_kind from the requested result under this session's execution mode: "
+        "record for a specific record's "
         "detail or tab, page for general navigation/UI state, draft for form prefill, "
         "mutation for a persisted change, none for questions only. A missing record "
         "cannot be downgraded to page; this classification grants no authority."),
@@ -76,8 +77,9 @@ The declaration does not authorize writes or submission. Existing approval still
 Classify answer_kinds alongside the original clauses, before reading evidence. UI control
 labels and selected states (saw=ui_state) cannot settle data or knowledge questions. Read
 the actual content or report that question unanswered; do not downgrade it to UI after a result.
-Declare action_kind from the requested result, before feasibility is known. A record's
-detail/tab needs an application-verified rendered record; an empty lookup cannot make
+Declare action_kind from the requested result under the server-declared execution mode,
+before feasibility is known. A record's detail/tab needs an application-verified
+rendered record; an empty lookup cannot make
 a list page complete it. Recover its name/type, or report partial/unable. For a general
 page use page, for prefill use draft, for a persisted change use mutation, else none.
 For questions only, prefer one answer quoting the entire request. Questions about an
@@ -90,6 +92,51 @@ purpose into an extra UI question. Preserve actual accompanying questions such a
 counts, field values or eligibility. Copy literal clauses even when the original
 omits a repeated subject; do not insert that subject to make the quotation grammatical.
 """
+
+MANUAL_SUBMIT_TASK_SYSTEM = """
+THIS SESSION'S DEFAULT FORM EXECUTION MODE is manual-submit prefill. The application
+explicitly enables reviewed transient forms and this session cannot persist business
+changes. An ordinary request to create a record or change its field values asks for a
+prepared form in this mode: when declare_task is offered, use action_kind=draft even
+when the person did not add "do not submit" or "先别提交". Preserve the entire exact operation clause, record, values,
+conditions and every accompanying question. A missing or unsupported form does not
+change that declaration; report the unfinished draft instead of substituting navigation.
+An explicit request to save, submit or persist, or a non-form operation such as delete,
+send, post or confirm, still requires a persisted change (action_kind=mutation). Do not
+reinterpret it as a draft or claim persistence from a form handoff. Questions about an operation remain
+questions. Correct a mistaken initial mutation/draft interpretation only within the
+existing declare_task revision rules, before a verified effect; never lower an explicit
+persistence obligation. This default mode grants no permission: form entry and values
+still require the application's current actor checks and the existing fresh approval.
+The assistant never submits a prepared form; the final reply says it is ready for the
+person to review and submit manually.
+"""
+
+
+def manual_submit_form_mode(session) -> bool:
+    """Only an installed, enabled form port can establish a draft-only default.
+
+    Merely disabling writes cannot turn a persisted request into a draft. The mode is
+    presented before interpretation, not used to rewrite already-frozen obligations.
+    """
+    return (session.allow_form_prefill and session._application_form_tools is not None
+            and not session._approvals.mutations_enabled)
+
+
+def declaration_schema(session) -> dict:
+    result = deepcopy(DECLARE_TASK_TOOL)
+    if manual_submit_form_mode(session):
+        result["function"]["description"] += "\n" + MANUAL_SUBMIT_TASK_SYSTEM.strip()
+    return result
+
+
+def declaration_system(session) -> str:
+    return TASK_SYSTEM + form_execution_system(session)
+
+
+def form_execution_system(session) -> str:
+    return MANUAL_SUBMIT_TASK_SYSTEM if manual_submit_form_mode(session) else ""
+
 
 _CONNECTORS = re.compile(r"(?:(?:并且?|以及|和|然后|同时|顺便|还|再|也|请|帮我|麻烦)|"
                          r"\b(?:and|then|also|please)\b|\s)+", re.I)

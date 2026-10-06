@@ -22,6 +22,7 @@ from ..planning.source_read import SourceReadError
 from ..privacy import redact_sensitive_assignments
 from ..schemas import BROWSER_ACTIONS, PageObservation, digest
 from .prompts import CLARIFICATION_CHOICE_LIMIT, _assistant_call, _tool_result
+from .request_contract import manual_submit_form_mode
 from .runstate import RunResult, _Next, _Turn
 
 
@@ -380,10 +381,31 @@ def capability_check_feedback(session) -> str:
     # after a business read -- the one thing a turn declining a change must not do first.
     session._answer_mode = True
     held = session.evidence.get(ref)
+    draft_feedback = (
+        " This check concerns persistent writes only. The application separately enables "
+        "manual-submit form prefill in this session. For an ordinary create or field-change "
+        "request, keep the exact original clauses and prepare the form under the declared "
+        "execution mode. When declare_task is offered, use draft; correct a mistaken "
+        "initial mutation only before verified effects. An explicit save, submit, delete, "
+        "send, post or confirm request remains mutation. For a declared draft, continue "
+        "with authorized record reads, an exact current-page or registered route, and "
+        "find_form_entries/open_form_entry or describe_form/prepare_form/prefill_form as "
+        "offered. Current actor-bound application metadata must prove the requested entry "
+        "and fields; prefill still needs fresh approval and never submits. An unavailable "
+        "form leaves the draft unfinished, not a completed navigation. If the original "
+        "operation explicitly requires persistence, preserve it as unfinished and cite "
+        "this check for that missing write while retaining any independently verified "
+        "answers or useful handoff."
+        if manual_submit_form_mode(session) else "")
     if held.matches:
         return (f"CAPABILITY CHECK {ref}: registered capability candidates are "
                 + ", ".join(held.matches) + ". Use only one whose exact effect and "
-                "target fit the request; a capability_gap citing this check is refused.")
+                "target fit the request; a capability_gap citing this check is refused."
+                + draft_feedback)
+    if draft_feedback:
+        return (f"CAPABILITY CHECK {ref}: nothing installed for this actor performs the "
+                "persistent change. Do not claim it was saved or submitted."
+                + draft_feedback)
     return (f"CAPABILITY CHECK {ref}: nothing installed for this actor performs the change "
             "the user asked for. Do not substitute a different change or claim completion. "
             "You may follow an exact read-only route from a registered result or a live "

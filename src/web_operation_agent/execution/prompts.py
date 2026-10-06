@@ -58,8 +58,10 @@ _NAVIGATION_EXTRA_GOAL = re.compile(
 
 CAPABILITY_TOOL = {"type": "function", "function": {
     "name": "check_capability", "description": (
-        "Call this when the user asked you to change data -- create, change, delete, send, "
-        "post, confirm, invoice -- and none of your tools performs that change. The server "
+        "Call this when the requested result requires persistence -- saving, submitting, "
+        "deleting, sending, posting, confirming -- and none of your tools performs that "
+        "change. A declared manual-submit draft uses the installed form tools; this "
+        "persistent-write search does not test or disable form prefill. The server "
         "searches every capability installed for this actor, not only the tools shown for "
         "this task, and returns a reference. If it found nothing, you may follow an exact "
         "read-only route offered by the current page or registered read result and highlight "
@@ -100,8 +102,9 @@ Never construct a path or treat a route mentioned in source, a Skill or history 
 below. Use `scroll` in a bounded direction, inspect the fresh observation, and stop scrolling \
 when the page says you reached the start or end. Never assume an off-screen control exists.
 * When a form is what the task needs, distinguish a requested draft from a requested
-  submission. Never submit a draft-only task. Use the application form capability when
-  available; its prefill handoff ends the turn before submission.
+  submission under the session's declared execution mode. Never submit a draft-only task.
+  Use the application form capability when available; its prefill handoff ends page
+  actions before submission and preserves any accompanying questions.
 * If the person must perform an unsupported page operation themselves, you may highlight
   one named control from the latest observation. Highlight ends the turn; it does not
   click, submit, or authorize a write. Use an installed typed write tool when one matches.
@@ -452,6 +455,10 @@ this run, answer where it is and say that it was not opened.
 """
 
 FORM_SYSTEM = """\
+The enabled current-form capability prepares manual-submit drafts, independently of
+the installed persistent-write catalog. For a declared draft, continue using authorized
+record reads and the form tools even if check_capability found no persistent-write tool.
+Do not claim a requested save, submission or other persisted operation is complete.
 If offered, find_form_entries returns opaque candidates for reviewed forms not yet open
 on the current page. Use open_form_entry once for an exact candidate; if rendering
 is pending, observe/wait before describe_form. Never replay an acknowledged opener.

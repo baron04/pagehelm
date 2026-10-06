@@ -221,6 +221,23 @@ class TheConclusionStandsOnAnEmptySearch(unittest.TestCase):
         with self.assertRaises(Exception):
             self._submit(turn, [{"kind": "capability_gap", "evidence_ref": "nothing#1"}])
 
+    def test_only_explicit_partial_task_admission_can_preserve_independent_facts(self):
+        from web_operation_agent.tests.support.answer import _turn
+        turn = _turn()
+        turn.record(_capability(()))
+        args = {"outcome": "partial", "answer": {"version": 1, "coverage": "partial",
+            "conclusions": [{"kind": "field_value", "evidence_ref": "record#1"},
+                            {"kind": "capability_gap", "evidence_ref": "capability#1"}]}}
+        with self.assertRaises(ConclusionRefused):
+            answer_protocol.submit(turn, args)
+        verified = answer_protocol.submit(turn, args, allow_partial_capability_gap=True)
+        self.assertEqual(verified["coverage"], "partial")
+        self.assertEqual([c["kind"] for c in verified["conclusions"]], ["field_value", "capability_gap"])
+        for outcome, coverage in (("answered", "partial"), ("partial", "complete")):
+            with self.subTest(outcome=outcome, coverage=coverage), self.assertRaises(ConclusionRefused):
+                answer_protocol.submit(turn, {**args, "outcome": outcome,
+                    "answer": {**args["answer"], "coverage": coverage}}, allow_partial_capability_gap=True)
+
     def test_an_adapter_cannot_import_a_capability_claim(self):
         """`capture` is the adapter door; what this session can run is not an adapter's to say."""
         turn = TurnEvidence()

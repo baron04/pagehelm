@@ -14,11 +14,13 @@ from ..business.errors import (BusinessToolError, BusinessToolPermissionError,
                                BusinessToolRequestError, BusinessToolContractError,
                                BusinessToolIdentityError)
 from ..business.runtime import FormDraft
+from ..business.form_entries import _FormEntryPending
 from ..business.tools.contracts import matches_form_control
 from ..schemas import PageObservation
 from .routes import observation_is_at_route
 from .page_evidence import capture_page_snapshot
 from .runstate import _Next, _Turn
+from .data_tools import stopped_read
 from .budget import TurnBudget
 from ..modeling.spend import BudgetExhausted
 from ..state.identity import PrincipalError
@@ -75,7 +77,9 @@ def describe_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
     context, identity = _form_identity(session, turn.step, name)
     try:
         if session._form_entry_tools is not None:
-            session._form_entry_tools.accept_current(turn.obs, context=context)
+            ended = _accept_current_form_entry(session, turn, context)
+            if ended is not None:
+                return ended
         content = session._application_form_tools.describe(
             turn.obs, args, context=context)
     except BusinessToolPermissionError as exc:
@@ -99,6 +103,81 @@ def describe_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> 
         side_effect_possible=False, identity=identity)
     return session._reply(
         turn, call, "CURRENT FORM DESCRIPTOR (runtime fact; opaque bindings):\n" + encoded)
+
+
+def _accept_current_form_entry(session, turn: "_Turn", context) -> "_Next | None":
+    """Refresh an acknowledged opener's form before the same exact admission check.
+
+    A ready opener receipt still precedes the required independent form observation.
+    Obtaining that read is a fixed server substep, not another model decision. Only the
+    typed pending state permits these bounded reads; a failed admission never retries
+    the opener or transfers its receipt to another editor.
+    """
+    tools = session._form_entry_tools
+    refreshes = iter((("observe", {}), ("wait_for", {"ms": 100}),
+                      ("wait_for", {"ms": 250}), ("wait_for", {"ms": 500})))
+    while True:
+        try:
+            reference = tools.accept_current(turn.obs, context=context)
+            if reference:
+                session.ledger.append("form_entry_bound", step=turn.step,
+                    reference_digest=hashlib.sha256(reference.encode()).hexdigest(),
+                    page_epoch=turn.obs.epoch, submitted=False, persisted=False)
+            return None
+        except _FormEntryPending:
+            try:
+                action, args = next(refreshes)
+            except StopIteration:
+                raise BusinessToolRequestError(
+                    "the opened form is still loading after bounded fresh observations") from None
+        before = turn.obs
+        try:
+            if session._cancel_requested():
+                raise TurnCancelled("the person stopped before form observation")
+            budget = session._turn_budget
+            if budget is not None:
+                remaining = budget.check()
+            session._browser_attempts += 1
+            receipt = (session.browser.execute_with_budget(action, args, timeout_s=remaining)
+                       if budget is not None else session.browser.execute(action, args))
+        except (TurnCancelled, BudgetExhausted) as exc:
+            return stopped_read(session, turn, exc)
+        except TransportError as exc:
+            return _Next(session._finish(turn.result, turn.started_at, "transport_error",
+                                        str(exc), steps=turn.step))
+        write = session._writes.write_outcome(receipt, turn.step, action_may_write=False)
+        after = receipt.observation
+        fresh = bool(receipt.action == action and receipt.args_echo == args and receipt.ok
+                     and after is not None and after.epoch > before.epoch)
+        session.ledger.append("action_receipt", step=turn.step, tool=action,
+            command_id=receipt.command_id, after_tool="describe_form",
+            server_tool_dispatched=True, browser_action_dispatched=True,
+            side_effect_possible=False, write_attribution="unattributed",
+            ok=receipt.ok, error_code=receipt.error_code, navigated=receipt.navigated,
+            url_after=receipt.url_after, elapsed_ms=receipt.elapsed_ms,
+            write=write["state"], relogin=receipt.relogin,
+            page_epoch_before=before.epoch,
+            observation_epoch=after.epoch if after is not None else None,
+            fresh_observation=fresh)
+        if after is not None:
+            turn.obs = after
+        reason, detail = session._writes.settle_write(write)
+        if reason:
+            return _Next(session._finish(turn.result, turn.started_at, reason, detail,
+                                        steps=turn.step))
+        if receipt.error_code == "user_intervened":
+            return _Next(session._finish(turn.result, turn.started_at, "user_cancelled",
+                                        "the person took control", steps=turn.step))
+        try:
+            if session._cancel_requested():
+                raise TurnCancelled("the person stopped during form observation")
+            if budget is not None:
+                budget.check()
+        except (TurnCancelled, BudgetExhausted) as exc:
+            return stopped_read(session, turn, exc)
+        if not fresh:
+            return _Next(session._finish(turn.result, turn.started_at, "transport_error",
+                "form entry refresh did not return a successful fresh observation", steps=turn.step))
 
 
 def prepare_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":

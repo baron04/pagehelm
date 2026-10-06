@@ -221,17 +221,41 @@ export function scrubLegacyNavigationUrls(action: ActionEnvelope | null | undefi
   return clean
 }
 
+export interface DocumentNavigation {
+  url: string
+  startedAt: number
+}
+
+/** Browser-local load facts. Raw URLs never enter the outbox, receipt or server context. */
+export function documentNavigation(): DocumentNavigation | null {
+  try {
+    const entries = performance.getEntriesByType('navigation')
+    if (entries.length !== 1) return null
+    const entry = entries[0] as PerformanceNavigationTiming
+    if (entry.entryType !== 'navigation' || entry.type !== 'navigate' ||
+        entry.redirectCount !== 0 || entry.startTime !== 0 || !entry.name ||
+        !Number.isFinite(performance.timeOrigin) || performance.timeOrigin <= 0) return null
+    return {url: entry.name, startedAt: performance.timeOrigin}
+  } catch {
+    return null
+  }
+}
+
 /**
  * Whether the page now shows proves a claimed action navigated.
  *
  * Only a digest match counts. A form may POST back to the same URL, so for a form only a
  * new JavaScript document proves the submission committed -- without claiming its business
  * effect succeeded. A Runtime restart in the same document keeps the document id and cannot
- * forge that proof.
+ * forge that proof. A newly loaded document may change its address through history before
+ * the Runtime starts. Its browser navigation entry still names the document load; that
+ * exact digest can establish navigation, with a new document and dispatch-time correlation.
+ * The application's fresh rendered-page checks still decide whether the target is ready.
  */
 export async function recoveryProvesNavigation(action: ActionEnvelope | null | undefined,
                                                observationUrl: string,
-                                               currentDocumentId = ''): Promise<boolean> {
+                                               currentDocumentId = '',
+                                               loaded: DocumentNavigation | null = null): Promise<boolean> {
   const expected = String(action?.expected_url_digest || '')
   const before = String(action?.started_url_digest || '')
   const after = observationUrl ? await urlDigest(observationUrl) : ''
@@ -239,7 +263,19 @@ export async function recoveryProvesNavigation(action: ActionEnvelope | null | u
     return Boolean(action.document_id && currentDocumentId &&
       action.document_id !== currentDocumentId)
   }
-  return action?.phase === 'claimed' &&
-    ['goto', 'link', 'form-get'].includes(String(action?.navigation_kind)) &&
-    Boolean(expected) && expected !== before && after === expected
+  if (action?.phase !== 'claimed' ||
+      !['goto', 'link', 'form-get'].includes(String(action?.navigation_kind)) ||
+      !expected || expected === before) return false
+  if (after === expected) return true
+  const dispatchedAt = action.dispatched_at
+  if (!action.document_id || !currentDocumentId || action.document_id === currentDocumentId ||
+      typeof dispatchedAt !== 'number' || !Number.isFinite(dispatchedAt) || dispatchedAt <= 0 ||
+      !loaded || !Number.isFinite(loaded.startedAt) || loaded.startedAt < dispatchedAt ||
+      loaded.startedAt > Date.now()) return false
+  try {
+    if (new URL(loaded.url).origin !== new URL(observationUrl).origin) return false
+    return await urlDigest(loaded.url) === expected
+  } catch {
+    return false
+  }
 }

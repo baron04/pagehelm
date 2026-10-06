@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,10 +14,11 @@ from web_operation_agent.execution import product, turn
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
 from web_operation_agent.execution.prompts import _trim
 from web_operation_agent.execution.request_contract import (
-    TaskRequirements, action_unmet, parse_requirements, revise_requirements,
+    DECLARE_TASK_TOOL, MANUAL_SUBMIT_TASK_SYSTEM, TaskRequirements, action_unmet,
+    declaration_schema, declaration_system, parse_requirements, revise_requirements,
     finish_schema, missing_answers)
 from web_operation_agent.schemas import POTENTIALLY_WRITING_ACTIONS, ElementRef
-from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
+from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser, _principal
 from web_operation_agent.tests.execution.test_answer_product import _EvidenceExecutor
 from web_operation_agent.tests.support.answer import _answer
 from web_operation_agent.tests.support.business import _Chat, _skill
@@ -65,6 +67,27 @@ def answer(*, outcome="acted", omit=False, forged=False):
 
 
 class RequestContractShape(unittest.TestCase):
+    def test_draft_only_form_mode_is_present_before_declaration_without_changing_global_schema(self):
+        session = SimpleNamespace(allow_form_prefill=True, _application_form_tools=object(),
+            _approvals=SimpleNamespace(mutations_enabled=False))
+        original = deepcopy(DECLARE_TASK_TOOL)
+        scoped = declaration_schema(session)
+        self.assertIn(MANUAL_SUBMIT_TASK_SYSTEM.strip(), scoped['function']['description'])
+        self.assertIn(MANUAL_SUBMIT_TASK_SYSTEM, declaration_system(session))
+        self.assertIn('action_kind=draft', scoped['function']['description'])
+        self.assertIn('An explicit request to save, submit or persist',
+                      scoped['function']['description'])
+        self.assertEqual(original, DECLARE_TASK_TOOL)
+
+    def test_disabling_writes_alone_does_not_reclassify_persistence_as_draft(self):
+        for prefill, forms, writes in ((False, object(), False), (True, None, False),
+                                      (True, object(), True)):
+            session = SimpleNamespace(allow_form_prefill=prefill, _application_form_tools=forms,
+                _approvals=SimpleNamespace(mutations_enabled=writes))
+            with self.subTest(prefill=prefill, forms=bool(forms), writes=writes):
+                self.assertEqual(DECLARE_TASK_TOOL, declaration_schema(session))
+                self.assertNotIn(MANUAL_SUBMIT_TASK_SYSTEM, declaration_system(session))
+
     def test_all_user_clauses_are_required_and_application_text_cannot_replace_them(self):
         expected = TaskRequirements("打开公司详情", ("查询名称", "金额"), "record", ("data", "data"))
         self.assertEqual(parse_requirements(DECLARATION, REQUEST), expected)
@@ -294,6 +317,32 @@ class RequestContractProduct(unittest.TestCase):
         self.assertIn("Acme", result.user_answer)
         self.assertIn("已打开页面", result.user_answer)
         self.assertIn("未完成问答：金额", result.user_answer)
+
+    def test_unavailable_operation_retains_an_independent_answer_as_partial(self):
+        prompt = "公司的金额是多少？保存公司"
+        final = _answer("field_value", "call3-record#1")
+        final["outcome"] = "partial"
+        final["answer"]["coverage"] = "partial"
+        final["answer"]["conclusions"].append({"kind": "capability_gap", "evidence_ref": "capability#1"})
+        final["answer"]["answers_for"] = [{"request_ref": "a1", "evidence_refs": ["call3-record#1"]}]
+        result, _ = self.execute([("check_capability", {}), ("finish", final)],
+            channel=_Channel(principal=_principal()),
+            prompt=prompt, declaration={"action_request": "保存公司", "action_kind": "mutation",
+                "answer_requests": ["公司的金额是多少？"], "answer_kinds": ["data"]})
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertEqual(result.agent.verified_answer["coverage"], "partial")
+        self.assertIn("12.50 USD", result.user_answer)
+        self.assertIn("未完成操作：保存公司", result.user_answer)
+        self.assertNotIn("未完成问答", result.user_answer)
+
+    def test_binding_repair_names_only_eligible_selected_conclusions(self):
+        invalid = answer(outcome="partial")
+        invalid["answer"]["answers_for"][0]["evidence_refs"].append("call3-query#1")
+        result, chat = self.execute([("finish", invalid), ("finish", answer(outcome="partial"))])
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        feedback = chat.messages[-1][-1]["content"]
+        self.assertIn("Eligible selected refs: call3-record#2, call3-record#1", feedback)
+        self.assertNotIn("Eligible selected refs: call3-query", feedback)
 
     def test_no_action_receipt_prevents_a_complete_fact_answer_from_settling_the_operation(self):
         result, _ = self.execute([("finish", answer(outcome="answered")),

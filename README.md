@@ -500,6 +500,25 @@ agent.
   and source questions continue in the same Agent using reads only; missing clauses
   retain the observed handoff in a partial result. A pure verified draft hands over
   directly without another model call. Submission stays manual.
+  When `allow_form_prefill=True`, an application installs its reviewed current-form port,
+  and persistent mutations are disabled, the server presents manual-submit prefill as
+  the default form execution mode before task declaration. Ordinary requests to create
+  a record or change its fields can therefore declare a draft without adding "do not
+  submit". Exact operation clauses, target values and accompanying questions stay intact.
+  Explicit save/submit requests and non-form operations such as delete/send/confirm
+  remain persisted-change obligations. The persistent-write capability search does not
+  disable an enabled form path. Current actor, entry, field and fresh approval checks
+  still apply; an unavailable draft stays unfinished, and no handoff proves persistence.
+  These are scripted contract checks, not a measured model interpretation success rate.
+  Describing an acknowledged form opener obtains an independent fresh observation and
+  at most three short read-only waits within the shared deadline before the application
+  binds the exact editor; failed admission never reopens it. Lazy page acquisition retains
+  a first `set_target` declaration and its conditions. Independently declared questions
+  accompanying an unavailable operation can retain their verified answers in a partial
+  result. After full navigation, an exact browser document-load URL can recover the
+  correlated command when the application changes its address through history; a new
+  document and durable dispatch timing are required. Redirects remain unverified, and
+  application-owned arrival checks still decide whether the destination is ready.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
   enabled, deployment-bound structured facts plus a language-neutral local code-block index
   can answer source questions while retaining exact file, line, release, and byte-digest
