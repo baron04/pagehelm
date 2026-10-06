@@ -18,9 +18,12 @@ from .resolve.read_evidence import ReadEvidence, validate_number
 from .resolve.resolver import Resolver
 from .resolve.service import GoalData
 from .ports import capabilities_of
+from .read_schemas import DATA_READ_SCHEMAS, SIMPLE_DATA_READ_SCHEMAS
+from .read_simple import SimpleReadResolver, bind_read, compile_read
 from .spec import GoalSpec
 
 DATA_READ_NAMES = frozenset({"inspect_data", "resolve_data"})
+SIMPLE_DATA_READ_NAMES = frozenset({"inspect_data", "read_data"})
 _DELIVERABLE_KEYS = {"kind", "entity", "record", "via", "fields", "metric", "page",
                      "sort", "descending", "limit"}
 _METRIC_KEYS = {"op", "field", "filters", "page_filters", "group_by", "top", "total"}
@@ -79,12 +82,17 @@ class DataReadTools:
     delegated actor and immutable credential identity. The application owns this
     verification, including checking credential renewal during each read. The core
     checks principal, scope, cancellation and deadline around every port call.
+
+    ``surface="simple"`` exposes ``inspect_data`` and one-operation ``read_data``.
+    The default declaration surface preserves ``resolve_data`` callers. Hosts must
+    select this instance's ``names`` and ``schemas`` together.
     """
 
     data_for: Callable[[OperationContext, Callable[[], None]], GoalData]
     application_id: str
     required_scope: str
     today: date | None = None
+    surface: str = "declaration"
 
     def __post_init__(self):
         if (not callable(self.data_for) or not isinstance(self.application_id, str)
@@ -93,6 +101,16 @@ class DataReadTools:
             raise ValueError("data reads require an application, scope and actor-bound factory")
         if self.today is not None and type(self.today) is not date:
             raise TypeError("today must be a date or None")
+        if not isinstance(self.surface, str) or self.surface not in {"declaration", "simple"}:
+            raise ValueError("data read surface must be declaration or simple")
+
+    @property
+    def names(self):
+        return SIMPLE_DATA_READ_NAMES if self.surface == "simple" else DATA_READ_NAMES
+
+    @property
+    def schemas(self):
+        return SIMPLE_DATA_READ_SCHEMAS if self.surface == "simple" else DATA_READ_SCHEMAS
 
     def execute(self, name, args, *, context, checkpoint, user_request):
         try:
@@ -106,7 +124,7 @@ class DataReadTools:
             raise BusinessToolUnavailableError("the application data read is unavailable") from exc
 
     def _execute(self, name, args, *, context, checkpoint, user_request):
-        if name not in DATA_READ_NAMES:
+        if name not in self.names:
             raise BusinessToolRequestError("unknown deterministic data tool")
         if not isinstance(context, OperationContext):
             raise BusinessToolIdentityError("data reads require a verified operation identity")
@@ -123,7 +141,8 @@ class DataReadTools:
 
         # Validate the declaration before application dispatch. Metadata never grants
         # navigation, form entry, writes, source access or extra query capability.
-        spec = _declarations(args) if name == "resolve_data" else None
+        spec = (_declarations(args) if name == "resolve_data" else
+                compile_read(args) if name == "read_data" else None)
         if name == "inspect_data":
             _object(args, {"query", "entity"}, name)
             if (not isinstance(args.get("query"), str) or not args["query"].strip()
@@ -137,11 +156,12 @@ class DataReadTools:
         if not isinstance(index, ApplicationIndex):
             raise BusinessToolContractError("the application returned an invalid data index")
         if name == "inspect_data":
-            content = _inspect(index, args)
+            content = _inspect(index, args, read_tool="read_data" if self.surface == "simple" else "resolve_data")
             proof = ()
             reads = ()
         else:
-            spec = replace(spec, conventions=conventions_named(index.conventions, user_request),
+            spec = replace(spec, conventions=(() if name == "read_data" else
+                           conventions_named(index.conventions, user_request)),
                            language="zh" if any("\u3400" <= c <= "\u9fff" for c in user_request) else "en")
             offered = capabilities_of(data)
             for d in spec.deliverables:
@@ -157,7 +177,11 @@ class DataReadTools:
                 if missing_group(d, user_request, index):
                     raise BusinessToolRequestError("the request's explicit count grouping was not declared")
             evidence = ReadEvidence(context.binding_digest)
-            resolver = Resolver(data, index, data.schema(), today=self.today, evidence=evidence)
+            schema = data.schema()
+            if name == "read_data":
+                spec = bind_read(spec, index, schema)
+            resolver_type = SimpleReadResolver if name == "read_data" else Resolver
+            resolver = resolver_type(data, index, schema, today=self.today, evidence=evidence)
             resolution = resolver.resolve(spec)
             content = {"deliverables": [{
                 "kind": result.kind, "problem": result.problem, "repair": result.repair,
@@ -230,7 +254,7 @@ class _CheckedData:
         return call
 
 
-def _inspect(index, args):
+def _inspect(index, args, *, read_tool="resolve_data"):
     entity_key = args.get("entity", "")
     if entity_key:
         entity = index.entity(entity_key)
@@ -255,7 +279,7 @@ def _inspect(index, args):
             "total_entities": len(index.entities), "shown_entities": len(out),
             "sample_complete": len(out) == len(index.entities),
             "instructions": "Metadata only; this is a ranked bounded sample, not business data or proof of absence. "
-                "Use entity keys and indexed field labels in resolve_data; page keys select query scope only. "
+                f"Use entity keys and indexed field labels in {read_tool}; page keys select query scope only. "
                 "Ask again for a focused entity; omitted vocabulary is not an unsupported capability."}
 
 
