@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent_yudao.ui_source import UiSource
+from web_operation_agent_yudao.ui_source import UiSource, _literal_column_labels
 
 _PAGE = """<template>
   <el-table-column label="流程名称" prop="name" />
@@ -83,6 +83,7 @@ class UiSourceTests(unittest.TestCase):
         self.assertEqual(source.line_labels("bpm/processInstance"),
                          {"productId": "产品名称", "count": "数量"})
         self.assertEqual(view.columns, ("name",))
+        self.assertEqual(view.column_labels, (("name", "流程名称"),))
 
     def test_named_loader_and_function_api_resolve_the_main_list(self):
         page = """<template><el-table :data="projectList" /></template>
@@ -196,3 +197,12 @@ async function getList() {
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_column_vocabulary_requires_unique_literal_bindings(self):
+        source = '<el-table-column prop="totalPrice" label="含税金额" :formatter="formatter" />'
+        self.assertEqual(_literal_column_labels(source), (("totalPrice", "含税金额"),))
+        for attrs in ('prop="a" :label="caption"', ':prop="field" label="金额"',
+                      'prop="a" label="金额" v-bind="attrs"'):
+            self.assertEqual(_literal_column_labels(f'<el-table-column {attrs} />'), ())
+        self.assertEqual(_literal_column_labels(source + source.replace('totalPrice', 'taxPrice')), ())
+        self.assertEqual(_literal_column_labels(source + source.replace('含税金额', '税额')), ())

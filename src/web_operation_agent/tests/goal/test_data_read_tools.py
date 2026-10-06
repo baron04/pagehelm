@@ -107,6 +107,30 @@ class DataReadToolsTests(unittest.TestCase):
         return self.tools.execute("resolve_data", {"deliverables": list(deliverables)},
             context=ctx or context(), checkpoint=checkpoint, user_request=request)
 
+    def test_unsupported_scope_forms_refuse_before_binding_or_reading(self):
+        for declaration in (
+            {"kind": "list", "entity": "records", "via": "Customer A", "fields": ["Email"]},
+            {"kind": "aggregate", "entity": "records", "via": "Customer A", "metric": {"op": "count"}},
+            {"kind": "list", "entity": "records", "metric": {"op": "sum", "field": "Amount"}},
+        ):
+            with self.subTest(declaration=declaration), self.assertRaises(BusinessToolRequestError):
+                self.call(declaration)
+        self.assertEqual([], self.factory_calls)
+        self.assertEqual([], self.data.calls)
+
+    def test_list_retains_filter_conditions_and_separate_sum_reads_same_scope(self):
+        condition = {"field": "Status", "values": ["active"]}
+        result = self.call(
+            {"kind": "list", "entity": "records", "fields": ["Email"],
+             "metric": {"op": "count", "filters": [condition]}},
+            {"kind": "aggregate", "entity": "records", "metric": {
+                "op": "sum", "field": "Amount", "total": True, "filters": [condition]}})
+        queries = [e for e in result.evidence if isinstance(e, QueryEvidence)]
+        self.assertTrue(all(e.matched_count == 2 and e.count_exact for e in queries))
+        self.assertTrue(queries[0].covers_whole_scope)
+        self.assertEqual(queries[0].conditions, queries[1].conditions)
+        self.assertIn("24", [e.value for e in result.evidence if isinstance(e, ComputationEvidence)])
+
     def test_fact_has_exact_record_field_native_value_and_no_route(self):
         result = self.call({"kind": "fact", "entity": "records", "record": "Smaller",
                             "fields": ["Amount", "Email"]})

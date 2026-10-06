@@ -113,8 +113,17 @@ class YudaoHostConfig:
     native_navigation: bool = False
     #: Explicit read-only page-planning pilot; never selected by browser messages or fallback.
     executor_mode: str = "goal"
+    #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
+    native_action_effect_review: str = ""
 
     def __post_init__(self):
+        if (not isinstance(self.native_action_effect_review, str)
+                or len(self.native_action_effect_review) > 200
+                or self.native_action_effect_review and not self.native_action_effect_review.strip()):
+            raise ValueError("native action effects need a bounded deployment review")
+        if self.native_action_effect_review and (self.executor_mode != "page-agent"
+                or not self.native_navigation or self.native_read_policy is None or self.ui_source is None):
+            raise ValueError("native action effects require page-agent, navigation, UI routes and a reviewed guard")
         if self.native_filter_policies and self.native_read_policy is None:
             raise ValueError("native page filters require a reviewed read guard")
         if not isinstance(self.native_navigation, bool) or self.native_navigation and self.native_read_policy is None:
@@ -321,7 +330,8 @@ class YudaoHost:
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
                                            source=self.source, click_policy=app.native_tab_policy,
                                            form_prefill=self.form_review is not None or bool(self.create_reviews),
-                                           page_filtering=bool(self.filter_reviews))
+                                           page_filtering=bool(self.filter_reviews),
+                                           deterministic_reads=self.config.executor_mode == "page-agent")
             common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
@@ -344,6 +354,28 @@ class YudaoHost:
                         "uses one exact reviewed receipt, then describe/prepare/prefill and hand "
                         "over with submission left to the user. Arbitrary fill/select/click, "
                         "mutations and page filtering remain disabled.")
+                if self.config.native_action_effect_review:
+                    from .read_actions import NativeReadActions
+                    from .list_actions import NativeListActions
+                    policy = NativeReadActions(app.origin, app.goal_data, self.ui.records,
+                        review=self.config.native_action_effect_review, form_entries=app.ports.forms,
+                        list_actions=NativeListActions(self.form_tree, self.filter_reviews)
+                            if self.filter_reviews else None)
+                    scope = ("Open actor-catalog pages and exact actor-readable record details; "
+                        "select native record tabs and verify fresh rendered state after each step. "
+                        "Missing candidates are not proof of absence; clarify ambiguous targets. ")
+                    if self.form_review is not None or self.create_reviews:
+                        scope += ("For reviewed forms use find_form_entries, open_form_entry, "
+                            "describe_form, prepare_form and prefill_form, then hand over the "
+                            "highlighted submit control for manual submission. ")
+                    if self.filter_reviews:
+                        scope += ("Reviewed list query inputs, query buttons and pagination are "
+                            "available only where the deployment qualifies their effects. ")
+                    turn_config = replace(turn_config, click_policy=None, action_policy=policy,
+                        supported_scope=yudao_turn_config(run_dir,
+                            timeout_s=self.config.turn_timeout_s, source=self.source,
+                            deterministic_reads=True).supported_scope + " " + scope +
+                            "Other controls, arbitrary field entry and record mutations are unavailable.")
                 executor = AgentTurnExecutor(**common, config=turn_config)
             else:
                 executor = GoalTurnExecutor(**common, config=turn_config,
@@ -447,6 +479,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-filter-policy", type=Path, action="append", default=[])
     ap.add_argument("--native-guard-port", type=int, default=48093)
     ap.add_argument("--native-navigation", action="store_true")
+    ap.add_argument("--native-action-effect-review", default="")
     ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
@@ -469,7 +502,7 @@ def main(argv=None) -> int:
         native_navigation=a.native_navigation,
         native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
         native_filter_policies=tuple(a.native_filter_policy),
-        executor_mode=a.executor,
+        executor_mode=a.executor, native_action_effect_review=a.native_action_effect_review,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))
     host.server.start()

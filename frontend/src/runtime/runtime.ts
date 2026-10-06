@@ -1015,17 +1015,18 @@ export class EmbeddedWebRuntime {
       expected_url_digest: wal.expected_url_digest,
       expected_url_display: wal.expected_url_display,
       navigation_kind: wal.navigation_kind || navigation.kind,
+      write_guard_path: this.config?.pageWriteGuard || '',
+      write_guard_expires_at_ms: this.writeGuardUntil,
       document_id: prior?.document_id || this.documentId,
       runtime_instance_id: this.runtimeInstanceId}
-    if (!prior) {
-      const durable: Partial<ActionEnvelope> = {...executing}
-      delete durable.started_url_raw
-      this.stored.inFlight = {
-        ...durable,
-        command: {...executing.command, args: this.redactor.safeArgs(executing.command.args)},
-      } as ActionEnvelope
-      this._save()
-    }
+    // Refresh a same-runtime prepared replay with the window confirmed before this dispatch.
+    const durable: Partial<ActionEnvelope> = {...executing}
+    delete durable.started_url_raw
+    this.stored.inFlight = {
+      ...durable,
+      command: {...executing.command, args: this.redactor.safeArgs(executing.command.args)},
+    } as ActionEnvelope
+    this._save()
     return executing
   }
 
@@ -1229,11 +1230,16 @@ export class EmbeddedWebRuntime {
       result = results.rejected(action, observation, 'runtime_replaced',
         'The previous runtime ended before the action was dispatched.')
     } else if (await recoveryProvesNavigation(action, location.href, this.documentId)) {
+      const guardExpiry = action.write_guard_expires_at_ms
       const receipt = results.receipt(action, {
         ok: true, code: '', detail: '', observation,
         navigated: action.started_url_display !== observation.observation.url,
         elapsedMs: Date.now() - Number(action.started_at || 0),
         urlBefore: this.currentObservation?.observation.url || '',
+        writeGuardHeld: Boolean(this.config?.pageWriteGuard &&
+          action.write_guard_path === this.config.pageWriteGuard &&
+          typeof guardExpiry === 'number' && Number.isFinite(guardExpiry) &&
+          guardExpiry > Date.now()),
       }, this.redactor)
       result = results.completed(action, receipt, observation)
     } else {

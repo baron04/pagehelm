@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlsplit
 
 from web_operation_agent.execution.action_admission import (
-    ActionEffect, ActionPermit, ActionAdmissionRefused)
+    ActionEffect, ActionPermit, ActionAdmissionRefused, ActionResultPending)
 from .bound_data_reads import BoundDataReads
 from web_operation_agent.business.errors import BusinessToolIdentityError
 from .native_tabs import NativeNavigationPolicy, NativeTabPolicy
@@ -64,6 +64,34 @@ class NativeReadActions:
             raise ActionAdmissionRefused("invalid_target")
         return parsed.path
 
+    def _record_target(self, target, index, context, checkpoint):
+        bound = self._actor(context, checkpoint)
+        schema = bound.schema()
+        pages = {p.key:p for p in index.pages if p.entity
+                 and (page := schema.page(p.key)) is not None and page.opens_records}
+        matches = []
+        for key, template in self.record_routes.items():
+            if key not in pages or template.count("{id}") != 1:
+                continue
+            match = re.fullmatch(re.escape(template).replace(r"\{id\}", r"([1-9][0-9]*)"), target)
+            if match:
+                matches.append((key, pages[key].entity, match[1]))
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise ActionAdmissionRefused("invalid_target")
+        key, entity, identifier = matches[0]
+        spec = self.data._entities.get(entity)
+        if spec is None or not spec.has_get:
+            raise ActionAdmissionRefused("unreviewed")
+        # A list may remain readable when detail access is denied. Navigation must
+        # check the exact detail GET; the ordinary data read's list fallback is not proof.
+        row = bound._invoke(self.data._client.get, spec.get_path, id=identifier)
+        if (not isinstance(row, dict) or str(row.get("id")) != identifier
+                or not self.data._display(entity, row).strip()):
+            raise ActionAdmissionRefused("invalid_target")
+        return ["record", target, key]
+
     def admit(self, intent, *, context, checkpoint):
         before = intent.observation
         if self.form_open_actions is not None and self.form_open_actions.matches(intent):
@@ -93,6 +121,8 @@ class NativeReadActions:
             target = self._path(urljoin(before.url, intent.arguments["url"]))
             if target in pages:
                 expectation = ["page", target]
+            else:
+                expectation = self._record_target(target, index, context, checkpoint)
         else:
             element = next(e for e in before.elements if e.ref == intent.arguments["ref"])
             attrs = element.attrs
@@ -121,6 +151,10 @@ class NativeReadActions:
                 if not NativeTabPolicy(routes.values()).decide(before, element):
                     effect = ActionEffect.READ_ONLY
                     expectation = ["tab", attrs["id"], attrs["aria-controls"], element.name]
+            elif element.role == "link" and attrs.get("href"):
+                from urllib.parse import urljoin
+                target = self._path(urljoin(before.url, attrs["href"]))
+                expectation = self._record_target(target, index, context, checkpoint)
         if expectation is None:
             raise ActionAdmissionRefused("unreviewed")
         encoded = json.dumps([self.data._client.read_generation, expectation], separators=(",", ":"))
@@ -146,10 +180,18 @@ class NativeReadActions:
             return False
         after, before = observation, intent.observation
         path = self._path(after.url)
+        if expected[0] in {"page", "record"} and path == expected[1] and not after.page_route:
+            # The new document can report before Vue mounts its main route, with no
+            # loading mask yet. Retain the consumed receipt and wait for render proof;
+            # neither the URL nor this pending state can complete or replay navigation.
+            raise ActionResultPending()
         if after.page_route != path:
             return False
         if expected[0] == "page":
             return path == expected[1] and path in {p.key for p in index.pages}
+        if expected[0] == "record":
+            return (path == expected[1] and after.record_route == path
+                and self._record_target(path, index, context, checkpoint) == expected)
         if after.url != before.url or after.record_route != before.record_route:
             return False
         if expected[0] == "branch":
@@ -158,5 +200,7 @@ class NativeReadActions:
             return len(matches) == 1 and matches[0].attrs.get("aria-expanded") == str(expected[2]).lower()
         matches = [e for e in after.elements if e.role == "tab" and e.attrs.get("id") == expected[1]
                    and e.attrs.get("aria-controls") == expected[2] and e.name == expected[3]]
+        # selected_controls is a bounded toolbar supplement. Native tab state is
+        # already bound by its exact observed ID, owned panel and selected attribute.
         return (len(matches) == 1 and matches[0].attrs.get("aria-selected") == "true"
-                and expected[3] in after.selected_controls)
+                and matches[0].attrs.get("panel_ready") == "true")

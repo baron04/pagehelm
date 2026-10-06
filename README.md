@@ -756,6 +756,8 @@ The Yudao native host uses staged goal declarations for actor-bound business rea
 page requests, with bounded raw repository answers beside them. Its optional native-tab
 prototype requires a release-matched reviewed
 read policy, deployed UI routes and verified API ingress through its page-guard proxy.
+Unique literal list-column labels may alias existing readable API fields only when the
+list endpoint matches; dynamic/conflicting labels add no vocabulary, fields or permissions.
 The proxy fences earlier requests, blocks unreviewed requests during page operations,
 and preserves uncertain mutation admission and acknowledged windows across restart. It is an HTTP admission
 boundary, not a database sandbox; it pauses other browser sessions of the same actor.
@@ -778,7 +780,16 @@ Describe, prepare and prefill use the existing application-owned form contract;
 the Runtime checks entered values and highlights submission for the person. Accompanying
 declared questions continue in the same Agent with only read tools after the handoff,
 retaining its receipt in the final answer. Arbitrary clicks, unreviewed fields,
-submission and page filters remain disabled; source grants none of those permissions.
+submission remain disabled; source grants none of those permissions.
+A separate `--native-action-effect-review REVIEW_ID`, with `--native-navigation`, the
+reviewed read guard and deployed UI routes, opts this pilot into the application-owned
+menu/detail/tab effect policy. Exact record navigation requires an actor-readable detail
+GET, plus matching rendered page and record proof after arrival; a readable list cannot
+replace denied detail access. Reviewed form openers and optional reviewed list query/paging
+handlers use their existing contracts under the same policy. Without this explicit
+handler review those actions stay unavailable. Cross-document receipts retain the confirmed
+read-guard window only while its original expiry and guard path still match; missing or
+expired proof cannot establish completion.
 The pilot never runs automatically after a goal refusal. Its
 scripted isolated browser checks do not establish model accuracy or production readiness.
 With the separate `--native-navigation` opt-in and reviewed native read fence, the
@@ -791,8 +802,8 @@ This pilot enables the application-neutral `require_task_contract` option (off b
 for other step executors). Before application tools, the same Agent quotes the user's
 operation and answer clauses in `declare_task`, preserving the original request and
 using the bounded interpretation corrections described above.
-Each independent clause must quote a separate part of the request; redeclaring a page-opening
-clause as an extra question is rejected before application tools, allowing the same Agent to repair.
+Question clauses may share their original subject; redeclaring the entire page-opening
+operation as an extra question is rejected before application tools, allowing the same Agent to repair.
 A complete finish must map
 each declared question to evidence selected by its validated conclusions and carry an
 observed receipt for the operation. Partial or unable outcomes preserve observed actions

@@ -101,6 +101,9 @@ export interface ActionEnvelope {
   deadline: number
   command_digest: string
   command: ActionCommand
+  /** Browser-local confirmed guard bookkeeping, never a server policy or permission. */
+  write_guard_path?: string
+  write_guard_expires_at_ms?: number
   /** Navigation bookkeeping the Runtime keeps while a command is in flight. */
   [extra: string]: unknown
 }

@@ -1,4 +1,7 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
+import {urlDigest} from '../src/runtime/navigation'
+import type {ActionEnvelope, ActionResultEnvelope, ObservationEnvelope} from '../src/runtime/types'
+import {createRedactor} from '../src/runtime/redaction'
 import {EmbeddedWebRuntime} from '../src/runtime/runtime'
 import {
   WRITE_GUARD_TTL_S, closeWriteGuard, openWriteGuard, releaseWriteGuard,
@@ -362,5 +365,54 @@ describe('a page action in an application that names a write guard', () => {
     expect(state.userIntervened).toBe(true)
     expect(preventDefault).toHaveBeenCalledOnce()
     expect((state.highlightHandle as unknown)).toBeNull()
+  })
+})
+
+describe('a confirmed write guard across document navigation', () => {
+  it('persists only the confirmed window before dispatch, including a prepared replay', async () => {
+    const {runtime, action} = actingRuntime('/woa/page-guard')
+    const state = runtime as unknown as Record<string, unknown>
+    state.writeGuardUntil = Date.now() + 60_000
+    state.redactorInstance = createRedactor()
+    const prepare = state._prepare as (a: ActionEnvelope, o: ObservationEnvelope,
+      n: {url: string; kind: string}) => Promise<ActionEnvelope>
+    const observation = state.currentObservation as ObservationEnvelope
+    for (const expiry of [Date.now() + 60_000, Date.now() + 120_000]) {
+      state.writeGuardUntil = expiry
+      await prepare.call(runtime, action as ActionEnvelope, observation,
+        {url: 'https://app.test/next', kind: 'link'})
+      const wal = (state.stored as {inFlight: ActionEnvelope}).inFlight
+      expect(wal.write_guard_path).toBe('/woa/page-guard')
+      expect(wal.write_guard_expires_at_ms).toBe(expiry)
+      expect(wal.started_url_raw).toBeUndefined()
+    }
+  })
+
+  it('restores guard proof only for claimed navigation within the same unexpired window', async () => {
+    vi.stubGlobal('location', {href: 'https://app.test/next'})
+    for (const [path, expiry, phase, proven] of [
+      ['/woa/page-guard', Date.now() + 60_000, 'claimed', true],
+      ['/woa/other', Date.now() + 60_000, 'claimed', false],
+      ['/woa/page-guard', Date.now() - 1, 'claimed', false],
+      ['/woa/page-guard', undefined, 'claimed', false],
+      ['/woa/page-guard', Number.POSITIVE_INFINITY, 'claimed', false],
+      ['/woa/page-guard', Date.now() + 60_000, 'prepared', false],
+    ] as const) {
+      const {runtime, action} = actingRuntime('/woa/page-guard')
+      const state = runtime as unknown as Record<string, unknown>
+      state.redactorInstance = createRedactor()
+      const saved = {...action, phase, navigation_kind: 'link',
+        expected_url_digest: await urlDigest(location.href), started_url_digest: 'different',
+        write_guard_path: path, write_guard_expires_at_ms: expiry}
+      state.stored = {inFlight: saved}
+      let result!: ActionResultEnvelope
+      state._deliver = async (value: ActionResultEnvelope) => {result = value}
+      await runtime._recoverAfterNavigation({session_id: 's', observation_id: 'o-2', page_epoch: 2,
+        observation: {url: location.href, elements: []}} as unknown as ObservationEnvelope)
+      expect(result.receipt?.write_guard_held === true).toBe(proven)
+      expect(JSON.stringify(result)).not.toContain('write_guard_expires_at_ms')
+      expect(JSON.stringify(result)).not.toContain('write_guard_path')
+      if (phase === 'prepared') expect(result.status).toBe('rejected')
+    }
   })
 })

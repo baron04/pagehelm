@@ -143,6 +143,34 @@ class NativeHostTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reviewed native read policy"):
             replace(self.config, executor_mode="page-agent")
 
+    def test_reviewed_effect_policy_is_explicit_and_uses_the_real_session_ports(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.read_actions import NativeReadActions
+        self.assertEqual(self.config.native_action_effect_review, "")
+        for review in (" ", [], "r" * 201):
+            with self.assertRaises(ValueError):
+                replace(self.config, native_action_effect_review=review)
+        with self.assertRaises(ValueError):
+            replace(self.config, native_action_effect_review="review")
+        self.config = replace(self._native_form_config(), executor_mode="page-agent",
+            native_navigation=True, native_action_effect_review="synthetic-deployment-review")
+        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+                records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
+                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy"):
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "reviewed-effects")
+            executor = host._sessions[("1", "1")].session.runner.executor
+            policy = executor.config.action_policy
+            self.assertIsInstance(policy, NativeReadActions)
+            self.assertEqual(policy.review, "synthetic-deployment-review")
+            self.assertIsNone(executor.config.click_policy)
+            self.assertIsNotNone(policy.form_open_actions)
+            self.assertIn("inspect_data", executor.config.supported_scope)
+            self.assertNotIn("Prefer resolve_goal_candidates", executor.config.supported_scope)
+            self.assertIn("manual submission", executor.config.supported_scope)
+            self.documents.assert_not_called()
+            self.chat.return_value.complete.assert_not_called()
+
     def test_page_agent_reuses_the_actor_session_and_only_reviewed_form_openers(self):
         from web_operation_agent.execution.product import AgentTurnExecutor
         from web_operation_agent.schemas import ElementRef, PageObservation

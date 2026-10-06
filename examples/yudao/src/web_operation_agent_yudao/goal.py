@@ -553,6 +553,14 @@ class YudaoGoalData:
         # The list's column order first, then the rest as the API lists them.
         order = {c: i for i, c in enumerate(columns)}
         fields.sort(key=lambda f: order.get(f.key, order.get(links.get(f.key, ""), len(order))))
+        if entity.view and entity.view.endpoint.lstrip("/") == entity.list_path.lstrip("/"):
+            labels = dict(entity.view.column_labels)
+            # Labels are optional vocabulary for existing readable keys, not new fields
+            # or units. Do not shadow another API field's exact label.
+            fields = [replace(f, aliases=(labels[f.key],)) if f.key in labels
+                and labels[f.key] != f.label
+                and not any(other.key != f.key and other.label == labels[f.key] for other in fields)
+                else f for f in fields]
         entity.links = links
         # A record is called by its name or number; without either, by the first text
         # its list shows (a leave request by its reason).

@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from web_operation_agent.execution.action_admission import (
-    ActionAdmission, ActionAdmissionRefused, ActionPermit, ActionEffect)
+    ActionAdmission, ActionAdmissionRefused, ActionPermit, ActionEffect, ActionResultPending)
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.business.errors import BusinessToolIdentityError
@@ -14,6 +14,7 @@ from web_operation_agent_yudao.client import YudaoClient
 from web_operation_agent_yudao.goal import YudaoGoalData
 from web_operation_agent_yudao.read_actions import NativeReadActions
 from .test_goal import _Client, DOCS
+from copy import deepcopy
 
 
 class NativeReadActionTests(unittest.TestCase):
@@ -23,13 +24,21 @@ class NativeReadActionTests(unittest.TestCase):
         self.user = {"id": 1, "deptId": 10}
         def request(method, path, **kwargs):
             self.assertEqual("GET", method)
-            result = fixture.get(path, **(kwargs.get("params") or {}))
+            if path == "crm/customer/get":
+                identifier = int(kwargs["params"]["id"])
+                result = {"id": identifier, "name": "Synthetic detail"}
+            else:
+                result = fixture.get(path, **(kwargs.get("params") or {}))
             if path == "system/auth/get-permission-info":
                 result = {**result, "user": self.user}
             return 0, {"code": 0, "data": result}
         self.addCleanup(patch.stopall)
         patch.object(self.client, "_request", side_effect=request).start()
-        data = YudaoGoalData(self.client, DOCS)
+        self.fixture = fixture
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/crm/customer/get"] = docs["paths"]["/admin-api/crm/contract/get"]
+        self.request = request
+        data = YudaoGoalData(self.client, docs)
         self.policy = NativeReadActions("https://fixture.test", data,
             {"/crm/customer": "/crm/customer/detail/{id}"}, review="synthetic-handler-effect-review")
         self.runtime = ActionAdmission(self.policy, "yudao")
@@ -69,12 +78,19 @@ class NativeReadActionTests(unittest.TestCase):
         attrs = {"id": "tab-payments", "aria-controls": "pane-payments", "aria-selected": "false"}
         tab = ElementRef("e1", "tab", "回款", "div", 1, attrs)
         before = self.page(path="/crm/customer/detail/1", elements=(tab,))
-        chosen = replace(tab, epoch=2, attrs={**attrs, "aria-selected": "true"})
-        after = self.page(2, path="/crm/customer/detail/1", elements=(chosen,), selected=("回款",))
+        chosen = replace(tab, epoch=2, attrs={**attrs, "aria-selected": "true", "panel_ready": "true"})
+        after = self.page(2, path="/crm/customer/detail/1", elements=(chosen,), selected=())
         self.settle(before, after)
         self.runtime = ActionAdmission(self.policy, "yudao")
         with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
             self.settle(before, replace(after, record_route="/crm/customer/detail/2"))
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+            self.settle(before, replace(after, elements=[replace(chosen, attrs=attrs)], selected_controls=["回款"]))
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+            self.settle(before, replace(after, elements=[replace(chosen,
+                attrs={**chosen.attrs, "panel_ready": "false"})]))
 
     def test_identity_or_credential_drift_cannot_verify_acknowledged_action(self):
         intent, permit = self.runtime.prepare("goto", {"url": "/crm/customer"}, self.page(),
@@ -125,3 +141,58 @@ class NativeReadActionTests(unittest.TestCase):
         with self.assertRaises(BusinessToolIdentityError):
             self.runtime.prepare('click',{'ref':'e1'},self.page(elements=(opener,)),
                                  context=self.context,checkpoint=lambda:None)
+
+    def test_exact_record_get_and_render_proof_bind_navigation(self):
+        for identifier in (5, 6):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            route = f"/crm/customer/detail/{identifier}"
+            self.settle(self.page(), self.page(2, path=route), "goto", {"url": route})
+        for changed in (self.page(2, path="/crm/customer"),
+                        replace(self.page(2, path="/crm/customer/detail/5"), record_route=""),
+                        self.page(2, path="/crm/customer/detail/6")):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            with self.subTest(changed=changed.url), self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+                self.settle(self.page(), changed, "goto", {"url": "/crm/customer/detail/5"})
+
+    def test_denied_detail_does_not_fall_back_to_readable_list(self):
+        from web_operation_agent.goal.data import DataRefused
+        def denied(method, path, **kw):
+            if path == "crm/customer/get":
+                raise DataRefused("synthetic denied detail", permission_denied=True)
+            return self.request(method, path, **kw)
+        with patch.object(self.client, "_request", side_effect=denied), self.assertRaises(DataRefused):
+            self.runtime.prepare("goto", {"url": "/crm/customer/detail/5"}, self.page(),
+                                 context=self.context, checkpoint=lambda: None)
+        self.assertNotIn("crm/customer/page", [p for p, _ in self.fixture.calls])
+
+    def test_record_route_must_be_unique_and_match_returned_identifier(self):
+        self.policy.record_routes["/crm/contract"] = "/crm/customer/detail/{id}"
+        with self.assertRaises(ActionAdmissionRefused):
+            self.runtime.prepare("goto", {"url": "/crm/customer/detail/5"}, self.page(),
+                                 context=self.context, checkpoint=lambda: None)
+        del self.policy.record_routes["/crm/contract"]
+        def wrong(method, path, **kw):
+            if path == "crm/customer/get":
+                return 0, {"code": 0, "data": {"id": 6, "name": "Wrong record"}}
+            return self.request(method, path, **kw)
+        with patch.object(self.client, "_request", side_effect=wrong), self.assertRaises(ActionAdmissionRefused):
+            self.runtime.prepare("goto", {"url": "/crm/customer/detail/5"}, self.page(),
+                                 context=self.context, checkpoint=lambda: None)
+
+    def test_route_mounting_waits_on_the_consumed_receipt_without_replaying_navigation(self):
+        before=self.page()
+        args={"url":"/crm/customer"}
+        intent,permit=self.runtime.prepare("goto",args,before,context=self.context,checkpoint=lambda:None)
+        self.runtime.consume(intent,permit,before,context=self.context,checkpoint=lambda:None)
+        pending=replace(self.page(2,path="/crm/customer"),page_route="")
+        receipt=ActionReceipt(1,"command","goto",args,True,url_before=before.url,
+            url_after=pending.url,observation=pending,write_guard_held=True)
+        with self.assertRaises(ActionResultPending):
+            self.runtime.verify(intent,permit,receipt,context=self.context,checkpoint=lambda:None)
+        fresh=self.page(3,path="/crm/customer")
+        settlement=ActionReceipt(1,"observe","wait_for",{"ms":300},True,
+            url_before=fresh.url,url_after=fresh.url,observation=fresh,write_guard_held=True)
+        self.runtime.verify(intent,permit,receipt,settlement=settlement,
+            context=self.context,checkpoint=lambda:None)
+        with self.assertRaisesRegex(ActionAdmissionRefused,"already_consumed"):
+            self.runtime.consume(intent,permit,before,context=self.context,checkpoint=lambda:None)

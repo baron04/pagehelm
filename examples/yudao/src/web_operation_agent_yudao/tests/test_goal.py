@@ -140,6 +140,23 @@ class _Client:
 
 
 class YudaoGoalDataTests(unittest.TestCase):
+    def test_ui_alias_keeps_api_field_and_requires_matching_endpoint(self):
+        for endpoint, labels, alias in (
+            ("/crm/contract/page", (("totalPrice", "含税金额"),), ("含税金额",)),
+            ("/crm/other/page", (("totalPrice", "含税金额"),), ()),
+            ("/crm/contract/page", (("totalPrice", "合同名称"),), ())):
+            ui = UiSource(views={"crm/contract/index": ListView(endpoint=endpoint, column_labels=labels)})
+            data = YudaoGoalData(_Client(), DOCS, ui=ui)
+            entity = data.schema().entity("crm/contract")
+            if entity is None:  # A conflicting endpoint cannot invent a readable entity.
+                self.assertNotEqual(endpoint, "/crm/contract/page")
+                continue
+            field = next(f for f in entity.fields if f.key == "totalPrice")
+            self.assertEqual(field.label, "合同金额")
+            self.assertEqual(field.aliases, alias)
+            self.assertEqual(set(f.key for f in entity.fields),
+                set(f.key for f in YudaoGoalData(_Client(), DOCS).schema().entity("crm/contract").fields))
+
     def test_exact_local_timestamp_does_not_expand_to_a_day(self):
         rows = [dict(CONTRACTS[1][0], id=100+i, name=f"Synthetic {i}", orderDate=moment)
                 for i, moment in enumerate(("2026-09-30T23:59:59", "2026-09-30T12:00:00", "2026-10-01T00:00:00", None))]

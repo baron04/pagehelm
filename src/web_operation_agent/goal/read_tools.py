@@ -56,9 +56,19 @@ def _declarations(args):
             for condition in filters:
                 _object(condition, _FILTER_KEYS, "condition")
     try:
-        return GoalSpec.from_json(args)
+        spec = GoalSpec.from_json(args)
     except (ValueError, TypeError) as exc:
         raise BusinessToolRequestError(str(exc)) from exc
+    for i, item in enumerate(spec.deliverables):
+        if item.via and not item.record and not (item.kind == "fact" and i > 0
+                and spec.deliverables[i-1].kind == "list"):
+            raise BusinessToolRequestError("via names a link from a named record or the preceding "
+                "list, not a customer/owner restriction. Use metric.filters with the indexed "
+                "owner/link field and its exact record name. No scope was read or broadened.")
+        if item.kind == "list" and item.metric and item.metric.op == "sum":
+            raise BusinessToolRequestError("a list does not deliver a sum; declare a separate "
+                "aggregate with op=sum and the same scope, or compute on a complete list")
+    return spec
 
 
 @dataclass(frozen=True)

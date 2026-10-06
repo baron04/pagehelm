@@ -51,6 +51,8 @@ class ListView:
     endpoint: str = ""
     #: Literal query arguments that the page supplies to that endpoint.
     fixed_params: tuple[tuple[str, object], ...] = ()
+    #: Only unique literal prop/label bindings from this list component.
+    column_labels: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,7 @@ class UiSource:
         for path in sorted((src / "views").rglob("index.vue")):
             text = path.read_text(encoding="utf-8")
             columns = tuple(dict.fromkeys(_COLUMN.findall(text)))
+            labels = _literal_column_labels(text)
             dicts = {row: consts[name] for name, row in _DICT_TAG.findall(text) if name in consts}
             endpoint, fixed_params = _list_endpoint(src, text)
             if not endpoint:
@@ -121,12 +124,13 @@ class UiSource:
                         endpoint, fixed_params = _list_endpoint(src, child_text)
                         if endpoint:
                             columns = tuple(dict.fromkeys(_COLUMN.findall(child_text))) or columns
+                            labels = _literal_column_labels(child_text)
                             dicts = {row: consts[name] for name, row in _DICT_TAG.findall(child_text)
                                      if name in consts} or dicts
             if columns or dicts or endpoint:
                 key = path.relative_to(src / "views").with_suffix("").as_posix()
                 views[key] = ListView(columns=columns, dicts=dicts, endpoint=endpoint,
-                                      fixed_params=fixed_params)
+                                      fixed_params=fixed_params, column_labels=labels)
         router = (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")
         return UiSource(views=views, records=_record_routes(router), tables=tables,
                         record_sections=_record_sections(src, router), table_dicts=table_dicts)
@@ -141,6 +145,18 @@ def _row_dictionaries(page: str, consts: dict) -> dict:
             found.setdefault(row, set()).add(consts.get(name, ""))
     return {key: next(iter(names)) if len(names) == 1 else ""
             for key, names in found.items()}
+
+
+def _literal_column_labels(page: str) -> tuple[tuple[str, str], ...]:
+    found = {}
+    for attrs, _body in _TABLE_COLUMN.findall(page):
+        prop = _COLUMN_PROP.search(attrs)
+        label = re.search(r'(?<![:\w-])label="([^"{}]+)"', attrs)
+        if prop and label and not re.search(r'(?:v-bind|:prop|:label)\s*[=:]', attrs):
+            found.setdefault(prop[1], set()).add(label[1].strip())
+    unique = {key:next(iter(labels)) for key,labels in found.items() if len(labels) == 1}
+    return tuple((key,label) for key,label in unique.items() if label
+                 and sum(label == other for other in unique.values()) == 1)
 
 
 def _row_columns(page: str) -> dict:

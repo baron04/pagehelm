@@ -1,5 +1,5 @@
 """The bounded readonly subset of the existing goal declaration vocabulary."""
-from .spec import FILTER_OPS
+from .spec import FILTER_OPS, DECLARE_GOAL_TOOL
 from ..business.entities import (DISCOVER_ENTITIES_TOOL, DESCRIBE_ENTITY_TOOL,
                                 QUERY_ENTITY_RECORDS_TOOL)
 
@@ -23,6 +23,21 @@ _deliverable = _object({"kind": {"type": "string", "enum": ["fact", "list", "agg
     "descending": {"type": "boolean"}, "limit": {"type": "integer", "minimum": 0, "maximum": 50}},
     ("kind", "entity"))
 
+# Preserve the established declaration semantics when exposing its readonly subset.
+# Bounds/types are this tool's; descriptions have one owner in the goal vocabulary.
+_goal_properties = DECLARE_GOAL_TOOL["function"]["parameters"]["properties"]["deliverables"]["items"]["properties"]
+for _key in ("entity", "record", "via", "fields", "sort", "descending", "limit"):
+    if "description" in _goal_properties[_key]:
+        _deliverable["properties"][_key]["description"] = _goal_properties[_key]["description"]
+for _key in _metric["properties"]:
+    if "description" in _goal_properties["metric"]["properties"][_key]:
+        _metric["properties"][_key]["description"] = _goal_properties["metric"]["properties"][_key]["description"]
+_metric["description"] = ("Conditions for facts and lists also belong here in filters. "
+    "Numeric highest/lowest means min/max and ALL ties, not a sorted top-N list. "
+    "A list with op=count retains the rows and applies these conditions. "
+    "For a requested overall sum set total=true. Select the requested business measure, "
+    "not a neighbouring tax or discount field.")
+
 DATA_READ_REPLACED_TOOLS = frozenset({DISCOVER_ENTITIES_TOOL, DESCRIBE_ENTITY_TOOL,
                                      QUERY_ENTITY_RECORDS_TOOL})
 
@@ -35,9 +50,12 @@ DATA_READ_SCHEMAS = (
     {"type": "function", "function": {"name": "resolve_data", "description":
         "Read facts, scoped counts/sums, numeric min/max (all ties), or lists through the "
         "application's deterministic resolver. Use entity keys and actual indexed field labels; "
-        "Prefer inspect_data then this tool for business answers, including linked names, "
+        "Use inspect_data before this tool to see actual field labels/aliases, including linked names, "
         "full-scope aggregates and extrema, rather than rebuilding those reads with opaque IDs. "
-        "copy record references and conditions from the user. A page key scopes data; it does "
+        "copy record references and conditions from the user. Owner/date/status restrictions "
+        "belong in metric.filters even for lists. An unrequested broader scope is not an answer. "
+        "Use native aggregate evidence or compute; writing arithmetic in a statement cannot "
+        "deliver a calculated value. A page key scopes data; it does "
         "not navigate. Every result returns to this same Agent with typed evidence and failures. "
         "No writes, source rules, form entry or page operations. Mixed tasks keep all raw requirements.",
         "parameters": _object({"deliverables": {"type": "array", "minItems": 1, "maxItems": 4,

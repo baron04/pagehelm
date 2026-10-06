@@ -7,22 +7,30 @@ from web_operation_agent.execution.product import AgentTurnConfig
 
 def yudao_turn_config(run_dir: Path, *, timeout_s: int,
                       source: SourceCapability, click_policy=None, form_prefill: bool = False,
-                      page_filtering: bool = False) -> AgentTurnConfig:
+                      page_filtering: bool = False, deterministic_reads: bool = False) -> AgentTurnConfig:
+    reads = ("Use inspect_data to see current entities and fields, then resolve_data for "
+        "business facts, filtered counts/sums and complete lists. Keep every owner, date and "
+        "status condition in metric.filters. Numeric highest/lowest uses min/max, including "
+        "every tie. Select the requested business field using its actual label or UI alias; "
+        "tax alone is not a tax-inclusive total. Use native aggregate evidence or compute, "
+        "never statement arithmetic. resolve_record_reference supplies exact page addresses "
+        "when navigation is requested. " if deterministic_reads else
+        "Prefer resolve_goal_candidates for a business read: it combines entity, field and "
+        "named-record discovery in one call; use separate discovery only if its result needs "
+        "refinement. For counts, including filtered counts, query with field_ids=[] and bind "
+        "filters to discovered fields; cite its ready count evidence without fetching record "
+        "values or computing again. ")
     return AgentTurnConfig(
         supported_scope=(
             "Answer source and documentation questions from cited repository evidence; "
             "read current business records as the signed-in actor and open exact pages "
-            "returned by read tools. Prefer resolve_goal_candidates for a business "
-            "read: it combines entity, field and named-record discovery in one call; "
-            "use separate discovery only if its result needs refinement. Pure source "
+            "returned by read tools. " + reads + "Pure source "
             "questions need no business metadata or page navigation. A request may combine "
             "source questions, data reads and page navigation. Source describes the "
             "deployed implementation, not current records or execution authority. "
             "Do not substitute business operation logs for Git history, or record "
             "owners for declared engineering ownership. No record mutations or "
-            "form submission are enabled. For counts, including filtered counts, query "
-            "with field_ids=[] and bind filters to discovered fields; cite its ready "
-            "count evidence without fetching record values or computing again. "
+            "form submission are enabled. "
             "For source search, start with the user's own terms and language; this "
             "lexical index does not translate queries. Use identifiers when known. "
             "For a pure page-opening request, find_page_entries returns current "
