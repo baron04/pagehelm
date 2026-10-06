@@ -300,10 +300,11 @@ export function createPageFacts({view = window, doc = document} = {}) {
       if (sections.length !== 1) return undefined
       const main = sections[0].el
       const render = [instance.subTree], rendered = new Set()
+      const renderLimit = 8192
       let content = false
       // Bound element wrappers and child components together; truncation must
       // not drop a blocking error and still grant arrival.
-      while (render.length && rendered.size < 4096) {
+      while (render.length && rendered.size < renderLimit) {
         const node = render.pop()
         if (!node || rendered.has(node)) continue
         rendered.add(node)
@@ -312,7 +313,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
         if (node.el?.nodeType === 1 && node.el.isConnected && main.contains(node.el) && visible(node.el)) content = true
         if (node.component) render.push(node.component.subTree)
         if (Array.isArray(node.children)) {
-          if (node.children.length + render.length > 4096) return undefined
+          if (node.children.length + render.length > renderLimit) return undefined
           render.push(...node.children)
         }
       }

@@ -604,12 +604,39 @@ describe('native Yudao mounted navigation identity', () => {
       expect(facts.readPageRoute()).toBe('/system/role')
     }
   })
+  function tableRows(state: ReturnType<typeof mountedPage>, count: number): NativeVNode[] {
+    return Array.from({length: count}, () => ({type: 'tr', children: Array.from({length: 8}, () => ({
+      type: 'td', children: [{type: 'span'}, {component: {
+        type: {name: 'FieldCell'}, parent: state.instance,
+        isMounted: true, isUnmounted: false, isDeactivated: false,
+        appContext: state.instance.appContext, subTree: {type: 'span'},
+      }}],
+    }))}))
+  }
+  it('proves a rendered table with component wrappers beyond four thousand VNodes', () => {
+    const state = mountedPage()
+    // 128 rows with eight wrapped cells have 4225 live VNodes including the root.
+    state.instance.subTree.children = tableRows(state, 128)
+    expect(createPageFacts().readPageRoute()).toBe('/system/role')
+  })
+  it('refuses a nested render tree that exceeds the bounded eight thousand VNode budget', () => {
+    const state = mountedPage()
+    state.instance.subTree.children = tableRows(state, 256)
+    expect(createPageFacts().readPageRoute()).toBeUndefined()
+  })
+  it('does not truncate a blocking component after four thousand otherwise live VNodes', () => {
+    const state = mountedPage()
+    const blocker: NativeVNode = {component: {...state.instance, type: {name: 'Error'}}}
+    // The stack visits the final children first, reaching this blocker after all rows.
+    state.instance.subTree.children = [blocker, ...tableRows(state, 128)]
+    expect(createPageFacts().readPageRoute()).toBeUndefined()
+  })
   it('refuses custom keys, pending suspense, missing mount state and oversized render trees', () => {
     for (const change of [
       (state: ReturnType<typeof mountedPage>) => {state.instance.vnode.key = 'shared-view-key'},
       (state: ReturnType<typeof mountedPage>) => {state.routerView.subTree.suspense = {pendingBranch: {}}},
       (state: ReturnType<typeof mountedPage>) => {delete state.instance.isMounted},
-      (state: ReturnType<typeof mountedPage>) => {state.instance.subTree.children = Array.from({length: 4096}, () => ({type: 'div'}))},
+      (state: ReturnType<typeof mountedPage>) => {state.instance.subTree.children = Array.from({length: 8192}, () => ({type: 'div'}))},
     ]) {
       const state = mountedPage(); change(state)
       expect(createPageFacts().readPageRoute()).toBeUndefined()
