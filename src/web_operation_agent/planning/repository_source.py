@@ -31,11 +31,12 @@ SOURCE_FILENAMES = frozenset({
 })
 _K1, _B = 1.2, 0.75
 _SYMBOL = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+_UPPERCASE = re.compile(r"[A-Z]")
 
 
 def _symbols(text: str) -> frozenset[str]:
-    return frozenset(word for word in _SYMBOL.findall(text)
-                     if "_" in word or any(c.isupper() for c in word[1:]))
+    return frozenset(word for word in set(_SYMBOL.findall(text))
+                     if "_" in word or _UPPERCASE.search(word, 1))
 
 
 def _is_source_file(path: str) -> bool:
@@ -140,7 +141,14 @@ class RepositorySourceLookup:
                 document = Counter(path_words + terms(body))
                 if not document:
                     continue
-                evidence = tree.cite(path, start, end, excerpt_chars=char_limit)
+                # The allowlisted file was read above. Cite that same snapshot
+                # instead of resolving and rereading the whole file per window.
+                # Live verification and follow-up reads still use the tree.
+                evidence = EvidenceRef(
+                    repository_id=self.repository_id, release=self.release, path=path,
+                    start_line=start, end_line=end,
+                    sha256=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    excerpt=body[:char_limit].rstrip())
                 evidence = self._context(evidence, lines)
                 blocks.append(RepositoryBlock(evidence, language, document, _symbols(evidence.excerpt)))
                 lengths.append(sum(document.values()))

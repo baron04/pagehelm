@@ -5,6 +5,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from web_operation_agent.planning.repository_source import (
     CombinedSourceLookup, RepositorySourceLookup,
@@ -46,6 +47,27 @@ def _write(root: Path, files: dict[str, str] = FILES) -> None:
 
 
 class LanguageNeutralRepositoryLookupTests(unittest.TestCase):
+    def test_many_windows_share_one_allowlisted_read_and_keep_exact_citations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root, {"src/rules.py": "".join(
+                f"def enforceLimit{i}(value): return value <= {i}\r\n"
+                for i in range(500))})
+            tree = _tree(root)
+            with patch.object(tree, "read_text", wraps=tree.read_text) as read:
+                lookup = RepositorySourceLookup(tree, line_limit=8, overlap=2)
+                self.assertGreater(len(lookup), 50)
+                self.assertEqual([("src/rules.py",)], [call.args for call in read.call_args_list])
+            for block in lookup._blocks:
+                ref = block.evidence
+                self.assertEqual(ref, tree.cite(ref.path, ref.start_line, ref.end_line,
+                                                excerpt_chars=4000))
+            (root / "src/rules.py").write_text("changed = True\n")
+            self.assertFalse(lookup.verify(lookup._blocks[0].evidence))
+            with self.assertRaises(SourceReadError) as caught:
+                lookup.read("src/rules.py", start_line=1, end_line=1)
+            self.assertEqual("source_changed", caught.exception.code)
+
     def test_raw_read_returns_whole_lines_and_exact_bytes_in_two_source_shapes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
