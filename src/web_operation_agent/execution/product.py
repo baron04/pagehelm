@@ -177,9 +177,6 @@ class AgentTurnConfig:
     #: Freeze request clauses before results; require explicit evidence coverage of
     #: every declared question beside any observed action. Opt-in qualification.
     require_task_contract: bool = False
-    #: Reference planning and flat evidence conclusions for the stepwise Agent.
-    #: Literal declarations remain available for existing scripted integrations.
-    request_protocol: str = "literal"
     deployment_profile: str = "production"
     #: Where the person is, as an IANA zone name, so "today" and "this month" mean their
     #: days. Empty leaves the turn on UTC and says so. An application that knows its user's
@@ -238,10 +235,6 @@ class AgentTurnConfig:
                 or not isinstance(self.require_page_route, bool)
                 or not isinstance(self.require_task_contract, bool)):
             raise ValueError("turn policy flags must be booleans")
-        if not isinstance(self.request_protocol, str) or self.request_protocol not in {"literal", "references"}:
-            raise ValueError("request_protocol must be literal or references")
-        if self.request_protocol == "references" and not self.require_task_contract:
-            raise ValueError("reference planning requires task completeness accounting")
         for name in ("step_budget", "wall_budget_s", "approval_ttl_s",
                      "operation_approval_ttl_s", "keep_observations",
                      "max_user_answer_chars"):

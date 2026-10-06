@@ -103,41 +103,6 @@ class DomainReport:
 
 
 class ContactReportTests(unittest.TestCase):
-    def test_flat_reads_reuse_the_source_free_actor_scoped_rest_report(self):
-        from web_operation_agent.answer.evidence import ComputationEvidence, QueryEvidence, RecordEvidence
-        from web_operation_agent.goal.read_tools import DataReadTools
-        from web_operation_agent.business.errors import BusinessToolIdentityError
-        with MinimalContactsApplication() as app:
-            data = self.bind(app, "ada-lovelace")
-            def factory(context, checkpoint):
-                report = DomainReport(data.contacts._adapter, context)
-                return ScopedData(report, {"domains": report.scope("example.test")})
-            tools = DataReadTools(factory, data.context.principal.application_id, "contacts:read", surface="simple")
-            expected = sum(row["email"].endswith("@example.test")
-                           for row in data.contacts._executor._contact_rows())
-            for operation, args in (("sum", {"field": "Contacts"}),
-                                    ("min", {"field": "Contacts"}),
-                                    ("max", {"field": "Contacts"}),
-                                    ("record", {"record": "example.test", "fields": ["Contacts"]})):
-                with self.subTest(operation=operation):
-                    result = tools.execute("read_data", {"operation": operation, "entity": "domains", **args},
-                        context=data.context, checkpoint=lambda: None,
-                        user_request="How many contacts use example.test?")
-                    values = [e.value for e in result.evidence
-                              if (isinstance(e, ComputationEvidence) and e.operation != "count()")
-                              or (isinstance(e, RecordEvidence) and e.field_name == "count")]
-                    self.assertEqual([str(expected)], list(dict.fromkeys(values)))
-                    self.assertEqual((), result.allowed_routes)
-            listed = tools.execute("read_data", {"operation": "list", "entity": "domains", "fields": ["Contacts"]},
-                context=data.context, checkpoint=lambda: None, user_request="List this domain's contact count")
-            query = next(e for e in listed.evidence if isinstance(e, QueryEvidence))
-            self.assertEqual((1, True), (query.matched_count, query.covers_whole_scope))
-            other = self.bind(app, "rosalind-franklin")
-            with self.assertRaises(BusinessToolIdentityError):
-                tools.execute("read_data", {"operation": "count", "entity": "domains"},
-                    context=other.context, checkpoint=lambda: None, user_request="count this domain")
-            self.assertEqual(0, app.write_requests)
-
     def test_same_agent_data_tool_uses_source_free_rest_report_and_real_actor(self):
         from web_operation_agent.answer.evidence import ComputationEvidence, RecordEvidence, TurnEvidence
         from web_operation_agent.goal.read_tools import DataReadTools

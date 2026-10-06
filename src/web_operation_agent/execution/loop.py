@@ -21,6 +21,7 @@ from ..modeling.spend import BudgetExhausted
 from ..privacy import safe_tool_arguments as _safe
 from .business_tools import apply_skill_first, business_tool, load_skill, prefill_form
 from .data_tools import data_tool
+from ..goal.read_tools import DATA_READ_NAMES
 from .form_tools import describe_form, prepare_form
 from .form_entries import find_form_entries, open_form_entry
 from .knowledge_tools import (ask_user_tool, check_capability_tool, capability_check_available,
@@ -52,7 +53,7 @@ def named_tools(session):
     """
     available: dict[str, Callable[["_Turn", dict, str, dict], "_Next"]] = {}
     if session.require_task_contract:
-        available["plan_task" if session.request_protocol == "references" else "declare_task"] = session._tool_declare_task
+        available["declare_task"] = session._tool_declare_task
     if session.runtime_source:
         available["lookup_source"] = partial(lookup_source_tool, session)
         available["lookup_source_history"] = partial(lookup_source_history_tool, session)
@@ -82,7 +83,7 @@ def named_tools(session):
         available["set_target"] = session._tool_set_target
     available["finish"] = session._tool_finish
     if session.data_reads is not None:
-        for tool in session.data_reads.names:
+        for tool in DATA_READ_NAMES:
             available[tool] = partial(data_tool, session)
     for tool in (session.business_tools.tool_names if session.business_tools is not None else ()):
         available[tool] = partial(business_tool, session)
@@ -184,7 +185,7 @@ def run_loop(session) -> RunResult:
                              elements=len(obs.elements), digest=obs.content_digest)
 
     system = AGENT_SYSTEM
-    if session.require_task_contract and session.request_protocol == "literal":
+    if session.require_task_contract:
         from .request_contract import TASK_SYSTEM
         system += "\n" + TASK_SYSTEM
     if session.target_settlement_available():
@@ -217,11 +218,6 @@ def run_loop(session) -> RunResult:
         system += "\n" + CAPABILITY_SYSTEM
     if session.scope_first_policy:
         system += "\n" + SCOPE_FIRST_SYSTEM
-    if session.require_task_contract and session.request_protocol == "references":
-        from .request_references import SYSTEM as TASK_SYSTEM
-        # The selected schema supersedes legacy answer-envelope examples in
-        # generic source/business instructions, without changing their authority.
-        system += "\n" + TASK_SYSTEM
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": session._opening(obs)}]
     session._sync_plan_message(messages)
@@ -374,7 +370,7 @@ def run_loop(session) -> RunResult:
                                       tool="plain_content", dispatched=False)
                 messages += [{"role": "assistant", "content": said},
                              {"role": "user", "content":
-                              "First call the offered task planning tool for every USER REQUEST clause. "
+                              "First call declare_task for every USER REQUEST clause. "
                               "No application tool or completion has been dispatched."}]
                 continue
             if session._answers.answer_mode or session.require_task_contract:
@@ -491,13 +487,10 @@ def run_loop(session) -> RunResult:
                 "wait_for, or finish unable/partial may run until its result is verified.")]
             continue
 
-        from .tools import task_planning_reads
-        if (session.require_task_contract and session._task_requirements is None
-                and name not in ({"plan_task"} | task_planning_reads(session)
-                    if session.request_protocol == "references" else {"declare_task"})):
+        if session.require_task_contract and session._task_requirements is None and name != "declare_task":
             session.ledger.append("task_declaration_required", step=step, tool=name, dispatched=False)
             messages += [_assistant_call(call), _tool_result(call,
-                "First plan every original USER REQUEST clause with the offered planning tool. No effect was dispatched.")]
+                "First declare_task for every original USER REQUEST clause. No application tool was dispatched.")]
             continue
 
         if obs is None and name not in {tool["function"]["name"] for tool in session.tool_schemas()}:
@@ -571,7 +564,7 @@ def run_loop(session) -> RunResult:
             continue
 
         if (session._target_reached and session._navigation_only and not session._finalizing
-                and name not in {"finish", "set_target", "declare_task", "plan_task", "ask_user", "withdraw_request"}):
+                and name not in {"finish", "set_target", "declare_task", "ask_user", "withdraw_request"}):
             # A pure navigation request can stop at its page target. A request
             # that also asks a question still needs reads or observation after
             # reaching a page, so its target cannot lock the tool surface.

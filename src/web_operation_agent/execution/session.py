@@ -175,7 +175,6 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  deterministic_read_navigation: bool = False,
                  require_page_route: bool = False,
                  require_task_contract: bool = False,
-                 request_protocol: str = "literal",
                  defer_page_context: bool = False,
                  page_entry: Callable[[], PageObservation] | None = None,
                  skill_first: bool = False,
@@ -364,11 +363,6 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         self._capability_question = bool(_CAPABILITY_QUESTION.fullmatch(task.prompt))
         if not isinstance(require_task_contract, bool):
             raise ValueError("require_task_contract must be boolean")
-        if not isinstance(request_protocol, str) or request_protocol not in {"literal", "references"}:
-            raise ValueError("request_protocol must be literal or references")
-        if request_protocol == "references" and not require_task_contract:
-            raise ValueError("reference planning requires task completeness accounting")
-        self.request_protocol = request_protocol
         # Self-capability replies are already settled from server-owned capabilities.
         self.require_task_contract = require_task_contract and not self._capability_question
         self._task_requirements = None
@@ -714,11 +708,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
     def _tool_declare_task(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
         previous = self._task_requirements
         try:
-            if self.request_protocol == "references":
-                from .request_references import parse_plan
-                requirements = parse_plan(args, self._task_request_text)
-            else:
-                requirements = parse_requirements(args, self._task_request_text)
+            requirements = parse_requirements(args, self._task_request_text)
             if previous is not None:
                 requirements = revise_requirements(previous, requirements, committed=bool(
                     self._answer_action_receipt or self._superseded_action_receipt))

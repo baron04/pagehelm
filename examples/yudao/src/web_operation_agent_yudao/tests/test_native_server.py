@@ -81,12 +81,14 @@ class NativeHostTests(unittest.TestCase):
         self.documents.side_effect = AssertionError("business metadata is unavailable")
         question = "代码中的batchLimit是多少？"
         chat = _Chat([
-            ("plan_task", {"action_refs": [], "action_kind": "none",
-                 "answers": [{"refs": ["r0"], "kind": "knowledge"}]}),
+            ("declare_task", {"action_request": "", "action_kind": "none",
+                 "answer_requests": [question], "answer_kinds": ["knowledge"]}),
             ("lookup_source", {"query": "batchLimit"}),
-            ("finish", {"outcome": "answered", "conclusions": [{"request_refs": ["a1"],
+            ("finish", {"outcome": "answered", "answer": {"version": 1,
+                "coverage": "complete", "conclusions": [{"kind": "source_excerpt",
                     "evidence_ref": "source#1", "statement": "batchLimit定义为125。",
-                    "support": "export const batchLimit = 125;"}]}),
+                    "support": "export const batchLimit = 125;"}],
+                "answers_for": [{"request_ref": "a1", "evidence_refs": ["source#1"]}]}}),
         ])
         chat.model = "scripted/no-model"
         chat.egress_policy = ProviderEgressPolicy(session_handoff_keys=SESSION_HANDOFF_KEYS)

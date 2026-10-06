@@ -386,7 +386,6 @@ class AgentTurnExecutor:
                 self.config.deterministic_read_navigation),
             require_page_route=self.config.require_page_route,
             require_task_contract=self.config.require_task_contract,
-            request_protocol=self.config.request_protocol,
             defer_page_context=self.config.defer_page_context,
             page_entry=page_entry if self.config.defer_page_context else None,
             skill_first=self.config.skill_first,

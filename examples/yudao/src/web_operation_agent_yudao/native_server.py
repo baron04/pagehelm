@@ -340,9 +340,8 @@ class YudaoHost:
                 # The same Agent receives optional source evidence and reviewed form
                 # entries. Source grants no actions; form review grants no submission.
                 turn_config = replace(turn_config, require_page_route=True, require_task_contract=True,
-                    request_protocol="references",
                     defer_page_context=True,
-                    data_reads=replace(app.data_reads, surface="simple"),
+                    data_reads=app.data_reads,
                     allow_application_entry=False, allow_page_facets=False,
                     disabled_actions=turn_config.disabled_actions | {"fill", "select", "submit", "back", "apply_facet"},
                     click_policy=app.native_tab_policy,

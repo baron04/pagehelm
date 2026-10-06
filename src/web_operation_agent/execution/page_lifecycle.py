@@ -22,8 +22,7 @@ def requires_page(session, name: str) -> bool:
     tools = session.business_tools
     return bool(tools is not None and name in tools.tool_names and (
         tools.is_mutation(name)
-        or (session.deterministic_read_navigation and not session.require_task_contract
-            and session._navigation_only)))
+        or (session.deterministic_read_navigation and session._navigation_only)))
 
 
 def acquire_page(session, turn, call, name: str) -> _Next | None:

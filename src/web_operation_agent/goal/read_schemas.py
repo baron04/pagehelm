@@ -61,35 +61,3 @@ DATA_READ_SCHEMAS = (
         "parameters": _object({"deliverables": {"type": "array", "minItems": 1, "maxItems": 4,
                                                 "items": _deliverable}}, ("deliverables",))}},
 )
-
-# An opt-in model surface; the established declaration schema remains the default.
-# Each call asks for one operation, while the server owns the GoalSpec compilation.
-SIMPLE_DATA_READ_SCHEMAS = (DATA_READ_SCHEMAS[0], {
-    "type": "function", "function": {"name": "read_data", "description":
-        "Read one actor-scoped operation using exact entities and field labels from inspect_data. "
-        "record reads fields of a named record, or one uniquely selected by filters. "
-        "list returns bounded rows; count counts every matching row; sum totals the field over "
-        "every matching row; min/max compare the complete scope and retain ALL tied records. "
-        "Put every owner/date/status restriction in filters, including for records and lists. "
-        "A relationship scope is a filter on the indexed link field with the exact related "
-        "record name. via follows an indexed link of a named record to read that target's fields. "
-        "page is an optional indexed query scope and never navigates. search is an explicit "
-        "record-name substring for lists. Missing or unusable conditions are refused; do not "
-        "substitute neighbouring fields or broaden the user's scope. sum needs field, never "
-        "a nested metric or total flag. No writes, source rules or page operations. "
-        "Results and typed evidence return to this same Agent before its next decision.",
-        "parameters": _object({
-            "operation": {"type": "string", "enum": ["record", "list", "count", "sum", "min", "max"]},
-            "entity": _text, "record": _text, "via": _text,
-            "fields": {**_strings, "description": "Requested columns for record/list, or all min/max ties."},
-            "field": {**_text, "description": "Numeric field required for sum/min/max."},
-            "filters": {"type": "array", "maxItems": 6, "items": _filter},
-            "page": {**_text, "description": "Exact indexed page key selecting the read scope."},
-            "page_filters": {**_strings, "maxItems": 8},
-            "search": {**_text, "description": "Explicit record-name substring; list only."},
-            "group_by": {**_text, "description": "Exact indexed field; count only. Groups may be bounded."},
-            "sort": {**_text, "description": "Exact indexed field; list only."},
-            "descending": {"type": "boolean"},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 50,
-                      "description": "Maximum listed rows; list only. Does not limit aggregates."},
-        }, ("operation", "entity"))}})

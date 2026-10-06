@@ -13,7 +13,8 @@ from ..answer import answer_protocol, page_answer
 from ..business.forms import FORM_TOOL_SCHEMAS
 from ..business.form_entries import FORM_ENTRY_SCHEMAS
 from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
-from ..goal.read_schemas import DATA_READ_REPLACED_TOOLS
+from ..goal.read_schemas import DATA_READ_SCHEMAS, DATA_READ_REPLACED_TOOLS
+from ..goal.read_tools import DATA_READ_NAMES
 from .knowledge_tools import capability_check_available
 from .request_contract import DECLARE_TASK_TOOL, finish_schema
 from .prompts import (APPLICATION_ENTRY_TOOL, ASK_USER_TOOL, CAPABILITY_TOOL,
@@ -31,8 +32,7 @@ class ToolSurface:
 
     def schemas(self) -> list[dict]:
         session = self._session
-        if (session.require_task_contract and session._task_requirements is None
-                and session.request_protocol == "literal"):
+        if session.require_task_contract and session._task_requirements is None:
             return [deepcopy(DECLARE_TASK_TOOL)]
         tools = [tool for tool in TOOL_SCHEMAS
                  if tool["function"]["name"] not in session.disabled_actions
@@ -42,11 +42,7 @@ class ToolSurface:
                      and tool["function"]["name"] in session.action_admission.actions)]
         skill = bool(session._loaded_business_skill_ids)
         if session.require_task_contract:
-            if session.request_protocol == "references":
-                from .request_references import plan_tool
-                tools += [plan_tool(session._task_request_text)]
-            else:
-                tools += [deepcopy(DECLARE_TASK_TOOL)]
+            tools += [deepcopy(DECLARE_TASK_TOOL)]
         if session._finalizing:
             # Answer repair may need one missing typed read or a fresh snapshot.
             # Build the ordinary actor-scoped schemas below, then retain only reads.
@@ -90,7 +86,7 @@ class ToolSurface:
                 or session.evidence.has_application_evidence()):
             tools += [answer_protocol.COMPUTE_TOOL]
         if session.data_reads is not None:
-            tools += list(session.data_reads.schemas)
+            tools += list(DATA_READ_SCHEMAS)
         if session.runtime_source:
             tools += [SOURCE_TOOL, SOURCE_HISTORY_TOOL]
             if session.source.reader_lookup() is not None:
@@ -166,24 +162,10 @@ class ToolSurface:
         if session._finalizing:
             permitted = answer_repair_tools(session)
             tools = [tool for tool in tools if tool["function"]["name"] in permitted]
-        if session.require_task_contract and session.request_protocol == "references":
-            from .request_references import finish_tool
-            tools = [finish_tool(session) if tool["function"]["name"] == "finish" else tool
-                     for tool in tools]
-            if session._task_requirements is None:
-                allowed = task_planning_reads(session) | {"plan_task"}
-                tools = [tool for tool in tools if tool["function"]["name"] in allowed]
-        elif session._task_requirements and session._task_requirements.answer_requests:
+        if session._task_requirements and session._task_requirements.answer_requests:
             tools = [finish_schema(tool, session._task_requirements)
                      if tool["function"]["name"] == "finish" else tool for tool in tools]
         return tools
-
-
-def task_planning_reads(session) -> frozenset[str]:
-    """No page effect or mutation can precede original-request accounting."""
-    return answer_repair_tools(session) - {"finish"} | {
-        "wait_for", "load_skill", "ask_user", "check_capability",
-        "find_form_entries", "describe_form"}
 
 
 def answer_repair_tools(session) -> frozenset[str]:
@@ -198,5 +180,5 @@ def answer_repair_tools(session) -> frozenset[str]:
                     if session.runtime_source else frozenset())
     if session.runtime_source and session.source.reader_lookup() is not None:
         source_reads |= {"read_source"}
-    data_reads = session.data_reads.names if session.data_reads is not None else frozenset()
+    data_reads = DATA_READ_NAMES if session.data_reads is not None else frozenset()
     return frozenset({"finish", "compute", "observe"}) | reads | source_reads | data_reads
