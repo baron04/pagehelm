@@ -450,6 +450,19 @@ class ReasoningEatsTheBudget(unittest.TestCase):
                          "its own reasoning must not be fed back to it")
         self.assertEqual(contract.steps[0].request, "sproutSeedling")
 
+    def test_contract_retry_keeps_the_explicit_complex_scenario(self):
+        from unittest.mock import patch
+        from web_operation_agent.modeling.reasoning import ReasoningScenario, scenario_options
+        good = ('{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'
+                f'"request":"sproutSeedling","citations":["{self.key}"]}}],"citations":["{self.key}"]}}')
+        model = _StubModel([{"content": "", "finish_reason": "length"}, good])
+        with patch.object(model, "complete", wraps=model.complete) as calls:
+            _, attempts = ContractPlanner(model, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r")
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual([call.kwargs["options"] for call in calls.call_args_list],
+                         [scenario_options(ReasoningScenario.COMPLEX_PLAN)] * 2)
+        self.assertEqual([item["reasoning_scenario"] for item in attempts], ["complex_plan"] * 2)
+
     def test_a_truncated_answer_buys_more_room_too(self):
         """The provider saying it stopped on length is a budget fact, not an answer fact."""
         good = ('{"task_ref":"T","summary":"s","steps":[{"intent":"go","webapp":"glasshouse",'

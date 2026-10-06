@@ -991,16 +991,19 @@ no credentials. The Odoo fixture's `provision` command prints the exact Odoo val
 Scripted runs need no model settings, and the source and resettable-fixture sections are
 optional.
 
-The server's `policies/model_options.json` disables reasoning by default for
-`qwen3.8-flash` with `enable_thinking=false`; planner answer-budget growth does not
-enable it again. For `deepseek-flash`, it sends `thinking={"type":"disabled"}`
-using the [DeepSeek thinking-mode contract](https://api-docs.deepseek.com/guides/thinking_mode/).
-Its registered CNY rates use the published peak rates as a conservative fixed estimate;
-off-peak charges can be lower, so this is not an invoice or time-dependent billing.
-The selected model still comes from `AGENT_OPENAI_MODEL`. This
-latency preference does not guarantee unchanged accuracy; see the
-[frozen model comparison](evals/yudao/qualification/RESULTS.zh-CN.md).
-Policy changes require restarting a source-installed server, or rebuilding and
+Server call-site code selects reasoning by scenario. Ordinary page decisions, form
+entry, scope/goal declarations and answers default to non-thinking; only complete
+operation-contract synthesis explicitly selects the complex-plan scenario. Its effort
+stays fixed across repairs and answer-budget growth: Qwen 3.8 uses a 1,024-token thinking
+budget; DeepSeek V4.1 Flash uses `low`. The client translates that decision into the
+endpoint's supported fields (Aliyun `enable_thinking`, official DeepSeek `thinking.type`).
+`policies/model_options.json` contains compatibility options, not reasoning defaults.
+Unknown model/endpoint combinations receive no speculative reasoning fields; native
+framework requests own their serialization and must select their mode explicitly.
+The selected model still comes from `AGENT_OPENAI_MODEL`. This policy has transport
+tests, not a new model-accuracy result; earlier
+[frozen model comparisons](evals/yudao/qualification/RESULTS.zh-CN.md) retain their original settings.
+Changes require restarting a source-installed server, or rebuilding and
 redeploying a wheel/container installation.
 
 Build the browser assets. The assistant script the gateway serves and the trace replay page

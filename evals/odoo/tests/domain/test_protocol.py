@@ -118,8 +118,10 @@ class DocumentTests(unittest.TestCase):
     def test_both_arms_share_the_products_request_parameters(self):
         parameters = protocol.PROVIDER["request_parameters"]
         policy = json.loads(protocol.PRODUCT_MODEL_OPTIONS.read_text())
+        from web_operation_agent.modeling.reasoning import request_options
         self.assertEqual(parameters["model_options"],
-                         policy[protocol.PROVIDER["requested_model_alias"]])
+                         request_options(protocol.PROVIDER["requested_model_alias"], "",
+                                         policy[protocol.PROVIDER["requested_model_alias"]]))
         self.assertEqual(parameters["identical_for"], sorted(protocol.ARMS))
         self.assertEqual(parameters["temperature"], 0.0)
         self.assertNotIn("top_p", protocol.PROVIDER)

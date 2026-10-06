@@ -15,7 +15,9 @@ class ProfileTests(unittest.TestCase):
         with patch.dict(PRICES):
             self.assertEqual({'thinking': {'type': 'disabled'}}, register_profile('deepseek-flash', 'fast'))
             self.assertEqual(False, register_profile('qwen3.8-flash', 'fast')['enable_thinking'])
-            self.assertEqual(options_for('qwen3.8-flash'), register_profile('qwen3.8-flash', 'production'))
+            from web_operation_agent.modeling.reasoning import request_options
+            self.assertEqual(request_options('qwen3.8-flash', '', options_for('qwen3.8-flash')),
+                             register_profile('qwen3.8-flash', 'production'))
             with self.assertRaises(ValueError):
                 register_profile('unreviewed', 'fast')
 

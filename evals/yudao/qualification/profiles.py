@@ -31,7 +31,8 @@ def register_profile(model, profile):
             raise ValueError('DeepSeek comparison requires the registered non-thinking profile')
         return {'thinking': {'type': 'disabled'}}
     if profile == 'production':
-        return options_for(model)
+        from web_operation_agent.modeling.reasoning import request_options
+        return request_options(model, '', options_for(model))
     if model == 'qwen3.8-flash':
         return {'enable_thinking': False, 'parallel_tool_calls': False}
     raise ValueError('no reviewed evaluation profile for this model')

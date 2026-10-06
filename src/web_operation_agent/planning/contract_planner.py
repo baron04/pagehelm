@@ -6,8 +6,8 @@ from ..schemas import (SCHEMA_VERSIONS, OperationContract, PageObservation, Sche
 from .retrieval import EvidenceBundle
 from .contract_inputs import PLANNER_SYSTEM, PLANNER_SYSTEM_PAGE_ONLY, render_page_for_planner
 from .contract_response import (PLANNER_MAX_GROWTHS, PLANNER_START_TOKENS,
-                                PLANNER_THINKING_FACTOR, _extract_json, split_reasoning,
-                                thinking_options)
+                                _extract_json, split_reasoning)
+from ..modeling.reasoning import ReasoningScenario, scenario_options
 from .contract_validation import (PlanningFailed, normalise_contract, prune_contract,
                                   validate_contract)
 
@@ -24,14 +24,12 @@ class ContractPlanner:
 
     def __init__(self, chat, smap: SourceMap | None = None, *, segment: str = "",
                  start_tokens: int = PLANNER_START_TOKENS,
-                 max_growths: int = PLANNER_MAX_GROWTHS,
-                 thinking_factor: float = PLANNER_THINKING_FACTOR):
+                 max_growths: int = PLANNER_MAX_GROWTHS):
         self.chat = chat
         self.segment = segment
         self.map = smap
         self.start_tokens = start_tokens
         self.max_growths = max_growths
-        self.thinking_factor = thinking_factor
 
     def plan(self, task_ref: str, prompt: str, bundle: EvidenceBundle, run_id: str,
              *, repairs: int = 1, page: PageObservation | None = None
@@ -59,7 +57,9 @@ class ContractPlanner:
         attempts: list[dict] = []
         budget, growths, repaired = self.start_tokens, 0, 0
         while True:
-            think = thinking_options(self.chat, self.thinking_factor * (2 ** growths))
+            # Full operation-contract synthesis is the explicit complex scenario.
+            # Scope/goal declarations and ordinary browser decisions remain routine.
+            think = scenario_options(ReasoningScenario.COMPLEX_PLAN)
             reply = self.chat.complete(messages, tools=None, run_id=run_id, max_tokens=budget,
                                        options=think)
             raw = reply.get("content") or ""
@@ -106,7 +106,7 @@ class ContractPlanner:
                              "reasoning_chars": len(thought), "answer_chars": len(answer),
                              "finish_reason": reply.get("finish_reason") or "",
                              "max_tokens": budget,
-                             "thinking_budget": (think or {}).get("thinking_budget"),
+                             "reasoning_scenario": ReasoningScenario.COMPLEX_PLAN.value,
                              "raw_head": (answer or raw)[:400] if problems else ""})
 
             if contract is not None and not problems:

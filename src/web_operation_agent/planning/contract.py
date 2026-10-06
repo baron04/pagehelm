@@ -3,8 +3,7 @@ from .contract_inputs import (EXPANDER_SYSTEM, PLANNER_SYSTEM, PLANNER_SYSTEM_PA
                               expand_terms, render_page_for_planner)
 from .contract_planner import ContractPlanner
 from .contract_response import (PLANNER_MAX_GROWTHS, PLANNER_START_TOKENS,
-                                PLANNER_THINKING_FACTOR, REASONING_TAGS, split_reasoning,
-                                thinking_options)
+                                REASONING_TAGS, split_reasoning)
 from .contract_validation import (PlanningFailed, SupportIndex, _segment_from_template,
                                   bare_request, normalise_citation, normalise_contract,
                                   normalise_request, prune_contract, qualified_request,
@@ -13,9 +12,9 @@ from .contract_validation import (PlanningFailed, SupportIndex, _segment_from_te
 __all__ = [
     "ContractPlanner", "EXPANDER_SYSTEM", "PLANNER_MAX_GROWTHS",
     "PLANNER_START_TOKENS", "PLANNER_SYSTEM", "PLANNER_SYSTEM_PAGE_ONLY",
-    "PLANNER_THINKING_FACTOR", "PlanningFailed", "REASONING_TAGS", "SupportIndex",
+    "PlanningFailed", "REASONING_TAGS", "SupportIndex",
     "_segment_from_template", "bare_request", "expand_terms", "normalise_citation",
     "normalise_contract", "normalise_request", "prune_contract", "qualified_request",
     "render_page_for_planner", "split_handler_subject", "split_reasoning",
-    "thinking_options", "validate_contract",
+    "validate_contract",
 ]

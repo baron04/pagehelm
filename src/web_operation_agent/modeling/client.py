@@ -20,6 +20,7 @@ from .chat import (ChatPort, KeyedLimitedChat, KeyedProviderAdmission,
 from ..state.quota import SQLiteProviderQuota
 from .egress import DEFAULT_PROVIDER_EGRESS_POLICY, ProviderEgressPolicy
 from .provider import ProviderError, ProviderOutcome, ProviderRuntimeGuard
+from .reasoning import REASONING_FIELDS, request_options
 from .spend import (DEFAULT_LEDGER, PRICES, BudgetExhausted, SpendMeter, UnpricedModel,
                     cost_with, price_for, reported_model_string)
 
@@ -58,9 +59,7 @@ def _provider_http_error_code(status: int) -> str:
     return "provider_http"
 
 
-#: Extra request-body fields per model, keyed by the model's own name. See the file's own
-#: `_why_thinking_budget` note for the rationale. Keyed by model rather than branched on in
-#: code so changing model is a policy edit and an unknown model receives no unsupported fields.
+#: Compatibility options only. Reasoning mode belongs to the server call site.
 MODEL_OPTIONS = json.loads(
     (Path(__file__).parents[1] / "policies" / "model_options.json").read_text())
 
@@ -74,7 +73,7 @@ MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024
 def options_for(model: str) -> dict:
     """Extra body fields for a model. Unknown models get none, deliberately."""
     opt = MODEL_OPTIONS.get(model)
-    return {k: v for k, v in opt.items() if k not in _RESERVED_BODY} \
+    return {k: v for k, v in opt.items() if k not in _RESERVED_BODY and k not in REASONING_FIELDS} \
         if isinstance(opt, dict) else {}
 
 
@@ -210,8 +209,10 @@ class ChatModel(_ConcreteChatProvider):
             raise TypeError("runtime_guard must be ProviderRuntimeGuard or None")
         if options is not None and not isinstance(options, dict):
             raise ValueError("provider options must be an object or None")
-        self.options = ({k: v for k, v in options.items() if k not in _RESERVED_BODY}
-                        if options is not None else options_for(self.model))
+        selected = ({k: v for k, v in options.items()
+                     if k not in _RESERVED_BODY and k not in REASONING_FIELDS}
+                    if options is not None else options_for(self.model))
+        self.options = request_options(self.model, self.base, selected)
 
     def complete(self, messages: list[dict], tools: list[dict] | None, run_id: str,
                  max_tokens: int | None = None, options: dict | None = None,
@@ -241,10 +242,9 @@ class ChatModel(_ConcreteChatProvider):
         document is a different shape of answer, and the shared ceiling truncated it mid-JSON
         in four of six source-arm runs, which measured the ceiling rather than the contract.
 
-        `max_tokens` turns out to bound only the answer on at least one endpoint we use, so
-        it cannot by itself stop a model thinking for two minutes about a click. `options`
-        carries the per-model fields that can -- see `policies/model_options.json`; a caller
-        passing its own merges over the model's, and neither may touch the fields above.
+        Ordinary calls explicitly disable reasoning for supported endpoints. A server call
+        site can select a complex-plan scenario through options; answer-budget growth does
+        not increase reasoning effort. Model configuration cannot select the scenario.
         """
         effective_max_tokens = self.max_completion_tokens if max_tokens is None else max_tokens
         if (isinstance(effective_max_tokens, bool)
@@ -255,9 +255,10 @@ class ChatModel(_ConcreteChatProvider):
             raise ValueError("provider options must be an object or None")
         body = {"model": self.model, "messages": messages, "temperature": self.temperature,
                 "max_tokens": effective_max_tokens}
-        body.update(self.options)
+        selected = dict(self.options)
         if options:
-            body.update({k: v for k, v in options.items() if k not in _RESERVED_BODY})
+            selected.update({k: v for k, v in options.items() if k not in _RESERVED_BODY})
+        body.update(request_options(self.model, self.base, selected))
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"

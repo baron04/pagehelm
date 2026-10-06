@@ -63,18 +63,3 @@ PLANNER_START_TOKENS = 4096
 #: How many times the budget may double before the conclusion is about the model rather than
 #: the budget. Bounds cost; does not cap capability.
 PLANNER_MAX_GROWTHS = 3
-#: Writing a contract is a harder thought than deciding one click, so the planner asks for a
-#: multiple of whatever reasoning allowance the model in use declares. A multiple, not a
-#: number: the allowance itself is a property of the model and lives in its policy entry.
-PLANNER_THINKING_FACTOR = 4
-
-
-def thinking_options(chat, factor: float) -> dict | None:
-    """Scale the model's own reasoning allowance, or return None if it declares none.
-
-    A model with no such knob is sent no such field. This is the difference between adapting
-    to the provider in use and hard-coding one: `policies/model_options.json` says whether a
-    reasoning allowance exists and how big it is, and this only asks for more of it.
-    """
-    base = (getattr(chat, "options", None) or {}).get("thinking_budget")
-    return {"thinking_budget": int(base * factor)} if base else None

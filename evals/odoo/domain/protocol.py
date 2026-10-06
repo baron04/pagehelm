@@ -25,6 +25,7 @@ from typing import Any
 
 from evals.odoo.domain import outcomes
 from evals.odoo.domain.population import digest_json
+from web_operation_agent.modeling.reasoning import request_options
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 PROTOCOL_ID = "p74-odoo-v2"
@@ -36,8 +37,7 @@ POPULATIONS = ("development", "heldout")
 #: The domain tag of each population's schedule seed.
 SCHEDULE_DOMAIN_TAGS = {"development": "p74-odoo/development", "heldout": "p74-odoo/heldout"}
 REQUESTED_MODEL_ALIAS = "qwen3.8-flash"
-#: The product's own per-model request options. Both arms must send them, so they are read
-#: from the product's policy file rather than restated here.
+#: Both arms use the product's routine scenario and compatibility options.
 PRODUCT_MODEL_OPTIONS = REPOSITORY / "src" / "web_operation_agent" / "policies" / "model_options.json"
 
 ARMS: dict[str, dict[str, Any]] = {
@@ -123,8 +123,8 @@ PROVIDER = {
         "output_cap": "an integer max_tokens from 1 to max_output_tokens_per_call",
         "input_bound": "max_request_bytes; input tokens are not capped and are recorded per "
                        "response",
-        "model_options": json.loads(PRODUCT_MODEL_OPTIONS.read_text(encoding="utf-8"))[
-            REQUESTED_MODEL_ALIAS],
+        "model_options": request_options(REQUESTED_MODEL_ALIAS, "",
+            json.loads(PRODUCT_MODEL_OPTIONS.read_text(encoding="utf-8"))[REQUESTED_MODEL_ALIAS]),
         "never_forwarded": ["enable_thinking", "max_completion_tokens", "top_p"],
         "pageagent_mapping": ("the server-held completion client removes top_p, "
                               "max_completion_tokens and the pinned bundle's enable_thinking "

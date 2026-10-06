@@ -558,13 +558,14 @@ cp .env.example .env
 Odoo 装置的 `provision` 命令会打印准确的 Odoo 配置值。脚本模式无需模型配置，源码和
 可恢复装置两组配置也都是可选的。
 
-服务端 `policies/model_options.json` 对 `qwen3.8-flash` 默认发送
-`enable_thinking=false` 关闭推理，规划器扩大回答预算时也不会重新开启。
-对 `deepseek-flash` 按[官方推理开关](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)发送
-`thinking={"type":"disabled"}`。其人民币登记费率采用官方高峰单价作保守固定估算；
-空闲时段实际费用可能更低，这不是发票或按时段动态计费。
-模型仍由 `AGENT_OPENAI_MODEL` 选择。这项延迟偏好不保证准确率不变，详见
-[冻结模型对照](evals/yudao/qualification/RESULTS.zh-CN.md)。
+推理开关由服务端调用场景在代码中决定。页面操作、表单填写、范围／目标声明和普通回答
+默认关闭；只有生成完整操作合同的规划调用显式选择复杂规划场景。修正或扩大回答预算
+不增加推理强度：Qwen 3.8 的思考预算固定为 1,024 token，DeepSeek V4.1 Flash 使用 `low`。
+客户端只负责转换为接口支持的参数（阿里云 `enable_thinking`、DeepSeek 官方 `thinking.type`）。
+`policies/model_options.json` 只存兼容选项，不决定推理开关。
+未知模型／接口组合不猜测推理参数；原生框架请求自行序列化，须显式选择推理模式。
+模型仍由 `AGENT_OPENAI_MODEL` 选择。本策略经过请求传输测试，尚无新的模型准确率结论；
+此前[冻结模型对照](evals/yudao/qualification/RESULTS.zh-CN.md)保留原设置。
 源码安装的服务需要重启；wheel 或容器安装需要重新构建并部署才能生效。
 
 构建浏览器资源。网关提供的助手脚本和轨迹回放页都是生成物，不提交进仓库；没有构建时，浏览器里没有助手，

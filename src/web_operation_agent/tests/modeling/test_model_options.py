@@ -1,8 +1,4 @@
-"""Per-model request options.
-
-Some providers bound answer and reasoning tokens separately. Reasoning allowances therefore
-live in policy data keyed by model name rather than in model-specific code branches.
-"""
+"""Compatibility options and scenario reasoning at the actual provider boundary."""
 import json
 import io
 import tempfile
@@ -14,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from web_operation_agent.modeling import client as M
+from web_operation_agent.modeling.reasoning import (
+    ReasoningScenario, REASONING_FIELDS, request_options, scenario_options)
 from web_operation_agent.tests.support.session_fixture import SessionFixture
 
 
@@ -22,10 +20,9 @@ class Policy(unittest.TestCase):
         """An option a provider does not understand is a 400, so absence means silence."""
         self.assertEqual(M.options_for("some-model-we-have-never-run"), {})
 
-    def test_the_default_flash_model_disables_reasoning_without_an_allowance(self):
+    def test_model_configuration_does_not_select_reasoning(self):
         options = M.options_for("qwen3.8-flash")
-        self.assertIs(options["enable_thinking"], False)
-        self.assertNotIn("thinking_budget", options)
+        self.assertFalse(REASONING_FIELDS.intersection(options))
 
     def test_the_react_model_disables_parallel_tool_calls(self):
         self.assertIs(M.options_for("qwen3.8-flash")["parallel_tool_calls"], False)
@@ -35,7 +32,7 @@ class Policy(unittest.TestCase):
         M.MODEL_OPTIONS["m-x"] = {"model": "something-else", "messages": [], "max_tokens": 1,
                                   "thinking_budget": 32}
         try:
-            self.assertEqual(M.options_for("m-x"), {"thinking_budget": 32})
+            self.assertEqual(M.options_for("m-x"), {})
         finally:
             M.MODEL_OPTIONS.pop("m-x", None)
             if saved is not None:
@@ -44,13 +41,13 @@ class Policy(unittest.TestCase):
     def test_every_entry_is_an_object_and_the_file_documents_itself(self):
         raw = json.loads(
             (Path(M.__file__).parents[1] / "policies" / "model_options.json").read_text())
-        self.assertIn("_why_thinking_budget", raw)
         self.assertIn("_why_parallel_tool_calls", raw)
         for name, opts in raw.items():
             if name.startswith("_"):
                 self.assertIsInstance(opts, str)
             else:
                 self.assertIsInstance(opts, dict, name)
+                self.assertFalse(REASONING_FIELDS.intersection(opts), name)
 
 
 class _Recorder:
@@ -58,6 +55,7 @@ class _Recorder:
 
     def __init__(self, model, options=None):
         self.model = model
+        self.base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         self.options = ({k: v for k, v in options.items() if k not in M._RESERVED_BODY}
                         if options is not None else M.options_for(model))
         self.temperature, self.max_completion_tokens = 0.0, 2048
@@ -66,9 +64,10 @@ class _Recorder:
     def complete(self, messages, tools, run_id, max_tokens=None, options=None, timeout_s=None):
         body = {"model": self.model, "messages": messages, "temperature": self.temperature,
                 "max_tokens": max_tokens or self.max_completion_tokens}
-        body.update(self.options)
+        selected = dict(self.options)
         if options:
-            body.update({k: v for k, v in options.items() if k not in M._RESERVED_BODY})
+            selected.update({k: v for k, v in options.items() if k not in M._RESERVED_BODY})
+        body.update(request_options(self.model, self.base, selected))
         self.body = body
         return {"content": "", "finish_reason": "stop", "reasoning": ""}
 
@@ -80,10 +79,14 @@ class TheRequestBody(unittest.TestCase):
         self.assertIs(c.body["enable_thinking"], False)
         self.assertNotIn("thinking_budget", c.body)
 
-    def test_a_caller_may_ask_for_more_thinking_for_one_call(self):
-        c = _Recorder("thinking-model", options={"thinking_budget": 1024})
-        c.complete([], None, "r", options={"thinking_budget": 8192})
-        self.assertEqual(c.body["thinking_budget"], 8192)
+    def test_complex_scenario_has_a_fixed_allowance_for_one_call(self):
+        c = _Recorder("qwen3.8-flash")
+        c.complete([], None, "r", options=scenario_options(ReasoningScenario.COMPLEX_PLAN))
+        self.assertTrue(c.body["enable_thinking"])
+        self.assertEqual(c.body["thinking_budget"], 1024)
+        c.complete([], None, "r")
+        self.assertFalse(c.body["enable_thinking"])
+        self.assertNotIn("thinking_budget", c.body)
 
     def test_a_caller_may_not_redirect_the_call_to_another_model(self):
         c = _Recorder("qwen3.8-flash")
@@ -141,6 +144,12 @@ class NativeCompletionTransport(unittest.TestCase):
            "AGENT_OPENAI_API_KEY": "test-key",
            "AGENT_OPENAI_MODEL": "qwen3.8-flash"}
 
+    def setUp(self):
+        # Synthetic accounting fixture, not a new production price registration.
+        registered = patch.dict(M.PRICES, {"deepseek-v4.1-flash": dict(M.PRICES["deepseek-flash"])})
+        registered.start()
+        self.addCleanup(registered.stop)
+
     @staticmethod
     def _response(payload):
         response = io.BytesIO(json.dumps(payload).encode("utf-8"))
@@ -149,11 +158,15 @@ class NativeCompletionTransport(unittest.TestCase):
         return response
 
     def test_default_flash_reasoning_stays_off_on_a_planner_request(self):
-        from web_operation_agent.planning.contract import thinking_options
-        for model in ("qwen3.8-flash", "deepseek-flash"):
+        for model, endpoint in (
+                ("qwen3.8-flash", self.ENV["AGENT_OPENAI_BASE_URL"]),
+                ("qwen3.8-max", self.ENV["AGENT_OPENAI_BASE_URL"]),
+                ("deepseek-flash", "https://api.deepseek.com/v1"),
+                ("deepseek-v4.1-flash", "https://ws-test.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")):
             with self.subTest(model=model), tempfile.TemporaryDirectory() as directory:
                 chat = M.ChatModel(M.SpendMeter(ledger=Path(directory) / "spend.jsonl"),
-                                   env={**self.ENV, "AGENT_OPENAI_MODEL": model})
+                                   env={**self.ENV, "AGENT_OPENAI_MODEL": model,
+                                        "AGENT_OPENAI_BASE_URL": endpoint})
                 captured = []
                 payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
                            "choices": [{"finish_reason": "stop", "message": {"content": "done"}}]}
@@ -165,7 +178,7 @@ class NativeCompletionTransport(unittest.TestCase):
                 with patch.object(M.urllib.request, "urlopen", side_effect=respond):
                     chat.complete([{"role": "user", "content": "synthetic planning request"}],
                                   None, "planner-run", max_tokens=8192,
-                                  options=thinking_options(chat, 8))
+                                  options=scenario_options(ReasoningScenario.ROUTINE))
                 body = captured[0]
                 self.assertEqual(body["model"], model)
                 self.assertEqual(chat.meter.price, M.PRICES[model])
@@ -178,8 +191,42 @@ class NativeCompletionTransport(unittest.TestCase):
                     self.assertNotIn("parallel_tool_calls", body)
                 else:
                     self.assertIs(body["enable_thinking"], False)
-                    self.assertIs(body["parallel_tool_calls"], False)
+                    if model == "qwen3.8-flash":
+                        self.assertIs(body["parallel_tool_calls"], False)
                     self.assertNotIn("thinking", body)
+
+    def test_complex_deepseek_call_uses_low_reasoning_without_leaking_into_next_call(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chat = M.ChatModel(M.SpendMeter(ledger=Path(directory) / "spend.jsonl"), env={
+                **self.ENV, "AGENT_OPENAI_MODEL": "deepseek-v4.1-flash",
+                "AGENT_OPENAI_BASE_URL": "https://ws-test.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"},
+                options={"enable_thinking": True, "thinking_budget": 99999})
+            captured = []
+            payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                       "choices": [{"finish_reason": "stop", "message": {"content": "done"}}]}
+
+            def respond(request, timeout):
+                captured.append(json.loads(request.data))
+                return self._response(payload)
+
+            def respond_cancellable(_url, data, *_args, **_kwargs):
+                captured.append(json.loads(data))
+                return json.dumps(payload).encode()
+
+            messages = [{"role": "user", "content": "synthetic planning request"}]
+            with patch.object(M.urllib.request, "urlopen", side_effect=respond), \
+                    patch.object(chat, "_cancellable_post", side_effect=respond_cancellable):
+                chat.complete(messages, None, "r")
+                chat.complete(messages, None, "r", max_tokens=4096,
+                              options=scenario_options(ReasoningScenario.COMPLEX_PLAN))
+                chat.complete_cancellable(messages, None, "r", cancelled=lambda: False, max_tokens=8192,
+                              options=scenario_options(ReasoningScenario.COMPLEX_PLAN))
+                chat.complete(messages, None, "r", options={"enable_thinking": True})
+            self.assertEqual([body["enable_thinking"] for body in captured], [False, True, True, False])
+            self.assertEqual([body.get("reasoning_effort") for body in captured], [None, "low", "low", None])
+            self.assertTrue(all("_woa_reasoning_scenario" not in body and "thinking_budget" not in body
+                                and "thinking" not in body for body in captured))
+            self.assertIs(chat.options["enable_thinking"], False)
 
     def test_shared_quota_refuses_before_http_and_spend(self):
         from web_operation_agent.state import SQLiteProviderQuota, SQLiteSessionStore
@@ -669,26 +716,24 @@ class ProviderRuntimeProtection(unittest.TestCase):
             self.assertIsNone(report["total_cost_cny"])
 
 
-class PlannerAllowance(unittest.TestCase):
-    def test_the_planner_asks_for_a_multiple_of_what_the_model_declares(self):
-        from web_operation_agent.planning.contract import PLANNER_THINKING_FACTOR, thinking_options
-        c = _Recorder("thinking-model", options={"thinking_budget": 1024})
-        base = c.options["thinking_budget"]
-        self.assertEqual(thinking_options(c, PLANNER_THINKING_FACTOR),
-                         {"thinking_budget": base * PLANNER_THINKING_FACTOR})
+class ReasoningScenarios(unittest.TestCase):
+    def test_official_and_aliyun_endpoints_encode_the_same_scenario_differently(self):
+        selected = scenario_options(ReasoningScenario.COMPLEX_PLAN)
+        official = request_options("deepseek-v4.1-flash", "https://api.deepseek.com/v1", selected)
+        aliyun = request_options("deepseek-v4.1-flash", "https://dashscope.aliyuncs.com/v1", selected)
+        self.assertEqual(official, {"thinking": {"type": "enabled"}, "reasoning_effort": "low"})
+        self.assertEqual(aliyun, {"enable_thinking": True, "reasoning_effort": "low"})
 
-    def test_it_grows_with_the_answer_budget(self):
-        from web_operation_agent.planning.contract import thinking_options
-        c = _Recorder("thinking-model", options={"thinking_budget": 1024})
-        first = thinking_options(c, 4 * 2 ** 0)["thinking_budget"]
-        second = thinking_options(c, 4 * 2 ** 1)["thinking_budget"]
-        self.assertEqual(second, 2 * first)
+    def test_unknown_models_and_endpoints_get_no_guessed_reasoning_fields(self):
+        self.assertEqual(request_options("unknown", "https://api.deepseek.com/v1", {}), {})
+        self.assertEqual(request_options("deepseek-v4.1-flash", "https://unknown.example/v1", {}), {})
 
-    def test_a_model_with_no_such_knob_is_asked_for_nothing(self):
-        """Otherwise switching provider would start posting a field it never advertised."""
-        from web_operation_agent.planning.contract import thinking_options
-        self.assertIsNone(thinking_options(_Recorder("some-model-we-have-never-run"), 4))
-        self.assertIsNone(thinking_options(object(), 4))
+    def test_an_invalid_scenario_fails_before_provider_dispatch(self):
+        with self.assertRaises(ValueError):
+            scenario_options("complex_plan")
+        with self.assertRaises(ValueError):
+            request_options("qwen3.8-flash", "https://provider.example/v1",
+                            {"_woa_reasoning_scenario": "unbounded"})
 
 
 if __name__ == "__main__":
