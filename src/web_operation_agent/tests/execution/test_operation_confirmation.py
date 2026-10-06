@@ -578,6 +578,25 @@ class TheSessionAsksOnceBeforeWorkingThePage(unittest.TestCase):
             self.assertEqual(approvals.confirm_operation(2, page, action="fill"), ("", ""))
             self.assertEqual(approvals.operation_counts["requested"], 1)
 
+    def test_task_interpretation_change_requires_new_leave_before_the_next_page_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt = "Open company details"
+            declaration = {"action_request":prompt, "action_kind":"page",
+                "answer_requests":[], "answer_kinds":[]}
+            person = _Person("approved", "approved")
+            browser = _MenuBrowser()
+            session = _session(tmp, task=prompt, browser=browser, person=person,
+                chat=_Chat([("declare_task",declaration), ("click",{"ref":"e2"}),
+                    ("declare_task",{**declaration,"action_kind":"record"}),
+                    ("click",{"ref":"e1"}), ("finish",{"outcome":"unable"})]))
+            session.require_task_contract = True
+            result = session.run()
+            self.assertEqual("agent_refused", result.terminal_reason)
+            self.assertEqual(2, len(person.asked))
+            self.assertEqual(["click","click"], [a for a,_ in browser.done])
+            self.assertEqual(2, session._approvals.operation_counts["confirmed"])
+            self.assertEqual(1, len(session.ledger.of_kind("task_interpretation_revised")))
+
     def test_filling_a_form_is_working_the_page_too(self):
         with tempfile.TemporaryDirectory() as tmp:
             form = form_page

@@ -28,7 +28,7 @@ def data_tool(session, turn, call, name, args):
         return session._reply(turn, call, "DATA READ REFUSED: the operation identity is invalid or expired.")
     def read():
         return session.data_reads.execute(name, args, context=context,
-            checkpoint=checkpoint, user_request=session.task.prompt)
+            checkpoint=checkpoint, user_request=session._task_request_text)
     return execute_business_read(session, turn, call, name, args, context,
         context.audit_projection() if context is not None else {}, reader=read,
         counts_as_read=name != "inspect_data")

@@ -464,7 +464,7 @@ agent.
   missing proof returns unfinished-state feedback to the same Agent; losing a target's
   proof invalidates its earlier checkpoint. This option defaults to false and does not
   change the selected executor or grant page actions.
-  With opt-in `require_task_contract=True`, the first `declare_task` also freezes
+  With opt-in `require_task_contract=True`, the first `declare_task` declares
   `action_kind` (`none`, `page`, `record`, `draft`, or `mutation`) before application
   results. A record outcome needs fresh application-owned rendered page and record
   identity; reaching a collection cannot complete it. Rejected completion leaves
@@ -473,11 +473,21 @@ agent.
   original intent correctly or chose the intended record; it grants no authority.
   The declaration also requires `answer_kinds`, aligned with `answer_requests`:
   `data` for business values/records/metrics, `ui` for controls or UI guidance, and
-  `knowledge` for source rules or documented explanations. These freeze before reads.
+  `knowledge` for source rules or documented explanations. The original user text stays
+  fixed. At most two interpretation corrections share the turn budget: before task
+  results, clauses may be repartitioned; after results their text and roles are preserved,
+  data/knowledge cannot become UI, and record/draft/mutation outcomes cannot be lowered
+  or replaced. A page outcome can be strengthened. Corrections invalidate target,
+  prepared-draft and page-consent bindings and issue new question IDs, which must be
+  explicitly rebound to valid evidence. Initial context is not a task-result commitment.
   Server-issued selected-state and serialized-tab evidence (`saw=ui_state`)
   cannot settle a data or knowledge clause. The same Agent can repair with a read;
   explicit UI questions remain answerable. This does not establish the relevance
   of ordinary text, the intended record/field, or the model's initial classification.
+  A verified form prefill never completes a persisted-change request. Accompanying data
+  and source questions continue in the same Agent using reads only; missing clauses
+  retain the observed handoff in a partial result. A pure verified draft hands over
+  directly without another model call. Submission stays manual.
 - Application-owned Skills and typed tools provide current business facts. When explicitly
   enabled, deployment-bound structured facts plus a language-neutral local code-block index
   can answer source questions while retaining exact file, line, release, and byte-digest
@@ -770,7 +780,8 @@ handlers, arbitrary buttons and submission remain unavailable. This adds menu ad
 not a new planner or automatic fallback from the default goal executor.
 This pilot enables the application-neutral `require_task_contract` option (off by default
 for other step executors). Before application tools, the same Agent quotes the user's
-operation and answer clauses in an immutable `declare_task`.
+operation and answer clauses in `declare_task`, preserving the original request and
+using the bounded interpretation corrections described above.
 Each independent clause must quote a separate part of the request; redeclaring a page-opening
 clause as an extra question is rejected before application tools, allowing the same Agent to repair.
 A complete finish must map

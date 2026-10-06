@@ -58,8 +58,9 @@ class FinishHandler:
         if verified is None:
             verified = {"conclusions": (), "coverage": "undetermined", "prose": "",
                         "lowered_because": ()}
-        if self._answer_action_receipt is not None:
-            verified["action"] = self._answer_action_receipt
+        observed_action = self._answer_action_receipt or self._superseded_action_receipt
+        if observed_action is not None:
+            verified["action"] = observed_action
         verified["coverage"] = "partial"
         verified["unfinished_requests"] = incomplete_notes(
             requirements, missing, action_missing=action_missing,

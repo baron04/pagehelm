@@ -6,7 +6,7 @@ classify the request correctly and connect each question to the right evidence.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import re
 import unicodedata
@@ -16,6 +16,7 @@ from ..privacy import redact_sensitive_assignments
 from ..answer.evidence import EvidenceUnknown, PageEvidence, TurnEvidence
 
 MAX_ANSWERS = 8
+MAX_TASK_DECLARATIONS = 3
 ANSWER_KINDS = ("data", "ui", "knowledge")
 DECLARE_TASK_TOOL = {"type": "function", "function": {
     "name": "declare_task",
@@ -29,7 +30,11 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
         "values/counts/records, ui for visible controls/selected states/UI guidance, "
         "knowledge for source rules/implementation or documented explanations. "
         "Every request character except punctuation and connecting words must be covered. "
-        "This immutable declaration grants no permission or tool. Runtime results decide "
+        "The original request cannot change and this declaration grants no permission or tool. "
+        "You may correct its interpretation with declare_task, at most twice: before facts "
+        "repartition exact clauses if needed; after facts preserve those clauses, do not lower "
+        "data/knowledge to UI or record/draft/mutation to a lesser outcome. A revision issues "
+        "new answer IDs and invalidates target/draft/consent bindings. Runtime results decide "
         "what can be fulfilled; only evidence-backed answers can settle these questions. "
         "Set action_kind from the requested result: record for a specific record's "
         "detail or tab, page for general navigation/UI state, draft for form prefill, "
@@ -48,16 +53,21 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
 TASK_SYSTEM = """
 First call declare_task for the USER REQUEST, before application reads or actions.
 Separate reaching a page or preparing a draft from answering a question. Unknown or
-unsupported questions still belong in the declaration; application metadata cannot
-rewrite it. Its answer references freeze before results. In finish.answer.answers_for,
-map each aN to the exact evidence_refs actually selected by that answer's conclusions.
+unsupported questions still belong in the declaration. Every declaration covers the
+unchanged original text. Correct an initial interpretation with declare_task, at most
+twice; use the newest answer IDs in finish.answer.answers_for and explicitly bind them
+to the exact evidence_refs actually selected by that answer's conclusions. An older
+declaration's bindings are invalid. Before facts, exact clauses may be repartitioned;
+after facts, preserve the clauses and never reduce an unmet record/draft/mutation to
+a page, or data/knowledge to UI. Entity and field interpretations can still be corrected
+with new reads. Corrections do not change the request, permissions or evidence bytes.
 A page/action receipt cannot replace a requested fact. Missing answers or an unfinished
 operation require partial/unable, preserving any observed action and verified answers.
 The declaration does not authorize writes or submission. Existing approval still applies.
-Freeze answer_kinds alongside the original clauses, before reading evidence. UI control
+Classify answer_kinds alongside the original clauses, before reading evidence. UI control
 labels and selected states (saw=ui_state) cannot settle data or knowledge questions. Read
-the actual content or report that question unanswered; do not reclassify it after a result.
-Freeze action_kind from the requested result, before feasibility is known. A record's
+the actual content or report that question unanswered; do not downgrade it to UI after a result.
+Declare action_kind from the requested result, before feasibility is known. A record's
 detail/tab needs an application-verified rendered record; an empty lookup cannot make
 a list page complete it. Recover its name/type, or report partial/unable. For a general
 page use page, for prefill use draft, for a persisted change use mutation, else none.
@@ -75,13 +85,16 @@ class TaskRequirements:
     answer_requests: tuple[str, ...]
     action_kind: str
     answer_kinds: tuple[str, ...]
+    revision: int = 1
 
     @property
     def answer_ids(self) -> tuple[str, ...]:
-        return tuple(f"a{i}" for i in range(1, len(self.answer_requests) + 1))
+        prefix = "" if self.revision == 1 else f"r{self.revision}-"
+        return tuple(f"{prefix}a{i}" for i in range(1, len(self.answer_requests) + 1))
 
     def render(self) -> str:
         return "FROZEN USER REQUIREMENTS (not application authority):\n" + json.dumps({
+            "revision": self.revision,
             "action_request": self.action_request,
             "action_kind": self.action_kind,
             "answers": dict(zip(self.answer_ids, self.answer_requests)),
@@ -145,6 +158,32 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
     return TaskRequirements(action, answers, kind, tuple(kinds))
 
 
+def revise_requirements(previous: TaskRequirements, proposed: TaskRequirements, *,
+                        committed: bool) -> TaskRequirements:
+    """Correct interpretation without erasing a result's unmet user obligations.
+
+    The immutable original prompt is separately checked by parse_requirements. Once
+    facts or effects exist, clauses cannot be removed or shuffled to another role;
+    only non-UI answer kinds or a stricter general-page result can change. This does
+    not establish semantic entailment of the model's initial classification.
+    """
+    if previous.revision >= MAX_TASK_DECLARATIONS:
+        raise ValueError("task interpretation correction limit reached")
+    if replace(proposed, revision=previous.revision) == previous:
+        raise ValueError("task interpretation is unchanged; continue with the current declaration")
+    if committed:
+        if (previous.action_request, previous.answer_requests) != (
+                proposed.action_request, proposed.answer_requests):
+            raise ValueError("after facts or actions, preserve every original operation and answer clause")
+        if (previous.action_kind != proposed.action_kind
+                and previous.action_kind != "page"):
+            raise ValueError("do not lower or replace the original record/draft/mutation outcome after results")
+        if any(before != "ui" and after == "ui" for before, after in zip(
+                previous.answer_kinds, proposed.answer_kinds)):
+            raise ValueError("a data/knowledge question cannot become UI after results")
+    return replace(proposed, revision=previous.revision + 1)
+
+
 def record_target_unmet(requirements, observation) -> tuple[str, ...]:
     """Only application-reported record identity satisfies a frozen record outcome.
 
@@ -188,7 +227,7 @@ def finish_schema(tool: dict, requirements: TaskRequirements) -> dict:
     result = deepcopy(tool)
     payload = result["function"]["parameters"]["properties"]["answer"]
     payload["properties"]["answers_for"] = {"type": "array", "maxItems": MAX_ANSWERS,
-        "description": "Bind each requested aN to evidence_refs selected by valid conclusions.",
+        "description": "Bind each latest declaration's request_ref to evidence_refs selected by valid conclusions.",
         "items": {"type": "object", "additionalProperties": False,
             "properties": {
                 "request_ref": {"type": "string", "enum": list(requirements.answer_ids)},

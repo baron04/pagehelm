@@ -356,6 +356,11 @@ class ApprovalWatch:
         """The operation the card was answered for has been dispatched, or something was."""
         self.answered_for = None
 
+    def invalidate_operation(self) -> None:
+        """A changed task interpretation needs new leave before further page work."""
+        self.operation_granted = False
+        self.answered_for = None
+
     def operation_result(self) -> dict | None:
         return (dict(self.operation_counts)
                 if self.operation_confirmation is not None else None)

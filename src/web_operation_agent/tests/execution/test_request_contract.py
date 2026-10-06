@@ -13,8 +13,9 @@ from web_operation_agent.execution import product, turn
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
 from web_operation_agent.execution.prompts import _trim
 from web_operation_agent.execution.request_contract import (
-    TaskRequirements, action_unmet, parse_requirements, finish_schema, missing_answers)
-from web_operation_agent.schemas import POTENTIALLY_WRITING_ACTIONS
+    TaskRequirements, action_unmet, parse_requirements, revise_requirements,
+    finish_schema, missing_answers)
+from web_operation_agent.schemas import POTENTIALLY_WRITING_ACTIONS, ElementRef
 from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
 from web_operation_agent.tests.execution.test_answer_product import _EvidenceExecutor
 from web_operation_agent.tests.support.answer import _answer
@@ -30,6 +31,16 @@ DECLARATION = {"action_request": "打开公司详情", "action_kind": "record",
 
 class _RecordBrowser(_RemoteBrowser):
     """This test application's verifier, not a URL heuristic in product code."""
+    def __init__(self, channel, **kwargs):
+        super().__init__(channel, **kwargs)
+        self.url = channel.latest_observation_envelope.observation.url
+
+    def observe(self):
+        obs = super().observe()
+        obs.elements.append(ElementRef("companies-link", "link", "Companies", "a",
+            obs.epoch, {"href": "/companies"}))
+        return obs
+
     def execute(self, *args, **kwargs):
         receipt = super().execute(*args, **kwargs)
         obs = receipt.observation
@@ -157,9 +168,33 @@ class RequestContractShape(unittest.TestCase):
         self.assertIn(req, [message["content"] for message in trimmed])
         self.assertIn(REQUEST, [message["content"] for message in trimmed])
 
+    def test_after_results_correction_cannot_drop_a_clause_or_weaken_its_outcome(self):
+        original = parse_requirements(DECLARATION, REQUEST)
+        for proposed in (
+            replace(original, action_kind="page"),
+            replace(original, answer_kinds=("ui", "data")),
+            replace(original, answer_requests=("金额", "查询名称")),
+            replace(original, answer_requests=("查询名称",), answer_kinds=("data",)),
+        ):
+            with self.subTest(proposed=proposed), self.assertRaises(ValueError):
+                revise_requirements(original, proposed, committed=True)
+
+    def test_accepted_corrections_are_bounded_and_do_not_reset_on_a_noop(self):
+        original = parse_requirements(DECLARATION, REQUEST)
+        second = revise_requirements(original,
+            replace(original, answer_kinds=("knowledge", "data")), committed=True)
+        with self.assertRaises(ValueError):
+            revise_requirements(second, second, committed=True)
+        third = revise_requirements(second,
+            replace(second, answer_kinds=("data", "knowledge")), committed=True)
+        self.assertEqual(("r3-a1", "r3-a2"), third.answer_ids)
+        with self.assertRaises(ValueError):
+            revise_requirements(third, original, committed=False)
+
 
 class RequestContractProduct(unittest.TestCase):
-    def execute(self, replies, *, prompt=REQUEST, declaration=DECLARATION, reads=True, prefix=()):
+    def execute(self, replies, *, prompt=REQUEST, declaration=DECLARATION, reads=True,
+                prefix=(), channel=None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tools = BusinessToolRuntime((_skill(root / "skill.json"),), _EvidenceExecutor())
@@ -167,14 +202,19 @@ class RequestContractProduct(unittest.TestCase):
             if reads:
                 script += [("load_skill", {"skill_id": "fixture.companies-query"}), ("query_companies", {})]
             chat = _Chat([*script, *replies])
-            executor = AgentTurnExecutor(channel=_Channel(), chat=chat, business_tools=tools,
+            channel = channel or _Channel()
+            obs = channel.latest_observation_envelope.observation
+            obs.elements.append(ElementRef("companies-link", "link", "Companies", "a",
+                obs.epoch, {"href": "/companies"}))
+            executor = AgentTurnExecutor(channel=channel, chat=chat, business_tools=tools,
                 config=AgentTurnConfig(supported_scope="Read companies.", require_task_contract=True,
                     ledger_path=root / "run.jsonl", plain_business_answer_min_page_actions=0,
+                    step_budget=16,
                     disabled_actions=POTENTIALLY_WRITING_ACTIONS - {"goto"}),
                 control=ReadOnlyControl(), run_id_factory=lambda message: "contract-run")
             with patch.object(turn, "RemoteBrowserClient", _RecordBrowser):
                 result = executor.run_once({"message_id": "contract", "text": prompt,
-                                            "page_url": "http://app.test/companies"})
+                    "page_url": channel.latest_observation_envelope.observation.url})
             return result, chat
 
     def test_application_calls_and_plain_content_cannot_bypass_first_declaration(self):
@@ -281,6 +321,71 @@ class RequestContractProduct(unittest.TestCase):
             declaration={"action_request": prompt, "action_kind": "record", "answer_requests": [], "answer_kinds": []})
         self.assertEqual(result.status, AgentTurnStatus.REFUSED)
         self.assertIn("未完成操作：打开公司详情", result.user_answer)
+
+    def test_wrong_initial_action_kind_can_be_corrected_before_application_facts(self):
+        prompt = "打开公司列表"
+        declaration = {"action_request": prompt, "action_kind": "record",
+                       "answer_requests": [], "answer_kinds": []}
+        result, chat = self.execute([
+            ("declare_task", {**declaration, "action_kind": "page"}),
+            ("set_target", {"path": "/companies"}),
+            ("goto", {"url": "/companies"}),
+            ("finish", {"outcome": "acted"})],
+            prompt=prompt, declaration=declaration, reads=False)
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("declare_task", chat.tool_names[1])
+        frozen = [m for m in chat.messages[-1] if m["role"] == "user"
+                  and m.get("content", "").startswith("FROZEN USER REQUIREMENTS")]
+        self.assertEqual(1, len(frozen))
+        self.assertIn('"revision": 2', frozen[0]["content"])
+        self.assertNotIn('"action_kind": "record"', frozen[0]["content"])
+
+    def test_stricter_correction_invalidates_arrival_until_the_current_record_is_rebound(self):
+        prompt = "打开公司详情"
+        declaration = {"action_request": prompt, "action_kind": "page",
+                       "answer_requests": [], "answer_kinds": []}
+        channel = _Channel(page_url="http://app.test/start")
+        result, chat = self.execute([
+            ("set_target", {"path": "/object/company/company-1"}),
+            ("goto", {"url": "/object/company/company-1"}),
+            ("declare_task", {**declaration, "action_kind": "record"}),
+            ("finish", {"outcome": "acted"}),
+            ("set_target", {"path": "/object/company/company-1"}),
+            ("finish", {"outcome": "acted"})],
+            prompt=prompt, declaration=declaration, channel=channel)
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED,
+                         (result.terminal_reason, str(chat.messages[-1][-4:])))
+        self.assertIn("frozen operation is unfinished", str(chat.messages))
+        self.assertEqual(1, len(channel.approvals))
+        self.assertEqual(1, _RemoteBrowser.instances[-1].actions.count("goto"))
+
+    def test_partial_after_correction_preserves_actual_action_but_not_old_completion_proof(self):
+        prompt = "打开公司详情"
+        declaration = {"action_request": prompt, "action_kind": "page",
+                       "answer_requests": [], "answer_kinds": []}
+        result, _ = self.execute([
+            ("set_target", {"path": "/object/company/company-1"}),
+            ("goto", {"url": "/object/company/company-1"}),
+            ("declare_task", {**declaration, "action_kind": "record"}),
+            ("finish", {"outcome": "unable"})], prompt=prompt, declaration=declaration)
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIn("未完成操作：打开公司详情", result.user_answer)
+        self.assertIn("http://app.test/object/company/company-1", result.user_answer)
+        self.assertIn("已到达请求的页面状态", result.user_answer)
+        self.assertEqual(1, _RemoteBrowser.instances[-1].actions.count("goto"))
+
+    def test_after_facts_old_question_bindings_are_rejected_until_explicitly_rebound(self):
+        rebound = answer()
+        for binding in rebound["answer"]["answers_for"]:
+            binding["request_ref"] = "r2-" + binding["request_ref"]
+        result, chat = self.execute([
+            ("declare_task", {**DECLARATION, "answer_kinds": ["knowledge", "data"]}),
+            ("goto", {"url": "/object/company/company-1"}),
+            ("finish", answer()), ("finish", rebound)])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("12.50 USD", result.user_answer)
+        self.assertIn("r2-a1", str(chat.messages[-1]))
+        self.assertEqual(1, _RemoteBrowser.instances[-1].actions.count("goto"))
 
     def test_verified_current_record_receipt_matches_its_type_and_observation(self):
         requirements = TaskRequirements("Open the record", (), "record", ())

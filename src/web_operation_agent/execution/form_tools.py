@@ -9,6 +9,7 @@ import time
 from ..transport.browser import TransportError, TurnCancelled
 from ..answer.evidence import EvidenceUnknown, SourceEvidence
 from ..answer.answer_view import form_handoff_answer
+from .request_contract import action_unmet
 from ..business.errors import (BusinessToolError, BusinessToolPermissionError,
                                BusinessToolRequestError, BusinessToolContractError,
                                BusinessToolIdentityError)
@@ -198,20 +199,26 @@ def prefill_form(session, turn: "_Turn", call: dict, name: str, args: dict) -> "
         route_digest=hashlib.sha256(draft.route.encode()).hexdigest(),
         fields=[item.field for item in draft.fields],
         submitted=False, persisted=False, user_takeover=True)
-    if session._task_requirements is not None and session._task_requirements.answer_requests:
+    requirements = session._task_requirements
+    if requirements is not None and (requirements.answer_requests or action_unmet(
+            requirements, session._answer_action_receipt, turn.obs)):
         session._finalizing = True
-        session._answers.action_answer_required = True
+        session._answers.action_answer_required = bool(requirements.answer_requests)
         try:
             _, evidence_feedback = capture_page_snapshot(session, turn.obs, step=turn.step)
         except (ValueError, TypeError, EvidenceUnknown):
             evidence_feedback = "Use a fresh observation or registered read for missing facts."
         return session._reply(turn, call, turn.result.agent_said + "\n"
-            "FORM PREFILL VERIFIED. Complete the frozen accompanying questions using "
+            "FORM PREFILL VERIFIED; this is not a persisted change. Check the original "
+            "operation and complete any accompanying questions using "
             "only observation, registered reads, offered source lookup, compute and finish. No navigation, "
             "opening, filling or submission is permitted after this handoff. "
             "Report the observed form_prefill action with valid answers in finish, "
             "or preserve the handoff and unresolved questions in a partial result.\n"
             + evidence_feedback)
+    if requirements is not None:
+        turn.result.verified_answer = {"conclusions": (), "coverage": "complete", "prose": "",
+            "lowered_because": (), "action": session._answer_action_receipt}
     return _Next(session._finish(turn.result, turn.started_at, "agent_finished",
                               turn.result.agent_said, steps=turn.step))
 

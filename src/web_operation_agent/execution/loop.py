@@ -564,7 +564,7 @@ def run_loop(session) -> RunResult:
             continue
 
         if (session._target_reached and session._navigation_only and not session._finalizing
-                and name not in {"finish", "set_target", "ask_user", "withdraw_request"}):
+                and name not in {"finish", "set_target", "declare_task", "ask_user", "withdraw_request"}):
             # A pure navigation request can stop at its page target. A request
             # that also asks a question still needs reads or observation after
             # reaching a page, so its target cannot lock the tool surface.
@@ -572,7 +572,7 @@ def run_loop(session) -> RunResult:
                                   dispatched=False, side_effect_possible=False)
             messages += [_assistant_call(call), _tool_result(
                 call, "TARGET REACHED: the page already shows the declared state. Only "
-                      "finish and set_target are available. Call finish to report the "
+                      "finish, set_target and any offered declare_task are available. Call finish to report the "
                       "action if the request is complete, or set_target with the next "
                       "state if it is not.")]
             continue

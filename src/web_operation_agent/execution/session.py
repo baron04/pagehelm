@@ -70,7 +70,7 @@ from .click_policy import ClickPolicy
 from .action_admission import ActionAdmission, ApplicationActionPolicy
 from .target import (MAX_TARGET_DECLARATIONS, TargetState, describe_target, parse_target,
                      required_page_controls, required_page_effects)
-from .request_contract import parse_requirements
+from .request_contract import parse_requirements, revise_requirements
 from ..business.writes import PRE_DISPATCH_ERRORS, WatchState, WriteWatch
 from .prompts import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM, TOOL_SCHEMAS, _CAPABILITY_QUESTION,
                       _NAVIGATION_EXTRA_GOAL, _NAVIGATION_ONLY, _PLAN_PREAMBLE,
@@ -366,6 +366,9 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         # Self-capability replies are already settled from server-owned capabilities.
         self.require_task_contract = require_task_contract and not self._capability_question
         self._task_requirements = None
+        self._requirements_context = None
+        self._requirements_initial_evidence = frozenset()
+        self._superseded_action_receipt = None
         if not isinstance(allow_clarification, bool):
             raise ValueError("allow_clarification must be a boolean")
         if not isinstance(deterministic_read_navigation, bool):
@@ -704,23 +707,49 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                 and not self._explicit_mutation_intent)
 
     def _tool_declare_task(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
-        if self._task_requirements is not None:
-            return self._reply(turn, call, "The USER REQUEST requirements are frozen; they cannot be removed or rewritten.")
+        previous = self._task_requirements
         try:
             requirements = parse_requirements(args, self._task_request_text)
+            if previous is not None:
+                requirements = revise_requirements(previous, requirements, committed=bool(
+                    self.page_actions or turn.successful_business_tools
+                    or self._answer_action_receipt
+                    or any(ref not in self._requirements_initial_evidence
+                           for ref in self.evidence.ids())))
         except ValueError as exc:
             self.ledger.append("task_declaration_refused", step=turn.step, reason=str(exc))
             return self._reply(turn, call, "TASK DECLARATION REFUSED: " + str(exc))
         self._task_requirements = requirements
         self._answers.answer_mode = True
+        if previous is not None:
+            self._superseded_action_receipt = self._answer_action_receipt or self._superseded_action_receipt
+            self._answer_action_receipt = None
+            self._target = None
+            self._target_reached = False
+            self._form_draft = None
+            self._form_draft_verification = None
+            self._approvals.invalidate_operation()
+            self.ledger.append("task_interpretation_revised", step=turn.step,
+                revision=requirements.revision, previous_revision=previous.revision,
+                bindings_invalidated=True, operation_consent_invalidated=True,
+                dispatched=False, side_effect_possible=False)
         if requirements.answer_requests or requirements.action_kind in {"draft", "mutation"}:
             self._navigation_only = False
-        if requirements.answer_requests:
-            self._answers.action_answer_required = True
-        self.ledger.append("task_requirements_frozen", step=turn.step,
-            action=bool(requirements.action_request), answers=len(requirements.answer_requests))
+        self._answers.action_answer_required = bool(requirements.answer_requests)
+        if previous is None:
+            # Initial context (such as a selected Skill) precedes task interpretation;
+            # only subsequent task results commit it to the stronger repair rules.
+            self._requirements_initial_evidence = frozenset(self.evidence.ids())
+            self.ledger.append("task_requirements_frozen", step=turn.step,
+                action=bool(requirements.action_request), answers=len(requirements.answer_requests))
         # Keep this separate from snapshots, which may be compacted after actions.
-        turn.messages.insert(1, {"role": "user", "content": requirements.render()})
+        updated = {"role": "user", "content": requirements.render()}
+        own = next((i for i,m in enumerate(turn.messages) if m is self._requirements_context), None)
+        if own is None:
+            turn.messages.insert(1, updated)
+        else:
+            turn.messages[own] = updated
+        self._requirements_context = updated
         return self._reply(turn, call, requirements.render())
 
     def _tool_set_target(self, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":

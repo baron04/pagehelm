@@ -310,7 +310,10 @@ class SessionContext:
                           "user's request; do not report the whole request complete "
                           "from this page state alone.")
             return ("TARGET REACHED (server-observed): " + describe_target(self._target)
-                    + ". Only finish and set_target are available now. If this completes "
+                    + (". Use finish, set_target, or declare_task for a bounded interpretation correction. "
+                       if self.require_task_contract else
+                       ". Only finish and set_target are available now. ")
+                    + "If this completes "
                       "the user's request, call finish with {\"outcome\": \"acted\"} and "
                       "nothing else; the server reports the observed state. Add an answer "
                       "only if the user also asked a question, citing recorded evidence "
