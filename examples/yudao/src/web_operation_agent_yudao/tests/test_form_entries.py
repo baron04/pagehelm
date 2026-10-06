@@ -427,6 +427,52 @@ class CreationEntryTests(unittest.TestCase):
         with self.assertRaises(BusinessToolPermissionError):
             verifier.adopt_current(obs, context=self.context)
 
+    def test_reviewed_contact_opener_on_parent_discovers_and_binds_only_child_editor(self):
+        _, client, _, _, _ = self.creation("contact-create")
+        component = CREATE_ENTRIES["contact-create"][5]
+        path = self.tree.root / component
+        path.write_text('<template><el-form :model="formData">' + ''.join(
+            f'<el-form-item label="{label}" prop="{field}"><el-input v-model="formData.{field}" /></el-form-item>'
+            for field, label in (("name", "联系人姓名"), ("mobile", "手机"))) + '</el-form></template>')
+        files = (CREATE_ENTRIES["contact-create"][4], component, REVIEWED_FILES[2], REVIEWED_FILES[0])
+        review = NativeCreateReview.load({"schema_version": 1, "release": self.tree.release,
+            "reference": "contact-create", "hashes": {p: hashlib.sha256(self.tree.read_text(p).encode()).hexdigest()
+                for p in files}}, self.tree)
+        verifier = NativeCreateEntryVerifier(self.tree, review, client)
+        port = NativeEntryFormPort(NativeEntryVerifiers(verifier))
+        before = replace(self.before, page_route=self.route,
+            elements=[replace(self.before.elements[0], name="创建联系人")])
+        self.assertEqual([(r.reference, r.kind) for r in port.form_entries(before, context=self.context)],
+                         [("contact-create", "create")])
+        attrs = self.after.elements[0].attrs
+        after = replace(self.after, page_route=self.route, elements=[
+            ElementRef("name", "textbox", "", "input", 3, {**attrs, "field_label": "联系人姓名"}),
+            ElementRef("mobile", "textbox", "", "input", 3, {**attrs, "field_label": "手机"}),
+            ElementRef("owner", "combobox", "", "input", 3, {**attrs, "field_label": "负责人"}),
+            self.after.elements[1]])
+        entry = port.plan_entry("contact-create", before, context=self.context)
+        reference = port.accept_entry(entry, before, self.receipt, after, context=self.context)
+        self.assertEqual(port.describe_form(after, context=self.context).reference, reference)
+        tools = ApplicationFormTools(port, application_id="yudao")
+        draft, _ = tools.prepare_current(after, reference=reference,
+            values=(("name", "Synthetic child"), ("mobile", "00000000001")), context=self.context)
+        self.assertEqual([f.field for f in draft.fields], ["name", "mobile"])
+        changed = replace(after, url="https://synthetic.test/crm/customer/detail/13",
+            page_route="/crm/customer/detail/13", record_route="/crm/customer/detail/13")
+        self.assertIsNone(port.describe_form(changed, context=self.context))
+        self.assertIsNone(port.describe_form(after, context=self.context))
+        for invalid in (replace(before, record_route=""), replace(before, page_route=""),
+                replace(before, url=before.url + "?id=12"),
+                replace(before, elements=[before.elements[0], replace(before.elements[0], ref="duplicate")])):
+            self.assertEqual(port.form_entries(invalid, context=self.context), ())
+        verifier = NativeCreateEntryVerifier(self.tree, review, client)
+        entry = verifier.plan_entry("contact-create", before, context=self.context)
+        with self.assertRaises(BusinessToolRequestError):
+            verifier.accept_entry(entry, before, self.receipt, self.after, context=self.context)
+        client.actor = 3
+        with self.assertRaises(BusinessToolIdentityError):
+            verifier.plan_entry("contact-create", before, context=self.context)
+
     def test_separate_creation_policies_bind_exact_receipt_and_no_record(self):
         for reference in CREATE_ENTRIES:
             with self.subTest(reference=reference):

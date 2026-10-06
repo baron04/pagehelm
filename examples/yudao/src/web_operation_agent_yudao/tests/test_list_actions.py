@@ -1,14 +1,16 @@
 """Query drafts are distinct from successful actor-bound applied reads."""
 from dataclasses import replace
+from datetime import date
+from types import SimpleNamespace
 import hashlib
 import unittest
 
 from web_operation_agent.execution.action_admission import ActionIntent, ActionAdmissionRefused
 from web_operation_agent.business.errors import BusinessToolRequestError
-from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexPage
+from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexPage, IndexField
 from web_operation_agent.schemas import ElementRef, PageObservation
 from web_operation_agent_yudao.list_actions import NativeListActions, PAGINATION_COMPONENT, _hash
-from web_operation_agent_yudao.page_filters import NativePageFilterReview
+from web_operation_agent_yudao.page_filters import NativePageFilterReview, NativePageFilters
 from . import test_form_entries as entries_fixture
 
 
@@ -39,6 +41,7 @@ class NativeListActionTests(unittest.TestCase):
         self.index = ApplicationIndex(entities=(IndexEntity('orders','Orders'),),
                                      pages=(IndexPage('/orders','Orders','Orders',entity='orders'),))
         self.policy = NativeListActions(self.tree,(review,))
+        self.review = review
         attrs = dict(form_scope='form:query',form_instance='synthetic-instance',page_control='query')
         self.before = PageObservation(1,1,'https://synthetic.test/orders','Orders',[],[
             ElementRef('field','textbox','编号','input',1,{**attrs,'field_label':'编号','query_field':'no'}),
@@ -70,6 +73,53 @@ class NativeListActionTests(unittest.TestCase):
         self.assertTrue(self.verify(pair,applied))
         self.assertFalse(self.verify(pair,replace(applied,page_read={**applied.page_read,'query_fields':{}})))
 
+    def test_single_choice_query_uses_reviewed_mapping_and_new_applied_read(self):
+        select = '<el-select v-model="queryParams.status"><el-option label="Waiting" :value="0" />' \
+                 '<el-option label="Ready" :value="10" /></el-select>'
+        source = SOURCE.replace('label="编号" prop="no"', 'label="State" prop="status"').replace(
+            '<el-input v-model="queryParams.no" @keyup.enter="searchRows" />', select)
+        self.integration(source)
+        dictionary = self.tree.root / 'ui/src/utils/dict.ts'
+        dictionary.parent.mkdir(parents=True, exist_ok=True)
+        dictionary.write_text('export const DICT_TYPE = {}')
+        self.index = replace(self.index, entities=(IndexEntity('orders', 'Orders', fields=(
+            IndexField('status', 'State', 'choice', choices=('Waiting', 'Ready')),)),))
+        data = SimpleNamespace(_client=self.client, index=lambda **kw:self.index)
+        self.policy.page_filters = NativePageFilters(data, self.tree, (self.review,), date(2026,10,3))
+        self.before = replace(self.before, elements=[replace(e, role='combobox', attrs={**e.attrs,
+            'query_field':'status', 'field_label':'State'}) if e.ref=='field' else replace(e, name='搜索')
+            if e.ref=='search' else e for e in self.before.elements])
+        # NativePageFilters binds its own search name; retain the reviewed handler.
+        source = source.replace('>查找<', '>搜索<')
+        self.tree.resolve(self.review.component).write_text(source)
+        self.review = replace(self.review, hashes=tuple((p, hashlib.sha256(self.tree.read_text(p).encode()).hexdigest())
+            for p, _ in self.review.hashes))
+        self.policy.reviews = (self.review,)
+        self.policy.page_filters.reviews = (self.review,)
+        pair = self.admit('select', {'ref':'field', 'value':'Waiting', 'option_label':'Waiting'})
+        selected = replace(self.before, epoch=2, elements=[replace(e, epoch=2,
+            attrs={**e.attrs, 'selected_option':'Waiting'}) if e.ref=='field' else replace(e, epoch=2)
+            for e in self.before.elements])
+        self.assertTrue(self.verify(pair, selected))
+        search = self.admit('click', {'ref':'search'}, selected)
+        self.assertFalse(self.verify(search, selected))
+        applied = replace(selected, epoch=3, elements=[replace(e, epoch=3) for e in selected.elements],
+            page_read={**selected.page_read, 'revision':2,
+            'query_fields':{'status':_hash(['0'])}})
+        self.assertTrue(self.verify(search, applied))
+        raced = replace(applied, elements=[replace(e, attrs={**e.attrs,
+            'selected_option':'Ready'}) if e.ref=='field' else e for e in applied.elements])
+        self.assertFalse(self.verify(search, raced))
+        self.assertFalse(self.verify(search, replace(applied, page_read={**applied.page_read,
+            'query_fields':{'status':_hash(['10'])}})))
+        for args in ({'ref':'field','value':'10','option_label':'Waiting'},
+                     {'ref':'field','value':'Waiting','option_label':'Missing'},
+                     {'ref':'field','value':'0'}):
+            with self.subTest(args=args), self.assertRaises((ActionAdmissionRefused,BusinessToolRequestError)):
+                self.admit('select',args)
+        self.assertFalse(self.verify(pair, replace(selected, elements=[replace(e,
+            attrs={**e.attrs,'form_instance':'another'}) for e in selected.elements])))
+
     def test_paging_preserves_applied_filters_and_requires_a_new_successful_read(self):
         self.integration()
         self.before.page_read.update(query_fields={'status':_hash(['20'])},query_digest=_hash([['status','20']]))
@@ -91,6 +141,15 @@ class NativeListActionTests(unittest.TestCase):
         self.integration()
         (self.tree.root/'ui/src/views/orders/index.vue').write_text('changed')
         with self.assertRaises(BusinessToolRequestError):self.admit('click',{'ref':'page'})
+
+    def test_ref_unwrap_and_async_search_preserve_the_same_readonly_effect(self):
+        source = SOURCE.replace('OrdersApi.page(queryParams)', 'OrdersApi.page(unref(queryParams))') \
+            .replace('queryParams.pageNo = 1;loadRows()', 'queryParams.value.pageNo = 1;await loadRows()')
+        self.integration(source)
+        self.admit('click', {'ref':'search'})
+        self.integration(source.replace('await loadRows()', 'await save();await loadRows()'))
+        with self.assertRaises(ActionAdmissionRefused):
+            self.admit('click', {'ref':'search'})
 
     def test_unknown_buttons_dialogs_and_out_of_range_paging_are_not_enabled(self):
         self.integration()

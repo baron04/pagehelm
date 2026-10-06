@@ -332,6 +332,15 @@ class FinishHandler:
                 ref_hint = (
                     " Current answer evidence refs: " + ", ".join(refs[:24]) + "."
                     if refs else " No answer evidence has been recorded yet.")
+                # Navigation does not expire typed reads. Restore their exact
+                # kinds and values when a repair cites a page/element placeholder,
+                # instead of directing a mixed task to read the page again.
+                held = tuple(ref for ref in refs
+                    if isinstance(self.evidence.get(ref), ComputationEvidence))[-8:]
+                held_hint = ("\nHELD AGGREGATE EVIDENCE (already computed; no new read "
+                             "or compute is needed if its scope answers the request):\n"
+                             + answer_protocol.evidence_index(self.evidence, held)
+                             if held else "")
                 if self._task_requirements is not None:
                     # Name the exact intersection instead of listing all read
                     # fields again: query children are not selected conclusions,
@@ -354,7 +363,7 @@ class FinishHandler:
                 attempted_page_fact = (isinstance(entries, list) and any(
                     isinstance(entry, dict) and entry.get("kind") == "page_observation"
                     for entry in entries))
-                if (self._finalizing and attempted_page_fact
+                if (self._finalizing and attempted_page_fact and not held
                         and not self._refused_reads and
                         not any(ref.startswith("obs") for ref in refs)):
                     try:
@@ -374,7 +383,7 @@ class FinishHandler:
                           "outcome=unable. ")
                 messages += [_assistant_call(call), _tool_result(
                     call, "ANSWER REFUSED: " + str(exc)[:500] + "." + ref_hint +
-                    repair + self._answers.render_action() + page_hint)]
+                    repair + held_hint + self._answers.render_action() + page_hint)]
                 return self._resume(turn, messages, obs, successful_business_tools)
             verified = self._answers.with_refused_reads(self._answers.with_labels(verified))
             result.verified_answer = verified

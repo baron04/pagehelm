@@ -73,6 +73,10 @@ class ActionIntent:
             if type(args.pop("epoch")) is not int or arguments["epoch"] != observation.epoch:
                 raise ActionAdmissionRefused("stale_binding")
         expected = {"url"} if action == "goto" else {"ref", "value"} if action in {"fill", "select"} else {"ref"}
+        if action == "select" and "option_label" in args:
+            if not isinstance(args["option_label"], str) or not args["option_label"].strip():
+                raise ActionAdmissionRefused("invalid_target")
+            expected |= {"option_label"}
         if action == "click" and "expect_navigation" in args:
             if not isinstance(args["expect_navigation"], bool):
                 raise ActionAdmissionRefused("invalid_target")
@@ -160,7 +164,17 @@ class ActionAdmission:
     def query_verified(self, observation: PageObservation) -> bool:
         """A read snapshot counts only after this turn's guarded application check."""
         return self._verified_query is not None and self._verified_query == (
-            observation.url, observation.page_route, _encoded(observation.page_read))
+            observation.url, observation.page_route, _encoded(observation.page_read),
+            self._query_choices(observation))
+
+    @staticmethod
+    def _query_choices(observation):
+        # Bind visible choices to the verified read. A later user edit or editor
+        # replacement cannot inherit that proof even while its last GET is unchanged.
+        return _encoded(sorted((e.attrs.get("query_field", ""), e.attrs.get("form_scope", ""),
+            e.attrs.get("form_instance", ""), e.attrs.get("selected_option", ""))
+            for e in observation.elements if e.role == "combobox"
+            and e.attrs.get("page_control") == "query"))
 
     def _check(self, context, checkpoint):
         checkpoint()
@@ -243,4 +257,5 @@ class ActionAdmission:
                 and before.page_read is not None and after.page_read is not None
                 and before.page_read["path"] == after.page_read["path"]
                 and after.page_read["revision"] > before.page_read["revision"]):
-            self._verified_query = (after.url, after.page_route, _encoded(after.page_read))
+            self._verified_query = (after.url, after.page_route, _encoded(after.page_read),
+                                    self._query_choices(after))

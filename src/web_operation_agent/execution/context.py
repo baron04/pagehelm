@@ -402,7 +402,7 @@ def _render_observation(obs: PageObservation, max_elements: int = RENDER_ELEMENT
             bits.append(f'"{e.name}"')
         for k in ("href", "target", "name", "value", "action", "options", "checked",
                   "disabled", "field_label", "page_control", "query_field", "page_number", "page_size",
-                  "aria-expanded"):
+                  "aria-expanded", "selected_option"):
             if k in e.attrs and e.attrs[k]:
                 v = e.attrs[k]
                 if isinstance(v, list):

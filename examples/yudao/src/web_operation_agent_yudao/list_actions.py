@@ -12,6 +12,8 @@ from web_operation_agent.execution.action_admission import (
     ActionAdmissionRefused, ActionEffect, ActionPermit)
 from .source import _function_body
 from .source_forms import _Template, _walk
+from web_operation_agent.goal.ports import PagePlan
+from web_operation_agent.goal.spec import Filter
 
 PAGINATION_COMPONENT = "ui/src/components/Pagination/index.vue"
 
@@ -51,7 +53,7 @@ def _compile(tree, review):
     body = _plain(_function_body(source, listing))
     # The reviewed standard list handler only assigns loading, returned rows and total.
     if not re.fullmatch(r"loading\.value=true;?try\{constdata=await[A-Za-z][A-Za-z0-9_]*\."
-        r"[A-Za-z][A-Za-z0-9_]*\(queryParams\);?list\.value=data\.list;?"
+        r"[A-Za-z][A-Za-z0-9_]*\((?:queryParams(?:\.value)?|unref\(queryParams\))\);?list\.value=data\.list;?"
         r"total\.value=data\.total;?\}finally\{loading\.value=false;?\}", body):
         raise ActionAdmissionRefused("unreviewed")
     buttons = []
@@ -60,7 +62,7 @@ def _compile(tree, review):
         if node.tag == "el-button":
             handler = node.attrs.get("@click", "")
             if (re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", handler) and re.fullmatch(
-                    r"queryParams\.pageNo=1;?" + re.escape(listing) + r"\(\);?",
+                    r"queryParams(?:\.value)?\.pageNo=1;?(?:await)?" + re.escape(listing) + r"\(\);?",
                     _plain(_function_body(source, handler)))):
                 label = " ".join(" ".join(n.text for n, _ in _walk(node)).split())
                 if label and not any(k in node.attrs for k in ("v-bind", "href", "@click.prevent", "@click.stop")):
@@ -68,30 +70,34 @@ def _compile(tree, review):
         if node.tag != "el-form-item" or not node.attrs.get("prop") or not node.attrs.get("label"):
             continue
         key, label = node.attrs["prop"], node.attrs["label"]
-        inputs = [n for n, _ in _walk(node) if n.tag in {"el-input", "el-input-number"}]
+        inputs = [n for n, _ in _walk(node) if n.tag in {"el-input", "el-input-number", "el-select"}]
         if len(inputs) != 1 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key):
             continue
         control = inputs[0]
-        if (control.tag != "el-input" or control.attrs.get("v-model") != "queryParams." + key
+        if (control.tag not in {"el-input", "el-select"}
+                or control.attrs.get("v-model") != "queryParams." + key
+                or control.tag == "el-select" and any(k in control.attrs
+                    for k in ("multiple", ":multiple", "remote", ":remote", "remote-method", ":remote-method"))
                 or any(k.startswith(("@", "v-on", "v-bind", "v-model.")) and k != "@keyup.enter"
                        for k in control.attrs)
                 or control.attrs.get("@keyup.enter") and not re.fullmatch(
-                    r"queryParams\.pageNo=1;?" + re.escape(listing) + r"\(\);?",
+                    r"queryParams(?:\.value)?\.pageNo=1;?(?:await)?" + re.escape(listing) + r"\(\);?",
                     _plain(_function_body(source, control.attrs["@keyup.enter"])))):
             continue
         if label in fields:
             raise ActionAdmissionRefused("unreviewed")
-        fields[label] = key
+        fields[label] = (key, control.tag)
     if len(buttons) != 1:
         raise ActionAdmissionRefused("unreviewed")
     return buttons[0], fields
 
 
 class NativeListActions:
-    actions = frozenset({"click", "fill"})
+    actions = frozenset({"click", "fill", "select"})
 
-    def __init__(self, tree, reviews):
+    def __init__(self, tree, reviews, page_filters=None):
         self.tree, self.reviews = tree, tuple(reviews)
+        self.page_filters = page_filters
         self._turn = None
         self._checks, self._drafts = {}, {}
 
@@ -121,17 +127,39 @@ class NativeListActions:
         if str(attrs.get("form_scope", "")).startswith("dialog") or attrs.get("disabled") == "true":
             raise ActionAdmissionRefused("invalid_target")
         expected = {"proof": proof, "kind": ""}
-        if intent.action == "fill":
+        if intent.action in {"fill", "select"}:
             label = attrs.get("field_label", "")
-            key = fields.get(label)
+            binding = fields.get(label)
             value = intent.arguments["value"]
-            if (key is None or element.role != "textbox" or attrs.get("page_control") != "query"
-                    or attrs.get("query_field") != key
+            if (binding is None or attrs.get("page_control") != "query"
+                    or attrs.get("query_field") != binding[0]
                     or not attrs.get("form_instance")
-                    or not attrs.get("form_scope") or len(value) > 120 or attrs.get("readonly") == "true"):
+                    or not attrs.get("form_scope") or len(value) > 120):
                 raise ActionAdmissionRefused("unreviewed")
+            key, tag = binding
+            choice_label = ""
+            if intent.action == "fill":
+                if tag != "el-input" or element.role != "textbox" or attrs.get("readonly") == "true":
+                    raise ActionAdmissionRefused("unreviewed")
+            else:
+                choice_label = intent.arguments.get("option_label", "")
+                if (tag != "el-select" or element.role != "combobox"
+                        or not choice_label or self.page_filters is None):
+                    raise ActionAdmissionRefused("unreviewed")
+                # Reuse the actor-bound filter compiler's real choice mapping.
+                # A label typed by the model never establishes the underlying value.
+                draft = self.page_filters.prepare(PagePlan(review.route, label,
+                    expected_path=review.route, conditions=(Filter(label, (choice_label,)),)),
+                    before, context=context)
+                if (draft.scope != attrs["form_scope"] or draft.instance != attrs["form_instance"]
+                        or len(draft.fields) != 1 or draft.fields[0].option_label != choice_label
+                        or dict(draft.parameters) != {key: draft.fields[0].value}
+                        or value not in {choice_label, draft.fields[0].value}):
+                    raise ActionAdmissionRefused("invalid_target")
+                value = draft.fields[0].value
             expected.update(kind="input", label=label, key=key, value=value,
-                scope=attrs["form_scope"], instance=attrs["form_instance"])
+                scope=attrs["form_scope"], instance=attrs["form_instance"],
+                role=element.role, option_label=choice_label)
         elif attrs.get("page_control") == "pagination":
             if PAGINATION_COMPONENT not in dict(review.hashes):
                 raise ActionAdmissionRefused("unreviewed")
@@ -169,13 +197,15 @@ class NativeListActions:
             return False
         after = observation.page_read
         if expected["kind"] == "input":
-            controls = [e for e in observation.elements if e.role == "textbox"
+            controls = [e for e in observation.elements if e.role == expected["role"]
                 and e.attrs.get("page_control") == "query"
                 and e.attrs.get("query_field") == expected["key"]
                 and e.attrs.get("form_scope") == expected["scope"]
                 and e.attrs.get("form_instance") == expected["instance"]
                 and e.attrs.get("field_label") == expected["label"]]
-            if (len(controls) != 1 or controls[0].attrs.get("value", "") != expected["value"]
+            shown = (controls[0].attrs.get("selected_option", "") if expected["option_label"]
+                     else controls[0].attrs.get("value", "")) if len(controls) == 1 else None
+            if (len(controls) != 1 or shown != (expected["option_label"] or expected["value"])
                     or after != expected["proof"]):
                 return False
             self._drafts.setdefault((review.route, expected["instance"]), {})[expected["key"]] = expected["value"]
@@ -185,5 +215,23 @@ class NativeListActions:
                 or after["page"] != expected["page"] or after["page_size"] != expected["proof"]["page_size"]
                 or after["query_fields"] != expected["fields"]):
             return False
+        # Resolve visible choices again under the same actor, then compare their
+        # actual values to the successful GET. Reject a user edit racing that read.
+        _, fields = _compile(self.tree, review)
+        for control in observation.elements:
+            attrs = control.attrs
+            label = attrs.get("selected_option", "")
+            if control.role != "combobox" or attrs.get("page_control") != "query" or not label:
+                continue
+            field = fields.get(attrs.get("field_label", ""))
+            if field is None or field[1] != "el-select" or self.page_filters is None:
+                return False
+            draft = self.page_filters.prepare(PagePlan(review.route, label,
+                expected_path=review.route, conditions=(Filter(attrs["field_label"], (label,)),)),
+                observation, context=context)
+            if (draft.scope != attrs.get("form_scope") or draft.instance != attrs.get("form_instance")
+                    or len(draft.fields) != 1 or draft.fields[0].option_label != label
+                    or after["query_fields"].get(field[0]) != _hash([draft.fields[0].value])):
+                return False
         self._drafts.clear()
         return True

@@ -1,4 +1,4 @@
-"""Bind a declared text query to live controls, then to an application-verified read."""
+"""Bind a declared query to live controls and an application-verified read."""
 from dataclasses import dataclass
 import hashlib
 import json
@@ -17,6 +17,9 @@ class QueryCondition:
     field: str
     route: str
     read_path: str
+    choice: bool = False
+    scope: str = ""
+    instance: str = ""
 
     @property
     def value_digest(self):
@@ -45,7 +48,7 @@ def bind_query(raw, observation: PageObservation | None, maximum: int):
         field = element.attrs.get("query_field")
         label = element.attrs.get("field_label", element.name)
         scope, instance = element.attrs.get("form_scope"), element.attrs.get("form_instance")
-        if (element.epoch != observation.epoch or element.role not in {"textbox", "searchbox"}
+        if (element.epoch != observation.epoch or element.role not in {"textbox", "searchbox", "combobox"}
                 or element.attrs.get("page_control") != "query"
                 or (scope is not None or instance is not None) and (not scope or not instance)
                 or str(scope or "").startswith("dialog")
@@ -55,10 +58,14 @@ def bind_query(raw, observation: PageObservation | None, maximum: int):
                 or SENSITIVE_CREDENTIAL_NAME.search(field)
                 or not isinstance(label, str) or not label.strip()):
             raise ValueError("query control has no application-owned list field binding")
+        if element.role == "combobox" and (not scope or not instance
+                or element.attrs.get("aria-multiselectable") == "true"):
+            raise ValueError("query choice requires one bound single-choice control")
         if any(c.field == field for c in conditions):
             raise ValueError("query field is repeated")
         conditions.append(QueryCondition(item["ref"], item["value"], label, field,
-                                        observation.page_route, observation.page_read["path"]))
+            observation.page_route, observation.page_read["path"],
+            element.role == "combobox", str(scope or ""), str(instance or "")))
     return tuple(conditions)
 
 
@@ -68,6 +75,18 @@ def query_unmet(conditions, observation, *, verified: bool):
     if not verified or observation.page_read is None:
         return ("query result not application-verified",)
     proof = observation.page_read
+    def matches(condition):
+        if not condition.choice:
+            return proof["query_fields"].get(condition.field) == condition.value_digest
+        # Application verification binds this selection to the successful read, and
+        # ActionAdmission stamps the same query controls. A draft label alone proves nothing.
+        controls = [e for e in observation.elements if e.role == "combobox"
+            and e.attrs.get("page_control") == "query"
+            and e.attrs.get("query_field") == condition.field
+            and e.attrs.get("form_scope") == condition.scope
+            and e.attrs.get("form_instance") == condition.instance]
+        return (len(controls) == 1 and controls[0].epoch == observation.epoch
+            and controls[0].attrs.get("selected_option") == condition.value
+            and condition.field in proof["query_fields"])
     return tuple(f'query condition "{c.label}" not applied' for c in conditions
-        if observation.page_route != c.route or proof["path"] != c.read_path
-        or proof["query_fields"].get(c.field) != c.value_digest)
+        if observation.page_route != c.route or proof["path"] != c.read_path or not matches(c))

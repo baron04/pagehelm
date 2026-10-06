@@ -289,6 +289,9 @@ def run_loop(session) -> RunResult:
             return session._finish(result, t0, "wall_clock_budget",
                                 f"exceeded {session.wall_budget_s}s", steps=step)
         session._feed.note(stage="thinking", step=step + 1)
+        answer_contract = ("\n" + answer_protocol.ANSWER_INSTRUCTIONS
+            if session.evidence.ids() or (session._task_requirements is not None
+                and session._task_requirements.answer_requests) else "")
         if session.require_task_contract:
             # Only declare_task is offered before interpretation. Source, page,
             # form and answer instructions belong to execution, and distracting
@@ -296,8 +299,12 @@ def run_loop(session) -> RunResult:
             # the ordinary complete execution contract as soon as it is accepted.
             from .request_contract import declaration_system
             content = (declaration_system(session)
-                       if session._task_requirements is None else system)
+                       if session._task_requirements is None else system + answer_contract)
             messages[0] = {"role": "system", "content": content}
+        else:
+            # One complete copy once facts are needed; never accumulate another
+            # copy per read or burden an operation without an evidence answer.
+            messages[0] = {"role": "system", "content": system + answer_contract}
         try:
             reply = _complete_once_more_if_transient(session, messages, step, t0)
         except TurnCancelled:

@@ -9,6 +9,27 @@ import {
 const redactor = createRedactor()
 
 describe('observable form labels and scopes', () => {
+  it('projects only a unique live single-choice option and removes stale or sensitive hints', () => {
+    const form = document.createElement('form')
+    form.innerHTML = '<input role="combobox" aria-haspopup="listbox" aria-controls="choice-options">' +
+      '<ul id="choice-options" role="listbox"><li role="option" aria-selected="true">Waiting</li>' +
+      '<li role="option" aria-selected="false">Ready</li></ul>'
+    document.body.append(form)
+    try {
+      const input = form.querySelector('input')!
+      const elements = elementsFrom('[0]<input role=combobox />', 1, redactor)
+      elements[0]!.attrs.selected_option = 'invented'
+      hydrateFormFacts(elements, {}, () => input, redactor)
+      expect(elements[0]!.attrs.selected_option).toBe('Waiting')
+      form.querySelectorAll('li')[1]!.setAttribute('aria-selected', 'true')
+      hydrateFormFacts(elements, {}, () => input, redactor)
+      expect(elements[0]!.attrs.selected_option).toBeUndefined()
+      form.querySelectorAll('li')[1]!.setAttribute('aria-selected', 'false')
+      input.name = 'password'
+      hydrateFormFacts(elements, {}, () => input, redactor)
+      expect(elements[0]!.attrs.selected_option).toBeUndefined()
+    } finally { form.remove() }
+  })
   it('binds an idless native search form to one DOM lifetime without inventing an id', () => {
     const form = document.createElement('form')
     form.innerHTML = '<label for="search-name">Name</label><input id="search-name"><button>Search</button>'

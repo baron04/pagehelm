@@ -70,6 +70,23 @@ class ProductDataReadsTests(unittest.TestCase):
             self.assertEqual("agent_refused", result.terminal_reason)
             self.assertNotIn("1000", result.user_answer)
 
+    def test_evidence_contract_is_single_and_bad_aggregate_ref_reuses_existing_count(self):
+        from web_operation_agent.answer.answer_protocol import ANSWER_INSTRUCTIONS
+        with tempfile.TemporaryDirectory() as tmp:
+            result, events, chat = self.execute(Path(tmp), [
+                ('resolve_data', {'deliverables':[{'kind':'aggregate','entity':'records',
+                    'metric':{'op':'count'}}]}),
+                ('finish', self.finish({'kind':'aggregate','evidence_ref':'page_observation'})),
+                ('finish', self.finish({'kind':'aggregate','evidence_ref':'call1-data#2'})),
+            ])
+            self.assertEqual('agent_finished', result.terminal_reason)
+            messages = chat.messages[-1]
+            self.assertEqual(sum(str(m.get('content','')).count(ANSWER_INSTRUCTIONS)
+                                 for m in messages), 1)
+            self.assertIn('HELD AGGREGATE EVIDENCE', str(messages))
+            self.assertIn('call1-data#2', str(messages))
+            self.assertFalse(any(e['event']=='action_receipt' for e in events))
+
     def test_data_label_calculation_and_selected_columns_reach_the_product(self):
         with tempfile.TemporaryDirectory() as tmp:
             result, _, _ = self.execute(Path(tmp), [

@@ -98,9 +98,7 @@ class TurnAnswer:
                 self.query_tools.update(
                     {ref: read_tool for ref in recorded
                      if isinstance(self.evidence.get(ref), QueryEvidence)})
-            self.evidence_feedback = (
-                answer_protocol.ANSWER_INSTRUCTIONS + "\n"
-                + answer_protocol.evidence_index(self.evidence, tuple(recorded)))
+            self.evidence_feedback = answer_protocol.evidence_index(self.evidence, tuple(recorded))
         elif refused:
             self.evidence_feedback = "ANSWER EVIDENCE UNAVAILABLE: narrow or repeat the read."
         if recorded or refused:

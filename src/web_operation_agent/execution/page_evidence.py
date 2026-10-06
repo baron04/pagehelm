@@ -70,8 +70,7 @@ def capture_page_snapshot(session, observation: PageObservation, *, step: int,
     paging = json.dumps({"query": query, "offset": offset,
                          "matched_items": window.matched_items,
                          "next_offset": next_offset}, ensure_ascii=False)
-    return clean, (answer_protocol.ANSWER_INSTRUCTIONS + "\n" +
-                   index +
+    return clean, (index +
                    "\nPAGE EVIDENCE WINDOW: " + paging +
                    "\nThis searches only bounded excerpts of the current redacted observation, "
                    "not all application data. No match does not establish absence. "

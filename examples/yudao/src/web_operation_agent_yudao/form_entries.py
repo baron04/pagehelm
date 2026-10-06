@@ -299,6 +299,25 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         self._adoption_turn = None
         self._adopted = None
 
+    def parent_record(self, observation):
+        """The installed contact review also pins its customer-detail opener."""
+        path = urlsplit(observation.url).path
+        match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
+        return (match[1] if self.review.reference == "contact-create" and match
+                and observation.render_state == "ready"
+                and observation.page_route == observation.record_route == path
+                and not urlsplit(observation.url).query else "")
+
+    def _read_parent(self, identifier):
+        try:
+            parent = self.client.get("crm/customer/get", id=identifier)
+        except DataRefused:
+            raise BusinessToolPermissionError("the contact parent is not readable") from None
+        except (OSError, TimeoutError):
+            raise BusinessToolUnavailableError("the contact parent could not be verified") from None
+        if not isinstance(parent, dict) or str(parent.get("id")) != identifier:
+            raise BusinessToolPermissionError("the contact parent is not readable")
+
     def adopt_current(self, observation, *, context):
         """Bind one user-opened creation to reviewed mode evidence and live identity.
 
@@ -369,9 +388,7 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
             return None
         self._authorize("", context)
         # Read the parent under this actor, never derive its authority from a URL.
-        parent = self.client.get("crm/customer/get", id=match[1])
-        if not isinstance(parent, dict) or str(parent.get("id")) != match[1]:
-            raise BusinessToolPermissionError("the contact parent is not readable")
+        self._read_parent(match[1])
         component = self.review.entry[5]
         source = self.source.read(component)
         if source is None:
@@ -383,6 +400,13 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
     def current(self, observation, *, context):
         if self._adoption_turn == (context.session_id, context.turn_id):
             return self.adopt_current(observation, context=context)
+        state = self._current
+        if state is not None and self.parent_record(observation):
+            observed = self._observed_parent_contact(observation, context=context)
+            if observed != state:
+                self._current = None
+                return None
+            return state
         state = super().current(observation, context=context)
         return state if state is not None else self.adopt_current(observation, context=context)
 
@@ -411,23 +435,33 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         if reference != self.review.reference:
             raise BusinessToolRequestError("this creation entry is not reviewed")
         _, route, label, *_ = self.review.entry
-        if (observation.render_state != "ready" or observation.record_route
-                or not _creation_location(self.review, observation.url)
+        parent = self.parent_record(observation)
+        if (observation.render_state != "ready"
+                or not parent and (observation.record_route
+                    or not _creation_location(self.review, observation.url))
                 or any(str(e.attrs.get("form_scope", "")).startswith("dialog") for e in observation.elements)):
             raise BusinessToolRequestError("the exact collection must be ready without an editor")
         self._authorize("",context)
+        if parent:
+            self._read_parent(parent)
         controls = [e for e in observation.elements if e.role == "button" and e.name == label
                     and not str(e.attrs.get("form_scope", "")).startswith("dialog")
                     and not form_control_unavailable(e.attrs)]
         if len(controls) != 1:
             raise BusinessToolRequestError("the reviewed creation opener is not unique and enabled")
         entry = ApplicationFormEntry(reference,controls[0])
-        self._planned = entry,context.principal.binding_digest,context.session_id,context.turn_id,_location(observation.url),""
+        self._planned = (entry, context.principal.binding_digest, context.session_id,
+                         context.turn_id, _location(observation.url), observation.record_route)
         return entry
 
     def _entry_state(self, planned, entry, before, receipt, observation, context):
         planned, scope, instance = self._checked_entry(
             planned, entry, before, receipt, observation, context)
+        if self.parent_record(before):
+            state = self._observed_parent_contact(observation, context=context)
+            if state is None or (state.control_scope, state.entry_id) != (scope, instance):
+                raise BusinessToolRequestError("the contact opener did not reach its creation editor")
+            return state
         self._authorize("",context)
         component = self.review.entry[5]
         source = self.source.read(component)
@@ -435,6 +469,15 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
             raise BusinessToolRequestError("the reviewed creation source is unavailable")
         return NativeFormState(context.principal.actor_authority_digest,context.session_id,
             context.turn_id,instance,"create","",planned[4],scope,component,source.binding_digest,"新建草稿","确 定")
+
+    def accept_entry(self, *args, context, **kwargs):
+        reference = super().accept_entry(*args, context=context, **kwargs)
+        if re.fullmatch(r"/crm/customer/detail/[1-9][0-9]{0,19}", self._current.route):
+            # The acknowledged parent editor cannot be rebound after identity,
+            # mode or instance loss within this turn.
+            self._adoption_turn = context.session_id, context.turn_id
+            self._adopted = self._current
+        return reference
 
 
 class NativeEntryVerifiers:
@@ -536,7 +579,9 @@ class NativeEntryFormPort(YudaoFormPort):
             if isinstance(verifier, NativeCreateEntryVerifier):
                 reference = verifier.review.reference
                 _, route, label, *_ = verifier.review.entry
-                if not _creation_location(verifier.review, observation.url) or observation.record_route:
+                parent = verifier.parent_record(observation)
+                if not parent and (not _creation_location(verifier.review, observation.url)
+                                   or observation.record_route):
                     continue
                 record, kind = "", "create"
             else:
@@ -551,6 +596,8 @@ class NativeEntryFormPort(YudaoFormPort):
             if len(controls) != 1:
                 continue
             verifier._authorize(record, context)
+            if isinstance(verifier, NativeCreateEntryVerifier) and parent:
+                verifier._read_parent(parent)
             candidates.append(FormEntryCandidate(reference, label, kind))
         return tuple(candidates)
 

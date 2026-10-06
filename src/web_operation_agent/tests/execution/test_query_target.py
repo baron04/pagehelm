@@ -82,6 +82,27 @@ class QueryTargetTests(unittest.TestCase):
 
 class RestQueryLoopTests(unittest.TestCase):
     execute = fixture.EffectLoopTests.execute
+    def test_source_free_choice_query_binds_verified_selection_not_an_unapplied_edit(self):
+        before, after = rest_list(), rest_list(2, applied=True)
+        for obs, label in ((before, ""), (after, "Ready")):
+            obs.elements[1] = replace(obs.elements[1], role="combobox", attrs={
+                **obs.elements[1].attrs, "query_field":"state", "selected_option":label})
+        after.page_read["query_fields"] = {"state":digest("10")}
+        policy = Policy(ActionEffect.READ_ONLY)
+        policy.verify = lambda permit, intent, receipt, *, observation, **kw: (
+            intent.action == "click" and observation.page_read["query_fields"] == {"state":digest("10")}
+            and observation.elements[1].attrs.get("selected_option") == "Ready")
+        result, session, _, _ = self.execute(policy, [
+            ("set_target", {"query":[{"ref":"e2", "value":"Ready"}]}),
+            ("click", {"ref":"e1"}), ("finish", {"done":True})],
+            before=before, after=after, navigated=False, prompt="Filter contacts by Ready")
+        self.assertEqual("agent_finished", result.terminal_reason)
+        self.assertTrue(session.action_admission.query_verified(after))
+        changed = replace(after, elements=[replace(e, attrs={**e.attrs,
+            "selected_option":"Waiting"}) if e.ref == "e2" else e for e in after.elements])
+        self.assertFalse(session.action_admission.query_verified(changed))
+        self.assertTrue(unmet_conditions(session._target, changed, verified_query=True))
+
     def test_body_searchbox_uses_the_same_guarded_full_query_contract_without_source(self):
         policy = Policy(ActionEffect.READ_ONLY)
         policy.verify = lambda permit, intent, receipt, *, observation, **kw: (

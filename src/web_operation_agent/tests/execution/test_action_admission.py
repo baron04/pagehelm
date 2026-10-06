@@ -92,6 +92,17 @@ class ActionAdmissionTests(unittest.TestCase):
         self.assertEqual("e1", intent.arguments["ref"])
         self.assertEqual({}, intent.observation.elements[0].attrs)
 
+    def test_combobox_option_label_is_immutable_and_part_of_the_consumed_intent(self):
+        intent, permit = self.prepare('select', {'ref':'e2', 'value':'0', 'option_label':'Waiting'})
+        self.assertEqual(intent.arguments['option_label'], 'Waiting')
+        changed = dict(intent.arguments, option_label='Ready')
+        with self.assertRaises(ActionAdmissionRefused):
+            self.runtime.consume(type(intent).create('select', changed, self.before, self.context),
+                permit, self.before, context=self.context, checkpoint=lambda:None)
+        for label in ('', ' ', False, None):
+            with self.subTest(label=label), self.assertRaises(ActionAdmissionRefused):
+                self.prepare('select', {'ref':'e2','value':'0','option_label':label})
+
     def test_malformed_extra_arguments_and_foreign_navigation_fail_before_policy(self):
         for action, args in (("submit", {"ref": "e1"}), ("click", {"ref": "absent"}),
                 ("click", {"ref": "e1", "epoch": True}),

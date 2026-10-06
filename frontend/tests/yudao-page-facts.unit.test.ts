@@ -1,7 +1,7 @@
 import {afterAll, beforeEach, describe, expect, it} from 'vitest'
 import {createHash} from 'node:crypto'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, readElementPageControl} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, readElementPageControl, nativeControlElement} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -378,6 +378,26 @@ describe('native Yudao mounted navigation identity', () => {
     component.vnode.ctx=state.instance
     document.querySelector('header')!.append(form)
     expect(readElementPageControl(input)).toBeUndefined()
+  })
+  it('resolves a query label only to its unique same-item accessible select', () => {
+    const state=mountedPage('/erp/sale/order', 'SaleOrder')
+    state.element.innerHTML='<form><div class="el-form-item"><label for="state-choice">State</label>' +
+      '<div class="el-select__wrapper"><input id="state-choice" role="combobox" aria-haspopup="listbox" readonly></div></div></form>'
+    const form=state.element.querySelector('form')!, itemRoot=form.firstElementChild!
+    const label=form.querySelector('label')!, input=form.querySelector('input')!
+    const item={...state.instance,type:{name:'ElFormItem'},props:{prop:'status'},subTree:{type:'div',el:itemRoot}}
+    const component={...state.instance,type:{name:'ElForm'},props:{model:{pageNo:1,pageSize:10}},
+      subTree:{type:'form',el:form,children:[{component:item}]},vnode:{ctx:state.instance},parent:state.instance}
+    state.instance.subTree.children=[{component} as unknown as NativeVNode]
+    expect(nativeControlElement(label)).toBe(input)
+    input.disabled=true
+    expect(nativeControlElement(label)).toBe(label)
+    input.disabled=false
+    form.append(input.cloneNode())
+    expect(nativeControlElement(label)).toBe(label)
+    form.lastChild!.remove()
+    component.vnode.ctx={} as typeof state.instance
+    expect(nativeControlElement(label)).toBe(label)
   })
   it('rejects ambiguous or replaced query forms and unmounted route owners', () => {
     const state=mountedPage('/erp/sale/order', 'SaleOrder')

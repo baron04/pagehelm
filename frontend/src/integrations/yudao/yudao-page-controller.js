@@ -21,6 +21,15 @@ export class PageController extends GenericPageController {
   async clickElement(index) {
     const element = controllerElement(this.selectorMap, index)
     const target = nativeControlElement(element)
+    if (element instanceof HTMLLabelElement && target instanceof HTMLInputElement && element !== target) {
+      // Label focus does not open Element Plus's query select. Click its exact
+      // owned wrapper through the existing controller's fixed DOM operation.
+      const wrapper = target.closest('.el-select__wrapper')
+      if (wrapper && nativeControlElement(wrapper) === target) {
+        await controllerClick(wrapper)
+        return {success: true}
+      }
+    }
     // The indexed submenu container's handler lives on its owned title.
     if (element !== target && element.matches('li.el-sub-menu')) {
       target.click()

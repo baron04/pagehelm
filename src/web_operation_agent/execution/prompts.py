@@ -147,9 +147,11 @@ TOOL_SCHEMAS = [
             "ref": {"type": "string"}, "value": {"type": "string"}},
             "required": ["ref", "value"]}}},
     {"type": "function", "function": {
-        "name": "select", "description": "Choose an option in a select control.",
+        "name": "select", "description": "Choose a native select by value, or a single-choice combobox by its exact visible option_label.",
         "parameters": {"type": "object", "properties": {
-            "ref": {"type": "string"}, "value": {"type": "string"}},
+            "ref": {"type": "string"}, "value": {"type": "string"},
+            "option_label": {"type": "string", "minLength": 1,
+                "description": "Exact visible option label for a single-choice combobox; the application still verifies its value."}},
             "required": ["ref", "value"]}}},
     {"type": "function", "function": {
         "name": "submit", "description": "Submit the form that contains this element.",
@@ -351,8 +353,7 @@ TARGET_TOOL = {"type": "function", "function": {
                                                           "value": {"type": "string", "minLength": 1,
                                                                     "maxLength": MAX_QUERY_VALUE_CHARS}},
                                            "required": ["ref", "value"]},
-                                 "description": ("text query conditions: current textbox ref and "
-                                                 "requested value; only application-bound query "
+                                 "description": ("query conditions: current textbox ref and text, or single-choice combobox ref and exact visible label; only application-bound query "
                                                  "controls and a verified applied read count")},
                        "groups": {"type": "array", "maxItems": 4,
                                   "items": {"type": "string", "minLength": 1,
@@ -435,8 +436,9 @@ the complete state that finishes
 it: the exact path (an href on the current page, a route a typed result returned, or a
 cited source route), names of controls that must be selected, and/or names of active
 filters and groups reported by the application. A menu option's presence alone does not
-establish application. For a text query, use query with its current textbox ref and requested
-value, then fill and apply it. Filling alone does not settle a query condition. Application-
+establish application. For query controls, use query with the current textbox ref and text,
+or single-choice combobox ref and exact visible label. Fill or select, then apply it.
+Changing a control alone does not settle a query condition. Application-
 verified successful list reads, not the draft input or a search button click alone,
 establish that a filter or group was applied. For a request to remove an existing
 restriction, first observe its active filter, then declare filters_absent with that exact

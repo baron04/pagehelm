@@ -21,6 +21,17 @@ step; guessed element actions still require a new decision from the fresh observ
 Reloading the current address can recover a navigation receipt only from a new document
 whose exact browser load follows that command's dispatch; the unchanged URL alone proves
 nothing. The application must still verify the rendered destination and requested state.
+Execution carries one complete answer-evidence contract when an answer needs it; individual reads return their
+dynamic evidence without repeating that contract. Answer repair re-exposes retained
+aggregate references instead of requiring a new page read for an already computed value.
+The generic selection tool can name one exact visible single-choice combobox option;
+application-owned effect admission and live selection verification remain required.
+Yudao's reviewed standard list queries can qualify those choices through the existing
+actor-bound filter compiler. Input selection is a draft until a new successful list read
+proves the applied query. Its reviewed contact creation entry is also discoverable from
+a rendered customer detail page, with the parent read and child editor checked under
+the same actor; a customer edit dialog cannot settle that entry. Its installed read
+review must include the native form's actor-authorized parent-contact lookup.
 
 ## Current capabilities
 

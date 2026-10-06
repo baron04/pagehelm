@@ -11,7 +11,7 @@ import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance} from './formInstance'
-import {listboxCombobox} from './combobox'
+import {listboxCombobox, selectedOption} from './combobox'
 import {radioGroup, radioChoices, selectedRadio} from './radio'
 
 /** Maximum live controls one observation may expose across the browser boundary. */
@@ -397,6 +397,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       delete item.attrs.form_instance
       delete item.attrs.field_label
       delete item.attrs.field
+      delete item.attrs.selected_option
       // These are live DOM facts rather than hints parsed from PageController's text.
       // They let the server omit an unavailable field up front; Page.input/select still
       // recheck the live element at execution time because the DOM may change afterwards.
@@ -420,6 +421,11 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
         delete item.attrs.field_label
         item.name = ''
         continue
+      }
+      if (listboxCombobox(element)) {
+        const selected = selectedOption(element)
+        if (selected && selected.length <= browserContract.form_handoff.max_label_chars &&
+            redactor.redactString(selected) === selected) item.attrs.selected_option = selected
       }
       const label = formControlLabel(element)
       if (scope && !rawField && label && redactor.redactString(label) === label) {

@@ -359,7 +359,8 @@ class YudaoHost:
                     from .list_actions import NativeListActions
                     policy = NativeReadActions(app.origin, app.goal_data, self.ui.records,
                         review=self.config.native_action_effect_review, form_entries=app.ports.forms,
-                        list_actions=NativeListActions(self.form_tree, self.filter_reviews)
+                        list_actions=NativeListActions(self.form_tree, self.filter_reviews,
+                            page_filters=app.goal_port.page_filters)
                             if self.filter_reviews else None)
                     scope = ("Open actor-catalog pages and exact actor-readable record details; "
                         "select native record tabs and verify fresh rendered state after each step. "

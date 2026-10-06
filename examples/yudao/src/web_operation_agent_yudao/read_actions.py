@@ -127,7 +127,7 @@ class NativeReadActions:
             element = next(e for e in before.elements if e.ref == intent.arguments["ref"])
             attrs = element.attrs
             if self.list_actions is not None and (
-                    intent.action == "fill" or attrs.get("form_scope")
+                    intent.action in {"fill", "select"} or attrs.get("form_scope")
                     or attrs.get("page_control") == "pagination"):
                 permit = self.list_actions.admit(intent, index, context=context, checkpoint=checkpoint)
                 turn = (context.principal.binding_digest, context.session_id, context.turn_id)
