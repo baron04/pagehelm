@@ -1860,6 +1860,49 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
+    def test_goto_current_address_recovers_one_document_load_without_retry(self):
+        from playwright.sync_api import sync_playwright
+        _runtime_bytes()
+        registry = RemoteSessionRegistry()
+        app = _FixtureApplication(PAGE_CONTROLLER)
+        app.start()
+        grant, channel = registry.create(allowed_origins=[app.origin])
+        gateway = EmbeddedGateway(registry, sse_wait_s=0.1).start()
+        app.runtime_url = gateway.runtime_url
+        app.runtime_config = gateway.bootstrap_config(
+            grant, page_controller_module=app.origin + "/page-controller.js")
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page()
+                page.goto(app.origin + "/page1", wait_until="domcontentloaded")
+                remote = RemoteBrowserClient(channel, timeout_s=8)
+                remote.start()
+                first = remote.observe()
+                before_document = page.evaluate(
+                    "window.__WOA_EMBEDDED_RUNTIME_STARTED__.documentId")
+                before_commands = remote.command_count
+                loads = []
+                page.on("request", lambda request: loads.append(request.url)
+                        if request.is_navigation_request() and request.frame == page.main_frame
+                        else None)
+                receipt = remote.execute("goto", {"url": "/page1"})
+                self.assertTrue(receipt.ok, receipt.error_detail)
+                self.assertFalse(receipt.navigated)
+                self.assertEqual(receipt.url_after, first.url)
+                self.assertGreater(receipt.observation.epoch, first.epoch)
+                self.assertNotEqual(before_document, page.evaluate(
+                    "window.__WOA_EMBEDDED_RUNTIME_STARTED__.documentId"))
+                self.assertEqual(remote.command_count - before_commands, 1)
+                self.assertEqual(loads, [app.origin + "/page1"])
+                self.assertEqual(app.form_submissions, 0)
+                browser.close()
+        finally:
+            gateway.close()
+            app.close()
+
+    @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
+                         "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_document_navigation_receipt_survives_history_canonicalization_without_retry(self):
         """The application adds its default query before the successor Runtime starts."""
         try:

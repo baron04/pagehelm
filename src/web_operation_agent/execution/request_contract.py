@@ -86,7 +86,9 @@ before feasibility is known. A record's detail/tab needs an application-verified
 rendered record; an empty lookup cannot make
 a list page complete it. Recover its name/type, or report partial/unable. For a general
 page use page, for prefill use draft, for a persisted change use mutation, else none.
-For questions only, prefer one answer quoting the entire request. Questions about an
+For questions only, set action_request="" and action_kind="none", and prefer one
+answer quoting the entire request. For an operation alone, answer_requests and
+answer_kinds are empty arrays. Questions about an
 operation's instructions or eligibility do not ask you to perform that operation.
 Answers may share original subject text. Do not declare the same
 page-opening clause again as a factual question; questions-only requests use no action.
@@ -129,14 +131,9 @@ def manual_submit_form_mode(session) -> bool:
 
 def declaration_schema(session) -> dict:
     result = deepcopy(DECLARE_TASK_TOOL)
-    # The system contract owns the detailed interpretation/revision rules. Do not
-    # repeat that contract (and the manual-submit policy) inside a schema sent on
-    # every execution step as well. Parameter names, types and bounds are unchanged.
-    result["function"]["description"] = (
-        "Account for every exact original USER REQUEST clause before any application "
-        "read or action, following the system's task contract. Set action_kind and "
-        "answer_kinds from requested outcomes, without deciding feasibility. "
-        "A bounded correction must preserve all obligations and cannot grant authority.")
+    # Keep the complete field/revision semantics next to the offered tool. Moving
+    # them only into a larger system contract made questions-only declarations
+    # repeatedly put the question in action_request as well.
     if manual_submit_form_mode(session):
         result["function"]["description"] += (
             " DEFAULT FORM EXECUTION MODE: manual-submit prefill; ordinary form creation "
@@ -196,7 +193,10 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
     kind = args["action_kind"]
     if (not isinstance(kind, str) or kind not in {"none", "page", "record", "draft", "mutation"}
             or bool(action) != (kind != "none")):
-        raise ValueError("action_kind must match a nonempty action; use none for questions only")
+        raise ValueError('action_kind must match action_request: questions only require '
+                         'action_request="" and action_kind="none", with the exact '
+                         'question in answer_requests; an operation requires a nonempty '
+                         'action_request and a non-none action_kind')
     if len(set(answers)) != len(answers) or not (action or answers):
         raise ValueError("request clauses must be nonempty and questions must not repeat")
     prompt = redact_sensitive_assignments(prompt)

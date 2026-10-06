@@ -18,6 +18,9 @@ superseded snapshot spans while preserving action receipts, typed facts and cita
 The retained observation count remains configurable. Lazy browser initialization can
 continue an exact-path navigation through the ordinary admission checks in the same
 step; guessed element actions still require a new decision from the fresh observation.
+Reloading the current address can recover a navigation receipt only from a new document
+whose exact browser load follows that command's dispatch; the unchanged URL alone proves
+nothing. The application must still verify the rendered destination and requested state.
 
 ## Current capabilities
 

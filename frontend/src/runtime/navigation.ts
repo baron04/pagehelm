@@ -224,6 +224,7 @@ export function scrubLegacyNavigationUrls(action: ActionEnvelope | null | undefi
 export interface DocumentNavigation {
   url: string
   startedAt: number
+  type: 'navigate' | 'reload'
 }
 
 /** Browser-local load facts. Raw URLs never enter the outbox, receipt or server context. */
@@ -232,10 +233,11 @@ export function documentNavigation(): DocumentNavigation | null {
     const entries = performance.getEntriesByType('navigation')
     if (entries.length !== 1) return null
     const entry = entries[0] as PerformanceNavigationTiming
-    if (entry.entryType !== 'navigation' || entry.type !== 'navigate' ||
+    if (entry.entryType !== 'navigation' || !['navigate', 'reload'].includes(entry.type) ||
         entry.redirectCount !== 0 || entry.startTime !== 0 || !entry.name ||
         !Number.isFinite(performance.timeOrigin) || performance.timeOrigin <= 0) return null
-    return {url: entry.name, startedAt: performance.timeOrigin}
+    return {url: entry.name, startedAt: performance.timeOrigin,
+      type: entry.type as DocumentNavigation['type']}
   } catch {
     return null
   }
@@ -265,13 +267,19 @@ export async function recoveryProvesNavigation(action: ActionEnvelope | null | u
   }
   if (action?.phase !== 'claimed' ||
       !['goto', 'link', 'form-get'].includes(String(action?.navigation_kind)) ||
-      !expected || expected === before) return false
-  if (after === expected) return true
+      !expected) return false
+  // The same address alone cannot prove that anything happened. A goto to the
+  // current address can replace the document, but needs the correlated load
+  // proof below rather than this URL-only shortcut.
+  if (expected !== before && after === expected) return true
   const dispatchedAt = action.dispatched_at
   if (!action.document_id || !currentDocumentId || action.document_id === currentDocumentId ||
       typeof dispatchedAt !== 'number' || !Number.isFinite(dispatchedAt) || dispatchedAt <= 0 ||
       !loaded || !Number.isFinite(loaded.startedAt) || loaded.startedAt < dispatchedAt ||
       loaded.startedAt > Date.now()) return false
+  if (!['navigate', 'reload'].includes(loaded.type)) return false
+  if (loaded.type === 'reload' &&
+      (action.navigation_kind !== 'goto' || expected !== before)) return false
   try {
     if (new URL(loaded.url).origin !== new URL(observationUrl).origin) return false
     return await urlDigest(loaded.url) === expected

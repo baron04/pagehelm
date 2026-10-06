@@ -219,6 +219,18 @@ class RequestContractShape(unittest.TestCase):
                                           "answer_requests": ["金额"], "answer_kinds": ["data"]}, "金额")
         self.assertEqual(action_unmet(requirements, None, None), ())
 
+    def test_questions_only_error_names_the_fields_to_correct(self):
+        prompt = "How many open invoices are there?"
+        duplicated = {"action_request": prompt, "action_kind": "none",
+                      "answer_requests": [prompt], "answer_kinds": ["data"]}
+        with self.assertRaises(ValueError) as caught:
+            parse_requirements(duplicated, prompt)
+        self.assertIn('action_request=""', str(caught.exception))
+        self.assertIn('action_kind="none"', str(caught.exception))
+        corrected = parse_requirements({**duplicated, "action_request": ""}, prompt)
+        self.assertEqual(corrected.answer_requests, (prompt,))
+        self.assertEqual(corrected.action_request, "")
+
     def test_other_effect_types_cannot_be_settled_by_navigation(self):
         for kind in ("draft", "mutation"):
             with self.subTest(kind=kind):

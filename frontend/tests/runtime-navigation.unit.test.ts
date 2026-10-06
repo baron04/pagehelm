@@ -109,7 +109,7 @@ describe('recoveryProvesNavigation only trusts a digest match, not what the page
     const action = {phase: 'claimed', navigation_kind: 'goto', document_id: 'old-document',
       dispatched_at: dispatchedAt, expected_url_digest: await urlDigest(requested),
       started_url_digest: await urlDigest('https://app.test/home')} as unknown as ActionEnvelope
-    const loaded = {url: requested, startedAt: dispatchedAt + 1}
+    const loaded = {url: requested, startedAt: dispatchedAt + 1, type: 'navigate' as const}
     expect(await recoveryProvesNavigation(action, current, 'new-document', loaded)).toBe(true)
     expect(await recoveryProvesNavigation(action, current, 'old-document', loaded)).toBe(false)
     expect(await recoveryProvesNavigation(action, current, '', loaded)).toBe(false)
@@ -122,29 +122,56 @@ describe('recoveryProvesNavigation only trusts a digest match, not what the page
     const action = {phase: 'claimed', navigation_kind: 'goto', document_id: 'old-document',
       dispatched_at: dispatchedAt, expected_url_digest: await urlDigest(requested),
       started_url_digest: await urlDigest('https://app.test/home')} as unknown as ActionEnvelope
-    for (const loaded of [{url: current, startedAt: dispatchedAt + 1},
-      {url: requested, startedAt: dispatchedAt - 1},
-      {url: requested, startedAt: Number.NaN},
-      {url: requested, startedAt: Date.now() + 60_000}]) {
+    for (const loaded of [{url: current, startedAt: dispatchedAt + 1, type: 'navigate' as const},
+      {url: requested, startedAt: dispatchedAt - 1, type: 'navigate' as const},
+      {url: requested, startedAt: Number.NaN, type: 'navigate' as const},
+      {url: requested, startedAt: Date.now() + 60_000, type: 'navigate' as const}]) {
       expect(await recoveryProvesNavigation(action, current, 'new-document', loaded)).toBe(false)
     }
     expect(await recoveryProvesNavigation({...action, dispatched_at: undefined}, current,
-      'new-document', {url: requested, startedAt: dispatchedAt + 1})).toBe(false)
+      'new-document', {url: requested, startedAt: dispatchedAt + 1, type: 'navigate' as const})).toBe(false)
     expect(await recoveryProvesNavigation(action, 'https://other.test/projects',
-      'new-document', {url: requested, startedAt: dispatchedAt + 1})).toBe(false)
+      'new-document', {url: requested, startedAt: dispatchedAt + 1, type: 'navigate' as const})).toBe(false)
+  })
+
+  it('proves a same-address goto only with a new, dispatch-correlated exact document load', async () => {
+    const requested = 'https://app.test/orders'
+    const dispatchedAt = Date.now() - 1000, digest = await urlDigest(requested)
+    const action = {phase: 'claimed', navigation_kind: 'goto', document_id: 'old',
+      dispatched_at: dispatchedAt, expected_url_digest: digest,
+      started_url_digest: digest} as unknown as ActionEnvelope
+    for (const type of ['navigate', 'reload'] as const) {
+      const loaded = {url: requested, startedAt: dispatchedAt + 1, type}
+      expect(await recoveryProvesNavigation(action, requested, 'new', loaded)).toBe(true)
+      expect(await recoveryProvesNavigation(action, requested, 'old', loaded)).toBe(false)
+      expect(await recoveryProvesNavigation(action, requested, 'new', null)).toBe(false)
+      expect(await recoveryProvesNavigation(action, requested, 'new',
+        {...loaded, startedAt: dispatchedAt - 1})).toBe(false)
+      expect(await recoveryProvesNavigation(action, requested, 'new',
+        {...loaded, url: requested + '?status=paid'})).toBe(false)
+      expect(await recoveryProvesNavigation({...action, dispatched_at: undefined},
+        requested, 'new', loaded)).toBe(false)
+    }
+    const reload = {url: requested, startedAt: dispatchedAt + 1, type: 'reload' as const}
+    for (const navigation_kind of ['link', 'form-get']) {
+      expect(await recoveryProvesNavigation({...action, navigation_kind},
+        requested, 'new', reload)).toBe(false)
+    }
   })
 })
 
 describe('the browser document navigation entry', () => {
-  it('reads the loaded URL without storing it, and refuses redirects, reloads and history', () => {
+  it('reads the loaded URL without storing it, and refuses redirects and history', () => {
     const startedAt = Date.now() - 1000
     const entry = {entryType: 'navigation', type: 'navigate', redirectCount: 0, startTime: 0,
       name: 'https://app.test/projects?token=private'}
     const getEntriesByType = vi.fn(() => [entry])
     vi.stubGlobal('performance', {timeOrigin: startedAt, getEntriesByType})
-    expect(documentNavigation()).toEqual({url: entry.name, startedAt})
+    expect(documentNavigation()).toEqual({url: entry.name, startedAt, type: 'navigate'})
     expect(getEntriesByType).toHaveBeenCalledWith('navigation')
-    for (const changed of [{...entry, redirectCount: 1}, {...entry, type: 'reload'},
+    getEntriesByType.mockReturnValue([{...entry, type: 'reload'}])
+    expect(documentNavigation()).toEqual({url: entry.name, startedAt, type: 'reload'})
+    for (const changed of [{...entry, redirectCount: 1},
       {...entry, type: 'back_forward'}]) {
       getEntriesByType.mockReturnValue([changed])
       expect(documentNavigation()).toBeNull()
