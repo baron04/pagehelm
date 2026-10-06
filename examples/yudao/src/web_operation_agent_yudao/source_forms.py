@@ -262,14 +262,16 @@ def _compile(tree: SourceTree, path: str, text: str, dictionary: str = "", *,
                 continue
             input_type = "integer" if precision == 0 else "number"
         elif control.tag == "el-date-picker":
-            # A single day with ISO display can be typed and checked exactly. Range,
-            # time/epoch conversions and dynamic formatting need a separate translation.
-            if (attrs.get("type", "date") != "date" or attrs.get("format", "YYYY-MM-DD") != "YYYY-MM-DD"
-                    or attrs.get("value-format", "YYYY-MM-DD") not in {"YYYY-MM-DD", "x"}
-                    or _dynamic(attrs, "format", "value-format", "editable")
-                    or attrs.get(":editable") == "false" or "v-bind" in attrs):
+            # Only fixed, editable single-value displays can be typed and checked
+            # exactly. The application translates datetime wall time, never epochs.
+            input_type = attrs.get("type", "date")
+            display = {"date": "YYYY-MM-DD", "datetime": "YYYY-MM-DD HH:mm:ss"}.get(input_type)
+            if (display is None or attrs.get("format", display) != display
+                    or attrs.get("value-format", display) not in {display, "x"}
+                    or _dynamic(attrs, "format", "value-format", "editable", "readonly", "disabled")
+                    or attrs.get("editable") == "false" or "readonly" in attrs or "disabled" in attrs
+                    or "v-bind" in attrs):
                 continue
-            input_type = "date"
         else:
             input_type = attrs.get("type", "text")
             if input_type not in {"text", "textarea", "email", "tel", "url", "date"}:

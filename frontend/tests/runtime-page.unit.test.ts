@@ -376,6 +376,103 @@ describe('Page refuses controls that are not writable at execution time', () => 
       }
     } finally {form.remove()}
   })
+  it.each([
+    ['2026-10-06T09:05:00', '2026-10-06T09:05'],
+    // jsdom serializes nonzero seconds with .000; Chromium uses :07. The
+    // application owns the exact spelling, and this test exercises that contract
+    // against this DOM implementation rather than inferring time equivalence.
+    ['2026-10-06 09:05:07', '2026-10-06T09:05:07.000'],
+  ])('commits a native datetime-local draft and verifies the application-normalized value (%s)', async (sourceValue, draftValue) => {
+    // @ts-expect-error The independent test application serves its own JS module.
+    const {PageController, getElementByIndex} = await import('../../testapps/contacts/assets/page_controller.js')
+    const form = document.createElement('form')
+    form.id = 'native-datetime'
+    form.innerHTML = '<label>Follow-up time<input type="datetime-local" step="1"></label>' +
+      '<button type="submit" aria-label="Save contact">Save contact</button>'
+    document.body.append(form)
+    const input = form.querySelector('input')!, button = form.querySelector('button')!
+    // Only geometry is supplied for jsdom; the native value setter, focus and events
+    // and the application's PageController input path remain real.
+    for (const node of [form, input, button])
+      node.getBoundingClientRect = () => ({width: 100, height: 20} as DOMRect)
+    const api = new PageController()
+    const filled = vi.spyOn(api, 'inputText'), clicked = vi.spyOn(api, 'clickElement')
+    const nativeSubmit = vi.spyOn(form, 'submit'), requestSubmit = vi.spyOn(form, 'requestSubmit')
+    const submitted = vi.fn((event: Event) => event.preventDefault()), blurred = vi.fn()
+    const changed: string[] = []
+    form.addEventListener('submit', submitted)
+    input.addEventListener('blur', blurred)
+    input.addEventListener('change', () => changed.push(input.value))
+    const runtime = Object.create(EmbeddedWebRuntime.prototype) as EmbeddedWebRuntime
+    const state = runtime as unknown as Record<string, unknown>
+    state.controller = api
+    state.getElementByIndex = getElementByIndex
+    state.redactorInstance = createRedactor()
+    const observe = async (epoch: number) => {
+      const reading = runtime.page.describe(await runtime.page.read(), epoch)
+      state.currentObservation = {observation: reading.observation}
+      state.observationFingerprints = reading.fingerprints
+      state.observedUrl = reading.canonicalUrl
+      return reading.observation
+    }
+    try {
+      // A native input normalizes these strings itself. The adapter must issue that
+      // exact spelling in its draft; the Runtime does not infer datetime equivalence.
+      input.value = sourceValue
+      expect(input.value).toBe(draftValue)
+      input.value = ''
+      const before = await observe(1)
+      const field = before.elements.find(element => element.attrs.field_label === 'Follow-up time')!
+      expect(field).toMatchObject({role: 'textbox', attrs: {type: 'datetime-local',
+        field_label: 'Follow-up time', form_scope: 'form:native-datetime'}})
+      const fill = {command_id: 'datetime-fill', action: 'fill',
+        args: {ref: field.ref, value: draftValue, commit: true}, expect_navigation: false}
+      expect(runtime._actionFreshness(fill).fresh).toBe(true)
+      await expect(runtime._execute(fill)).resolves.toMatchObject({success: true})
+      expect(filled).toHaveBeenCalledWith(Number(field.ref.slice(1)), draftValue)
+      expect(input.value).toBe(draftValue)
+      expect(input.validity.valid).toBe(true)
+      expect(changed.at(-1)).toBe(draftValue)
+      expect(blurred).toHaveBeenCalledOnce()
+      expect(document.activeElement).not.toBe(input)
+
+      const after = await observe(2)
+      const entered = after.elements.find(element => element.attrs.field_label === 'Follow-up time')!
+      const submit = after.elements.find(element => element.role === 'button' && element.name === 'Save contact')!
+      expect(entered.attrs.value).toBe(draftValue)
+      const binding = {ref: entered.ref, field: 'follow_up_time', label: 'Follow-up time',
+        binding: 'label', scope: 'form:native-datetime', control: 'textbox', value: draftValue}
+      const handoff = {command_id: 'datetime-handoff', action: 'handoff_form', args: {
+        fields: [binding], submit: {ref: submit.ref, label: 'Save contact', scope: 'form:native-datetime'},
+      }, expect_navigation: false}
+      expect(runtime._actionFreshness(handoff).fresh).toBe(true)
+      const receipt = await runtime._execute(handoff)
+      expect(receipt).toEqual({success: true, message: 'form fields verified for handoff'})
+      expect(JSON.stringify(receipt)).not.toContain(draftValue)
+      expect(button.style.outline).toContain('Highlight')
+      expect(clicked).not.toHaveBeenCalled()
+      expect(submitted).not.toHaveBeenCalled()
+
+      const unnormalized = {...handoff, args: {...handoff.args, fields: [{...binding, value: sourceValue}]}}
+      expect(() => runtime._execute(unnormalized)).toThrow(/fields do not match/)
+      input.value = '2026-10-06T09:06:07'
+      expect(runtime._actionFreshness(handoff).fresh).toBe(false)
+      expect(() => runtime._execute(handoff)).toThrow(/fields do not match/)
+      for (const invalid of ['2026-02-29T09:05:00', '2026-10-06T09:05:00Z']) {
+        input.value = invalid
+        expect(input.value).toBe('')
+        expect(() => runtime._execute(handoff)).toThrow(/fields do not match/)
+      }
+      expect(clicked).not.toHaveBeenCalled()
+      expect(submitted).not.toHaveBeenCalled()
+      expect(nativeSubmit).not.toHaveBeenCalled()
+      expect(requestSubmit).not.toHaveBeenCalled()
+    } finally {
+      (state.highlightHandle as {clear(): void} | undefined)?.clear()
+      api.dispose()
+      form.remove()
+    }
+  })
   it('checks a scoped unnamed input and its native submit button without clicking', () => {
     const form = document.createElement('form')
     form.id = 'native-editor'

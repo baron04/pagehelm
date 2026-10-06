@@ -33,6 +33,9 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
         "split only different evidence kinds, using literal clauses without repeating an "
         "implicit subject. Questions about how/where/why to perform an operation are answers, "
         "not requests to actually perform it. Looking up a status is data, not record navigation. "
+        "Opening a page so the person can inspect its contents is one operation: include "
+        "that purpose in action_request, without inventing a separate UI answer. Only an "
+        "independently requested fact, explanation or UI state belongs in answer_requests. "
         "Every request character except punctuation and connecting words must be covered. "
         "The original request cannot change and this declaration grants no permission or tool. "
         "You may correct its interpretation with declare_task, at most twice: before a verified "
@@ -81,6 +84,11 @@ For questions only, prefer one answer quoting the entire request. Questions abou
 operation's instructions or eligibility do not ask you to perform that operation.
 Answers may share original subject text. Do not declare the same
 page-opening clause again as a factual question; questions-only requests use no action.
+For an operation whose purpose is to let the person inspect a page or its contents,
+quote the whole operation including that purpose in action_request. Do not turn the
+purpose into an extra UI question. Preserve actual accompanying questions such as
+counts, field values or eligibility. Copy literal clauses even when the original
+omits a repeated subject; do not insert that subject to make the quotation grammatical.
 """
 
 _CONNECTORS = re.compile(r"(?:(?:并且?|以及|和|然后|同时|顺便|还|再|也|请|帮我|麻烦)|"
@@ -131,6 +139,13 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
         raise ValueError("request clauses must be nonempty and questions must not repeat")
     prompt = redact_sensitive_assignments(prompt)
     clauses = ((action,) if action else ()) + answers
+    # Report a bad quotation before checking overlap. Otherwise an action with an
+    # inserted implicit subject has no matches and is misleadingly diagnosed as
+    # an invented additional answer, which cannot guide the model's next repair.
+    if any(clause not in prompt for clause in clauses):
+        raise ValueError("each clause must quote exact original USER REQUEST text; "
+                         "do not insert an omitted subject or rewrite the clause. "
+                         "For questions only quote the entire original request as one answer")
     # Answers can share an explicit subject. Only an answer wholly inside the
     # action would turn one operation into an invented additional obligation.
     if action:
@@ -145,10 +160,6 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
     covered = [False] * len(prompt)
     for clause in clauses:
         start = prompt.find(clause)
-        if start < 0:
-            raise ValueError("each clause must quote exact original USER REQUEST text; "
-                             "for questions only quote the entire original request as one answer, "
-                             "without adding an implicit subject")
         while start >= 0:
             covered[start:start + len(clause)] = [True] * len(clause)
             start = prompt.find(clause, start + 1)

@@ -9,7 +9,7 @@ from web_operation_agent.execution import product, turn
 from web_operation_agent.answer.answer_protocol import compute, submit
 from web_operation_agent.answer.answer_view import render_payload
 from web_operation_agent.business.control import ReadOnlyControl
-from web_operation_agent.answer.evidence import TurnEvidence
+from web_operation_agent.answer.evidence import EvidenceUnknown, TurnEvidence
 from web_operation_agent.answer.page_answer import (
     collect, collect_window, observation_options, MAX_PAGE_ITEMS)
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor, AgentTurnStatus
@@ -39,6 +39,54 @@ class _PageBrowser(_RemoteBrowser):
 
 
 class PageEvidenceContract(unittest.TestCase):
+    def test_consecutive_windows_retain_exact_earlier_facts_when_only_epoch_changes(self):
+        fixture = SessionFixture()
+        self.addCleanup(fixture.close)
+        session = fixture.session()
+        capture_page_snapshot(session, page(2), step=1, query="Phone")
+        _, feedback = capture_page_snapshot(session, page(3), step=2, query="Balance")
+        self.assertEqual(session.evidence.get("obs1-page#1").value, "123-456")
+        self.assertIn("10.00 USD", session.evidence.get("obs2-page#2").value)
+        self.assertIn("retain earlier page refs", feedback)
+        self.assertTrue(session.ledger.events[-1]["retained_previous_windows"])
+
+    def test_every_observed_change_expires_previous_windows_not_just_visible_text(self):
+        fixture = SessionFixture()
+        self.addCleanup(fixture.close)
+        changes = (
+            {"url": "http://app.test/other"}, {"title": "Other"},
+            {"content": "New balance: 20.00 USD"}, {"truncated": True},
+            {"render_state": "blocked"}, {"messages": ["Read failed"]},
+            {"selected_controls": ["Other tab"]}, {"active_view": "other"},
+            {"record_route": "/companies/7"}, {"page_route": "/other"},
+            {"page_facets": [{"kind": "filter", "name": "Other scope"}]},
+            {"elements": [ElementRef("different", "textbox", "Phone", "input", 3,
+                                     {"value": "123-456"})]},
+            {"elements": [ElementRef("e1", "textbox", "Phone", "input", 3,
+                                     {"value": "654-321"})]},
+        )
+        for changed in changes:
+            with self.subTest(changed=changed):
+                session = fixture.session()
+                capture_page_snapshot(session, page(2), step=1, query="Phone")
+                capture_page_snapshot(session, replace(page(3), **changed), step=2)
+                with self.assertRaises(EvidenceUnknown):
+                    session.evidence.get("obs1-page#1")
+                self.assertFalse(session.ledger.events[-1]["retained_previous_windows"])
+
+    def test_failed_window_import_expires_previous_facts_and_respects_existing_byte_limit(self):
+        fixture = SessionFixture()
+        self.addCleanup(fixture.close)
+        session = fixture.session()
+        capture_page_snapshot(session, page(2), step=1, query="Phone")
+        with patch("web_operation_agent.answer.evidence.MAX_TURN_EVIDENCE_BYTES", 1):
+            with self.assertRaisesRegex(ValueError, "byte limit"):
+                capture_page_snapshot(session, page(3), step=2, query="Balance")
+        with self.assertRaises(EvidenceUnknown):
+            session.evidence.get("obs1-page#1")
+        self.assertEqual(session._page_answer_digest, "")
+        self.assertEqual(session._page_answer_window_digest, "")
+
     def test_missing_value_and_empty_value_are_distinct(self):
         items = collect(page(), observed_at="now")
         self.assertEqual((items[0].saw, items[0].value), ("value", "123-456"))
@@ -244,6 +292,37 @@ class DefaultPageAnswerPath(unittest.TestCase):
         self.assertIn("123-456", result.user_answer)
         self.assertIn('"next_offset": 32', str(chat.messages[1]))
         self.assertNotIn("click", _RemoteBrowser.instances[-1].actions)
+
+    def test_two_current_windows_deliver_both_facts_without_repeating_the_first_read(self):
+        final = _answer("page_observation", "obs1-page#1")
+        final["answer"]["conclusions"].append({"kind": "page_observation", "evidence_ref": "obs2-page#2"})
+        result, _ = self.execute([
+            ("observe", {"answer_evidence": True, "answer_query": "Phone"}),
+            ("observe", {"answer_evidence": True, "answer_query": "Balance"}),
+            ("finish", final),
+        ])
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("123-456", result.user_answer)
+        self.assertIn("10.00 USD", result.user_answer)
+        self.assertEqual(_RemoteBrowser.instances[-1].actions, ["observe", "observe"])
+
+    def test_changed_page_between_answer_windows_cannot_launder_the_previous_value(self):
+        class Changed(_PageBrowser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                if self.epoch > 2:
+                    obs = receipt.observation
+                    obs.elements[0] = replace(obs.elements[0], attrs={"value": "654-321"})
+                return receipt
+        result, chat = self.execute([
+            ("observe", {"answer_evidence": True, "answer_query": "Phone"}),
+            ("observe", {"answer_evidence": True, "answer_query": "Balance"}),
+            ("finish", _answer("page_observation", "obs1-page#1")),
+            ("finish", {"outcome": "unable"}),
+        ], Changed)
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertNotIn("123-456", result.user_answer)
+        self.assertIn("ANSWER REFUSED", str(chat.messages))
 
     def test_invalid_search_cannot_dispatch_and_a_no_match_does_not_answer_not_found(self):
         result, chat = self.execute([

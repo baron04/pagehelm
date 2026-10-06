@@ -171,6 +171,7 @@ class SessionContext:
     _answer_repairs = AnswerState("answer_repairs", 0)
     _answer_mode = AnswerState("answer_mode", False)
     _page_answer_digest = AnswerState("page_answer_digest", "")
+    _page_answer_window_digest = AnswerState("page_answer_window_digest", "")
     _answer_action_receipt = AnswerState("action_receipt")
     _latest_business_query_page_actions = AnswerState(
         "latest_business_query_page_actions")

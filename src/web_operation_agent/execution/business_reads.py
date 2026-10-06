@@ -282,7 +282,7 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
         result.refused_operation = label or result.refused_operation
         session._answer_mode = True
         session.evidence.discard_pages()
-        session._page_answer_digest = ""
+        session._page_answer_digest = session._page_answer_window_digest = ""
         session._form_draft = None
         session._form_draft_verification = None
         session._latest_business_routes = set()

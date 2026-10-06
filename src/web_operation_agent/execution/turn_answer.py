@@ -69,6 +69,7 @@ class TurnAnswer:
         self.action_answer_required = False
         self.answer_mode = False
         self.page_answer_digest = ""
+        self.page_answer_window_digest = ""
         self.action_receipt: dict | None = None
         self.latest_business_query_page_actions: int | None = None
         self.answer_goals: tuple[AnswerGoal, ...] = ()

@@ -252,6 +252,114 @@ class DefinedCreationEntryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             NativeCreateReview.load(payload, self.tree)
 
+    def user_opened(self):
+        payload, client, _, _, observation = self.defined()
+        path = self.tree.root / payload["entry"]["form_component"]
+        path.write_text(path.read_text().replace('label="金额"', 'v-if="formType === \'create\'" label="金额"'))
+        payload["hashes"][payload["entry"]["form_component"]] = hashlib.sha256(path.read_bytes()).hexdigest()
+        verifier = NativeCreateEntryVerifier(self.tree, NativeCreateReview.load(payload, self.tree), client)
+        return payload, client, verifier, observation
+
+    def test_user_opened_defined_creation_uses_mode_evidence_without_an_opener_receipt(self):
+        _, _, verifier, observation = self.user_opened()
+        combined = NativeEntryVerifiers(verifier)
+        port = NativeEntryFormPort(combined)
+        form = port.current_goal_form("synthetic/record", observation, context=self.context)
+        self.assertIsNotNone(form)
+        self.assertIsNone(verifier._planned)
+        self.assertEqual((verifier._current.mode, verifier._current.record_id), ("create", ""))
+        self.assertEqual(combined.active, verifier)
+        tools = ApplicationFormTools(port, application_id="yudao")
+        draft, _ = tools.prepare_current(observation, reference=form.reference,
+            values=(("price", "12.5"), ("day", "2026-10-08")), context=self.context)
+        self.assertEqual([f.value for f in draft.fields], ["12.50", "2026-10-08"])
+        self.assertEqual(draft.persistence, "transient_until_submit")
+        self.assertEqual(draft.effect, "")
+        tools.take_verification(draft).check(draft, replace(observation, epoch=4,
+            elements=[replace(e, epoch=4) for e in observation.elements]), context=self.context)
+
+    def test_adoption_requires_rendered_route_unique_enabled_create_marker_and_live_authority(self):
+        _, _, _, observation = self.user_opened()
+        for changed in (replace(observation, page_route=""), replace(observation, record_route=self.route),
+                        replace(observation, url=observation.url + "?id=12"),
+                        replace(observation, elements=observation.elements[1:]),
+                        replace(observation, elements=[replace(observation.elements[0], ref="duplicate"), *observation.elements]),
+                        replace(observation, elements=[replace(observation.elements[0],
+                            attrs={**observation.elements[0].attrs, "disabled": "true"}), *observation.elements[1:]])):
+            with self.subTest(observation=changed):
+                _, _, verifier, _ = self.user_opened()
+                self.assertIsNone(verifier.adopt_current(changed, context=self.context))
+        for attribute, value in (("permission", "synthetic:record:query"), ("actor", 3), ("tenant", "2")):
+            with self.subTest(attribute=attribute):
+                _, client, verifier, observation = self.user_opened()
+                setattr(client, attribute, value)
+                with self.assertRaises((BusinessToolPermissionError, BusinessToolIdentityError)):
+                    verifier.adopt_current(observation, context=self.context)
+
+    def test_unconditional_update_or_unknown_mode_cannot_admit_a_user_opened_creation(self):
+        for condition in ("", 'v-if="formType === \'update\'" ', 'v-if="canCreate" ',
+                          'v-if="formType === \'create\'" @change="persist" '):
+            with self.subTest(condition=condition):
+                payload, client, verifier, _, observation = self.defined()
+                path = self.tree.root / payload["entry"]["form_component"]
+                path.write_text(path.read_text().replace('label="金额"', condition + 'label="金额"'))
+                payload["hashes"][payload["entry"]["form_component"]] = hashlib.sha256(path.read_bytes()).hexdigest()
+                verifier = NativeCreateEntryVerifier(self.tree, NativeCreateReview.load(payload, self.tree), client)
+                self.assertIsNone(verifier.adopt_current(observation, context=self.context))
+
+    def test_user_opened_creation_cannot_use_changed_reviewed_source(self):
+        payload, _, verifier, observation = self.user_opened()
+        path = self.tree.root / payload["entry"]["form_component"]
+        path.write_text(path.read_text().replace(':precision="2"', ':precision="3"'))
+        with self.assertRaises(BusinessToolRequestError):
+            verifier.adopt_current(observation, context=self.context)
+        self.assertIsNone(verifier._current)
+
+    def test_adopted_form_cannot_drift_or_readopt_after_mode_route_or_instance_loss(self):
+        _, _, _, observation = self.user_opened()
+        changes = (replace(observation, elements=observation.elements[1:]),
+                   replace(observation, url=observation.url + "?id=12"),
+                   replace(observation, elements=[replace(e, attrs={**e.attrs,
+                       "form_instance": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}) for e in observation.elements]))
+        for changed in changes:
+            with self.subTest(changed=changed):
+                _, _, verifier, original = self.user_opened()
+                port = NativeEntryFormPort(verifier)
+                form = port.describe_form(original, context=self.context)
+                tools = ApplicationFormTools(port, application_id="yudao")
+                draft, _ = tools.prepare_current(original, reference=form.reference,
+                    values=(("price", "12.5"),), context=self.context)
+                with self.assertRaises(BusinessToolRequestError):
+                    tools.take_verification(draft).check(draft, changed, context=self.context)
+                self.assertIsNone(verifier.current(original, context=self.context))
+                self.assertIsNone(verifier.adopt_current(original, context=self.context))
+                self.assertIsNotNone(verifier.current(original,
+                    context=replace(self.context, turn_id="fresh-user-turn")))
+
+    def test_two_matching_creation_policies_cannot_choose_an_editor(self):
+        payload, client, first, observation = self.user_opened()
+        review = NativeCreateReview.load({**payload, "reference": "other-create"}, self.tree)
+        second = NativeCreateEntryVerifier(self.tree, review, client)
+        combined = NativeEntryVerifiers(first, second)
+        self.assertIsNone(combined.current(observation, context=self.context))
+        self.assertIsNone(combined.active)
+
+    def test_another_user_turn_can_adopt_a_different_policy_but_the_bound_turn_cannot(self):
+        payload, client, first, observation = self.user_opened()
+        definition = {**payload["entry"], "route": "/synthetic/other-records"}
+        second = NativeCreateEntryVerifier(self.tree, NativeCreateReview.load(
+            {**payload, "reference": "other-create", "entry": definition}, self.tree), client)
+        combined = NativeEntryVerifiers(first, second)
+        self.assertIsNotNone(combined.current(observation, context=self.context))
+        other = replace(observation, url="https://synthetic.test" + definition["route"],
+            page_route=definition["route"], elements=[replace(e, attrs={**e.attrs,
+                "form_instance": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}) for e in observation.elements])
+        self.assertIsNone(combined.current(other, context=self.context))
+        self.assertIsNone(combined.current(observation, context=self.context))
+        state = combined.current(other, context=replace(self.context, turn_id="fresh-user-turn"))
+        self.assertEqual(state.route, definition["route"])
+        self.assertEqual(combined.active, second)
+
 
 class CreationEntryTests(unittest.TestCase):
     setUp = EntryTests.setUp
@@ -375,6 +483,42 @@ class CreationEntryTests(unittest.TestCase):
             shown, reference=reference, values=(("remark", "Draft"),), context=self.context)
         self.assertEqual(draft.route, route + "?tabs=participate")
         self.assertIsNone(verifier.current(replace(shown, url=before.url + "?tabs=all"), context=self.context))
+
+    def test_user_opened_project_shape_binds_create_radio_and_local_datetime_fields(self):
+        payload, client, _, _, observation = self.creation("project-create")
+        component = CREATE_ENTRIES["project-create"][5]
+        path = self.tree.root / component
+        path.write_text('''<template><el-form :model="formData">
+          <el-form-item v-if="formType === 'create'" label="项目类型" prop="type">
+            <el-radio-group v-model="formData.type"><el-radio :value="1">普通项目</el-radio><el-radio :value="2">敏捷项目</el-radio></el-radio-group>
+          </el-form-item>
+          <el-form-item label="项目名称" prop="name"><el-input v-model="formData.name" maxlength="31"/></el-form-item>
+          <el-form-item label="开始时间" prop="startTime"><el-date-picker v-model="formData.startTime" type="datetime" value-format="x"/></el-form-item>
+          <el-form-item label="截止时间" prop="endTime"><el-date-picker v-model="formData.endTime" type="datetime" value-format="x"/></el-form-item>
+        </el-form></template>''')
+        payload["hashes"][component] = hashlib.sha256(path.read_bytes()).hexdigest()
+        verifier = NativeCreateEntryVerifier(self.tree, NativeCreateReview.load(payload, self.tree), client)
+        attrs = observation.elements[0].attrs
+        observation = replace(observation, url=observation.url + "?tabs=participate", page_route="/pms/pm/project/list",
+            elements=[ElementRef(ref, role, "", "div" if role == "radiogroup" else "input", 3,
+                {**attrs, "field_label": label}) for ref, role, label in
+                (("type", "radiogroup", "项目类型"), ("name", "textbox", "项目名称"),
+                 ("start", "combobox", "开始时间"), ("end", "combobox", "截止时间"))] + [observation.elements[1]])
+        port = NativeEntryFormPort(NativeEntryVerifiers(verifier))
+        form = port.current_goal_form("pms/pm/project", observation, context=self.context)
+        self.assertEqual([f.kind for f in form.fields], ["choice", "text", "datetime", "datetime"])
+        tools = ApplicationFormTools(port, application_id="yudao")
+        draft, _ = tools.prepare_current(observation, reference=form.reference, values=(("name", "合成项目"),
+            ("startTime", "2026-10-08T09:30"), ("endTime", "2026-10-09T18:00")), context=self.context)
+        self.assertEqual([f.value for f in draft.fields], ["合成项目", "2026-10-08 09:30:00", "2026-10-09 18:00:00"])
+        check = tools.take_verification(draft)
+        check.check(draft, replace(observation, epoch=4,
+            elements=[replace(e, epoch=4) for e in observation.elements]), context=self.context)
+        # A selected collection tab remains part of the exact entry, even though all
+        # three tabs have the same reviewed creation opener.
+        with self.assertRaises(BusinessToolRequestError):
+            check.check(draft, replace(observation, url=observation.url.replace("participate", "all")), context=self.context)
+        self.assertIsNone(port.describe_form(observation, context=self.context))
 
     def test_creation_cannot_borrow_update_review_or_other_entry_authority(self):
         with self.assertRaises(TypeError):

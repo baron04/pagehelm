@@ -141,6 +141,45 @@ class FormsTests(unittest.TestCase):
                     self.tools.prepare(self.obs, {"form_id": result["form_id"], "values": [
                         {"field_id": field["field_id"], "value": value}]}, context=self.context)
 
+    def datetime_form(self):
+        self.path.write_text(_SOURCE.replace('<el-input v-model="formData.name" maxlength="31" clearable />',
+            '<el-date-picker v-model="formData.name" type="datetime" value-format="x" />'))
+        self.verifier.state = replace(self.state, source_digest=self.reader.read(_PATH).binding_digest)
+        self.obs.elements[0] = replace(self.obs.elements[0], role="combobox")
+
+    def test_datetime_draft_uses_local_display_without_epoch_or_precision_loss(self):
+        self.datetime_form()
+        for value, expected in (("2026-10-08T09:30", "2026-10-08 09:30:00"),
+                                ("2026-10-08 18:45:27", "2026-10-08 18:45:27"),
+                                ("2026-10-08T09:30:00.000", "2026-10-08 09:30:00")):
+            with self.subTest(value=value):
+                result = self.describe()
+                self.assertEqual(result["fields"][0]["type"], "datetime")
+                draft, reply = self.tools.prepare(self.obs, self.args(result, value), context=self.context)
+                self.assertEqual((draft.fields[0].control, draft.fields[0].value), ("combobox", expected))
+                self.assertEqual(reply["submission"], "user_only")
+                check = self.tools.take_verification(draft)
+                after = replace(self.obs, epoch=2, elements=[replace(e, epoch=2) for e in self.obs.elements])
+                check.check(draft, after, context=self.context)
+
+    def test_datetime_requires_explicit_naive_time_and_rejects_precision_loss(self):
+        self.datetime_form()
+        for value in ("2026-10-08", "2026-10-08T09:30Z", "2026-10-08T09:30+08:00",
+                      "2026-10-08T09:30:00.001", "2026-02-30T09:30", "2026-10-08T24:00",
+                      "1791413400000", "2026-10-08T09:30/2026-10-09T18:00"):
+            with self.subTest(value=value), self.assertRaises(BusinessToolRequestError):
+                self.tools.prepare(self.obs, self.args(self.describe(), value), context=self.context)
+
+    def test_datetime_readonly_and_ambiguous_live_controls_never_issue_a_draft(self):
+        self.datetime_form()
+        original = self.obs.elements[0]
+        for controls in ([replace(original, attrs={**original.attrs, "readonly": "true"})],
+                         [original, replace(original, ref="other")]):
+            with self.subTest(controls=controls):
+                self.obs.elements = [*controls, *self.obs.elements[1:]]
+                self.assertNotIn("合成名称", [f["label"] for f in self.describe()["fields"]])
+                self.obs.elements = [original, *self.obs.elements[len(controls):]]
+
     def test_no_live_verifier_or_wrong_actor_session_turn_route_has_no_form(self):
         self.verifier.allowed = False
         self.assertFalse(self.describe()["form_available"])

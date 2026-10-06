@@ -8,6 +8,7 @@ issue that attestation. The default native host installs no verifier or form por
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -23,6 +24,31 @@ from web_operation_agent.schemas import PageObservation
 from web_operation_agent.state.identity import OperationContext
 
 from .source_forms import SourceFormReader
+
+
+def source_field_controls(input_type: str) -> tuple[str, ...]:
+    """Native semantic roles shared by source translation and entry evidence."""
+    if input_type in {"number", "integer"}:
+        return ("spinbutton",)
+    if input_type in {"date", "datetime"}:
+        return ("textbox", "combobox")
+    if input_type == "choice":
+        return ("combobox",)
+    if input_type == "radio":
+        return ("radiogroup",)
+    return ("textbox",)
+
+
+def _local_datetime_display(value: str, label: str) -> str:
+    # The reviewed editor displays seconds in local wall time. Do not discard an
+    # offset or fractional precision, infer midnight, or send its bound epoch value.
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.0{1,6})?)?", value.strip()):
+        raise BusinessToolRequestError(f"{label} requires a local date and time at second precision")
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        raise BusinessToolRequestError(f"{label} requires a valid local date and time") from None
+    return parsed.isoformat(sep=" ", timespec="seconds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,12 +151,9 @@ class YudaoFormPort:
                 if item.input_type in {"choice", "radio"} and not options:
                     continue
                 fields.append(ApplicationFormField(item.reference, item.label,
-                    kind={"email": "email", "tel": "phone", "url": "url", "date": "date",
+                    kind={"email": "email", "tel": "phone", "url": "url", "date": "date", "datetime": "datetime",
                           "integer": "integer", "number": "number", "choice": "choice", "radio": "choice"}.get(item.input_type, "text"),
-                    controls=(("spinbutton",) if item.input_type in {"number", "integer"}
-                              else ("textbox", "combobox") if item.input_type == "date"
-                              else ("combobox",) if item.input_type == "choice"
-                              else ("radiogroup",) if item.input_type == "radio" else ("textbox",)),
+                    controls=source_field_controls(item.input_type),
                     choices=options, binding="label"))
             except ValueError:
                 # Credential-like semantics never enter the generic draft contract.
@@ -178,6 +201,8 @@ class YudaoFormPort:
                 if options != item.field.choices or item.value not in {c.value for c in options}:
                     raise BusinessToolRequestError("the current form choices changed")
             normalized[item.field.reference] = item.value
+            if fact.input_type == "datetime":
+                normalized[item.field.reference] = _local_datetime_display(item.value, item.field.label)
             if fact.input_type in {"number", "integer"}:
                 try:
                     value = Decimal(item.value)

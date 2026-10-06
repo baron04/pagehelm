@@ -239,7 +239,7 @@ def run_loop(session) -> RunResult:
     while True:
         if obs is not None and session._page_answer_digest and session._page_answer_digest != obs.content_digest:
             session.evidence.discard_pages()
-            session._page_answer_digest = ""
+            session._page_answer_digest = session._page_answer_window_digest = ""
         if (obs is not None and session._answer_action_receipt is not None
                 and session._answer_action_receipt["kind"] in
                     {"navigation", "page_interaction", "target_state"}

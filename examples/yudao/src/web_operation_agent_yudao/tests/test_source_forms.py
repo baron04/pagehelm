@@ -237,10 +237,17 @@ class SourceFormTests(unittest.TestCase):
             '<el-input-number :min.prop="0" />',
             '<el-input-number step-strictly />',
             '<el-date-picker type="daterange" />',
-            '<el-date-picker type="datetime" />',
+            '<el-date-picker type="datetimerange" />',
             '<el-date-picker :format="fmt" />',
             '<el-date-picker format="DD/MM/YYYY" />',
             '<el-date-picker value-format="YYYY/MM/DD" />',
+            '<el-date-picker type="datetime" format="YYYY-MM-DD HH:mm" />',
+            '<el-date-picker type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" />',
+            '<el-date-picker type="datetime" readonly />',
+            '<el-date-picker type="datetime" :readonly="locked" />',
+            '<el-date-picker type="datetime" editable="false" />',
+            '<el-date-picker type="datetime" :editable="true" />',
+            '<el-date-picker type="datetime" :value-format="format" />',
         ]
         for control in controls:
             with self.subTest(control=control):
@@ -248,6 +255,16 @@ class SourceFormTests(unittest.TestCase):
                 self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />', bound))
                 self.assertEqual([f.reference for f in self.reader.read(_PATH).fields],
                                  ["name", "description"])
+
+    def test_editable_single_datetime_keeps_fixed_display_and_source_evidence(self):
+        for attributes in ('type="datetime"', 'type="datetime" value-format="x"',
+                           'type="datetime" format="YYYY-MM-DD HH:mm:ss" value-format="YYYY-MM-DD HH:mm:ss"'):
+            with self.subTest(attributes=attributes):
+                self.path.write_text(_SOURCE.replace('<el-input v-model="formData.remark" />',
+                    f'<el-date-picker v-model="formData.remark" {attributes} />'))
+                field = self.reader.read(_PATH).fields[-1]
+                self.assertEqual(field.input_type, "datetime")
+                self.assertTrue(self.tree.verify(field.evidence))
 
 
 if __name__ == "__main__":

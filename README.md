@@ -528,8 +528,10 @@ agent.
   `observe(answer_evidence=true, answer_query=..., answer_offset=...)`. Each response
   contains at most 32 evidence items and a next offset. Search covers only bounded,
   redacted excerpts of the fresh observation; it does not search application data,
-  establish absence or associate adjacent text with a business field. Refreshing
-  replaces earlier page references; offsets are snapshot-local. Selected-tab and
+  establish absence or associate adjacent text with a business field. Consecutive
+  answer-window reads retain earlier references only when the complete observed page
+  is unchanged apart from epoch counters. A changed page, ordinary observation,
+  failed refresh or authorization refusal expires them; offsets are snapshot-local. Selected-tab and
   pagination state cannot substitute for requested business values. These projection
   controls remain on the server and add no browser actions or write permissions.
 - An application-neutral entity-read contract can discover a current actor's readable
@@ -805,8 +807,11 @@ This pilot enables the application-neutral `require_task_contract` option (off b
 for other step executors). Before application tools, the same Agent quotes the user's
 operation and answer clauses in `declare_task`, preserving the original request and
 using the bounded interpretation corrections described above.
-Question clauses may share their original subject; redeclaring the entire page-opening
-operation as an extra question is rejected before application tools, allowing the same Agent to repair.
+Question clauses may share their original subject, but quotations must preserve the
+literal request even when it omits a repeated subject. Invalid quotations receive
+specific correction feedback. Opening a page for the user to inspect is one operation;
+independently requested counts, values and explanations remain answer obligations.
+Redeclaring the page-opening operation as an extra question is rejected before application tools.
 A complete finish must map
 each declared question to evidence selected by its validated conclusions and carry an
 observed receipt for the operation. Partial or unable outcomes preserve observed actions
@@ -832,6 +837,13 @@ Numeric translation enforces literal bounds and precision and refuses values tha
 control would round or clamp. Spinbutton discovery and verification share the browser contract
 and are also exercised by Contacts' source-free HTML form. A prepared draft commits each local
 editor with change/blur, checks its fresh value, and highlights submission for the person.
+The adapter also translates editable single datetime inputs with the fixed
+`YYYY-MM-DD HH:mm:ss` display, including `value-format="x"`. It normalizes explicit naive
+ISO local times to that display, refusing timezone offsets, missing times and fractional
+precision that would be lost. Adapter contract tests cover the translation; a source-free
+Contacts/native `datetime-local` regression exercises the same core input and exact-value
+handoff. This does not qualify an arbitrary native datetime widget's underlying model binding;
+that still needs the deployment's browser verification.
 Single-choice ARIA listboxes use adapter-issued option values and labels, reject ambiguous or
 disabled choices, and verify the selection before handoff. The native Yudao form port can
 translate literal options, integer dictionary options and its fixed user-list relation
@@ -851,7 +863,7 @@ the server revalidates the complete application descriptor before handoff. New o
 controls, closing/reopening the editor or changing its target still stop the draft.
 Yudao's public-project choice and Contacts' source-free contact-method choice exercise
 this removal-only flow; other conditional layouts remain outside this qualification.
-Dynamic numeric constraints, date ranges, custom date formats, datetime fields, multi-select,
+Dynamic numeric constraints, date ranges, custom date formats, read-only datetime fields, multi-select,
 cascaders, remote option search and editable detail rows remain unsupported by this translation.
 One scope declaration
 preserves every business and static-source part of a mixed request; business details use
@@ -1145,6 +1157,12 @@ parent, form and shared dialog bytes; the deployment must review their transient
 behavior, since hashes alone do not establish absence of persistence. Runtime actor,
 permission, entry and field checks still apply. Undeclared entries remain unavailable
 and submissions stay manual.
+An already open creation editor can use the same reviewed policy without fabricating an
+opener receipt. It requires rendered collection-route proof, one live editor instance and
+uniquely writable source-declared create-only fields; a route or source hash alone cannot
+prove creation mode. The customer-bound contact editor retains its separately reviewed
+parent-read and enabled-owner checks. Losing or changing an adopted entry refuses further
+adoption in that turn. This admission is still separate from fresh visible approval to fill.
 
 An optional server-side product-knowledge index groups original, release-bound source
 excerpts into draft workflow guides and retains raw-source fallback. Derived summaries

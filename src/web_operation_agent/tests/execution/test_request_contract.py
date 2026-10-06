@@ -94,6 +94,32 @@ class RequestContractShape(unittest.TestCase):
         self.assertEqual(parse_requirements({"action_request": prompt, "action_kind": "record",
             "answer_requests": [], "answer_kinds": []}, prompt).answer_ids, ())
 
+    def test_inserted_subject_reports_bad_quotation_before_overlap_without_dropping_the_question(self):
+        prompt = "先告诉我青岚有几个联系人，再打开联系人页面"
+        declaration = {"action_request": "打开青岚的联系人页面", "action_kind": "record",
+            "answer_requests": ["先告诉我青岚有几个联系人"], "answer_kinds": ["data"]}
+        with self.assertRaisesRegex(ValueError, "quote exact original") as caught:
+            parse_requirements(declaration, prompt)
+        self.assertNotIn("additional answer", str(caught.exception))
+        corrected = parse_requirements({**declaration, "action_request": "打开联系人页面"}, prompt)
+        self.assertEqual(corrected.action_request, "打开联系人页面")
+        self.assertEqual(corrected.answer_requests, ("先告诉我青岚有几个联系人",))
+        with self.assertRaisesRegex(ValueError, "omitted original"):
+            parse_requirements({**declaration, "action_request": "打开联系人页面",
+                                "answer_requests": [], "answer_kinds": []}, prompt)
+
+    def test_inspection_purpose_belongs_to_the_operation_but_real_questions_remain_required(self):
+        prompt = "打开合同详情和产品清单，让我核对一下"
+        declaration = {"action_request": prompt, "action_kind": "record",
+                       "answer_requests": [], "answer_kinds": []}
+        self.assertEqual(parse_requirements(declaration, prompt).answer_ids, ())
+        mixed = prompt + "，产品有几种"
+        with self.assertRaisesRegex(ValueError, "omitted original"):
+            parse_requirements(declaration, mixed)
+        corrected = parse_requirements({**declaration, "answer_requests": ["产品有几种"],
+                                       "answer_kinds": ["data"]}, mixed)
+        self.assertEqual(corrected.answer_ids, ("a1",))
+
     def test_separate_repeated_words_and_actual_mixed_clauses_are_preserved(self):
         prompt = "打开公司详情，并回答打开公司详情需要什么权限"
         declaration = {"action_request": "打开公司详情", "action_kind": "record",
@@ -337,6 +363,25 @@ class RequestContractProduct(unittest.TestCase):
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertEqual(chat.tool_names[:2], [{"declare_task"}, {"declare_task"}])
         self.assertIn("an operation is not an additional answer", str(chat.messages))
+        self.assertEqual(_RemoteBrowser.instances[-1].actions.count("goto"), 1)
+
+    def test_misquoted_operation_can_repair_once_and_deliver_both_the_record_and_fact(self):
+        prompt = "打开公司详情，并查询金额"
+        declaration = {"action_request": "打开公司详情", "action_kind": "record",
+                       "answer_requests": ["查询金额"], "answer_kinds": ["data"]}
+        final = _answer("field_value", "call4-record#1")
+        final["outcome"] = "acted"
+        final["answer"]["answers_for"] = [{"request_ref": "a1", "evidence_refs": ["call4-record#1"]}]
+        result, chat = self.execute([
+            ("goto", {"url": "/object/company/company-1"}), ("finish", final)],
+            prompt=prompt, declaration=declaration,
+            prefix=(("declare_task", {**declaration, "action_request": "打开公司的详情"}),))
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("12.50 USD", result.user_answer)
+        self.assertIn("已打开页面", result.user_answer)
+        self.assertIn("quote exact original", str(chat.messages))
+        self.assertNotIn("an operation is not an additional answer", str(chat.messages))
+        self.assertEqual(chat.tool_names[:2], [{"declare_task"}, {"declare_task"}])
         self.assertEqual(_RemoteBrowser.instances[-1].actions.count("goto"), 1)
 
     def test_record_task_cannot_finish_on_a_collection_but_can_recover_with_the_same_agent(self):

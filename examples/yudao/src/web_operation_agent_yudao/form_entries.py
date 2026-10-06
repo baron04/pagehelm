@@ -15,8 +15,8 @@ from web_operation_agent.business.forms import ApplicationFormEntry
 from web_operation_agent.business.form_entries import FormEntryCandidate
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.planning.sourcetree import AccessDenied
-from web_operation_agent.business.tools.contracts import form_control_unavailable
-from .forms import NativeFormState, YudaoFormPort
+from web_operation_agent.business.tools.contracts import form_control_unavailable, matches_form_control
+from .forms import NativeFormState, YudaoFormPort, source_field_controls
 from .source_forms import SourceFormReader
 from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS
 
@@ -296,16 +296,63 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
             raise TypeError("creation cannot use a customer update review")
         super().__init__(tree, review, client)
         self.goal_entries = ((review.reference, *review.entry),)
+        self._adoption_turn = None
+        self._adopted = None
 
     def adopt_current(self, observation, *, context):
-        """Admit the reviewed customer-bound contact creation dialog opened by its user.
+        """Bind one user-opened creation to reviewed mode evidence and live identity.
 
-        Its enabled owner distinguishes creation from the update editor. Reviewed
-        parent/opener bytes bind the unobserved disabled customer to this record.
-        No receipt or submission is fabricated.
+        A route or source hash alone proves no mode. A source-declared create-only
+        field must be uniquely writable in this editor; the contact parent path has
+        its separately reviewed owner discriminator. No opener receipt is fabricated.
+        Once adopted, a changed or lost binding cannot be readopted in the same turn.
         """
-        if self.review.reference != "contact-create":
+        turn = context.session_id, context.turn_id
+        if self._adoption_turn == turn and self._adopted is None:
             return None
+        state = self._observed_creation(observation, context=context)
+        if self._adoption_turn == turn and state != self._adopted:
+            self._current = self._adopted = None
+            return None
+        if state is not None:
+            self._adoption_turn, self._adopted = turn, state
+        self._current = state
+        return state
+
+    def _observed_creation(self, observation, *, context):
+        path = urlsplit(observation.url).path
+        if self.review.reference == "contact-create" and path.startswith("/crm/customer/detail/"):
+            return self._observed_parent_contact(observation, context=context)
+        if (observation.render_state != "ready" or observation.record_route
+                or observation.page_route != path or not _creation_location(self.review, observation.url)):
+            return None
+        component = self.review.entry[5]
+        source = self.source.read(component)
+        if source is None:
+            return None
+        markers = [f for f in source.fields if f.conditional and f.modes == ("create",) and not f.handlers]
+        if not markers:
+            return None
+        # No editor is a normal unsupported observation, not an ambiguous editor.
+        if not any(e.role in FORM_INPUT_CONTROLS and str(e.attrs.get("form_scope", "")).startswith("dialog")
+                   for e in observation.elements):
+            return None
+        scope, instance = self._scope(observation)
+        for field in markers:
+            controls = [e for e in observation.elements
+                        if any(matches_form_control(e, field=field.reference, label=field.label,
+                            control=role, binding="label", scope=scope)
+                            for role in source_field_controls(field.input_type))]
+            if len(controls) != 1 or form_control_unavailable(controls[0].attrs):
+                return None
+        self._authorize("", context)
+        return NativeFormState(context.principal.actor_authority_digest,
+            context.session_id, context.turn_id, instance, "create", "", _location(observation.url), scope,
+            component, source.binding_digest, "新建草稿", "确 定")
+
+    def _observed_parent_contact(self, observation, *, context):
+        # Its enabled owner distinguishes creation from the update editor. Reviewed
+        # parent/opener bytes bind the unobserved disabled customer to this record.
         path = urlsplit(observation.url).path
         match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
         if (not match or urlsplit(observation.url).query or observation.render_state != "ready"
@@ -329,22 +376,15 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         source = self.source.read(component)
         if source is None:
             return None
-        self._current = NativeFormState(context.principal.actor_authority_digest,
+        return NativeFormState(context.principal.actor_authority_digest,
             context.session_id, context.turn_id, instance, "create", "", path, scope,
             component, source.binding_digest, "新建联系人草稿", "确 定")
-        return self._current
 
     def current(self, observation, *, context):
-        if (self.review.reference == "contact-create"
-                and urlsplit(observation.url).path.startswith("/crm/customer/detail/")):
-            previous = self._current
-            state = self.adopt_current(observation, context=context)
-            if (previous is not None and previous.turn_id == context.turn_id
-                    and previous.session_id == context.session_id and state != previous):
-                self._current = None
-                return None
-            return state
-        return super().current(observation, context=context)
+        if self._adoption_turn == (context.session_id, context.turn_id):
+            return self.adopt_current(observation, context=context)
+        state = super().current(observation, context=context)
+        return state if state is not None else self.adopt_current(observation, context=context)
 
     def _authorize(self, record, context):
         context.require_live(application_id="yudao", required_scope="yudao.read")
@@ -409,6 +449,7 @@ class NativeEntryVerifiers:
             raise ValueError("native policies must share one source binding and unique targets")
         self.goal_updates = "customer-update" in references
         self.verifiers, self.active = tuple(verifiers), None
+        self._active_turn = None
         self.source = verifiers[0].source
         self.goal_entries = tuple(e for v in verifiers for e in getattr(v,"goal_entries",()))
 
@@ -418,6 +459,7 @@ class NativeEntryVerifiers:
 
     def plan_entry(self, reference, observation, *, context):
         self.active = None
+        self._active_turn = None
         for verifier in self.verifiers:
             verifier._planned = verifier._current = None
         candidates = [v for v in self.verifiers if (isinstance(v,NativeCreateEntryVerifier)
@@ -425,6 +467,7 @@ class NativeEntryVerifiers:
         if len(candidates) != 1:
             raise BusinessToolRequestError("the requested native entry is unavailable or ambiguous")
         self.active = candidates[0]
+        self._active_turn = context.session_id, context.turn_id
         return self.active.plan_entry(reference,observation,context=context)
 
     def accept_entry(self, *args, **kwargs):
@@ -438,15 +481,20 @@ class NativeEntryVerifiers:
     def discard_entry(self, *args, **kwargs):
         if self.active: self.active.discard_entry(*args,**kwargs)
 
-    def current(self, *args, **kwargs):
-        if self.active:
-            return self.active.current(*args,**kwargs)
-        matches = [(v, v.adopt_current(*args, **kwargs)) for v in self.verifiers
-                   if isinstance(v, NativeCreateEntryVerifier) and v.review.reference == "contact-create"]
+    def current(self, observation, *, context):
+        turn = context.session_id, context.turn_id
+        if self.active and self._active_turn == turn:
+            return self.active.current(observation, context=context)
+        # A new user turn may observe a different reviewed creation editor. Within
+        # the bound turn, never fall back to another policy after losing its target.
+        self.active = None
+        matches = [(v, v.adopt_current(observation, context=context)) for v in self.verifiers
+                   if isinstance(v, NativeCreateEntryVerifier)]
         matches = [(v, state) for v, state in matches if state is not None]
         if len(matches) != 1:
             return None
         self.active, state = matches[0]
+        self._active_turn = turn
         return state
 
     def validate(self, *args, **kwargs):

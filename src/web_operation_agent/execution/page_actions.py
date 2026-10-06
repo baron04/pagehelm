@@ -371,8 +371,9 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
             return session._resume(turn, messages, obs, successful_business_tools)
         if collect_page_answer:
             session._answer_mode = True
+        else:
             session.evidence.discard_pages()
-            session._page_answer_digest = ""
+            session._page_answer_digest = session._page_answer_window_digest = ""
         args = {}
 
     # A source/typed routing tool may have resolved into goto after the early gate.
@@ -674,8 +675,12 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
                     session, obs, step=step, reused_observation=False,
                     query=answer_query, offset=answer_offset)
             except (ValueError, TypeError, EvidenceUnknown):
+                session.evidence.discard_pages()
+                session._page_answer_digest = session._page_answer_window_digest = ""
                 page_feedback = "PAGE EVIDENCE UNAVAILABLE: the observation could not support an answer."
         else:
+            session.evidence.discard_pages()
+            session._page_answer_digest = session._page_answer_window_digest = ""
             page_feedback = "PAGE EVIDENCE UNAVAILABLE: observe did not return a successful fresh page."
     feedback = session._render(rendered_observation, receipt, note, write)
     if page_feedback:
