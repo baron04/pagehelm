@@ -477,12 +477,18 @@ agent.
   The declaration also requires `answer_kinds`, aligned with `answer_requests`:
   `data` for business values/records/metrics, `ui` for controls or UI guidance, and
   `knowledge` for source rules or documented explanations. The original user text stays
-  fixed. At most two interpretation corrections share the turn budget: before task
-  results, clauses may be repartitioned; after results their text and roles are preserved,
+  fixed. At most two interpretation corrections share the turn budget: before
+  verified page effects, clauses may be repartitioned, including after data/source reads;
+  after verified effects their text and roles are preserved,
   data/knowledge cannot become UI, and record/draft/mutation outcomes cannot be lowered
   or replaced. A page outcome can be strengthened. Corrections invalidate target,
   prepared-draft and page-consent bindings and issue new question IDs, which must be
   explicitly rebound to valid evidence. Initial context is not a task-result commitment.
+  Highlighting cannot replace opening a record, verified form prefill or a persisted change;
+  a handoff still checks the whole declared request. Explicit partial results retain verified
+  answers alongside unfinished operations. When deterministic data reads are configured,
+  their discovery/resolution tools replace the parallel generic entity query tools;
+  record location and form tools remain available.
   Server-issued selected-state and serialized-tab evidence (`saw=ui_state`)
   cannot settle a data or knowledge clause. The same Agent can repair with a read;
   explicit UI questions remain answerable. This does not establish the relevance

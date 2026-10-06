@@ -24,7 +24,7 @@ class PageHandoffTests(unittest.TestCase):
             "找到「Pay」后高亮「Create Payment」，不要提交"), "Create Payment")
 
     def _run(self, tmp, script, *, pages=None, browser_type=HandoffBrowser,
-             matched_mutation=False, prompt="请找到 Go 按钮，由我自己点击"):
+             matched_mutation=False, prompt="请找到 Go 按钮，由我自己点击", contract=False):
         observations = pages or [_obs(1), _obs(2)]
         for observation in observations:
             observation.render_state = "ready"
@@ -33,7 +33,7 @@ class PageHandoffTests(unittest.TestCase):
             task=TaskSpec("T", prompt),
             chat=_Chat(script), browser=browser, control=_Control([[], [], []]),
             ledger=SessionLedger(Path(tmp) / "audit.jsonl", "handoff"),
-            step_budget=4)
+            step_budget=6, require_task_contract=contract)
         session.entry_observation = browser.pages[0]
         session._explicit_mutation_intent = matched_mutation
         return session.run(), browser
@@ -45,6 +45,29 @@ class PageHandoffTests(unittest.TestCase):
         self.assertIn("尚未代你点击或提交", result.agent_said)
         self.assertEqual([name for name, _ in browser.done], ["highlight"])
         self.assertIsNone(result.verified_answer)
+
+    def test_declared_marker_handoff_is_verified_and_still_tells_the_person_to_continue(self):
+        prompt = "请标出 Go 按钮"
+        with tempfile.TemporaryDirectory() as tmp:
+            result, browser = self._run(tmp, [('declare_task', {'action_request':prompt,
+                'action_kind':'page', 'answer_requests':[], 'answer_kinds':[]}),
+                ('highlight', {'ref':'e1'})], prompt=prompt, contract=True)
+        self.assertEqual('agent_finished', result.terminal_reason)
+        self.assertIn('尚未代你点击或提交', result.agent_said)
+        self.assertEqual([name for name, _ in browser.done], ['highlight'])
+        self.assertEqual('highlight', result.verified_answer['action']['action'])
+
+    def test_marker_does_not_erase_accompanying_question_at_automatic_handoff(self):
+        prompt = "请标出 Go 按钮，查询金额"
+        with tempfile.TemporaryDirectory() as tmp:
+            result, browser = self._run(tmp, [('declare_task', {'action_request':'请标出 Go 按钮',
+                'action_kind':'page', 'answer_requests':['查询金额'], 'answer_kinds':['data']}),
+                ('highlight', {'ref':'e1'}), ('finish', {'outcome':'unable'})],
+                prompt=prompt, contract=True)
+        self.assertEqual('agent_refused', result.terminal_reason)
+        self.assertIn('未完成问答：查询金额', result.agent_said)
+        self.assertIn('尚未代你点击或提交', result.agent_said)
+        self.assertEqual([name for name, _ in browser.done], ['highlight'])
 
     def test_missing_target_is_not_dispatched(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,11 +10,15 @@ from .business_mutations import execute_business_mutation, observe_after_busines
 from .business_reads import execute_business_read
 from .form_tools import apply_form_draft, prefill_form
 from ..answer.evidence import Origin, SkillEvidence
+from ..goal.read_schemas import DATA_READ_REPLACED_TOOLS
 from .runstate import _Next, _Turn
 
 
 def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Dispatch a typed business tool after binding its exact operation context."""
+    if session.data_reads is not None and name in DATA_READ_REPLACED_TOOLS:
+        return session._reply(turn, call, "This tool is not offered. Use inspect_data and "
+                              "resolve_data for business answers; record locating and forms remain available.")
     if (session.business_tools.is_mutation(name)
             and not session._approvals.mutations_enabled):
         session.ledger.append(

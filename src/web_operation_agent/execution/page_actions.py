@@ -32,6 +32,7 @@ from .page_evidence import capture_page_snapshot
 from .prompts import _assistant_call, _tool_result, _trim
 from .runstate import _Next, _StepEnd, _Turn
 from .target import required_highlight_control
+from .request_contract import record_target_unmet
 
 
 def _record_navigation(session, url: str) -> None:
@@ -89,6 +90,17 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
     messages, obs = turn.messages, turn.obs
     successful_business_tools = turn.successful_business_tools
     admitted = None
+    requirements = session._task_requirements
+    if (name == "highlight" and requirements is not None
+            and (requirements.action_kind in {"draft", "mutation"}
+                 or record_target_unmet(requirements, obs))):
+        session.ledger.append("task_highlight_refused", step=step, dispatched=False,
+                              side_effect_possible=False)
+        return session._reply(turn, call,
+            "Highlighting does not open a requested record, prefill a form or persist a change. "
+            "Use verified navigation or the FormPort. Correct a misclassified question with "
+            "declare_task before a verified page effect, or finish partial/unable with the facts "
+            "already read. No control was highlighted or handed over.")
     if obs.render_state in {"pending", "blocked"} and name not in {"observe", "wait_for"}:
         blocked = obs.render_state == "blocked"
         session.ledger.append("blocked_page_action_refused" if blocked
@@ -559,6 +571,13 @@ def take_page_action(session, turn: "_Turn", call: dict, name: str, args: dict,
                  "please review it and continue yourself.")
         session.ledger.append("page_handoff_ready", step=step, command_id=receipt.command_id,
                               observation_epoch=obs.epoch, submitted=False, persisted=False)
+        if session._task_requirements is not None:
+            if session._answer_action_receipt is None:
+                session._answer_action_receipt = {"kind":"page_interaction", "action":"highlight",
+                                                  "url":obs.url}
+            session._answer_action_receipt["highlighted_control"] = highlighted.name[:80]
+            session._finalizing = True
+            return session._tool_finish(turn, call, "finish", {"outcome": "acted"})
         return _Next(session._finish(result, t0, "agent_finished",
                                      result.agent_said, steps=step))
     if (session._pending_navigation_url and obs.url != session._pending_navigation_url):

@@ -186,6 +186,12 @@ def render_payload(payload: dict, *, user_text: str, max_chars: int) -> str:
             if action.get("navigation_url"):
                 opened = "已打开页面" if _language(user_text) == "zh" else "Opened the page"
                 action_text += f"\n{opened}：{_literal(action['navigation_url'])}"
+        if action.get("highlighted_control"):
+            label = _literal(action["highlighted_control"])
+            action_text += (f"\n已标出「{label}」。尚未代你点击或提交，请核对后自行操作。"
+                            if _language(user_text) == "zh" else
+                            f"\nHighlighted “{label}”. I did not click or submit it; "
+                            "please review it and continue yourself.")
     refused_reads = tuple(data.pop("refused_reads", ()) or ())
     unfinished = tuple(data.pop("unfinished_requests", ()) or ())
     if unfinished:

@@ -1,5 +1,7 @@
 """The bounded readonly subset of the existing goal declaration vocabulary."""
 from .spec import FILTER_OPS
+from ..business.entities import (DISCOVER_ENTITIES_TOOL, DESCRIBE_ENTITY_TOOL,
+                                QUERY_ENTITY_RECORDS_TOOL)
 
 
 def _object(properties, required=()):
@@ -20,6 +22,9 @@ _deliverable = _object({"kind": {"type": "string", "enum": ["fact", "list", "agg
     "page": _object({"key": _text, "search": _text}), "sort": _text,
     "descending": {"type": "boolean"}, "limit": {"type": "integer", "minimum": 0, "maximum": 50}},
     ("kind", "entity"))
+
+DATA_READ_REPLACED_TOOLS = frozenset({DISCOVER_ENTITIES_TOOL, DESCRIBE_ENTITY_TOOL,
+                                     QUERY_ENTITY_RECORDS_TOOL})
 
 DATA_READ_SCHEMAS = (
     {"type": "function", "function": {"name": "inspect_data", "description":

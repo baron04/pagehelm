@@ -29,10 +29,15 @@ DECLARE_TASK_TOOL = {"type": "function", "function": {
         "In answer_kinds, classify each answer in the same order: data for business "
         "values/counts/records, ui for visible controls/selected states/UI guidance, "
         "knowledge for source rules/implementation or documented explanations. "
+        "For questions only, prefer one answer containing the ENTIRE original request; "
+        "split only different evidence kinds, using literal clauses without repeating an "
+        "implicit subject. Questions about how/where/why to perform an operation are answers, "
+        "not requests to actually perform it. Looking up a status is data, not record navigation. "
         "Every request character except punctuation and connecting words must be covered. "
         "The original request cannot change and this declaration grants no permission or tool. "
-        "You may correct its interpretation with declare_task, at most twice: before facts "
-        "repartition exact clauses if needed; after facts preserve those clauses, do not lower "
+        "You may correct its interpretation with declare_task, at most twice: before a verified "
+        "page effect repartition exact clauses if needed; data/source reads do not freeze a "
+        "mistaken classification. After a verified effect preserve those clauses, do not lower "
         "data/knowledge to UI or record/draft/mutation to a lesser outcome. A revision issues "
         "new answer IDs and invalidates target/draft/consent bindings. Runtime results decide "
         "what can be fulfilled; only evidence-backed answers can settle these questions. "
@@ -57,8 +62,9 @@ unsupported questions still belong in the declaration. Every declaration covers 
 unchanged original text. Correct an initial interpretation with declare_task, at most
 twice; use the newest answer IDs in finish.answer.answers_for and explicitly bind them
 to the exact evidence_refs actually selected by that answer's conclusions. An older
-declaration's bindings are invalid. Before facts, exact clauses may be repartitioned;
-after facts, preserve the clauses and never reduce an unmet record/draft/mutation to
+declaration's bindings are invalid. Before a verified page effect, exact clauses may be
+repartitioned, even after data/source reads. After that effect, preserve the clauses and
+never reduce an unmet record/draft/mutation to
 a page, or data/knowledge to UI. Entity and field interpretations can still be corrected
 with new reads. Corrections do not change the request, permissions or evidence bytes.
 A page/action receipt cannot replace a requested fact. Missing answers or an unfinished
@@ -71,7 +77,9 @@ Declare action_kind from the requested result, before feasibility is known. A re
 detail/tab needs an application-verified rendered record; an empty lookup cannot make
 a list page complete it. Recover its name/type, or report partial/unable. For a general
 page use page, for prefill use draft, for a persisted change use mutation, else none.
-Quote separate, nonoverlapping operation and answer clauses. Do not declare the same
+For questions only, prefer one answer quoting the entire request. Questions about an
+operation's instructions or eligibility do not ask you to perform that operation.
+Answers may share original subject text. Do not declare the same
 page-opening clause again as a factual question; questions-only requests use no action.
 """
 
@@ -123,30 +131,24 @@ def parse_requirements(args: dict, prompt: str) -> TaskRequirements:
         raise ValueError("request clauses must be nonempty and questions must not repeat")
     prompt = redact_sensitive_assignments(prompt)
     clauses = ((action,) if action else ()) + answers
-    # Require distinct original spans without interpreting intent or application
-    # nouns. For each subset keep its earliest possible end; later ends cannot help
-    # remaining clauses. At most nine clauses give 512 states, including repeats at
-    # different positions, without greedy false refusals or unbounded backtracking.
-    ends = {0: 0}
-    for mask in range(1 << len(clauses)):
-        if mask not in ends:
-            continue
-        for index, clause in enumerate(clauses):
-            if mask & (1 << index):
-                continue
-            start = prompt.find(clause, ends[mask])
-            if start >= 0:
-                following = mask | (1 << index)
-                end = start + len(clause)
-                ends[following] = min(end, ends.get(following, len(prompt) + 1))
-    if (1 << len(clauses)) - 1 not in ends:
-        raise ValueError("quote separate nonoverlapping original operation and answer clauses; "
-                         "a page-opening clause is not an additional factual question")
+    # Answers can share an explicit subject. Only an answer wholly inside the
+    # action would turn one operation into an invented additional obligation.
+    if action:
+        starts = [i for i in range(len(prompt)) if prompt.startswith(action, i)]
+        def separate(start):
+            end = start + len(action)
+            return all(any(i < start or i + len(answer) > end
+                for i in range(len(prompt)) if prompt.startswith(answer, i)) for answer in answers)
+        if not any(separate(start) for start in starts):
+            raise ValueError("an operation is not an additional answer; for questions only use "
+                             "action_request='' and quote the entire original request as an answer")
     covered = [False] * len(prompt)
     for clause in clauses:
         start = prompt.find(clause)
         if start < 0:
-            raise ValueError("each clause must quote exact original USER REQUEST text")
+            raise ValueError("each clause must quote exact original USER REQUEST text; "
+                             "for questions only quote the entire original request as one answer, "
+                             "without adding an implicit subject")
         while start >= 0:
             covered[start:start + len(clause)] = [True] * len(clause)
             start = prompt.find(clause, start + 1)
@@ -163,7 +165,7 @@ def revise_requirements(previous: TaskRequirements, proposed: TaskRequirements, 
     """Correct interpretation without erasing a result's unmet user obligations.
 
     The immutable original prompt is separately checked by parse_requirements. Once
-    facts or effects exist, clauses cannot be removed or shuffled to another role;
+    verified page effects exist, clauses cannot be removed or shuffled to another role;
     only non-UI answer kinds or a stricter general-page result can change. This does
     not establish semantic entailment of the model's initial classification.
     """
@@ -174,7 +176,7 @@ def revise_requirements(previous: TaskRequirements, proposed: TaskRequirements, 
     if committed:
         if (previous.action_request, previous.answer_requests) != (
                 proposed.action_request, proposed.answer_requests):
-            raise ValueError("after facts or actions, preserve every original operation and answer clause")
+            raise ValueError("after verified effects, preserve every original operation and answer clause")
         if (previous.action_kind != proposed.action_kind
                 and previous.action_kind != "page"):
             raise ValueError("do not lower or replace the original record/draft/mutation outcome after results")

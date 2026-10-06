@@ -96,7 +96,9 @@ class FinishHandler:
             return self._reply(turn, call, "The frozen operation is unfinished: "
                                + "; ".join(typed_unmet)
                                + ". Continue toward the requested result or report partial/unable. "
-                                 "Do not replace a record with a collection.")
+                                 "Do not replace a record with a collection. If this was a question "
+                                 "misclassified as an operation, correct declare_task before a "
+                                 "verified page effect; data/source reads do not freeze that mistake.")
         claims_page_action = (isinstance(args, dict)
                               and (args.get("outcome") == "acted"
                                    or (self._task_requirements is not None
@@ -177,7 +179,8 @@ class FinishHandler:
                 action_missing = bool(typed_unmet)
                 if requirements is not None and (
                         args.get("outcome") in {"acted", "answered"}
-                        or (isinstance(answer, dict) and answer.get("coverage") == "complete")
+                        or (args.get("outcome") not in {"partial", "unable"}
+                            and isinstance(answer, dict) and answer.get("coverage") == "complete")
                         or args.get("done") is True) and (missing or action_missing):
                     raise ValueError("incomplete USER REQUEST: " + "; ".join(incomplete_notes(
                         requirements, missing, action_missing=action_missing,

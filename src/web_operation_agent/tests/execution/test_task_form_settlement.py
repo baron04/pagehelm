@@ -73,6 +73,16 @@ class TaskFormSettlementTests(unittest.TestCase):
         self.assertEqual(['fill', 'handoff_form'], browser.actions)
         self.assertIn('has not been submitted', result.agent_said)
 
+    def test_highlight_cannot_replace_prefill_or_release_the_guard_before_real_handoff(self):
+        prompt = 'Prefill NovaForge'
+        result, chat, browser, events, _ = self.execute(prompt, {'action_request':prompt,
+            'action_kind':'draft', 'answer_requests':[], 'answer_kinds':[]}, before_prefill=[
+                ('highlight', {'ref':'name'})])
+        self.assertEqual('agent_finished', result.terminal_reason)
+        self.assertEqual(['fill', 'handoff_form'], browser.actions)
+        self.assertTrue(any(e['event'] == 'task_highlight_refused' for e in events))
+        self.assertIn('No control was highlighted', str(chat.messages))
+
     def test_verified_prefill_cannot_complete_a_requested_persisted_change(self):
         prompt = 'Save NovaForge'
         result, chat, browser, events, _ = self.execute(prompt, {'action_request':prompt,

@@ -13,7 +13,7 @@ from ..answer import answer_protocol, page_answer
 from ..business.forms import FORM_TOOL_SCHEMAS
 from ..business.form_entries import FORM_ENTRY_SCHEMAS
 from ..business.goal_candidates import RESOLVE_GOAL_CANDIDATES_TOOL
-from ..goal.read_schemas import DATA_READ_SCHEMAS
+from ..goal.read_schemas import DATA_READ_SCHEMAS, DATA_READ_REPLACED_TOOLS
 from ..goal.read_tools import DATA_READ_NAMES
 from .knowledge_tools import capability_check_available
 from .request_contract import DECLARE_TASK_TOOL, finish_schema
@@ -109,6 +109,11 @@ class ToolSurface:
                 allow_mutations=session._approvals.mutations_enabled,
                 actor_scopes=(principal.scopes if principal is not None else None),
                 writes=session._requested_writes)
+            if session.data_reads is not None:
+                # One business-answer surface when the deterministic resolver is
+                # configured. Record addresses, custom reads and forms remain offered.
+                business_schemas = [s for s in business_schemas
+                                    if s['function']['name'] not in DATA_READ_REPLACED_TOOLS]
             read_names = session.business_tools.read_tool_names & {
                 schema["function"]["name"] for schema in business_schemas}
             metric_read_names = read_names - {RESOLVE_GOAL_CANDIDATES_TOOL}

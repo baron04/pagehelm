@@ -13,6 +13,10 @@ from web_operation_agent.business.goal_candidates import (
 from web_operation_agent.execution.business_tools import business_tool
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
 from web_operation_agent.execution.tools import answer_repair_tools
+from web_operation_agent.goal.read_tools import DataReadTools
+from web_operation_agent.goal.read_schemas import DATA_READ_REPLACED_TOOLS
+from web_operation_agent.tests.goal.test_data_read_tools import Data, context
+from web_operation_agent.tests.support.session_fixture import SessionFixture
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.support.execution import _Browser, _Chat, _Control, _obs
 
@@ -29,7 +33,7 @@ class _GenericExecutor:
     def tool_schemas():
         return (RESOLVE_GOAL_CANDIDATES_SCHEMA,) + tuple(_schema(name) for name in (
             "discover_entities", "resolve_record_reference", "find_page_entries",
-            "query_records", "describe_entity", "prepare_record_form"))
+            "query_records", "describe_entity", "query_entity_records", "prepare_record_form"))
 
     @staticmethod
     def tool_effects():
@@ -38,6 +42,24 @@ class _GenericExecutor:
 
 
 class ToolSurfaceTests(unittest.TestCase):
+    def test_deterministic_reads_replace_only_parallel_entity_queries_and_block_hidden_dispatch(self):
+        fixture = SessionFixture()
+        self.addCleanup(fixture.close)
+        tools = BusinessToolRuntime((), _GenericExecutor())
+        session = fixture.session(business_tools=tools, principal=context().principal,
+            session_id='session', turn_id='turn', allow_form_prefill=True,
+            data_reads=DataReadTools(lambda ctx, check:Data(), 'sample', 'records:read'))
+        names = {s['function']['name'] for s in session.tool_schemas()}
+        self.assertTrue({'inspect_data', 'resolve_data', 'resolve_record_reference',
+                         'find_page_entries', 'prefill_form', 'query_records'} <= names)
+        self.assertFalse(DATA_READ_REPLACED_TOOLS & names)
+        with (patch('web_operation_agent.execution.business_tools.execute_business_read') as run,
+              patch.object(session, '_reply', return_value=None) as reply):
+            for name in DATA_READ_REPLACED_TOOLS:
+                business_tool(session, SimpleNamespace(step=1), {}, name, {})
+                self.assertIn('inspect_data', reply.call_args.args[2])
+        self.assertFalse(run.called)
+
     def test_answer_phase_keeps_optional_source_reads_and_blocks_action_tools(self):
         tools = BusinessToolRuntime((), _GenericExecutor(), numeric_goal_binding=True)
         with tempfile.TemporaryDirectory() as directory:

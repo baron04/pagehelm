@@ -367,7 +367,6 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
         self.require_task_contract = require_task_contract and not self._capability_question
         self._task_requirements = None
         self._requirements_context = None
-        self._requirements_initial_evidence = frozenset()
         self._superseded_action_receipt = None
         if not isinstance(allow_clarification, bool):
             raise ValueError("allow_clarification must be a boolean")
@@ -712,10 +711,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             requirements = parse_requirements(args, self._task_request_text)
             if previous is not None:
                 requirements = revise_requirements(previous, requirements, committed=bool(
-                    self.page_actions or turn.successful_business_tools
-                    or self._answer_action_receipt
-                    or any(ref not in self._requirements_initial_evidence
-                           for ref in self.evidence.ids())))
+                    self._answer_action_receipt or self._superseded_action_receipt))
         except ValueError as exc:
             self.ledger.append("task_declaration_refused", step=turn.step, reason=str(exc))
             return self._reply(turn, call, "TASK DECLARATION REFUSED: " + str(exc))
@@ -737,9 +733,6 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
             self._navigation_only = False
         self._answers.action_answer_required = bool(requirements.answer_requests)
         if previous is None:
-            # Initial context (such as a selected Skill) precedes task interpretation;
-            # only subsequent task results commit it to the stronger repair rules.
-            self._requirements_initial_evidence = frozenset(self.evidence.ids())
             self.ledger.append("task_requirements_frozen", step=turn.step,
                 action=bool(requirements.action_request), answers=len(requirements.answer_requests))
         # Keep this separate from snapshots, which may be compacted after actions.

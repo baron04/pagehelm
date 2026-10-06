@@ -107,6 +107,18 @@ class RequestContractShape(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_requirements({**declaration, "action_request": prompt}, prompt)
 
+    def test_question_clauses_can_share_the_original_subject_without_adding_text(self):
+        prompt = "销售订单今天有几张，含税金额多少？"
+        whole = {"action_request":"", "action_kind":"none", "answer_requests":[prompt],
+                 "answer_kinds":["data"]}
+        self.assertEqual(parse_requirements(whole, prompt).answer_requests, (prompt,))
+        shared = {**whole, "answer_requests":["销售订单今天有几张", prompt],
+                  "answer_kinds":["data", "data"]}
+        self.assertEqual(parse_requirements(shared, prompt).answer_ids, ("a1", "a2"))
+        with self.assertRaises(ValueError):
+            parse_requirements({**whole, "answer_requests":["销售订单今天有几张", "销售订单含税金额多少？"],
+                               "answer_kinds":["data", "data"]}, prompt)
+
     def test_only_selected_answer_evidence_can_settle_frozen_question_ids(self):
         req = parse_requirements(DECLARATION, REQUEST)
         value = answer()
@@ -264,6 +276,38 @@ class RequestContractProduct(unittest.TestCase):
         self.assertIn("未完成操作：打开公司详情", result.user_answer)
         self.assertIn("12.50 USD", result.user_answer)
 
+    def test_explicit_partial_retains_facts_even_if_model_declares_complete_coverage(self):
+        partial = answer(outcome="partial")
+        partial["answer"]["coverage"] = "complete"
+        result, _ = self.execute([("finish", partial)])
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIn("未完成操作：打开公司详情", result.user_answer)
+        self.assertIn("12.50 USD", result.user_answer)
+
+    def test_read_facts_do_not_freeze_a_question_misclassified_as_record_navigation(self):
+        prompt = "公司的金额是多少"
+        declaration = {"action_request":prompt, "action_kind":"record", "answer_requests":[],
+                       "answer_kinds":[]}
+        corrected = {"action_request":"", "action_kind":"none", "answer_requests":[prompt],
+                     "answer_kinds":["data"]}
+        final = _answer("field_value", "call3-record#1")
+        final["answer"]["answers_for"] = [{"request_ref":"r2-a1", "evidence_refs":["call3-record#1"]}]
+        result, _ = self.execute([("declare_task", corrected), ("finish", final)],
+                                 prompt=prompt, declaration=declaration)
+        self.assertEqual(result.status, AgentTurnStatus.FINISHED)
+        self.assertIn("12.50 USD", result.user_answer)
+        self.assertNotIn("goto", _RemoteBrowser.instances[-1].actions)
+
+    def test_highlighting_a_list_cannot_complete_or_hand_over_a_record_task(self):
+        prompt = "打开公司详情"
+        result, chat = self.execute([("highlight", {"ref":"companies-link"}),
+                                    ("finish", {"outcome":"unable"})], reads=False,
+            prompt=prompt, declaration={"action_request":prompt, "action_kind":"record",
+                                        "answer_requests":[], "answer_kinds":[]})
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertNotIn("highlight", _RemoteBrowser.instances[-1].actions)
+        self.assertIn("No control was highlighted", str(chat.messages))
+
     def test_unable_and_exhausted_repairs_retain_the_observed_action(self):
         for finish_calls in ([ ("finish", {"outcome": "unable"}) ],
                              [(None, {"content": "Everything is done"})] * 3,
@@ -292,7 +336,7 @@ class RequestContractProduct(unittest.TestCase):
             prefix=(("declare_task", {**declaration, "answer_requests": [prompt], "answer_kinds": ["data"]}),))
         self.assertEqual(result.status, AgentTurnStatus.FINISHED)
         self.assertEqual(chat.tool_names[:2], [{"declare_task"}, {"declare_task"}])
-        self.assertIn("nonoverlapping", str(chat.messages))
+        self.assertIn("an operation is not an additional answer", str(chat.messages))
         self.assertEqual(_RemoteBrowser.instances[-1].actions.count("goto"), 1)
 
     def test_record_task_cannot_finish_on_a_collection_but_can_recover_with_the_same_agent(self):
