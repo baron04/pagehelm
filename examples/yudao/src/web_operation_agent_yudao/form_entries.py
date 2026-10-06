@@ -1,7 +1,7 @@
 """Reviewed customer editor admission, issued by the server after an exact click receipt.
 
-Explicit policies admit customer updates and named creation entries. File hashes attest reviewed
-entry/persistence semantics; live APIs attest the actor's authority. DOM tokens attest
+Deployment-owned policies admit customer updates and defined creation entries. File hashes
+bind an entry to the reviewed source bytes; live APIs attest the actor's authority. DOM tokens attest
 only lifetime. None of those facts alone authorizes filling or submission.
 """
 from dataclasses import dataclass
@@ -35,12 +35,12 @@ def _location(url):
     return parts.path + ("?" + parts.query if parts.query else "")
 
 
-def _creation_location(reference, url):
+def _creation_location(review, url):
     parts = urlsplit(url)
     # The reviewed PMS opener belongs to these source-declared collection tabs.
     # Extra parameters and duplicate keys are not an entry identity.
-    return (parts.path == CREATE_ENTRIES[reference][1] and not parts.fragment
-            and (not parts.query or reference == "project-create"
+    return (parts.path == review.entry[1] and not parts.fragment
+            and (not parts.query or review.reference == "project-create"
                  and parts.query in {"tabs=participate", "tabs=owner", "tabs=all"}))
 
 
@@ -239,23 +239,52 @@ CREATE_ENTRIES = {
 @dataclass(frozen=True)
 class NativeCreateReview(NativeFormReview):
     reference: str
+    definition: tuple[str, ...] = ()
+
+    @property
+    def entry(self):
+        if self.definition:
+            return self.definition
+        if self.reference not in CREATE_ENTRIES:
+            raise ValueError("creation requires a reviewed entry definition")
+        return CREATE_ENTRIES[self.reference]
 
     @classmethod
     def load(cls, payload, tree):
-        if (not isinstance(payload, dict) or set(payload) != {"schema_version", "release", "hashes", "reference"}
+        required_keys = {"schema_version", "release", "hashes", "reference"}
+        if (not isinstance(payload, dict) or set(payload) not in (required_keys, required_keys | {"entry"})
                 or type(payload["schema_version"]) is not int or payload["schema_version"] != 1
                 or payload["release"] != tree.release or not isinstance(payload["reference"], str)
-                or payload["reference"] not in CREATE_ENTRIES
+                or not re.fullmatch(r"[a-z][a-z0-9_-]{0,79}", payload["reference"])
                 or not isinstance(payload["hashes"], dict)):
             raise ValueError("native creation needs a named reviewed entry")
-        entry = CREATE_ENTRIES[payload["reference"]]
+        definition = ()
+        if "entry" in payload:
+            raw = payload["entry"]
+            keys = ("entity", "route", "label", "permission", "parent_component", "form_component")
+            if (not isinstance(raw, dict) or set(raw) != set(keys)
+                    or any(not isinstance(raw[k], str) for k in keys)
+                    or not re.fullmatch(r"[a-z][a-z0-9_]*(?:/[a-z][a-z0-9_]*){1,5}", raw["entity"])
+                    or not re.fullmatch(r"/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+){0,10}", raw["route"])
+                    or not raw["label"].strip() or len(raw["label"]) > 240
+                    or re.search(r"[\x00-\x1f\x7f]", raw["label"])
+                    or not re.fullmatch(r"[a-z][a-z0-9_-]*(?::[a-z][a-z0-9_-]*){1,5}", raw["permission"])
+                    or any(not re.fullmatch(r"ui/src/views/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.vue", raw[k])
+                           for k in ("parent_component", "form_component"))):
+                raise ValueError("creation entry definition is malformed")
+            definition = tuple(raw[k] for k in keys)
+            if payload["reference"] in CREATE_ENTRIES and definition != CREATE_ENTRIES[payload["reference"]]:
+                raise ValueError("a built-in entry cannot borrow another definition")
+        elif payload["reference"] not in CREATE_ENTRIES:
+            raise ValueError("creation requires a reviewed entry definition")
+        entry = definition or CREATE_ENTRIES[payload["reference"]]
         required = {entry[4], entry[5], REVIEWED_FILES[2]}
         if payload["reference"] == "contact-create":
             required.add(REVIEWED_FILES[0])
         if (set(payload["hashes"]) != required or any(not isinstance(v,str)
                 or not re.fullmatch(r"[0-9a-f]{64}",v) for v in payload["hashes"].values())):
             raise ValueError("native creation must pin its own opener, form and dialog")
-        review = cls(payload["release"], tuple(sorted(payload["hashes"].items())), payload["reference"])
+        review = cls(payload["release"], tuple(sorted(payload["hashes"].items())), payload["reference"], definition)
         if not review.matches(tree):
             raise ValueError("native creation review does not match current source")
         return review
@@ -263,10 +292,10 @@ class NativeCreateReview(NativeFormReview):
 
 class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
     def __init__(self, tree, review, client):
-        if not isinstance(review, NativeCreateReview) or review.reference not in CREATE_ENTRIES:
+        if not isinstance(review, NativeCreateReview):
             raise TypeError("creation cannot use a customer update review")
         super().__init__(tree, review, client)
-        self.goal_entries = ((review.reference, *CREATE_ENTRIES[review.reference]),)
+        self.goal_entries = ((review.reference, *review.entry),)
 
     def adopt_current(self, observation, *, context):
         """Admit the reviewed customer-bound contact creation dialog opened by its user.
@@ -296,7 +325,7 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         parent = self.client.get("crm/customer/get", id=match[1])
         if not isinstance(parent, dict) or str(parent.get("id")) != match[1]:
             raise BusinessToolPermissionError("the contact parent is not readable")
-        component = CREATE_ENTRIES[self.review.reference][5]
+        component = self.review.entry[5]
         source = self.source.read(component)
         if source is None:
             return None
@@ -332,7 +361,7 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         if (not isinstance(user, dict) or str(user.get("id")) != context.principal.actor_id
                 or str(self.client.tenant) != context.principal.tenant_id):
             raise BusinessToolIdentityError("the creation actor changed")
-        required = CREATE_ENTRIES[self.review.reference][3]
+        required = self.review.entry[3]
         if (not isinstance(permissions,list) or any(not isinstance(p,str) for p in permissions)
                 or not {required,"*:*:*"}.intersection(permissions)):
             raise BusinessToolPermissionError("this actor cannot create this entity")
@@ -341,9 +370,9 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         self._planned = self._current = None
         if reference != self.review.reference:
             raise BusinessToolRequestError("this creation entry is not reviewed")
-        _, route, label, *_ = CREATE_ENTRIES[reference]
+        _, route, label, *_ = self.review.entry
         if (observation.render_state != "ready" or observation.record_route
-                or not _creation_location(reference, observation.url)
+                or not _creation_location(self.review, observation.url)
                 or any(str(e.attrs.get("form_scope", "")).startswith("dialog") for e in observation.elements)):
             raise BusinessToolRequestError("the exact collection must be ready without an editor")
         self._authorize("",context)
@@ -360,7 +389,7 @@ class NativeCreateEntryVerifier(NativeCustomerEntryVerifier):
         planned, scope, instance = self._checked_entry(
             planned, entry, before, receipt, observation, context)
         self._authorize("",context)
-        component = CREATE_ENTRIES[entry.reference][5]
+        component = self.review.entry[5]
         source = self.source.read(component)
         if source is None:
             raise BusinessToolRequestError("the reviewed creation source is unavailable")
@@ -437,7 +466,7 @@ class NativeEntryFormPort(YudaoFormPort):
         form = self.describe_form(observation, context=context)
         active = getattr(self._verifier, "active", self._verifier)
         if (form is not None and isinstance(active, NativeCreateEntryVerifier)
-                and CREATE_ENTRIES[active.review.reference][0] == entity):
+                and active.review.entry[0] == entity):
             return form
         return None
 
@@ -458,8 +487,8 @@ class NativeEntryFormPort(YudaoFormPort):
         for verifier in verifiers:
             if isinstance(verifier, NativeCreateEntryVerifier):
                 reference = verifier.review.reference
-                _, route, label, *_ = CREATE_ENTRIES[reference]
-                if not _creation_location(reference, observation.url) or observation.record_route:
+                _, route, label, *_ = verifier.review.entry
+                if not _creation_location(verifier.review, observation.url) or observation.record_route:
                     continue
                 record, kind = "", "create"
             else:

@@ -1096,7 +1096,13 @@ inputs invalidate reuse. Source retrieval remains optional.
 Source-backed how-to questions explain evidenced user-facing steps; they do not execute
 the operation. Ambiguous module workflows are distinguished rather than treated as one
 application path. Native Yudao hosts can compose separately reviewed update and creation
-entry policies; undeclared entries remain unavailable and submissions stay manual.
+entry policies. A deployment-owned creation review can define the entity, collection
+route, opener label, exact permission and parent/form component paths through its
+`entry` object, without adding a Python registry entry. The review pins the deployed
+parent, form and shared dialog bytes; the deployment must review their transient
+behavior, since hashes alone do not establish absence of persistence. Runtime actor,
+permission, entry and field checks still apply. Undeclared entries remain unavailable
+and submissions stay manual.
 
 An optional server-side product-knowledge index groups original, release-bound source
 excerpts into draft workflow guides and retains raw-source fallback. Derived summaries

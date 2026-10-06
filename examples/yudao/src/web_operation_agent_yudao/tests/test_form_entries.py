@@ -195,6 +195,64 @@ class EntryTests(unittest.TestCase):
             self.assertTrue(port.resolve(wrong,context=self.context).deliverables[1].problem)
 
 
+class DefinedCreationEntryTests(unittest.TestCase):
+    setUp = EntryTests.setUp
+
+    def defined(self):
+        definition = {"entity": "synthetic/record", "route": "/synthetic/records",
+            "label": "新建记录", "permission": "synthetic:record:create",
+            "parent_component": "ui/src/views/synthetic/record/index.vue",
+            "form_component": "ui/src/views/synthetic/record/RecordForm.vue"}
+        for path in (definition["parent_component"], definition["form_component"]):
+            target = self.tree.root / path; target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('<template><el-form :model="formData">'
+                '<el-form-item label="金额" prop="price"><el-input-number v-model="formData.price" :min="0" :precision="2"/></el-form-item>'
+                '<el-form-item label="日期" prop="day"><el-date-picker v-model="formData.day" type="date" value-format="x"/></el-form-item>'
+                '</el-form></template>')
+        paths = (definition["parent_component"], definition["form_component"], REVIEWED_FILES[2])
+        payload = {"schema_version": 1, "release": self.tree.release, "reference": "synthetic-create",
+            "entry": definition, "hashes": {p: hashlib.sha256(self.tree.read_text(p).encode()).hexdigest() for p in paths}}
+        review = NativeCreateReview.load(payload, self.tree)
+        client = Client(); client.permission = definition["permission"]
+        verifier = NativeCreateEntryVerifier(self.tree, review, client)
+        before = replace(self.before, url="https://synthetic.test" + definition["route"],
+            record_route="", page_route=definition["route"],
+            elements=[replace(self.before.elements[0], name=definition["label"])])
+        attrs = self.after.elements[0].attrs
+        after = replace(self.after, url=before.url, record_route="", page_route=definition["route"],
+            elements=[ElementRef("amount", "spinbutton", "", "input", 3, {**attrs, "field_label":"金额"}),
+                ElementRef("day", "textbox", "", "input", 3, {**attrs, "field_label":"日期"}), self.after.elements[1]])
+        return payload, client, verifier, before, after
+
+    def test_deployment_defined_entry_binds_scalar_fields_without_a_code_registry(self):
+        payload, client, verifier, before, after = self.defined()
+        port = NativeEntryFormPort(verifier)
+        self.assertEqual([r.reference for r in port.form_entries(before, context=self.context)], ["synthetic-create"])
+        entry = port.plan_entry("synthetic-create", before, context=self.context)
+        ref = port.accept_entry(entry, before, self.receipt, after, context=self.context)
+        draft, _ = ApplicationFormTools(port, application_id="yudao").prepare_current(after,
+            reference=ref, values=(("price", "1250.5"), ("day", "2026-10-08")), context=self.context)
+        self.assertEqual([f.value for f in draft.fields], ["1250.50", "2026-10-08"])
+        client.permission = "synthetic:record:query"
+        with self.assertRaises(BusinessToolPermissionError):
+            port.describe_form(after, context=self.context)
+
+    def test_definition_cannot_borrow_builtin_authority_or_escape_reviewed_source(self):
+        payload, _, _, _, _ = self.defined()
+        for key, value in (("form_component", "../private.vue"), ("route", "https://other.test/records"),
+                           ("permission", "*:*:*"), ("entity", ""), ("label", "\n新建")):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                NativeCreateReview.load({**payload, "entry": {**payload["entry"], key:value}}, self.tree)
+        with self.assertRaises(ValueError):
+            NativeCreateReview.load({**payload, "reference":"customer-create"}, self.tree)
+        with self.assertRaises(ValueError):
+            NativeCreateReview.load({k:v for k,v in payload.items() if k!="entry"}, self.tree)
+        path = self.tree.root / payload["entry"]["form_component"]
+        path.write_text("changed source")
+        with self.assertRaises(ValueError):
+            NativeCreateReview.load(payload, self.tree)
+
+
 class CreationEntryTests(unittest.TestCase):
     setUp = EntryTests.setUp
 
