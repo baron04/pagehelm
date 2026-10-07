@@ -163,7 +163,10 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
       if (!Number.isInteger(pages) || pages < 1 || pages > MAX_SCROLL_PAGES) {
         throw new Error(`bad_arguments: scroll pages must be an integer from 1 to ${MAX_SCROLL_PAGES}`)
       }
-      return access().scroll(direction === 'down', pages)
+      // With a reference, the container that holds that element scrolls: a page whose
+      // content scrolls inside its layout is not moved by scrolling the window.
+      return args.ref === undefined ? access().scroll(direction === 'down', pages)
+        : access().scroll(direction === 'down', pages, args.ref)
     }
     case 'goto': {
       if (!args.url) throw new Error('bad_arguments: goto needs url')

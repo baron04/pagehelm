@@ -537,6 +537,7 @@ class _Unmet(NamedTuple):
                 "page_unverified": "rendered destination not verified",
                 "error_dialog": "the application reported an error dialog",
                 "filter_on": f"filter {self.name}", "filter_off": f"filter {self.name} off",
+                "paging": f"paging {self.name}",
                 "section": f"section {self.name}", "control": f"control {self.name}",
                 "action_unspecified": "no handoff control was specified",
                 "record": f"no detail page for record {self.name}",
@@ -550,6 +551,7 @@ class _Unmet(NamedTuple):
                     "page_unverified": "无法确认目标页面已经加载",
                     "filter_on": f"筛选「{self.name}」没有生效",
                     "filter_off": f"筛选「{self.name}」没有取消",
+                    "paging": f"没有{self.name}",
                     "section": f"没有找到页签「{self.name}」",
                     "control": f"没有找到控件「{self.name}」",
                     "action_unspecified": "没有确定要准备的操作或字段",
@@ -561,6 +563,7 @@ class _Unmet(NamedTuple):
                 "error_dialog": "the application showed an error",
                 "filter_on": f"filter “{self.name}” not applied",
                 "filter_off": f"filter “{self.name}” not removed",
+                "paging": f"did not {self.name}",
                 "section": f"no tab “{self.name}”", "control": f"no control “{self.name}”",
                 "action_unspecified": "no operation or field to prepare was determined",
                 "record": f"no detail address for “{self.name}”",
@@ -590,6 +593,8 @@ class _PageOutcome:
     form_input_dispatched: bool = False
     form_reason: str = ""
     form_error_code: str = ""
+    #: "page/size" as the page's own list read reported it once paging was settled.
+    paging: str = ""
 
 
 @dataclass
@@ -650,6 +655,9 @@ class _TurnState:
     source_answer: str = ""
     source_complete: bool = True
     unsupported: str = ""
+    #: Quantities the request wrote that the declaration acted on carries nowhere, as
+    #: written. What was done may be right, but it is not all that was asked.
+    dropped: tuple[str, ...] = ()
 
 
 
@@ -1181,6 +1189,9 @@ class GoalTurnExecutor:
                 except (ValueError, ProviderError) as exc:
                     s.ledger.append("goal_coverage_repair_failed", step=s.step,
                                     detail=str(exc)[:200])
+            s.dropped = _dropped_quantities(spec, s.message.text, s.candidates)
+            if s.dropped:
+                s.ledger.append("goal_quantities_dropped", step=s.step, count=len(s.dropped))
         s.write_intent = spec.write_intent or any(
             d.kind == "handoff" for d in spec.deliverables)
         if (not spec.deliverables and not spec.about_assistant and s.focus
@@ -1362,7 +1373,7 @@ class GoalTurnExecutor:
             for i in form_indices:
                 outcomes[i] = outcome
         if not s.terminal_reason:
-            achieved = not s.unsupported and all(_achieved(r, o) for r, o in
+            achieved = not s.unsupported and not s.dropped and all(_achieved(r, o) for r, o in
                            zip(resolution.deliverables, outcomes, strict=True))
             s.terminal_reason = "agent_finished" if achieved else "agent_refused"
             unsure = next((r for r in resolution.deliverables
@@ -1995,6 +2006,11 @@ class GoalTurnExecutor:
             from .page_filters import apply_page_filters
             if not apply_page_filters(self, s, plan):
                 out.unmet.append(_Unmet("filter_on", "requested page conditions"))
+        if (plan.page_number or plan.page_step or plan.page_size) and not out.unmet:
+            from .paging import apply_paging
+            out.paging = apply_paging(self, s, plan)
+            if not out.paging:
+                out.unmet.append(_Unmet("paging", _paging_words(plan, s.chinese)))
         if plan.section and not self._select_tab(s, plan.section):
             out.unmet.append(_Unmet("section", plan.section))
         if plan.missing_record:
@@ -2388,6 +2404,11 @@ class GoalTurnExecutor:
             lines.extend(_render(resolved, outcome, zh, request, name))
         if s.unsupported:
             lines.append(("未完成的部分：" if zh else "Parts not completed: ") + s.unsupported)
+        if s.dropped:
+            said = "、".join(f"「{q}」" for q in s.dropped) if zh else ", ".join(f"“{q}”" for q in s.dropped)
+            lines.append((f"未完成的部分：你提到的{said}没有体现在这次操作里，助手目前做不到这一部分。") if zh
+                         else f"Parts not completed: {said} from your request is not reflected in what "
+                              "was done; the assistant cannot do that part.")
         # A turn stopped by the person, or by an unanswered card, says so in the line of
         # the deliverable it stopped; the internal detail behind it is not the person's.
         form_failure = any(r.page is not None and r.page.form is not None
@@ -2481,6 +2502,44 @@ class GoalTurnExecutor:
         return execution
 
 
+#: A quantity as a person writes it in running Chinese text: digits directly before a
+#: measure word or noun (50条, 100顶, 10卷). Digits inside codes and names are not these.
+_QUANTITY = re.compile(r"(?<![A-Za-z0-9_.:：/\-])(\d+(?:\.\d+)?)(?=([\u4e00-\u9fff]))")
+
+
+def _dropped_quantities(spec: GoalSpec, text: str, candidates: tuple = ()) -> tuple[str, ...]:
+    """Quantities the request wrote that appear nowhere in the declaration, by value.
+
+    Days and clock times are read elsewhere and are not quantities. A number is compared
+    by its value, so 9 is found in 09:00 and 2000 in 2,000.00.
+    """
+    declared = json.dumps(spec.to_json(), ensure_ascii=False)
+    chosen = " ".join(f"{c.display} {c.detail}" for c in candidates if c.display in declared)
+    def value(raw):
+        try:
+            return float(raw.replace(",", ""))
+        except ValueError:
+            return None
+    held = {value(n) for n in _numbers(declared + " " + chosen)}
+    out = []
+    for match in _QUANTITY.finditer(without_days(text)):
+        if value(match.group(1)) not in held:
+            out.append(match.group(1) + match.group(2))
+    return tuple(dict.fromkeys(out))[:4]
+
+
+def _paging_words(plan, zh: bool) -> str:
+    parts = []
+    if plan.page_size:
+        parts.append(f"改成每页 {plan.page_size} 条" if zh else f"show {plan.page_size} per page")
+    if plan.page_number:
+        parts.append(f"翻到第 {plan.page_number} 页" if zh else f"go to page {plan.page_number}")
+    elif plan.page_step:
+        parts.append(("翻到下一页" if plan.page_step > 0 else "翻到上一页") if zh
+                     else ("go to the next page" if plan.page_step > 0 else "go to the previous page"))
+    return ("、" if zh else " or ").join(parts)
+
+
 def _numbers(text: str) -> set[str]:
     """Numbers as written, without separators or trailing zero decimals."""
     out = set()
@@ -2536,6 +2595,9 @@ def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
             continue
         gaps.append(f"the request says {ref!r} but the declaration does not use it; put it "
                     "where it belongs (a record, a condition's value, a search)")
+    gaps.extend(f"the request says {q!r} but the declaration carries that quantity nowhere; put it "
+                "where it belongs (a value, a condition, a limit, page_number or page_size), or "
+                "say in unsupported that it cannot be done" for q in _dropped_quantities(spec, text, candidates))
     for day in days(text, today):
         if day not in declared and day[5:] not in declared:
             gaps.append(f"the request names the day {day} but the declaration has no "
@@ -2676,6 +2738,8 @@ def _needs_beyond(d, offered: frozenset[str]) -> frozenset[str]:
         needs.add("sections")
     if d.page.search:
         needs.add("search")
+    if d.page.paged:
+        needs.add("paging")
     if d.kind == "handoff":
         needs.add("handoffs")
         if d.value:
@@ -2695,9 +2759,11 @@ def _ask_what_it_can(spec: GoalSpec, offered: frozenset[str]) -> tuple[GoalSpec,
     """
     out, left = [], []
     for d in spec.deliverables:
-        drop = frozenset({"facets"} & _needs_beyond(d, offered)) if d.kind == "page" else frozenset()
-        if drop:
+        drop = frozenset({"facets", "paging"} & _needs_beyond(d, offered)) if d.kind == "page" else frozenset()
+        if "facets" in drop:
             d = replace(d, page=replace(d.page, filters_on=(), filters_off=(), group_by="", conditions=()))
+        if "paging" in drop:
+            d = replace(d, page=replace(d.page, page_number=0, page_step=0, page_size=0))
         out.append(d)
         left.append(tuple(sorted(drop)))
     return replace(spec, deliverables=tuple(out)), tuple(left)
@@ -2965,6 +3031,9 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
             if plan.facets_off:
                 extras.append(("已移除筛选：" if zh else "filters removed: ")
                               + ", ".join(plan.facets_off))
+            if outcome.paging:
+                number, size = outcome.paging.split("/")
+                extras.append(f"第 {number} 页，每页 {size} 条" if zh else f"page {number}, {size} per page")
             suffix = f"（{'；'.join(extras)}）" if extras and zh else (
                 f" ({'; '.join(extras)})" if extras else "")
             if plan.missing_view:
@@ -2980,6 +3049,10 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                 suffix += (f"，但这个应用没有提供{offers}" if zh
                            else f", but this application does not offer {offers}")
             lines.append((f"已打开：{what}{suffix}") if zh else f"Opened: {what}{suffix}")
+        elif outcome.reached and all(u.kind == "paging" for u in outcome.unmet):
+            # The list is open as it was; the page or page size asked for was not reached.
+            lines.append((f"已打开：{plan.label}，但{outcome.unmet[0].said(True)}") if zh
+                         else f"Opened: {plan.label}, but {outcome.unmet[0].said(False)}")
         elif outcome.reached and all(u.kind == "filter_on" for u in outcome.unmet):
             # The page is open; a filter or group it asked for has no such choice there.
             # Said as what the page lacks, not as the assistant failing, because the
@@ -3002,10 +3075,10 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
 
 
 #: The optional capabilities of a goal port (`OPTIONAL`), as a person would name them.
-_OFFER_ZH = {"facets": "页面筛选与分组", "sections": "页签", "lines": "明细行",
+_OFFER_ZH = {"facets": "页面筛选与分组", "paging": "翻页和每页条数", "sections": "页签", "lines": "明细行",
              "handoffs": "指出控件", "fill": "预先填值", "search": "页面搜索",
              "source": "源码规则", "values": "候选值"}
-_OFFER_EN = {"facets": "page filters and groups", "sections": "tabs", "lines": "line items",
+_OFFER_EN = {"facets": "page filters and groups", "paging": "paging", "sections": "tabs", "lines": "line items",
              "handoffs": "pointing at controls", "fill": "entering values",
              "search": "page search", "source": "rules from source", "values": "candidate values"}
 

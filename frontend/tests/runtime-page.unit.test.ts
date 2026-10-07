@@ -115,6 +115,32 @@ describe('adapter-issued single-choice combobox drafts', () => {
   })
 })
 
+describe('an anchored scroll moves the container that holds the anchor', () => {
+  it('scrolls the nearest ancestor with room, however deep, and falls back to the page', async () => {
+    const outer = document.createElement('div')
+    outer.style.overflowY = 'auto'
+    let inner: HTMLElement = outer
+    for (let depth = 0; depth < 14; depth++) inner = inner.appendChild(document.createElement('div'))
+    const anchor = inner.appendChild(document.createElement('button'))
+    document.body.append(outer)
+    Object.defineProperty(outer, 'scrollHeight', {value: 2000})
+    Object.defineProperty(outer, 'clientHeight', {value: 500})
+    const api = controller()
+    api.scroll = vi.fn(async () => ({success: true}))
+    const page = new Page(api, () => anchor, createRedactor())
+    try {
+      await page.scroll(true, 2, 'e1')
+      expect(outer.scrollTop).toBe(1000)
+      expect(api.scroll).not.toHaveBeenCalled()
+      await page.scroll(false, 1, 'e1')
+      expect(outer.scrollTop).toBe(500)
+      outer.style.overflowY = 'visible'
+      await page.scroll(true, 1, 'e1')
+      expect(api.scroll).toHaveBeenCalledWith({down: true, numPages: 1})
+    } finally {outer.remove()}
+  })
+})
+
 describe('the product PageController extraction policy', () => {
   it('accepts explicit application loading while unknown blocker values fail closed', () => {
     const read = (value: unknown) => new Page(controller(), () => null, createRedactor(),

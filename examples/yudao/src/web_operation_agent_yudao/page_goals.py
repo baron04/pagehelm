@@ -20,7 +20,9 @@ class NativePageGoalPort(DataGoalPort):
     page_filters = None
 
     def capabilities(self):
-        return super().capabilities() | ({"facets"} if self.page_filters is not None else set())
+        # Paging is settled on the page's own pagination controls and list reads, which the
+        # page integration reports for every list; it needs no review of its own.
+        return super().capabilities() | {"paging"} | ({"facets"} if self.page_filters is not None else set())
 
     def prepare_page_filters(self, plan, observation, *, context):
         from web_operation_agent.business.errors import BusinessToolRequestError

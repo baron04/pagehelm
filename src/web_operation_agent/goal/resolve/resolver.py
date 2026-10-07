@@ -840,6 +840,7 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
             url=url, label=page.breadcrumb, expected_path=expected, view=view,
             facets_on=tuple(dict.fromkeys(on)), facets_off=tuple(dict.fromkeys(off)),
             conditions=d.page.conditions,
+            page_number=d.page.page_number, page_step=d.page.page_step, page_size=d.page.page_size,
             missing_view=d.page.view if problem else "", requires_page_route=not page.entity))
 
     def _names_repair(self, model: str) -> str:

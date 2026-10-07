@@ -7,6 +7,15 @@ function pageWithScroll(scroll: ReturnType<typeof vi.fn>): Page {
 }
 
 describe('the generic scroll command is bounded before PageController receives it', () => {
+  it('passes an anchor through so that its own container is the one scrolled', async () => {
+    const scroll = vi.fn().mockResolvedValue({success: true})
+    await executeCommand(
+      {command_id: 'a9', action: 'scroll', args: {direction: 'down', pages: 2, ref: 'e7'},
+        expect_navigation: false},
+      () => pageWithScroll(scroll), {},
+    )
+    expect(scroll).toHaveBeenCalledWith(true, 2, 'e7')
+  })
   it('scrolls one viewport down by default', async () => {
     const scroll = vi.fn().mockResolvedValue({success: true})
 

@@ -125,6 +125,11 @@ class PagePlan:
     #: Header controls and the address alone cannot verify such a destination.
     requires_page_route: bool = False
     conditions: tuple[Filter, ...] = ()
+    #: The page of the list to show (a number, or a step from the one shown) and the rows
+    #: per page; 0 leaves each as it is. Settled on the page's own pagination controls.
+    page_number: int = 0
+    page_step: int = 0
+    page_size: int = 0
     #: The record has only a collection address; opening it cannot settle a record
     #: request or authorize actions on a particular row.
     missing_record: str = ""
@@ -205,14 +210,14 @@ class Resolution:
 #: capability name because they cannot be absent.
 REQUIRED = ("index", "records", "facts", "aggregates", "pages")
 #: What an adapter may add, each named so that the core can say honestly what this
-#: application does not offer rather than fail: page filters and groups ("facets"),
+#: application does not offer rather than fail: page filters and groups ("facets"), a list's page and page size ("paging"),
 #: tabs on a record's page ("sections"), the lines a record's form embeds ("lines"),
 #: business controls to point at ("handoffs"), entering a value before handing over
 #: ("fill"), free text searched on a page ("search"), rules compiled from the
 #: deployment's source ("source"), and real values offered before the declaration --
 #: a named record's lines, a named partner's documents -- through
 #: `candidates(entities=, known=, context=)` ("values").
-OPTIONAL = frozenset({"facets", "sections", "lines", "handoffs", "fill", "search", "source",
+OPTIONAL = frozenset({"facets", "paging", "sections", "lines", "handoffs", "fill", "search", "source",
                       "values"})
 
 

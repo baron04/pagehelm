@@ -428,7 +428,22 @@ export class Page {
     }
     throw new Error('execution_failed: combobox option did not become actionable')
   }
-  scroll(down: boolean, pages: number): Promise<unknown> {
+  scroll(down: boolean, pages: number, ref?: unknown): Promise<unknown> {
+    if (ref === undefined) return this.controller.scroll({down, numPages: pages})
+    const anchor = this.element(ref)
+    if (!(anchor instanceof Element) || !anchor.isConnected) {
+      throw new Error('bad_arguments: scroll anchor is not a current element')
+    }
+    // The nearest container around the anchor that still has room in that direction.
+    // PageController's own anchored scroll gives up ten ancestors above the element, which
+    // a row inside a table inside a card inside a scrolling layout never reaches.
+    for (let node: Element | null = anchor.parentElement; node; node = node.parentElement) {
+      const room = down ? node.scrollHeight - node.clientHeight - node.scrollTop : node.scrollTop
+      if (room > 1 && /(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY)) {
+        node.scrollTop += (down ? 1 : -1) * Math.max(40, node.clientHeight) * pages
+        return Promise.resolve({success: true, message: 'container scroll observed'})
+      }
+    }
     return this.controller.scroll({down, numPages: pages})
   }
 
@@ -625,6 +640,10 @@ export class Page {
             Number(fact.page) > 0 && Number.isSafeInteger(fact.pageSize) && Number(fact.pageSize) > 0) {
           item.attrs.page_control = 'pagination'
           item.attrs.page_number = String(fact.page)
+          item.attrs.page_size = String(fact.pageSize)
+        } else if (fact?.kind === 'page_size' && Number.isSafeInteger(fact.pageSize) &&
+            Number(fact.pageSize) > 0) {
+          item.attrs.page_control = 'page_size'
           item.attrs.page_size = String(fact.pageSize)
         } else if (fact?.kind === 'query') {
           item.attrs.page_control = 'query'

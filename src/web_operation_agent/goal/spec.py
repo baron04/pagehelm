@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import re
 
 KINDS = ("fact", "aggregate", "list", "page", "handoff")
 METRIC_OPS = ("count", "sum", "min", "max")
@@ -121,6 +122,20 @@ class Metric:
                    total=value.get("total") is True)
 
 
+def _paging(value: dict) -> dict:
+    out = {}
+    for name, low, high in (("page_number", 0, 100_000), ("page_step", -1, 1), ("page_size", 0, 1000)):
+        raw = value.get(name) or 0
+        if isinstance(raw, str) and re.fullmatch(r"[+-]?\d{1,6}", raw.strip()):
+            raw = int(raw)
+        if type(raw) is not int or not low <= raw <= high:
+            raise ValueError(f"{name} must be a whole number from {low} to {high}")
+        out[name] = raw
+    if out["page_number"] and out["page_step"]:
+        raise ValueError("a page is named by its number or by a step, not both")
+    return out
+
+
 @dataclass(frozen=True)
 class PageSpec:
     #: A page key from the index, or empty when a record's own page is meant.
@@ -131,6 +146,12 @@ class PageSpec:
     group_by: str = ""
     search: str = ""
     conditions: tuple[Filter, ...] = ()
+    #: Which page of the list to show: a page number, or a step from the page now shown
+    #: (+1 the next, -1 the previous). At most one of the two; 0 leaves the page as it is.
+    page_number: int = 0
+    page_step: int = 0
+    #: How many rows a page shows; 0 leaves it as it is.
+    page_size: int = 0
 
     @classmethod
     def from_json(cls, value: object) -> "PageSpec":
@@ -147,12 +168,17 @@ class PageSpec:
                    filters_off=_texts(value.get("filters_off"), "filters_off"),
                    group_by=_text(value.get("group_by"), "group_by"),
                    search=_text(value.get("search"), "search"),
-                   conditions=tuple(Filter.from_json(item) for item in conditions))
+                   conditions=tuple(Filter.from_json(item) for item in conditions),
+                   **_paging(value))
+
+    @property
+    def paged(self) -> bool:
+        return bool(self.page_number or self.page_step or self.page_size)
 
     @property
     def empty(self) -> bool:
         return not any((self.key, self.view, self.filters_on, self.filters_off,
-                        self.group_by, self.search, self.conditions))
+                        self.group_by, self.search, self.conditions, self.paged))
 
 
 @dataclass(frozen=True)
@@ -259,7 +285,10 @@ class Deliverable:
                            "filters_off": list(self.page.filters_off),
                            "group_by": self.page.group_by, "search": self.page.search,
                            "conditions": [{"field": f.field, "values": list(f.values), "op": f.op}
-                                          for f in self.page.conditions]}
+                                          for f in self.page.conditions],
+                           **{name: getattr(self.page, name)
+                              for name in ("page_number", "page_step", "page_size")
+                              if getattr(self.page, name)}}
         return out
 
 
@@ -438,6 +467,12 @@ DECLARE_GOAL_TOOL = {
                                             "values": {"type": "array", "items": {"type": "string"}},
                                             "op": {"type": "string"}}, "required": ["field", "values"]},
                                         "description": "Conditions to APPLY to the actual page filter controls. Use kind page for requests to filter the page; metric.filters only queries records for a chat answer."},
+                                    "page_number": {"type": "integer",
+                                                    "description": "the page of the list to show, when the person names it (page 3)"},
+                                    "page_step": {"type": "integer", "enum": [-1, 0, 1],
+                                                  "description": "1 for the next page, -1 for the previous page, from the page now shown"},
+                                    "page_size": {"type": "integer",
+                                                  "description": "rows per page, when the person asks for it (50 per page)"},
                                     "search": {"type": "string",
                                                "description": "free text to search on the page, in the application's language"}}},
                             "section": {"type": "string",
