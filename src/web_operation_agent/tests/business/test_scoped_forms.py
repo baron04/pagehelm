@@ -453,8 +453,13 @@ class ScopedForms(unittest.TestCase):
                 _, reason, _ = apply_form_draft(session, draft, observation(), 1,
                     verify=lambda obs: check.check(draft, obs))
                 self.assertEqual(reason, "agent_refused")
-                expected = {"approval": [], "fill": ["fill"], "handoff_form": ["fill", "handoff_form"]}
+                # After an entered value the form is looked at again twice, by waiting only,
+                # before it is called changed: its own popup may still be closing over it.
+                expected = {"approval": [], "fill": ["fill", "wait_for", "wait_for"],
+                            "handoff_form": ["fill", "handoff_form"]}
                 self.assertEqual(calls, expected[change_at])
+                self.assertEqual(sum(event == "form_entry_verification_refused"
+                                     for event, _ in events), 1)
                 self.assertTrue(any(event == "form_entry_verification_refused" for event, _ in events))
 
     def test_loading_only_waits_and_revalidates_after_ready_without_retyping(self):

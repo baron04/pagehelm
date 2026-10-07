@@ -65,6 +65,32 @@ class ApplicationFormEntryPort(Protocol):
     def discard_entry(self, entry: ApplicationFormEntry, *, context: OperationContext) -> None:
         """Release unconsumed server admission after every opener attempt, including loss."""
         ...
+
+
+@runtime_checkable
+class ApplicationFormBindingPort(Protocol):
+    """A form port that ties requested fields to the labels the open form itself shows.
+
+    A request names fields in the index's words; the form that opened may label the same
+    field differently, or not show it. The port says which requested fields it could not
+    tie to a control and which labelled controls nothing is tied to; the server chooses
+    among those labels and tells the port. The port still enters each value through
+    exactly one control and still verifies it.
+    """
+
+    def unbound_fields(self, reference: str, observation: PageObservation, *,
+                       context: OperationContext
+                       ) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+        """((requested field reference, the name it was asked by), ...) with no control,
+        and ((visible label, control kind), ...) with no requested field."""
+        ...
+
+    def bind_fields(self, reference: str, bindings: tuple[tuple[str, str], ...], *,
+                    context: OperationContext) -> None:
+        """Tie requested field references to visible labels returned by `unbound_fields`."""
+        ...
+
+
 _FIELD_REFERENCE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,79}$")
 _OPAQUE_FORM = re.compile(r"^form_[0-9a-f]{32}$")
 _OPAQUE_FIELD = re.compile(r"^form_field_[0-9a-f]{32}$")
@@ -688,7 +714,7 @@ class ApplicationFormTools:
 
 
 __all__ = [
-    "ApplicationFormEntry", "ApplicationFormEntryPort",
+    "ApplicationFormBindingPort", "ApplicationFormEntry", "ApplicationFormEntryPort",
     "ApplicationFormDescriptor", "ApplicationFormField", "ApplicationFormPort",
     "ApplicationFormTools", "ApplicationFormValue", "DESCRIBE_FORM_SCHEMA",
     "DESCRIBE_FORM_TOOL", "FORM_TOOL_SCHEMAS", "FORM_TOOLS", "FormChoice",

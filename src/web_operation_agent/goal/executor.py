@@ -593,6 +593,8 @@ class _PageOutcome:
     form_input_dispatched: bool = False
     form_reason: str = ""
     form_error_code: str = ""
+    #: Requested fields the open form showed no field for, by the names asked.
+    form_unfilled: tuple[str, ...] = ()
     #: "page/size" as the page's own list read reported it once paging was settled.
     paging: str = ""
 
@@ -658,6 +660,8 @@ class _TurnState:
     #: Quantities the request wrote that the declaration acted on carries nowhere, as
     #: written. What was done may be right, but it is not all that was asked.
     dropped: tuple[str, ...] = ()
+    #: The turn's measured chat, for the one question a page step may ask of the model.
+    chat: object = None
 
 
 
@@ -918,6 +922,7 @@ class GoalTurnExecutor:
         chat = MeasuredChat(AuditedChat(self.chat, s.ledger), s.receipt,
                             remaining_s=s.budget.remaining, budget=s.budget,
                             stopped=s.model_stop.is_set)
+        s.chat = chat
         s.budget.check()
         with s.receipt.stage("business"):
             index = self.goal_port.index(context=s.approvals.context(0, "index"))
@@ -2023,6 +2028,7 @@ class GoalTurnExecutor:
                     prepared.complete, prepared.fields, prepared.submit_label)
                 out.form_input_dispatched = prepared.input_dispatched
                 out.form_reason, out.form_error_code = prepared.reason, prepared.error_code
+                out.form_unfilled = prepared.unfilled
                 if prepared.reason:
                     s.terminal_reason, s.detail = prepared.reason, prepared.detail
         elif plan.highlight and plan.fill:
@@ -2679,7 +2685,8 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
                 and (resolved.kind != "handoff" or bool(resolved.page
                      and (resolved.page.highlight or resolved.page.form)))
                 and (not resolved.page or not resolved.page.missing_record)
-                and (not resolved.page or not resolved.page.form or outcome.form_complete)
+                and (not resolved.page or not resolved.page.form
+                     or (outcome.form_complete and not outcome.form_unfilled))
                 and (not resolved.page or not resolved.page.fill
                      or bool(outcome.filled and outcome.fill_verified)))
     return False
@@ -2955,6 +2962,11 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                        if outcome.unmet else form_failure_message(
                            outcome.form_reason, outcome.form_error_code, zh))
                 lines.append(("原因：" if zh else "Reason: ") + why + ("。" if zh else "."))
+            if outcome.form_unfilled:
+                asked = ("、".join(f"「{n}」" for n in outcome.form_unfilled) if zh
+                         else ", ".join(f"“{n}”" for n in outcome.form_unfilled))
+                lines.append((f"未填写：这张表单上没有找到{asked}对应的字段，这部分需要你自己填。") if zh
+                             else f"Not filled: this form shows no field for {asked}; that part is yours to enter.")
             return lines
         if resolved.kind == "handoff":
             if not plan.highlight:

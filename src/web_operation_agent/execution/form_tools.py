@@ -340,21 +340,23 @@ def apply_form_draft(
     """
     current = observation
 
-    def verified(before):
+    def verified(before, *, record=True):
         if verify is None or before.render_state == "pending":
             return "", ""
         try:
             if verify(before) is not None:
                 raise BusinessToolContractError("form verification returned an invalid verdict")
         except PrincipalError as exc:
-            session.ledger.append("form_entry_verification_refused", step=step,
-                                  error_code=BusinessToolIdentityError.code, dispatched=False,
-                                  submitted=False, persisted=False)
+            if record:
+                session.ledger.append("form_entry_verification_refused", step=step,
+                                      error_code=BusinessToolIdentityError.code, dispatched=False,
+                                      submitted=False, persisted=False)
             return "agent_refused", str(exc)
         except BusinessToolError as exc:
-            session.ledger.append("form_entry_verification_refused", step=step,
-                                  error_code=exc.code, dispatched=False,
-                                  submitted=False, persisted=False)
+            if record:
+                session.ledger.append("form_entry_verification_refused", step=step,
+                                      error_code=exc.code, dispatched=False,
+                                      submitted=False, persisted=False)
             return ("permission_denied" if isinstance(exc, BusinessToolPermissionError)
                     else "agent_refused"), str(exc)
         return "", ""
@@ -465,10 +467,54 @@ def apply_form_draft(
         if (action != "goto" and before.record_route
                 and after.record_route != before.record_route):
             return after, "agent_refused", "the application changed the form record"
-        reason, detail = verified(after)
-        if reason:
+        if action not in ("fill", "select"):
+            reason, detail = verified(after)
             return after, reason, detail
-        return after, "", ""
+        # A control's own popup -- a calendar, an option list -- may still be closing
+        # over the form when its value is acknowledged, hiding the rest of the form for
+        # that moment. Look again after a short wait before calling the form changed;
+        # nothing is entered meanwhile, and the last look is the one that is recorded.
+        for wait_ms in (300, 600):
+            if not verified(after, record=False)[0]:
+                return after, "", ""
+            again, reason, detail = look_again(after, wait_ms)
+            if reason:
+                return again or after, reason, detail
+            if again is None:
+                break
+            after = again
+        reason, detail = verified(after)
+        return after, reason, detail
+
+    def look_again(before: PageObservation, wait_ms: int):
+        """A fresh observation after a bounded wait, or None when the page gave none."""
+        try:
+            session._browser_attempts += 1
+            receipt = (session.browser.execute_with_budget(
+                "wait_for", {"ms": wait_ms}, timeout_s=budget.check()) if budget is not None
+                else session.browser.execute("wait_for", {"ms": wait_ms}))
+        except TurnCancelled as exc:
+            return None, "user_cancelled", str(exc)
+        except BudgetExhausted as exc:
+            return None, ("wall_clock_budget" if exc.kind == "wall_budget" else exc.kind), str(exc)
+        except TransportError as exc:
+            return None, "transport_error", str(exc)
+        write = session._writes.write_outcome(receipt, step, action_may_write=False)
+        session.ledger.append(
+            "form_prefill_action", step=step, tool="wait_for", command_id=receipt.command_id,
+            field="", value_digest="", ok=receipt.ok, error_code=receipt.error_code,
+            page_epoch_before=before.epoch,
+            observation_epoch=(receipt.observation.epoch
+                               if receipt.observation is not None else None),
+            side_effect_possible=False, persisted=False, submitted=False, write=write["state"])
+        terminal, detail = session._writes.settle_write(write)
+        if terminal:
+            return receipt.observation, terminal, detail
+        if (not receipt.ok or receipt.observation is None or receipt.observation.epoch <= before.epoch
+                or not observation_is_at_route(receipt.observation, draft.route)
+                or receipt.observation.render_state == "blocked"):
+            return None, "", ""
+        return receipt.observation, "", ""
 
     for action, args, field in actions:
         current, reason, detail = dispatch(action, args, field, current)

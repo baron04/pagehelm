@@ -4,10 +4,13 @@ from types import SimpleNamespace
 
 from ..business.errors import (BusinessToolError, BusinessToolIdentityError,
                                BusinessToolPermissionError, BusinessToolRequestError)
-from ..business.forms import ApplicationFormTools, ApplicationFormEntryPort, ApplicationFormEntry, FormSubmitUnobserved
+from ..business.forms import (ApplicationFormBindingPort, ApplicationFormTools, ApplicationFormEntryPort,
+                              ApplicationFormEntry, FormSubmitUnobserved)
 from ..execution.form_tools import apply_form_draft
+from ..modeling.provider import ProviderError
 from ..state.identity import PrincipalError
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
+from .bind_fields import choose_labels
 from .ports import capabilities_of
 
 
@@ -38,6 +41,8 @@ class FormOutcome:
     detail: str = ""
     input_dispatched: bool = False
     error_code: str = ""
+    #: Requested fields, by the names asked, that the open form shows no field for.
+    unfilled: tuple[str, ...] = ()
 
 
 def form_failure_message(reason: str, error_code: str, zh: bool) -> str:
@@ -86,8 +91,43 @@ class _FormBrowser:
             return s.browser.execute_with_budget(action, args, timeout_s=timeout_s)
 
 
+def _shown_fields(executor, s, reference, values):
+    """The planned values the open form shows a field for, and the names of the rest.
+
+    A port that ties fields to the form's own labels says which requested fields it found
+    no control for. Those are asked of the model once, against the labels nothing is tied
+    to; what still has no control is left out and named, and the rest of the form is
+    prepared as planned. Any other port is prepared as it always was.
+    """
+    port = executor.application.ports.forms
+    if not isinstance(port, ApplicationFormBindingPort):
+        return values, ()
+    context = s.approvals.context(s.step, "bind_form")
+    with s.receipt.stage("business"):
+        missing, free = port.unbound_fields(reference, s.obs, context=context)
+    if missing and free and s.chat is not None:
+        wanted = dict(values)
+        chosen = {}
+        try:
+            chosen = choose_labels(s.chat, run_id=s.run_id, labels=free, cancelled=s.cancelled,
+                                   requested=tuple((name, wanted.get(key, "")) for key, name in missing),
+                                   timeout_s=max(1.0, s.budget.remaining()))
+        except (ValueError, ProviderError) as exc:
+            s.ledger.append("goal_form_binding_failed", step=s.step, error_type=type(exc).__name__)
+        bindings = tuple((key, chosen[name]) for key, name in missing if name in chosen)
+        s.ledger.append("goal_form_fields_bound", step=s.step, asked=len(missing),
+                        labels=len(free), bound=len(bindings))
+        if bindings:
+            with s.receipt.stage("business"):
+                port.bind_fields(reference, bindings, context=context)
+                missing, _ = port.unbound_fields(reference, s.obs, context=context)
+    left = {key for key, _ in missing}
+    return tuple(item for item in values if item[0] not in left), tuple(name for _, name in missing)
+
+
 def handoff_form(executor, state, plan):
-    """No model calls, selectors, submit actions or subsequent page operations."""
+    """No selectors, submit actions or subsequent page operations; at most one model call,
+    which chooses among the open form's own labels and enters nothing."""
     s = state
     if (not executor.config.allow_form_prefill
             or not {"fill", "handoffs"} <= capabilities_of(executor.goal_port)):
@@ -126,11 +166,18 @@ def handoff_form(executor, state, plan):
                 port.discard_entry(entry, context=s.approvals.context(s.step, "form_entry_release"))
             if not isinstance(reference, str) or not reference:
                 raise BusinessToolRequestError("the application did not bind the opened form")
+        values, unfilled = _shown_fields(executor, s, reference, plan.form.values)
+        if unfilled:
+            s.ledger.append("goal_form_fields_unshown", step=s.step, count=len(unfilled),
+                            kept=len(values))
+        if not values:
+            return FormOutcome(reason="agent_refused", detail="the form shows none of the planned fields",
+                               error_code=BusinessToolRequestError.code, unfilled=unfilled)
         for attempt in range(4):
             try:
                 with s.receipt.stage("business"):
                     draft, described = forms.prepare_current(s.obs, reference=reference,
-                        values=plan.form.values, context=s.approvals.context(s.step, "prepare_form"))
+                        values=values, context=s.approvals.context(s.step, "prepare_form"))
                     verification = forms.take_verification(draft)
                 break
             except FormSubmitUnobserved:
@@ -169,4 +216,4 @@ def handoff_form(executor, state, plan):
         error_code=browser.error_code)
     return FormOutcome(not reason, tuple(described["fields"]), draft.submit_label,
                        "wall_budget" if reason == "wall_clock_budget" else reason, detail,
-                       browser.input_dispatched, browser.error_code)
+                       browser.input_dispatched, browser.error_code, unfilled)
