@@ -1052,6 +1052,16 @@ export class EmbeddedWebRuntime {
   private async _dispatch(action: ActionEnvelope, executing: ActionEnvelope,
                           navigation: NavigationExpectation,
   ): Promise<{ok: boolean; code: string; detail: string}> {
+    // Claiming is a network round trip. Neither the action deadline nor the application's
+    // confirmed window may have lapsed while it was pending; reject before page dispatch.
+    if (Date.now() >= action.deadline) {
+      return {ok: false, code: 'deadline_expired',
+        detail: 'the action deadline expired before page dispatch'}
+    }
+    if (this.config?.pageWriteGuard && !(this.writeGuardUntil > Date.now())) {
+      return {ok: false, code: 'capability_refused',
+        detail: 'page_write_guard_unavailable: the confirmed window expired before page dispatch'}
+    }
     if (action.command.action === 'highlight' && this.config?.pageWriteGuard) {
       if (!await releaseWriteGuard(this.config.pageWriteGuard)) {
         return {ok: false, code: 'capability_refused',

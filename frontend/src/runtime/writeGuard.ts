@@ -35,7 +35,7 @@ export async function openWriteGuard(path: string, fetcher: Fetch = fetch): Prom
     if (!response.ok) return null
     const body = await response.json() as {active?: unknown; expires_at?: unknown} | null
     if (body?.active !== true || typeof body.expires_at !== 'number'
-        || !Number.isFinite(body.expires_at)) return null
+        || !Number.isFinite(body.expires_at * 1000) || body.expires_at * 1000 <= Date.now()) return null
     return body.expires_at
   } catch {
     return null

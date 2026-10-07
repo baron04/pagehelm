@@ -24,8 +24,9 @@ describe('the page write guard path', () => {
 
 describe('opening the guard', () => {
   it('asks for a bounded window and accepts only an explicit confirmation', async () => {
-    const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: 1790000000.5}))
-    expect(await openWriteGuard('/woa/page-guard', fetcher as typeof fetch)).toBe(1790000000.5)
+    const expiresAt = Date.now() / 1000 + 120
+    const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: expiresAt}))
+    expect(await openWriteGuard('/woa/page-guard', fetcher as typeof fetch)).toBe(expiresAt)
     const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('/woa/page-guard/begin')
     expect(init.method).toBe('POST')
@@ -40,6 +41,9 @@ describe('opening the guard', () => {
       async () => reply(200, {active: false, expires_at: 1}),
       async () => reply(200, {active: 'yes', expires_at: 1}),
       async () => reply(200, {active: true}),
+      async () => reply(200, {active: true, expires_at: Date.now() / 1000}),
+      async () => reply(200, {active: true, expires_at: Date.now() / 1000 - 1}),
+      async () => reply(200, {active: true, expires_at: 1e308}),
       async () => reply(200, null),
       async () => new Response('not json', {status: 200}),
       async () => { throw new TypeError('network down') },
@@ -111,7 +115,7 @@ function actingRuntime(pageWriteGuard?: string) {
   return {runtime, executed, posts, action}
 }
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('a page action in an application that names a write guard', () => {
   it('is refused, before anything is claimed, when the guard cannot be opened', async () => {
@@ -138,13 +142,68 @@ describe('a page action in an application that names a write guard', () => {
     expect(receipt.write_guard_held).toBe(true)
   })
 
+  it('does not claim or execute an already expired guard confirmation', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => reply(200,
+      {active: true, expires_at: Date.now() / 1000 - 1})))
+    const {runtime, executed, posts, action} = actingRuntime('/woa/page-guard')
+    await runtime._handleAction(action as never)
+    expect(executed).toEqual([])
+    expect(posts.map(row => row.path)).toEqual(['/results'])
+    expect(posts[0]?.body.status).toBe('rejected')
+    expect(posts[0]?.body.error_code).toBe('capability_refused')
+  })
+
   it('does not say the window held when it had lapsed by the time the action settled', async () => {
-    const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: Date.now() / 1000 - 1}))
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    const fetcher = vi.fn(async () => reply(200, {active: true, expires_at: (now + 120_000) / 1000}))
     vi.stubGlobal('fetch', fetcher)
     const {runtime, posts, action} = actingRuntime('/woa/page-guard')
+    const state = runtime as unknown as Record<string, unknown>
+    state._execute = async () => {
+      clock.mockReturnValue(now + 120_001)
+      return {success: true}
+    }
     await runtime._handleAction(action as never)
     const receipt = posts[1]?.body.receipt as Record<string, unknown>
     expect(receipt.write_guard_held).toBe(false)
+  })
+
+  it('does not execute when the confirmed guard expires during the claim request', async () => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    vi.stubGlobal('fetch', vi.fn(async () => reply(200,
+      {active: true, expires_at: (now + 1000) / 1000})))
+    const {runtime, executed, posts, action} = actingRuntime('/woa/page-guard')
+    const state = runtime as unknown as Record<string, unknown>
+    const post = state._post as (path: string, body: Record<string, unknown>) => Promise<unknown>
+    state._post = async (path: string, body: Record<string, unknown>) => {
+      if (path === '/claims') clock.mockReturnValue(now + 1000)
+      return post(path, body)
+    }
+    await runtime._handleAction(action as never)
+    expect(executed).toEqual([])
+    const receipt = posts[1]?.body.receipt as Record<string, unknown>
+    expect(receipt.ok).toBe(false)
+    expect(receipt.error_code).toBe('capability_refused')
+    expect(receipt.write_guard_held).toBe(false)
+  })
+
+  it('does not execute when the action deadline expires during an unguarded claim', async () => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    const {runtime, executed, posts, action} = actingRuntime()
+    const state = runtime as unknown as Record<string, unknown>
+    const post = state._post as (path: string, body: Record<string, unknown>) => Promise<unknown>
+    state._post = async (path: string, body: Record<string, unknown>) => {
+      if (path === '/claims') clock.mockReturnValue(action.deadline)
+      return post(path, body)
+    }
+    await runtime._handleAction(action as never)
+    expect(executed).toEqual([])
+    const receipt = posts[1]?.body.receipt as Record<string, unknown>
+    expect(receipt.ok).toBe(false)
+    expect(receipt.error_code).toBe('deadline_expired')
   })
 
   it('is untouched in an application without one', async () => {
