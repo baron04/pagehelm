@@ -22,8 +22,11 @@ class Values(unittest.TestCase):
 
     def test_explicit_lists_and_real_values_keep_the_contract(self):
         d=Deliverable('handoff',entity='people',field_values=(('Email',''),('Phone','')))
-        for text in ('把邮箱和电话清空', '清空邮箱、电话', 'Clear Email and Phone', 'Email、Phone置空'):
+        for text in ('把邮箱和电话清空', '清空邮箱、电话', 'Clear Email and Phone', 'Email、Phone置空',
+                     'Ada的邮箱和电话都清空', '邮箱、电话全部置空'):
             self.assertIsNone(missing_form_values(d,text,INDEX),text)
+        for text in ('邮箱和电话都不要清空', '不要把邮箱和电话都清空'):
+            self.assertEqual(missing_form_values(d,text,INDEX).input_fields,('Email','Phone'),text)
         self.assertIsNone(missing_form_values(Deliverable('handoff',entity='people',
             field_values=(('Email','new@example.invalid'),)),'Set Email to new@example.invalid',INDEX))
 

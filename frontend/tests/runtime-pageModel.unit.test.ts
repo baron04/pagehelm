@@ -299,6 +299,25 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
       expect(elements[1]?.name).toBe('')
     } finally {fixture.remove()}
   })
+  it('gives one live control its form facts once when two indexed hit areas resolve to it', () => {
+    const dialog = document.createElement('section')
+    dialog.setAttribute('role', 'dialog')
+    dialog.id = 'order-editor'
+    dialog.innerHTML = '<label for="customer">Customer</label><div class="wrapper" tabindex="-1">'
+      + '<input id="customer" role="combobox" aria-controls="customer-list"></div>'
+    document.body.append(dialog)
+    try {
+      const input = dialog.querySelector('input')!
+      // The application controller maps both the wrapper and the input to the input.
+      const elements = elementsFrom('[0]<div tabindex=-1 />\n[1]<input role=combobox />', 1, redactor)
+      for (const item of elements) item.role = 'combobox'
+      hydrateFormFacts(elements, {}, () => input, redactor)
+      expect(elements.filter(item => item.attrs.field_label === 'Customer')).toHaveLength(1)
+      expect(elements[0]?.attrs.form_scope).toBe('dialog:order-editor')
+      expect(elements[1]?.attrs.form_scope).toBeUndefined()
+      expect(elements[1]?.attrs.field_label).toBeUndefined()
+    } finally { dialog.remove() }
+  })
   it('does not turn a named HTML form into the identity of an unnamed field', () => {
     const fixture = document.createElement('form')
     fixture.name = 'customer'
@@ -337,11 +356,14 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
       if (source === 'type') input.type = 'password'
       if (source === 'autocomplete') input.autocomplete = 'current-password'
       if (source === 'id') input.id = 'secret'
-      const elements = elementsFrom('[0]<input type=text value=private-credential />', 1, redactor)
+      const elements = elementsFrom('[0]<input type=text value=private-credential />\n' +
+        '[1]<input type=text value=private-credential />', 1, redactor)
       hydrateFormFacts(elements, {}, () => input, redactor)
-      expect(elements[0]?.attrs.value).toBeUndefined()
-      expect(elements[0]?.attrs.field).toBeUndefined()
-      expect(elements[0]?.name).toBe('')
+      for (const element of elements) {
+        expect(element.attrs.value).toBeUndefined()
+        expect(element.attrs.field).toBeUndefined()
+        expect(element.name).toBe('')
+      }
     } finally { wrapper.remove() }
   })
 
@@ -353,6 +375,24 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
     const element = {closest: () => wrapper}
     hydrateFormFacts(elements, {}, () => element, redactor)
     expect(elements[0]?.attrs.field).toBe('contact.email')
+  })
+
+  it('scrubs sensitive radio aliases before grouping can skip a duplicate', () => {
+    const group = document.createElement('div')
+    group.setAttribute('role', 'radiogroup')
+    group.innerHTML = '<label>A<input type="radio" name="api_key" value="private-credential"></label>' +
+      '<label>B<input type="radio" name="api_key" value="another-credential"></label>'
+    document.body.append(group)
+    try {
+      const elements = elementsFrom('[0]<input type=radio value=private-credential />\n' +
+        '[1]<input type=radio value=private-credential />', 1, redactor)
+      hydrateFormFacts(elements, {}, () => group.querySelector('input'), redactor)
+      for (const element of elements) {
+        expect(element.attrs.value).toBeUndefined()
+        expect(element.attrs.field).toBeUndefined()
+        expect(element.name).toBe('')
+      }
+    } finally { group.remove() }
   })
 
   it('omits a field identifier that looks like a credential name', () => {

@@ -160,5 +160,75 @@ class NativePageGuardTests(unittest.TestCase):
             restarted.begin(B, OWNER)
 
 
+class MethodFenceTests(unittest.TestCase):
+    WRITING = frozenset({"/admin-api/pms/pm/project-group/list",
+                         "/admin-api/infra/file/{configId}/get/**"})
+
+    def setUp(self):
+        self.guard = NativePageGuard(frozenset(), writing_gets=self.WRITING)
+
+    def test_window_admits_unreviewed_plain_gets_and_refuses_every_other_method(self):
+        self.guard.begin(A, OWNER)
+        for path in (READ + "?id=1", "/admin-api/hrm/employee/page", "/admin-api/system/dict-data/simple-list"):
+            with self.subTest(path=path), self.guard.request(A, "GET", path):
+                pass
+        for method in ("POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"):
+            with self.subTest(method=method), self.assertRaises(GuardRefused):
+                with self.guard.request(A, method, READ):
+                    self.fail("a refused request was admitted")
+
+    def test_scanned_writing_gets_and_alternate_spellings_stay_refused(self):
+        self.guard.begin(A, OWNER)
+        for path in ("/admin-api/pms/pm/project-group/list", "/admin-api/PMS/pm/project-group/list",
+                     "/admin-api/pms/pm/project-group/list/", "/admin-api/pms/pm//project-group/list",
+                     "/admin-api/pms/pm/project-group/list;v=1", "/admin-api/pms/pm/../pm/project-group/list",
+                     "/admin-api/pms/pm/project-group/%6cist", "/admin-api/infra/file/4/get",
+                     "/admin-api/infra/file/4/get/a", "/admin-api/infra/file/4/get/a/b.png",
+                     "https://upstream.test/admin-api/crm/customer/get", "/app-api/trade/order/page",
+                     "/admin-api", "/admin-api/"):
+            with self.subTest(path=path), self.assertRaises(GuardRefused):
+                with self.guard.request(A, "GET", path):
+                    self.fail("a refused request was admitted")
+        with self.guard.request(A, "GET", "/admin-api/pms/pm/project/page"):
+            pass
+
+    def test_refusals_inside_a_window_are_bounded_evidence_without_queries(self):
+        with self.guard.request(A, "POST", "/admin-api/crm/customer/create"):
+            pass
+        self.assertEqual(self.guard.refused_since(A, 0), ())
+        self.guard.begin(A, OWNER)
+        mark = self.guard.refusal_mark(A)
+        for method, path in (("PUT", "/admin-api/crm/customer/update?id=7"),
+                             ("GET", "/admin-api/pms/pm/project-group/list?token=secret")):
+            with self.assertRaises(GuardRefused):
+                with self.guard.request(A, method, path):
+                    pass
+        self.assertEqual(self.guard.refused_since(A, mark),
+                         (("PUT", "/admin-api/crm/customer/update"),
+                          ("GET", "/admin-api/pms/pm/project-group/list")))
+        self.assertEqual(self.guard.refused_since(A, self.guard.refusal_mark(A)), ())
+        self.assertEqual(self.guard.refused_since(B, 0), ())
+        for _ in range(70):
+            with self.assertRaises(GuardRefused):
+                with self.guard.request(A, "DELETE", "/admin-api/crm/customer/delete"):
+                    pass
+        with self.assertRaises(GuardRefused):
+            self.guard.refused_since(A, mark)
+        with self.assertRaises(GuardRefused):
+            self.guard.refused_since(A, 10_000)
+
+    def test_fence_and_reviewed_reads_cannot_be_combined_and_templates_are_exact(self):
+        with self.assertRaises(ValueError):
+            NativePageGuard(frozenset({READ}), writing_gets=frozenset())
+        for bad in ("/crm/customer/get", "/admin-api/**/get", "/admin-api/a b", "/admin-api/x/{id", 7):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                NativePageGuard(frozenset(), writing_gets=frozenset({bad}))
+        reviewed = NativePageGuard(frozenset({READ}))
+        reviewed.begin(A, OWNER)
+        with self.assertRaises(GuardRefused):
+            with reviewed.request(A, "GET", "/admin-api/hrm/employee/page"):
+                self.fail("the reviewed window must not widen")
+
+
 if __name__ == "__main__":
     unittest.main()

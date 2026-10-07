@@ -91,6 +91,28 @@ describe('adapter-issued single-choice combobox drafts', () => {
       expect(s.api.clickElement).toHaveBeenNthCalledWith(2,2)
     } finally {s.form.remove()}
   })
+  it('reaches a far option in a long menu by the distance left, whatever the scroll scales by', async () => {
+    const s = setup('<li role="option">Bob</li>')
+    const other = s.list.lastElementChild!
+    const page = new Page(s.api, (_, index) => index === 1 ? s.input : index === 2 ? s.option : other, createRedactor())
+    // The menu shows 200px; the wanted option starts 9000px below its top edge.
+    s.list.style.overflowY = 'auto'
+    Object.defineProperty(s.list, 'scrollHeight', {value: 12_000})
+    Object.defineProperty(s.list, 'clientHeight', {value: 200})
+    let top = 9000
+    s.list.getBoundingClientRect = () => ({top: 0, bottom: 200, width: 100, height: 200} as DOMRect)
+    s.option.getBoundingClientRect = () => ({top, bottom: top + 20, width: 100, height: 20} as DOMRect)
+    const shown = () => top >= 0 && top + 20 <= 200
+    try {
+      s.api.getBrowserState = vi.fn(async () => ({url:location.href,title:'',
+        content:shown() ? '[2]<li role=option>Alex />' : '[3]<li role=option>Bob />'}))
+      s.api.scroll = vi.fn(async ({down, pixels}) => {top -= (down ? 1 : -1) * pixels / 3; return {success:true}})
+      await page.select('e1','17','Alex')
+      expect(vi.mocked(s.api.scroll).mock.calls.length).toBeLessThanOrEqual(3)
+      expect(s.api.scroll).toHaveBeenCalledWith(expect.objectContaining({index:3, down:true}))
+      expect(s.api.clickElement).toHaveBeenNthCalledWith(2,2)
+    } finally {s.form.remove()}
+  })
 })
 
 describe('the product PageController extraction policy', () => {

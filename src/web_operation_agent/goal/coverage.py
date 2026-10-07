@@ -70,7 +70,8 @@ def missing_form_values(deliverable, request, index):
     field = "(?:" + "|".join(re.escape(n) for n in labels) + ")"
     names = field + r"(?:\s*(?:、|,|，|和|及|与|\band\b|&)\s*" + field + r")*"
     patterns = [r"(?:\bclear\b|\bempty\b|\bblank\b|清空|置空)\s*(?:the\s+)?" + names,
-                names + r"\s*(?:字段)?\s*(?:清空|置空|留空|设为空|改为空|改成空|设为\s*[\"“']\s*[\"”'])"]
+                names + r"\s*(?:字段)?\s*(?:都|全都|全部|均|一并)?\s*"
+                        r"(?:清空|置空|留空|设为空|改为空|改成空|设为\s*[\"“']\s*[\"”'])"]
     request = re.sub(r'[“「\"]([^”」\"]+)[”」\"]', " ", request)
     cleared = set()
     for pattern in patterns:

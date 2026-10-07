@@ -373,10 +373,21 @@ export function hydrateSelectionFacts(elements: ElementRef[], selectorMap: unkno
 export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
                                  getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {
   const groups = new Set<HTMLElement>()
+  const claimed = new WeakSet<object>()
   for (const item of elements) {
     try {
       let element = getByIndex(selectorMap, refIndex(item.ref))
       const group = radioGroup(element)
+      // Scrub each alias before either radio grouping or control deduplication.
+      // The parsed summary may lack a sensitive name that only the live DOM exposes.
+      if (isSensitiveFormControl(element, redactor) ||
+          (group && isSensitiveFormControl(group, redactor))) {
+        for (const key of ['value', 'form_scope', 'form_instance', 'field_label', 'field', 'selected_option']) {
+          delete item.attrs[key]
+        }
+        item.name = ''
+        continue
+      }
       if (group && radioChoices(group).length) {
         if (groups.has(group)) continue
         groups.add(group)
@@ -398,6 +409,13 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       delete item.attrs.field_label
       delete item.attrs.field
       delete item.attrs.selected_option
+      // Two indexed hit areas can resolve to one live control: a select's wrapper and the
+      // input inside it. Only the first carries that control's form facts, so a field a
+      // draft names is still exactly one control.
+      if (item.role !== 'button' && element && typeof element === 'object') {
+        if (claimed.has(element)) continue
+        claimed.add(element)
+      }
       // These are live DOM facts rather than hints parsed from PageController's text.
       // They let the server omit an unavailable field up front; Page.input/select still
       // recheck the live element at execution time because the DOM may change afterwards.

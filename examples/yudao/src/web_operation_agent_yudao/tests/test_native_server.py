@@ -287,6 +287,63 @@ class NativeHostTests(unittest.TestCase):
             self.assertIn("submit", executor.disabled_page_actions)
             self.assertIn("fill", executor.disabled_page_actions)
 
+    def _fence(self, **changes):
+        policy = Path(self.tmp.name) / f"native-fence-{len(list(Path(self.tmp.name).glob('native-fence-*')))}.json"
+        policy.write_text(json.dumps({**{
+            "schema_version": 2, "release": "fixture-release", "mode": "method-fence",
+            "writing_gets": ["/admin-api/pms/pm/project-group/list"], "scan": {"get_handlers": 3}}, **changes}))
+        return replace(self.config, native_read_policy=policy, native_guard_port=0,
+                       source_release="fixture-release", native_live_forms=False)
+
+    def test_method_fence_live_binding_requires_reviewed_entries(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.live_filters import LivePageFilters
+        from web_operation_agent_yudao.live_forms import LiveFormPort
+        from web_operation_agent_yudao.live_goals import LiveFormsGoalPort
+        reviewed = self._native_form_config()
+        self.config = replace(reviewed, native_read_policy=self._fence().native_read_policy,
+                              native_live_forms=True)
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy, \
+                patch("web_operation_agent_yudao.page_guard.NativePageGuard") as guard, \
+                patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+            host = self.host()
+            guard.assert_called_once()
+            self.assertEqual(guard.call_args.args, (frozenset(),))
+            self.assertEqual(guard.call_args.kwargs["writing_gets"],
+                             frozenset({"/admin-api/pms/pm/project-group/list"}))
+            proxy.return_value.start.return_value.verify_ingress.assert_called_once()
+            host.bootstrap("synthetic-a", "1", "native-tab")
+            executor = host._sessions[("1", "1")].session.runner.executor
+            self.assertIsInstance(executor.goal_port, LiveFormsGoalPort)
+            self.assertIsInstance(executor.goal_port.page_filters, LivePageFilters)
+            self.assertIsInstance(executor.application.ports.forms, LiveFormPort)
+            self.assertLessEqual({"fill", "handoffs", "facets"}, executor.goal_port.capabilities())
+            # Inputs are allowed so that a draft can be prepared; submitting never is.
+            self.assertNotIn("fill", executor.disabled_page_actions)
+            self.assertNotIn("select", executor.disabled_page_actions)
+            self.assertIn("submit", executor.disabled_page_actions)
+        self.chat.return_value.complete.assert_not_called()
+
+    def test_method_fence_is_exact_and_live_forms_need_it(self):
+        reviewed = Path(self.tmp.name) / "reviewed-reads.json"
+        reviewed.write_text(json.dumps({"schema_version": 1, "release": "fixture-release", "read_paths": []}))
+        invalid = [self._fence(release="another-release"), self._fence(mode="allow-all"),
+                   self._fence(writing_gets="/admin-api/x"), self._fence(read_paths=[]),
+                   replace(self._fence(), source_release=""),
+                   replace(self._fence(), native_filter_policies=(reviewed,))]
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"):
+            for config in invalid:
+                self.config = config
+                with self.subTest(policy=config.native_read_policy.read_text()[:80]), \
+                        self.assertRaises(ValueError):
+                    self.host()
+        for changes in ({"native_read_policy": None}, {"native_live_forms": True},
+                        {"executor_mode": "page-agent", "native_live_forms": True,
+                         "native_form_policy": reviewed},
+                        {"native_live_forms": 1}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                replace(self._fence(), **changes)
+
     def _native_form_config(self, *, update=True, create=True):
         import hashlib
         from web_operation_agent_yudao.form_entries import REVIEWED_FILES, CREATE_ENTRIES

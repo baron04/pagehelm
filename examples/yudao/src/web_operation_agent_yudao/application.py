@@ -131,6 +131,11 @@ class YudaoApplication:
         from .page_goals import NativePageGoalPort
         goal_port = NativePageGoalPort if native_tabs else DataGoalPort
         self.goal_port = goal_port(self.goal_data, today=today, reference_workers=4)
+        from .live_forms import LiveFormPort
+        if isinstance(forms, LiveFormPort):
+            from .live_goals import LiveFormsGoalPort
+            self.goal_port = LiveFormsGoalPort(self.goal_data, forms, today=today, reference_workers=4)
+            self.native_tab_policy = forms.click_policy(self.native_tab_policy)
         from .form_entries import NativeEntryFormPort
         if isinstance(forms, NativeEntryFormPort):
             from .form_goals import NativeFormsGoalPort

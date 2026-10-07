@@ -3,8 +3,14 @@
 Source is optional. The application must explicitly offer facets, issue this plan
 under the current actor, revalidate it before each input, and attest the successful
 applied read. Draft input values alone are never a completion postcondition.
+
+The applied read is attested in one of two ways, chosen by the application: the exact
+scalar parameters its page reports (`parameters`), or the digests of the values its
+page's own completed list read carried (`read_fields`), for a page that reports only
+digests.
 """
 from dataclasses import dataclass
+import re
 from urllib.parse import urlsplit
 
 from ..business.errors import BusinessToolError, BusinessToolRequestError
@@ -21,9 +27,13 @@ class PageFilterField:
     name: str = ""
     option_label: str = ""
     commit: bool = True
+    #: Which of several controls answering to this label and name is meant, counted in
+    #: page order from 1 (the two ends of a range that share one placeholder); 0 requires
+    #: that exactly one answers.
+    ordinal: int = 0
 
     def __post_init__(self):
-        if (not isinstance(self.commit, bool)
+        if (not isinstance(self.commit, bool) or type(self.ordinal) is not int or not 0 <= self.ordinal <= 4
                 or any(not isinstance(v, str) for v in (self.control, self.label, self.value, self.name, self.option_label))
                 or self.control not in {"textbox", "combobox", "select"}
                 or not self.label or len(self.label) > 120 or len(self.value) > 4000
@@ -40,7 +50,9 @@ class PageFilterDraft:
     fields: tuple[PageFilterField, ...]
     button: str
     query_path: str
-    parameters: tuple[tuple[str, str], ...]
+    parameters: tuple[tuple[str, str], ...] = ()
+    #: (query key, the SHA-256 digests its applied values may have) for each condition.
+    read_fields: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def __post_init__(self):
         if (any(not isinstance(v, str) or not v or len(v) > 500
@@ -52,10 +64,31 @@ class PageFilterDraft:
                 or not self.query_path.startswith("/") or self.query_path.startswith("//")
                 or not self.scope or not self.instance or not self.button
                 or not 1 <= len(self.fields) <= 12
-                or len({(f.label, f.name) for f in self.fields}) != len(self.fields)
-                or not 1 <= len(self.parameters) <= 12
-                or len(dict(self.parameters)) != len(self.parameters)):
+                or len({(f.label, f.name, f.ordinal) for f in self.fields}) != len(self.fields)
+                or len(dict(self.parameters)) != len(self.parameters)
+                or not isinstance(self.read_fields, tuple) or any(
+                    not isinstance(p, tuple) or len(p) != 2 or not isinstance(p[0], str)
+                    or not 0 < len(p[0]) <= 120 or not isinstance(p[1], tuple) or not 1 <= len(p[1]) <= 6
+                    or any(not isinstance(d, str) or not re.fullmatch(r"[0-9a-f]{64}", d) for d in p[1])
+                    for p in self.read_fields)
+                or len(dict(self.read_fields)) != len(self.read_fields)
+                # Exactly one kind of attestation, never neither and never a choice.
+                or bool(self.parameters) == bool(self.read_fields)
+                or not 1 <= len(self.parameters) + len(self.read_fields) <= 12):
             raise ValueError("invalid application page filter draft")
+
+
+def _read_attests(before, after, draft) -> bool:
+    """A later completed list read of the page carries each requested condition, keeps
+    what the list was already narrowed by, and adds nothing else."""
+    if (not isinstance(after, dict) or after.get("path") != draft.query_path
+            or not isinstance(after.get("query_fields"), dict)
+            or not after.get("revision", 0) > before["revision"]):
+        return False
+    wanted, held, now = dict(draft.read_fields), before["query_fields"], after["query_fields"]
+    return (all(now.get(key) in digests for key, digests in wanted.items())
+            and all(now.get(key) == digest for key, digest in held.items() if key not in wanted)
+            and set(now) <= set(held) | set(wanted))
 
 
 def apply_page_filters(executor, state, plan):
@@ -101,11 +134,21 @@ def apply_page_filters(executor, state, plan):
                 and (e.role == "button" and e.name == draft.button if field is None else
                      e.role == field.control and labelled(e)
                      and (not field.name or field.name in (e.name, e.attrs.get("placeholder"))))]
+            if field is not None and field.ordinal:
+                # Observation order is page order.
+                if not field.ordinal <= len(candidates) <= 4:
+                    raise BusinessToolRequestError("a page query control is unavailable or ambiguous")
+                return candidates[field.ordinal - 1]
             if len(candidates) != 1:
                 raise BusinessToolRequestError("a page query control is unavailable or ambiguous")
             return candidates[0]
         # Validate the entire plan before the first effect or approval.
         current()
+        held = s.obs.page_read
+        if draft.read_fields and not (
+                isinstance(held, dict) and held.get("path") == draft.query_path
+                and isinstance(held.get("query_fields"), dict) and isinstance(held.get("revision"), int)):
+            raise BusinessToolRequestError("the page has not reported its own list read")
         for field in draft.fields:
             control(field)
         control()
@@ -153,7 +196,8 @@ def apply_page_filters(executor, state, plan):
                 return False
         # This fact comes from a completed application GET, not the entered fields.
         expected = {"path": draft.query_path, "parameters": dict(draft.parameters)}
-        complete = s.obs.page_query == expected
+        complete = (_read_attests(held, s.obs.page_read, draft) if draft.read_fields
+                    else s.obs.page_query == expected)
         s.ledger.append("goal_page_filters_settled", step=s.step, complete=complete,
                         fields=len(draft.fields), submitted=False)
         return complete

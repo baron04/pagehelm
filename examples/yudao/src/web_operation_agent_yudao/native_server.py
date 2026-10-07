@@ -108,6 +108,9 @@ class YudaoHostConfig:
     native_read_policy: Path | None = None
     native_form_policy: Path | None = None
     native_create_policies: tuple[Path, ...] = ()
+    #: One deployment-level creation class file naming many entries; reviewed once per
+    #: release, hashed per admitted component. Off by default.
+    native_create_class: Path | None = None
     native_filter_policies: tuple[Path, ...] = ()
     native_guard_port: int = 48093
     native_navigation: bool = False
@@ -115,6 +118,14 @@ class YudaoHostConfig:
     executor_mode: str = "goal"
     #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
     native_action_effect_review: str = ""
+    #: Extend the reviewed read fence with every list endpoint compiled from the UI
+    #: source (read_catalog.py). Off by default: the deployment reviews this generator
+    #: once per release, and the union is still validated by NativePageGuard's exact
+    #: path rules. A hand-written policy remains authoritative for what it lists.
+    auto_read_catalog: bool = False
+    #: Live label binding and list filters under the method fence. Editors still require
+    #: application reviews of exact targets and transient persistence through handoff.
+    native_live_forms: bool = False
 
     def __post_init__(self):
         if (not isinstance(self.native_action_effect_review, str)
@@ -126,6 +137,10 @@ class YudaoHostConfig:
             raise ValueError("native action effects require page-agent, navigation, UI routes and a reviewed guard")
         if self.native_filter_policies and self.native_read_policy is None:
             raise ValueError("native page filters require a reviewed read guard")
+        if not isinstance(self.native_live_forms, bool) or self.native_live_forms and (
+                self.native_read_policy is None or self.executor_mode != "goal"
+                or not (self.native_form_policy is not None or self.native_create_policies)):
+            raise ValueError("live forms require goal execution, the method fence and reviewed transient entries")
         if not isinstance(self.native_navigation, bool) or self.native_navigation and self.native_read_policy is None:
             raise ValueError("native navigation requires a reviewed native read policy and write guard")
         if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent"}:
@@ -157,7 +172,8 @@ class YudaoHost:
         self.form_tree = None
         self.create_reviews = ()
         self.filter_reviews = ()
-        if config.native_form_policy is not None or config.native_create_policies:
+        if (config.native_form_policy is not None or config.native_create_policies
+                or config.native_create_class is not None):
             if config.native_read_policy is None or config.source_root is None:
                 raise ValueError("native forms require the verified guard and reviewed raw source")
             from .repository import repository_tree
@@ -167,6 +183,9 @@ class YudaoHost:
                 self.form_review = NativeFormReview.load(json.loads(config.native_form_policy.read_text()), self.form_tree)
             self.create_reviews = tuple(NativeCreateReview.load(json.loads(path.read_text()), self.form_tree)
                                         for path in config.native_create_policies)
+            if config.native_create_class is not None:
+                self.create_reviews += NativeCreateReview.load_class_catalog(
+                    json.loads(config.native_create_class.read_text()), self.form_tree)
             references = [review.reference for review in self.create_reviews]
             if len(references) != len(set(references)):
                 raise ValueError("native create policies must have unique entry references")
@@ -175,11 +194,22 @@ class YudaoHost:
             from .guard_proxy import NativeGuardProxy
             from .page_guard import NativePageGuard
             policy = json.loads(config.native_read_policy.read_text())
-            if (not isinstance(policy, dict) or set(policy) != {"schema_version", "release", "read_paths"}
+            fenced = isinstance(policy, dict) and policy.get("schema_version") == 2
+            if fenced:
+                # The method fence: every plain GET but the release scan's writing handlers.
+                if (set(policy) != {"schema_version", "release", "mode", "writing_gets", "scan"}
+                        or policy["mode"] != "method-fence" or not config.source_release
+                        or policy["release"] != config.source_release
+                        or not isinstance(policy["writing_gets"], list)
+                        or config.native_filter_policies or config.native_action_effect_review):
+                    raise ValueError("the method fence policy must match the deployment release")
+            elif (not isinstance(policy, dict) or set(policy) != {"schema_version", "release", "read_paths"}
                     or policy["schema_version"] != 1 or not config.source_release
                     or policy["release"] != config.source_release or not self.ui or not self.ui.records
                     or not isinstance(policy["read_paths"], list)):
                 raise ValueError("native read policy must match the deployment and its UI routes")
+            if config.native_live_forms and not fenced:
+                raise ValueError("live forms require the method fence policy")
             if config.native_filter_policies:
                 from .repository import repository_tree
                 from .page_filters import NativePageFilterReview
@@ -190,10 +220,23 @@ class YudaoHost:
                     self.form_tree, policy["read_paths"]) for path in config.native_filter_policies)
                 if len({r.route for r in self.filter_reviews}) != len(self.filter_reviews):
                     raise ValueError("native page filter routes must be unique")
+            read_paths = [] if fenced else list(policy["read_paths"])
+            if config.auto_read_catalog:
+                from .read_catalog import generated_read_paths
+                generated = generated_read_paths(self.ui)
+                unknown = [p for p in generated if p not in read_paths]
+                (config.state_dir / "auto-read-catalog.json").write_text(json.dumps({
+                    "release": config.source_release, "manual": len(read_paths),
+                    "generated": len(generated), "added": unknown}, ensure_ascii=False,
+                    indent=2) + "\n", encoding="utf-8")
+                read_paths += unknown
             self.native_proxy = NativeGuardProxy(
                 upstream=config.api_base, origin=config.public_origin,
-                guard=NativePageGuard(frozenset(policy["read_paths"]),
-                                      journal=config.state_dir / "native-guard.sqlite3"),
+                guard=(NativePageGuard(frozenset(), writing_gets=frozenset(policy["writing_gets"]),
+                                       journal=config.state_dir / "native-guard.sqlite3")
+                       if fenced else
+                       NativePageGuard(frozenset(read_paths),
+                                       journal=config.state_dir / "native-guard.sqlite3")),
                 resolve_actor=GuardIdentity(config.api_base), host=config.bootstrap_host,
                 port=config.native_guard_port).start()
             try:
@@ -281,6 +324,11 @@ class YudaoHost:
             verifiers.extend(NativeCreateEntryVerifier(self.form_tree, review, client)
                              for review in self.create_reviews)
             forms = NativeEntryFormPort(NativeEntryVerifiers(*verifiers))
+        if self.config.native_live_forms:
+            from .live_forms import FenceEvidence, LiveFormPort
+            proxy = self.native_proxy
+            forms = LiveFormPort(FenceEvidence(
+                proxy.guard, lambda: proxy.resolve_actor(client._login(), client.tenant)), forms)
         app = YudaoApplication(self.config.public_origin, None, self._load_api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
@@ -329,7 +377,8 @@ class YudaoHost:
                 app.goal_port.page_reader = page_reader
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
                                            source=self.source, click_policy=app.native_tab_policy,
-                                           form_prefill=self.form_review is not None or bool(self.create_reviews),
+                                           form_prefill=(self.form_review is not None or bool(self.create_reviews)
+                                                         or self.config.native_live_forms),
                                            page_filtering=bool(self.filter_reviews),
                                            deterministic_reads=self.config.executor_mode == "page-agent")
             common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
@@ -477,10 +526,16 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-form-policy", type=Path)
     ap.add_argument("--native-create-policy", type=Path, action="append", default=[])
+    ap.add_argument("--native-create-class", type=Path,
+                    help="one deployment-level creation class file naming many reviewed entries")
     ap.add_argument("--native-filter-policy", type=Path, action="append", default=[])
     ap.add_argument("--native-guard-port", type=int, default=48093)
     ap.add_argument("--native-navigation", action="store_true")
     ap.add_argument("--native-action-effect-review", default="")
+    ap.add_argument("--auto-read-catalog", action="store_true",
+                    help="extend the reviewed read fence with list endpoints compiled "
+                         "from the UI source (release-bound, mutation-shaped excluded)")
+    ap.add_argument("--native-live-forms", action="store_true")
     ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
@@ -501,9 +556,12 @@ def main(argv=None) -> int:
         bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
         native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
         native_navigation=a.native_navigation,
+        auto_read_catalog=a.auto_read_catalog,
         native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
+        native_create_class=a.native_create_class,
         native_filter_policies=tuple(a.native_filter_policy),
         executor_mode=a.executor, native_action_effect_review=a.native_action_effect_review,
+        native_live_forms=a.native_live_forms,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))
     host.server.start()

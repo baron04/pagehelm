@@ -47,6 +47,17 @@ export interface BrowserState {
 }
 
 /** The part of PageController this Runtime drives. */
+/** The nearest ancestor that scrolls the option, or the menu itself. */
+function scrollViewport(option: Element, list: Element): Element {
+  let node: Element | null = option.parentElement
+  for (let depth = 0; node && depth < 10; depth++, node = node.parentElement) {
+    if (/(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY) &&
+        node.scrollHeight > node.clientHeight) return node
+    if (node === document.body) break
+  }
+  return list
+}
+
 export interface PageControllerApi {
   selectorMap: unknown
   getBrowserState(): Promise<BrowserState>
@@ -356,6 +367,9 @@ export class Page {
       const opened = await this.controller.clickElement(index)
       if (!opened || (opened as {success?: unknown}).success !== true) return opened
     }
+    // What the last scroll was asked for over what it moved: PageController scales the
+    // distance it is given, by a factor that is its own.
+    let gain = 1
     for (let attempt = 0; attempt < 8; attempt++) {
       const state = await this.controller.getBrowserState()
       if (!current() || ownedListbox(element) !== list) {
@@ -383,12 +397,19 @@ export class Page {
           if (!anchors.length || !current()) {
             throw new Error('execution_failed: combobox menu has no current scroll target')
           }
-          const scrolled = await this.controller.scroll({
-            down: option.getBoundingClientRect().top >= list.getBoundingClientRect().top,
-            numPages: 1, pixels: Math.min(800, Math.max(40, list.clientHeight)), index: anchors[0]!,
-          })
+          // Ask for the distance that brings the option into the menu's visible part, so
+          // a long menu is reached in a few scrolls rather than a page at a time.
+          const view = scrollViewport(option, list).getBoundingClientRect()
+          const before = option.getBoundingClientRect()
+          const down = before.top >= view.top
+          const away = down ? before.bottom - view.bottom : view.top - before.top
+          const pixels = Math.min(400_000, Math.max(40, Math.ceil(
+            (Math.max(away, 0) + Math.min(view.height / 2, 80)) * gain)))
+          const scrolled = await this.controller.scroll({down, numPages: 1, pixels, index: anchors[0]!})
           if (!scrolled || (scrolled as {success?: unknown}).success !== true) return scrolled
           await sleep(50)
+          const moved = Math.abs(option.getBoundingClientRect().top - before.top)
+          if (moved > 0.5) gain = Math.min(16, Math.max(1, pixels / moved))
           continue
         }
         if (indexes.length !== 1 || !current()) {

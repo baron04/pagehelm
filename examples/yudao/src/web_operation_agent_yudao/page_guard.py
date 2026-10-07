@@ -9,9 +9,16 @@ poisons the actor's fence rather than declaring an uncertain request completed.
 This is an HTTP admission boundary, not a database transaction sandbox. Only reviewed
 GET handlers without persistence or asynchronous effects may run inside the window.
 Direct upstream access, background jobs and external services are outside its scope.
+
+A deployment may instead choose the method fence: inside the window every plain GET under
+the admin API is admitted except the handlers its release scan lists as writing, and every
+other method is refused. That trades the per-handler review for runtime enforcement, so
+refused requests are kept as bounded evidence: a control that tried to persist while the
+window was open is known by its attempt, not by a prior review of its source.
 """
 from __future__ import annotations
 
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import math
@@ -30,25 +37,57 @@ class GuardRefused(RuntimeError):
         super().__init__(code)
 
 
+#: A plain admin API path: no encoding, empty or dot segments, matrix parameters or
+#: backslashes, so a refused handler cannot be reached under another spelling.
+_PLAIN_GET = re.compile(r"/admin-api(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+")
+_WRITING_GET = re.compile(r"/admin-api(?:/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*|\{[A-Za-z0-9_]+\}|\*\*))+")
+_REFUSALS_KEPT = 64
+
+
+def _writing_get_pattern(template: str) -> re.Pattern:
+    """A scanned handler path; `{name}` is one segment and a final `**` is any remainder."""
+    if (not isinstance(template, str) or not _WRITING_GET.fullmatch(template)
+            or "**" in template[:-2]):
+        raise ValueError("writing GET handlers must be exact admin API path templates")
+    segments = template.casefold().split("/")[1:]
+    wildcard = segments[-1] == "**"
+    parts = []
+    for segment in (segments[:-1] if wildcard else segments):
+        parts.append("[^/]+" if segment.startswith("{")
+                     else re.escape(segment))
+    return re.compile("/" + "/".join(parts) + ("(?:/.*)?" if wildcard else ""))
+
+
 @dataclass
 class _Actor:
     inflight: int = 0
     opening: int = 0
     uncertain: bool = False
     windows: dict[str, float] = field(default_factory=dict)
+    #: (sequence, method, path) of requests refused while a window was open; no query,
+    #: body or credential is kept.
+    refused: deque = field(default_factory=lambda: deque(maxlen=_REFUSALS_KEPT))
+    refusals: int = 0
 
 
 class NativePageGuard:
     """Bounded, in-process fence; contains neither credentials nor model context."""
 
     def __init__(self, read_paths: frozenset[str], *, clock=time.monotonic,
-                 actor_limit: int = 2048, journal: Path | None = None):
+                 actor_limit: int = 2048, journal: Path | None = None,
+                 writing_gets: frozenset[str] | None = None):
         if not isinstance(read_paths, frozenset) or any(
                 not isinstance(path, str) or not re.fullmatch(r"/admin-api/[a-z0-9][a-z0-9/-]*", path)
                 for path in read_paths):
             raise ValueError("reviewed reads must be exact admin API paths")
         if isinstance(actor_limit, bool) or not isinstance(actor_limit, int) or actor_limit < 1:
             raise ValueError("actor limit must be positive")
+        if writing_gets is not None and (not isinstance(writing_gets, frozenset) or read_paths):
+            raise ValueError("the method fence takes scanned writing GETs and no reviewed reads")
+        #: None keeps the reviewed-read window. A set, possibly empty, selects the method
+        #: fence and names the GET handlers that stay refused inside it.
+        self.writing_gets = (None if writing_gets is None else
+                             tuple(_writing_get_pattern(path) for path in sorted(writing_gets)))
         self.read_paths, self.clock, self.actor_limit = read_paths, clock, actor_limit
         self._actors: dict[str, _Actor] = {}
         self._condition = threading.Condition()
@@ -161,16 +200,45 @@ class NativePageGuard:
             state = self._actor(actor)
             return bool(state.windows or state.opening or state.uncertain)
 
+    def refusal_mark(self, actor: str) -> int:
+        """A position in this actor's refusals, to ask later what was refused after it."""
+        with self._condition:
+            return self._actor(actor).refusals
+
+    def refused_since(self, actor: str, mark: int) -> tuple[tuple[str, str], ...]:
+        """(method, path) of requests refused inside a window after `mark`.
+
+        More refusals than are kept raise rather than report a partial list as complete.
+        """
+        with self._condition:
+            state = self._actor(actor)
+            if isinstance(mark, bool) or not isinstance(mark, int) or not 0 <= mark <= state.refusals:
+                raise GuardRefused("invalid_window")
+            if state.refusals - mark > len(state.refused):
+                raise GuardRefused("refusal_evidence_incomplete")
+            return tuple((method, path) for sequence, method, path in state.refused
+                         if sequence > mark)
+
+    def _admits(self, method: str, parsed) -> bool:
+        # Encoded/absolute/fragment paths cannot borrow a reviewed route's admission.
+        plain = (method == "GET" and not parsed.scheme and not parsed.netloc
+                 and not parsed.fragment and "%" not in parsed.path)
+        if self.writing_gets is None:
+            return plain and parsed.path in self.read_paths
+        path = parsed.path
+        return (plain and _PLAIN_GET.fullmatch(path) is not None
+                and not any(part in {".", ".."} for part in path.split("/"))
+                and not any(pattern.fullmatch(path.casefold()) for pattern in self.writing_gets))
+
     @contextmanager
     def request(self, actor: str, method: str, target: str):
         parsed = urlsplit(target)
-        # Encoded/absolute/fragment paths cannot borrow a reviewed route's admission.
-        safe = (method == "GET" and not parsed.scheme and not parsed.netloc
-                and not parsed.fragment and "%" not in parsed.path
-                and parsed.path in self.read_paths)
+        safe = self._admits(method, parsed)
         with self._condition:
             state = self._actor(actor)
             if (state.windows or state.opening or state.uncertain) and not safe:
+                state.refusals += 1
+                state.refused.append((state.refusals, str(method)[:16], parsed.path[:200]))
                 raise GuardRefused("page_write_blocked")
             if state.uncertain:
                 raise GuardRefused("prior_request_uncertain")
