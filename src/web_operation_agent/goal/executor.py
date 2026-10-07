@@ -2511,6 +2511,10 @@ def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
     gaps.extend(r.repair for d in spec.deliverables if (r := missing_group(d, text, index)))
     reads = ("fact", "list", "aggregate")
     asked = [p for p in parts if p.get("kind") in reads]
+    # A list asked for is also delivered by its own page narrowed to the same records:
+    # the person sees the list there, and the applied conditions are verified on the page.
+    shown = {d.entity for d in spec.deliverables if d.kind == "page" and d.page.conditions}
+    asked = [p for p in asked if not (p.get("kind") == "list" and p.get("entity") in shown)]
     if asked and not named and not any(d.kind in reads for d in spec.deliverables):
         gaps.append("the request asks for values (" + "; ".join(
             f"{p['kind']} on {p['entity']}" for p in asked) + ") but the declaration only "

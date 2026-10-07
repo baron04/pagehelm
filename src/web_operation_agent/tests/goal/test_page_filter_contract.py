@@ -184,6 +184,23 @@ class PageFilterContractTests(unittest.TestCase):
         bound,_,_=bind(before,(Candidate('record','contacts','Ada',id='v1'),))
         self.assertEqual(bound.deliverables[0].page.conditions,(Filter('Name',('Ada',),'!='),))
 
+    def test_condition_order_is_not_a_disagreement_and_a_narrowed_page_delivers_an_asked_list(self):
+        from web_operation_agent.goal.executor import _coverage_gaps
+        def page(*conditions, entity='contacts'):
+            return GoalSpec.from_json({'deliverables':[{'kind':'page','entity':entity,'page':{
+                'key':'/contacts','conditions':[{'field':f,'values':[v]} for f,v in conditions]}}]})
+        first,second=page(('Name','Ada'),('City','Paris')),page(('City','Paris'),('Name','Ada'))
+        self.assertEqual(first.differences(second),[])
+        self.assertTrue(first.differences(page(('Name','Ada'),('City','Rome'))))
+        self.assertTrue(first.differences(page(('Name','Ada'))))
+        asked=[{'kind':'list','entity':'contacts'}]
+        self.assertEqual(_coverage_gaps(first,asked,'show Ada in Paris on the page','2026-10-03'),())
+        # A bare page, another entity's page, or a count that was asked still leave the gap.
+        bare=GoalSpec.from_json({'deliverables':[{'kind':'page','entity':'contacts','page':{'key':'/contacts'}}]})
+        for spec,parts in ((bare,asked),(page(('Name','Ada'),entity='orders'),asked),
+                           (first,[{'kind':'aggregate','entity':'contacts'}])):
+            self.assertTrue(_coverage_gaps(spec,parts,'how many','2026-10-03'))
+
     def test_conditions_roundtrip_and_missing_optional_capability_never_dispatch(self):
         spec=GoalSpec.from_json({'deliverables':[{'kind':'page','entity':'contacts','page':{
             'key':'/contacts','conditions':[{'field':'Name','values':['Ada']}]} }]})

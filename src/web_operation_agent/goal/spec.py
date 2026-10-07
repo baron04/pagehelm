@@ -352,6 +352,12 @@ class GoalSpec:
         out, previous_context = [], None
         for d in self.deliverables:
             part = d.to_json()
+            conditions = (part.get("page") or {}).get("conditions")
+            if conditions:
+                # Conditions on a page all hold together; the order they were written in
+                # says nothing, and two readings that differ only in it agree.
+                part["page"] = {**part["page"], "conditions": sorted(
+                    conditions, key=lambda c: json.dumps(c, ensure_ascii=False, sort_keys=True))}
             if d.kind == "fact" and d.fields and not d.rules:
                 context = {k: v for k, v in part.items() if k != "fields"}
                 labels = set(d.fields)
