@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent测评出题"
+  short_description: "为后台助手设计简短自然目标题集，冻结评分并区分回归与泛化"
+  default_prompt: "使用 $author-agent-evals 为当前应用设计真实用户目标题集，附覆盖矩阵与独立评分要求。"
