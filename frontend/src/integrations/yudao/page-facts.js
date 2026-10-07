@@ -143,6 +143,12 @@ export function createPageFacts({view = window, doc = document} = {}) {
       // Application-owned scalar query observation for the first native report.
       // Retain only reviewed query fields, never headers, bodies or arbitrary URLs.
       query = ledger ? ledgerQuery(url) : orderQuery(url)
+    } else if (url.pathname.endsWith('/page') && route && route.indexOf('/detail/') < 0) {
+      // Any other collection page's own list read: the tracked GET is the page's
+      // applied query. Scalar projection stays ledger/order-only; this general
+      // capture feeds applied-query facets for target settlement on every list.
+      appliedQuery = null
+      query = {path: url.pathname, parameters: Object.fromEntries(url.searchParams)}
     }
     const detail = /^\/crm\/(customer|contract|business)\/detail\/([0-9]+)$/.exec(route)
     const isRecord = Boolean(detail && url.pathname === `/admin-api/crm/${detail[1]}/get`)
@@ -177,7 +183,10 @@ export function createPageFacts({view = window, doc = document} = {}) {
       const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
       latest.failed = !ok
       if ((ledger && ok && query && Array.isArray(body?.data)) ||
-          (order && ok && query && Array.isArray(body?.data?.list))) appliedQuery = query
+          (order && ok && query && Array.isArray(body?.data?.list)) ||
+          (query && ok && url.pathname.endsWith('/page') && Array.isArray(body?.data?.list))) {
+        appliedQuery = query
+      }
       if (isRecord && ok) {
         const id = body?.data?.id, name = body?.data?.name
         if ((typeof id === 'number' && Number.isSafeInteger(id) || typeof id === 'string' && /^[0-9]+$/.test(id))
@@ -323,7 +332,28 @@ export function createPageFacts({view = window, doc = document} = {}) {
       return route
     } catch { return undefined }
   }
+  // Applied query facets for target settlement: one entry per query-form control
+  // whose selection or value is visibly non-default. Names are the rendered field
+  // labels — what a person sees and what set_target declares. Pagination, dialogs
+  // and hidden controls are not page conditions. The applied GET (appliedQuery)
+  // must exist: a form the page has not yet read proves no applied condition.
+  function readPageFacets() {
+    if (disposed || !appliedQuery || readPageBlocker()) return []
+    const facts = []
+    for (const item of Array.from(doc.querySelectorAll('.el-form-item')).filter(visible)) {
+      if (item.closest('[role="dialog"],dialog')) continue
+      const label = item.querySelector('.el-form-item__label')?.textContent?.trim()
+      if (!label) continue
+      const filled = item.querySelector(
+        '.el-select__selected-item:not(.is-hidden), .el-radio.is-checked, .el-checkbox.is-checked')
+        || Array.from(item.querySelectorAll('input:not([type="hidden"]), textarea'))
+            .filter(visible).some(input => input.value !== '')
+      if (filled && facts.length < 16) facts.push({kind: 'filter', name: label})
+    }
+    return facts
+  }
   return {begin, readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
+    readPageFacets,
     dispose() {disposed = true; reads.clear(); record = null; appliedQuery = null; appliedRead = null}}
 }
 

@@ -688,3 +688,26 @@ describe('native date range selection uses only an exact owned live calendar', (
     expect(nativeRangeDateCell(input,'2026-10-31')).toBeNull()
   })
 })
+
+describe('applied query facets for target settlement', () => {
+  it('reports visible query-form labels only while an applied read exists', async () => {
+    mountedPage('/mall/trade/order', 'TradeOrder')
+    const facts = createPageFacts()
+    // No applied read yet: nothing may be claimed as an applied condition.
+    document.body.insertAdjacentHTML('beforeend',
+      '<div class="el-form-item"><label class="el-form-item__label">订单状态</label>'
+      + '<div class="el-select__wrapper"><div class="el-select__selected-item">待支付</div></div></div>'
+      + '<div class="el-form-item"><label class="el-form-item__label">创建时间</label>'
+      + '<input placeholder="请选择日期"></div>')
+    for (const element of document.querySelectorAll('*')) {
+      element.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    }
+    expect(facts.readPageFacets()).toEqual([])
+    const url = '/admin-api/mall/trade/order/page?pageNo=1&pageSize=10&status=20'
+    await facts.begin(url)!(200, {code:0, data:{list:[{id:1}], total:1}})
+    const facets = facts.readPageFacets()
+    expect(facets).toContainEqual({kind:'filter', name:'订单状态'})
+    // An empty default control is not an applied condition.
+    expect(facets).not.toContainEqual({kind:'filter', name:'创建时间'})
+  })
+})
