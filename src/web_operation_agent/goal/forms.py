@@ -37,15 +37,45 @@ class FormOutcome:
     reason: str = ""
     detail: str = ""
     input_dispatched: bool = False
+    error_code: str = ""
+
+
+def form_failure_message(reason: str, error_code: str, zh: bool) -> str:
+    """User copy from typed outcomes only; exception prose stays in the audit."""
+    causes = {
+        "form_disabled": ("当前部署未启用这项表单操作", "this deployment has not enabled this form operation"),
+        "form_plan_invalid": ("无法将请求绑定到一个明确的表单和填写目标", "the request could not bind to one exact form and set of fields"),
+        "form_entry_unverified": ("无法核验目标表单已打开", "the opened form could not be verified"),
+        "form_entry_unready": ("目标表单尚未加载完成", "the target form did not finish loading"),
+        "form_submit_unobserved": ("没有找到可核验的提交按钮，无法交回表单", "no verifiable submit control was found for handoff"),
+        BusinessToolPermissionError.code: ("你的账号没有这项表单操作的权限", "your account lacks permission for this form operation"),
+        BusinessToolIdentityError.code: ("无法核验当前登录身份，请重新登录后重试", "the current login could not be verified; sign in again"),
+        "business_authentication": ("当前登录已失效，请重新登录", "the current login has expired; sign in again"),
+        BusinessToolRequestError.code: ("目标表单或填写内容未通过应用校验，请核对表单和字段要求", "the target form or requested values did not pass application validation; check the form and field requirements"),
+        "business_contract": ("应用返回的表单信息不完整或不一致", "the application's form information is incomplete or inconsistent"),
+        "business_unavailable": ("表单读取服务暂不可用", "the form read service is unavailable"),
+        "permission_denied": ("你的账号没有这项表单操作的权限", "your account lacks permission for this form operation"),
+        "operation_not_confirmed": ("未获得你对这次操作的同意", "you did not approve this operation"),
+        "approval_expired": ("这次操作的确认已过期", "approval for this operation expired"),
+        "user_cancelled": ("操作已由你停止", "you stopped the operation"),
+        "wall_budget": ("操作超过本轮时间上限", "the operation exceeded this turn's time limit"),
+        "transport_error": ("无法取得可靠的浏览器执行回执", "a reliable browser action receipt was unavailable"),
+    }
+    pair = causes.get(reason) or causes.get(error_code) or (
+        "页面状态或填写结果未通过核验，请检查当前表单",
+        "the page state or entered values could not be verified; check the current form")
+    return pair[0 if zh else 1]
 
 
 class _FormBrowser:
     def __init__(self, executor, state):
         self.executor, self.state = executor, state
         self.input_dispatched = False
+        self.error_code = ""
 
     def execute_with_budget(self, action, args, *, timeout_s):
         if action in self.executor.disabled_page_actions:
+            self.error_code = "form_disabled"
             raise BusinessToolRequestError("the deployment disabled this form action")
         s = self.state
         s.step += 1
@@ -61,9 +91,9 @@ def handoff_form(executor, state, plan):
     s = state
     if (not executor.config.allow_form_prefill
             or not {"fill", "handoffs"} <= capabilities_of(executor.goal_port)):
-        return FormOutcome(reason="agent_refused", detail="form entry is not enabled")
+        return FormOutcome(reason="agent_refused", detail="form entry is not enabled", error_code="form_disabled")
     if plan.fill or plan.highlight:
-        return FormOutcome(reason="agent_refused", detail="a form plan cannot mix legacy field actions")
+        return FormOutcome(reason="agent_refused", detail="a form plan cannot mix legacy field actions", error_code="form_plan_invalid")
     forms = ApplicationFormTools(executor.application.ports.forms,
                 application_id=executor.application.descriptor.application_id)
     s.budget.check()
@@ -84,9 +114,11 @@ def handoff_form(executor, state, plan):
             try:
                 receipt = executor._dispatch(s, "click", {"ref": entry.control.ref, "epoch": before.epoch})
                 if receipt is None or not receipt.ok or receipt.navigated:
-                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry did not complete")
+                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry did not complete",
+                                       error_code="form_entry_unverified")
                 if not executor._wait_ready(s, plan.expected_path, record=bool(before.record_route)):
-                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry is not ready")
+                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry is not ready",
+                                       error_code="form_entry_unready")
                 with s.receipt.stage("business"):
                     reference = port.accept_entry(entry, before, receipt, s.obs,
                                         context=s.approvals.context(s.step, "form_entry_receipt"))
@@ -109,7 +141,7 @@ def handoff_form(executor, state, plan):
                 receipt = executor._dispatch(s, "scroll", {"direction": "down", "pages": 1})
                 if receipt is None or not receipt.ok or s.terminal_reason:
                     return FormOutcome(reason=s.terminal_reason or "agent_refused",
-                                       detail="the form submit control could not be observed")
+                                       detail="the form submit control could not be observed", error_code="form_submit_unobserved")
     except (BusinessToolError, PrincipalError) as exc:
         s.ledger.append("goal_form_preparation_refused", step=s.step,
                         error_code=(BusinessToolIdentityError.code if isinstance(exc, PrincipalError)
@@ -117,7 +149,9 @@ def handoff_form(executor, state, plan):
                         detail=redact_sensitive_assignments(redact_session_handoffs(str(exc)))[:200],
                         dispatched=False, submitted=False)
         return FormOutcome(reason=("permission_denied" if isinstance(exc, BusinessToolPermissionError)
-                                   else "agent_refused"), detail=str(exc))
+                                   else "agent_refused"), detail=str(exc), error_code=(
+            BusinessToolIdentityError.code if isinstance(exc, PrincipalError) else
+            "form_submit_unobserved" if isinstance(exc, FormSubmitUnobserved) else exc.code))
     browser = _FormBrowser(executor, s)
     session = SimpleNamespace(_cancel_requested=s.cancelled, _browser_attempts=0,
         page_actions=0, _approvals=s.approvals, _writes=s.writes, ledger=s.ledger,
@@ -131,7 +165,8 @@ def handoff_form(executor, state, plan):
     s.ledger.append("goal_form_handoff", step=s.step, complete=not reason,
         fields=len(draft.fields), submitted=False, persisted=False,
         terminal_reason=reason, detail=redact_sensitive_assignments(redact_session_handoffs(detail))[:200],
-        browser_attempts=session._browser_attempts, input_dispatched=browser.input_dispatched)
+        browser_attempts=session._browser_attempts, input_dispatched=browser.input_dispatched,
+        error_code=browser.error_code)
     return FormOutcome(not reason, tuple(described["fields"]), draft.submit_label,
                        "wall_budget" if reason == "wall_clock_budget" else reason, detail,
-                       browser.input_dispatched)
+                       browser.input_dispatched, browser.error_code)

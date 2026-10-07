@@ -52,7 +52,7 @@ from .index import conventions_named
 from .narrow import (correct_records, locate, locate_names, neighbourhood, references,
                      summaries)
 from .declaration_cache import DeclarationCache
-from .forms import combine_forms, handoff_form
+from .forms import combine_forms, handoff_form, form_failure_message
 from .understand import understand, understand_scope
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -239,7 +239,8 @@ def _answer_key(resolution: Resolution) -> tuple:
     out = []
     for r in resolution.deliverables:
         if r.page is not None and not r.problem and not (r.facts or r.aggregate):
-            out.append(("page", r.page.url))
+            out.append(("record_unavailable", r.page.url, r.page.missing_record)
+                       if r.page.missing_record else ("page", r.page.url))
         elif len(r.candidates) >= 2 and not (r.facts or r.aggregate):
             out.append(("ask", tuple(sorted(r.candidates))))
         else:
@@ -537,6 +538,8 @@ class _Unmet(NamedTuple):
                 "error_dialog": "the application reported an error dialog",
                 "filter_on": f"filter {self.name}", "filter_off": f"filter {self.name} off",
                 "section": f"section {self.name}", "control": f"control {self.name}",
+                "action_unspecified": "no handoff control was specified",
+                "record": f"no detail page for record {self.name}",
                 "view": f"{self.name} view"}[self.kind]
 
     def said(self, zh: bool) -> str:
@@ -549,6 +552,8 @@ class _Unmet(NamedTuple):
                     "filter_off": f"筛选「{self.name}」没有取消",
                     "section": f"没有找到页签「{self.name}」",
                     "control": f"没有找到控件「{self.name}」",
+                    "action_unspecified": "没有确定要准备的操作或字段",
+                    "record": f"没有取得「{self.name}」的详情地址",
                     "view": f"没有切换到 {self.name} 视图"}[self.kind]
         return {"not_attempted": "not attempted", "not_confirmed": "working the page was not agreed",
                 "not_opened": "the page did not open",
@@ -557,6 +562,8 @@ class _Unmet(NamedTuple):
                 "filter_on": f"filter “{self.name}” not applied",
                 "filter_off": f"filter “{self.name}” not removed",
                 "section": f"no tab “{self.name}”", "control": f"no control “{self.name}”",
+                "action_unspecified": "no operation or field to prepare was determined",
+                "record": f"no detail address for “{self.name}”",
                 "view": f"not switched to the {self.name} view"}[self.kind]
 
 
@@ -581,6 +588,8 @@ class _PageOutcome:
     form_fields: tuple[str, ...] = ()
     form_submit: str = ""
     form_input_dispatched: bool = False
+    form_reason: str = ""
+    form_error_code: str = ""
 
 
 @dataclass
@@ -1319,7 +1328,8 @@ class GoalTurnExecutor:
                 form_plan = combine_forms([resolution.deliverables[i].page for i in form_indices])
             except BusinessToolRequestError as exc:
                 s.ledger.append("goal_form_plan_refused", error_code=exc.code, dispatched=False)
-                refused = _PageOutcome(reached=False, form_requested=True)
+                refused = _PageOutcome(reached=False, form_requested=True,
+                                       form_error_code="form_plan_invalid")
                 for i in form_indices:
                     outcomes[i] = refused
         for i, (declared, resolved) in enumerate(zip(spec.deliverables, resolution.deliverables, strict=True)):
@@ -1329,6 +1339,13 @@ class GoalTurnExecutor:
                 continue
             if s.terminal_reason:
                 outcomes[i] = _PageOutcome(reached=False, unmet=[_Unmet("not_attempted")])
+                continue
+            if (resolved.kind == "handoff" and resolved.page.form is None
+                    and not resolved.page.highlight):
+                missing = (_Unmet("record", resolved.page.missing_record)
+                           if resolved.page.missing_record else _Unmet("action_unspecified"))
+                outcomes[i] = _PageOutcome(reached=False, unmet=[missing])
+                s.ledger.append("goal_handoff_target_missing", step=s.step, dispatched=False)
                 continue
             outcome = self._reach(s, resolved.page)
             if any(u.kind == "control" for u in outcome.unmet):
@@ -1980,6 +1997,8 @@ class GoalTurnExecutor:
                 out.unmet.append(_Unmet("filter_on", "requested page conditions"))
         if plan.section and not self._select_tab(s, plan.section):
             out.unmet.append(_Unmet("section", plan.section))
+        if plan.missing_record:
+            out.unmet.append(_Unmet("record", plan.missing_record))
         if plan.form is not None:
             out.form_requested = True
             if not out.unmet:
@@ -1987,6 +2006,7 @@ class GoalTurnExecutor:
                 out.form_complete, out.form_fields, out.form_submit = (
                     prepared.complete, prepared.fields, prepared.submit_label)
                 out.form_input_dispatched = prepared.input_dispatched
+                out.form_reason, out.form_error_code = prepared.reason, prepared.error_code
                 if prepared.reason:
                     s.terminal_reason, s.detail = prepared.reason, prepared.detail
         elif plan.highlight and plan.fill:
@@ -2370,7 +2390,11 @@ class GoalTurnExecutor:
             lines.append(("未完成的部分：" if zh else "Parts not completed: ") + s.unsupported)
         # A turn stopped by the person, or by an unanswered card, says so in the line of
         # the deliverable it stopped; the internal detail behind it is not the person's.
-        if s.terminal_reason not in ("agent_finished", "agent_refused", "needs_clarification") + _STOPPED:
+        form_failure = any(r.page is not None and r.page.form is not None
+                           and o is not None and not o.form_complete
+                           for r, o in zip(deliverables, outcomes))
+        if (not form_failure
+                and s.terminal_reason not in ("agent_finished", "agent_refused", "needs_clarification") + _STOPPED):
             detail = s.detail or s.terminal_reason
             if zh and not re.search(r"[\u3400-\u9fff]", detail):
                 lines.append("这次操作没有完成。")
@@ -2540,7 +2564,7 @@ def _clarification(s: _TurnState, names: tuple[str, ...]) -> dict:
 def _status_for(terminal_reason: str) -> AgentTurnStatus:
     if terminal_reason == "agent_finished":
         return AgentTurnStatus.FINISHED
-    if terminal_reason == "agent_refused":
+    if terminal_reason in {"agent_refused", "permission_denied"}:
         return AgentTurnStatus.REFUSED
     if terminal_reason == "needs_clarification":
         return AgentTurnStatus.NEEDS_INPUT
@@ -2586,6 +2610,9 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
         return True
     if outcome is not None:
         return (outcome.reached and not outcome.unmet
+                and (resolved.kind != "handoff" or bool(resolved.page
+                     and (resolved.page.highlight or resolved.page.form)))
+                and (not resolved.page or not resolved.page.missing_record)
                 and (not resolved.page or not resolved.page.form or outcome.form_complete)
                 and (not resolved.page or not resolved.page.fill
                      or bool(outcome.filled and outcome.fill_verified)))
@@ -2827,6 +2854,15 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
             return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
+        if plan.missing_record and (outcome.reached or any(u.kind == "record" for u in outcome.unmet)):
+            opened = ((f"已打开：{plan.label}。" if zh else f"Opened: {plan.label}. ")
+                      if outcome.reached else "")
+            why = (f"当前集成没有提供「{plan.missing_record}」的详情地址，"
+                   "未打开该记录详情或执行记录内的操作。") if zh else (
+                   f"The integration has no detail address for “{plan.missing_record}”; "
+                   "record details were not opened and no record actions were performed.")
+            lines.append(opened + why)
+            return lines
         if plan.form is not None:
             if outcome.form_complete:
                 fields = ("、" if zh else ", ").join(outcome.form_fields)
@@ -2844,8 +2880,18 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                 lines.append("表单填写或交接未完成；部分字段可能已输入。请核对当前页面，助手没有提交。" if zh else
                              "Form entry or handoff did not complete; some fields may have been entered. "
                              "Check the current page. The assistant did not submit.")
+            if not outcome.form_complete:
+                why = (("、" if zh else ", ").join(u.said(zh) for u in outcome.unmet)
+                       if outcome.unmet else form_failure_message(
+                           outcome.form_reason, outcome.form_error_code, zh))
+                lines.append(("原因：" if zh else "Reason: ") + why + ("。" if zh else "."))
             return lines
         if resolved.kind == "handoff":
+            if not plan.highlight:
+                lines.append("没有确定要准备的操作或字段，请说明要做什么；助手没有执行页面操作。" if zh else
+                             "No operation or field to prepare was determined. Please specify the goal; "
+                             "the assistant did not perform page actions.")
+                return lines
             if outcome.highlighted and outcome.filled and not outcome.fill_verified:
                 lines.append((f"已打开 {plan.label} 并标出「{outcome.highlighted}」。"
                               f"尝试输入「{outcome.filled}」，但未能核验页面中的完整值；"

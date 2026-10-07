@@ -128,12 +128,14 @@ class GoalFillTests(unittest.TestCase):
                 self.assertIsNone(executor._find_input(SimpleNamespace(obs=obs), plan))
 
     def test_unverified_or_missing_fill_does_not_complete_a_handoff(self):
-        resolved = Resolved("handoff", page=PagePlan("/records/1", "Fixture", fill="Value"))
+        resolved = Resolved("handoff", page=PagePlan("/records/1", "Fixture", highlight="Field", fill="Value"))
         self.assertFalse(_achieved(resolved, _PageOutcome(reached=True, highlighted="Field")))
         self.assertFalse(_achieved(resolved, _PageOutcome(reached=True, filled="Value",
                                                         fill_verified=False)))
         self.assertTrue(_achieved(resolved, _PageOutcome(reached=True, filled="Value",
                                                        fill_verified=True)))
+        empty_target = Resolved("handoff", page=PagePlan("/records/1", "Fixture", fill="Value"))
+        self.assertFalse(_achieved(empty_target, _PageOutcome(reached=True, filled="Value", fill_verified=True)))
 
 
 if __name__ == "__main__":

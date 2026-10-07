@@ -300,6 +300,51 @@ class _AgreeingChat(_Chat):
 
 
 class GoalTurnTests(unittest.TestCase):
+    def test_empty_handoff_cannot_navigate_or_claim_completion_and_keeps_other_answers(self):
+        declaration = ("declare_goal", {"deliverables": [
+            {"kind": "fact", "entity": "order", "record": "S00006", "fields": ["Total"]},
+            {"kind": "handoff", "entity": "order", "record": "S00006", "section": "Other Info"}]})
+        result, channel, _, _, events = self._run([declaration], [
+            Resolved(kind="fact", facts=(Fact("S00006", "Total", "42"),)),
+            Resolved(kind="handoff", page=PagePlan("/orders/6", "S00006", "/orders/6",
+                                                   section="Other Info"))], readings=1,
+            text="S00006 的金额是多少？准备其他信息")
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIn("42", result.user_answer)
+        self.assertIn("没有确定要准备的操作或字段", result.user_answer)
+        self.assertNotIn("没有这项操作的权限", result.user_answer)
+        self.assertEqual(channel.approvals, [])
+        self.assertFalse({"goto", "click", "fill", "highlight"} &
+                         {action for action, _ in _Browser.instances[-1].actions})
+        self.assertTrue(any(e["event"] == "goal_handoff_target_missing" for e in events))
+
+    def test_record_collection_fallback_is_partial_and_named_honestly(self):
+        for text in ("打开 S00006 的详情", "Open S00006 detail"):
+            with self.subTest(text=text):
+                self.ledger.unlink(missing_ok=True)
+                result, _, _, _, _ = self._run([
+                    _declaration(kind="page", entity="order", record="S00006")], [
+                    Resolved(kind="page", page=PagePlan("/orders", "Sales / Orders", "/orders",
+                                                       missing_record="S00006"))], readings=1, text=text)
+                self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+                self.assertIn("Sales / Orders", result.user_answer)
+                self.assertIn("详情地址" if "打开" in text else "no detail address", result.user_answer)
+                self.assertNotIn("已打开：S00006", result.user_answer)
+                self.assertFalse({"click", "fill", "highlight"} &
+                                 {action for action, _ in _Browser.instances[-1].actions})
+
+    def test_collection_fallback_cannot_hand_off_another_records_control(self):
+        result, _, _, _, _ = self._run([
+            _declaration(kind="handoff", entity="order", record="S00006", action="Confirm")], [
+            Resolved(kind="handoff", page=PagePlan("/orders", "Sales / Orders", "/orders",
+                                                   missing_record="S00006"))], readings=1,
+            text="准备 S00006 的确认操作")
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIn("没有提供「S00006」的详情地址", result.user_answer)
+        self.assertNotIn("没有确定要准备的操作", result.user_answer)
+        self.assertFalse({"goto", "click", "highlight"} &
+                         {action for action, _ in _Browser.instances[-1].actions})
+
     def test_a_port_cannot_replace_declared_groups_with_a_positive_total(self):
         for count, expected in ((4, AgentTurnStatus.REFUSED), (0, AgentTurnStatus.FINISHED)):
             with self.subTest(count=count):
@@ -719,6 +764,9 @@ class GoalTurnTests(unittest.TestCase):
                                                   candidates=("期数 2", "期数 1")),))
         # The same page opened is one answer, however it is labelled.
         self.assertEqual(_answer_key(opened), _answer_key(titled))
+        fallback = replace(opened, deliverables=(Resolved(kind="page", page=PagePlan(
+            "/plans/9", "Plans", "/plans/9", missing_record="第 1 期")),))
+        self.assertNotEqual(_answer_key(opened), _answer_key(fallback))
         self.assertTrue(_answer_among(opened, asked))
         other = Resolution(deliverables=(Resolved(kind="page", page=PagePlan(
             url="/plans/3", label="期数 3", expected_path="/plans/3")),))

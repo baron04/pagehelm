@@ -228,6 +228,12 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
             # ordinary data resolver must not silently turn it into navigation.
             return Resolved(kind=d.kind, unoffered="fill",
                             problem="this application does not offer a reviewed form batch")
+        if (d.kind == "handoff" and not d.action.strip() and not d.fields
+                and (d.record or _describes_record(d) or d.section)):
+            return Resolved(kind="handoff", problem="no control or field was declared for the handoff",
+                            refused=("没有确定要准备的操作或字段，请说明要做什么" if self.say.zh else
+                                     "No operation or field to prepare was determined; please specify the goal"),
+                            repair="name the requested control or field in action; tab navigation is a page deliverable")
         d = self._line_record_from_conditions(d)
         if isinstance(d, Resolved):
             return d
@@ -748,6 +754,10 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
                      highlight: str, value: str = "") -> PagePlan:
         view = self.view(model)
         url = self.port.record_address(model, rid)
+        collection = self._default_page(model)
+        if collection is not None and url == self.port.page_address(collection.key):
+            return PagePlan(url=url, label=collection.breadcrumb, expected_path=url,
+                            missing_record=name)
         tab = ""
         if section and view is not None:
             wanted = norm(section)

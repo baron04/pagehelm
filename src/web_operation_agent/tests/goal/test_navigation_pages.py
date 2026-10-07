@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from web_operation_agent.goal.data import EntitySchema, PageSchema, Schema
+from web_operation_agent.goal.data import EntitySchema, PageSchema, Ref, Schema
 from web_operation_agent.goal.index import ApplicationIndex, IndexConvention, IndexEntity, IndexPage
 from web_operation_agent.goal.narrow import KnownReference, neighbourhood, summaries
 from web_operation_agent.goal.resolve.indexing import index_from_schema
@@ -66,6 +66,33 @@ class NavigationPageContractTests(unittest.TestCase):
         self.port.find.assert_not_called()
         self.port.count.assert_not_called()
         self.port.rows.assert_not_called()
+
+    def test_collection_address_cannot_become_a_record_detail_or_tab(self):
+        self.port.name_of = lambda text: text
+        self.port.find.return_value = (Ref("contact", "1", "Ada"),)
+        self.port.record_address = Mock(return_value="/contacts")
+        for section in ("", "History"):
+            with self.subTest(section=section):
+                result = self.resolve({"kind": "page", "entity": "contact",
+                                       "record": "Ada", "section": section})
+                plan = result.deliverables[0].page
+                self.assertEqual((plan.url, plan.label, plan.missing_record),
+                                 ("/contacts", "Contacts", "Ada"))
+                self.assertEqual(plan.section, "")
+                self.assertEqual(plan.highlight, "")
+        with self.assertRaises(ValueError):
+            PagePlan("/contacts", "Contacts", missing_record="Ada", section="History")
+
+    def test_record_address_keeps_record_navigation_and_empty_handoff_is_repairable(self):
+        self.port.name_of = lambda text: text
+        self.port.find.return_value = (Ref("contact", "1", "Ada"),)
+        self.port.record_address = Mock(return_value="/contacts/1")
+        result = self.resolve({"kind": "page", "entity": "contact", "record": "Ada"})
+        plan = result.deliverables[0].page
+        self.assertEqual((plan.url, plan.label, plan.missing_record), ("/contacts/1", "Ada", ""))
+        result = self.resolve({"kind": "handoff", "entity": "contact", "record": "Ada"})
+        self.assertIsNone(result.deliverables[0].page)
+        self.assertTrue(result.deliverables[0].repair)
 
     def test_entityless_page_refuses_data_filters_records_and_forms_without_reads(self):
         declarations = (

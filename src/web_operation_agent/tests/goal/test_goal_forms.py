@@ -10,7 +10,8 @@ from testapps.contacts.adapter import MinimalContactsAdapter
 from testapps.contacts.app import ACTORS_BY_ID, DEMO_SESSION_COOKIE, MinimalContactsApplication
 from testapps.contacts.goal import ContactsGoalPort
 from web_operation_agent.business.control import ReadOnlyControl
-from web_operation_agent.business.errors import BusinessToolRequestError
+from web_operation_agent.business.errors import (BusinessToolIdentityError,
+                                                BusinessToolPermissionError, BusinessToolRequestError)
 from web_operation_agent.business.forms import ApplicationFormEntry
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStatus
@@ -68,7 +69,7 @@ class FormBrowser:
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交", repair_label=False, submit_requires_values=False):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交", repair_label=False, submit_requires_values=False, preparation_error=None):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
         FormBrowser.submit_after_scroll = submit_after_scroll
@@ -95,6 +96,15 @@ class GoalFormsTests(unittest.TestCase):
                                "deliverables": [*declarations, *extras]})])
             audit = Path(tmp) / "audit.jsonl"
             bound = bind_application(adapter)
+            if preparation_error is not None:
+                delegate = bound.ports.forms
+                class RefusedForms:
+                    required_scopes = delegate.required_scopes
+                    def describe_form(self, *args, **kwargs):
+                        return delegate.describe_form(*args, **kwargs)
+                    def prepare_form(self, *args, **kwargs):
+                        raise preparation_error
+                bound = replace(bound, ports=replace(bound.ports, forms=RefusedForms()))
             goal_port = ContactsGoalPort(adapter, form_prefill=True)
             if repair_label:
                 old_label = "Wrong mail" if repair_label == "literal" else "Electronic mail"
@@ -217,11 +227,34 @@ class GoalFormsTests(unittest.TestCase):
         self.assertEqual(result.status, AgentTurnStatus.CANCELLED)
         self.assertNotIn("fill", browser.actions)
         self.assertIn("没有填写或提交", result.user_answer)
+        self.assertIn("未获得你对这次操作的同意", result.user_answer)
         self.assertNotIn("部分字段可能", result.user_answer)
         result, browser, _, _, events = self.run_goal(batch=True, fail="fill")
         self.assertEqual(browser.actions.count("fill"), 1)
         self.assertIn("部分字段可能", result.user_answer)
         self.assertTrue(any(e['event']=='goal_form_handoff' and e['input_dispatched'] for e in events))
+
+    def test_typed_preparation_refusals_explain_the_cause_without_exposing_exception_text(self):
+        for error_type, copy in ((BusinessToolPermissionError, "没有这项表单操作的权限"),
+                                 (BusinessToolIdentityError, "无法核验当前登录身份"),
+                                 (BusinessToolRequestError, "未通过应用校验")):
+            with self.subTest(error=error_type):
+                result, browser, _, _, events = self.run_goal(batch=True,
+                    preparation_error=error_type("internal /private/source credential-token"))
+                self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+                self.assertIn(copy, result.user_answer)
+                self.assertIn("没有填写或提交", result.user_answer)
+                self.assertNotIn("/private/source", result.user_answer)
+                self.assertNotIn("credential-token", result.user_answer)
+                self.assertFalse({"fill", "select", "handoff_form"} & set(browser.actions))
+                self.assertTrue(any(e["event"] == "goal_form_preparation_refused"
+                                    and e["error_code"] == error_type.code for e in events))
+
+    def test_missing_submit_explains_why_and_never_enters_values(self):
+        result, browser, _, _, _ = self.run_goal(batch=True, submit_after_scroll=99)
+        self.assertEqual(result.status, AgentTurnStatus.REFUSED)
+        self.assertIn("没有找到可核验的提交按钮", result.user_answer)
+        self.assertFalse({"fill", "handoff_form"} & set(browser.actions))
 
     def test_unobserved_submit_is_scrolled_before_values_and_still_verified(self):
         result, browser, _, _, _ = self.run_goal(batch=True, submit_after_scroll=1)
@@ -334,6 +367,8 @@ class GoalFormsTests(unittest.TestCase):
                     self.assertEqual(browser.actions.count("fill"), 1)
                 if not args.get("fail"):
                     self.assertNotIn("handoff_form", browser.actions)
+                if args.get("disabled"):
+                    self.assertIn("当前部署未启用这项表单操作", result.user_answer)
 
     def test_distinct_entries_or_excessive_fields_cannot_share_a_handoff(self):
         plan = PagePlan("/records", "Form", form=FormPlan("entry", (("name", "A"),)))

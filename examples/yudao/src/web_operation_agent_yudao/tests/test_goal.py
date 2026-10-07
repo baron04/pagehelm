@@ -434,9 +434,11 @@ class YudaoGoalDataTests(unittest.TestCase):
         self.assertEqual([f.value for f in fact.facts], ["审核通过", "2026-09-01"])
         page = self.ask({"kind": "page", "entity": "crm/contract", "record": "云帆企业版合同"})
         self.assertEqual(page.page.url, "/crm/contract/detail/11")
-        # Without a record page of its own, a record opens as its list.
+        # A collection fallback is labelled as the collection, never as record detail.
         supplier = self.ask({"kind": "page", "entity": "erp/supplier", "record": "宁波海川"})
         self.assertEqual(supplier.page.url, "/erp/purchase/supplier")
+        self.assertEqual(supplier.page.missing_record, "宁波海川电子有限公司")
+        self.assertNotEqual(supplier.page.label, "宁波海川")
         # "Open the contract list": the page's one way of showing records is the list,
         # so there is no view to switch to or find missing.
         listed = self.ask({"kind": "page", "entity": "crm/contract",
@@ -484,7 +486,8 @@ class DeclarationRepairTests(unittest.TestCase):
 
     def test_the_records_pointing_at_a_named_record_are_the_ones_meant(self):
         contracts = self.ask({"kind": "page", "entity": "crm/contract", "record": "苏州瑞达精密机械有限公司"})
-        self.assertEqual(contracts.page.label, "瑞达实施服务合同")
+        self.assertEqual(contracts.page.missing_record, "瑞达实施服务合同")
+        self.assertEqual(contracts.page.label, "CRM 系统 / 合同管理")
 
     def test_an_empty_list_asked_for_as_a_whole_is_an_answer(self):
         suppliers = self.ask({"kind": "list", "entity": "crm/contract", "metric": {

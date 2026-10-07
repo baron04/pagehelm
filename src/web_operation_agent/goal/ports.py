@@ -125,12 +125,18 @@ class PagePlan:
     #: Header controls and the address alone cannot verify such a destination.
     requires_page_route: bool = False
     conditions: tuple[Filter, ...] = ()
+    #: The record has only a collection address; opening it cannot settle a record
+    #: request or authorize actions on a particular row.
+    missing_record: str = ""
 
     def __post_init__(self):
         if not isinstance(self.requires_page_route, bool):
             raise ValueError("requires_page_route must be a boolean")
         if self.requires_page_route and not self.expected_path:
             raise ValueError("a required page route needs an expected path")
+        if self.missing_record and any((self.section, self.highlight, self.form, self.fill,
+                                       self.facets_on, self.facets_off, self.conditions)):
+            raise ValueError("a collection fallback cannot perform record actions")
 
 
 @dataclass(frozen=True)
