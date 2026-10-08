@@ -30,7 +30,8 @@ _PUBLIC = frozenset({"/admin-api/system/auth/login", "/admin-api/system/auth/ref
 
 class NativeGuardProxy:
     def __init__(self, *, upstream: str, origin: str, guard: NativePageGuard,
-                 resolve_actor, host="127.0.0.1", port=0, timeout_s=30):
+                 resolve_actor, host="127.0.0.1", port=0, timeout_s=30,
+                 application_window: bool = False):
         target = urlsplit(upstream)
         site = urlsplit(origin)
         if (target.scheme not in {"http", "https"} or not target.hostname or target.username
@@ -44,6 +45,9 @@ class NativeGuardProxy:
             raise ValueError("the proxy requires fixed upstream, origin and identity verifier")
         self.upstream, self.origin = target, origin.rstrip("/")
         self.guard, self.resolve_actor, self.timeout_s = guard, resolve_actor, timeout_s
+        #: The application refuses its own writes while a window is open (the server's
+        #: `/admin-api/woa/page-guard`); a window it does not confirm is not opened.
+        self.application_window = application_window is True
         self._probe = secrets.token_hex(32)
         self.http = ThreadingHTTPServer((host, port), self._handler())
         self._thread = None
@@ -138,14 +142,42 @@ class NativeGuardProxy:
                 if self.path == GUARD_PATH + "/begin":
                     owner = owner or secrets.token_hex(32)
                     ttl = proxy.guard.begin(actor, owner, ttl_s=body.get("ttl_s", 120))
-                    self.reply(200, {"active": True, "expires_at": time.time() + ttl}, cookie=owner)
+                    state = {"active": True, "expires_at": time.time() + ttl}
+                    if proxy.application_window:
+                        confirmed = self.application("begin", {"ttl_s": math.ceil(ttl)})
+                        if confirmed.get("active") is not True or confirmed.get("guard") != "read_only_statements":
+                            proxy.guard.end(actor, owner)
+                            raise GuardRefused("application_window_unavailable")
+                        state["guard"] = "read_only_statements"
+                    self.reply(200, state, cookie=owner)
                 elif self.path == GUARD_PATH + "/end":
                     if not owner:
                         raise GuardRefused("invalid_browser")
                     proxy.guard.end(actor, owner)
+                    if proxy.application_window and not proxy.guard.protected(actor):
+                        # The application's window also ends by its own clock.
+                        self.application("end", {})
                     self.reply(200, {"active": proxy.guard.protected(actor)})
                 else:
                     raise GuardRefused("unknown_guard_operation")
+
+            def application(self, operation, payload):
+                """The application's answer to opening or closing its own read-only window."""
+                connect = http.client.HTTPSConnection if proxy.upstream.scheme == "https" else http.client.HTTPConnection
+                connection = connect(proxy.upstream.hostname, proxy.upstream.port, timeout=proxy.timeout_s)
+                headers = {key: self.headers[key] for key in ("Authorization", "tenant-id") if key in self.headers}
+                headers["Content-Type"] = "application/json"
+                try:
+                    connection.request("POST", f"/admin-api/woa/page-guard/{operation}",
+                                       body=json.dumps(payload).encode(), headers=headers)
+                    response = connection.getresponse()
+                    answer = json.loads(response.read(8192) or b"{}")
+                except Exception:
+                    return {}
+                finally:
+                    connection.close()
+                data = answer.get("data") if isinstance(answer, dict) and answer.get("code") == 0 else None
+                return data if isinstance(data, dict) else {}
 
             def forward(self):
                 path = urlsplit(self.path).path

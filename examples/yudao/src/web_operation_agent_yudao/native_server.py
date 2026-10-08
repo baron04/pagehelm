@@ -123,9 +123,14 @@ class YudaoHostConfig:
     #: once per release, and the union is still validated by NativePageGuard's exact
     #: path rules. A hand-written policy remains authoritative for what it lists.
     auto_read_catalog: bool = False
-    #: Live label binding and list filters under the method fence. Editors still require
-    #: application reviews of exact targets and transient persistence through handoff.
-    native_live_forms: bool = False
+    #: Under the method fence: fill the form a page shows by its own labels, and take
+    #: bounded page steps to reach a form or a record that has no address. Both run only
+    #: inside a window in which the application itself refuses its writes
+    #: (`/admin-api/woa/page-guard`); a window it does not confirm is not opened. On for a
+    #: goal deployment whose read policy is the method fence, unless turned off here.
+    native_live_forms: bool = True
+    #: Page steps one turn may take to reach such a form or record.
+    page_reach_steps: int = 8
 
     def __post_init__(self):
         if (not isinstance(self.native_action_effect_review, str)
@@ -137,10 +142,9 @@ class YudaoHostConfig:
             raise ValueError("native action effects require page-agent, navigation, UI routes and a reviewed guard")
         if self.native_filter_policies and self.native_read_policy is None:
             raise ValueError("native page filters require a reviewed read guard")
-        if not isinstance(self.native_live_forms, bool) or self.native_live_forms and (
-                self.native_read_policy is None or self.executor_mode != "goal"
-                or not (self.native_form_policy is not None or self.native_create_policies)):
-            raise ValueError("live forms require goal execution, the method fence and reviewed transient entries")
+        if (not isinstance(self.native_live_forms, bool) or isinstance(self.page_reach_steps, bool)
+                or not isinstance(self.page_reach_steps, int) or not 0 <= self.page_reach_steps <= 16):
+            raise ValueError("live forms are on or off, with at most 16 page steps a turn")
         if not isinstance(self.native_navigation, bool) or self.native_navigation and self.native_read_policy is None:
             raise ValueError("native navigation requires a reviewed native read policy and write guard")
         if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent"}:
@@ -168,6 +172,7 @@ class YudaoHost:
         self.source = repository_source(config.source_root, config.source_release,
                                         commits=config.source_commits)
         self.native_proxy = None
+        self.live_forms = False
         self.form_review = None
         self.form_tree = None
         self.create_reviews = ()
@@ -208,8 +213,8 @@ class YudaoHost:
                     or policy["release"] != config.source_release or not self.ui or not self.ui.records
                     or not isinstance(policy["read_paths"], list)):
                 raise ValueError("native read policy must match the deployment and its UI routes")
-            if config.native_live_forms and not fenced:
-                raise ValueError("live forms require the method fence policy")
+            self.live_forms = (config.native_live_forms and fenced and config.executor_mode == "goal"
+                               and config.native_form_policy is None and not config.native_create_policies)
             if config.native_filter_policies:
                 from .repository import repository_tree
                 from .page_filters import NativePageFilterReview
@@ -238,7 +243,7 @@ class YudaoHost:
                        NativePageGuard(frozenset(read_paths),
                                        journal=config.state_dir / "native-guard.sqlite3")),
                 resolve_actor=GuardIdentity(config.api_base), host=config.bootstrap_host,
-                port=config.native_guard_port).start()
+                port=config.native_guard_port, application_window=self.live_forms).start()
             try:
                 self.native_proxy.verify_ingress()
             except Exception:
@@ -324,11 +329,11 @@ class YudaoHost:
             verifiers.extend(NativeCreateEntryVerifier(self.form_tree, review, client)
                              for review in self.create_reviews)
             forms = NativeEntryFormPort(NativeEntryVerifiers(*verifiers))
-        if self.config.native_live_forms:
+        if self.live_forms:
             from .live_forms import FenceEvidence, LiveFormPort
             proxy = self.native_proxy
             forms = LiveFormPort(FenceEvidence(
-                proxy.guard, lambda: proxy.resolve_actor(client._login(), client.tenant)), forms)
+                proxy.guard, lambda: proxy.resolve_actor(client._login(), client.tenant)))
         app = YudaoApplication(self.config.public_origin, None, self._load_api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
@@ -378,7 +383,7 @@ class YudaoHost:
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
                                            source=self.source, click_policy=app.native_tab_policy,
                                            form_prefill=(self.form_review is not None or bool(self.create_reviews)
-                                                         or self.config.native_live_forms),
+                                                         or self.live_forms),
                                            page_filtering=bool(self.filter_reviews),
                                            deterministic_reads=self.config.executor_mode == "page-agent")
             common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
@@ -428,9 +433,18 @@ class YudaoHost:
                             "Other controls, arbitrary field entry and record mutations are unavailable.")
                 executor = AgentTurnExecutor(**common, config=turn_config)
             else:
+                reach = {}
+                if self.live_forms and self.config.page_reach_steps:
+                    from .live_forms import FenceReachPolicy
+                    # Each page step, and the one question that ties requested fields to
+                    # the form's own labels, is a model request of the same turn.
+                    turn_config = replace(turn_config, step_budget=turn_config.step_budget
+                                          + self.config.page_reach_steps + 1)
+                    reach = dict(page_reach_steps=self.config.page_reach_steps,
+                                 page_reach_policy=FenceReachPolicy())
                 executor = GoalTurnExecutor(**common, config=turn_config,
                     disabled_page_actions=turn_config.disabled_actions, repository_answers=True,
-                    goal_port=app.goal_port)
+                    goal_port=app.goal_port, **reach)
             return LiveConversationRunner(channel, executor=executor)
 
         return self.server.create_session(
@@ -535,7 +549,9 @@ def main(argv=None) -> int:
     ap.add_argument("--auto-read-catalog", action="store_true",
                     help="extend the reviewed read fence with list endpoints compiled "
                          "from the UI source (release-bound, mutation-shaped excluded)")
-    ap.add_argument("--native-live-forms", action="store_true")
+    ap.add_argument("--native-live-forms", action=argparse.BooleanOptionalAction, default=True,
+                    help="under a method-fence read policy: fill the form a page shows and take "
+                         "bounded page steps, inside the application's own read-only window")
     ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)

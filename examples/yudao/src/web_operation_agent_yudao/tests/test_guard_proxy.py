@@ -23,6 +23,7 @@ class GuardProxyTests(unittest.TestCase):
             connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, name TEXT)")
             connection.execute("INSERT INTO records VALUES (1, 'Synthetic customer')")
         self.calls = []
+        self.window = {"code": 0, "data": {"active": True, "guard": "read_only_statements"}}
         self.entered, self.release = threading.Event(), threading.Event()
         owner = self
         class Application(BaseHTTPRequestHandler):
@@ -30,6 +31,14 @@ class GuardProxyTests(unittest.TestCase):
                 pass
             def handle_api(self):
                 owner.calls.append((self.command, self.path, self.headers.get("Cookie")))
+                if "/woa/page-guard/" in self.path:
+                    # The application's own window, as its server answers it.
+                    payload = json.dumps(owner.window).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers(); self.wfile.write(payload)
+                    return
                 if self.path.endswith("/slow-update"):
                     owner.entered.set()
                     owner.release.wait(3)
@@ -102,6 +111,33 @@ class GuardProxyTests(unittest.TestCase):
         status, body, _ = self.request("POST", GUARD_PATH + "/end")
         self.assertEqual(status, 200); self.assertFalse(body["active"])
         self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 200)
+
+    def windowed(self):
+        self.proxy.close()
+        self.proxy = NativeGuardProxy(upstream=f"http://127.0.0.1:{self.app.server_port}",
+            origin=self.origin, guard=self.guard, resolve_actor=self.proxy.resolve_actor,
+            application_window=True).start()
+
+    def test_a_window_opens_with_the_applications_own_and_closes_it(self):
+        self.windowed()
+        status, payload, cookie = self.request("POST", GUARD_PATH + "/begin")
+        self.assertEqual((status, payload["guard"]), (200, "read_only_statements"))
+        self.cookie = cookie.split(";", 1)[0]
+        self.assertEqual(self.calls[-1][:2], ("POST", "/admin-api/woa/page-guard/begin"))
+        self.assertIsNone(self.calls[-1][2])
+        self.request("POST", GUARD_PATH + "/end")
+        self.assertEqual(self.calls[-1][:2], ("POST", "/admin-api/woa/page-guard/end"))
+
+    def test_a_window_the_application_does_not_confirm_is_not_opened(self):
+        self.windowed()
+        for answer in ({"code": 0, "data": {"active": True, "guard": "something-else"}},
+                       {"code": 0, "data": {"active": False, "guard": "read_only_statements"}},
+                       {"code": 404, "msg": "not found"}):
+            self.window = answer
+            with self.subTest(answer=answer):
+                status, body, _ = self.request("POST", GUARD_PATH + "/begin")
+                self.assertEqual((status, body["error"]), (403, "application_window_unavailable"))
+                self.assertFalse(self.guard.protected("a" * 64))
 
     def test_begin_acknowledges_only_after_the_prior_mutation_response(self):
         results = {}

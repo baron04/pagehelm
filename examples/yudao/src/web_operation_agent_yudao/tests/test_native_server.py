@@ -293,16 +293,14 @@ class NativeHostTests(unittest.TestCase):
             "schema_version": 2, "release": "fixture-release", "mode": "method-fence",
             "writing_gets": ["/admin-api/pms/pm/project-group/list"], "scan": {"get_handlers": 3}}, **changes}))
         return replace(self.config, native_read_policy=policy, native_guard_port=0,
-                       source_release="fixture-release", native_live_forms=False)
+                       source_release="fixture-release")
 
-    def test_method_fence_live_binding_requires_reviewed_entries(self):
+    def test_method_fence_binds_live_forms_inside_the_applications_window(self):
         from web_operation_agent_yudao.ui_source import UiSource
         from web_operation_agent_yudao.live_filters import LivePageFilters
         from web_operation_agent_yudao.live_forms import LiveFormPort
         from web_operation_agent_yudao.live_goals import LiveFormsGoalPort
-        reviewed = self._native_form_config()
-        self.config = replace(reviewed, native_read_policy=self._fence().native_read_policy,
-                              native_live_forms=True)
+        self.config = self._fence()
         with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy, \
                 patch("web_operation_agent_yudao.page_guard.NativePageGuard") as guard, \
                 patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
@@ -312,6 +310,8 @@ class NativeHostTests(unittest.TestCase):
             self.assertEqual(guard.call_args.kwargs["writing_gets"],
                              frozenset({"/admin-api/pms/pm/project-group/list"}))
             proxy.return_value.start.return_value.verify_ingress.assert_called_once()
+            # The window is opened only when the application confirms its own.
+            self.assertIs(proxy.call_args.kwargs["application_window"], True)
             host.bootstrap("synthetic-a", "1", "native-tab")
             executor = host._sessions[("1", "1")].session.runner.executor
             self.assertIsInstance(executor.goal_port, LiveFormsGoalPort)
@@ -323,6 +323,20 @@ class NativeHostTests(unittest.TestCase):
             self.assertNotIn("select", executor.disabled_page_actions)
             self.assertIn("submit", executor.disabled_page_actions)
         self.chat.return_value.complete.assert_not_called()
+
+    def test_reviewed_forms_or_the_switch_keep_live_forms_and_its_window_off(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        for config in (replace(self._fence(), native_live_forms=False),
+                       replace(self._native_form_config(),
+                               native_read_policy=self._fence().native_read_policy)):
+            self.config = config
+            with self.subTest(live=config.native_live_forms), \
+                    patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy, \
+                    patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
+                    patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+                host = self.host()
+                self.assertFalse(host.live_forms)
+                self.assertIs(proxy.call_args.kwargs["application_window"], False)
 
     def test_method_fence_is_exact_and_live_forms_need_it(self):
         reviewed = Path(self.tmp.name) / "reviewed-reads.json"
@@ -337,10 +351,7 @@ class NativeHostTests(unittest.TestCase):
                 with self.subTest(policy=config.native_read_policy.read_text()[:80]), \
                         self.assertRaises(ValueError):
                     self.host()
-        for changes in ({"native_read_policy": None}, {"native_live_forms": True},
-                        {"executor_mode": "page-agent", "native_live_forms": True,
-                         "native_form_policy": reviewed},
-                        {"native_live_forms": 1}):
+        for changes in ({"native_live_forms": 1}, {"page_reach_steps": 99}, {"page_reach_steps": True}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 replace(self._fence(), **changes)
 
