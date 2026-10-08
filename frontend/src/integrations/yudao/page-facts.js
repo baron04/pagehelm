@@ -430,6 +430,7 @@ export const readPageRecordRoute = () => installed?.readPageRecordRoute()
 export const readPageRoute = () => installed?.readPageRoute()
 export const readPageQuery = () => installed?.readPageQuery()
 export const readPageRead = () => installed?.readPageRead()
+export const readPageFacets = () => installed ? installed.readPageFacets() : []
 export const disposeInstalledPageFacts = () => installed?.dispose()
 /** Observe only the mounted application's default menu, not arbitrary menu-shaped DOM. */
 export function readElementNavigation(element) {
