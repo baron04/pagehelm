@@ -142,7 +142,7 @@ class PageReadinessTests(unittest.TestCase):
         good = replace(_obs(1, "https://app.test/help"), page_route="/help")
         for epochs in ((1, 1, 1), (1, 0, 1), (1, 2)):
             with self.subTest(epochs=epochs):
-                state = SimpleNamespace(obs=replace(good, epoch=epochs[0]))
+                state = SimpleNamespace(obs=replace(good, epoch=epochs[0]), refused=False)
                 iterator = iter(epochs[1:])
                 def dispatch(s, action, args):
                     s.obs = replace(s.obs, epoch=next(iterator, epochs[-1]))
@@ -154,7 +154,8 @@ class PageReadinessTests(unittest.TestCase):
 
     def test_interrupted_required_page_identity_does_not_count_as_consecutive(self):
         executor = GoalTurnExecutor.__new__(GoalTurnExecutor)
-        state = SimpleNamespace(obs=replace(_obs(1, "https://app.test/help"), page_route="/help"))
+        state = SimpleNamespace(obs=replace(_obs(1, "https://app.test/help"), page_route="/help"),
+                                refused=False)
         def dispatch(s, action, args):
             epoch = s.obs.epoch + 1
             s.obs = replace(s.obs, epoch=epoch, page_route="" if epoch == 2 else "/help")
@@ -168,7 +169,7 @@ class PageReadinessTests(unittest.TestCase):
 
     def test_ready_route_without_rendered_page_evidence_does_not_settle(self):
         executor = GoalTurnExecutor.__new__(GoalTurnExecutor)
-        state = SimpleNamespace(obs=_obs(1, "https://app.test/orders"))
+        state = SimpleNamespace(obs=_obs(1, "https://app.test/orders"), refused=False)
         waits = []
 
         def dispatch(s, action, args):
@@ -2313,6 +2314,51 @@ class GoalTurnTests(unittest.TestCase):
                 text="打开订单")
         self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
         self.assertIn("未完成", execution.user_answer)
+
+    def test_a_page_the_browser_would_not_work_is_said_to_be_that_and_is_not_waited_for(self):
+        """The browser runs no command at all -- what it needs to work the page is not
+        there. The page did not fail to load: it was never asked for."""
+        class _RefusingBrowser(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                self.actions.append((action, dict(args or {})))
+                return ActionReceipt(schema_version=1, command_id=f"c{len(self.actions)}",
+                                     action=action, args_echo=dict(args or {}), ok=False,
+                                     error_code="capability_refused", url_before=self.url,
+                                     url_after=self.url, navigated=False,
+                                     epoch_before=self.epoch, epoch_after=self.epoch,
+                                     observation=self._observation())
+
+        for label, page, said in (
+                ("another page", PagePlan(url="/orders", label="Sales / Orders", expected_path="/orders"),
+                 ["goto"]),
+                ("the page already open", PagePlan(url="", label="Start", expected_path=""),
+                 ["wait_for"])):
+            with (self.subTest(label), patch.object(executor_module, "RemoteBrowserClient", _RefusingBrowser)):
+                _RefusingBrowser.instances.clear()
+                execution, *_ = self._run([_declaration(kind="page", page={"key": "p1"})],
+                                          [Resolved(kind="page", page=page)], text="打开订单")
+                self.assertEqual(execution.status, AgentTurnStatus.REFUSED)
+                self.assertIn("助手暂时无法操作页面", execution.user_answer)
+                self.assertNotIn("加载", execution.user_answer)
+                asked = [a for a, _ in _RefusingBrowser.instances[-1].actions if a != "observe"]
+                self.assertEqual(asked, said)
+
+    def test_a_command_refused_before_the_page_is_asked_for_does_not_speak_for_the_page(self):
+        """An earlier look at the page was refused; the page itself then opened."""
+        class _RefusedOnce(_Browser):
+            def execute(self, action, args=None, expect_navigation=False):
+                receipt = super().execute(action, args, expect_navigation)
+                return replace(receipt, ok=False, error_code="capability_refused") \
+                    if action == "observe" else receipt
+
+        with patch.object(executor_module, "RemoteBrowserClient", _RefusedOnce):
+            execution, *_ = self._run(
+                [_declaration(kind="page", page={"key": "p1"})],
+                [Resolved(kind="page", page=PagePlan(
+                    url="/orders", label="Sales / Orders", expected_path="/orders"))],
+                text="打开订单")
+        self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
+        self.assertNotIn("无法操作", execution.user_answer)
 
     def test_interrupted_render_observations_do_not_count_as_consecutive(self):
         class _FlappingBrowser(_Browser):

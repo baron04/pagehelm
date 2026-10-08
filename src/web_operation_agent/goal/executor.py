@@ -617,6 +617,7 @@ class _Unmet(NamedTuple):
         return {"not_attempted": "not attempted",
                 "not_confirmed": "working the page not confirmed",
                 "not_opened": "page did not open",
+                "refused": "the browser did not run the command",
                 "page_unverified": "rendered destination not verified",
                 "error_dialog": "the application reported an error dialog",
                 "filter_on": f"filter {self.name}", "filter_off": f"filter {self.name} off",
@@ -631,6 +632,7 @@ class _Unmet(NamedTuple):
         if zh:
             return {"not_attempted": "没有执行", "not_confirmed": "没有得到操作页面的同意",
                     "not_opened": "页面没有打开", "error_dialog": "应用弹出了错误提示",
+                    "refused": "助手暂时无法操作页面",
                     "page_unverified": "无法确认目标页面已经加载",
                     "filter_on": f"筛选「{self.name}」没有生效",
                     "filter_off": f"筛选「{self.name}」没有取消",
@@ -642,6 +644,7 @@ class _Unmet(NamedTuple):
                     "view": f"没有切换到 {self.name} 视图"}[self.kind]
         return {"not_attempted": "not attempted", "not_confirmed": "working the page was not agreed",
                 "not_opened": "the page did not open",
+                "refused": "the assistant cannot work the page right now",
                 "page_unverified": "the rendered destination could not be verified",
                 "error_dialog": "the application showed an error",
                 "filter_on": f"filter “{self.name}” not applied",
@@ -703,6 +706,9 @@ class _TurnState:
     model_futures: list = field(default_factory=list)
     step: int = 0
     page_actions: int = 0
+    #: The browser did not run the last command it was sent: what it needs to work the
+    #: page at all was not there. Nothing was done, and waiting on the page shows nothing.
+    refused: bool = False
     terminal_reason: str = ""
     detail: str = ""
     chinese: bool = False
@@ -2079,6 +2085,7 @@ class GoalTurnExecutor:
                         navigated=receipt.navigated, write="none")
         if action not in ("observe", "wait_for"):
             s.page_actions += 1
+        s.refused = receipt.error_code == "capability_refused"
         if receipt.observation is not None:
             s.obs = receipt.observation
         s.budget.check()
@@ -2135,13 +2142,15 @@ class GoalTurnExecutor:
                 last_confirmed_epoch = -1
                 last_names = None
             receipt = self._dispatch(s, "wait_for", {"ms": 500})
-            if receipt is None:
+            if receipt is None or s.refused:
                 return False
         return False
 
     def _reach(self, s: _TurnState, plan: PagePlan) -> _PageOutcome:
         out = _PageOutcome()
         target = plan.url
+        # Only what this page is asked to do counts towards why it was not reached.
+        s.refused = False
         if target and (_path_of(s.obs.url) != _path_of(target)
                        or urlsplit(target).query != urlsplit(s.obs.url).query):
             reason, detail = s.approvals.confirm_operation(
@@ -2161,15 +2170,18 @@ class GoalTurnExecutor:
             if receipt is None:
                 out.reached = False
                 return out
-        if not self._wait_ready(s, plan.expected_path,
-                                record=bool(plan.section or plan.highlight
-                                            or re.search(r"/\d+$", plan.expected_path)),
-                                requires_page_route=plan.requires_page_route):
+        # A page the browser did not open is not waited for.
+        if s.refused or not self._wait_ready(
+                s, plan.expected_path,
+                record=bool(plan.section or plan.highlight
+                            or re.search(r"/\d+$", plan.expected_path)),
+                requires_page_route=plan.requires_page_route):
             if s.terminal_reason:
                 out.reached = False
                 return out
             out.reached = False
-            out.unmet.append(_Unmet("error_dialog" if s.obs.render_state == "blocked"
+            out.unmet.append(_Unmet("refused" if s.refused
+                                    else "error_dialog" if s.obs.render_state == "blocked"
                                     else "page_unverified" if plan.requires_page_route
                                     else "not_opened"))
             out.url = s.obs.url
