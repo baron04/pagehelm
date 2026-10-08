@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from evals.odoo.goals.judge import score
 from evals.odoo.goals.source_citations import bound_source
-from evals.yudao.run_goals import check_run_contract, check_task_coverage, summarize
+from evals.yudao.run_goals import _tasks, check_run_contract, check_task_coverage, summarize
 from web_operation_agent_yudao.client import YudaoAccount
 
 _VUE = "ui/src/views/crm/contract/index.vue"
@@ -40,6 +40,14 @@ class RunnerTests(unittest.TestCase):
             entities=[SimpleNamespace(key=key) for key in ("pay/app", "product/spu")],
             pages=[SimpleNamespace(key="/mall/product/spu")])
         check_task_coverage(doc, complete)
+
+    def test_a_set_files_questions_become_the_judges_tasks(self):
+        doc = _tasks({"suite_id": "s", "questions": [
+            {"id": "q1", "prompt": "p", "expected_outcome": {"page": "/mall/product/spu"}}]})
+        self.assertNotIn("questions", doc)
+        self.assertEqual(doc["tasks"], [{"id": "q1", "prompt": "p",
+                                         "expected_outcome": {"page": "/mall/product/spu"},
+                                         "truth": {"page": "/mall/product/spu"}}])
 
     def test_a_sealed_holdout_refuses_another_origin_actor_or_snapshot(self):
         environment = {"base_url": "http://localhost:48088", "tenant_id": 1,

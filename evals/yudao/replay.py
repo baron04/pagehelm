@@ -109,7 +109,7 @@ def main() -> int:
     p.add_argument("--ledgers", type=Path, help="keep each replayed turn's audit ledger here")
     a = p.parse_args()
     doc = json.loads(a.taskset.read_text())
-    tasks = {t["id"]: t for t in doc["tasks"]}
+    tasks = {t["id"]: {**t, "truth": t.get("expected_outcome")} for t in doc["questions"]}
     data = YudaoGoalData(YudaoClient(a.origin, YudaoAccount.from_file(a.account)),
                          read_api_docs(a.origin),
                          ui=UiSource.read(a.ui_source) if a.ui_source else None)

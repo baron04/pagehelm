@@ -42,7 +42,7 @@ def reassess(root):
         if not new:
             failed.append(cid)
     files = ['evals/yudao/qualification/judge.py', 'evals/yudao/v7/fixture.py',
-             'evals/yudao/v7/rubric.json', 'evals/yudao/v7_1/fixture.py',
+             'evals/yudao/v7/cases.json', 'evals/yudao/v7_1/fixture.py',
              'evals/yudao/v7_1/judge.py', 'evals/yudao/v7_1/regrade.py']
     checkout = Path(__file__).resolve().parents[3]
     binding = {name: hashlib.sha256((checkout / name).read_bytes()).hexdigest() for name in files}

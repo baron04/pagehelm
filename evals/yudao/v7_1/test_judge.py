@@ -72,10 +72,10 @@ class GradingTests(unittest.TestCase):
         self.assertEqual(named_records('北辰数科实验室华东分部', fixture.CUSTOMERS), {'北辰数科实验室华东分部'})
 
     def test_all_covered_lists_reject_an_extra_known_row(self):
-        rubric = json.loads((Path(__file__).parents[1] / 'v7' / 'rubric.json').read_text())
+        rubric = json.loads((Path(__file__).parents[1] / 'v7' / 'cases.json').read_text())
         rows = {'contract': fixture.CONTRACTS, 'customer': fixture.CUSTOMERS,
                 'supplier': fixture.SUPPLIERS, 'flow': fixture.FLOWS}
-        for case in rubric['cases']:
+        for case in rubric['questions']:
             scope = case.get('oracle_scope', {})
             if scope.get('mode') not in ('list', 'both') or not case['expected_record_ids']:
                 continue

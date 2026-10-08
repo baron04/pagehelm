@@ -1,14 +1,15 @@
 """Run a sealed yudao goal set on the local deployment, one fresh session per task, and score it.
 
-The task file stays where its author sealed it; this runner reads it only after checking its
-digest and the judge's against the seal, hands the model nothing but each task's prompt, and
+A set is a directory holding `cases.json` and its `seal.json`, kept where its author sealed it,
+outside this repository. This runner reads it only after checking its digest and the judge's
+against the seal, hands the model nothing but each task's prompt, and
 scores every attempt with the same judge the Odoo goal sets use (rubric 7): the reply the person
 was shown, the final page's address, the addresses passed on the way, and whether the database
 changed. Lanes split the tasks between processes; each attempt is written as it finishes, so a
 lane that stops resumes where it left off.
 
     PYTHONPATH=src:examples/yudao/src .venv/bin/python -m evals.yudao.run_goals \\
-        --taskset <path>/yudao-goals-zh-v1-holdout.json --output .artifacts/yudao-v1 \\
+        --taskset <path>/yudao-goals-zh-v1-holdout/cases.json --output .artifacts/yudao-v1 \\
         --account .private/yudao-local-evaluator.json --model-env .env --lane 1/4
 """
 from __future__ import annotations
@@ -50,7 +51,17 @@ def _digest(path: Path) -> str:
 
 
 def _seal(taskset: Path) -> dict:
-    return json.loads(taskset.with_name(taskset.name.replace(".json", ".seal.json")).read_text())
+    return json.loads(taskset.with_name("seal.json").read_text())
+
+
+def _tasks(doc: dict) -> dict:
+    """A set file's questions as the tasks the shared goal judge scores.
+
+    A set keeps its questions under `questions` and each one's gold under
+    `expected_outcome`; the judge these sets were sealed with reads `truth`.
+    """
+    doc["tasks"] = [{**q, "truth": q.get("expected_outcome")} for q in doc.pop("questions")]
+    return doc
 
 
 def _prefixed(digest: str) -> str:
@@ -68,7 +79,7 @@ def load_sealed(taskset: Path) -> dict:
         raise RuntimeError("the task set does not match its seal")
     if _digest(JUDGE).removeprefix("sha256:") != seal["judge"]["sha256"].removeprefix("sha256:"):
         raise RuntimeError("the judge differs from the one the task set was sealed with")
-    doc = json.loads(taskset.read_text())
+    doc = _tasks(json.loads(taskset.read_text()))
     if seal.get("status", doc.get("status")) not in ("FROZEN", "DEVELOPMENT"):
         raise RuntimeError("the task set is not sealed for running")
     if len(doc["tasks"]) != seal.get("tasks", seal.get("task_count")):

@@ -12,8 +12,8 @@ from evals.yudao.qualification.judge import CITATION, grade as original_grade
 from . import fixture
 
 VERSION = 'v7.1'
-_RUBRIC = json.loads((Path(__file__).parents[1] / 'v7' / 'rubric.json').read_text())
-_CASES = {case['id']: case for case in _RUBRIC['cases']}
+_RUBRIC = json.loads((Path(__file__).parents[1] / 'v7' / 'cases.json').read_text())
+_CASES = {case['id']: case for case in _RUBRIC['questions']}
 _ROWS = {'contract': fixture.CONTRACTS, 'customer': fixture.CUSTOMERS,
          'supplier': fixture.SUPPLIERS, 'flow': fixture.FLOWS}
 _TRUNCATED = re.compile(r'仅列|只列|只显示|仅显示|前\s*\d+\s*(?:条|个|份)|first\s+\d+', re.I)

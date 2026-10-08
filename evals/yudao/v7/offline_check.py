@@ -31,12 +31,12 @@ def matching(rows, conditions):
 
 
 def main():
-    rubric = json.loads((ROOT / 'rubric.json').read_text())
+    rubric = json.loads((ROOT / 'cases.json').read_text())
     subset = json.loads((ROOT / 'comparison_ids.json').read_text())
     assert len(f.CASES) == 64
     ids = [c[0] for c in f.CASES]
     assert len(ids) == len(set(ids))
-    assert ids == [r['id'] for r in rubric['cases']]
+    assert ids == [r['id'] for r in rubric['questions']]
     assert len(subset['ids']) == 30 and len(set(subset['ids'])) == 30
     assert set(subset['ids']) <= set(ids)
     assert set(f.EXPECTED_STATUSES) == set(ids) == set(f.FORBIDDEN)
@@ -71,7 +71,7 @@ def main():
     assert not re.search(bycase['v7-10'][0], '北辰门户二期续签')
     assert re.search(bycase['v7-43'][2], 'ui/docs/maintenance.md:3@synthetic-v7-1')
     checked_oracles = 0
-    for case in rubric['cases']:
+    for case in rubric['questions']:
         assert case['required_facts'] and case['completeness'] and case['must_not'] and case['truth_basis']
         if 'oracle_scope' in case:
             scope = case['oracle_scope']
@@ -145,7 +145,7 @@ def main():
     assert sum(r['level'] == 1 for r in f.CUSTOMERS) == 5
     assert sum(r['status'] == 1 for r in f.SUPPLIERS) == 3
     assert '石桥服务组' in f.SOURCE['ui/docs/maintenance.md'] and '海桐界面组' in f.SOURCE['ui/docs/maintenance.md']
-    outcomes = {k: sum(e['expected_outcome'] == k for e in rubric['cases']) for k in sorted({e['expected_outcome'] for e in rubric['cases']})}
+    outcomes = {k: sum(e['expected_outcome'] == k for e in rubric['questions']) for k in sorted({e['expected_outcome'] for e in rubric['questions']})}
     assert outcomes == {'clarification': 2, 'deliverable': 58, 'limitation': 3, 'partial_deliverable': 1}
     print(json.dumps({'cases': len(ids), 'comparison_cases': 30, 'structured_oracles_checked': checked_oracles, 'outcomes': outcomes, 'model_calls': 0, 'live_calls': 0, 'result': 'passed'}, ensure_ascii=False))
 
