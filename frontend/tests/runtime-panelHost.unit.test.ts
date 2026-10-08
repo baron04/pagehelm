@@ -139,6 +139,69 @@ describe('PanelHost.clearTimeline raises a floor instead of erasing server histo
   })
 })
 
+describe('PanelHost keeps one conversation across the channels that carry it', () => {
+  // The agent restarted, or the session ended and the next message made another, while this
+  // page stayed open. The new channel numbers its events from one again.
+  const first = [
+    entry({id: 'e00000002', sequence: 2, turn_id: 't1', kind: 'goal', text: 'first question'}),
+    entry({id: 'e00000003', sequence: 3, turn_id: 't1', kind: 'result', text: 'first answer'}),
+  ]
+
+  it('shows a new channel\'s lines although an earlier one used the same ids', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({incarnation: 'a', entries: first})
+    host.setOptimistic({turnId: 't2', text: 'second question', failed: false})
+    host.applyTimeline({incarnation: 'b', entries: [
+      entry({id: 'e00000002', sequence: 2, turn_id: 't2', kind: 'goal', text: 'second question'}),
+      entry({id: 'e00000003', sequence: 3, turn_id: 't2', kind: 'result', text: 'second answer'}),
+    ]})
+    expect(host.snapshot().entries.map(item => item.text)).toEqual(
+      ['first question', 'first answer', 'second question', 'second answer'])
+    expect(host.snapshot().optimistic).toBeNull()
+  })
+
+  it('still takes a line it was given twice by the same channel for one line', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({incarnation: 'a', entries: first})
+    host.applyTimeline({incarnation: 'a', entries: first})
+    expect(host.snapshot().entries).toHaveLength(2)
+  })
+
+  it('does not add a second time what the new channel replays of a turn on screen', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({incarnation: 'a', entries: first})
+    const replay = [
+      entry({id: 'h00000001', sequence: 0, replayed: true, turn_id: 't0', kind: 'goal', text: 'before this page'}),
+      entry({id: 'h00000002', sequence: 0, replayed: true, turn_id: 't1', kind: 'goal', text: 'first question'}),
+      entry({id: 'h00000003', sequence: 0, replayed: true, turn_id: 't1', kind: 'result', text: 'first answer'}),
+    ]
+    host.applyTimeline({incarnation: 'b', entries: replay})
+    host.applyTimeline({incarnation: 'b', entries: replay}, {prepend: true})
+    expect(host.snapshot().entries.map(item => item.text)).toEqual(
+      ['first question', 'first answer', 'before this page'])
+  })
+
+  it('does not hold a new channel\'s lines under the place an old conversation was cleared', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({incarnation: 'a', entries: [entry({id: 'e00000050', sequence: 50})]})
+    host.clearTimeline()
+    host.applyTimeline({incarnation: 'a', entries: [entry({id: 'e00000050', sequence: 50})]})
+    expect(host.snapshot().entries).toHaveLength(0)
+    host.applyTimeline({incarnation: 'b', entries: [
+      entry({id: 'h00000001', sequence: 0, replayed: true, turn_id: 't0', text: 'cleared'}),
+      entry({id: 'e00000002', sequence: 2, turn_id: 't2', text: 'asked after'}),
+    ]})
+    expect(host.snapshot().entries.map(item => item.text)).toEqual(['asked after'])
+  })
+
+  it('changes nothing for a server that does not say which channel a page is from', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({entries: first})
+    host.applyTimeline({entries: first})
+    expect(host.snapshot().entries).toHaveLength(2)
+  })
+})
+
 describe('PanelHost verbs the panel drives', () => {
   it('submit clears the notice and forwards the trimmed intent', () => {
     const act = actions()

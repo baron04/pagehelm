@@ -136,6 +136,10 @@ export class PanelHost implements PanelHostContract {
   private floor = 0
   /** Recovered entries use sequence zero because they belong to an earlier incarnation. */
   private recoveredHistoryVisible = true
+  /** Whose ids and sequences `byId` and `floor` hold; another channel's start again at one. */
+  private incarnation = ''
+  /** Turns on screen when the channel changed: its successor's replay of them adds nothing. */
+  private told = new Set<string>()
 
   private offered: readonly PanelExample[]
 
@@ -216,8 +220,23 @@ export class PanelHost implements PanelHostContract {
   applyTimeline(page: Partial<TimelinePage> | null | undefined,
                 {prepend = false}: {prepend?: boolean} = {}): void {
     const incoming = Array.isArray(page?.entries) ? page.entries : []
+    // The agent restarted, or the session ended and the next message made another: the new
+    // channel numbers its events from one again. What this panel remembers by id or by
+    // sequence is the old channel's, and would take a new line for one already shown or
+    // already cleared. The conversation on screen stays, and what the new channel replays
+    // of it is not added a second time.
+    const incarnation = typeof page?.incarnation === 'string' ? page.incarnation : ''
+    if (incarnation && incarnation !== this.incarnation) {
+      if (this.incarnation) {
+        this.byId.clear()
+        this.floor = 0
+        this.told = new Set(this.state.entries.map(entry => entry.turn_id))
+      }
+      this.incarnation = incarnation
+    }
     const fresh = incoming.filter(entry => !this.byId.has(entry.id) && (
-      entry.replayed ? this.recoveredHistoryVisible : entry.sequence > this.floor))
+      entry.replayed ? this.recoveredHistoryVisible && !this.told.has(entry.turn_id)
+        : entry.sequence > this.floor))
     for (const entry of fresh) this.byId.set(entry.id, entry)
     let entries = this.state.entries
     if (fresh.length) {
@@ -272,6 +291,7 @@ export class PanelHost implements PanelHostContract {
     const latest = this.state.entries.at(-1)
     this.floor = Math.max(this.floor, latest ? latest.sequence : 0)
     this.recoveredHistoryVisible = false
+    this.told.clear()
     this.byId.clear()
     this.commit({entries: [], hasOlder: false, loadingOlder: false, optimistic: null})
   }

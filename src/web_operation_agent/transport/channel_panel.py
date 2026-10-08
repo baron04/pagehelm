@@ -92,6 +92,7 @@ class ChannelPanel:
         payload = {
             "schema_version": SCHEMA_VERSIONS["TaskEvent"],
             "protocol": panel_contract()["protocol"],
+            "incarnation": self._incarnation,
             "entries": entries,
             "cursor": self._events[-1].event_id if self._events else "",
             "oldest": entries[0]["id"] if entries else "",

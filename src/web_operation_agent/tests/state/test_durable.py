@@ -78,6 +78,32 @@ class DurableSessionTests(unittest.TestCase):
                 recovered.close()
 
 
+    def test_a_recovered_session_says_its_timeline_is_another_channels(self):
+        """Its event ids start again at one, so a page that stayed open through the restart
+        could not otherwise tell a new line from one it has already shown."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteSessionStore(Path(tmp) / 'sessions.db')
+            registries = [RemoteSessionRegistry(durable_store=store) for _ in range(2)]
+            pages = []
+            for registry, text in zip(registries, ('first question', 'second question')):
+                p = principal(int(time.time() * 1000))
+                _, channel = registry.create(allowed_origins=[ORIGIN], session_id='again', principal=p)
+                try:
+                    lease = channel.accept_hello(hello('again', application_id='sample',
+                                                       principal_digest=p.binding_digest))['lease_id']
+                    channel.accept_message({'message_id': text.split()[0], 'text': text,
+                                            'page_url': ORIGIN + '/start'}, lease_id=lease)
+                    channel.publish('progress', {'state': 'step', 'message': 'Reading'})
+                    pages.append(channel.panel_timeline(lease_id=lease))
+                finally:
+                    channel.close()
+            asked = [next(e for e in page['entries'] if e['kind'] == 'goal' and not e.get('replayed'))
+                     for page in pages]
+            self.assertEqual([e['text'] for e in asked], ['first question', 'second question'])
+            self.assertIn(asked[1]['id'], {e['id'] for e in pages[0]['entries']})
+            self.assertRegex(pages[0]['incarnation'], r'^[0-9a-f]{16}$')
+            self.assertNotEqual(pages[0]['incarnation'], pages[1]['incarnation'])
+
     def test_outbox_failure_closes_channel_before_event_delivery(self):
         import sqlite3
         with tempfile.TemporaryDirectory() as tmp:

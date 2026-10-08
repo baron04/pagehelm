@@ -75,6 +75,8 @@ export function declinable(kind: ApprovalKind | undefined): boolean {
 export interface TimelinePage {
   schema_version: number
   protocol: number
+  /** The channel that numbered these entries. Ids and sequences are its own. */
+  incarnation?: string
   entries: TimelineEntry[]
   cursor: string
   oldest: string

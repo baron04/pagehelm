@@ -7,6 +7,7 @@ append-only event journal are this module's alone.
 """
 from __future__ import annotations
 
+import secrets
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -146,6 +147,10 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._owner = (durable_store.acquire(session_id, principal_scope(principal, allowed_origins))
                        if durable_store else None)
         self.recovered_history = (durable_store.history(self._owner) if durable_store else [])
+        # Event ids and sequences count from one in every channel. What a panel was shown
+        # under another channel -- before a restart, or by a session that has since ended --
+        # cannot be told from this one's by id, so each timeline page says whose it is.
+        self._incarnation = secrets.token_hex(8)
         self._heartbeat_stop = threading.Event()
         self._closed = False
         self._close_reason = ""

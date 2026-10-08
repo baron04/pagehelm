@@ -305,6 +305,11 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
             "() => window.__WOA_ASSISTANT__?.state?.kind === 'running'"
             " && window.__WOA_ASSISTANT__.state.runtime.sessionId === 'lifecycle-2'",
             timeout=20_000)
+        # The new session numbers its events from one again, as the first did. Both
+        # questions are on screen as what the server accepted, not as a local echo.
+        asked = page.locator(".woa-turn .woa-user")
+        asked.nth(1).wait_for(timeout=10_000)
+        self.assertEqual(asked.all_text_contents(), ["列出所有待开票的销售订单", "再列一次"])
         self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 
