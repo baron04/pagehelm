@@ -62,9 +62,13 @@ _MAX_BODY = 4096
 
 
 def _api_docs(api_base: str, *, wait_s: float = 600, every_s: float = 5,
-              timeout_s: float = 20) -> dict:
+              timeout_s: float = 120) -> dict:
     """yudao's API documentation, waited for: the server may still be starting when this
-    host does, and a host that exits on the first refusal only restarts into it again."""
+    host does, and a host that exits on the first refusal only restarts into it again.
+
+    One read is given two minutes. A server that has just started builds the document on
+    its first request, which was measured at 32 seconds on the deployment host; with the
+    former 20 seconds the first turn after every restart failed."""
     deadline = time.monotonic() + wait_s
     while True:
         try:
@@ -280,6 +284,16 @@ class YudaoHost:
         reasons = reasons if isinstance(reasons, dict) else {}
         return frozenset(path for path in listed
                          if not re.search(r"Mapper\.\w+$", str(reasons.get(path, ""))))
+
+    def _warm_api_docs(self) -> None:
+        try:
+            with self._documents_lock:
+                if self._api_documents is None:
+                    documents = _api_docs(self.config.api_base)
+                    if isinstance(documents, dict):
+                        self._api_documents = documents
+        except (OSError, ValueError):
+            pass  # A turn reads it again and says so if it is still unavailable.
 
     def _load_api_docs(self) -> dict:
         from web_operation_agent.goal.data import DataRefused
@@ -599,6 +613,9 @@ def main(argv=None) -> int:
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))
     host.server.start()
+    # Read the API documentation once in the background, so the first person to ask after
+    # a start waits for a document already on its way instead of starting the slow read.
+    threading.Thread(target=host._warm_api_docs, daemon=True).start()
     http = ThreadingHTTPServer((host.config.bootstrap_host, host.config.bootstrap_port), _handler(host))
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
