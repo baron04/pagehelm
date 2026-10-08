@@ -43,6 +43,8 @@ class FormOutcome:
     error_code: str = ""
     #: Requested fields, by the names asked, that the open form shows no field for.
     unfilled: tuple[str, ...] = ()
+    #: (field label, option asked) for the choices whose own list did not offer the option.
+    unoffered: tuple[tuple[str, str], ...] = ()
 
 
 def form_failure_message(reason: str, error_code: str, zh: bool) -> str:
@@ -289,8 +291,9 @@ def handoff_form(executor, state, plan):
     session = SimpleNamespace(_cancel_requested=s.cancelled, _browser_attempts=0,
         page_actions=0, _approvals=s.approvals, _writes=s.writes, ledger=s.ledger,
         browser=browser)
+    unoffered: list = []
     final, reason, detail = apply_form_draft(session, draft, s.obs, s.step,
-        budget=s.budget, verify=lambda obs: verification.check(draft, obs,
+        budget=s.budget, unoffered=unoffered, verify=lambda obs: verification.check(draft, obs,
             context=s.approvals.context(s.step, "prefill_form")))
     if final is not None:
         s.obs = final
@@ -300,6 +303,8 @@ def handoff_form(executor, state, plan):
         terminal_reason=reason, detail=redact_sensitive_assignments(redact_session_handoffs(detail))[:200],
         browser_attempts=session._browser_attempts, input_dispatched=browser.input_dispatched,
         error_code=browser.error_code)
-    return FormOutcome(not reason, tuple(described["fields"]), draft.submit_label,
+    skipped = {label for label, _ in unoffered}
+    return FormOutcome(not reason, tuple(f for f in described["fields"] if f not in skipped),
+                       draft.submit_label,
                        "wall_budget" if reason == "wall_clock_budget" else reason, detail,
-                       browser.input_dispatched, browser.error_code, unfilled)
+                       browser.input_dispatched, browser.error_code, unfilled, tuple(unoffered))

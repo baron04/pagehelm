@@ -309,7 +309,9 @@ export function createPageFacts({view = window, doc = document} = {}) {
       if (sections.length !== 1) return undefined
       const main = sections[0].el
       const render = [instance.subTree], rendered = new Set()
-      const renderLimit = 8192
+      // A list showing fifty or a hundred rows renders tens of thousands of nodes; at
+      // 8192 such a page could never prove it had arrived.
+      const renderLimit = 65536
       let content = false
       // Bound element wrappers and child components together; truncation must
       // not drop a blocking error and still grant arrival.
@@ -550,7 +552,19 @@ export function readElementPageControl(element) {
     const field = item?.instance.props?.prop
     return {kind: 'query', ...(typeof field === 'string' ? {field} : {})}
   }
-  const root = element.closest('.el-pagination'), target = element.closest('button.btn-prev,button.btn-next,li.number')
+  const root = element.closest('.el-pagination')
+  // The rows-per-page choice of the same pagination: its own select, nothing else in it.
+  const sizes = root && element.closest('.el-pagination__sizes')
+  if (sizes && root.contains(sizes)) {
+    const owner = pageComponentForRoot(root, 'ElPagination')
+    const size = owner?.instance.props?.pageSize
+    // Only the select's own hit area or input: what is inside them is not a control.
+    if (!owner || !Number.isSafeInteger(size) || size < 1 ||
+        !element.matches('.el-select__wrapper,input[role="combobox"]') ||
+        element.matches(':disabled,.is-disabled,[aria-disabled="true"]')) return undefined
+    return {kind: 'page_size', pageSize: size}
+  }
+  const target = element.closest('button.btn-prev,button.btn-next,li.number')
   if (!root || !target || !root.contains(target) || target.matches(':disabled,.is-disabled,[aria-disabled="true"]')) return undefined
   const binding = pageComponentForRoot(root, 'ElPagination')
   if (!binding) return undefined

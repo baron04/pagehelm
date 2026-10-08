@@ -428,6 +428,28 @@ describe('native Yudao mounted navigation identity', () => {
     component.isUnmounted=true
     expect(readElementPageControl(numbers[1])).toBeUndefined()
   })
+  it('names the rows-per-page select of the active pagination and nothing else as page size', () => {
+    const state=mountedPage('/erp/sale/order', 'SaleOrder')
+    state.element.innerHTML='<div class="el-pagination"><span class="el-pagination__sizes">'
+      +'<div class="el-select"><div class="el-select__wrapper"><span id="inside">10</span>'
+      +'<input role="combobox"></div></div></span><ul><li class="number">2</li></ul></div>'
+      +'<div class="el-select"><input role="combobox" id="elsewhere"></div>'
+    const root=state.element.firstElementChild!
+    const component={...state.instance,type:{name:'ElPagination'},props:{currentPage:1,pageSize:10,total:25},
+      subTree:{type:'div',el:root},parent:state.instance}
+    state.instance.subTree.children=[{component}] as unknown as NativeVNode[]
+    const input=root.querySelector('input')!
+    expect(readElementPageControl(input)).toEqual({kind:'page_size',pageSize:10})
+    expect(readElementPageControl(root.querySelector('.el-select__wrapper'))).toEqual({kind:'page_size',pageSize:10})
+    expect(readElementPageControl(root.querySelector('#inside'))).toBeUndefined()
+    expect(readElementPageControl(root.querySelector('li'))).toEqual({kind:'pagination',page:2,pageSize:10})
+    expect(readElementPageControl(state.element.querySelector('#elsewhere'))).toBeUndefined()
+    input.setAttribute('aria-disabled','true')
+    expect(readElementPageControl(input)).toBeUndefined()
+    input.removeAttribute('aria-disabled')
+    component.isUnmounted=true
+    expect(readElementPageControl(input)).toBeUndefined()
+  })
   it('retains only the successful applied ledger query, independent of draft inputs and other documents', () => {
     mountedPage('/fms/ledger/general', 'FmsLedgerGeneral')
     const facts = createPageFacts(), other = createPageFacts()
@@ -639,9 +661,12 @@ describe('native Yudao mounted navigation identity', () => {
     state.instance.subTree.children = tableRows(state, 128)
     expect(createPageFacts().readPageRoute()).toBe('/system/role')
   })
-  it('refuses a nested render tree that exceeds the bounded eight thousand VNode budget', () => {
+  it('proves arrival on a list of a few hundred rows and still refuses a tree beyond its bound', () => {
     const state = mountedPage()
+    // Fifty or a hundred rows per page is an ordinary list; it used to exceed the bound.
     state.instance.subTree.children = tableRows(state, 256)
+    expect(createPageFacts().readPageRoute()).toBe('/system/role')
+    state.instance.subTree.children = tableRows(state, 4096)
     expect(createPageFacts().readPageRoute()).toBeUndefined()
   })
   it('does not truncate a blocking component after four thousand otherwise live VNodes', () => {
@@ -656,7 +681,7 @@ describe('native Yudao mounted navigation identity', () => {
       (state: ReturnType<typeof mountedPage>) => {state.instance.vnode.key = 'shared-view-key'},
       (state: ReturnType<typeof mountedPage>) => {state.routerView.subTree.suspense = {pendingBranch: {}}},
       (state: ReturnType<typeof mountedPage>) => {delete state.instance.isMounted},
-      (state: ReturnType<typeof mountedPage>) => {state.instance.subTree.children = Array.from({length: 8192}, () => ({type: 'div'}))},
+      (state: ReturnType<typeof mountedPage>) => {state.instance.subTree.children = Array.from({length: 65536}, () => ({type: 'div'}))},
     ]) {
       const state = mountedPage(); change(state)
       expect(createPageFacts().readPageRoute()).toBeUndefined()

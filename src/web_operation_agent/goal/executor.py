@@ -596,6 +596,8 @@ class _PageOutcome:
     form_error_code: str = ""
     #: Requested fields the open form showed no field for, by the names asked.
     form_unfilled: tuple[str, ...] = ()
+    #: (field label, option asked) for choices whose own list did not offer the option.
+    form_unoffered: tuple[tuple[str, str], ...] = ()
     #: The record whose details the page loop brought on screen, when it has no address.
     record_shown: str = ""
     #: "page/size" as the page's own list read reported it once paging was settled.
@@ -2086,7 +2088,7 @@ class GoalTurnExecutor:
                     prepared.complete, prepared.fields, prepared.submit_label)
                 out.form_input_dispatched = prepared.input_dispatched
                 out.form_reason, out.form_error_code = prepared.reason, prepared.error_code
-                out.form_unfilled = prepared.unfilled
+                out.form_unfilled, out.form_unoffered = prepared.unfilled, prepared.unoffered
                 if prepared.reason:
                     s.terminal_reason, s.detail = prepared.reason, prepared.detail
         elif plan.highlight and plan.fill:
@@ -2809,7 +2811,8 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
                 and (not resolved.page or not resolved.page.missing_record
                      or bool(outcome.record_shown))
                 and (not resolved.page or not resolved.page.form
-                     or (outcome.form_complete and not outcome.form_unfilled))
+                     or (outcome.form_complete and not outcome.form_unfilled
+                         and not outcome.form_unoffered))
                 and (not resolved.page or not resolved.page.fill
                      or bool(outcome.filled and outcome.fill_verified)))
     return False
@@ -3095,6 +3098,9 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
                        if outcome.unmet else form_failure_message(
                            outcome.form_reason, outcome.form_error_code, zh))
                 lines.append(("原因：" if zh else "Reason: ") + why + ("。" if zh else "."))
+            for label, option in outcome.form_unoffered:
+                lines.append((f"未填写：「{label}」的选项里没有「{option}」，这一项需要你自己选。") if zh
+                             else f"Not filled: “{label}” does not offer “{option}”; that choice is yours to make.")
             if outcome.form_unfilled:
                 asked = ("、".join(f"「{n}」" for n in outcome.form_unfilled) if zh
                          else ", ".join(f"“{n}”" for n in outcome.form_unfilled))

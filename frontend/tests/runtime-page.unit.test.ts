@@ -56,6 +56,16 @@ describe('adapter-issued single-choice combobox drafts', () => {
       expect(() => s.page.input('e1','Alex')).toThrow(/read-only/)
     } finally {s.form.remove()}
   })
+  it('closes a list that does not offer the option and says so by its own code', async () => {
+    const s = setup()
+    try {
+      await expect(s.page.select('e1', '99', 'Nobody')).rejects.toThrow(/^option_unavailable:/)
+      // Opened once to look, pressed once more to close; no option was pressed.
+      expect(s.api.clickElement).toHaveBeenCalledTimes(2)
+      expect(s.api.clickElement).toHaveBeenNthCalledWith(2, 1)
+      expect(s.option.getAttribute('aria-selected')).toBe('false')
+    } finally {s.form.remove()}
+  })
   it('refuses duplicate, disabled or multi-select options without choosing anything', async () => {
     for (const mode of ['duplicate','disabled','multiple']) {
       const s = setup(mode === 'duplicate' ? '<li role="option">Alex</li>' : '')

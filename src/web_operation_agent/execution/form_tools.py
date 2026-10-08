@@ -332,14 +332,19 @@ _DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 def apply_form_draft(
         session, draft: FormDraft, observation: PageObservation,
-        step: int, *, budget: TurnBudget | None = None, verify=None
-        ) -> tuple[PageObservation | None, str, str]:
+        step: int, *, budget: TurnBudget | None = None, verify=None,
+        unoffered: list | None = None) -> tuple[PageObservation | None, str, str]:
     """Apply one adapter-issued transient draft without exposing its bindings to choice.
 
     The application has attested the persistence behavior of these exact fields. This
     method never calls ``click`` or ``submit`` and every generic browser action yields a
     fresh observation before the next field is resolved. Completion requires a browser
     receipt for the actual values and release of the read-only window.
+
+    With `unoffered` (a list), a choice whose own list does not offer the option asked for
+    is left unchosen and recorded there as (field label, option asked), and the rest of the
+    draft is entered and handed over; the runtime reports that case by its own code and has
+    chosen nothing. Without it, such a field ends the draft as any failed entry does.
     """
     current = observation
 
@@ -541,6 +546,7 @@ def apply_form_draft(
                 if current.render_state == "pending" else ("", ""))
 
     completed: dict[str, str] = {}
+    left_out: set[str] = set()
     for binding in draft.fields:
         reason, detail = ready()
         if reason:
@@ -606,6 +612,14 @@ def apply_form_draft(
                     if shown == [midnight]:
                         completed[binding.field] = midnight
                 break
+            if last_code == "option_unavailable" and unoffered is not None and action == "select":
+                unoffered.append((binding.label or binding.field, binding.option_label or binding.value))
+                left_out.add(binding.field)
+                again, reason, detail = look_again(current, 300)
+                if reason:
+                    return again or current, reason, detail
+                current = again or current
+                break
             if last_code != "stale_observation" or attempt == 2:
                 return current, reason, detail
             current, reason, detail = dispatch("observe", {}, "", current)
@@ -650,8 +664,12 @@ def apply_form_draft(
             return current, "agent_refused", "the form has no unique observed submit control"
         submit_target = {"ref": buttons[0].ref, "label": draft.submit_label,
                          "scope": draft.control_scope}
+    if left_out and len(left_out) == len(draft.fields):
+        return current, "agent_refused", "the form offered none of the planned choices"
     handoff_fields = []
     for binding in draft.fields:
+        if binding.field in left_out:
+            continue
         matches = matching(binding)
         if len(matches) > 1 or (not matches and not draft.control_scope):
             return current, "agent_refused", (

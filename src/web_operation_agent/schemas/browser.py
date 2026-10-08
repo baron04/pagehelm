@@ -453,4 +453,6 @@ RECEIPT_ERRORS = frozenset({
     "navigation_timeout", "origin_refused", "page_error", "write_refused",
     "deadline_expired", "stale_observation", "capability_refused", "runtime_replaced",
     "user_intervened",
+    # A choice list was open and did not offer the option asked for; nothing was chosen.
+    "option_unavailable",
 })

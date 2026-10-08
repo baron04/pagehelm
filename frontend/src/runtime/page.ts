@@ -238,6 +238,37 @@ export class Page {
     }
     return this.controller.clickElement(refIndex(ref))
   }
+  /** The controller's page state, with the application's rows-per-page control kept as
+   * an element of its own.
+   *
+   * Inside an element the controller already lists -- a scrolling region is one -- it
+   * lists a plain element only when something says that element is acted on by itself,
+   * and one thing it asks is this window hook, when there is one: what listens on the
+   * element. The control the application's page module names is answered for; every
+   * other element is answered as it was. The hook is in place only for the reading.
+   */
+  private async browserState(): Promise<BrowserState> {
+    const read = this.readElementPageControl
+    if (!read) return this.controller.getBrowserState()
+    const host = window as unknown as {getEventListenersForNode?: (node: Element) => Array<{type: string}>}
+    const had = Object.prototype.hasOwnProperty.call(host, 'getEventListenersForNode')
+    const earlier = host.getEventListenersForNode
+    host.getEventListenersForNode = node => {
+      let named = false
+      try {
+        named = node instanceof HTMLElement &&
+          (read(node) as {kind?: unknown} | undefined)?.kind === 'page_size'
+      } catch { named = false }
+      return named ? [{type: 'click'}] : typeof earlier === 'function' ? earlier(node) : []
+    }
+    try {
+      return await this.controller.getBrowserState()
+    } finally {
+      if (had && earlier) host.getEventListenersForNode = earlier
+      else delete host.getEventListenersForNode
+    }
+  }
+
   /** Open a menu the control declares collapsed; refuse anything else (see `revealable`).
    *
    * Some menus open when the pointer comes over their control, and pressing such a control
@@ -351,7 +382,7 @@ export class Page {
       this.rememberEntered(group)
       return {success: true}
     }
-    const state = await this.controller.getBrowserState()
+    const state = await this.browserState()
     const indexes = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
       .filter(i => this.lookup(this.controller.selectorMap, i) === matches[0])
     if (indexes.length !== 1 || !current() || !radioEnabled(matches[0]!)) {
@@ -394,13 +425,19 @@ export class Page {
     // distance it is given, by a factor that is its own.
     let gain = 1
     for (let attempt = 0; attempt < 8; attempt++) {
-      const state = await this.controller.getBrowserState()
+      const state = await this.browserState()
       if (!current() || ownedListbox(element) !== list) {
         throw new Error('execution_failed: combobox changed before selection')
       }
       if (visibleElement(list)) {
         const matches = [...list.querySelectorAll('[role="option"]')].filter(option =>
           option.closest('[role="listbox"]') === list && optionText(option) === label)
+        if (matches.length === 0) {
+          // The list is open and does not offer this choice. Nothing was chosen; the
+          // list is closed again so that the rest of the form is not left under it.
+          if (element.getAttribute('aria-expanded') === 'true') await this.controller.clickElement(index)
+          throw new Error('option_unavailable: the list does not offer this option')
+        }
         if (matches.length !== 1 || !visibleElement(matches[0]!) ||
             matches[0]!.getAttribute('aria-disabled') === 'true' ||
             matches[0]!.hasAttribute('disabled')) {
@@ -611,7 +648,7 @@ export class Page {
     }
     let state: BrowserState
     try {
-      state = await this.controller.getBrowserState()
+      state = await this.browserState()
     } finally {
       after(new Event('afterUpdate'))
       if (events) {

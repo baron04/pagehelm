@@ -213,5 +213,75 @@ class LookAgainAfterAPopup(unittest.TestCase):
         self.assertEqual((reason, calls), ("", ["fill", "handoff_form"]))
 
 
+class UnofferedChoice(unittest.TestCase):
+    """A choice its own list does not offer is left unchosen; the rest of the form is entered."""
+    DRAFT = FormDraft("/records", (
+        FormDraftField("kind", "跟进类型", "电话", "combobox", binding="label", option_label="电话"),
+        FormDraftField("date", "日期", "2026-11-05", "combobox", binding="label")),
+        control_scope=SCOPE, submit_label="确 定")
+
+    @staticmethod
+    def form(epoch, value=""):
+        return PageObservation(schema_version=1, epoch=epoch, url="https://app.test/records", title="Editor",
+                               landmarks=[], render_state="ready", elements=[
+            ElementRef("e0", "combobox", "请选择跟进类型", "input", epoch,
+                       {"field_label": "跟进类型", "form_scope": SCOPE}),
+            ElementRef("e1", "combobox", "选择日期", "input", epoch,
+                       {"field_label": "日期", "form_scope": SCOPE, "value": value}),
+            ElementRef("e2", "button", "确 定", "button", epoch, {"form_scope": SCOPE})])
+
+    def run_draft(self, *, unoffered, code="option_unavailable", draft=None):
+        calls = []
+
+        def execute(action, args):
+            calls.append((action, args))
+            epoch = len(calls) + 1
+            missing = action == "select"
+            return ActionReceipt(1, "c" + str(epoch), action, {}, not missing,
+                                 error_code=code if missing else "",
+                                 observation=self.form(epoch, "2026-11-05" if len(calls) > 2 else ""))
+        session = SimpleNamespace(
+            _cancel_requested=lambda: False, _browser_attempts=0, page_actions=0,
+            _approvals=SimpleNamespace(confirm_operation=lambda *a, **k: ("", ""), settle_operation=lambda: None),
+            _writes=SimpleNamespace(write_outcome=lambda *a, **k: {"state": "not_written"},
+                                    settle_write=lambda write: ("", "")),
+            ledger=SimpleNamespace(append=lambda *a, **k: None), browser=SimpleNamespace(execute=execute))
+        _, reason, detail = apply_form_draft(session, draft or self.DRAFT, self.form(1), 1, unoffered=unoffered)
+        return reason, detail, calls
+
+    def test_the_rest_is_entered_and_handed_over_without_the_unoffered_choice(self):
+        unoffered = []
+        reason, _, calls = self.run_draft(unoffered=unoffered)
+        self.assertEqual(reason, "")
+        self.assertEqual([a for a, _ in calls], ["select", "wait_for", "fill", "handoff_form"])
+        self.assertEqual(unoffered, [("跟进类型", "电话")])
+        self.assertEqual([f["field"] for f in calls[-1][1]["fields"]], ["date"])
+
+    def test_without_the_list_or_for_any_other_failure_the_draft_ends_as_before(self):
+        reason, detail, calls = self.run_draft(unoffered=None)
+        self.assertEqual((reason, [a for a, _ in calls]), ("agent_refused", ["select"]))
+        unoffered = []
+        reason, _, calls = self.run_draft(unoffered=unoffered, code="page_error")
+        self.assertEqual((reason, [a for a, _ in calls], unoffered), ("agent_refused", ["select"], []))
+
+    def test_a_form_that_offered_none_of_the_choices_is_not_handed_over(self):
+        unoffered = []
+        only = FormDraft("/records", self.DRAFT.fields[:1], control_scope=SCOPE, submit_label="确 定")
+        reason, detail, calls = self.run_draft(unoffered=unoffered, draft=only)
+        self.assertEqual(reason, "agent_refused")
+        self.assertNotIn("handoff_form", [a for a, _ in calls])
+        self.assertEqual(unoffered, [("跟进类型", "电话")])
+
+    def test_the_reply_names_the_choice_and_the_turn_is_not_finished(self):
+        resolved = Resolved(kind="handoff", page=PartialHandoffReply.PLAN)
+        outcome = _PageOutcome(form_requested=True, form_complete=True, form_fields=("日期",),
+                               form_submit="确 定", form_input_dispatched=True,
+                               form_unoffered=(("跟进类型", "电话"),))
+        self.assertFalse(_achieved(resolved, outcome))
+        text = "\n".join(_render(resolved, outcome, True))
+        self.assertIn("已预填：日期", text)
+        self.assertIn("「跟进类型」的选项里没有「电话」", text)
+
+
 if __name__ == "__main__":
     unittest.main()

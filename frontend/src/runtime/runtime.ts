@@ -1119,7 +1119,7 @@ export class EmbeddedWebRuntime {
     } catch (error) {
       const detail = results.safeErrorDetail(
         String((error as Error)?.message || error), action.command, this.redactor)
-      const code = ['origin_refused', 'bad_arguments', 'navigation_timeout']
+      const code = ['origin_refused', 'bad_arguments', 'navigation_timeout', 'option_unavailable']
         .find(prefix => detail.startsWith(prefix)) ?? 'page_error'
       return {ok: false, code, detail}
     } finally {
