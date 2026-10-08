@@ -62,6 +62,8 @@ docker run --rm -v $YUDAO_CACHE/server:/src -v yudao-m2:/root/.m2 -w /src maven:
 (cd $YUDAO_CACHE/ui && pnpm install --frozen-lockfile --registry https://registry.npmmirror.com/ && VITE_BASE_URL= VITE_APP_CAPTCHA_ENABLE=false pnpm run build:prod)
 docker compose up -d
 ```
+Before building, copy `patches/server/` over the server checkout (`cp -R patches/server/. $YUDAO_CACHE/server/`). It adds four classes under `yudao-server` and changes none of upstream's: a read-only window per signed-in user (`/admin-api/woa/page-guard/begin`, `/end`, `/status`). While a user's window is open, every insert, update and delete their requests reach is refused at the one place all mapped statements pass, whatever handler or HTTP method they came through; work handed to other threads (access logs) is not affected, and the window closes by itself when its time runs out. It covers database writes only: a handler that sends a message or calls another service is outside it, which is why the assistant's host still refuses every request that is not a read. The assistant's host opens this window with its own and does not work the page without it.
+
 
 The UI lockfile resolves from `registry.npmmirror.com`, so install against that registry; a current pnpm rejects the lockfile against npmjs metadata. The UI build needs about 8 GB of heap, so build it on the host rather than in a default Docker VM. Keep `VITE_BASE_URL` empty for the local build: nginx proxies `/admin-api` on the page's own origin, including an isolated clone on another port. A bundle baked for `localhost:48088` leaves a clone on another port stuck at its loading screen.
 

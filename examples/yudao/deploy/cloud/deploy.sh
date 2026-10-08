@@ -45,7 +45,11 @@ DIR=/opt/yudao/releases/$RELEASE
 COMPOSE="docker compose -p yudao --env-file /opt/yudao/.env -f /opt/yudao/current/compose.yaml -f /opt/yudao/current/compose.cloud.yaml"
 
 echo "release $RELEASE -> $TARGET"
-ssh "$TARGET" "mkdir -p $DIR/server/yudao-server/target $DIR/server/sql/mysql $DIR/ui $DIR/woa $DIR/agent/wheels $DIR/source/ui"
+# The server must carry the read-only window (patches/server); a jar without it would let
+# the assistant's host refuse every page operation, since its window is never confirmed.
+unzip -l "$JAR" | grep -q 'cn/iocoder/yudao/server/woa/WoaPageGuard.class' \
+  || { echo "the server jar was built without patches/server (see the deploy README)" >&2; exit 1; }
+ssh "$TARGET" "mkdir -p $DIR/server/yudao-server/target $DIR/server/sql/mysql $DIR/ui $DIR/woa $DIR/agent/wheels $DIR/source/ui $DIR/native-policy"
 rsync -az "$JAR" "$TARGET:$DIR/server/yudao-server/target/"
 rsync -az "$YUDAO_CACHE/server/sql/mysql/ruoyi-vue-pro.sql" "$YUDAO_CACHE/server/sql/mysql/quartz.sql" \
   "$TARGET:$DIR/server/sql/mysql/"
@@ -57,6 +61,7 @@ rsync -az "$REPO/frontend/src/integrations/yudao/page-facts.js" \
   "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js" "$TARGET:$DIR/woa/"
 rsync -az "$WHEELS/" "$TARGET:$DIR/agent/wheels/"
 rsync -az "$HERE/agent.Dockerfile" "$TARGET:$DIR/agent/"
+rsync -az --delete "$HERE/native-policy/" "$TARGET:$DIR/native-policy/"
 # The source the assistant compiles its rules from and reads the UI's lists and tables in:
 # the pages' .vue and .ts files, and every module's Java.
 rsync -az --prune-empty-dirs --include='*/' --include='*.vue' --include='*.ts' --exclude='*' \

@@ -30,7 +30,10 @@ services:
   agent:
     # The assistant host, on when the owner has put the model provider's settings in
     # /opt/yudao/agent.env (deploy.sh then enables the profile). It reads yudao as each
-    # signed-in person, with their own token, and offers no writes.
+    # signed-in person, with their own token, and offers no writes. Page work runs under
+    # the method fence (cloud/native-policy/fence.json, bound to the release) and inside
+    # the server's own read-only window (patches/server); the host's nginx sends the API
+    # and /woa/page-guard through port 48093 (cloud/nginx.native-guard.locations.conf).
     profiles: [agent]
     build:
       context: ${YUDAO_CACHE}/agent
@@ -39,11 +42,13 @@ services:
     env_file: [/opt/yudao/agent.env]
     command: ["--api-base", "http://server:48080", "--public-origin", "https://${YUDAO_DOMAIN}",
               "--state-dir", "/var/lib/woa-yudao", "--ui-source", "/opt/source/ui",
-              "--source-root", "/opt/source", "--source-release", "${YUDAO_RELEASE:-v2026.09}"]
+              "--source-root", "/opt/source", "--source-release", "${YUDAO_RELEASE:-v2026.09}",
+              "--native-read-policy", "/opt/native-policy/fence.json"]
     volumes:
       - agent-state:/var/lib/woa-yudao
+      - ${YUDAO_CACHE}/native-policy:/opt/native-policy:ro
       - ${YUDAO_CACHE}/source:/opt/source:ro
-    ports: ["127.0.0.1:48091:48091", "127.0.0.1:48092:48092"]
+    ports: ["127.0.0.1:48091:48091", "127.0.0.1:48092:48092", "127.0.0.1:48093:48093"]
     depends_on: [server]
     restart: unless-stopped
 
