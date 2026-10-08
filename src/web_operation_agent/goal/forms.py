@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 from ..business.errors import (BusinessToolError, BusinessToolIdentityError,
                                BusinessToolPermissionError, BusinessToolRequestError)
-from ..business.forms import (ApplicationFormBindingPort, ApplicationFormTools, ApplicationFormEntryPort,
-                              ApplicationFormEntry, FormSubmitUnobserved)
+from ..business.forms import (ApplicationFormBindingPort, ApplicationFormOfferPort, ApplicationFormTools,
+                              ApplicationFormEntryPort, ApplicationFormEntry, FormSubmitUnobserved)
 from ..execution.form_tools import apply_form_draft
 from ..modeling.provider import ProviderError
 from ..state.identity import PrincipalError
@@ -52,6 +52,7 @@ def form_failure_message(reason: str, error_code: str, zh: bool) -> str:
         "form_plan_invalid": ("无法将请求绑定到一个明确的表单和填写目标", "the request could not bind to one exact form and set of fields"),
         "form_entry_unverified": ("无法核验目标表单已打开", "the opened form could not be verified"),
         "form_entry_unready": ("目标表单尚未加载完成", "the target form did not finish loading"),
+        "form_entry_not_found": ("没有在页面上找到打开这张表单的入口", "no control that opens this form was found on the page"),
         "form_submit_unobserved": ("没有找到可核验的提交按钮，无法交回表单", "no verifiable submit control was found for handoff"),
         BusinessToolPermissionError.code: ("你的账号没有这项表单操作的权限", "your account lacks permission for this form operation"),
         BusinessToolIdentityError.code: ("无法核验当前登录身份，请重新登录后重试", "the current login could not be verified; sign in again"),
@@ -125,6 +126,76 @@ def _shown_fields(executor, s, reference, values):
     return tuple(item for item in values if item[0] not in left), tuple(name for _, name in missing)
 
 
+def _forms_shown(observation) -> frozenset:
+    return frozenset(str(e.attrs.get("form_instance")) for e in observation.elements
+                     if e.attrs.get("form_instance"))
+
+
+def _found_entry(executor, s, port, plan, reference) -> str:
+    """The planned form's reference once the page loop has opened it, or "".
+
+    Every click the loop chooses is offered to the port first and pressed only if the
+    port admits it; after each, the port is asked whether the planned form is what
+    opened. A form that opened and is not the planned one ends the search: a dialog is
+    in the way, and nothing was entered in it.
+    """
+    from .reach import EndReach, reach
+    opened: list[str] = []
+
+    def context(name):
+        return s.approvals.context(s.step, name)
+
+    def press(element):
+        before = s.obs
+        try:
+            with s.receipt.stage("business"):
+                entry = port.offer_entry(reference, before, element, context=context("form_entry"))
+        except BusinessToolRequestError:
+            s.ledger.append("goal_form_entry_offer_refused", step=s.step, role=element.role,
+                            dispatched=False)
+            return "refused: this control cannot be pressed for this"
+        try:
+            receipt = executor._dispatch(s, "click", {"ref": element.ref, "epoch": before.epoch})
+            if receipt is None or not receipt.ok:
+                return "it could not be pressed"
+            appeared = False
+            for attempt in range(4):
+                executor._dispatch(s, "wait_for", {"ms": 400})
+                if s.terminal_reason:
+                    return "the turn ended"
+                if s.obs.render_state == "pending":
+                    continue
+                try:
+                    with s.receipt.stage("business"):
+                        bound = port.accept_entry(entry, before, receipt, s.obs,
+                                                  context=context("form_entry_receipt"))
+                except BusinessToolRequestError:
+                    # Nothing new that is a form: a menu opened, a tab switched. A form
+                    # that did appear may still be loading the record it edits.
+                    appeared = bool(_forms_shown(s.obs) - _forms_shown(before))
+                    if not appeared:
+                        return "pressed"
+                    continue
+                if isinstance(bound, str) and bound:
+                    opened.append(bound)
+                    return "pressed; the form opened"
+            if appeared:
+                raise EndReach("a form opened that is not the one asked for")
+            return "pressed"
+        finally:
+            port.discard_entry(entry, context=context("form_entry_release"))
+
+    title = plan.form.title or plan.label
+    goal = (f'The form that edits the {title} record named "{plan.form.record}" is open.'
+            if plan.form.record else f"The form that creates a new {title} is open.")
+    result = reach(executor, s, goal=goal, steps=executor.page_reach_steps, press=press,
+                   arrived=lambda observation: bool(opened), handoffs=executor._handoffs(),
+                   names=(plan.form.record,) if plan.form.record else ())
+    s.ledger.append("goal_form_entry_reached", step=s.step, arrived=bool(opened),
+                    steps=result.steps, why=result.why[:200])
+    return opened[0] if opened else ""
+
+
 def handoff_form(executor, state, plan):
     """No selectors, submit actions or subsequent page operations; at most one model call,
     which chooses among the open form's own labels and enters nothing."""
@@ -144,26 +215,41 @@ def handoff_form(executor, state, plan):
             if not isinstance(port, ApplicationFormEntryPort):
                 raise BusinessToolRequestError("this application does not expose reviewed form entries")
             before = s.obs
-            with s.receipt.stage("business"):
-                entry = port.plan_entry(reference, before,
-                                       context=s.approvals.context(s.step, "form_entry"))
-            if (not isinstance(entry, ApplicationFormEntry) or entry.reference != reference
-                    or entry.control.role != "button" or entry.control not in before.elements
-                    or entry.control.epoch != before.epoch):
-                raise BusinessToolRequestError("the form entry is not an exact current control")
+            entry = None
             try:
-                receipt = executor._dispatch(s, "click", {"ref": entry.control.ref, "epoch": before.epoch})
-                if receipt is None or not receipt.ok or receipt.navigated:
-                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry did not complete",
-                                       error_code="form_entry_unverified")
-                if not executor._wait_ready(s, plan.expected_path, record=bool(before.record_route)):
-                    return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry is not ready",
-                                       error_code="form_entry_unready")
                 with s.receipt.stage("business"):
-                    reference = port.accept_entry(entry, before, receipt, s.obs,
-                                        context=s.approvals.context(s.step, "form_entry_receipt"))
-            finally:
-                port.discard_entry(entry, context=s.approvals.context(s.step, "form_entry_release"))
+                    entry = port.plan_entry(reference, before,
+                                           context=s.approvals.context(s.step, "form_entry"))
+            except BusinessToolRequestError:
+                # The port names no opener here. Where the deployment lets the page loop
+                # look for one, each control it presses is still the port's to admit and
+                # the opened form still the port's to accept.
+                if executor.page_reach_steps <= 0 or not isinstance(port, ApplicationFormOfferPort):
+                    raise
+            if entry is None:
+                reference = _found_entry(executor, s, port, plan, reference)
+                if not reference:
+                    return FormOutcome(reason=s.terminal_reason or "agent_refused",
+                                       detail="no control opened the planned form",
+                                       error_code="form_entry_not_found")
+            else:
+                if (not isinstance(entry, ApplicationFormEntry) or entry.reference != reference
+                        or entry.control.role != "button" or entry.control not in before.elements
+                        or entry.control.epoch != before.epoch):
+                    raise BusinessToolRequestError("the form entry is not an exact current control")
+                try:
+                    receipt = executor._dispatch(s, "click", {"ref": entry.control.ref, "epoch": before.epoch})
+                    if receipt is None or not receipt.ok or receipt.navigated:
+                        return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry did not complete",
+                                           error_code="form_entry_unverified")
+                    if not executor._wait_ready(s, plan.expected_path, record=bool(before.record_route)):
+                        return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry is not ready",
+                                           error_code="form_entry_unready")
+                    with s.receipt.stage("business"):
+                        reference = port.accept_entry(entry, before, receipt, s.obs,
+                                            context=s.approvals.context(s.step, "form_entry_receipt"))
+                finally:
+                    port.discard_entry(entry, context=s.approvals.context(s.step, "form_entry_release"))
             if not isinstance(reference, str) or not reference:
                 raise BusinessToolRequestError("the application did not bind the opened form")
         values, unfilled = _shown_fields(executor, s, reference, plan.form.values)

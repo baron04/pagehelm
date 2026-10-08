@@ -68,6 +68,36 @@ class ApplicationFormEntryPort(Protocol):
 
 
 @runtime_checkable
+class ApplicationFormOfferPort(Protocol):
+    """A form entry port that also admits an opener the server found on the page.
+
+    `plan_entry` names the opener itself. Where it cannot -- one row's editor among many,
+    an opener worded the application's own way -- the server may find a control and offer
+    it. The port admits or refuses that control; `accept_entry` still decides, from what
+    the page shows afterwards, whether the planned form is the one that opened.
+    """
+
+    def offer_entry(self, reference: str, observation: PageObservation, control: ElementRef, *,
+                    context: OperationContext) -> ApplicationFormEntry:
+        ...
+
+
+@runtime_checkable
+class ApplicationOpenFormPort(Protocol):
+    """A form port that can prepare the one form already open on the page.
+
+    A person may ask for a change to what they are in the middle of entering: a record
+    nobody has saved, in a form that is open. There is no entry to plan and none to press;
+    the port takes the open form as it stands and returns its reference with the requested
+    values keyed by its own field references, to be prepared like any other form.
+    """
+
+    def adopt_open(self, observation: PageObservation, fields: tuple[tuple[str, str], ...], *,
+                   context: OperationContext) -> tuple[str, tuple[tuple[str, str], ...]]:
+        ...
+
+
+@runtime_checkable
 class ApplicationFormBindingPort(Protocol):
     """A form port that ties requested fields to the labels the open form itself shows.
 
@@ -715,6 +745,7 @@ class ApplicationFormTools:
 
 __all__ = [
     "ApplicationFormBindingPort", "ApplicationFormEntry", "ApplicationFormEntryPort",
+    "ApplicationFormOfferPort", "ApplicationOpenFormPort",
     "ApplicationFormDescriptor", "ApplicationFormField", "ApplicationFormPort",
     "ApplicationFormTools", "ApplicationFormValue", "DESCRIBE_FORM_SCHEMA",
     "DESCRIBE_FORM_TOOL", "FORM_TOOL_SCHEMAS", "FORM_TOOLS", "FormChoice",

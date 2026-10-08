@@ -375,8 +375,11 @@ class FormDraft:
 
 
 def validate_form_scope(scope: str, submit_label: str, *, label_binding: bool) -> None:
+    # `form_instance` is the runtime's identity for a native form that has no id of its
+    # own: the lifetime of that form in the page, as an opaque token.
     if not isinstance(scope, str) or (scope and not re.fullmatch(
-            r"(?:form|dialog|dialog_labelledby|dialog_describedby):[A-Za-z][A-Za-z0-9_:.-]{0,199}", scope)):
+            r"(?:form|dialog|dialog_labelledby|dialog_describedby):[A-Za-z][A-Za-z0-9_:.-]{0,199}"
+            r"|form_instance:[A-Za-z0-9][A-Za-z0-9-]{0,63}", scope)):
         raise ValueError("form control scope is invalid")
     if (not isinstance(submit_label, str) or len(submit_label) > MAX_FORM_LABEL_CHARS
             or re.search(r"[\x00-\x1f\x7f]", submit_label)

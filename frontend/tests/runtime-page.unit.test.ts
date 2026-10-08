@@ -847,3 +847,48 @@ it('invalidates a menu ref when the app reports a changed expansion state', () =
     facts.expanded = true
     expect(page.fingerprint('e1')).not.toBe(reading.fingerprints.get('e1'))
   })
+
+describe('a collapsed menu is opened the way a person opens it', () => {
+  function setup(opensOn: 'hover' | 'press') {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.setAttribute('aria-haspopup', 'menu')
+    button.setAttribute('aria-expanded', 'false')
+    document.body.append(button)
+    // A menu that opens under the pointer closes again when its control is pressed.
+    button.addEventListener('mouseenter', () => {
+      if (opensOn === 'hover') button.setAttribute('aria-expanded', 'true')
+    })
+    const api = controller()
+    api.clickElement = vi.fn(async () => {
+      button.setAttribute('aria-expanded', opensOn === 'hover' ? 'false' : 'true')
+      return {success: true}
+    })
+    const page = new Page(api, () => button, createRedactor())
+    return {button, api, page}
+  }
+  it('lets the pointer open it and does not then press it shut', async () => {
+    const s = setup('hover')
+    try {
+      await s.page.reveal('e1')
+      expect(s.api.clickElement).not.toHaveBeenCalled()
+      expect(s.button.getAttribute('aria-expanded')).toBe('true')
+    } finally {s.button.remove()}
+  })
+  it('presses a control the pointer alone did not open', async () => {
+    const s = setup('press')
+    try {
+      await s.page.reveal('e1')
+      expect(s.api.clickElement).toHaveBeenCalledTimes(1)
+      expect(s.button.getAttribute('aria-expanded')).toBe('true')
+    } finally {s.button.remove()}
+  })
+  it('still refuses a control that is not a collapsed menu', async () => {
+    const s = setup('press')
+    try {
+      s.button.setAttribute('aria-expanded', 'true')
+      await expect(s.page.reveal('e1')).rejects.toThrow(/not a collapsed menu/)
+      expect(s.api.clickElement).not.toHaveBeenCalled()
+    } finally {s.button.remove()}
+  })
+})

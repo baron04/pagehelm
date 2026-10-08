@@ -20,6 +20,26 @@ class FormBatchSpecTests(unittest.TestCase):
         self.assertEqual(GoalSpec.from_json(spec.to_json()), spec)
         self.assertFalse(spec.differences(GoalSpec.from_json(spec.to_json())))
 
+    def test_one_value_beside_one_field_is_that_fields_value(self):
+        one = GoalSpec.from_json({"write_intent": True, "deliverables": [
+            {"kind": "handoff", "entity": "contacts", "record": "Ada", "value": "a@x.invalid",
+             "fields": ["Email"]}]}).deliverables[0]
+        self.assertEqual((one.field_values, one.value, one.fields), ((("Email", "a@x.invalid"),), "", ()))
+        self.assertEqual(GoalSpec.from_json({"write_intent": True, "deliverables": [
+            {"kind": "handoff", "entity": "contacts", "record": "Ada",
+             "field_values": [{"field": "Email", "value": "a@x.invalid"}]}]}).deliverables[0], one)
+        # A named action keeps its own value; several fields, or a field with no value,
+        # are still fields that lack a value; another kind is never a form.
+        for other in ({"action": "Email", "value": "a@x.invalid"},
+                      {"value": "a@x.invalid", "fields": ["Email", "Phone"]},
+                      {"fields": ["Email"]}):
+            kept = GoalSpec.from_json({"write_intent": True, "deliverables": [
+                {"kind": "handoff", "entity": "contacts", **other}]}).deliverables[0]
+            self.assertEqual(kept.field_values, ())
+        fact = GoalSpec.from_json({"deliverables": [
+            {"kind": "fact", "entity": "contacts", "record": "Ada", "fields": ["Email"]}]}).deliverables[0]
+        self.assertEqual((fact.field_values, fact.fields), ((), ("Email",)))
+
     def test_batch_entry_action_remains_for_application_review(self):
         for action in ("edit", "create", "Reviewed entry", "Delete"):
             self.assertEqual(self.spec(action=action).deliverables[0].action, action)

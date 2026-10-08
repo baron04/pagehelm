@@ -327,6 +327,9 @@ def observe_after_business_mutation(session, obs: PageObservation, step: int,
     return receipt, write, fresh
 
 
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
 def apply_form_draft(
         session, draft: FormDraft, observation: PageObservation,
         step: int, *, budget: TurnBudget | None = None, verify=None
@@ -537,6 +540,7 @@ def apply_form_draft(
         return (("agent_refused", "the form page is still loading")
                 if current.render_state == "pending" else ("", ""))
 
+    completed: dict[str, str] = {}
     for binding in draft.fields:
         reason, detail = ready()
         if reason:
@@ -584,6 +588,23 @@ def apply_form_draft(
                  **({"commit": True} if action == "fill" else {})},
                 binding.field, current)
             if not reason:
+                # A control that keeps a time spells a date as that date at midnight: it
+                # either shows the entered date so, or keeps nothing of a date without a
+                # time, and is then given the date at midnight once. What it shows is the
+                # application's spelling of the value, which the handoff must agree with.
+                midnight = binding.value + " 00:00:00"
+                shown = [str(e.attrs.get("value") or "") for e in matching(binding)]
+                if action == "fill" and len(shown) == 1 and _DATE_ONLY.fullmatch(binding.value):
+                    if shown[0] == "":
+                        target = matching(binding)[0]
+                        current, reason, detail = dispatch(
+                            "fill", {"ref": target.ref, "epoch": current.epoch, "value": midnight,
+                                     "commit": True}, binding.field, current)
+                        if reason:
+                            return current, reason, detail
+                        shown = [str(e.attrs.get("value") or "") for e in matching(binding)]
+                    if shown == [midnight]:
+                        completed[binding.field] = midnight
                 break
             if last_code != "stale_observation" or attempt == 2:
                 return current, reason, detail
@@ -639,7 +660,8 @@ def apply_form_draft(
         # Runtime can recheck only its own entered DOM control in the same live
         # form instance; this is never a selector search or permission fallback.
         handoff_fields.append({**({"ref": matches[0].ref} if matches else {}), "field": binding.field,
-                               "control": binding.control, "value": binding.value,
+                               "control": binding.control,
+                               "value": completed.get(binding.field, binding.value),
                                **({"option_label": binding.option_label} if binding.option_label else {}),
                                **({"binding": "label", "label": binding.label}
                                   if binding.binding == "label" else {}),

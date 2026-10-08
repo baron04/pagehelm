@@ -74,9 +74,15 @@ class FormPlan:
     reference: str
     values: tuple[tuple[str, str], ...]
     open_entry: bool = False
+    #: What the form is a form of, as the application names it, and the record it edits
+    #: (empty for a new one): the words a search for its opener is given.
+    title: str = ""
+    record: str = ""
 
     def __post_init__(self):
         if (not isinstance(self.open_entry, bool) or not isinstance(self.reference, str) or not self.reference.strip()
+                or not isinstance(self.title, str) or not isinstance(self.record, str)
+                or len(self.title) > 200 or len(self.record) > 200
                 or len(self.reference) > 300 or not isinstance(self.values, tuple)
                 or not 1 <= len(self.values) <= 20
                 or any(not isinstance(item, tuple) or len(item) != 2

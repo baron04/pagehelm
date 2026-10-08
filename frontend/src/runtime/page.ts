@@ -87,6 +87,9 @@ interface PageControllerModule {
 }
 
 export type PageFacetReader = () => unknown
+/** How long a menu is given to open under the pointer before its control is pressed. */
+const REVEAL_HOVER_MS = 350
+
 export type FacetCandidateReader = () => unknown
 export type FacetApplier = (ref: string, active: boolean) => Promise<unknown> | unknown
 export type PageRecordRouteReader = () => unknown
@@ -235,10 +238,30 @@ export class Page {
     }
     return this.controller.clickElement(refIndex(ref))
   }
-  /** Open a menu the control declares collapsed; refuse anything else (see `revealable`). */
-  reveal(ref: unknown): Promise<unknown> {
-    if (!revealable(this.element(ref))) {
+  /** Open a menu the control declares collapsed; refuse anything else (see `revealable`).
+   *
+   * Some menus open when the pointer comes over their control, and pressing such a control
+   * closes them again. So the pointer comes first, as a person's would; the control is
+   * pressed only if it still says it is collapsed a moment later.
+   */
+  async reveal(ref: unknown): Promise<unknown> {
+    const element = this.element(ref)
+    if (!revealable(element)) {
       throw new Error('bad_arguments: reveal target is not a collapsed menu control')
+    }
+    if (element instanceof HTMLElement) {
+      const rect = element.getBoundingClientRect()
+      const at = {clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2}
+      if (typeof PointerEvent === 'function') {
+        element.dispatchEvent(new PointerEvent('pointerover', {...at, bubbles: true, pointerType: 'mouse'}))
+        element.dispatchEvent(new PointerEvent('pointerenter', {...at, pointerType: 'mouse'}))
+      }
+      element.dispatchEvent(new MouseEvent('mouseover', {...at, bubbles: true}))
+      element.dispatchEvent(new MouseEvent('mouseenter', at))
+      await sleep(REVEAL_HOVER_MS)
+      if (element.isConnected && element.getAttribute('aria-expanded') === 'true') {
+        return {success: true, message: 'menu opened under the pointer'}
+      }
     }
     return this.controller.clickElement(refIndex(ref))
   }

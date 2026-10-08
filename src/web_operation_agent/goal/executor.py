@@ -33,7 +33,7 @@ from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnEr
 from ..execution.runstate import RunResult
 from ..execution.receipt import MeasuredChat, TurnReceipt
 from ..execution.budget import TurnBudget
-from ..execution.click_policy import click_policy_refusal
+from ..execution.click_policy import ClickPolicy, click_policy_refusal
 from ..modeling.chat import require_chat_port
 from ..modeling.egress import AuditedChat
 from ..modeling.provider import ProviderError
@@ -59,6 +59,7 @@ _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _CJK = re.compile(r"[㐀-鿿]")
 #: How long the page may take to settle after a switch, in half-second waits.
 _READY_WAITS = 12
+_RECORD_VIEW_ELEMENTS = 6
 #: Attribute values a runtime uses to mark the current tab of a set.
 _SELECTED_ATTRS = ("aria-selected", "selected", "aria-pressed", "aria-checked")
 #: Element roles a handoff never highlights: navigation, not the control asked for. A link
@@ -595,6 +596,8 @@ class _PageOutcome:
     form_error_code: str = ""
     #: Requested fields the open form showed no field for, by the names asked.
     form_unfilled: tuple[str, ...] = ()
+    #: The record whose details the page loop brought on screen, when it has no address.
+    record_shown: str = ""
     #: "page/size" as the page's own list read reported it once paging was settled.
     paging: str = ""
 
@@ -675,7 +678,8 @@ class GoalTurnExecutor:
                  readings: int = 2, staged: bool = True, values: bool = True,
                  declaration_cache: bool = True,
                  disabled_page_actions: frozenset[str] = frozenset(),
-                 repository_answers: bool = False):
+                 repository_answers: bool = False,
+                 page_reach_steps: int = 0, page_reach_policy=None):
         #: The staged path (the default): the request's hard references are located by
         #: the adapter, the model first picks entities and kinds from one-line summaries,
         #: then declares the details against those entities' neighbourhood of the index,
@@ -687,6 +691,16 @@ class GoalTurnExecutor:
         # A host may further restrict those procedures; the model-tool disabled set
         # historically belongs to the generic loop, not these procedures.
         self.disabled_page_actions = frozenset(disabled_page_actions)
+        #: How many steps the bounded page loop (`goal.reach`) may take to bring the page
+        #: to a state that has no address and no control the adapter can name; 0, the
+        #: default, never runs it. Its clicks are admitted by a policy of their own, since
+        #: what a model may press is a different question from what a fixed step may.
+        if isinstance(page_reach_steps, bool) or not isinstance(page_reach_steps, int) \
+                or not 0 <= page_reach_steps <= 20:
+            raise ValueError("page_reach_steps must be an integer from 0 to 20")
+        if page_reach_policy is not None and not isinstance(page_reach_policy, ClickPolicy):
+            raise TypeError("page_reach_policy must implement ClickPolicy")
+        self.page_reach_steps, self.page_reach_policy = page_reach_steps, page_reach_policy
         if not isinstance(repository_answers, bool):
             raise TypeError("repository_answers must be boolean")
         self.repository_answers = repository_answers and config.source.runtime_source
@@ -1225,6 +1239,7 @@ class GoalTurnExecutor:
             s.terminal_reason = "agent_refused"
             return self._say(s, "应用未能完整解析这次请求。" if s.chinese
                              else "The application could not resolve this request completely.")
+        resolution = self._open_form_meant(s, spec, resolution)
         for _round in range(_REPAIRS):
             problems = _repairable(spec, resolution, observed_empty_entities=frozenset(
                 q["entity"] for q in s.source_requests if q.get("current") and q.get("entity")))
@@ -1413,6 +1428,37 @@ class GoalTurnExecutor:
                       if s.chinese else
                       "\n\nI only found the relevant information or page. I did not make the requested change; please review it and act yourself.")
         return reply
+
+    def _open_form_meant(self, s: _TurnState, spec: GoalSpec, resolution: Resolution) -> Resolution:
+        """A change to something not saved yet: the name the request gives is no record of
+        the application, and a form open on the page shows that very name. The request is
+        then about that form, which is prepared where it stands. Nothing is looked up
+        again and no entry is pressed; a name the open form does not show changes nothing."""
+        from ..business.errors import BusinessToolError
+        from ..business.forms import ApplicationOpenFormPort
+        from .ports import FormPlan
+        port = self.application.ports.forms
+        if not self.config.allow_form_prefill or not isinstance(port, ApplicationOpenFormPort):
+            return resolution
+        out, adopted = list(resolution.deliverables), False
+        for i, (d, resolved) in enumerate(zip(spec.deliverables, out, strict=True)):
+            requested = d.field_values
+            if (d.kind != "handoff" or not resolved.missing or not requested or adopted
+                    or not _open_form_shows(s.obs, resolved.missing)):
+                continue
+            try:
+                with s.receipt.stage("business"):
+                    reference, values = port.adopt_open(
+                        s.obs, tuple(requested), context=s.approvals.context(s.step, "adopt_form"))
+                plan = PagePlan(url="", label=s.obs.title, expected_path=_path_of(s.obs.url),
+                                form=FormPlan(reference, tuple(values)))
+            except (BusinessToolError, PrincipalError, ValueError) as exc:
+                s.ledger.append("goal_open_form_not_adopted", step=s.step,
+                                error_type=type(exc).__name__)
+                continue
+            out[i], adopted = Resolved(kind="handoff", page=plan), True
+            s.ledger.append("goal_open_form_adopted", step=s.step, fields=len(values))
+        return replace(resolution, deliverables=tuple(out)) if adopted else resolution
 
     def _held_reading(self, s: _TurnState, spec: GoalSpec) -> GoalSpec:
         """The readings say the application does not hold what is asked, while the
@@ -1858,18 +1904,23 @@ class GoalTurnExecutor:
         return replace(resolution, deliverables=tuple(out))
 
     # -- pages ------------------------------------------------------------------------
-    def _dispatch(self, s: _TurnState, action: str, args: dict, *, navigating: bool = False):
-        """One page command under write control, with its receipt on the record."""
+    def _dispatch(self, s: _TurnState, action: str, args: dict, *, navigating: bool = False,
+                  admitted: bool = False):
+        """One page command under write control, with its receipt on the record.
+
+        `admitted` is a click the page loop's own policy already allowed."""
         if s.terminal_reason:
             return None
         s.budget.check()
         click_refusal = ""
-        if action == "click" and action in self.disabled_page_actions and self.config.click_policy is not None:
+        if admitted and action == "click":
+            pass
+        elif action == "click" and action in self.disabled_page_actions and self.config.click_policy is not None:
             click_refusal = click_policy_refusal(self.config.click_policy, s.obs, args.get("ref"))
             s.ledger.append("click_policy_decision", step=s.step, allowed=not click_refusal,
                             reason=click_refusal[:200])
-        if action in self.disabled_page_actions and not (
-                action == "click" and self.config.click_policy is not None and not click_refusal):
+        if action in self.disabled_page_actions and not (action == "click" and (admitted or (
+                self.config.click_policy is not None and not click_refusal))):
             s.terminal_reason, s.detail = "agent_refused", "the deployment disabled this page action"
             s.ledger.append("goal_action_disabled", action=action)
             return None
@@ -2019,7 +2070,14 @@ class GoalTurnExecutor:
         if plan.section and not self._select_tab(s, plan.section):
             out.unmet.append(_Unmet("section", plan.section))
         if plan.missing_record:
-            out.unmet.append(_Unmet("record", plan.missing_record))
+            brought = self._show_record(s, plan.missing_record) if not out.unmet else ""
+            if brought:
+                out.record_shown = plan.missing_record
+            if brought != "shown":
+                # Its page in front with the application's own error on it is said as
+                # that, not as a record that could not be opened.
+                out.unmet.append(_Unmet("error_dialog") if brought == "blocked"
+                                 else _Unmet("record", plan.missing_record))
         if plan.form is not None:
             out.form_requested = True
             if not out.unmet:
@@ -2047,9 +2105,16 @@ class GoalTurnExecutor:
         if plan.view and not self._view_shown(s.obs, plan.view):
             out.unmet.append(_Unmet("view", plan.view))
         out.url = s.obs.url
-        out.reached = _path_of(s.obs.url) == (plan.expected_path or _path_of(s.obs.url))
-        if plan.requires_page_route and (s.obs.page_route != plan.expected_path
-                                         or s.obs.render_state != "ready"):
+        # A record brought on screen from its list may have taken the page elsewhere, and
+        # so may a form whose opener leads to a page of its own. Either is judged by what
+        # was brought on screen, not by the address the plan started from.
+        elsewhere = bool(out.record_shown) or (
+            plan.form is not None and (out.form_complete or out.form_input_dispatched)
+            and _path_of(s.obs.url) != plan.expected_path)
+        out.reached = (bool(out.record_shown) or out.form_complete) if elsewhere else (
+            _path_of(s.obs.url) == (plan.expected_path or _path_of(s.obs.url)))
+        if plan.requires_page_route and not elsewhere and (
+                s.obs.page_route != plan.expected_path or s.obs.render_state != "ready"):
             out.reached = False
             out.unmet.append(_Unmet("page_unverified"))
         s.ledger.append("goal_page_settled", step=s.step, reached=out.reached,
@@ -2065,6 +2130,54 @@ class GoalTurnExecutor:
                                                           if k in ("role", "aria-selected", "selected", "field")})
                                   for e in s.obs.elements[:16]])
         return out
+
+    def _show_record(self, s: _TurnState, name: str) -> str:
+        """Bring a record that has no address on screen from the list it is in: the page
+        loop finds its row and opens what the row offers. It is "shown" when the list is
+        no longer what is in front -- another page, or a dialog over it -- and what is in
+        front carries the record's name; "blocked" when its own page came up and the
+        application reports an error on it; "" when it was not brought on screen."""
+        if self.page_reach_steps <= 0 or s.terminal_reason:
+            return ""
+        from .reach import reach
+        start, wanted = s.obs, _norm(name)
+        listed = any(e.attrs.get("page_control") for e in start.elements)
+        #: Whether the list, when last seen, had been narrowed to the one row carrying
+        #: the name: what that row opens is then the record's, even where the view that
+        #: opens shows its values in fields the page does not read out.
+        alone = [False]
+
+        def named(obs: PageObservation) -> bool:
+            return wanted in _norm(obs.content) or any(
+                wanted in _norm(e.name) or wanted in _norm(str(e.attrs.get("value") or ""))
+                for e in obs.elements)
+
+        def shown(obs: PageObservation) -> bool:
+            if obs.render_state in {"pending", "blocked"}:
+                return False
+            moved = _path_of(obs.url) != _path_of(start.url)
+            if not moved and any(e.attrs.get("page_control") for e in obs.elements):
+                alone[0] = bool(obs.page_read is not None and obs.page_read.get("rows") == 1
+                                and named(obs))
+                return False
+            # A confirmation box is a few buttons; a record's view is not.
+            return (moved or listed) and (named(obs) or (
+                alone[0] and len(obs.elements) >= _RECORD_VIEW_ELEMENTS))
+
+        result = reach(self, s, steps=self.page_reach_steps, arrived=shown, names=(name,),
+                       handoffs=self._handoffs(),
+                       goal=f'The details of the record named "{name}" are open: its own '
+                            "detail page, or the dialog that shows that record.")
+        blocked = (not result.arrived and s.obs.render_state == "blocked"
+                   and _path_of(s.obs.url) != _path_of(start.url) and named(s.obs))
+        s.ledger.append("goal_record_reached", step=s.step, arrived=result.arrived,
+                        blocked=blocked, steps=result.steps, why=result.why[:200])
+        return "shown" if result.arrived else "blocked" if blocked else ""
+
+    def _handoffs(self):
+        from ..privacy import SessionHandoffPolicy
+        return SessionHandoffPolicy.extending(
+            self.application.ports.routes.session_handoff_query_keys)
 
     def _facet(self, s: _TurnState, name: str, *, active: bool) -> bool:
         wanted = _norm(name)
@@ -2513,6 +2626,15 @@ class GoalTurnExecutor:
 _QUANTITY = re.compile(r"(?<![A-Za-z0-9_.:：/\-])(\d+(?:\.\d+)?)(?=([\u4e00-\u9fff]))")
 
 
+def _open_form_shows(observation: PageObservation, name: str) -> bool:
+    """Whether a form in a dialog on the page shows `name` in one of its own controls."""
+    wanted = _norm(name)
+    return bool(wanted) and any(
+        str(e.attrs.get("form_scope") or "").startswith("dialog") and e.attrs.get("field_label")
+        and wanted in {_norm(str(e.attrs.get("value") or "")), _norm(str(e.attrs.get("selected_option") or ""))}
+        for e in observation.elements)
+
+
 def _dropped_quantities(spec: GoalSpec, text: str, candidates: tuple = ()) -> tuple[str, ...]:
     """Quantities the request wrote that appear nowhere in the declaration, by value.
 
@@ -2684,7 +2806,8 @@ def _achieved(resolved: Resolved, outcome: _PageOutcome | None) -> bool:
         return (outcome.reached and not outcome.unmet
                 and (resolved.kind != "handoff" or bool(resolved.page
                      and (resolved.page.highlight or resolved.page.form)))
-                and (not resolved.page or not resolved.page.missing_record)
+                and (not resolved.page or not resolved.page.missing_record
+                     or bool(outcome.record_shown))
                 and (not resolved.page or not resolved.page.form
                      or (outcome.form_complete and not outcome.form_unfilled))
                 and (not resolved.page or not resolved.page.fill
@@ -2931,6 +3054,16 @@ def _render(resolved: Resolved, outcome: _PageOutcome | None, zh: bool,
             return lines
     if resolved.page is not None and outcome is not None:
         plan = resolved.page
+        if plan.missing_record and outcome.record_shown:
+            if not outcome.unmet:
+                lines.append((f"已打开「{outcome.record_shown}」的详情。" if zh
+                              else f"Opened the details of “{outcome.record_shown}”."))
+            else:
+                why = ("、" if zh else ", ").join(u.said(zh) for u in outcome.unmet)
+                lines.append((f"已打开「{outcome.record_shown}」的页面，但{why}，页面内容可能不完整。") if zh
+                             else f"Opened the page of “{outcome.record_shown}”, but {why}; "
+                                  "the page may be incomplete.")
+            return lines
         if plan.missing_record and (outcome.reached or any(u.kind == "record" for u in outcome.unmet)):
             opened = ((f"已打开：{plan.label}。" if zh else f"Opened: {plan.label}. ")
                       if outcome.reached else "")

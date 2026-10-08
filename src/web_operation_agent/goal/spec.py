@@ -230,6 +230,15 @@ class Deliverable:
             pairs.append((label, text))
         if pairs and (kind != "handoff" or value.get("value")):
             raise ValueError("field_values belongs to one form handoff, without a single-field value")
+        fields = _texts(value.get("fields"), "fields", limit=12)
+        single = _text(value.get("value"), "value")
+        if (kind == "handoff" and not pairs and single and len(fields) == 1
+                and not _text(value.get("action"), "action")):
+            # One value for one field is also written as that field beside the value. It
+            # means the same as a one-entry field_values, and is read as that: left as it
+            # is, the field counted as lacking a value and the person was asked for the
+            # value they had just given.
+            pairs, fields, single = [(fields[0], single)], (), ""
         metric = value.get("metric")
         page = PageSpec.from_json(value.get("page"))
         if page.conditions and kind != "page":
@@ -241,12 +250,12 @@ class Deliverable:
                    entity=_text(value.get("entity"), "entity"),
                    record=_text(value.get("record"), "record"),
                    via=_text(value.get("via"), "via"),
-                   fields=_texts(value.get("fields"), "fields", limit=12),
+                   fields=fields,
                    metric=Metric.from_json(metric) if metric else None,
                    page=page,
                    section=_text(value.get("section"), "section"),
                    action=_text(value.get("action"), "action"),
-                   value=_text(value.get("value"), "value"),
+                   value=single,
                    field_values=tuple(pairs),
                    # A model that names every rule in sight is clipped, not refused: the
                    # first ones named are the ones it found most relevant.
