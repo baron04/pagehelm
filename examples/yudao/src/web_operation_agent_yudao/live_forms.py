@@ -244,7 +244,11 @@ class LiveFormPort:
             # One row's editor among many: the form must show the record that was meant.
             shown = {plain(e.attrs.get(key)) for e in observation.elements
                      if e.attrs.get("form_instance") == instance for key in ("value", "selected_option")}
-            if plain(planned[0].record) not in shown:
+            meant = plain(planned[0].record)
+            # A name shared by several records is carried with what tells it apart
+            # ("吴敏（采购）（某公司）"); the form shows the name itself.
+            if not any(value and (value == meant or meant.startswith((value + "（", value + "(")))
+                       for value in shown):
                 raise BusinessToolRequestError("the editor that opened does not show the requested record")
         self._planned = None
         parsed = urlsplit(observation.url)

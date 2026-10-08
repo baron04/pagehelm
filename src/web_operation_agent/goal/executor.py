@@ -127,6 +127,24 @@ def _norm(text: str) -> str:
                    ).replace("&amp;", "&")
 
 
+def _said_apart(candidates: tuple[str, ...], text: str, details: dict) -> str:
+    """The one candidate that something only it shows is written in the request, else "".
+
+    A candidate's name and detail are cut at brackets and separators; a part every
+    candidate has tells nothing apart. A lone short number is not taken as such a part.
+    """
+    said = _norm(text)
+
+    def parts(name: str) -> set[str]:
+        cut = re.split(r"[（）()\[\]【】《》<>·/|,，;；:：\s]+", f"{name} {details.get(name, '')}")
+        return {_norm(p) for p in cut if len(_norm(p)) >= 2 and not (p.isdigit() and len(p) < 4)}
+
+    shown = {name: parts(name) for name in candidates}
+    shared = set.intersection(*shown.values()) if shown else set()
+    hits = [name for name in candidates if any(p in said for p in shown[name] - shared)]
+    return hits[0] if len(hits) == 1 else ""
+
+
 def _tokens(text: str) -> set[str]:
     return {t for t in re.split(r"[^0-9a-z\u3400-\u9fff]+", (text or "").casefold()) if t}
 
@@ -1387,6 +1405,7 @@ class GoalTurnExecutor:
             spec, resolution = repaired, second
         resolution = self._which_amount(s, spec, resolution)
         resolution = self._not_chosen_for(s, spec, resolution)
+        resolution = self._told_apart(s, spec, resolution)
         if s.source_requests:
             # Mixed source questions may ask whether a rule permits this record now.
             # Read first, then answer with only these actor-bound facts. Complete all
@@ -1843,6 +1862,38 @@ class GoalTurnExecutor:
                         left_out=[list(x) for x in left_out if x],
                         reads=[list(r) for r in resolution.reads])
         return resolution
+
+    def _told_apart(self, s: _TurnState, spec: GoalSpec, resolution: Resolution) -> Resolution:
+        """Several records share the name, and the request already says which one.
+
+        "杭州云帆科技有限公司吴敏的手机" with two contacts named 吴敏, one at each of two
+        companies, is not a question: the company is written in the request. Each
+        candidate is shown with what tells it apart from the others; when the request
+        writes that of exactly one of them, that record is the one meant. It is resolved
+        again by its own full name, so nothing is taken on the strength of the words
+        alone, and anything short of one record leaves the question as it was.
+        """
+        details = {c.display: c.detail for c in s.candidates}
+        out, changed = list(resolution.deliverables), False
+        for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
+            if len(r.candidates) < 2 or r.facts or r.aggregate or r.page:
+                continue
+            one = _said_apart(tuple(r.candidates), s.message.text, details)
+            if not one:
+                continue
+            try:
+                meant = self.goal_port.resolve(
+                    GoalSpec(deliverables=(replace(d, record=one),), conventions=s.conventions,
+                             language=_language(s), chosen=(*s.chosen, one)),
+                    context=s.approvals.context(s.step, "resolve"),
+                    current_path=_path_of(s.obs.url)).deliverables[0]
+            except Exception:  # noqa: BLE001 -- the question stands when the check cannot run
+                continue
+            if meant.problem or len(meant.candidates) >= 2:
+                continue
+            s.ledger.append("goal_record_told_apart", step=s.step, count=len(r.candidates))
+            out[i], changed = meant, True
+        return replace(resolution, deliverables=tuple(out)) if changed else resolution
 
     def _which_amount(self, s: _TurnState, spec: GoalSpec, resolution: Resolution) -> Resolution:
         """"What is the amount of Acme's September invoice" when two invoices fit asks which

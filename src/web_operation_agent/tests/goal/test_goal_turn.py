@@ -1232,6 +1232,43 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIsNone(executor._continued(AgentTurnMessage(message_id="m2", text="换个问题：S00001 呢",
                                                                page_url="http://127.0.0.1:8080/home")))
 
+    def test_same_named_records_the_request_tells_apart_are_not_asked_about(self):
+        scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "吴敏"}]}),
+                   _declaration(kind="fact", entity="order", record="吴敏", fields=["Total"])]
+        both = ("吴敏（采购）（成都天府软件有限公司）", "吴敏（采购）（杭州云帆科技有限公司）")
+
+        class Port(_Port):
+            def resolve(self, spec, *, context=None, current_path=""):
+                self.specs.append(spec)
+                named = spec.deliverables[0].record
+                if named in both:
+                    return Resolution(deliverables=(Resolved(kind="fact", facts=(
+                        Fact(named, "Total", "13720000001"),)),), reads=(("read", "order"),))
+                return Resolution(deliverables=(Resolved(
+                    kind="fact", problem="'吴敏' is ambiguous", candidates=both),), reads=())
+
+        def run(text):
+            port = Port([])
+            executor = GoalTurnExecutor(
+                channel=_Channel(page_url="http://127.0.0.1:8080/home", decision="approved"),
+                config=AgentTurnConfig(supported_scope="read", ledger_path=self.ledger),
+                chat=_AgreeingChat(list(scripts)), application=bind_application(_Adapter()),
+                goal_port=port, control=ReadOnlyControl(), run_id_factory=lambda _m: "goal-run",
+                staged=True)
+            return port, executor.execute({"message_id": "m1", "text": text,
+                                           "page_url": "http://127.0.0.1:8080/home"})
+        # The company is written in the request: that record, by its own full name.
+        port, told = run("杭州云帆科技有限公司吴敏的手机是多少？")
+        self.assertEqual(told.status, AgentTurnStatus.FINISHED)
+        self.assertNotIn("你指的是哪一个", told.user_answer)
+        self.assertIn("13720000001", told.user_answer)
+        self.assertEqual(port.specs[-1].deliverables[0].record, both[1])
+        self.assertIn(both[1], port.specs[-1].chosen)
+        # Nothing in the request tells them apart: the person is still asked.
+        _, asked = run("吴敏的手机是多少？")
+        self.assertEqual(asked.status, AgentTurnStatus.NEEDS_INPUT)
+        self.assertIn("你指的是哪一个？", asked.user_answer)
+
     def test_a_follow_up_is_read_with_the_earlier_turns(self):
         scripts = [("declare_scope", {"parts": [{"kind": "fact", "entity": "order", "about": "S00006"}]}),
                    _declaration(kind="fact", entity="order", record="S00006", fields=["Customer"]),

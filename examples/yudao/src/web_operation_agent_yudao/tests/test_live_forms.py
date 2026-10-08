@@ -102,6 +102,11 @@ class LiveFormTests(unittest.TestCase):
         entry = self.port.offer_entry(request.reference, self.list, row, context=self.context)
         self.port.accept_entry(entry, self.list, self.receipt(entry, self.list, self.form), self.form,
                                context=self.context)
+        # A name several records share arrives with what tells it apart; the form shows the name.
+        qualified = self.request(("手机", "1"), mode="update", record="沈秋（采购）（杭州云帆科技有限公司）")
+        entry = self.port.offer_entry(qualified.reference, self.list, row, context=self.context)
+        self.port.accept_entry(entry, self.list, self.receipt(entry, self.list, self.form), self.form,
+                               context=self.context)
         other = self.request(("手机", "1"), mode="update", record="另一个人")
         entry = self.port.offer_entry(other.reference, self.list, row, context=self.context)
         with self.assertRaisesRegex(BusinessToolRequestError, "does not show the requested record"):
