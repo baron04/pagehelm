@@ -324,6 +324,22 @@ class NativeHostTests(unittest.TestCase):
             self.assertIn("submit", executor.disabled_page_actions)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_inside_the_applications_window_only_reads_it_cannot_refuse_stay_fenced(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        gets = ["/admin-api/pms/pm/project-group/list", "/admin-api/infra/redis/get-monitor-info",
+                "/admin-api/oa/untraced/get"]
+        scan = {"get_handlers": 3, "reasons": {
+            gets[0]: "PmsProjectGroupController.getProjectGroupList -> PmsProjectGroupMapper.insertBatch",
+            gets[1]: "RedisController.getRedisMonitorInfo -> StringRedisTemplate.execute (unresolved)"}}
+        for live, fenced in ((True, set(gets[1:])), (False, set(gets))):
+            self.config = replace(self._fence(writing_gets=gets, scan=scan), native_live_forms=live)
+            with self.subTest(live=live), \
+                    patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
+                    patch("web_operation_agent_yudao.page_guard.NativePageGuard") as guard, \
+                    patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+                self.host()
+                self.assertEqual(guard.call_args.kwargs["writing_gets"], frozenset(fenced))
+
     def test_reviewed_forms_or_the_switch_keep_live_forms_and_its_window_off(self):
         from web_operation_agent_yudao.ui_source import UiSource
         for config in (replace(self._fence(), native_live_forms=False),

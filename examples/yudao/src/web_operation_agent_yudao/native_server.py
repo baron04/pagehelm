@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 import threading
 import time
@@ -237,7 +238,7 @@ class YudaoHost:
                 read_paths += unknown
             self.native_proxy = NativeGuardProxy(
                 upstream=config.api_base, origin=config.public_origin,
-                guard=(NativePageGuard(frozenset(), writing_gets=frozenset(policy["writing_gets"]),
+                guard=(NativePageGuard(frozenset(), writing_gets=self._fenced_gets(policy),
                                        journal=config.state_dir / "native-guard.sqlite3")
                        if fenced else
                        NativePageGuard(frozenset(read_paths),
@@ -263,6 +264,23 @@ class YudaoHost:
         self._lock = threading.RLock()
 
     # -- bootstrap ------------------------------------------------------------------------
+    def _fenced_gets(self, policy: dict) -> frozenset:
+        """The scanned GET handlers the fence still refuses inside a window.
+
+        Without the application's own window, all of them. With it, a handler the scan
+        traced to a mapped database statement is let through: the application refuses
+        that statement itself, and the request succeeds whenever it had nothing to
+        write (a default row that already exists). A handler traced anywhere else, or
+        not traced to its end, stays refused -- the window covers the database only.
+        """
+        listed = frozenset(policy["writing_gets"])
+        if not self.live_forms:
+            return listed
+        reasons = policy["scan"].get("reasons") if isinstance(policy.get("scan"), dict) else None
+        reasons = reasons if isinstance(reasons, dict) else {}
+        return frozenset(path for path in listed
+                         if not re.search(r"Mapper\.\w+$", str(reasons.get(path, ""))))
+
     def _load_api_docs(self) -> dict:
         from web_operation_agent.goal.data import DataRefused
         with self._documents_lock:
