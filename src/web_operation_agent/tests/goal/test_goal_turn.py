@@ -1264,6 +1264,14 @@ class GoalTurnTests(unittest.TestCase):
         self.assertIn("13720000001", told.user_answer)
         self.assertEqual(port.specs[-1].deliverables[0].record, both[1])
         self.assertIn(both[1], port.specs[-1].chosen)
+        # A word the request gives as the new value says nothing about which record is meant,
+        # and two candidates named at once are not one.
+        from web_operation_agent.goal.executor import _said_apart
+        self.assertEqual(_said_apart(both, "吴敏的公司改成杭州云帆科技有限公司", {},
+                                     ("杭州云帆科技有限公司",)), "")
+        self.assertEqual(_said_apart(both, "把成都天府软件有限公司的吴敏转到杭州云帆科技有限公司", {}), "")
+        self.assertEqual(_said_apart(both, "杭州云帆科技有限公司吴敏的手机改成13720000002", {},
+                                     ("13720000002",)), both[1])
         # Nothing in the request tells them apart: the person is still asked.
         _, asked = run("吴敏的手机是多少？")
         self.assertEqual(asked.status, AgentTurnStatus.NEEDS_INPUT)

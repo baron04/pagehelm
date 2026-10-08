@@ -127,13 +127,19 @@ def _norm(text: str) -> str:
                    ).replace("&amp;", "&")
 
 
-def _said_apart(candidates: tuple[str, ...], text: str, details: dict) -> str:
+def _said_apart(candidates: tuple[str, ...], text: str, details: dict,
+                given: tuple[str, ...] = ()) -> str:
     """The one candidate that something only it shows is written in the request, else "".
 
     A candidate's name and detail are cut at brackets and separators; a part every
     candidate has tells nothing apart. A lone short number is not taken as such a part.
+    `given` are the values the request asks to be entered: a word written as a new value
+    ("change his company to X") says nothing about which record is meant, so it is left
+    out of what the request is taken to say.
     """
     said = _norm(text)
+    for value in sorted({_norm(v) for v in given if _norm(v)}, key=len, reverse=True):
+        said = said.replace(value, " ")
 
     def parts(name: str) -> set[str]:
         cut = re.split(r"[（）()\[\]【】《》<>·/|,，;；:：\s]+", f"{name} {details.get(name, '')}")
@@ -1878,7 +1884,8 @@ class GoalTurnExecutor:
         for i, (d, r) in enumerate(zip(spec.deliverables, resolution.deliverables)):
             if len(r.candidates) < 2 or r.facts or r.aggregate or r.page:
                 continue
-            one = _said_apart(tuple(r.candidates), s.message.text, details)
+            given = tuple(str(value) for _, value in d.field_values) + ((d.value,) if d.value else ())
+            one = _said_apart(tuple(r.candidates), s.message.text, details, given)
             if not one:
                 continue
             try:
