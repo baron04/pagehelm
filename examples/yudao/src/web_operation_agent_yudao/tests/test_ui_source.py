@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent_yudao.ui_source import UiSource, _literal_column_labels
+from web_operation_agent_yudao.ui_source import UiSource, _literal_column_labels, _shown_units
 
 _PAGE = """<template>
   <el-table-column label="流程名称" prop="name" />
@@ -193,6 +193,21 @@ async function getList() {
             source = UiSource.read(root)
         self.assertEqual(source.views["hrm/clock/index"].endpoint, "/hrm/clock/page")
         self.assertEqual(source.views["hrm/clock/index"].columns, ("name",))
+
+    def test_a_columns_label_states_the_unit_only_of_a_value_shown_as_read(self):
+        column = '<el-table-column label="价格（元）" prop="price" :formatter="erpPriceTableColumnFormatter" />'
+        self.assertEqual(_shown_units(column), (("price", "元"),))
+        self.assertEqual(_shown_units(column.replace("（元）", "(分)")), (("price", "分"),))
+        # The page converts before showing, or renders the cell itself: the label is not
+        # the unit of what was read.
+        self.assertEqual(_shown_units(column.replace("erpPriceTableColumnFormatter", "fenToYuanFormat")), ())
+        self.assertEqual(_shown_units('<el-table-column label="价格（元）" prop="price">'
+                                      '<template #default="{ row }">{{ fenToYuan(row.price) }}</template>'
+                                      '</el-table-column>'), ())
+        # No unit in the label, a bound label, or two columns that disagree.
+        self.assertEqual(_shown_units('<el-table-column label="价格" prop="price" />'), ())
+        self.assertEqual(_shown_units('<el-table-column :label="caption" prop="price" />'), ())
+        self.assertEqual(_shown_units(column + column.replace("（元）", "（分）")), ())
 
 
 if __name__ == "__main__":

@@ -753,6 +753,23 @@ class MoneyUnitTests(unittest.TestCase):
         self.assertEqual(shown("integer", ["退款金额，单位：分", "定金，单位：元"]), "29,800.00")
         self.assertEqual(shown("integer", ["时长，单位：小时"]), "29,800.00")
 
+    def test_the_unit_a_page_states_for_a_value_it_shows_as_read_wins_over_the_api_description(self):
+        def shown(endpoint, description="合同金额, 单位：分"):
+            docs = deepcopy(DOCS)
+            docs["components"]["schemas"]["Contract"]["properties"]["totalPrice"] = {
+                "type": "number", "description": description}
+            ui = UiSource(views={"crm/contract/index": ListView(
+                endpoint=endpoint, column_units=(("totalPrice", "元"),))})
+            data = YudaoGoalData(_Client(), docs, ui=ui)
+            data.schema()
+            return data.read("crm/contract", "11", ("totalPrice",)).shown["totalPrice"]
+        # The list page shows the value unchanged under a label in 元.
+        self.assertEqual(shown("/crm/contract/page"), "29,800.00 元")
+        # A page that reads something else says nothing about this field.
+        self.assertEqual(shown("/crm/other/page"), "298.00 元")
+        # Where the API states no unit there is nothing to correct, and nothing is added.
+        self.assertEqual(shown("/crm/contract/page", "合同金额"), "29,800.00")
+
     def test_an_undeclared_currency_is_not_invented(self):
         data = YudaoGoalData(_Client(), DOCS)
         data.schema()

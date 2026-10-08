@@ -53,6 +53,8 @@ class ListView:
     fixed_params: tuple[tuple[str, object], ...] = ()
     #: Only unique literal prop/label bindings from this list component.
     column_labels: tuple[tuple[str, str], ...] = ()
+    #: field -> the unit its column's label states, where the column shows the value as read.
+    column_units: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,7 @@ class UiSource:
             text = path.read_text(encoding="utf-8")
             columns = tuple(dict.fromkeys(_COLUMN.findall(text)))
             labels = _literal_column_labels(text)
+            units = _shown_units(text)
             dicts = {row: consts[name] for name, row in _DICT_TAG.findall(text) if name in consts}
             endpoint, fixed_params = _list_endpoint(src, text)
             if not endpoint:
@@ -125,12 +128,14 @@ class UiSource:
                         if endpoint:
                             columns = tuple(dict.fromkeys(_COLUMN.findall(child_text))) or columns
                             labels = _literal_column_labels(child_text)
+                            units = _shown_units(child_text)
                             dicts = {row: consts[name] for name, row in _DICT_TAG.findall(child_text)
                                      if name in consts} or dicts
             if columns or dicts or endpoint:
                 key = path.relative_to(src / "views").with_suffix("").as_posix()
                 views[key] = ListView(columns=columns, dicts=dicts, endpoint=endpoint,
-                                      fixed_params=fixed_params, column_labels=labels)
+                                      fixed_params=fixed_params, column_labels=labels,
+                                      column_units=units)
         router = (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")
         return UiSource(views=views, records=_record_routes(router), tables=tables,
                         record_sections=_record_sections(src, router), table_dicts=table_dicts)
@@ -157,6 +162,30 @@ def _literal_column_labels(page: str) -> tuple[tuple[str, str], ...]:
     unique = {key:next(iter(labels)) for key,labels in found.items() if len(labels) == 1}
     return tuple((key,label) for key,label in unique.items() if label
                  and sum(label == other for other in unique.values()) == 1)
+
+
+_LABEL_UNIT = re.compile(r"[（(]\s*(元|分)\s*[）)]\s*$")
+_CONVERTS = re.compile(r"fen\s*to\s*yuan|fen2yuan|yuan\s*to\s*fen|/\s*100\b|\*\s*100\b", re.I)
+
+
+def _shown_units(page: str) -> tuple[tuple[str, str], ...]:
+    """Field -> the unit its column's label states, where the page shows the value as read.
+
+    A label says what unit the number on the page is in. That is the unit of the value the
+    API returned only when the column shows it unchanged: a column with its own body, or a
+    formatter that converts between units, shows something else and says nothing here. A
+    field two columns label differently says nothing either."""
+    found = {}
+    for attrs, body in _TABLE_COLUMN.findall(page):
+        prop = _COLUMN_PROP.search(attrs)
+        label = re.search(r'(?<![:\w-])label="([^"{}]+)"', attrs)
+        if not prop or not label or re.search(r'(?:v-bind|:prop|:label)\s*[=:]', attrs):
+            continue
+        unit = _LABEL_UNIT.search(label[1].strip())
+        shown_as_read = not (body or "").strip() and not _CONVERTS.search(attrs)
+        found.setdefault(prop[1], set()).add(unit[1] if unit and shown_as_read else "")
+    return tuple((key, next(iter(units))) for key, units in found.items()
+                 if len(units) == 1 and "" not in units)
 
 
 def _row_columns(page: str) -> dict:

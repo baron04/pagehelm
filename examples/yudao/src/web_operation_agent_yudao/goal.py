@@ -562,6 +562,12 @@ class YudaoGoalData:
                 and labels[f.key] != f.label
                 and not any(other.key != f.key and other.label == labels[f.key] for other in fields)
                 else f for f in fields]
+            # The page shows this value as it was read and says its unit. Where the API's
+            # description of the field states another unit, the page is right: it is
+            # what the person sees. A field the API states no unit for is left as it is.
+            for shown_key, shown_unit in entity.view.column_units:
+                if entity.money.get(shown_key) not in (None, "", shown_unit):
+                    entity.money[shown_key] = shown_unit
         entity.links = links
         # A record is called by its name or number; without either, by the first text
         # its list shows (a leave request by its reason).
