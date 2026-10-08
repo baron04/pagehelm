@@ -27,6 +27,7 @@ import json
 import os
 import re
 import signal
+import sys
 import threading
 import time
 import urllib.request
@@ -551,7 +552,11 @@ def _handler(host: YudaoHost):
                 self._json(exc.status, {"error": exc.code})
             except LiveProductCapacityError:
                 self._json(503, {"error": "assistant_busy"})
-            except Exception:  # noqa: BLE001 -- no detail leaves the host
+            except Exception as exc:  # noqa: BLE001 -- no detail leaves the host
+                # The person is told only that the assistant is unavailable; the operator
+                # needs to know which failure it was.
+                print(f"yudao assistant: bootstrap failed: {type(exc).__name__}: {exc}"[:400],
+                      file=sys.stderr, flush=True)
                 self._json(503, {"error": "assistant_unavailable"})
     return Handler
 
@@ -596,6 +601,13 @@ def main(argv=None) -> int:
     env = {k: os.environ[k] for k in _MODEL_ENV_KEYS if os.environ.get(k)}
     if "AGENT_OPENAI_API_KEY" not in env:
         raise SystemExit("AGENT_OPENAI_API_KEY is not set")
+    # A model without a registered price cannot open a session: say so at start, once,
+    # instead of answering every person with "unavailable".
+    from web_operation_agent.modeling.spend import UnpricedModel, price_for
+    try:
+        price_for(a.model or env.get("AGENT_OPENAI_MODEL", ""))
+    except UnpricedModel as exc:
+        raise SystemExit(str(exc)) from exc
     host = YudaoHost(YudaoHostConfig(
         api_base=a.api_base, public_origin=a.public_origin,
         public_agent_url=a.public_agent_url or a.public_origin.rstrip("/") + "/woa-agent",

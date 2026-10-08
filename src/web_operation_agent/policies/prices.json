@@ -27,5 +27,12 @@
     "cache_read_per_m": 0.04,
     "currency": "CNY",
     "taken": "2026-10-02, https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ ; CNY peak list rates used as a conservative fixed estimate. Off-peak list rates are half; this is not time-dependent billing or the account invoice."
+  },
+  "deepseek-v4.1-flash": {
+    "input_per_m": 2.0,
+    "output_per_m": 8.0,
+    "cache_read_per_m": 0.2,
+    "currency": "CNY",
+    "taken": "2026-10-03, help.aliyun.com/zh/model-studio/deepseek-v4-1-flash, Beijing busy-hour published reference price; no idle-hour or plan discount assumed, so a prepaid token plan is booked at or above what it costs"
   }
 }

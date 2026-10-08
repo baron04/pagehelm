@@ -17,9 +17,9 @@ describe('failureSentence says the cause, then what happens next, then the statu
     expect(failureSentence({status: 503, retrying: true}))
       .toBe('助手暂时不可用，正在重试（503）。')
     expect(failureSentence({status: 409, retrying: false}))
-      .toBe('助手正忙，可以点重试（409）。')
+      .toBe('助手正忙（409）。')
     expect(failureSentence({status: null, retrying: false}))
-      .toBe('助手暂时不可用，可以点重试。')
+      .toBe('助手暂时不可用。')
   })
 })
 

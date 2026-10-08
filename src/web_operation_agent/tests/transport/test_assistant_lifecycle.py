@@ -275,7 +275,7 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         self.host.statuses = [503]
         page, errors = self.open()
         self.send(page, "列出订单")
-        self.assertIn("可以点重试（503）", self.start_sentence(page))
+        self.assertIn("助手暂时不可用（503）", self.start_sentence(page))
         # The person asked, so the person retries: nothing is attempted behind their back.
         page.wait_for_timeout(2500)
         self.assertEqual(self.host.bootstraps, 1)
@@ -388,7 +388,8 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         page.wait_for_timeout(9000)
         self.assertEqual(len(self.host.sessions), count)
         self.assertLessEqual(count, 3)
-        self.assertIn("可以点重试", self.start_sentence(page))
+        self.assertIn("助手暂时不可用", self.start_sentence(page))
+        self.assertNotIn("重试", self.start_sentence(page))
         self.assert_quiet(page, errors)
 
     def test_a_session_another_page_took_over_is_left_to_that_page(self):

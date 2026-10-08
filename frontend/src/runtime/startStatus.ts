@@ -24,7 +24,9 @@ export function failureSentence(failure: StartFailure, text: StartText = START_T
   const causes = text.causes as Record<string, string>
   const cause = causes[key] ?? text.causes.default
   const final = failure.status !== null && text.final_statuses.includes(failure.status)
-  const next = final ? '' : `，${failure.retrying ? text.retrying : text.stopped}`
+  // What happens next is said only when something is happening: a start that stopped
+  // shows its Retry button, and the sentence does not tell the person to press it.
+  const next = !final && failure.retrying ? `，${text.retrying}` : ''
   const status = failure.status === null ? '' : `（${failure.status}）`
   return `${cause}${next}${status}。`
 }
