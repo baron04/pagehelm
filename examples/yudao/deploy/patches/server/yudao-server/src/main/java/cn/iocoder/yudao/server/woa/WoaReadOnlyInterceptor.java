@@ -25,7 +25,7 @@ public class WoaReadOnlyInterceptor implements Interceptor {
     @Override
     public Object intercept(Invocation invocation) throws Throwable {
         if (WoaPageGuard.readOnly()) {
-            throw new ServiceException(CODE, "助手正在操作页面，这段时间内不能保存或修改数据");
+            throw new ServiceException(CODE, "这次保存是助手操作页面时触发的，已被拦下，数据没有改动。需要保存请您自己操作。");
         }
         return invocation.proceed();
     }
