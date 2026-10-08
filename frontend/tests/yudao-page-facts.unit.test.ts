@@ -171,7 +171,7 @@ describe('native Yudao record and read completion facts', () => {
         return new Response(JSON.stringify(answer), {status: 200})
       }}
     const facts = installPageFacts(view, document)
-    const call = (url: string) => { const r = new Request(); r.open('POST', url); r.send(); return sent[sent.length - 1][1] }
+    const call = (url: string) => { const r = new Request(); r.open('POST', url); r.send(); return sent[sent.length - 1]![1] }
     try {
       // Before any window: the person's own request, unmarked.
       expect(call('/admin-api/crm/customer/update')).toEqual({})

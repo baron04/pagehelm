@@ -226,7 +226,6 @@ describe('a page action in an application that names a write guard', () => {
     const state = runtime as unknown as Record<string, unknown>
     const execute = vi.fn(() => {
       state.highlightHandle = {active: () => true, clear: vi.fn()}
-      state.handoffGranted = true
       return Promise.resolve({success: true})
     })
     state._execute = execute
@@ -291,7 +290,6 @@ describe('a page action in an application that names a write guard', () => {
         expect(receipt.ok).toBe(!changedAfterRelease)
         expect(receipt.args_echo).toEqual({fields: [{ref: 'e2', field: 'phone',
           control: 'textbox', value: '[redacted]'}]})
-        expect(state.handoffGranted === true).toBe(!changedAfterRelease)
         expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
           '/woa/page-guard/begin', '/woa/page-guard/end',
         ])
@@ -367,66 +365,50 @@ describe('a page action in an application that names a write guard', () => {
         const handedOver = ['ready', 'button-disabled', 'initially-disabled'].includes(mode)
         expect((posts[1]?.body.receipt as Record<string, unknown>).ok).toBe(handedOver)
         expect(button.style.outline !== '').toBe(handedOver)
-        expect(state.handoffGranted === true).toBe(handedOver)
         expect(clicked).not.toHaveBeenCalled()
         if (handedOver) (state.highlightHandle as {clear(): void}).clear()
       } finally { form.remove() }
     })
 
-  it('rejects an old action after the person takes control', async () => {
-    const {runtime, executed, posts, action} = actingRuntime()
-    const state = runtime as unknown as Record<string, unknown>
-    state.userIntervened = true
-    await runtime._handleAction(action as never)
-    expect(executed).toEqual([])
-    expect(posts.map(row => row.path)).toEqual(['/results'])
-    expect(posts[0]?.body.error_code).toBe('user_intervened')
-  })
-
-  it('leaves the page to the person while the turn only reads and thinks', () => {
+  it('never holds back, swallows or stops on a person\'s own gesture', () => {
     const {runtime} = actingRuntime()
     const state = runtime as unknown as Record<string, unknown>
-    state.stored = {taskInFlight: true, pageWorked: false, inFlight: null, cachedResult: null}
+    state.stored = {taskInFlight: true, pageWorked: true, inFlight: {action_id: 'a-1'}, cachedResult: null}
     state.cancelTask = vi.fn(async () => {})
-    const preventDefault = vi.fn()
-    const event = {isTrusted: true, cancelable: true, composedPath: () => [document.body],
-      preventDefault, stopImmediatePropagation: vi.fn()} as unknown as Event
-    runtime._userTookControl(event)
-    expect(state.userIntervened).toBeFalsy()
-    expect(preventDefault).not.toHaveBeenCalled()
-    expect(state.cancelTask).not.toHaveBeenCalled()
-    // A command running on the page is the assistant's hand on it: the gesture takes it back.
-    state.stored = {taskInFlight: true, pageWorked: false,
-      inFlight: {action_id: 'a-1'}, cachedResult: null}
-    runtime._userTookControl(event)
-    expect(state.userIntervened).toBe(true)
-    expect(state.cancelTask).toHaveBeenCalledOnce()
-  })
-
-  it('fences a live turn on a real page gesture but does not block the handoff gesture', () => {
-    const {runtime} = actingRuntime()
-    const state = runtime as unknown as Record<string, unknown>
-    state.stored = {taskInFlight: true, pageWorked: true, inFlight: null, cachedResult: null}
-    state.cancelTask = vi.fn(async () => {})
-    const preventDefault = vi.fn()
-    const stopImmediatePropagation = vi.fn()
+    state.highlightHandle = {clear: vi.fn(), active: () => true}
+    const preventDefault = vi.fn(), stopImmediatePropagation = vi.fn()
     const event = {isTrusted: true, cancelable: true, composedPath: () => [document.body],
       preventDefault, stopImmediatePropagation} as unknown as Event
-    runtime._userTookControl(event)
-    expect(state.userIntervened).toBe(true)
-    expect(preventDefault).toHaveBeenCalledOnce()
-    expect(state.cancelTask).toHaveBeenCalledOnce()
-    runtime._userTookControl(event)
-    expect(preventDefault).toHaveBeenCalledOnce()
-    expect(state.cancelTask).toHaveBeenCalledOnce()
-
-    state.userIntervened = false
-    state.handoffGranted = true
-    state.highlightHandle = {clear: vi.fn(), active: () => true}
-    runtime._userTookControl(event)
-    expect(state.userIntervened).toBe(true)
-    expect(preventDefault).toHaveBeenCalledOnce()
+    runtime._userActed(event)
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopImmediatePropagation).not.toHaveBeenCalled()
+    expect(state.cancelTask).not.toHaveBeenCalled()
+    // The assistant's marker goes; the turn itself carries on.
     expect((state.highlightHandle as unknown)).toBeNull()
+  })
+
+  it('closes the assistant\'s read-only window the moment the person acts on the page', () => {
+    const {runtime} = actingRuntime()
+    const state = runtime as unknown as Record<string, unknown>
+    const calls: string[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input)); return new Response('{"active":false}', {status: 200})
+    }) as typeof fetch
+    try {
+      state.config = {...(state.config as object), pageWriteGuard: '/woa/page-guard'}
+      state.writeGuardUntil = Date.now() + 60_000
+      const event = {isTrusted: true, cancelable: true, composedPath: () => [document.body],
+        preventDefault: vi.fn(), stopImmediatePropagation: vi.fn()} as unknown as Event
+      runtime._userActed(event)
+      // Asked for synchronously, before the application's own handler for the gesture runs.
+      expect(calls).toEqual(['/woa/page-guard/end'])
+      expect(state.writeGuardUntil).toBe(0)
+      // A synthetic event, or one inside the assistant's own panel, closes nothing.
+      state.writeGuardUntil = Date.now() + 60_000
+      runtime._userActed({...event, isTrusted: false} as unknown as Event)
+      expect(calls.length).toBe(1)
+    } finally { globalThis.fetch = original }
   })
 })
 

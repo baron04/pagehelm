@@ -120,8 +120,6 @@ export class EmbeddedWebRuntime {
   /** When the application's read-only window expires, in epoch milliseconds; 0 if none. */
   private writeGuardUntil = 0
   private highlightHandle: PageHighlight | null = null
-  private userIntervened = false
-  private handoffGranted = false
   private clientInstance: SessionClient | null = null
   /** A message the person sent in place of an unanswered confirmation. */
   private replacementText = ''
@@ -171,9 +169,9 @@ export class EmbeddedWebRuntime {
         this.panelHost?.setConnection({online: false})
         this.panelHost?.raise('offline', {retryable: false})
       }),
-      listen('user pointer', document, 'pointerdown', event => this._userTookControl(event), true),
-      listen('user keyboard', document, 'keydown', event => this._userTookControl(event), true),
-      listen('user wheel', document, 'wheel', event => this._userTookControl(event),
+      listen('user pointer', document, 'pointerdown', event => this._userActed(event), true),
+      listen('user keyboard', document, 'keydown', event => this._userActed(event), true),
+      listen('user wheel', document, 'wheel', event => this._userActed(event),
         {capture: true, passive: false}),
       listen('route change', window, 'popstate', () => this._clearHighlight()),
       listen('fragment change', window, 'hashchange', () => this._clearHighlight()),
@@ -232,7 +230,7 @@ export class EmbeddedWebRuntime {
     const page = new Page(this.controller, this.getElementByIndex, this.redactor,
       this.readPageFacets, this.readFacetCandidates, this.applyPageFacet,
       this.readPageRecordRoute, this.readPageBlocker, this.readActiveView, this.readPageRoute, this.readPageQuery,
-      () => this.userIntervened, this.readElementNavigation, this.readPageRead, this.readElementPageControl,
+      () => false, this.readElementNavigation, this.readPageRead, this.readElementPageControl,
       this.panelContainer ?? undefined)
     this.heldPage = {controller: this.controller, lookup: this.getElementByIndex, page}
     return page
@@ -548,8 +546,6 @@ export class EmbeddedWebRuntime {
     const goal = String(text || '').trim()
     if (!goal || goal.length > 2000) throw new Error('task must contain 1-2000 characters')
     this._clearHighlight()
-    this.userIntervened = false
-    this.handoffGranted = false
     const messageId = crypto.randomUUID()
     this.stored.taskInFlight = true
     this.stored.pageWorked = false
@@ -794,25 +790,24 @@ export class EmbeddedWebRuntime {
     this.highlightHandle = null
   }
 
-  /** A person's real page gesture fences this turn before another command can dispatch. */
-  _userTookControl(event: Event): void {
+  /**
+   * A person's real gesture on the page is theirs: it is never held back, never swallowed
+   * and never stops the assistant. Two things follow from it. The marker the assistant
+   * left on a control is cleared, and the read-only window the assistant opened for its
+   * own page work is closed at once, before the application handles the gesture, so what
+   * the person does is not refused as if the assistant had done it. The assistant opens
+   * the window again before its next action, and the server checks that action against a
+   * fresh observation either way.
+   */
+  _userActed(event: Event): void {
     if (!event.isTrusted) return
     if (event.composedPath().includes(this.panelContainer as EventTarget)) return
     this._clearHighlight()
-    if (!this.stored?.taskInFlight || this.userIntervened) return
-    // While the assistant only reads and thinks, the page is the person's: a click or a
-    // scroll there takes nothing from the assistant, and stopping the answer for it -- and
-    // swallowing the click -- was the bug. It is taking control only once the turn has
-    // worked the page or a command is running on it; a later command is checked against
-    // a fresh observation by the server either way.
-    if (!this.stored.pageWorked && !this.stored.inFlight) return
-    this.userIntervened = true
-    if (this.handoffGranted) return
-    // The first gesture stops the assistant, not the application. In particular it must
-    // not reach an app whose read-only window is still closing and be replayed later.
-    if (event.cancelable) event.preventDefault()
-    event.stopImmediatePropagation()
-    detach('user takeover', this.cancelTask().catch(() => {}))
+    const guard = this.config?.pageWriteGuard
+    if (guard && this.writeGuardUntil > Date.now()) {
+      this.writeGuardUntil = 0
+      detach('close page write guard for the person', closeWriteGuard(guard))
+    }
   }
 
   // -- observing the page ------------------------------------------------------------------
@@ -914,26 +909,15 @@ export class EmbeddedWebRuntime {
 
   async _handleAction(action: ActionEnvelope): Promise<void> {
     if (await this._replayOrRecover(action)) return
-    if (await this._rejectIfIntervened(action)) return
     if (await this._rejectIfNotCurrent(action)) return
     if (await this._rejectWithoutWriteGuard(action)) return
-    if (await this._rejectIfIntervened(action)) return
     const before = this.currentObservation
     if (!before) return
     const navigation = this._navigationExpectation(action.command)
     const executing = await this._prepare(action, before, navigation)
-    if (await this._rejectIfIntervened(action)) return
     if (!await this._claim(action, executing)) return
-    if (await this._rejectIfIntervened(action)) return
     const outcome = await this._dispatch(action, executing, navigation)
     await this._settle(executing, before, outcome)
-  }
-
-  private async _rejectIfIntervened(action: ActionEnvelope): Promise<boolean> {
-    if (!this.userIntervened) return false
-    await this._reject(action, 'user_intervened',
-      'The person took control of the page before this action was dispatched.')
-    return true
   }
 
   /** A result already written for this action is resent; an interrupted one is recovered. */
@@ -1069,10 +1053,6 @@ export class EmbeddedWebRuntime {
       }
       this.writeGuardUntil = 0
     }
-    if (this.userIntervened) {
-      return {ok: false, code: 'user_intervened',
-        detail: 'the person took control before the command was dispatched'}
-    }
     if (!PASSIVE_ACTIONS.has(action.command.action) && !this.stored.pageWorked) {
       this.stored.pageWorked = true
       this._save()
@@ -1132,11 +1112,10 @@ export class EmbeddedWebRuntime {
                         outcome: {ok: boolean; code: string; detail: string}): Promise<void> {
     const observation = await this.observe(executing.action_id)
     if (executing.command.action === 'highlight' && outcome.ok &&
-        (this.userIntervened || !this.highlightHandle?.active() ||
+        (!this.highlightHandle?.active() ||
          before.observation.url !== observation.observation.url)) {
       this._clearHighlight()
-      this.handoffGranted = false
-      outcome = {ok: false, code: this.userIntervened ? 'user_intervened' : 'stale_observation',
+      outcome = {ok: false, code: 'stale_observation',
         detail: 'the highlighted control was no longer current at handoff'}
     }
     if (executing.command.action === 'handoff_form' && outcome.ok) {
@@ -1155,20 +1134,17 @@ export class EmbeddedWebRuntime {
       const submitReady = !submit || (buttons.length === 1 &&
         this.highlightHandle?.active() && this.page.verifyFormSubmit(
           {...submit, ref: buttons[0]!.ref}, rebound, observation.observation.elements))
-      if (this.userIntervened || before.observation.url !== observation.observation.url ||
+      if (before.observation.url !== observation.observation.url ||
           before.observation.record_route !== observation.observation.record_route ||
           observation.observation.render_state !== 'ready' ||
           rebound.some(field => field === null) || !submitReady ||
           !this.page.verifyFormFields(rebound, observation.observation.elements)) {
-        outcome = {ok: false, code: this.userIntervened ? 'user_intervened' : 'stale_observation',
+        outcome = {ok: false, code: 'stale_observation',
           detail: 'the form fields were no longer ready at handoff'}
-      } else {
-        this.handoffGranted = true
       }
     }
     if (executing.command.action === 'handoff_form' && !outcome.ok) {
       this._clearHighlight()
-      this.handoffGranted = false
     }
     // `navigated` is a change in the observed top-level URL. A child-frame commit satisfies
     // the action guard, and its new content travels in the fresh observation instead.
@@ -1186,7 +1162,6 @@ export class EmbeddedWebRuntime {
     if (command.action === 'highlight') {
       this._clearHighlight()
       this.highlightHandle = this.page.highlight(command.args?.ref)
-      this.handoffGranted = true
       return Promise.resolve({success: true, message: 'control highlighted for the person'})
     }
     if (command.action === 'handoff_form') {
