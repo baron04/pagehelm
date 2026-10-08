@@ -154,6 +154,42 @@ describe('native Yudao record and read completion facts', () => {
     old(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
     expect(facts.readPageRecordRoute()).toBeUndefined()
   })
+  it('marks this page\'s own API requests only while the assistant is working it', async () => {
+    const sent: Array<[string, Record<string, string>]> = []
+    class Request extends EventTarget {
+      responseType = 'json'; response = {code: 0, data: {}}; status = 200
+      headers: Record<string, string> = {}; url = ''
+      open(_method: string, url: string) { this.url = url }
+      setRequestHeader(name: string, value: string) { this.headers[name] = value }
+      send() { sent.push([this.url, this.headers]); this.dispatchEvent(new Event('loadend')) }
+    }
+    let answer: unknown = {active: true, expires_at: Date.now() / 1000 + 60}
+    const fetched: Array<[string, string | null]> = []
+    const view = {location: window.location, XMLHttpRequest: Request, Headers,
+      fetch: async (input: string, init?: RequestInit) => {
+        fetched.push([input, new Headers(init?.headers).get('X-WOA-Assistant')])
+        return new Response(JSON.stringify(answer), {status: 200})
+      }}
+    const facts = installPageFacts(view, document)
+    const call = (url: string) => { const r = new Request(); r.open('POST', url); r.send(); return sent[sent.length - 1][1] }
+    try {
+      // Before any window: the person's own request, unmarked.
+      expect(call('/admin-api/crm/customer/update')).toEqual({})
+      await view.fetch('/woa/page-guard/begin', {method: 'POST'})
+      expect(call('/admin-api/crm/customer/update')).toEqual({'X-WOA-Assistant': '1'})
+      await view.fetch('/admin-api/infra/file/presigned-url')
+      expect(fetched[fetched.length - 1]).toEqual(['/admin-api/infra/file/presigned-url', '1'])
+      // Nothing outside the application's API is marked.
+      expect(call('/other/path')).toEqual({})
+      // The mark stops the moment the window's end is asked for.
+      await view.fetch('/woa/page-guard/end', {method: 'POST'})
+      expect(call('/admin-api/crm/customer/update')).toEqual({})
+      // A window the application did not confirm marks nothing.
+      answer = {active: false}
+      await view.fetch('/woa/page-guard/begin', {method: 'POST'})
+      expect(call('/admin-api/crm/customer/update')).toEqual({})
+    } finally { facts.dispose() }
+  })
   it('does not let XHR normalization turn duplicate IDs into an exact read', () => {
     class Request extends EventTarget {
       responseType = 'json'

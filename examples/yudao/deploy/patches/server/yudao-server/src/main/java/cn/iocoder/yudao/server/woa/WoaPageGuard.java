@@ -11,10 +11,10 @@ import java.time.Instant;
 /**
  * The read-only window an embedded assistant opens around its page actions.
  *
- * While a signed-in user's window is open, every request made as that user is refused any
- * insert, update or delete, whatever handler or HTTP method it came through. The window is
- * kept in Redis under the tenant and user, so every server instance and every browser
- * session of that user sees it, and it closes by itself when its time runs out.
+ * While a signed-in user's window is open, a request from the page the assistant is working
+ * is refused any insert, update or delete, whatever handler or HTTP method it came through.
+ * Nothing else that user does is held. The window is kept in Redis under the tenant and
+ * user, so every server instance sees it, and it closes by itself when its time runs out.
  */
 @Component
 public class WoaPageGuard {

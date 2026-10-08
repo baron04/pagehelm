@@ -359,17 +359,51 @@ export function createPageFacts({view = window, doc = document} = {}) {
     dispose() {disposed = true; reads.clear(); record = null; appliedQuery = null; appliedRead = null}}
 }
 
+/** What this page's own API requests carry while the assistant is working it. */
+export const ASSISTANT_HEADER = 'X-WOA-Assistant'
+
 export function installPageFacts(view = window, doc = document) {
   const facts = createPageFacts({view, doc})
   const originalFetch = view.fetch
   const originalOpen = view.XMLHttpRequest.prototype.open
   const originalSend = view.XMLHttpRequest.prototype.send
   const requests = new WeakMap()
+  // While the assistant works this page, the requests this page sends say so, and only
+  // those are held read-only by the deployment. The mark starts when the window is
+  // confirmed and stops the moment its end is asked for; another tab, another device and
+  // this page before or after never carry it, so a person's own saves are never held.
+  let assistantUntil = 0
+  const assistantWorking = () => Date.now() < assistantUntil
+  const guardStep = url => {
+    try {
+      const target = new URL(String(url), view.location.href)
+      const step = target.origin === view.location.origin && /^\/woa\/page-guard\/(begin|end)$/.exec(target.pathname)
+      return step ? step[1] : ''
+    } catch { return '' }
+  }
   const fetch = async function(input, init) {
-    const settle = facts.begin(typeof input === 'string' || input instanceof URL ? String(input) : input.url,
-      init?.method || input?.method || 'GET')
+    const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url
+    const step = guardStep(url)
+    if (step === 'end') assistantUntil = 0
+    const settle = facts.begin(url, init?.method || input?.method || 'GET')
+    if (!step && assistantWorking()) {
+      try {
+        const target = new URL(url, view.location.href)
+        if (target.origin === view.location.origin && target.pathname.startsWith('/admin-api/')) {
+          const headers = new view.Headers(init?.headers || (typeof input === 'object' && input.headers) || {})
+          headers.set(ASSISTANT_HEADER, '1')
+          init = {...init, headers}
+        }
+      } catch { /* the original implementation owns invalid requests */ }
+    }
     try {
       const response = await originalFetch.call(this, input, init)
+      if (step === 'begin') {
+        let window_
+        try { window_ = response.ok ? await response.clone().json() : null } catch { window_ = null }
+        assistantUntil = window_?.active === true && typeof window_.expires_at === 'number'
+          ? window_.expires_at * 1000 : 0
+      }
       if (settle) {
         let body
         try { body = await response.clone().json() } catch { /* invalid envelopes fail closed */ }
@@ -414,6 +448,9 @@ export function installPageFacts(view = window, doc = document) {
       try { body = this.responseType === 'json' ? this.response : JSON.parse(this.responseText) } catch { /* blocked */ }
       settle(this.status, body)
     }, {once: true})
+    if (request && assistantWorking()) {
+      try { this.setRequestHeader(ASSISTANT_HEADER, '1') } catch { /* the request is already sent */ }
+    }
     try { return originalSend.apply(this, args) } catch (error) {settle?.(0, null); throw error}
   }
   view.fetch = fetch; view.XMLHttpRequest.prototype.open = open; view.XMLHttpRequest.prototype.send = send

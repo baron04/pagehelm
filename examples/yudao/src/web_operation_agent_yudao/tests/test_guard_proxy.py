@@ -70,7 +70,8 @@ class GuardProxyTests(unittest.TestCase):
         self.proxy.close(); self.app.shutdown(); self.app.server_close(); self.worker.join(3)
         self.tmp.cleanup()
 
-    def request(self, method, path, *, token="synthetic-a", cookie=None, origin=None, body=b"{}", visit_tenant=""):
+    def request(self, method, path, *, token="synthetic-a", cookie=None, origin=None, body=b"{}", visit_tenant="",
+                assistant=True):
         connection = http.client.HTTPConnection("127.0.0.1", self.proxy.http.server_port, timeout=3)
         headers = {"tenant-id": "1", "Origin": origin or self.origin,
                    "Content-Type": "application/json"}
@@ -78,6 +79,9 @@ class GuardProxyTests(unittest.TestCase):
             headers["Authorization"] = "Bearer " + token
         if visit_tenant:
             headers["visit-tenant-id"] = visit_tenant
+        if assistant:
+            # What the page the assistant is working puts on its own API requests.
+            headers["X-WOA-Assistant"] = "1"
         selected = self.cookie if cookie is None else cookie
         if selected:
             headers["Cookie"] = selected
@@ -111,6 +115,14 @@ class GuardProxyTests(unittest.TestCase):
         status, body, _ = self.request("POST", GUARD_PATH + "/end")
         self.assertEqual(status, 200); self.assertFalse(body["active"])
         self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 200)
+
+    def test_the_persons_own_requests_are_never_held_by_the_assistants_window(self):
+        self.begin()
+        # Another tab, another device, or the person's own click: no mark, no fence.
+        status, body, _ = self.request("POST", "/admin-api/crm/customer/update", assistant=False)
+        self.assertEqual((status, body["name"]), (200, "Changed"))
+        # The page the assistant is working is still held.
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
 
     def windowed(self):
         self.proxy.close()

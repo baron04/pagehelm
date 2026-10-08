@@ -21,6 +21,10 @@ import urllib.request
 from .page_guard import GuardRefused, NativePageGuard
 
 GUARD_PATH = "/woa/page-guard"
+#: What the page's own API requests carry while the assistant is working that page
+#: (frontend/src/integrations/yudao/page-facts.js). Only these are fenced: another tab,
+#: another device and the person's own actions never carry it and are never held.
+ASSISTANT_HEADER = "X-WOA-Assistant"
 _COOKIE = "woa_native_window"
 _MAX_BODY = 20 * 1024 * 1024
 _PUBLIC = frozenset({"/admin-api/system/auth/login", "/admin-api/system/auth/refresh-token",
@@ -191,7 +195,7 @@ class NativeGuardProxy:
                 # a bearer is always actor-bound, even if its route also accepts guests.
                 anonymous = path in _PUBLIC and not self.headers.get("Authorization")
                 actor = None if anonymous else self.actor()
-                if actor is None:
+                if actor is None or self.headers.get(ASSISTANT_HEADER) != "1":
                     self.upstream_request(body)
                 else:
                     with proxy.guard.request(actor, self.command, self.path):
@@ -200,7 +204,8 @@ class NativeGuardProxy:
             def upstream_request(self, body):
                 connect = http.client.HTTPSConnection if proxy.upstream.scheme == "https" else http.client.HTTPConnection
                 connection = connect(proxy.upstream.hostname, proxy.upstream.port, timeout=proxy.timeout_s)
-                headers = {key: self.headers[key] for key in ("Authorization", "tenant-id", "Content-Type", "Accept")
+                headers = {key: self.headers[key] for key in ("Authorization", "tenant-id", "Content-Type",
+                                                              "Accept", ASSISTANT_HEADER)
                            if key in self.headers}
                 # The window cookie never leaves the application distribution.
                 try:
