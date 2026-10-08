@@ -801,6 +801,10 @@ class Resolver(ScopeMixin, LocateMixin, LinesMixin, ValuesMixin):
         page = self.index.page(d.page.key) if d.page.key else None
         if page is None and d.entity:
             page = self._default_page(d.entity)
+        if page is None and d.page.key and self.index.entity(d.page.key.strip("/")) is not None:
+            # The page was named by the key of the entity it lists ("crm/contact" for the
+            # contacts page): that entity's own page is the one meant.
+            page = self._default_page(d.page.key.strip("/"))
         if page is None:
             return Resolved(kind="page", problem="the page named is not in the index")
         if d.page.search and d.kind == "page":

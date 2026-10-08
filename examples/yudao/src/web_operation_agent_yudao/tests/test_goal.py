@@ -736,6 +736,23 @@ class MoneyUnitTests(unittest.TestCase):
                 self.assertEqual(data.total("crm/contract", Compare("totalPrice", "lt", 0),
                                             "totalPrice"), (0.0, "元"))
 
+    def test_a_whole_number_amount_follows_the_one_unit_the_apis_whole_numbers_state(self):
+        def shown(kind, others):
+            docs = deepcopy(DOCS)
+            docs["components"]["schemas"]["Contract"]["properties"]["totalPrice"] = {
+                "type": kind, "description": "合同金额"}
+            docs["components"]["schemas"]["Other"] = {"properties": {
+                f"price{i}": {"type": "integer", "description": text} for i, text in enumerate(others)}}
+            data = YudaoGoalData(_Client(), docs)
+            data.schema()
+            return data.read("crm/contract", "11", ("totalPrice",)).shown["totalPrice"]
+        # Every whole-number amount that says its unit says 分: so is this one.
+        self.assertEqual(shown("integer", ["退款金额，单位：分", "运费（分）", "时长，单位：小时"]), "298.00 元")
+        # A decimal amount, an API whose whole numbers disagree, or one that says nothing: as stored.
+        self.assertEqual(shown("number", ["退款金额，单位：分"]), "29,800.00")
+        self.assertEqual(shown("integer", ["退款金额，单位：分", "定金，单位：元"]), "29,800.00")
+        self.assertEqual(shown("integer", ["时长，单位：小时"]), "29,800.00")
+
     def test_an_undeclared_currency_is_not_invented(self):
         data = YudaoGoalData(_Client(), DOCS)
         data.schema()

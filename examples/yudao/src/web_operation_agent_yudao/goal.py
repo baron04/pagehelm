@@ -546,7 +546,8 @@ class YudaoGoalData:
                     kind = "money"
             shown = name in columns or links.get(name, "~") in columns
             if kind == "money":
-                entity.money[name] = _money_unit(str(prop.get("description") or ""))
+                entity.money[name] = (_money_unit(str(prop.get("description") or ""))
+                                      or self._whole_amount_unit(prop))
             fields.append(FieldSchema(key=name, label=desc, kind=kind, relation=relation,
                                       choices=choices, searchable=True,
                                       listed=shown if columns else True, on_form=True))
@@ -1227,6 +1228,26 @@ class YudaoGoalData:
                 units[key] = "元" if unit in ("元", "分") else unit
         return Row(id=_row_id(row), display=self._display(entity, row),
                    values=values, shown=shown, units=units)
+
+    def _whole_amount_unit(self, prop: dict) -> str:
+        """The unit of a whole-number amount whose description states none.
+
+        This API writes an amount either as a decimal or as a whole number of a smaller
+        unit, and says the unit on some fields only (应付金额（总） beside 退款金额，单位：分).
+        When every whole-number field of the API that does state a unit states the same
+        one, an unstated whole-number amount is in that unit too; shown as it is stored
+        it would read a hundred times too large. Where they disagree, or none says,
+        nothing is assumed."""
+        if prop.get("type") != "integer":
+            return ""
+        if not hasattr(self, "_whole_unit"):
+            stated = {unit[0] for schema in self._docs.get("components", {}).get("schemas", {}).values()
+                      for field in (schema.get("properties") or {}).values()
+                      if isinstance(field, dict) and field.get("type") == "integer"
+                      for unit in [_money_unit(str(field.get("description") or ""))]
+                      if unit[:1] in ("元", "分")}
+            self._whole_unit = next(iter(stated)) if len(stated) == 1 else ""
+        return self._whole_unit
 
     def _money_for(self, entity: str, key: str) -> str:
         spec = self._entities.get(entity) or self._lines.get(entity)
