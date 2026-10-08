@@ -42,6 +42,8 @@ class GuardRefused(RuntimeError):
 _PLAIN_GET = re.compile(r"/admin-api(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)+")
 _WRITING_GET = re.compile(r"/admin-api(?:/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*|\{[A-Za-z0-9_]+\}|\*\*))+")
 _REFUSALS_KEPT = 64
+#: No window is acknowledged for longer than this.
+_LONGEST_WINDOW_S = 120
 
 
 def _writing_get_pattern(template: str) -> re.Pattern:
@@ -97,12 +99,18 @@ class NativePageGuard:
             with sqlite3.connect(self.journal) as db:
                 db.execute("CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, actor TEXT NOT NULL)")
                 db.execute("CREATE TABLE IF NOT EXISTS windows (actor TEXT NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(actor, owner))")
-                # A browser may still be operating under an acknowledged window after
-                # restart. Its monotonic deadline cannot be reconstructed safely.
-                for (actor,) in db.execute("SELECT actor FROM requests UNION SELECT actor FROM windows"):
+                # A write whose outcome was never learned stays unknown across a restart.
+                for (actor,) in db.execute("SELECT actor FROM requests"):
                     if not re.fullmatch(r"[a-f0-9]{64}", actor):
                         raise ValueError("invalid guard journal actor")
                     self._actors[actor] = _Actor(uncertain=True)
+                # A browser may still be working under a window acknowledged before the
+                # restart. When it was to end is not known, but no window outlasts the
+                # longest one: it is held that long from now and then ends like any other.
+                for actor, owner in db.execute("SELECT actor, owner FROM windows"):
+                    if not re.fullmatch(r"[a-f0-9]{64}", actor) or not re.fullmatch(r"[a-f0-9]{64}", owner):
+                        raise ValueError("invalid guard journal window")
+                    self._actors.setdefault(actor, _Actor()).windows[owner] = self.clock() + _LONGEST_WINDOW_S
 
     def _actor(self, actor):
         if not isinstance(actor, str) or not re.fullmatch(r"[a-f0-9]{64}", actor):
@@ -142,7 +150,7 @@ class NativePageGuard:
               wait_s: float = 10) -> float:
         self._owner(owner)
         if (isinstance(ttl_s, bool) or not isinstance(ttl_s, (int, float))
-                or not math.isfinite(ttl_s) or not 1 <= ttl_s <= 120
+                or not math.isfinite(ttl_s) or not 1 <= ttl_s <= _LONGEST_WINDOW_S
                 or isinstance(wait_s, bool) or not isinstance(wait_s, (int, float))
                 or not math.isfinite(wait_s) or not 0 <= wait_s <= 30):
             raise GuardRefused("invalid_window")
@@ -259,7 +267,9 @@ class NativePageGuard:
             with self._condition:
                 state.inflight -= 1
                 if not acknowledged:
-                    state.uncertain = True
+                    # A read that was not answered changed nothing; only a write whose
+                    # answer was lost leaves the actor's state unknown.
+                    state.uncertain = state.uncertain or not safe
                 elif request_id:
                     try:
                         with sqlite3.connect(self.journal) as db:

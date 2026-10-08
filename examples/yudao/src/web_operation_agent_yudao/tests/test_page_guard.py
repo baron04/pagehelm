@@ -128,22 +128,48 @@ class NativePageGuardTests(unittest.TestCase):
                 restarted.begin(A, OWNER)
             self.assertEqual(lost.exception.code, "prior_request_uncertain")
 
-    def test_acknowledged_window_survives_restart_until_reconciled(self):
+    def test_a_window_open_at_a_restart_is_held_for_the_longest_a_window_lasts(self):
         with tempfile.TemporaryDirectory() as tmp:
             journal = Path(tmp) / "guard.sqlite3"
             first = NativePageGuard(frozenset({READ}), journal=journal)
             first.begin(A, OWNER)
-            restarted = NativePageGuard(frozenset({READ}), journal=journal)
-            with self.assertRaises(GuardRefused):
+            now = [0]
+            restarted = NativePageGuard(frozenset({READ}), journal=journal, clock=lambda: now[0])
+            with self.assertRaises(GuardRefused) as held:
                 with restarted.request(A, "POST", "/admin-api/crm/customer/update"):
                     self.fail("restart must not release an acknowledged window")
-            with self.assertRaises(GuardRefused):
-                restarted.end(A, OWNER)
-            with self.assertRaises(GuardRefused):
-                restarted.begin(A, OWNER)
+            self.assertEqual(held.exception.code, "page_write_blocked")
+            self.assertTrue(restarted.active(A, OWNER))
+            # The same browser, or another of the same person, can go on working.
+            restarted.begin(A, OTHER, ttl_s=5)
+            now[0] = 6
+            self.assertTrue(restarted.active(A, OWNER))
+            now[0] = 121
+            self.assertFalse(restarted.protected(A))
+            with restarted.request(A, "POST", "/admin-api/crm/customer/update"):
+                pass
+            # Ended by its own clock, it is not found again by the next restart.
             again = NativePageGuard(frozenset({READ}), journal=journal)
-            with self.assertRaises(GuardRefused):
-                again.begin(A, OWNER)
+            self.assertFalse(again.protected(A))
+
+    def test_a_window_nobody_closed_before_a_restart_does_not_lock_its_actor_out(self):
+        """It ran out long before the restart, and nothing touched the actor in between."""
+        with tempfile.TemporaryDirectory() as tmp:
+            journal = Path(tmp) / "guard.sqlite3"
+            now = [0]
+            first = NativePageGuard(frozenset({READ}), journal=journal, clock=lambda: now[0])
+            first.begin(A, OWNER)
+            now[0] = 600
+            restarted = NativePageGuard(frozenset({READ}), journal=journal)
+            restarted.begin(A, OWNER)
+            restarted.end(A, OWNER)
+
+    def test_a_read_that_was_never_answered_leaves_the_actor_certain(self):
+        with self.assertRaises(TimeoutError):
+            with self.guard.request(A, "GET", READ):
+                raise TimeoutError("the reply was lost")
+        self.guard.begin(A, OWNER)
+        self.assertTrue(self.guard.active(A, OWNER))
 
     def test_released_or_expired_window_does_not_poison_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
