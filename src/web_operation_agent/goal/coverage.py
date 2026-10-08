@@ -49,6 +49,31 @@ def missing_group(deliverable, request, index):
     return None
 
 
+def cleared_fields(request, entity):
+    """The fields of `entity` the request says in so many words to clear, as normalised
+    labels; None when the entity names no field at all. A field named after the record it
+    belongs to ("清空晨岚机电的电话", "clear Ada's phone") is that field."""
+    labels = sorted({n for f in entity.fields for n in (f.label, *f.aliases) if n}, key=len, reverse=True)
+    if not labels:
+        return None
+    field = "(?:" + "|".join(re.escape(n) for n in labels) + ")"
+    names = field + r"(?:\s*(?:、|,|，|和|及|与|\band\b|&)\s*" + field + r")*"
+    owner = r"(?:[^，。；;,\n]{1,40}?(?:的|'s)\s*)?"
+    patterns = [r"(?:\bclear\b|\bempty\b|\bblank\b|清空|置空)\s*(?:the\s+)?" + owner + names,
+                names + r"\s*(?:字段)?\s*(?:都|全都|全部|均|一并)?\s*"
+                        r"(?:清空|置空|留空|设为空|改为空|改成空|设为\s*[\"“']\s*[\"”'])"]
+    request = re.sub(r'[“「\"]([^”」\"]+)[”」\"]', " ", request)
+    cleared = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, request, re.I):
+            before = re.split(r"[。；;，,\n]", request[:match.start()])[-1]
+            if re.search(r"(?:不要|别|不必|无需|不|don't|do not|never|not)", before, re.I):
+                continue
+            # Whole matches prevent Email from qualifying Secondary Email by substring.
+            cleared.update(_norm(m.group()) for m in re.finditer(field, match.group(), re.I))
+    return cleared
+
+
 def missing_form_values(deliverable, request, index):
     """Empty model values require explicit literal clearing, using indexed labels.
 
@@ -64,23 +89,9 @@ def missing_form_values(deliverable, request, index):
         return next((f for f in entity.fields if _norm(label) in {_norm(n) for n in (f.key, f.label, *f.aliases)}), None)
 
     requested = deliverable.field_values or ((deliverable.action, deliverable.value),)
-    labels = sorted({n for f in entity.fields for n in (f.label, *f.aliases) if n}, key=len, reverse=True)
-    if not labels:
+    cleared = cleared_fields(request, entity)
+    if cleared is None:
         return None
-    field = "(?:" + "|".join(re.escape(n) for n in labels) + ")"
-    names = field + r"(?:\s*(?:、|,|，|和|及|与|\band\b|&)\s*" + field + r")*"
-    patterns = [r"(?:\bclear\b|\bempty\b|\bblank\b|清空|置空)\s*(?:the\s+)?" + names,
-                names + r"\s*(?:字段)?\s*(?:都|全都|全部|均|一并)?\s*"
-                        r"(?:清空|置空|留空|设为空|改为空|改成空|设为\s*[\"“']\s*[\"”'])"]
-    request = re.sub(r'[“「\"]([^”」\"]+)[”」\"]', " ", request)
-    cleared = set()
-    for pattern in patterns:
-        for match in re.finditer(pattern, request, re.I):
-            before = re.split(r"[。；;，,\n]", request[:match.start()])[-1]
-            if re.search(r"(?:不要|别|不必|无需|不|don't|do not|never|not)", before, re.I):
-                continue
-            # Whole matches prevent Email from qualifying Secondary Email by substring.
-            cleared.update(_norm(m.group()) for m in re.finditer(field, match.group(), re.I))
     missing = []
     supplied = set()
     for label, value in requested:

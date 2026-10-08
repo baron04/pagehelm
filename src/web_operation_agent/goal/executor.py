@@ -214,6 +214,64 @@ def _as_handoffs(spec: GoalSpec, text: str = "") -> tuple[GoalSpec, tuple[str, .
     return replace(spec, deliverables=tuple(out)), tuple(controls)
 
 
+_NEW = frozenset({"create", "new", "add", "新增", "新建", "创建", "添加"})
+_HIGHEST = re.compile(r"最高|最大|最多|最贵|\b(?:highest|largest|biggest|greatest)\b", re.I)
+_LOWEST = re.compile(r"最低|最小|最少|最便宜|\b(?:lowest|smallest|least|cheapest)\b", re.I)
+_FIRST_N = re.compile(r"前\s*[0-9一二两三四五六七八九十]+|\btop\s*\d+", re.I)
+
+
+def _as_said(spec: GoalSpec, text: str, index) -> tuple[GoalSpec, tuple[str, ...]]:
+    """Three spellings a declaration is often given that mean something the declaration
+    has a proper place for. Returns (spec, what was read otherwise).
+
+    A list ordered by a number, for a request that asks which are the highest or lowest
+    and does not ask for a first so-many, is that number's extreme with every tie: an
+    ordered list shows the answer somewhere in it, the extreme says it. A new record
+    declared with conditions and no values is being given those as the values it starts
+    with ("add a contact for this customer"): a record that does not exist has nothing
+    to be found by. A field declared without a value, for a request that says to clear
+    it, is that field with an empty value."""
+    from .coverage import cleared_fields
+    out, changed = [], []
+    highest, lowest = bool(_HIGHEST.search(text or "")), bool(_LOWEST.search(text or ""))
+    for d in spec.deliverables:
+        if (d.kind == "list" and d.sort and not d.limit and highest != lowest
+                and d.descending == highest and not _FIRST_N.search(text or "")
+                and (d.metric is None or (d.metric.op == "count" and not d.metric.group_by))):
+            filters = d.metric.filters if d.metric is not None else ()
+            pages = d.metric.page_filters if d.metric is not None else ()
+            d = replace(d, sort="", descending=False, metric=Metric(
+                op="max" if highest else "min", field=d.sort, filters=filters, page_filters=pages))
+            changed.append("extreme")
+        if (d.kind == "handoff" and d.action.casefold() in _NEW and not d.record
+                and not d.field_values and not d.value and d.metric is not None and d.metric.filters
+                and all(f.op in ("", "=") and len(f.values) == 1 for f in d.metric.filters)
+                and len({f.field.casefold() for f in d.metric.filters}) == len(d.metric.filters)):
+            d = replace(d, metric=None, field_values=tuple(
+                (f.field, f.values[0]) for f in d.metric.filters))
+            changed.append("starting values")
+        entity = index.entity(d.entity) if index is not None and d.entity else None
+        if (d.kind == "handoff" and d.fields and not d.value and entity is not None
+                and (d.field_values or not d.action)):
+            cleared = cleared_fields(text or "", entity) or set()
+            given = {k.casefold() for k, _ in d.field_values}
+
+            def names(label: str) -> set[str]:
+                """Every name the index gives the field this label is one name of."""
+                return {_norm(n) for f in entity.fields for n in (f.key, f.label, *f.aliases)
+                        if n and _norm(label) in {_norm(x) for x in (f.key, f.label, *f.aliases)}}
+            empty = tuple(label for label in dict.fromkeys(d.fields)
+                          if names(label) & cleared and label.casefold() not in given)
+            if empty:
+                d = replace(d, fields=tuple(f for f in d.fields if f not in empty),
+                            field_values=d.field_values + tuple((label, "") for label in empty))
+                changed.append("cleared")
+        out.append(d)
+    if not changed:
+        return spec, ()
+    return replace(spec, deliverables=tuple(out)), tuple(changed)
+
+
 def _link_to_named(s: _TurnState, d) -> tuple[str, str] | None:
     """The declared entity's link to a record the request names (an order's Customer for
     a named customer): (the link field's label, that record's name), or None."""
@@ -1172,6 +1230,9 @@ class GoalTurnExecutor:
         if flipped:
             s.ledger.append("goal_amounts_as_magnitudes", step=s.step, fields=list(flipped))
         spec, handed = _as_handoffs(spec, s.message.text)
+        spec, reread = _as_said(spec, s.message.text, s.full_index or s.index)
+        if reread:
+            s.ledger.append("goal_declaration_as_said", step=s.step, changes=list(reread))
         if handed:
             s.ledger.append("goal_page_became_handoff", step=s.step, controls=list(handed))
         spec, unscoped = _entity_over_page(spec, s.message.text, s.full_index)
@@ -1629,6 +1690,7 @@ class GoalTurnExecutor:
         today_text = str(today() or "") if callable(today) else ""
         spec, _flipped = _magnitudes(spec, s.message.text)
         spec, _handed = _as_handoffs(spec, s.message.text)
+        spec, _reread = _as_said(spec, s.message.text, s.full_index or s.index)
         spec, _corrections = correct_records(spec, s.message.text, s.references,
                                              tuple(c.display for c in s.candidates))
         if s.candidates and spec.deliverables:
@@ -2702,7 +2764,10 @@ def _coverage_gaps(spec: GoalSpec, parts: list, text: str, today: str,
     asked = [p for p in parts if p.get("kind") in reads]
     # A list asked for is also delivered by its own page narrowed to the same records:
     # the person sees the list there, and the applied conditions are verified on the page.
-    shown = {d.entity for d in spec.deliverables if d.kind == "page" and d.page.conditions}
+    # So is what a named record's tab lists: the request asked to see it, and the tab is
+    # where the application shows it.
+    shown = {d.entity for d in spec.deliverables if d.kind == "page"
+             and (d.page.conditions or (d.record and d.section))}
     asked = [p for p in asked if not (p.get("kind") == "list" and p.get("entity") in shown)]
     if asked and not named and not any(d.kind in reads for d in spec.deliverables):
         gaps.append("the request asks for values (" + "; ".join(
@@ -2937,8 +3002,20 @@ def _moved_from_named_kind(s: _TurnState, before: GoalSpec, after: GoalSpec) -> 
                   for t in c.terms]
         return any(n and _norm(n) in said for n in words)
 
+    def same_word(old: str, new: str) -> bool:
+        """The word the person used for the first kind is part of what the second is
+        called too ("订单" for a sales order; the record is a 交易订单): they named a kind
+        of thing both are, and the record's number says which."""
+        first, second = index.entity(old), index.entity(new)
+        if first is None or second is None:
+            return False
+        words = [first.label, *first.aliases] + [
+            t for c in getattr(index, "conventions", ()) or () if c.entity == old for t in c.terms]
+        called = [_norm(n) for n in (second.label, *second.aliases) if n]
+        return any(n and _norm(n) in said and any(_norm(n) in c for c in called) for n in words)
+
     return any(b.entity and a.entity and b.entity != a.entity and named(b.entity)
-               and not named(a.entity)
+               and not named(a.entity) and not same_word(b.entity, a.entity)
                for b, a in zip(before.deliverables, after.deliverables))
 
 
@@ -2959,6 +3036,15 @@ def _repairable(spec: GoalSpec, resolution: Resolution, *,
                 if r.repair and not (d.kind == "fact" and d.entity in observed_empty_entities
                     and r.facts and not r.problem and not r.missing_fields
                     and set(r.empty) == set(d.fields) == {f.label for f in r.facts})]
+    # The application would not read an entity the way it was declared. Another entity of
+    # the index may hold the same thing under a module the request did not name (stock in
+    # the warehouse module or in the purchasing one); the declarer is told once.
+    problems += [f"the application refused to read {d.entity} this way"
+                 + (f" ({r.refused[:120]})" if r.refused else "")
+                 + "; if another entity of the index holds what is asked, declare it there, "
+                   "keeping every condition; otherwise declare the same again"
+                 for d, r in zip(spec.deliverables, resolution.deliverables, strict=True)
+                 if r.read_failure == "refused" and not r.repair and not r.denied and d.entity]
     if spec.write_intent and not any(d.kind == "handoff" for d in spec.deliverables):
         problems.append("the person asks for a change (write_intent is true) but no "
                         "deliverable is a handoff: declare a handoff on the record meant, "
