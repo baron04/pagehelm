@@ -368,7 +368,8 @@ button:disabled { cursor: not-allowed; }
      would otherwise narrow and re-wrap every line the moment the bar appears. */
   scrollbar-gutter: stable;
   overflow-x: hidden;
-  overflow-anchor: auto;
+  /* Prepending history is anchored explicitly to the visible turn. */
+  overflow-anchor: none;
   padding: 16px 12px 4px;
 }
 /* The transcript remains keyboard-scrollable, but a saturated ring around the entire
@@ -440,7 +441,7 @@ button:disabled { cursor: not-allowed; }
   overflow-wrap: anywhere;
 }
 
-.woa-agent { display: flex; flex-direction: column; gap: 10px; }
+.woa-agent, .woa-result { display: flex; flex-direction: column; gap: 10px; }
 
 /* A boundary the server drew: everything above it is still readable, and no longer
    context for the model. */
@@ -1289,4 +1290,12 @@ button.woa-step__line:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+.woa-history {
+  text-align: center;
+  padding-block: 8px;
+  color: var(--woa-ink-muted);
+  button { cursor: pointer; color: var(--woa-accent); }
+  button:disabled { cursor: wait; }
 }

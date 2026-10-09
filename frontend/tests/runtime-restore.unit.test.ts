@@ -48,3 +48,43 @@ describe('restoring a conversation before exposing an empty greeting', () => {
     expect(host.snapshot().notice).not.toBeNull()
   })
 })
+
+describe('bounded live catch-up and independent history requests', () => {
+  it('drains live pages in order and shares concurrent refresh requests', async () => {
+    const {runtime, host} = setup()
+    const timeline = vi.spyOn(runtime, '_timeline')
+    timeline.mockResolvedValueOnce({entries: [], cursor: 'e100', has_newer: true} as never)
+      .mockResolvedValueOnce({entries: [], cursor: 'e200', has_newer: true} as never)
+      .mockResolvedValueOnce({entries: [], cursor: 'e235', has_newer: false} as never)
+    await Promise.all([runtime._refreshTimeline(), runtime._refreshTimeline()])
+    expect(timeline.mock.calls).toEqual([[{after: ''}], [{after: 'e100'}], [{after: 'e200'}]])
+    expect(runtime.panelCursor).toBe('e235')
+    expect(host.snapshot().notice).toBeNull()
+  })
+
+  it('offers history retry without putting the connection into reconnecting', async () => {
+    const {runtime, host} = setup()
+    host.setConnection({state: 'ready'})
+    host.setLoadingOlder(true)
+    const timeline = vi.spyOn(runtime, '_timeline').mockRejectedValueOnce(new Error('offline'))
+    await runtime._loadOlder('older')
+    expect(host.snapshot()).toMatchObject({historyError: true, loadingOlder: false,
+      connection: {state: 'ready'}, notice: null})
+    timeline.mockResolvedValueOnce({entries: [], has_more: false} as never)
+    await runtime._loadOlder('older')
+    expect(host.snapshot().historyError).toBe(false)
+  })
+
+  it('ignores a history page that completes after new conversation', async () => {
+    const {runtime, host} = setup()
+    let resolve!: (value: never) => void
+    vi.spyOn(runtime, '_timeline').mockImplementation(() => new Promise(done => {resolve = done}))
+    const pending = runtime._loadOlder('older')
+    host.clearTimeline()
+    resolve({entries: [{id: 'h00000001', sequence: 0, replayed: true,
+      turn_id: 'old', text: 'old question', kind: 'goal'}], has_more: true} as never)
+    await pending
+    expect(host.snapshot().entries).toEqual([])
+    expect(host.snapshot().hasOlder).toBe(false)
+  })
+})

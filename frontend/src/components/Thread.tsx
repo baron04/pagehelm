@@ -1,4 +1,4 @@
-import {memo, useCallback, useEffect, useMemo, useRef, useState} from 'react'
+import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {
   AlertTriangle, ArrowDown, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
 } from 'lucide-react'
@@ -167,7 +167,7 @@ function StepNode({step, status, duration, labels}: {
     </>
   )
   return (
-    <li className="woa-step" data-status={status} data-open={open ? 'true' : undefined}>
+    <li className="woa-step" data-entry-id={step.id} data-status={status} data-open={open ? 'true' : undefined}>
       <span className="woa-step__mark" aria-hidden="true"><NodeMark status={status} /></span>
       {detail
         ? (
@@ -296,7 +296,7 @@ function Outcome({entry, labels, limits, live, allowedOrigins}: {
     : entry.panel_state === 'refused' ? 'refused' : 'plain'
   if (kind === 'plain') {
     return (
-      <>
+      <div className="woa-result" data-entry-id={entry.id}>
       <Answer text={entry.text.slice(0, limits.result_max_chars)}
               authored={entry.authored ?? 'server'} live={live}
               labels={labels} allowedOrigins={allowedOrigins} />
@@ -311,12 +311,12 @@ function Outcome({entry, labels, limits, live, allowedOrigins}: {
           </time>
         )}
       </div>
-      </>
+      </div>
     )
   }
   const Icon = kind === 'indeterminate' ? AlertTriangle : CircleAlert
   return (
-    <section className="woa-outcome" data-kind={kind}>
+    <section className="woa-outcome" data-entry-id={entry.id} data-kind={kind}>
       <h3><Icon {...iconProps(14)} />
         {kind === 'indeterminate' ? labels.statusIndeterminate : labels.statusRefused}</h3>
       <p>{entry.text.slice(0, limits.result_max_chars)}</p>
@@ -358,7 +358,43 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   const [unseen, setUnseen] = useState(0)
   const turns = useMemo(() => group(snapshot.entries, snapshot.connection.busy),
                         [snapshot.entries, snapshot.connection.busy])
-  const lastCount = useRef(snapshot.entries.length)
+  const previousEntries = useRef(snapshot.entries)
+  const anchor = useRef<{node: HTMLElement; offset: number; height: number; top: number} | null>(null)
+
+  const restoreAnchor = useCallback(() => {
+    const root = scroller.current
+    const saved = anchor.current
+    if (!root || !saved) return
+    if (saved.node.isConnected) {
+      root.scrollTop += saved.node.getBoundingClientRect().top
+        - root.getBoundingClientRect().top - saved.offset
+    } else {
+      root.scrollTop = saved.top + root.scrollHeight - saved.height
+    }
+  }, [])
+
+  const captureAnchor = useCallback(() => {
+    const root = scroller.current
+    if (!root) return
+    const top = root.getBoundingClientRect().top
+    const visible = (node: HTMLElement) => node.getBoundingClientRect().bottom > top
+    const node = Array.from(root.querySelectorAll<HTMLElement>('[data-entry-id]')).find(visible)
+      ?? Array.from(root.querySelectorAll<HTMLElement>('[data-turn-id]')).find(visible)
+    anchor.current = node ? {node, offset: node.getBoundingClientRect().top - top,
+      height: root.scrollHeight, top: root.scrollTop} : null
+  }, [])
+
+  const loadOlder = useCallback(() => {
+    if (!scroller.current || snapshot.loadingOlder || !snapshot.hasOlder) return
+    follow.current = false
+    captureAnchor()
+    onLoadOlder()
+  }, [snapshot.loadingOlder, snapshot.hasOlder, onLoadOlder, captureAnchor])
+
+  useLayoutEffect(() => {
+    restoreAnchor()
+    if (!snapshot.loadingOlder) anchor.current = null
+  }, [snapshot.entries, snapshot.loadingOlder, restoreAnchor])
   // Prose already on screen when the panel opened is history, not something arriving now;
   // replaying a typewriter over it on every reconnect would be theatre.
   const settledAtMount = useRef<Set<string> | null>(null)
@@ -386,6 +422,9 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     const onScroll = guarded('thread scroll', () => {
       const distance = root.scrollHeight - root.scrollTop - root.clientHeight
       const near = distance <= NEAR_BOTTOM
+      // The person can keep scrolling while the request is in flight. Anchor the
+      // position they are reading now, rather than pulling them back to where it began.
+      if (anchor.current && Date.now() - gesture.current < GESTURE_WINDOW_MS) captureAnchor()
       if (near) {
         follow.current = true
         setUnseen(0)
@@ -407,7 +446,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       root.removeEventListener('keydown', note)
       root.removeEventListener('pointerdown', note)
     }
-  }, [])
+  }, [captureAnchor])
 
   // Anything that changes the height of the thread -- a new entry, prose revealing one
   // character at a time, a card opening -- keeps the newest line in view while following.
@@ -416,7 +455,8 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     if (!node || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(guarded('thread resize', () => {
       // A new conversation's greeting is read from the top; there is no newest line to keep.
-      if (follow.current && !node.hasAttribute('data-empty')) pin()
+      if (anchor.current) restoreAnchor()
+      else if (follow.current && !node.hasAttribute('data-empty')) pin()
       else {
         const root = scroller.current
         if (root) {
@@ -427,7 +467,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     }))
     observer.observe(node)
     return () => observer.disconnect()
-  }, [pin])
+  }, [pin, restoreAnchor])
 
   // Submitting is an explicit request to watch what happens next.
   const optimisticTurnId = snapshot.optimistic?.turnId
@@ -438,22 +478,29 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   useEffect(() => {
     const node = top.current
     const root = scroller.current
-    if (!node || !root || !snapshot.hasOlder || typeof IntersectionObserver === 'undefined') return
+    if (!node || !root || !snapshot.hasOlder || snapshot.loadingOlder || snapshot.historyError
+        || typeof IntersectionObserver === 'undefined') return
     const observer = new IntersectionObserver(
       guarded('load older', (records: IntersectionObserverEntry[]) => {
-        if (records.at(-1)?.isIntersecting) onLoadOlder()
+        if (records.at(-1)?.isIntersecting && !follow.current) loadOlder()
       }), {root, rootMargin: '160px 0px 0px 0px'})
     observer.observe(node)
     return () => observer.disconnect()
-  }, [snapshot.hasOlder, onLoadOlder])
+  }, [snapshot.hasOlder, snapshot.loadingOlder, snapshot.historyError, loadOlder])
 
   useEffect(() => {
-    const added = snapshot.entries.length - lastCount.current
-    lastCount.current = snapshot.entries.length
+    const previous = previousEntries.current
+    previousEntries.current = snapshot.entries
+    const last = previous.at(-1)
+    // Prepending history is not a new arrival. Count only entries after the former tail.
+    const tail = last ? snapshot.entries.findIndex(
+      entry => entry.id === last.id && entry.turn_id === last.turn_id) : -1
+    const added = tail >= 0 ? snapshot.entries.length - tail - 1
+      : Math.max(0, snapshot.entries.length - previous.length)
     if (added <= 0) return
     if (follow.current) pin()
     else setUnseen(count => count + added)
-  }, [snapshot.entries.length, pin])
+  }, [snapshot.entries, pin])
 
   const empty = turns.length === 0 && !snapshot.optimistic
   // A conversation this tab already has, being fetched: not the greeting of a new one.
@@ -469,13 +516,21 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       <div className="woa-thread__content" ref={content}
            data-empty={empty && !loading && !historyUnavailable ? 'true' : undefined}>
       <div ref={top} aria-hidden="true" />
-      {snapshot.loadingOlder && <Skeleton />}
+      {snapshot.hasOlder && (
+        <div className="woa-history">
+          {snapshot.historyError && <p role="status">{labels.historyLoadFailed}</p>}
+          <button type="button" disabled={snapshot.loadingOlder} onClick={loadOlder}>
+            {snapshot.loadingOlder ? labels.loadingTimeline
+              : snapshot.historyError ? labels.retry : labels.loadOlder}
+          </button>
+        </div>
+      )}
       {loading ? <Skeleton /> : historyUnavailable ? null : empty ? props.children : (
         <ol className="woa-turns">
           {turns.map(turn => (
-            <li className="woa-turn" key={turn.id || 'session'}
+            <li className="woa-turn" key={turn.id || 'session'} data-turn-id={turn.id}
                 data-settled={turn.running ? undefined : 'true'}>
-              {turn.goal && <p className="woa-user">{turn.goal.text}</p>}
+              {turn.goal && <p className="woa-user" data-entry-id={turn.goal.id}>{turn.goal.text}</p>}
               <div className="woa-agent">
                 {/* While the card is up, the card is what the turn is doing: a line above it
                     saying that a confirmation is needed said it twice. */}
@@ -490,7 +545,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                     still ends the turn and marks it stopped, and adds no line of its own. */}
                 {turn.outcome?.text && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
-                           live={!settledAtMount.current?.has(turn.outcome.id)}
+                           live={!turn.outcome.replayed && !settledAtMount.current?.has(turn.outcome.id)}
                            allowedOrigins={allowedOrigins} />
                 )}
               </div>

@@ -17,7 +17,6 @@ export type Labels = Record<LabelKey, string>
 export interface PanelLimits {
   composer_max_chars: number
   history_page_size: number
-  rendered_entry_budget: number
   effect_max_chars: number
   target_max_chars: number
   max_targets: number
@@ -39,6 +38,8 @@ export interface TimelineEntry {
   approval_id?: string
   authored?: 'model' | 'server'
   replayed?: boolean
+  /** Stable ordering within a durable stream, independent of transport incarnation. */
+  position?: {stream: string; sequence: number}
   step?: StepFacts
   /** Says only what is under way: shown while it is the newest step of a running turn. */
   transient?: boolean
@@ -81,6 +82,8 @@ export interface TimelinePage {
   cursor: string
   oldest: string
   has_more: boolean
+  /** More live entries remain after cursor; unrelated to older history. */
+  has_newer?: boolean
   closed: boolean
   close_reason: string
   pending_approval: ApprovalRequest | null

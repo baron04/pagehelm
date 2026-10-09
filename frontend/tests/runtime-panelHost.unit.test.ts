@@ -102,14 +102,14 @@ describe('PanelHost.applyTimeline merges by event id and is idempotent', () => {
     expect(host.snapshot().optimistic).toBeNull()
   })
 
-  it('drops the oldest entries once the render budget is exceeded', () => {
+  it('retains loaded history beyond the former render budget', () => {
     const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
-    const budget = DEFAULT_CONFIGURATION.limits.rendered_entry_budget
-    const entries = Array.from({length: budget + 5},
+    const count = 2005
+    const entries = Array.from({length: count},
       (_, i) => entry({id: `e${i}`, sequence: i + 1}))
     host.applyTimeline({entries})
-    expect(host.snapshot().entries).toHaveLength(budget)
-    expect(host.snapshot().entries[0]?.id).toBe(`e5`)
+    expect(host.snapshot().entries).toHaveLength(count)
+    expect(host.snapshot().entries[0]?.id).toBe('e0')
   })
 
   it('shows sequence-zero history recovered after a server restart', () => {
@@ -167,18 +167,21 @@ describe('PanelHost keeps one conversation across the channels that carry it', (
     expect(host.snapshot().entries).toHaveLength(2)
   })
 
-  it('does not add a second time what the new channel replays of a turn on screen', () => {
+  it('merges replay by stable ID, including a partially loaded turn', () => {
     const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
-    host.applyTimeline({incarnation: 'a', entries: first})
+    const id = (n: number) => `h0123456789abcdef:${String(n).padStart(8, '0')}`
+    host.applyTimeline({incarnation: 'a', entries: [
+      entry({id: id(3), position: {stream: 'history', sequence: 3}, sequence: 3, turn_id: 't1', kind: 'result', text: 'first answer'}),
+    ]})
     const replay = [
-      entry({id: 'h00000001', sequence: 0, replayed: true, turn_id: 't0', kind: 'goal', text: 'before this page'}),
-      entry({id: 'h00000002', sequence: 0, replayed: true, turn_id: 't1', kind: 'goal', text: 'first question'}),
-      entry({id: 'h00000003', sequence: 0, replayed: true, turn_id: 't1', kind: 'result', text: 'first answer'}),
+      entry({id: id(1), position: {stream: 'history', sequence: 1}, sequence: 0, replayed: true, turn_id: 't0', kind: 'goal', text: 'before this page'}),
+      entry({id: id(2), position: {stream: 'history', sequence: 2}, sequence: 0, replayed: true, turn_id: 't1', kind: 'goal', text: 'first question'}),
+      entry({id: id(3), position: {stream: 'history', sequence: 3}, sequence: 0, replayed: true, turn_id: 't1', kind: 'result', text: 'first answer'}),
     ]
     host.applyTimeline({incarnation: 'b', entries: replay})
     host.applyTimeline({incarnation: 'b', entries: replay}, {prepend: true})
     expect(host.snapshot().entries.map(item => item.text)).toEqual(
-      ['first question', 'first answer', 'before this page'])
+      ['before this page', 'first question', 'first answer'])
   })
 
   it('does not hold a new channel\'s lines under the place an old conversation was cleared', () => {
@@ -249,5 +252,39 @@ describe('examples the page declares after the panel went up', () => {
                                 examples: [{kind: 'find', text: '在哪里新建报价单'}]})
     host.offerExamples([{kind: 'query', text: '列出所有待开票的销售订单'}])
     expect(host.examples).toEqual([{kind: 'find', text: '在哪里新建报价单'}])
+  })
+})
+
+
+describe('history paging state is independent of the live stream', () => {
+  it('keeps a history request in flight when a live page arrives', () => {
+    const act = actions()
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: act})
+    host.applyTimeline({entries: [entry({id: 'e100', sequence: 100})], oldest: 'opaque', has_more: true})
+    host.loadOlder()
+    host.applyTimeline({entries: [entry({id: 'e101', sequence: 101})], has_more: false})
+    host.loadOlder()
+    expect(act.loadOlder).toHaveBeenCalledExactlyOnceWith('opaque')
+    expect(host.snapshot().loadingOlder).toBe(true)
+    host.applyTimeline({entries: [], oldest: 'older-opaque', has_more: true}, {prepend: true})
+    host.loadOlder()
+    expect(act.loadOlder).toHaveBeenLastCalledWith('older-opaque')
+  })
+
+  it('rejects late history responses after clearing the conversation', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    const version = host.timelineVersion
+    host.clearTimeline()
+    expect(host.applyTimeline({entries: [entry()], has_more: true}, {prepend: true, version})).toBe(false)
+    expect(host.snapshot().entries).toEqual([])
+    expect(host.snapshot().hasOlder).toBe(false)
+  })
+
+  it('rejects history from a channel replaced during the request', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    host.applyTimeline({incarnation: 'a', entries: [entry()]})
+    const version = host.timelineVersion
+    host.applyTimeline({incarnation: 'b', entries: []})
+    expect(host.applyTimeline({incarnation: 'a', entries: [entry()]}, {prepend: true, version})).toBe(false)
   })
 })

@@ -2148,3 +2148,76 @@ function rgb(hex: string): string {
   const value = Number.parseInt(hex.slice(1), 16)
   return `rgb(${value >> 16}, ${(value >> 8) & 255}, ${value & 255})`
 }
+
+test.describe('conversation history paging', () => {
+  const turns = (start: number, end: number) => Array.from({length: end - start}, (_, i) => {
+    const n = start + i
+    return [
+      entry(`e${n * 2 + 1}`, 'goal', `历史问题 ${n}`, {turn_id: `history-${n}`}),
+      entry(`e${n * 2 + 2}`, 'result', `历史回答 ${n}。`,
+        {turn_id: `history-${n}`, panel_state: 'success', replayed: true}),
+    ]
+  }).flat()
+
+  test('loads near the top and keeps the visible message when prepending', async ({open}) => {
+    const current = turns(20, 40)
+    const panel = await open(snapshot({entries: current, hasOlder: true}))
+    await panel.page.locator('.woa-launcher').click()
+    await panel.page.getByText('历史回答 39。', {exact: true}).waitFor()
+    await expect.poll(() => panel.page.locator('.woa-thread').evaluate(
+      node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(30)
+    // Initial display follows the newest message and does not eagerly fetch all history.
+    expect(await panel.calls()).toEqual([])
+    const thread = panel.page.locator('.woa-thread')
+    await thread.hover()
+    await panel.page.mouse.wheel(0, -100000)
+    await expect.poll(async () => (await panel.calls()).filter(c => c[0] === 'loadOlder').length)
+      .toBe(1)
+    await expect.poll(() => thread.evaluate(node => node.scrollTop)).toBe(0)
+    const message = panel.page.getByText('历史问题 20', {exact: true})
+    const before = await message.boundingBox()
+    await panel.set({loadingOlder: true})
+    await panel.set({entries: [...turns(0, 20), ...current], loadingOlder: false, hasOlder: false})
+    await expect.poll(async () => (await message.boundingBox())!.y).toBeCloseTo(before!.y, 0)
+    await expect(panel.page.locator('.woa-jump')).toHaveText(labels.jumpLatest)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('anchors an answer when the beginning of its turn arrives on an older page', async ({open}) => {
+    const answer = entry('e2', 'result', Array.from({length: 40}, (_, n) => `回答行 ${n}`).join('\n\n'),
+      {turn_id: 'partial', panel_state: 'success', replayed: true})
+    const panel = await open(snapshot({entries: [answer], hasOlder: true}))
+    await panel.page.locator('.woa-launcher').click()
+    const thread = panel.page.locator('.woa-thread')
+    await expect.poll(() => thread.evaluate(
+      node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(30)
+    await thread.hover()
+    await panel.page.mouse.wheel(0, -100000)
+    await expect.poll(async () => (await panel.calls()).filter(c => c[0] === 'loadOlder').length)
+      .toBe(1)
+    await expect.poll(() => thread.evaluate(node => node.scrollTop)).toBe(0)
+    const result = panel.page.locator('.woa-result')
+    const before = await result.boundingBox()
+    await panel.set({loadingOlder: true})
+    await panel.set({entries: [entry('e1', 'goal', '这一轮的早期问题', {turn_id: 'partial'}), answer],
+      loadingOlder: false, hasOlder: false})
+    await expect.poll(async () => (await result.boundingBox())!.y).toBeCloseTo(before!.y, 0)
+    await expect(panel.page.locator('.woa-jump')).toHaveText(labels.jumpLatest)
+    expect(panel.errors).toEqual([])
+  })
+
+  test('history failure offers retry and does not automatically loop', async ({open}) => {
+    const panel = await open(snapshot({entries: turns(0, 20), hasOlder: true, historyError: true}))
+    await panel.page.locator('.woa-launcher').click()
+    const thread = panel.page.locator('.woa-thread')
+    await thread.hover()
+    await panel.page.mouse.wheel(0, -100000)
+    await panel.page.getByRole('status').filter({hasText: labels.historyLoadFailed}).waitFor()
+    expect(await panel.calls()).toEqual([])
+    await panel.page.getByRole('button', {name: labels.retry, exact: true}).click()
+    expect((await panel.calls()).filter(c => c[0] === 'loadOlder')).toHaveLength(1)
+    await panel.set({loadingOlder: true, historyError: false})
+    await expect(panel.page.locator('.woa-history button')).toBeDisabled()
+    expect(panel.errors).toEqual([])
+  })
+})

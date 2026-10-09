@@ -140,6 +140,11 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._pending_approval_id = ""
         self._event_times: dict[int, int] = {}
+        self._event_durable_sequences: dict[int, int] = {}
+        self._panel_entries: list[dict] = []
+        self._panel_sequences: list[int] = []
+        self._panel_projected = 0
+        self._panel_observed_turns: set[str] = set()
         self._new_conversation_pending = False
         self._durable_store = durable_store
         if durable_store is not None and principal is None:
@@ -147,6 +152,8 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._owner = (durable_store.acquire(session_id, principal_scope(principal, allowed_origins))
                        if durable_store else None)
         self.recovered_history = (durable_store.history(self._owner) if durable_store else [])
+        self._history_upper = (self.recovered_history[-1]["sequence"]
+                               if self.recovered_history else 0)
         # Event ids and sequences count from one in every channel. What a panel was shown
         # under another channel -- before a restart, or by a session that has since ended --
         # cannot be told from this one's by id, so each timeline page says whose it is.

@@ -405,16 +405,21 @@ def collapse_timeline(entries: list[dict]) -> list[dict]:
     collapsed: list[dict] = []
     observed_turn: set[str] = set()
     for entry in entries:
-        if entry["kind"] == "action" and entry["text"] == "重新检查当前页面":
-            if entry["turn_id"] in observed_turn:
-                continue
-            observed_turn.add(entry["turn_id"])
-        previous = collapsed[-1] if collapsed else None
-        if (previous is not None and previous["kind"] == entry["kind"]
-                and previous["text"] == entry["text"]
-                and previous["turn_id"] == entry["turn_id"]
-                and entry["kind"] in {"progress", "action"}):
-            collapsed[-1] = entry
-            continue
-        collapsed.append(entry)
+        append_timeline_entry(collapsed, entry, observed_turn)
     return collapsed
+
+
+def append_timeline_entry(entries: list[dict], entry: dict, observed_turn: set[str]) -> None:
+    """Apply the same de-noising incrementally as new live events arrive."""
+    if entry["kind"] == "action" and entry["text"] == "重新检查当前页面":
+        if entry["turn_id"] in observed_turn:
+            return
+        observed_turn.add(entry["turn_id"])
+    previous = entries[-1] if entries else None
+    if (previous is not None and previous["kind"] == entry["kind"]
+            and previous["text"] == entry["text"]
+            and previous["turn_id"] == entry["turn_id"]
+            and entry["kind"] in {"progress", "action"}):
+        entries[-1] = entry
+    else:
+        entries.append(entry)

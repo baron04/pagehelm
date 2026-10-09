@@ -128,6 +128,7 @@ export class PanelHost implements PanelHostContract {
     notice: null,
     hasOlder: false,
     loadingOlder: false,
+    historyError: false,
     closed: false,
     optimistic: null,
   }
@@ -138,8 +139,11 @@ export class PanelHost implements PanelHostContract {
   private recoveredHistoryVisible = true
   /** Whose ids and sequences `byId` and `floor` hold; another channel's start again at one. */
   private incarnation = ''
-  /** Turns on screen when the channel changed: its successor's replay of them adds nothing. */
-  private told = new Set<string>()
+  /** The server's pagination position can precede entries already on screen. */
+  private oldest = ''
+  /** Invalidates in-flight pages when the view is cleared or the channel changes. */
+  private revision = 0
+  get timelineVersion(): number { return this.revision }
 
   private offered: readonly PanelExample[]
 
@@ -218,7 +222,8 @@ export class PanelHost implements PanelHostContract {
 
   /** Merge one projected page. Identity is the server's event id, so this is idempotent. */
   applyTimeline(page: Partial<TimelinePage> | null | undefined,
-                {prepend = false}: {prepend?: boolean} = {}): void {
+                {prepend = false, version}: {prepend?: boolean; version?: number} = {}): boolean {
+    if (version !== undefined && version !== this.revision) return false
     const incoming = Array.isArray(page?.entries) ? page.entries : []
     // The agent restarted, or the session ended and the next message made another: the new
     // channel numbers its events from one again. What this panel remembers by id or by
@@ -226,27 +231,38 @@ export class PanelHost implements PanelHostContract {
     // already cleared. The conversation on screen stays, and what the new channel replays
     // of it is not added a second time.
     const incarnation = typeof page?.incarnation === 'string' ? page.incarnation : ''
+    const changed = Boolean(incarnation && incarnation !== this.incarnation)
     if (incarnation && incarnation !== this.incarnation) {
       if (this.incarnation) {
-        this.byId.clear()
+        // Durable IDs are stable across incarnations; live transport IDs are local.
+        for (const [id, entry] of this.byId) {
+          if (!entry.position) this.byId.delete(id)
+        }
         this.floor = 0
-        this.told = new Set(this.state.entries.map(entry => entry.turn_id))
+        this.revision += 1
       }
       this.incarnation = incarnation
     }
     const fresh = incoming.filter(entry => !this.byId.has(entry.id) && (
-      entry.replayed ? this.recoveredHistoryVisible && !this.told.has(entry.turn_id)
-        : entry.sequence > this.floor))
+      entry.replayed ? this.recoveredHistoryVisible : entry.sequence > this.floor))
     for (const entry of fresh) this.byId.set(entry.id, entry)
     let entries = this.state.entries
     if (fresh.length) {
       entries = prepend ? [...fresh, ...entries] : [...entries, ...fresh]
     }
-    const budget = this.configuration.limits.rendered_entry_budget
-    if (entries.length > budget) {
-      const dropped = entries.slice(0, entries.length - budget)
-      for (const entry of dropped) this.byId.delete(entry.id)
-      entries = entries.slice(entries.length - budget)
+    // Order only by the server's declared durable position. IDs remain opaque.
+    const stream = fresh[0]?.position?.stream
+    if (stream && fresh.every(entry => entry.position?.stream === stream)) {
+      const group = entries.filter(entry => entry.position?.stream === stream)
+      if (!group.every((entry, index) => index === 0
+          || group[index - 1]!.position!.sequence <= entry.position!.sequence)) {
+        group.sort((a, b) => a.position!.sequence - b.position!.sequence)
+      }
+      let index = 0
+      entries = entries.map(entry => entry.position?.stream === stream ? group[index++]! : entry)
+    }
+    if (prepend || changed || !this.oldest) {
+      this.oldest = page?.oldest ?? incoming[0]?.id ?? ''
     }
     // The server's own `message_accepted` is what retires the local echo. Leaving both in
     // place showed the user their message twice for as long as the round trip took.
@@ -256,11 +272,15 @@ export class PanelHost implements PanelHostContract {
     this.commit({
       entries,
       optimistic: accepted ? null : echo,
-      pendingApproval: page?.pending_approval ?? null,
-      hasOlder: prepend ? Boolean(page?.has_more) : this.state.hasOlder || Boolean(page?.has_more),
-      loadingOlder: false,
+      pendingApproval: prepend ? this.state.pendingApproval : page?.pending_approval ?? null,
+      hasOlder: !this.recoveredHistoryVisible && fresh.length === 0 ? false
+        : prepend || changed ? Boolean(page?.has_more)
+        : this.state.hasOlder || Boolean(page?.has_more),
+      loadingOlder: prepend || changed ? false : this.state.loadingOlder,
+      historyError: prepend || changed ? false : this.state.historyError ?? false,
       closed: Boolean(page?.closed) || this.state.closed,
     })
+    return true
   }
 
   /**
@@ -291,9 +311,10 @@ export class PanelHost implements PanelHostContract {
     const latest = this.state.entries.at(-1)
     this.floor = Math.max(this.floor, latest ? latest.sequence : 0)
     this.recoveredHistoryVisible = false
-    this.told.clear()
+    this.oldest = ''
+    this.revision += 1
     this.byId.clear()
-    this.commit({entries: [], hasOlder: false, loadingOlder: false, optimistic: null})
+    this.commit({entries: [], hasOlder: false, loadingOlder: false, historyError: false, optimistic: null})
   }
 
   setOptimistic(optimistic: Optimistic | null): void { this.commit({optimistic}) }
@@ -318,6 +339,8 @@ export class PanelHost implements PanelHostContract {
   clearNotice(): void { this.commit({notice: null}) }
 
   setLoadingOlder(value: boolean): void { this.commit({loadingOlder: Boolean(value)}) }
+
+  setHistoryError(value: boolean): void { this.commit({historyError: value}) }
 
   // -- driven by the panel ---------------------------------------------------------
   submit(text: string): void {
@@ -346,9 +369,9 @@ export class PanelHost implements PanelHostContract {
 
   loadOlder(): void {
     if (this.state.loadingOlder || !this.state.hasOlder) return
-    const oldest = this.state.entries[0]
-    this.setLoadingOlder(true)
-    this.verbs.loadOlder(oldest ? oldest.id : '')
+    if (!this.oldest) return
+    this.commit({loadingOlder: true, historyError: false})
+    this.verbs.loadOlder(this.oldest)
   }
 
   dismissNotice(): void { this.clearNotice() }

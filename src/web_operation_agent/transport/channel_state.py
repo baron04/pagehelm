@@ -143,7 +143,8 @@ class ChannelState:
                          "payload": (_copy_json(payload) if kind == "progress"
                                      else {"state": "not_replayable"})}
             try:
-                self._durable_store.append(self._owner, persisted)
+                self._event_durable_sequences[sequence] = self._durable_store.append(
+                    self._owner, persisted)
             except (DurableStateError, sqlite3.Error, OSError) as exc:
                 self._closed = True
                 self._heartbeat_stop.set()

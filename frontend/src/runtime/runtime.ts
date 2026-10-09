@@ -110,6 +110,7 @@ export class EmbeddedWebRuntime {
   panelHost: PanelHost | null = null
   panelConfiguration: PanelConfiguration | null = null
   panelCursor = ''
+  private timelineRefresh: Promise<void> | null = null
   /** The shell this Runtime made for itself, when none was handed to it; it goes with it. */
   private ownShell: PanelShell | null = null
   /** Gives the panel's intents back to the shell. */
@@ -644,19 +645,47 @@ export class EmbeddedWebRuntime {
   }
 
   async _refreshTimeline(): Promise<void> {
-    if (!this.panelHost) return
-    const page = await this._timeline({after: this.panelCursor})
-    this.panelCursor = String(page?.cursor || '') || this.panelCursor
-    this.panelHost.applyTimeline(page)
+    if (this.timelineRefresh) return this.timelineRefresh
+    const refresh = async () => {
+      const host = this.panelHost
+      if (!host) return
+      let more = true
+      while (more && !this.stopped && this.panelHost === host) {
+        const version = host.timelineVersion
+        const page = await this._timeline({after: this.panelCursor})
+        if (this.stopped || this.panelHost !== host
+            || !host.applyTimeline(page, {version})) return
+        const cursor = String(page?.cursor || '')
+        more = Boolean(page?.has_newer) && cursor !== this.panelCursor
+        this.panelCursor = cursor || this.panelCursor
+      }
+    }
+    this.timelineRefresh = refresh()
+    try {
+      await this.timelineRefresh
+    } finally {
+      this.timelineRefresh = null
+    }
   }
 
   async _loadOlder(before: string): Promise<void> {
     const host = this.panelHost
     if (!host) return
+    const version = host.timelineVersion
     try {
-      host.applyTimeline(await this._timeline({before}), {prepend: true})
+      const page = await this._timeline({before})
+      if (!this.stopped && this.panelHost === host) {
+        host.applyTimeline(page, {prepend: true, version})
+      }
+    } catch (error) {
+      if (!this.stopped && this.panelHost === host && version === host.timelineVersion) {
+        const verdict = classifyTransportError(
+          error as {code?: unknown; status?: unknown}, this.panelConfiguration)
+        if (verdict.terminal) this._raise(error)
+        else host.setHistoryError(true)
+      }
     } finally {
-      host.setLoadingOlder(false)
+      if (version === host.timelineVersion) host.setLoadingOlder(false)
     }
   }
 

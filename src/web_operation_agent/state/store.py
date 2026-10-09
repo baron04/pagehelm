@@ -158,14 +158,25 @@ class SQLiteSessionStore:
             db.execute("INSERT INTO outbox VALUES (?, ?, ?, ?)",
                        (owner.session_id, seq, payload, self.now()))
             db.commit()
+        return seq
 
-    def history(self, owner):
+    def history(self, owner, *, before: int | None = None, limit: int = 100):
+        """Read one ascending page using the durable sequence, under the current owner."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+            raise ValueError("history limit must be an integer from 1 to 500")
+        if before is not None and (isinstance(before, bool) or not isinstance(before, int)
+                                   or before < 1):
+            raise ValueError("history cursor must be a positive integer")
         with self.connect() as db:
             self._check(db, owner)
+            condition = " AND sequence < ?" if before is not None else ""
+            params = ((owner.session_id, before, limit) if before is not None
+                      else (owner.session_id, limit))
             rows = db.execute(
-                "SELECT payload, created FROM outbox WHERE sid=? ORDER BY sequence DESC LIMIT 30",
-                (owner.session_id,)).fetchall()
-        return [{**json.loads(row[0]), "at": int(row[1])} for row in reversed(rows)]
+                "SELECT payload, created, sequence FROM outbox WHERE sid=?" + condition
+                + " ORDER BY sequence DESC LIMIT ?", params).fetchall()
+        return [{**json.loads(row[0]), "at": int(row[1]), "sequence": int(row[2])}
+                for row in reversed(rows)]
 
     def prune(self, *, older_than_ms: int) -> int:
         """Remove entire inactive sessions; retain tombstones for every live session."""

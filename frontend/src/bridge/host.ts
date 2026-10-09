@@ -46,6 +46,7 @@ export interface PanelSnapshot {
   notice: HostNotice | null
   hasOlder: boolean
   loadingOlder: boolean
+  historyError?: boolean
   closed: boolean
   /** A locally echoed message that has not yet been accepted by the server. */
   optimistic: {turnId: string; text: string; failed: boolean} | null

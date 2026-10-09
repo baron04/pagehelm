@@ -59,8 +59,7 @@
   },
   "limits": {
     "composer_max_chars": 2000,
-    "history_page_size": 80,
-    "rendered_entry_budget": 1500,
+    "history_page_size": 100,
     "effect_max_chars": 300,
     "target_max_chars": 300,
     "max_targets": 24,
@@ -101,6 +100,7 @@
     "dockDrawer": "并排显示",
     "dockFloat": "浮动显示",
     "loadOlder": "加载更早",
+    "historyLoadFailed": "更早的消息加载失败，请重试。",
     "jumpLatest": "回到最新",
     "aiTag": "AI",
     "emptyIntro": "你好，我是 AI 助手",

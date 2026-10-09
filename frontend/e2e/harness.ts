@@ -90,7 +90,10 @@ class ScriptedHost {
     window.__setSnapshot({entries: [], pendingApproval: null, notice: null, optimistic: null,
                           hasOlder: false})
   }
-  loadOlder(before) { this.note('loadOlder', before) }
+  loadOlder(before) {
+    this.note('loadOlder', before)
+    window.__setSnapshot({loadingOlder: true, historyError: false})
+  }
   dismissNotice() { this.note('dismissNotice') }
   reload() { this.note('reload') }
   note(...args) { window.__calls.push(args) }

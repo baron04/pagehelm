@@ -100,7 +100,8 @@ class DurableSessionTests(unittest.TestCase):
             asked = [next(e for e in page['entries'] if e['kind'] == 'goal' and not e.get('replayed'))
                      for page in pages]
             self.assertEqual([e['text'] for e in asked], ['first question', 'second question'])
-            self.assertIn(asked[1]['id'], {e['id'] for e in pages[0]['entries']})
+            self.assertNotIn(asked[1]['id'], {e['id'] for e in pages[0]['entries']})
+            self.assertIn(asked[0]['id'], {e['id'] for e in pages[1]['entries']})
             self.assertRegex(pages[0]['incarnation'], r'^[0-9a-f]{16}$')
             self.assertNotEqual(pages[0]['incarnation'], pages[1]['incarnation'])
 
