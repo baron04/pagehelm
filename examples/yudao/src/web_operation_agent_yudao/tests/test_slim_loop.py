@@ -12,7 +12,7 @@ from web_operation_agent.privacy import SessionHandoffPolicy
 from web_operation_agent.schemas.browser import ElementRef, PageObservation
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.slim_loop import (ActorKnowledge, SlimTurnExecutor, _commits, _fields, _lines,
-                                                 _page_lines, _today, conventions_text, page_text)
+                                                 _page_lines, _scroll_anchor, _today, conventions_text, page_text)
 
 
 def element(number: int, role: str, name: str = "", tag: str = "div", **attrs) -> ElementRef:
@@ -147,6 +147,10 @@ class PageTextTests(unittest.TestCase):
         lines, _hints = _page_lines(ranged)
         self.assertEqual(lines, ["[0]<input /> 〔日期·开始〕", "[1]<input /> 〔日期·结束〕"])
 
+    def test_a_region_is_scrolled_from_an_element_inside_it(self):
+        self.assertEqual(_scroll_anchor(observation(), "7"), "8")    # the runtime moves what is around its anchor
+        self.assertEqual(_scroll_anchor(observation(), "10"), "10")  # an ordinary element anchors itself
+
     def test_fields_are_read_by_their_labels(self):
         self.assertEqual(_fields(observation()), {"Customer": "Acme"})
 
@@ -195,6 +199,8 @@ class Client:
         if path == "leads/page":
             mine = {1: [{"id": 1, "name": "甲"}, {"id": 2, "name": "乙"}], 2: [{"id": 2, "name": "乙"}, {"id": 3, "name": "丙"}],
                     3: []}.get(params.get("sceneType"), [{"id": n, "name": "别人的"} for n in range(1, 9)])
+            if params.get("name"):
+                mine = [row for row in mine if params["name"] in row["name"]]
             return {"total": len(mine), "list": mine if params["pageNo"] == 1 else []}
         if path == "deals/page":
             size, page = params.get("pageSize", 2), params["pageNo"]
@@ -253,6 +259,14 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("total=3（当前账号可见的全部", text)
         self.assertNotIn("别人的", text)
         self.assertEqual(text.count('"name": "乙"'), 1)
+
+    def test_a_record_that_exists_outside_the_actor_s_scopes_is_not_reported_as_absent(self):
+        text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "别人"})
+        self.assertIn("total=0（当前账号可见的全部", text)
+        self.assertIn("不限范围时同样条件有 8 条记录", text)
+        self.assertIn("这是没有权限，不是记录不存在", text)
+        absent = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "没有这个"})
+        self.assertNotIn("不限范围", absent)
 
     def test_a_scope_the_person_named_is_the_only_one_read(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "sceneType": 1})
@@ -456,6 +470,9 @@ class LoopTests(unittest.TestCase):
         sent.pop()
         executor._tool(state, "input", {"index": 9, "text": "Delta"}, turn)   # typed into a dropdown
         self.assertEqual(sent[-1], ("select", {"ref": "e9", "value": "Delta", "option_label": "Delta"}))
+        said, _changed = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        self.assertEqual(sent[-1], ("scroll", {"direction": "down", "pages": 1, "ref": "e8"}))
+        self.assertIn("内容没有变化", said)    # the page it was shown is the page it had
         executor._act = lambda s, action, args, **kw: "没有成功：stale"
         executor._tool(state, "input", {"index": 9, "text": "Gamma"}, turn)
         self.assertEqual(len(turn["touched"]), 3)   # a step that failed put nothing there

@@ -250,6 +250,16 @@ class ActorKnowledge:
                 rows = list(merged.values())
                 out.append(f"total={len(rows) if whole else '至少 ' + str(len(rows))}（当前账号可见的全部：负责的、参与的、"
                            f"下属负责的三个范围合并去重），本次读了 {len(rows)} 行" + ("（已读完所有页）" if whole else ""))
+                if not rows and any(k not in ("pageNo", "pageSize") for k in params):
+                    # Nothing of this actor's matches; whether anything matches at all is the
+                    # difference between "there is no such record" and "it is not yours".
+                    others = self.client.get(relative, **{**params, "pageNo": 1, "pageSize": 5})
+                    count = others.get("total") if isinstance(others, dict) else 0
+                    if count:
+                        names = [str(r.get("name")) for r in others.get("list") or [] if isinstance(r, dict) and r.get("name")]
+                        out.append(f"不限范围时同样条件有 {count} 条记录" + (f"（{'、'.join(names[:5])}）" if names else "")
+                                   + "：它们存在，但不在当前账号负责、参与或下属负责的范围里，"
+                                   "当前账号打不开、改不了。这是没有权限，不是记录不存在。")
             else:
                 data, rows, total, whole = self._pages(relative, params, bool(fields))
                 if isinstance(data, list):
@@ -379,7 +389,9 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
 - 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
-- 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。
+- 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。记录存在但不属于当前账号的可见范围，是没有权限，不要说成不存在。
+- 答复只写用户要的结果，以及页面或表单现在的状态。不要顺带转述记录的其它字段；没有逐字核对过的话不要写。
+- 接口里的数字代码（status、type、level 这类）不要自己翻译成文字，除非字段说明或页面上写明了对应关系。这个应用里名为 status、只取 0 和 1 的通用状态：0 是开启，1 是关闭。
 - 全部做完后调用 finish，答复用一两句中文，写出查到的具体值和页面/表单现在的状态。"""
 
 VERIFY_SYSTEM = """你是验收员。下面是用户的原话、助手的答复，以及页面此刻的真实状态（由程序读取，不是助手自述）。
@@ -486,6 +498,22 @@ def _page_lines(observation) -> tuple[list[str], list[str]]:
         if i not in drop and kinds.get(f"e{number}"):
             lines[i] = lines[i] + " " + kinds[f"e{number}"]
     return [line for i, line in enumerate(lines) if i not in drop], hints
+
+
+def _scroll_anchor(observation, number: str) -> str:
+    """The element a scroll of region `number` is anchored to. The runtime scrolls the
+    nearest container *around* its anchor, so a region named by itself is not moved; the
+    first element directly inside it is."""
+    lines = observation.content.splitlines()
+    marks = [(len(m.group(1)), m.group(2), line) for line in lines if (m := _DEPTH.match(line))]
+    for position, (depth, found, line) in enumerate(marks):
+        if found == number and _SCROLL.search(line):
+            inside = [(d, n) for d, n, _line in marks[position + 1:]]
+            for deeper, child in inside:
+                if deeper <= depth:
+                    break
+                return child
+    return number
 
 
 def _control_kind(element) -> str:
@@ -701,8 +729,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
         if name == "scroll":
             command = {"direction": "down" if args.get("down", True) else "up", "pages": 1}
             if args.get("index") is not None:
-                command["ref"] = element.ref
+                command["ref"] = "e" + _scroll_anchor(s.obs, element.ref[1:])
+            before = s.obs.content_digest
             failed = self._act(s, "scroll", command)
+            if not failed and s.obs.content_digest == before:
+                return "滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。", True
             return failed or "已滚动。", True
         if name == "highlight":
             failed = self._act(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})
