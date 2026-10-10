@@ -159,10 +159,10 @@ class YudaoHostConfig:
             raise ValueError("live forms are on or off, with at most 16 page steps a turn")
         if not isinstance(self.native_navigation, bool) or self.native_navigation and self.native_read_policy is None:
             raise ValueError("native navigation requires a reviewed native read policy and write guard")
-        if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent"}:
-            raise ValueError("executor_mode must be goal or page-agent")
-        if self.executor_mode == "page-agent" and self.native_read_policy is None:
-            raise ValueError("page-agent requires a reviewed native read policy and write guard")
+        if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent", "slim"}:
+            raise ValueError("executor_mode must be goal, page-agent or slim")
+        if self.executor_mode in {"page-agent", "slim"} and self.native_read_policy is None:
+            raise ValueError("page-agent and slim require a reviewed native read policy and write guard")
 
 
 @dataclass
@@ -185,6 +185,7 @@ class YudaoHost:
                                         commits=config.source_commits)
         self.native_proxy = None
         self.live_forms = False
+        self._fenced = frozenset()
         self.form_review = None
         self.form_tree = None
         self.create_reviews = ()
@@ -225,8 +226,14 @@ class YudaoHost:
                     or policy["release"] != config.source_release or not self.ui or not self.ui.records
                     or not isinstance(policy["read_paths"], list)):
                 raise ValueError("native read policy must match the deployment and its UI routes")
-            self.live_forms = (config.native_live_forms and fenced and config.executor_mode == "goal"
+            self.live_forms = (config.native_live_forms and fenced
+                               and config.executor_mode in {"goal", "slim"}
                                and config.native_form_policy is None and not config.native_create_policies)
+            if config.executor_mode == "slim" and not self.live_forms:
+                # The slim loop works a page with the runtime's own actions; it runs only
+                # inside the window in which the application itself refuses its writes.
+                raise ValueError("slim requires the method fence and the application's own window")
+            self._fenced = self._fenced_gets(policy) if fenced else frozenset()
             if config.native_filter_policies:
                 from .repository import repository_tree
                 from .page_filters import NativePageFilterReview
@@ -434,7 +441,19 @@ class YudaoHost:
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
                     self.config.state_dir / "conversation-state.sqlite3", session_id))
-            if self.config.executor_mode == "page-agent":
+            if self.config.executor_mode == "slim":
+                # A measured prototype: the goal turn's protocol with a model-driven loop
+                # deciding its steps (slim_loop.py). Every page command still runs under
+                # the turn's leave, the write watch and the application's own window.
+                from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
+                executor = SlimTurnExecutor(
+                    **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
+                    goal_port=app.goal_port,
+                    disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
+                    knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced),
+                    today=str(getattr(app.goal_port, "today", "") or ""),
+                    time_zone=app.goal_data.time_zone())
+            elif self.config.executor_mode == "page-agent":
                 # The same Agent receives optional source evidence and reviewed form
                 # entries. Source grants no actions; form review grants no submission.
                 turn_config = replace(turn_config, require_page_route=True, require_task_contract=True,
@@ -600,7 +619,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-live-forms", action=argparse.BooleanOptionalAction, default=True,
                     help="under a method-fence read policy: fill the form a page shows and take "
                          "bounded page steps, inside the application's own read-only window")
-    ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
+    ap.add_argument("--executor", choices=("goal", "page-agent", "slim"), default="goal")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")

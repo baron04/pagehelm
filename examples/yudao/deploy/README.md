@@ -203,6 +203,18 @@ update review and creation reviews compose in the same actor session; creation a
 does not enable updates. Duplicate references or changed source abort startup. Both
 require the verified native guard.
 
+The explicit `--executor slim` pilot (`slim_loop.py`) is a measured prototype hosted by
+this adapter. It subclasses the goal executor and replaces only what decides the next
+step: one conversation in which the model searches the actor's menu, searches and calls
+the application's read-only API as the actor, works the page with the Runtime's fixed
+actions and marks a submit control for the person. Startup refuses it without the method
+fence (`--native-read-policy` in `method-fence` mode) and the application's own window.
+It uses no form or filter review, declares no goal-port capability of its own, and has
+no write path. What the model is shown leaves out the application's navigation menu and
+names the regions that scroll; only an element listed there may be acted on. A closing
+model request checks the person's words against the page and may send the turn back
+once. Set `WOA_SLIM_DEBUG_DIR` only in development: it writes what the model was shown.
+
 The explicit `--executor page-agent` pilot uses the same configured optional source
 lookup and reviewed forms as the goal composition. Its same server Agent discovers
 current reviewed entries with `find_form_entries`, opens one opaque candidate with
