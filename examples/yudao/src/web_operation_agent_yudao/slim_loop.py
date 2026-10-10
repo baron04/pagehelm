@@ -251,10 +251,12 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
    - 用 search_menu 找页面，goto 打开；同一个业务词常常在几个模块里都有页面，先看全部结果再选最贴合用户说法的那个，并在答复里说明用的是哪个模块的页面。
    - 筛选要在页面自己的筛选控件上操作，再点“搜索”，然后从“页面生效的查询”确认参数已生效。
-   - 下拉框用 select 选；select 不行时先点击它，再从新观察里点击选项。打开某条记录的详情：在列表里找到那一行再点它的名称或“详情”。
+   - 页面元素行尾的标记说明这个控件怎么用：〔下拉〕〔单选〕用 select(index, option) 选，option 写选项显示的文字（select 不行时再点开它、从新观察里点选项）；〔日期〕用 input 填 2026-10-20，带时间的填 2026-10-20 09:00:00；日期范围是〔日期·开始〕和〔日期·结束〕两个框，先填开始再填结束，两个都要填，不要去点日历。
+   - 打开某条记录的详情：在列表里找到那一行再点它的名称或“详情”。
    - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
+   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”），先进它的详情页，从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 填完后重新观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，再 finish。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：留空，在答复里提醒用户还有哪些必填项要自己补，然后照常以 done 结束。
@@ -262,6 +264,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 
 通用规则：
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
+- 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
 - 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。
 - 全部做完后调用 finish，答复用一两句中文，写出查到的具体值和页面/表单现在的状态。"""
 
@@ -274,6 +277,14 @@ VERIFY_SYSTEM = """你是验收员。下面是用户的原话、助手的答复�
 - 用户指的是单独一条记录（“那张”“这个”“它”或直接给名称），而操作轨迹里按这个名称或条件查到多条（total 大于 1），助手却自己挑了一条打开或修改：算问题，应当列出候选让用户选。
 - 答复里的金额、单价与页面状态里显示的数字不一致，或只来自接口原始值而页面上没有出现：算问题。
 只输出一个 JSON：{"ok": true 或 false, "problems": ["具体缺了什么或哪里不一致"]}。没有问题时 problems 为空数组。不要因为措辞、礼貌或你自己的偏好判不通过。"""
+
+
+def conventions_text(conventions) -> str:
+    """The deployment's reviewed conventions as the model reads them; empty without any."""
+    if not conventions:
+        return ""
+    return ("\n\n本部署的用语约定（部署方审核过；用户说的这些词按这里的意思理解，条目里的英文路径是模块/实体）：\n"
+            + "\n".join(f"- {' / '.join(c.terms)}：{c.meaning}" for c in conventions))
 
 
 def _today(today: str, time_zone: str) -> str:
@@ -346,7 +357,39 @@ def _page_lines(observation) -> tuple[list[str], list[str]]:
             if amount and int(amount.group(1)) >= 40:
                 hints.append(f"[{number}] {word}还有约 {amount.group(1)} 像素没显示，"
                              f"用 scroll(down={down}, index={number}) 查看")
+    kinds = {e.ref: _control_kind(e) for e in observation.elements}
+    panels: dict[str, list[str]] = {}
+    for e in observation.elements:
+        if e.attrs.get("aria-haspopup") == "dialog" and e.attrs.get("aria-controls"):
+            panels.setdefault(e.attrs["aria-controls"], []).append(e.ref)
+    for pair in panels.values():
+        if len(pair) == 2:
+            kinds[pair[0]], kinds[pair[1]] = "〔日期·开始〕", "〔日期·结束〕"
+    for i, _depth, number in marks:
+        if i not in drop and kinds.get(f"e{number}"):
+            lines[i] = lines[i] + " " + kinds[f"e{number}"]
     return [line for i, line in enumerate(lines) if i not in drop], hints
+
+
+def _control_kind(element) -> str:
+    """A mark for a control that is not worked by typing or clicking it plainly."""
+    if element.role == "combobox":
+        return "〔日期〕" if element.attrs.get("aria-haspopup") == "dialog" else "〔下拉〕"
+    if element.role == "radiogroup":
+        return "〔单选〕"
+    return ""
+
+
+def _commits(element, elements) -> bool:
+    """Whether a typed value is committed at once. The first box of a date range is not:
+    the component takes the pair when its second box is left, and a first box committed
+    alone is cleared again."""
+    if element.attrs.get("aria-haspopup") != "dialog":
+        return True
+    panel = element.attrs.get("aria-controls")
+    pair = [e for e in elements
+            if panel and e.attrs.get("aria-haspopup") == "dialog" and e.attrs.get("aria-controls") == panel]
+    return not (len(pair) == 2 and pair[0].ref == element.ref and not pair[1].attrs.get("value"))
 
 
 def page_text(observation, *, handoffs, marked: str = "") -> str:
@@ -406,9 +449,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
 
     def __init__(self, *, knowledge: ActorKnowledge, actor_name: str = "", today: str = "",
                  time_zone: str = "Asia/Shanghai", verify: bool = True,
-                 model_steps: int = MODEL_STEPS, **kw):
+                 model_steps: int = MODEL_STEPS, conventions=(), **kw):
         super().__init__(**kw)
         self.knowledge, self.actor_name = knowledge, actor_name
+        #: What this organisation means by some words, from the deployment's reviewed file.
+        self.conventions = tuple(conventions)
         self.today, self.time_zone = today, time_zone
         self.verify, self.model_steps = bool(verify), int(model_steps)
         #: This session's conversation as the model saw it; a new conversation starts it over.
@@ -483,7 +528,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
             return failed or "已点击。", True
         if name == "input":
             failed = self._act(s, "fill", {"ref": element.ref, "value": str(args.get("text", "")),
-                                           "commit": True})
+                                           "commit": _commits(element, s.obs.elements)})
             self._settled(s, waits=2)
             return failed or "已填入。", True
         if name == "select":
@@ -532,9 +577,10 @@ class SlimTurnExecutor(GoalTurnExecutor):
         if self.conversation_state.turn_count == 0 or not self._messages:
             self._messages = [{"role": "system", "content": SYSTEM.format(
                 user=self.actor_name or self.knowledge.user_name or "当前用户",
-                date=_today(self.today, self.time_zone), tz=self.time_zone)}]
+                date=_today(self.today, self.time_zone), tz=self.time_zone)
+                + conventions_text(self.conventions)}]
         turn = {"reads": [], "marked": "", "trace": [], "baseline": _fields(s.obs), "handoffs": handoffs,
-                "shown": []}
+                "shown": [], "done": set(), "stalled": 0}
         prompt = s.message.text
         self._messages.append({"role": "user", "_observation": True,
                                "content": prompt + "\n" + self._page(s, turn)})
@@ -608,6 +654,20 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                            "content": "未执行：页面已变化，请根据新的观察重新决定。"})
                     continue
+                acts = name in ("click", "input", "select", "scroll")
+                where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), s.obs.content_digest)
+                if acts and where in turn["done"]:
+                    # The same step from the same page: it led nowhere the first time.
+                    turn["stalled"] += 1
+                    if turn["stalled"] > 3:
+                        s.terminal_reason, s.detail = "agent_refused", "the same page step was repeated without effect"
+                        return "同一步重复了几次都没有效果，本次没有完成。"
+                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
+                                           "未执行：这一步在同样的页面状态下已经做过，没有带来进展。换一种做法"
+                                           "（用 input 直接填值、用 select 选、先 scroll 找控件），或者如实说明做不到。"})
+                    continue
+                if acts:
+                    turn["done"].add(where)
                 try:
                     text, changed = self._tool(s, name, args, turn)
                 except (ValueError, TypeError) as exc:
@@ -700,4 +760,4 @@ class SlimTurnExecutor(GoalTurnExecutor):
         return []
 
 
-__all__ = ["ActorKnowledge", "SlimTurnExecutor", "page_text"]
+__all__ = ["ActorKnowledge", "SlimTurnExecutor", "conventions_text", "page_text"]

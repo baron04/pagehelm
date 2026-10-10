@@ -10,8 +10,9 @@ from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.privacy import SessionHandoffPolicy
 from web_operation_agent.schemas.browser import ElementRef, PageObservation
 from web_operation_agent_yudao.native_server import YudaoHostConfig
-from web_operation_agent_yudao.slim_loop import (ActorKnowledge, SlimTurnExecutor, _fields, _page_lines,
-                                                 _today, page_text)
+from web_operation_agent.goal.index import IndexConvention
+from web_operation_agent_yudao.slim_loop import (ActorKnowledge, SlimTurnExecutor, _commits, _fields,
+                                                 _page_lines, _today, conventions_text, page_text)
 
 
 def element(number: int, role: str, name: str = "", tag: str = "div", **attrs) -> ElementRef:
@@ -86,6 +87,39 @@ class PageTextTests(unittest.TestCase):
     def test_the_date_told_is_the_application_s_reference_day_or_today_there(self):
         self.assertEqual(_today("2026-10-03", "Asia/Shanghai"), "2026-10-03")
         self.assertRegex(_today("", "Asia/Shanghai"), r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_a_dropdown_and_a_date_box_are_marked_as_what_they_are(self):
+        lines, _hints = _page_lines(observation())
+        self.assertTrue(next(line for line in lines if "[9]" in line).endswith("〔下拉〕"))
+        dated = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(0, "combobox", "开始日期", "input", **{"aria-haspopup": "dialog"}),
+            element(1, "textbox", "备注", "input")], content="[0]<input placeholder=开始日期 />\n[1]<input />")
+        lines, _hints = _page_lines(dated)
+        self.assertTrue(lines[0].endswith("〔日期〕"))
+        self.assertEqual(lines[1], "[1]<input />")
+
+    def test_the_first_box_of_a_date_range_waits_for_its_second(self):
+        def box(number, value=""):
+            attrs = {"aria-haspopup": "dialog", "aria-controls": "panel-1"}
+            if value:
+                attrs["value"] = value
+            return element(number, "combobox", "", "input", **attrs)
+        start, end, alone = box(1), box(2), element(3, "combobox", "", "input", **{
+            "aria-haspopup": "dialog", "aria-controls": "panel-2"})
+        text = element(4, "textbox", "", "input")
+        self.assertFalse(_commits(start, [start, end, alone, text]))
+        self.assertTrue(_commits(end, [start, end, alone, text]))
+        self.assertTrue(_commits(alone, [start, end, alone, text]))
+        self.assertTrue(_commits(text, [start, end, alone, text]))
+        # Once the second box holds a value, the first is committed like any other.
+        self.assertTrue(_commits(start, [start, box(2, "2026-10-31")]))
+
+    def test_the_deployment_s_conventions_are_told_as_reviewed(self):
+        told = conventions_text((IndexConvention(("客户",), "crm/customer (CRM 客户)", "crm/customer"),
+                                 IndexConvention(("进销存客户", "ERP 客户"), "erp/customer")))
+        self.assertIn("- 客户：crm/customer (CRM 客户)", told)
+        self.assertIn("- 进销存客户 / ERP 客户：erp/customer", told)
+        self.assertEqual(conventions_text(()), "")
 
     def test_fields_are_read_by_their_labels(self):
         self.assertEqual(_fields(observation()), {"Customer": "Acme"})
@@ -232,7 +266,7 @@ class LoopTests(unittest.TestCase):
         executor._verify = verify
         state = State(*replies)
         turn = {"reads": [], "marked": "", "trace": [], "baseline": {},
-                "handoffs": SessionHandoffPolicy.extending(()), "shown": []}
+                "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0}
         return executor, state, executor._loop(state, "q", turn, verified=False)
 
     def test_done_ends_the_turn_finished_with_the_model_s_answer(self):
@@ -278,6 +312,28 @@ class LoopTests(unittest.TestCase):
     def test_nothing_named_after_finish_in_the_same_reply_is_run(self):
         self.loop(reply(call("finish", status="cannot", answer="做不到"), call("click", index=10)))
         self.assertEqual(self.ran, [])
+
+    def test_a_step_repeated_from_the_same_page_is_not_run_again(self):
+        executor, state, _text = self.loop(
+            reply(call("click", index=10)), reply(call("click", index=10)),
+            reply(call("finish", status="cannot", answer="做不到")))
+        self.assertEqual(self.ran, ["click"])
+        self.assertTrue(any(m["role"] == "tool" and "没有带来进展" in m["content"] for m in executor._messages))
+        self.assertEqual(state.terminal_reason, "agent_refused")
+
+    def test_a_turn_that_keeps_repeating_one_step_ends(self):
+        _executor, state, text = self.loop(*[reply(call("click", index=10)) for _ in range(5)], steps=10)
+        self.assertEqual(self.ran, ["click"])
+        self.assertEqual(state.terminal_reason, "agent_refused")
+        self.assertIn("重复", text)
+
+    def test_the_two_boxes_of_a_date_range_are_told_apart(self):
+        ranged = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(0, "combobox", "", "input", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
+            element(1, "combobox", "", "input", **{"aria-haspopup": "dialog", "aria-controls": "p"})],
+            content="[0]<input />\n[1]<input />")
+        lines, _hints = _page_lines(ranged)
+        self.assertEqual(lines, ["[0]<input /> 〔日期·开始〕", "[1]<input /> 〔日期·结束〕"])
 
     def test_after_a_step_that_changes_the_page_the_rest_of_the_reply_is_not_run(self):
         def tool(s, name, args, turn):

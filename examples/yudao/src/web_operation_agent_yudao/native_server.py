@@ -445,12 +445,14 @@ class YudaoHost:
                 # A measured prototype: the goal turn's protocol with a model-driven loop
                 # deciding its steps (slim_loop.py). Every page command still runs under
                 # the turn's leave, the write watch and the application's own window.
+                from web_operation_agent.goal.conventions import load_conventions
                 from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
                 executor = SlimTurnExecutor(
                     **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
                     goal_port=app.goal_port,
                     disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                     knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced),
+                    conventions=load_conventions(REFERENCE_CONVENTIONS),
                     today=str(getattr(app.goal_port, "today", "") or ""),
                     time_zone=app.goal_data.time_zone())
             elif self.config.executor_mode == "page-agent":

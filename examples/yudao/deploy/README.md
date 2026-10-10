@@ -211,9 +211,17 @@ actions and marks a submit control for the person. Startup refuses it without th
 fence (`--native-read-policy` in `method-fence` mode) and the application's own window.
 It uses no form or filter review, declares no goal-port capability of its own, and has
 no write path. What the model is shown leaves out the application's navigation menu and
-names the regions that scroll; only an element listed there may be acted on. A closing
-model request checks the person's words against the page and may send the turn back
-once. Set `WOA_SLIM_DEBUG_DIR` only in development: it writes what the model was shown.
+names the regions that scroll; only an element listed there may be acted on. A dropdown,
+a radio group and a date box are marked as what they are, and the two boxes of a date
+range as its start and its end: the first is committed with the second, since the
+component clears a first box committed alone. The deployment's reviewed conventions file
+is told to the model in full, so that a name found in two modules is read the way the
+organisation means it. An existing record is edited from its detail page where it has
+one; a detail page without an edit entry is reported as no permission to change it,
+rather than entering through the list. A page step repeated from an unchanged page is
+not run again, and a turn that keeps repeating one ends. A closing model request checks
+the person's words against the page and may send the turn back once. Set
+`WOA_SLIM_DEBUG_DIR` only in development: it writes what the model was shown.
 
 The explicit `--executor page-agent` pilot uses the same configured optional source
 lookup and reviewed forms as the goal composition. Its same server Agent discovers
