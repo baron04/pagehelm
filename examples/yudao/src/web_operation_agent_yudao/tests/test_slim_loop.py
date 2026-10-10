@@ -7,11 +7,10 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.goal.data import DataRefused
+from web_operation_agent.goal.index import ApplicationIndex, IndexConvention, IndexEntity, IndexPage
 from web_operation_agent.privacy import SessionHandoffPolicy
 from web_operation_agent.schemas.browser import ElementRef, PageObservation
 from web_operation_agent_yudao.native_server import YudaoHostConfig
-from web_operation_agent.goal.index import IndexConvention
-from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexPage
 from web_operation_agent_yudao.slim_loop import (ActorKnowledge, SlimTurnExecutor, _commits, _fields, _lines,
                                                  _page_lines, _today, conventions_text, page_text)
 
@@ -139,6 +138,14 @@ class PageTextTests(unittest.TestCase):
         self.assertEqual(_lines(lined), {1: {"产品名称": "包装胶带", "数量": "10"}, 2: {"数量": ""}})
         text = page_text(lined, handoffs=SessionHandoffPolicy.extending(()))
         self.assertIn("明细行当前值: 第1行 产品名称=包装胶带, 数量=10； 第2行 数量=(空)", text)
+
+    def test_the_two_boxes_of_a_date_range_are_told_apart(self):
+        ranged = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(0, "combobox", "", "input", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
+            element(1, "combobox", "", "input", **{"aria-haspopup": "dialog", "aria-controls": "p"})],
+            content="[0]<input />\n[1]<input />")
+        lines, _hints = _page_lines(ranged)
+        self.assertEqual(lines, ["[0]<input /> 〔日期·开始〕", "[1]<input /> 〔日期·结束〕"])
 
     def test_fields_are_read_by_their_labels(self):
         self.assertEqual(_fields(observation()), {"Customer": "Acme"})
@@ -473,14 +480,6 @@ class LoopTests(unittest.TestCase):
         kept = [len(m["content"]) > 1000 for m in executor._messages]
         self.assertEqual(kept, [False, False, True, True])
         self.assertTrue(executor._messages[0]["content"].startswith("total=0\n（更早的接口结果已省略"))
-
-    def test_the_two_boxes_of_a_date_range_are_told_apart(self):
-        ranged = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
-            element(0, "combobox", "", "input", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
-            element(1, "combobox", "", "input", **{"aria-haspopup": "dialog", "aria-controls": "p"})],
-            content="[0]<input />\n[1]<input />")
-        lines, _hints = _page_lines(ranged)
-        self.assertEqual(lines, ["[0]<input /> 〔日期·开始〕", "[1]<input /> 〔日期·结束〕"])
 
     def test_after_a_step_that_changes_the_page_the_rest_of_the_reply_is_not_run(self):
         def tool(s, name, args, turn):
