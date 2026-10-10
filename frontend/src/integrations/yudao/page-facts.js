@@ -642,6 +642,82 @@ export function nativeControlElement(element) {
     ? inputs[0] : element
 }
 
+/**
+ * The controls of an editable table inside a form, each with the row and the column it
+ * belongs to. A line table gives its controls no label of their own, and the generic
+ * controller leaves a searchable select inside a scrolling table unindexed (its input sits
+ * under the placeholder, and its wrapper is not a distinct control once the table itself
+ * is indexed). `area` is what is pressed; `control` is the native input it owns.
+ */
+export function lineControls(root = document) {
+  const shown = element => {
+    const rect = element.getBoundingClientRect()
+    return element.isConnected && rect.width > 0 && rect.height > 0 &&
+      rect.bottom > 0 && rect.top < (window.innerHeight || 0) && !element.closest('[hidden],[aria-hidden="true"]')
+  }
+  const text = element => (element.textContent || '').replace(/\s+/g, ' ').trim()
+  const found = []
+  for (const table of root.querySelectorAll('.el-form .el-table')) {
+    const heads = [...table.querySelectorAll('.el-table__header-wrapper thead tr:last-child th')].map(text)
+    const rows = [...table.querySelectorAll('.el-table__body-wrapper tbody > tr')]
+    rows.forEach((row, at) => {
+      for (const cell of row.children) {
+        const column = cell instanceof HTMLTableCellElement ? heads[cell.cellIndex] : ''
+        if (!column) continue
+        for (const control of cell.querySelectorAll('input:not([type="hidden"]):not([type="file"]),textarea')) {
+          if (control.disabled || control.closest('.is-disabled')) continue
+          const wrapper = control.closest('.el-select__wrapper')
+          const area = wrapper && cell.contains(wrapper) ? wrapper : control
+          if (!shown(area)) continue
+          const hint = wrapper && wrapper.querySelector('.el-select__placeholder')
+          found.push({area, control, row: at + 1, column,
+            select: Boolean(wrapper) && control.getAttribute('role') === 'combobox',
+            ...(hint ? {[hint.classList.contains('is-transparent') ? 'placeholder' : 'value']: text(hint)} : {})})
+        }
+      }
+    })
+  }
+  return found
+}
+
+const attribute = value => /[\s"'<>=]/.test(value) ? `"${value.replace(/"/g, "'")}"` : value
+
+/**
+ * Say of each line-table control which row and column it is, and index the selects the
+ * generic controller left out. Returns the page text with those records; `selectorMap`
+ * gains the added indices. Nothing on the page is changed.
+ */
+export function withLineControls(selectorMap, html, lines) {
+  if (!lines.length) return html
+  const texts = html.split('\n'), indexOf = new Map()
+  for (const [index, node] of selectorMap) indexOf.set(node.ref, index)
+  const at = index => texts.findIndex(line => new RegExp(`^\\s*\\*?\\[${index}\\]<`).test(line))
+  let top = Math.max(-1, ...selectorMap.keys())
+  const anchors = new Map(), missing = []
+  for (const line of lines) {
+    const label = attribute(`明细第${line.row}行·${line.column}`.replace(/\s+/g, ''))
+    const index = indexOf.get(line.control) ?? indexOf.get(line.area)
+    if (index === undefined) { missing.push([line, label]); continue }
+    const position = at(index)
+    if (position < 0) continue
+    if (!anchors.has(line.row)) anchors.set(line.row, index)
+    // Only a record without text of its own: `[n]<input ... />`.
+    const record = /^(\s*\*?\[\d+\]<\w+)([^>]*?)\s*\/>$/.exec(texts[position])
+    if (record && !/\stitle=/.test(record[2])) texts[position] = `${record[1]}${record[2]} title=${label} />`
+  }
+  for (const [line, label] of missing) {
+    const index = ++top
+    selectorMap.set(index, {ref: line.area, tagName: 'input', isInteractive: true, highlightIndex: index})
+    const anchor = anchors.has(line.row) ? at(anchors.get(line.row)) : -1
+    const indent = anchor >= 0 ? /^\s*/.exec(texts[anchor])[0] : ''
+    const said = line.value ? ` value=${attribute(line.value)}` : line.placeholder ? ` placeholder=${attribute(line.placeholder)}` : ''
+    const record = `${indent}[${index}]<input${line.select ? ' role=combobox aria-haspopup=listbox' : ''} title=${label}${said} />`
+    if (anchor >= 0) texts.splice(anchor, 0, record)
+    else texts.push(record)
+  }
+  return texts.join('\n')
+}
+
 /** Locate an exact enabled native calendar day without touching Vue state. */
 export function nativeRangeDateCell(element, value) {
   if (!(element instanceof HTMLInputElement) || element.disabled || element.readOnly ||

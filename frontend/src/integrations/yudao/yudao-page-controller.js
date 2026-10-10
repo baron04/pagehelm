@@ -1,7 +1,20 @@
 /** Application-owned wrapper around the pinned generic controller, never a new harness. */
 import {PageController as GenericPageController, getElementByIndex as controllerElement, clickElement as controllerClick} from './page-controller.js'
-import {nativeControlElement, nativeRangeDateCell} from './page-facts.js'
+import {lineControls, nativeControlElement, nativeRangeDateCell, withLineControls} from './page-facts.js'
 export class PageController extends GenericPageController {
+  async updateTree() {
+    const html = await super.updateTree()
+    const next = withLineControls(this.selectorMap, this.simplifiedHTML, lineControls())
+    if (next === this.simplifiedHTML) return html
+    this.simplifiedHTML = next
+    for (const line of next.split('\n')) {
+      const mark = /^\s*\*?\[(\d+)\]</.exec(line)
+      if (mark && !this.elementTextMap.has(Number(mark[1]))) this.elementTextMap.set(Number(mark[1]), line.trim())
+    }
+    return next
+  }
+
+
   async inputText(index, text) {
     const element = controllerElement(this.selectorMap, index)
     const range = element instanceof HTMLInputElement && element.matches('.el-date-editor--daterange > .el-range-input')

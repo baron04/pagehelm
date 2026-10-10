@@ -219,9 +219,30 @@ is told to the model in full, so that a name found in two modules is read the wa
 organisation means it. An existing record is edited from its detail page where it has
 one; a detail page without an edit entry is reported as no permission to change it,
 rather than entering through the list. A page step repeated from an unchanged page is
-not run again, and a turn that keeps repeating one ends. A closing model request checks
-the person's words against the page and may send the turn back once. Set
-`WOA_SLIM_DEBUG_DIR` only in development: it writes what the model was shown.
+not run again, and a turn that keeps repeating one ends. `find_record` asks the goal
+port which entities hold a record of a name, so that a bare name is not placed by the
+words inside it. The application's page module (`page-facts.js`, `lineControls`) names
+each control of a form's line table by its row and column and indexes the searchable
+selects the generic controller leaves out inside a scrolling table; nothing on the page
+is changed for it, and it reads only what is on the screen. A value typed at a dropdown
+is chosen by its text rather than typed and entered. Where a list's filter does not take
+effect, the records under a record are shown from that record's detail page and its tab.
+
+An API read adds a bounded amount to the conversation and says how many rows it left
+out; earlier reads leave the conversation once they outgrow their share, because every
+request resends it and the run's input-token ceiling otherwise ends a turn that reads a
+long list. A read that names the columns it wants is followed to the last page and comes
+back with each numeric column's sum, highest and lowest and each date column's row count
+by month, so that counting and adding are not left to the model; instants are shown as
+the application's clock has them. A list the application divides by whose records they
+are (`sceneType`), read without naming a scope, is read as the adapter's data port reads
+it: the scopes together, once per record.
+
+A closing model request checks the person's words against the page and may send the turn
+back once. It is told which controls the turn itself filled or chose; every other value a
+form holds was there when it opened and is not a change. Before its last two steps the
+turn is told to report what it has. Set `WOA_SLIM_DEBUG_DIR` only in development: it
+writes what the model was shown.
 
 The explicit `--executor page-agent` pilot uses the same configured optional source
 lookup and reviewed forms as the goal composition. Its same server Agent discovers

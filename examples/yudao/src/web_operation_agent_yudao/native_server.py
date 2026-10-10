@@ -451,9 +451,9 @@ class YudaoHost:
                     **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
                     goal_port=app.goal_port,
                     disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
-                    knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced),
+                    knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
+                                             time_zone=app.goal_data.time_zone()),
                     conventions=load_conventions(REFERENCE_CONVENTIONS),
-                    today=str(getattr(app.goal_port, "today", "") or ""),
                     time_zone=app.goal_data.time_zone())
             elif self.config.executor_mode == "page-agent":
                 # The same Agent receives optional source evidence and reviewed form

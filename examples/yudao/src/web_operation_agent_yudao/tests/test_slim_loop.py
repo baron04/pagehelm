@@ -11,7 +11,8 @@ from web_operation_agent.privacy import SessionHandoffPolicy
 from web_operation_agent.schemas.browser import ElementRef, PageObservation
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent.goal.index import IndexConvention
-from web_operation_agent_yudao.slim_loop import (ActorKnowledge, SlimTurnExecutor, _commits, _fields,
+from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexPage
+from web_operation_agent_yudao.slim_loop import (ActorKnowledge, SlimTurnExecutor, _commits, _fields, _lines,
                                                  _page_lines, _today, conventions_text, page_text)
 
 
@@ -121,6 +122,24 @@ class PageTextTests(unittest.TestCase):
         self.assertIn("- 进销存客户 / ERP 客户：erp/customer", told)
         self.assertEqual(conventions_text(()), "")
 
+    def test_the_menu_under_an_open_dialog_is_left_out_too(self):
+        under = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(0, "menubar", "Home\nSales", "ul"), element(1, "button", "OK", "button")],
+            content="[0]<ul role=menubar>Home\nSales\nStock />\n[1]<button>OK />")
+        lines, _hints = _page_lines(under)
+        self.assertEqual(lines, ["[1]<button>OK />"])
+
+    def test_a_line_table_s_controls_are_read_by_row_and_column(self):
+        lined = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(3, "combobox", "明细第1行·产品名称", "input", title="明细第1行·产品名称", selected_option="包装胶带"),
+            element(4, "spinbutton", "明细第1行·数量", "input", title="明细第1行·数量", value="10"),
+            element(5, "spinbutton", "明细第2行·数量", "input", title="明细第2行·数量"),
+            element(6, "textbox", "备注", "input", title="备注", value="x")],
+            content="[3]<input />\n[4]<input />\n[5]<input />\n[6]<input />")
+        self.assertEqual(_lines(lined), {1: {"产品名称": "包装胶带", "数量": "10"}, 2: {"数量": ""}})
+        text = page_text(lined, handoffs=SessionHandoffPolicy.extending(()))
+        self.assertIn("明细行当前值: 第1行 产品名称=包装胶带, 数量=10； 第2行 数量=(空)", text)
+
     def test_fields_are_read_by_their_labels(self):
         self.assertEqual(_fields(observation()), {"Customer": "Acme"})
 
@@ -138,6 +157,10 @@ DOCS = {"paths": {
         {"name": "pageNo", "in": "query", "required": True, "description": "页码"}],
         "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/Result"}}}}}}},
     "/admin-api/wallet/get": {"get": {"summary": "获得钱包", "tags": ["管理后台 - 钱包"]}},
+    "/admin-api/deals/page": {"get": {"summary": "获得商机分页", "tags": ["管理后台 - 商机"]}},
+    "/admin-api/leads/page": {"get": {"summary": "获得线索分页", "tags": ["管理后台 - 线索"], "parameters": [
+        {"name": "sceneType", "in": "query", "description": "场景类型"},
+        {"name": "pageNo", "in": "query", "required": True, "description": "页码"}]}},
     "/admin-api/orders/export-excel": {"get": {"summary": "导出订单", "tags": ["管理后台 - 订单"]}},
     "/admin-api/orders/create": {"post": {"summary": "创建订单"}},
 }, "components": {"schemas": {
@@ -162,7 +185,22 @@ class Client:
             if params.get("customerId") == "0":
                 raise DataRefused("orders/page: 400 客户不存在")
             return {"total": 2, "list": [{"no": "S1", "price": 1000, "remark": None}, {"no": "S2", "price": 250}]}
+        if path == "leads/page":
+            mine = {1: [{"id": 1, "name": "甲"}, {"id": 2, "name": "乙"}], 2: [{"id": 2, "name": "乙"}, {"id": 3, "name": "丙"}],
+                    3: []}.get(params.get("sceneType"), [{"id": n, "name": "别人的"} for n in range(1, 9)])
+            return {"total": len(mine), "list": mine if params["pageNo"] == 1 else []}
+        if path == "deals/page":
+            size, page = params.get("pageSize", 2), params["pageNo"]
+            return {"total": len(DEALS), "list": DEALS[(page - 1) * size:page * size]}
         raise AssertionError(path)
+
+
+#: 2026-10-02 08:00 and 2026-09-30 23:30 in Asia/Shanghai, as epoch milliseconds.
+OCTOBER, SEPTEMBER = 1790899200000, 1790782200000
+DEALS = [{"id": n, "name": f"商机{n}", "ownerUserId": 7, "totalPrice": price, "createTime": made,
+          "remark": "备注" * 30}
+         for n, (price, made) in enumerate([(45000.0, OCTOBER), (18000.5, SEPTEMBER), (45000.0, OCTOBER),
+                                            (32000.0, SEPTEMBER), (100.0, OCTOBER)], start=1)]
 
 
 class KnowledgeTests(unittest.TestCase):
@@ -190,6 +228,62 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("remark", text)
         self.assertIn("price=金额，单位：分", text)
         self.assertEqual(self.client.calls[-1], ("orders/page", {"pageNo": 1}))
+
+    def test_chosen_columns_are_read_to_the_last_page_with_their_sums_and_extremes(self):
+        text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 2}, ["name", "totalPrice"])
+        self.assertEqual([c[1]["pageNo"] for c in self.client.calls if c[0] == "deals/page"], [1, 2, 3])
+        self.assertIn("total=5（符合条件的总数），本次读了 5 行（已读完所有页）", text)
+        self.assertIn("totalPrice（5 行）: 合计 140100.5，最大 45000，最小 100；最大的有 2 行: "
+                      '{"id": 1, "name": "商机1", "totalPrice": 45000.0}；{"id": 3, "name": "商机3", "totalPrice": 45000.0}',
+                      text)
+        self.assertIn('{"id": 5, "name": "商机5", "totalPrice": 100.0}', text)
+        self.assertNotIn("remark", text)
+        self.assertNotIn("ownerUserId（", text)   # an identifier is not a quantity
+
+    def test_a_list_divided_by_whose_records_they_are_is_read_as_everything_the_actor_sees(self):
+        text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
+        self.assertEqual([c[1]["sceneType"] for c in self.client.calls if c[0] == "leads/page"], [1, 2, 3])
+        self.assertIn("total=3（当前账号可见的全部", text)
+        self.assertNotIn("别人的", text)
+        self.assertEqual(text.count('"name": "乙"'), 1)
+
+    def test_a_scope_the_person_named_is_the_only_one_read(self):
+        text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "sceneType": 1})
+        self.assertEqual([c[1]["sceneType"] for c in self.client.calls if c[0] == "leads/page"], [1])
+        self.assertIn("total=2（符合条件的总数）", text)
+
+    def test_a_number_that_classifies_a_row_is_not_summed(self):
+        DEALS[0]["status"] = DEALS[1]["status"] = 10
+        try:
+            text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 2}, ["status", "totalPrice"])
+        finally:
+            del DEALS[0]["status"], DEALS[1]["status"]
+        self.assertNotIn("status（", text)
+        self.assertIn("totalPrice（", text)
+
+    def test_without_chosen_columns_only_the_page_asked_for_is_read(self):
+        text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 2})
+        self.assertEqual([c[1]["pageNo"] for c in self.client.calls if c[0] == "deals/page"], [1])
+        self.assertIn("total=5（符合条件的总数），本次读了 2 行", text)
+        self.assertNotIn("已读完所有页", text)
+
+    def test_an_instant_is_shown_as_the_application_s_clock_has_it(self):
+        text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 5}, ["createTime"])
+        self.assertIn('{"id": 1, "createTime": "2026-10-02 08:00:00"}', text)
+        self.assertIn('{"id": 2, "createTime": "2026-09-30 23:30:00"}', text)
+        self.assertIn("createTime 按月的行数: 2026-10 3 行，2026-09 2 行", text)
+        self.assertNotIn("createTime（", text)    # an instant is counted by month, not summed
+
+    def test_a_result_adds_a_bounded_amount_to_the_conversation_and_says_what_it_left_out(self):
+        text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 100})
+        self.assertIn("本次读了 5 行", text)
+        DEALS.extend({"id": 100 + n, "name": "行" * 60, "totalPrice": 1.0} for n in range(200))
+        try:
+            long = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 100}, ["name"])
+        finally:
+            del DEALS[5:]
+        self.assertLess(len(long), 10_600)
+        self.assertRegex(long, r"只列出了前 \d+ 行，其余 \d+ 行未列出")
 
     def test_a_get_that_writes_is_never_called(self):
         text = self.know.call_api("/admin-api/wallet/get", {})
@@ -265,8 +359,8 @@ class LoopTests(unittest.TestCase):
             return pending.pop(0) if pending else []
         executor._verify = verify
         state = State(*replies)
-        turn = {"reads": [], "marked": "", "trace": [], "baseline": {},
-                "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0}
+        self.turn = turn = {"reads": [], "marked": "", "trace": [], "touched": [],
+                            "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0}
         return executor, state, executor._loop(state, "q", turn, verified=False)
 
     def test_done_ends_the_turn_finished_with_the_model_s_answer(self):
@@ -296,14 +390,23 @@ class LoopTests(unittest.TestCase):
             problems=[["没有标出提交按钮"]])
         self.assertEqual((text, state.terminal_reason), ("已修正", ""))
         self.assertEqual(self.checked, ["已完成"])
-        sent_back = [m for m in executor._messages if m["role"] == "user" and m["content"].startswith("验收没有通过")]
+        sent_back = [m for m in executor._messages if m["role"] == "user" and m["content"].startswith("验收提出了疑点")]
         self.assertEqual(len(sent_back), 1)
         self.assertIn("没有标出提交按钮", sent_back[0]["content"])
+        self.assertIn("意见不对，就保持原来的结果", sent_back[0]["content"])   # a second reading, not a ruling
 
     def test_the_turn_is_refused_when_its_model_steps_run_out(self):
         _executor, state, text = self.loop(*[reply(call("search_menu", keyword="x")) for _ in range(3)], steps=3)
         self.assertEqual(state.terminal_reason, "agent_refused")
         self.assertIn("步骤用完", text)
+
+    def test_before_its_last_steps_the_turn_is_told_to_report_what_it_has(self):
+        executor, _state, _text = self.loop(
+            *[reply(call("search_menu", keyword="x")) for _ in range(3)],
+            reply(call("finish", status="cannot", answer="查到 3 张，页面没筛出来")), steps=5)
+        told = [n for n, m in enumerate(executor._messages) if m["role"] == "user" and m["content"].startswith("只剩最后两步")]
+        self.assertEqual(len(told), 1)
+        self.assertEqual(len([m for m in executor._messages[:told[0]] if m["role"] == "assistant"]), 3)
 
     def test_a_model_that_stops_calling_tools_is_reminded_then_refused(self):
         _executor, state, text = self.loop(*[reply(content="我想想") for _ in range(3)])
@@ -327,6 +430,50 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(state.terminal_reason, "agent_refused")
         self.assertIn("重复", text)
 
+    def test_the_trace_names_the_control_a_step_was_on(self):
+        self.loop(reply(call("input", index=9, text="Beta")),
+                  reply(call("finish", status="cannot", answer="做不到")))
+        self.assertTrue(self.turn["trace"][0].startswith("input[Customer]("), self.turn["trace"])
+
+    def test_what_the_assistant_put_into_a_control_is_kept_for_the_check(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge, sent = None, []
+        executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
+        executor._settled = lambda s, **kw: None
+        state, turn = State(), {"touched": []}
+        executor._tool(state, "input", {"index": 9, "text": ""}, turn)
+        executor._tool(state, "select", {"index": 9, "option": "Beta"}, turn)
+        self.assertEqual(turn["touched"], [("Customer", ""), ("Customer", "Beta")])
+        self.assertEqual([action for action, _args in sent], ["fill", "select"])
+        self.assertIn("用 select(index, option)", executor._tool(state, "click", {"index": 9}, turn)[0])
+        sent.pop()
+        executor._tool(state, "input", {"index": 9, "text": "Delta"}, turn)   # typed into a dropdown
+        self.assertEqual(sent[-1], ("select", {"ref": "e9", "value": "Delta", "option_label": "Delta"}))
+        executor._act = lambda s, action, args, **kw: "没有成功：stale"
+        executor._tool(state, "input", {"index": 9, "text": "Gamma"}, turn)
+        self.assertEqual(len(turn["touched"]), 3)   # a step that failed put nothing there
+
+    def test_the_check_is_told_which_controls_the_assistant_set_and_nothing_else_counts_as_changed(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "把地址清空"}]
+        state = State({"content": '{"ok": false, "problems": ["没有标出提交按钮"]}'})
+        turn = {"reads": [], "marked": "", "trace": ["input[详细地址]({})"], "touched": [("详细地址", ""), ("电话", "010")],
+                "handoffs": SessionHandoffPolicy.extending(())}
+        self.assertEqual(executor._verify(state, "把地址清空", "已清空", turn), ["没有标出提交按钮"])
+        asked = state.chat.seen[0][1]["content"]
+        self.assertIn("助手本轮填写/选择过的控件（程序记录，按先后）：详细地址←(清空)；电话←010", asked)
+        self.assertIn("助手填入的这些值没有原样出现在用户原话里：电话←010", asked)
+        self.assertNotIn("form_changed", asked)
+
+    def test_earlier_api_results_leave_the_conversation_once_they_outgrow_their_share(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor._messages = [{"role": "tool", "_api": True, "content": f"total={n}\n" + "行" * 5000}
+                              for n in range(4)]
+        executor._forget_old_observations()
+        kept = [len(m["content"]) > 1000 for m in executor._messages]
+        self.assertEqual(kept, [False, False, True, True])
+        self.assertTrue(executor._messages[0]["content"].startswith("total=0\n（更早的接口结果已省略"))
+
     def test_the_two_boxes_of_a_date_range_are_told_apart(self):
         ranged = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
             element(0, "combobox", "", "input", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
@@ -344,6 +491,60 @@ class LoopTests(unittest.TestCase):
             reply(call("finish", status="cannot", answer="做不到")), tool=tool)
         self.assertEqual(self.ran, ["click"])
         self.assertTrue(any(m["role"] == "tool" and m["content"].startswith("未执行") for m in executor._messages))
+
+
+class FindRecordTests(unittest.TestCase):
+    class Port:
+        def __init__(self, hits=(), refuse=False):
+            self.hits, self.refuse, self.asked = hits, refuse, []
+
+        def locate_reference(self, text, *, context=None):
+            self.asked.append(text)
+            if self.refuse:
+                raise DataRefused("the index is unavailable", read_failed=True)
+            return self.hits
+
+        def index(self, *, context=None):
+            return ApplicationIndex(
+                entities=(IndexEntity("crm/customer", "CRM 客户"), IndexEntity("erp/customer", "ERP 客户")),
+                pages=(IndexPage("crm-customer", "客户管理", "CRM 系统 / 客户管理", entity="crm/customer"),))
+
+    class Turn:
+        step = 0
+
+        class approvals:
+            @staticmethod
+            def context(step, tool):
+                return None
+
+        class receipt:
+            @staticmethod
+            def stage(name):
+                import contextlib
+                return contextlib.nullcontext()
+
+    def find(self, port, name):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.goal_port = port
+        return executor._find_record(self.Turn, name)
+
+    def test_it_says_which_modules_hold_a_record_of_that_name_and_where(self):
+        port = self.Port(hits=(("crm/customer", "晨岚机电"), ("erp/customer", "晨岚机电")))
+        told = self.find(port, "晨岚机电").splitlines()
+        self.assertEqual(told, ["CRM 客户（crm/customer；页面：CRM 系统 / 客户管理）：晨岚机电",
+                                "ERP 客户（erp/customer；页面：无）：晨岚机电"])
+        self.assertEqual(port.asked, ["晨岚机电"])
+
+    def test_nothing_found_is_said_without_claiming_absence(self):
+        told = self.find(self.Port(), "松原设备")
+        self.assertIn("没有在任何模块里找到", told)
+        self.assertIn("可能不存在", told)
+
+    def test_a_refused_read_is_told_and_an_empty_name_is_not_looked_up(self):
+        self.assertIn("查找失败", self.find(self.Port(refuse=True), "晨岚机电"))
+        port = self.Port()
+        self.assertIn("请给出", self.find(port, ""))
+        self.assertEqual(port.asked, [])
 
 
 class HostConfigTests(unittest.TestCase):

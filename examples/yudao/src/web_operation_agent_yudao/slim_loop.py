@@ -28,6 +28,8 @@ from web_operation_agent.modeling.egress import AuditedChat
 from web_operation_agent.modeling.provider import ProviderError
 from web_operation_agent.privacy import SessionHandoffPolicy, redact_sensitive_assignments
 
+from .goal import _SCENES
+
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
 MODEL_STEPS = 24
 #: Development only: a directory to which each turn's conversation is written as the model
@@ -36,6 +38,16 @@ _DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
 _MARK = re.compile(r"^\s*\*?\[(\d+)\]")
 _RUN, _HEAD, _TAIL = 60, 3, 30
 _PAGE_CHARS = 9_000
+#: What one API result may add to the conversation, and how much of earlier API results
+#: stays in it. Every request resends the conversation, so unbounded rows end the turn at
+#: the run's input-token ceiling before it can answer.
+_API_CHARS, _API_KEPT = 5_000, 12_000
+#: How many rows a read of chosen columns follows the pages for.
+_ALL_ROWS = 1_000
+_TIME_KEY = re.compile(r"(?:Time|Date)$", re.I)
+#: Numbers that name or classify a row; a sum or a highest value of them means nothing.
+_NOT_A_QUANTITY = re.compile(r"(?:^|[a-z])(?:Id|No|Status|State|Type|Sort|Level|Sex|Code|Enable|Flag)$"
+                              r"|^(?:id|no|status|state|type|sort|level|sex|code|enable|flag)$")
 
 
 # -- what the application already publishes: the actor's menu and its API description ------
@@ -75,11 +87,16 @@ def _slim(value, deep: bool = False):
     return value
 
 
+def _amount(value) -> str:
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
 class ActorKnowledge:
     """The signed-in actor's menu pages and the application's read-only API, searchable."""
 
-    def __init__(self, client, api_docs, writing_gets=frozenset()):
+    def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai"):
         self.client, self._docs, self.writing_gets = client, api_docs, frozenset(writing_gets)
+        self._zone = ZoneInfo(time_zone)
         self._menu = self._ops = self._by_path = self._schemas = None
         self.user_name = ""
 
@@ -169,7 +186,41 @@ class ActorKnowledge:
                 return props
         return {}
 
-    def call_api(self, path: str, params: dict) -> str:
+    def _cell(self, key: str, value):
+        """An instant under a time-named key as the application's clock shows it; the API
+        gives epoch milliseconds, which nobody can count months in."""
+        if (isinstance(value, int) and not isinstance(value, bool) and _TIME_KEY.search(key)
+                and 10 ** 11 < value < 10 ** 13):
+            return datetime.fromtimestamp(value / 1000, self._zone).strftime("%Y-%m-%d %H:%M:%S")
+        return value
+
+    def _row(self, row, fields=()):
+        if not isinstance(row, dict):
+            return row
+        if fields:
+            row = {k: row[k] for k in dict.fromkeys(("id", *fields)) if k in row}
+        return {k: self._cell(k, v) for k, v in _slim(row).items()}
+
+    def _pages(self, path: str, params: dict, follow: bool):
+        """One read of a list, and with `follow` its later pages: (first answer, rows or
+        None when it is not a list, total, whether every row was read)."""
+        data = self.client.get(path, **params)
+        if isinstance(data, list):
+            return data, list(data), len(data), True
+        if not (isinstance(data, dict) and isinstance(data.get("list"), list)):
+            return data, None, None, True
+        rows, total, page = list(data["list"]), data.get("total"), params.get("pageNo")
+        if follow and isinstance(total, int) and isinstance(page, int):
+            while rows and len(rows) < min(total, _ALL_ROWS):
+                page += 1
+                more = self.client.get(path, **{**params, "pageNo": page})
+                chunk = more.get("list") if isinstance(more, dict) else None
+                if not chunk:
+                    break
+                rows += chunk
+        return data, rows, total, not isinstance(total, int) or len(rows) >= total
+
+    def call_api(self, path: str, params: dict, fields=()) -> str:
         self._load()
         if not path.startswith("/admin-api/"):
             path = "/admin-api/" + path.lstrip("/")
@@ -178,31 +229,83 @@ class ActorKnowledge:
             return f"没有这个只读接口：{path}。相近的接口：\n{near}"
         if path in self.writing_gets:
             return "这个接口读取时会写入数据，助手不允许调用。"
+        params = {str(k): v for k, v in (params or {}).items() if isinstance(k, str)}
+        fields = tuple(str(f) for f in fields or () if isinstance(f, str) and f)[:12]
+        published = {q.get("name") for q in self._by_path[path]["op"].get("parameters") or []
+                     if q.get("in") == "query"}
+        # A list the application divides by whose records they are (mine, ones I take part
+        # in, my reports'), asked for without saying which: everything this actor sees is
+        # the three together, as the adapter's own data port reads it.
+        scoped = "sceneType" in published and "sceneType" not in params and "pageNo" in published
+        relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
         try:
-            data = self.client.get(path[len("/admin-api/"):], **{
-                str(k): v for k, v in (params or {}).items() if isinstance(k, str)})
+            if scoped:
+                merged, whole = {}, True
+                for scene in _SCENES:
+                    data, rows, _total, done = self._pages(
+                        relative, {**params, "sceneType": scene, "pageNo": 1, "pageSize": 100}, True)
+                    whole = whole and done
+                    for row in rows or []:
+                        merged.setdefault(row.get("id", len(merged)) if isinstance(row, dict) else len(merged), row)
+                rows = list(merged.values())
+                out.append(f"total={len(rows) if whole else '至少 ' + str(len(rows))}（当前账号可见的全部：负责的、参与的、"
+                           f"下属负责的三个范围合并去重），本次读了 {len(rows)} 行" + ("（已读完所有页）" if whole else ""))
+            else:
+                data, rows, total, whole = self._pages(relative, params, bool(fields))
+                if isinstance(data, list):
+                    out.append(f"返回 {len(rows)} 行")
+                elif rows is not None:
+                    out.append(f"total={total}（符合条件的总数），本次读了 {len(rows)} 行"
+                               + ("（已读完所有页）" if whole and fields else ""))
         except DataRefused as exc:
             return f"接口拒绝：{str(exc)[:200]}"
-        props, out, rows = self._row_schema(path), [], None
-        if isinstance(data, dict) and isinstance(data.get("list"), list):
-            rows = data["list"]
-            out.append(f"total={data.get('total')}（符合条件的总数），本次返回 {len(rows)} 行")
-        elif isinstance(data, list):
-            rows = data
-            out.append(f"返回 {len(rows)} 行")
-        if rows is not None:
-            out.extend(json.dumps(_slim(row), ensure_ascii=False) for row in rows[:25])
-            if len(rows) > 25:
-                out.append(f"……其余 {len(rows) - 25} 行未显示；用更具体的参数缩小范围")
-            keys = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
-        else:
-            out.append(json.dumps(_slim(data, deep=True), ensure_ascii=False)[:3500])
+        if rows is None:
             keys = list(data.keys()) if isinstance(data, dict) else []
+        else:
+            keys = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
         notes = [f"{k}={(self._deref(props[k]).get('description') or '')[:40]}"
-                 for k in keys if k in props and self._deref(props[k]).get("description")]
+                 for k in (fields or keys) if k in props and self._deref(props[k]).get("description")]
         if notes:
             out.append("字段说明: " + "; ".join(notes[:30]))
-        return "\n".join(out)[:6000]
+        if rows is None:
+            shown = self._row(data) if isinstance(data, dict) else data
+            if isinstance(data, dict):
+                shown.update({k: v for k, v in _slim(data, deep=True).items() if k not in shown})
+            out.append(json.dumps(shown, ensure_ascii=False)[:3500])
+            return "\n".join(out)
+        for key in fields:
+            values = [row.get(key) for row in rows if isinstance(row, dict)]
+            if _TIME_KEY.search(key):
+                # Counting the rows of a month is the program's work, not the model's.
+                months: dict[str, int] = {}
+                for value in values:
+                    shown = self._cell(key, value)
+                    if isinstance(shown, str) and re.match(r"\d{4}-\d{2}", shown):
+                        months[shown[:7]] = months.get(shown[:7], 0) + 1
+                if months:
+                    out.append(f"{key} 按月的行数: " + "，".join(
+                        f"{month} {count} 行" for month, count in sorted(months.items(), reverse=True)[:12]))
+                continue
+            if not values or _NOT_A_QUANTITY.search(key) or not all(
+                    isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
+                continue
+            top = max(values)
+            highest = [r for r in rows if r.get(key) == top]
+            out.append(f"{key}（{len(values)} 行）: 合计 {_amount(sum(values))}，最大 {_amount(top)}，"
+                       f"最小 {_amount(min(values))}；最大的有 {len(highest)} 行: "
+                       + "；".join(json.dumps(self._row(r, fields), ensure_ascii=False) for r in highest[:6]))
+        used, listed = sum(len(line) for line in out), 0
+        for row in rows if fields else rows[:25]:
+            line = json.dumps(self._row(row, fields), ensure_ascii=False)
+            if used + len(line) > _API_CHARS * (2 if fields else 1) and listed:
+                break
+            out.append(line)
+            used, listed = used + len(line), listed + 1
+        if listed < len(rows):
+            out.append(f"……只列出了前 {listed} 行，其余 {len(rows) - listed} 行未列出。"
+                       + ("加筛选参数缩小范围。" if fields else
+                          "要统计、比较或找最大最小：用 fields 只取要用的列，会读完所有页并算好合计、最大、最小。"))
+        return "\n".join(out)
 
 
 # -- tools ------------------------------------------------------------------------------
@@ -215,6 +318,9 @@ def _tool(name, description, properties, required):
 TOOLS = [
     _tool("search_menu", "按业务词查找后台菜单页面，返回页面路径。", {
         "keyword": {"type": "string", "description": "业务词，如 采购入库、会员等级"}}, ["keyword"]),
+    _tool("find_record", "按名称查这条记录在哪些模块里（客户、合同、商机、产品、订单……）。"
+          "用户给了记录名却没说它是什么，或者你不确定它属于哪个模块时，先用它。", {
+        "name": {"type": "string", "description": "记录的名称或编号，照用户的原话"}}, ["name"]),
     _tool("goto", "打开一个页面路径（来自 search_menu 或页面里出现的详情路径）。", {
         "path": {"type": "string"}}, ["path"]),
     _tool("observe", "重新观察当前页面。", {}, []),
@@ -230,7 +336,11 @@ TOOLS = [
         "keyword": {"type": "string"}}, ["keyword"]),
     _tool("call_api", "以当前用户身份调用一个只读接口（GET）。分页接口必须带 pageNo 和 pageSize。", {
         "path": {"type": "string"},
-        "params": {"type": "object", "description": "查询参数"}}, ["path"]),
+        "params": {"type": "object", "description": "查询参数"},
+        "fields": {"type": "array", "items": {"type": "string"}, "description":
+                   "只取这些列（列名是返回行里的键）。给了 fields，分页接口会从 pageNo 起读完所有页，"
+                   "并算好数值列的合计、最大、最小。统计、比较、找最大最小、按日期数个数时必须用。"}},
+        ["path"]),
     _tool("highlight", "把一个控件标出来交给用户自己点（例如表单的确定按钮）。不会点击它。", {
         "index": {"type": "integer"}}, ["index"]),
     _tool("finish", "结束本轮。", {
@@ -245,25 +355,29 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 
 你能做三类事，一句话里可能同时包含几类，每一类都要做完：
 1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
-   - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。
+   - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序会读完所有页，算好数值列的合计、最大、最小和日期列每个月的行数，直接用这些数，不要自己一页页翻、一行行加。
+   - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。
    - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以页面上显示的数字为准。
 2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
    - 用 search_menu 找页面，goto 打开；同一个业务词常常在几个模块里都有页面，先看全部结果再选最贴合用户说法的那个，并在答复里说明用的是哪个模块的页面。
    - 筛选要在页面自己的筛选控件上操作，再点“搜索”，然后从“页面生效的查询”确认参数已生效。
+   - 点了“搜索”筛选却没有生效（“共 N 条”没变，结果里还有不符合条件的行）时，不要停在这里。要看的是某条记录名下的关联记录（某客户的联系人、商机、回款这类）：进这条记录的详情页，切到对应的页签，那里显示的就是它名下的。
    - 页面元素行尾的标记说明这个控件怎么用：〔下拉〕〔单选〕用 select(index, option) 选，option 写选项显示的文字（select 不行时再点开它、从新观察里点选项）；〔日期〕用 input 填 2026-10-20，带时间的填 2026-10-20 09:00:00；日期范围是〔日期·开始〕和〔日期·结束〕两个框，先填开始再填结束，两个都要填，不要去点日历。
-   - 打开某条记录的详情：在列表里找到那一行再点它的名称或“详情”。
-   - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。
+   - 打开某条记录的详情：在列表里找到那一行再点它的名称或“详情”。这条记录没有详情页时，让它在列表里显示出来就算打开了；不要为了查看去点“编辑”，编辑表单只在用户要修改时才打开。
+   - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。列候选时，每一条用来区分的信息（编号、手机、所属客户等）必须来自按这个名称筛选后的列表或接口结果，逐条对应；不要从没筛选的列表里凭位置去读。
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
    - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”），先进它的详情页，从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
+   - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
    - 填完后重新观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，再 finish。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：留空，在答复里提醒用户还有哪些必填项要自己补，然后照常以 done 结束。
-   - 只有用户一个具体值都没给（比如只说“新增一家供应商”）时，才用 need_input 问，不要自己编。
+   - 只有用户一个具体值都没给（比如只说“新增一家供应商”“帮我新增一个产品单位”）时，才用 need_input 问要填什么，不要自己编；这时可以先把表单打开，但不要 highlight 提交按钮，也不要以 done 结束。用户指明了关联对象（比如“给某客户新增联系人”“给某客户开一张订单”）就算给了值：打开表单并带上这个对象后以 done 结束，说明其余由用户补。
 
 通用规则：
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
+- 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
 - 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。
 - 全部做完后调用 finish，答复用一两句中文，写出查到的具体值和页面/表单现在的状态。"""
@@ -271,10 +385,11 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 VERIFY_SYSTEM = """你是验收员。下面是用户的原话、助手的答复，以及页面此刻的真实状态（由程序读取，不是助手自述）。
 逐项核对用户原话里的每一个要求是否真的满足：
 - 要求打开/筛选/翻页/切页签的：页面路径、弹窗、页签、页面生效的查询是否就是用户要的那个对象和条件；打开的记录名称是否与用户说的完全一致。
-- 要求填表的：用户给的每个值是否出现在对应字段；是否标出了提交按钮；是否改动了用户没要求的字段。
-- 要求回答的：答复里是否有具体值；这个值是否能在“助手本轮读过的接口”结果或页面状态里找到；有矛盾才算问题。只提问、没要求打开页面的请求，不需要页面有任何变化。
+- 要求填表的：用户给的每个值是否出现在对应字段（要求清空的字段应当是空的）；是否标出了提交按钮；助手有没有动用户没要求的字段。最后这一项只看“助手本轮填写/选择过的控件”这份程序记录：表单里其它字段的值是表单打开时就有的（记录原值、应用默认值或联动带出的值），不算助手改动，不要要求恢复。
+- 用户说的是“帮我新增/创建一个…”，却一个具体的值都没给、也没指明关联对象，助手没有追问而以完成结束：算问题，应当用 need_input 问用户要填什么。用户只是要求“打开新增表单”则不算。
+- 要求回答的：答复里是否有具体值；这个值是否能在“助手本轮读过的接口”结果或页面状态里找到；有矛盾才算问题。只提问、没要求打开页面的请求，不需要页面有任何变化。不要用你自己对字段名、列名含义的理解去否定助手选的列或算法：答复里的数在接口结果或页面上能找到、且页面显示的数与它一致，就不算问题。接口结果在这里只截取了开头，没看到的行不等于助手没读到。
 - 助手说“已完成”的事，状态里有没有证据。
-- 用户指的是单独一条记录（“那张”“这个”“它”或直接给名称），而操作轨迹里按这个名称或条件查到多条（total 大于 1），助手却自己挑了一条打开或修改：算问题，应当列出候选让用户选。
+- 用户指的是单独一条记录（“那张”“这个”“它”或直接给名称），而操作轨迹里把这个名称或条件作为查询参数查到多条（带着该参数时 total 大于 1；没带这个条件的列表总数不算），助手却自己挑了一条打开或修改：算问题，应当列出候选让用户选。
 - 答复里的金额、单价与页面状态里显示的数字不一致，或只来自接口原始值而页面上没有出现：算问题。
 只输出一个 JSON：{"ok": true 或 false, "problems": ["具体缺了什么或哪里不一致"]}。没有问题时 problems 为空数组。不要因为措辞、礼貌或你自己的偏好判不通过。"""
 
@@ -288,8 +403,9 @@ def conventions_text(conventions) -> str:
 
 
 def _today(today: str, time_zone: str) -> str:
-    """The date the model is told: the application's reference day when it has one,
-    otherwise today where the application's clock is."""
+    """The date the model is told: the day this executor was given, otherwise today where
+    the application's clock is. The goal port's `today()` is the same day but builds the
+    application index to say it, ten seconds a conversation would wait for."""
     return today or datetime.now(ZoneInfo(time_zone)).date().isoformat()
 
 
@@ -343,7 +459,8 @@ def _page_lines(observation) -> tuple[list[str], list[str]]:
                 break
             inside.append(number)
         menu = [n for n in inside if roles.get(f"e{n}") == "menuitem"]
-        if len(inside) >= 5 and len(menu) >= 0.8 * len(inside):
+        # Under an open dialog the menu's entries are not operable and it is one bare record.
+        if roles.get(f"e{_number_}") == "menubar" or (len(inside) >= 5 and len(menu) >= 0.8 * len(inside)):
             drop.update(range(i, end))
     hints = []
     for i, depth, number in marks:
@@ -392,6 +509,31 @@ def _commits(element, elements) -> bool:
     return not (len(pair) == 2 and pair[0].ref == element.ref and not pair[1].attrs.get("value"))
 
 
+def _control_name(element) -> str:
+    """What a person would call this control: its form label, its place in a line table,
+    else its own text."""
+    for key in ("field_label", "title", "placeholder"):
+        value = str(element.attrs.get(key) or "").rstrip(":：").strip()
+        if value:
+            return value[:40]
+    return (element.name.splitlines()[0][:40] if element.name else "") or element.role
+
+
+_LINE = re.compile(r"^明细第(\d+)行·(.+)$")
+
+
+def _lines(observation) -> dict[int, dict[str, str]]:
+    """What each control of a form's line table holds, by row and column, as the
+    application's page module names them."""
+    rows: dict[int, dict[str, str]] = {}
+    for element in observation.elements:
+        named = _LINE.match(str(element.attrs.get("title") or ""))
+        if named:
+            rows.setdefault(int(named.group(1)), {})[named.group(2)] = str(
+                element.attrs.get("selected_option") or element.attrs.get("value") or "")
+    return rows
+
+
 def page_text(observation, *, handoffs, marked: str = "") -> str:
     """The page as the loop's model reads it; what it may act on is marked [n]."""
     head = [f"当前页面: {urlsplit(observation.url).path}  {observation.title}"]
@@ -409,6 +551,11 @@ def page_text(observation, *, handoffs, marked: str = "") -> str:
     fields = _fields(observation)
     if fields:
         head.append("表单当前值: " + "; ".join(f"{k}={v or '(空)'}" for k, v in list(fields.items())[:40]))
+    lines_now = _lines(observation)
+    if lines_now:
+        head.append("明细行当前值: " + "； ".join(
+            f"第{row}行 " + ", ".join(f"{k}={v or '(空)'}" for k, v in cells.items())
+            for row, cells in sorted(lines_now.items())[:12]))
     if observation.messages:
         head.append("页面提示: " + " | ".join(observation.messages[:4])[:300])
     if marked:
@@ -494,6 +641,8 @@ class SlimTurnExecutor(GoalTurnExecutor):
             return know.search_menu(str(args.get("keyword", ""))), False
         if name == "search_api":
             return know.search_api(str(args.get("keyword", ""))), False
+        if name == "find_record":
+            return self._find_record(s, str(args.get("name", "")).strip()), False
         if name == "call_api":
             params = args.get("params")
             if isinstance(params, str):
@@ -501,8 +650,10 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     params = json.loads(params)
                 except ValueError:
                     params = {}
+            fields = args.get("fields")
             with s.receipt.stage("business"):
-                text = know.call_api(str(args.get("path", "")), params if isinstance(params, dict) else {})
+                text = know.call_api(str(args.get("path", "")), params if isinstance(params, dict) else {},
+                                     fields if isinstance(fields, list) else ())
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             return text, False
         if name == "observe":
@@ -522,18 +673,29 @@ class SlimTurnExecutor(GoalTurnExecutor):
             element = self._element(s, args.get("index", -1))
             if element is None:
                 return "没有这个序号的元素，请根据最新观察重新选择。", True
+        if name == "input" and _control_kind(element) == "〔下拉〕" and str(args.get("text", "")).strip():
+            # Typing into a dropdown and pressing Enter takes whichever option is lit at
+            # that moment. A value meant for a dropdown is chosen by its text instead.
+            name, args = "select", {**args, "option": str(args["text"])}
         if name == "click":
             failed = self._act(s, "click", {"ref": element.ref})
             self._settled(s)
+            if not failed and _control_kind(element) == "〔下拉〕":
+                return ("已点开下拉。要选其中一项，用 select(index, option) 按选项文字选："
+                        "展开的列表只显示了一部分，在里面点容易点错。"), True
             return failed or "已点击。", True
         if name == "input":
             failed = self._act(s, "fill", {"ref": element.ref, "value": str(args.get("text", "")),
                                            "commit": _commits(element, s.obs.elements)})
+            if not failed:
+                turn["touched"].append((_control_name(element), str(args.get("text", ""))))
             self._settled(s, waits=2)
             return failed or "已填入。", True
         if name == "select":
             option = str(args.get("option", ""))
             failed = self._act(s, "select", {"ref": element.ref, "value": option, "option_label": option})
+            if not failed:
+                turn["touched"].append((_control_name(element), option))
             self._settled(s, waits=2)
             return failed or "已选中。", True
         if name == "scroll":
@@ -551,6 +713,30 @@ class SlimTurnExecutor(GoalTurnExecutor):
                             submitted=False, persisted=False)
             return f"已标出：{turn['marked']}", False
         return f"没有这个工具：{name}", False
+
+    def _find_record(self, s, name: str) -> str:
+        """Where the application has a record of this name, through the goal port's own
+        "records found by name": every entity a page shows, read as the actor."""
+        if not name:
+            return "请给出要找的名称。"
+        try:
+            with s.receipt.stage("business"):
+                context = s.approvals.context(s.step, "find_record")
+                hits = self.goal_port.locate_reference(name, context=context)
+                index = self.goal_port.index(context=context)
+        except DataRefused as exc:
+            return f"查找失败：{str(exc)[:160]}"
+        if not hits:
+            return (f"没有在任何模块里找到名称是（或以它开头的）“{name}”的唯一记录。"
+                    "可能不存在、名称不完整，或同一模块里有多条同名记录（这里查不出同名的）："
+                    "用对应模块的列表接口按名称查一次，确认是没有，还是有几条。")
+        labels = {e.key: e.label for e in index.entities}
+        pages = {}
+        for page in index.pages:
+            if page.entity:
+                pages.setdefault(page.entity, page.breadcrumb or page.label)
+        return "\n".join(f"{labels.get(entity, entity)}（{entity}；页面：{pages.get(entity, '无')}）：{shown}"
+                         for entity, shown in hits)
 
     # -- the loop ----------------------------------------------------------------------
     def _run(self, s) -> str:
@@ -579,7 +765,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 user=self.actor_name or self.knowledge.user_name or "当前用户",
                 date=_today(self.today, self.time_zone), tz=self.time_zone)
                 + conventions_text(self.conventions)}]
-        turn = {"reads": [], "marked": "", "trace": [], "baseline": _fields(s.obs), "handoffs": handoffs,
+        turn = {"reads": [], "marked": "", "trace": [], "touched": [], "handoffs": handoffs,
                 "shown": [], "done": set(), "stalled": 0}
         prompt = s.message.text
         self._messages.append({"role": "user", "_observation": True,
@@ -601,7 +787,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
         return text
 
     def _forget_old_observations(self) -> None:
-        seen = 0
+        seen = kept = 0
         for message in reversed(self._messages):
             if message.get("_observation"):
                 seen += 1
@@ -609,11 +795,22 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     message["content"] = message["content"].split("\n当前页面:")[0] \
                         + "\n（更早的页面观察已省略）"
                     message["_observation"] = False
+            elif message.get("_api"):
+                kept += len(message["content"])
+                if kept > _API_KEPT:
+                    message["content"] = message["content"].split("\n")[0] \
+                        + "\n（更早的接口结果已省略；还要用就带 fields 重新读）"
+                    message["_api"] = False
 
     def _loop(self, s, prompt: str, turn: dict, *, verified: bool) -> str:
         nudges, taken = 0, 0
         while taken < self.model_steps and not s.terminal_reason:
             taken += 1
+            if taken == self.model_steps - 1 and taken > 1:
+                # What was found so far is worth more to the person than "ran out of steps".
+                self._messages.append({"role": "user", "content":
+                                       "只剩最后两步：现在就调用 finish。已经查到的值照实写出；用户要的都做到了用 done，"
+                                       "还有没做到的部分就用 cannot，说明哪些查到了、哪些没做到。"})
             self._forget_old_observations()
             wire = [{k: v for k, v in m.items() if not k.startswith("_")} for m in self._messages]
             try:
@@ -655,6 +852,8 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                            "content": "未执行：页面已变化，请根据新的观察重新决定。"})
                     continue
                 acts = name in ("click", "input", "select", "scroll")
+                target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
+                          and isinstance(args.get("index"), int) else None)
                 where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), s.obs.content_digest)
                 if acts and where in turn["done"]:
                     # The same step from the same page: it led nowhere the first time.
@@ -673,10 +872,13 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 except (ValueError, TypeError) as exc:
                     text, changed = f"工具参数有误：{str(exc)[:160]}", False
                 s.ledger.append("slim_tool", step=s.step, tool=name, changed=changed, ok=not text.startswith("没有成功"))
-                turn["trace"].append(f"{name}({json.dumps(args, ensure_ascii=False)[:120]})"
+                turn["trace"].append(f"{name}{'[' + _control_name(target) + ']' if target is not None else ''}"
+                                     f"({json.dumps(args, ensure_ascii=False)[:120]})"
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
                 changed_page = changed and name != "observe"
                 entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text}
+                if name == "call_api":
+                    entry["_api"] = True
                 if changed:
                     entry["content"] = text + "\n" + self._page(s, turn)
                     entry["_observation"] = True
@@ -690,9 +892,13 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 problems = self._verify(s, prompt, answer, turn)
                 if problems:
                     s.ledger.append("slim_verify_sent_back", problems=len(problems))
+                    # A second reading, not a ruling: it has been wrong about a right
+                    # answer, and a model told "failed" gives the right answer up.
                     self._messages.append({"role": "user", "_observation": True, "content":
-                                           "验收没有通过：" + "；".join(problems)
-                                           + "。请修正后再 finish；如果确实做不到，用 cannot 或 need_input 如实说明。\n"
+                                           "验收提出了疑点（只是复核意见，可能有错）：" + "；".join(problems)
+                                           + "。逐条对照你手里的证据：意见对，就修正；意见不对，就保持原来的结果，"
+                                           "不要为了迁就它去改答案、改页面或改表单。然后重新 finish；"
+                                           "确实做不到的，用 cannot 或 need_input 如实说明。\n"
                                            + page_text(s.obs, handoffs=turn["handoffs"], marked=turn["marked"])})
                     return self._loop(s, prompt, turn, verified=True)
             if status == "need_input":
@@ -719,27 +925,27 @@ class SlimTurnExecutor(GoalTurnExecutor):
 
     def _verify(self, s, prompt: str, answer: str, turn: dict) -> list[str]:
         obs = s.obs
-        now = _fields(obs)
-        changed = {k: {"from": turn["baseline"].get(k), "to": v} for k, v in now.items()
-                   if k in turn["baseline"] and turn["baseline"][k] != v}
         history = [m["content"].split("\n当前页面:")[0] for m in self._messages
-                   if m["role"] == "user" and not m["content"].startswith(("验收", "请用工具"))]
+                   if m["role"] == "user" and not m["content"].startswith(("验收", "请用工具", "只剩最后两步"))]
         said = re.sub(r"[\s,，。.：:]", "", " ".join(history))
-        stray = [f"{label}：{c['from'] or '(空)'}→{c['to'] or '(空)'}" for label, c in changed.items()
-                 if c["to"] and re.sub(r"[\s,，。.：:]", "", str(c["to"])) not in said]
+        stray = [f"{label}←{value}" for label, value in turn["touched"]
+                 if value and re.sub(r"[\s,，。.：:]", "", value) not in said]
         state = {"path": urlsplit(obs.url).path, "title": obs.title,
                  "selected": list(obs.selected_controls),
                  "list": ({k: obs.page_read[k] for k in ("page", "page_size", "rows", "total")}
                           if obs.page_read is not None else None),
-                 "applied_query": obs.page_query, "form": now, "form_changed": changed,
+                 "applied_query": obs.page_query, "form": _fields(obs),
+                 "form_lines": {f"第{row}行": cells for row, cells in sorted(_lines(obs).items())},
                  "highlighted": turn["marked"], "messages": list(obs.messages[:4]),
                  "page_text": page_text(obs, handoffs=turn["handoffs"])[-2500:]}
         content = ("用户本轮原话：" + prompt
                    + ("\n此前各轮原话：" + " / ".join(history[:-1]) if len(history) > 1 else "")
                    + "\n助手答复：" + answer
                    + "\n助手本轮的操作轨迹：\n" + ("\n".join(turn["trace"][-14:]) or "无")
+                   + "\n助手本轮填写/选择过的控件（程序记录，按先后）："
+                   + ("；".join(f"{label}←{value or '(清空)'}" for label, value in turn["touched"][-20:]) or "无")
                    + "\n助手本轮读过的接口：" + ("\n".join(f"call_api({a}) → {r}" for a, r in turn["reads"][-4:]) or "无")
-                   + ("\n程序检出：这些被改动字段的新值没有原样出现在用户原话里：" + "；".join(stray)
+                   + ("\n程序检出：助手填入的这些值没有原样出现在用户原话里：" + "；".join(stray)
                       + "。逐个判断：是用户要求的另一种写法（如日期补全年份、名称补全全称）或应用自动联动（合计、天数、自动带出的关联）就不算问题；是助手自己编的值就算问题，要求恢复原值。"
                       if stray else "")
                    + "\n页面真实状态：" + json.dumps(state, ensure_ascii=False)[:7000])
