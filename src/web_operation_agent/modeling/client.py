@@ -7,6 +7,7 @@ import ipaddress
 import json
 import math
 import re
+import ssl
 import threading
 import time
 import urllib.error
@@ -355,7 +356,13 @@ class ChatModel(_ConcreteChatProvider):
                     req = urllib.request.Request(
                         url, data=payload, method="POST", headers=headers)
                     request_dispatched = True
-                    with urllib.request.urlopen(req, timeout=socket_timeout) as r:
+                    # Create SSL context with certifi if available, otherwise default
+                    try:
+                        import certifi
+                        ssl_context = ssl.create_default_context(cafile=certifi.where())
+                    except ImportError:
+                        ssl_context = ssl.create_default_context()
+                    with urllib.request.urlopen(req, timeout=socket_timeout, context=ssl_context) as r:
                         raw_response = r.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
                 else:
                     raw_response = self._cancellable_post(
