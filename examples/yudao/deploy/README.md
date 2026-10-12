@@ -236,7 +236,20 @@ back with each numeric column's sum, highest and lowest and each date column's r
 by month, so that counting and adding are not left to the model; instants are shown as
 the application's clock has them. A list the application divides by whose records they
 are (`sceneType`), read without naming a scope, is read as the adapter's data port reads
-it: the scopes together, once per record.
+it: the scopes together, once per record. When that reading finds nothing under a
+condition, one read without a scope tells whether such records exist outside the actor's
+scopes: that is no permission, not absence. Every instant column of a list read is
+counted by month and named, whichever column was asked for, because a list usually holds
+more than one (made, ordered, received) and the person's verb says which is meant.
+
+Round trips to the model are most of a turn's time, so fewer are asked for. The first
+request already carries the menu pages and paged lists whose own names the person's words
+contain, found by the program; `find_record` returns each entity's page and list with
+it. `fill_fields` fills or chooses several controls of the shown form, filter or line
+table by their labels in one step and may end by clicking a named button. After a page
+change, the steps of the same reply that name a path or a field still run; those that
+name an element by its number do not, since the numbers are the old page's. A scroll that
+names a region moves that region and says so when nothing moved.
 
 A closing model request checks the person's words against the page and may send the turn
 back once. It is told which controls the turn itself filled or chose; every other value a

@@ -227,6 +227,13 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("隐藏页", found)
         self.assertEqual(self.know.user_name, "合成用户")
 
+    def test_pages_and_lists_the_person_s_words_name_are_offered_before_any_model_request(self):
+        found = self.know.suggest("这个月的订单有几张")
+        self.assertIn("页面 /sale/order  销售 > 订单", found)
+        self.assertIn("GET /admin-api/orders/page  [订单] 获得订单分页", found)
+        self.assertNotIn("export", found)
+        self.assertEqual(self.know.suggest("你好"), "")
+
     def test_only_reads_are_searchable_and_exports_are_not(self):
         found = self.know.search_api("订单")
         self.assertIn("GET /admin-api/orders/page", found)
@@ -294,6 +301,19 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn('{"id": 2, "createTime": "2026-09-30 23:30:00"}', text)
         self.assertIn("createTime 按月的行数: 2026-10 3 行，2026-09 2 行", text)
         self.assertNotIn("createTime（", text)    # an instant is counted by month, not summed
+
+    def test_every_instant_of_a_list_is_counted_whichever_one_was_asked_for(self):
+        for deal in DEALS:
+            deal["dealTime"] = "2026-07-15 10:00:00"
+        try:
+            text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 5}, ["dealTime"])
+        finally:
+            for deal in DEALS:
+                del deal["dealTime"]
+        self.assertIn("这些行有几个时间列: dealTime; createTime。", text)
+        self.assertIn("dealTime 按月的行数: 2026-07 5 行", text)
+        self.assertIn("createTime 按月的行数: 2026-10 3 行，2026-09 2 行", text)
+        self.assertNotIn('"createTime"', text)    # the rows keep to the columns asked for
 
     def test_a_result_adds_a_bounded_amount_to_the_conversation_and_says_what_it_left_out(self):
         text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 100})
@@ -477,6 +497,32 @@ class LoopTests(unittest.TestCase):
         executor._tool(state, "input", {"index": 9, "text": "Gamma"}, turn)
         self.assertEqual(len(turn["touched"]), 3)   # a step that failed put nothing there
 
+    def test_several_named_fields_are_set_in_one_step_each_found_on_the_page_as_it_then_is(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge, sent = None, []
+        executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
+        executor._settled = lambda s, **kw: None
+        state, turn = State(), {"touched": [], "trace": []}
+        state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(1, "textbox", "", "input", field_label="备注", value=""),
+            element(2, "combobox", "", "input", field_label="客户"),
+            element(3, "combobox", "", "input", field_label="日期", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
+            element(4, "combobox", "", "input", field_label="日期", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
+            element(5, "button", "搜 索", "button")],
+            content="[1]<input />\n[2]<input />\n[3]<input />\n[4]<input />\n[5]<button>搜 索 />")
+        said, changed = executor._tool(state, "fill_fields", {"fields": [
+            {"label": "备注", "value": "加急"}, {"label": "客户", "value": "Acme"},
+            {"label": "日期", "value": "2026-10-01 ~ 2026-10-31"}, {"label": "不存在", "value": "x"}],
+            "then_click": "搜索"}, turn)
+        self.assertTrue(changed)
+        self.assertEqual([(a, args.get("ref"), args.get("value")) for a, args in sent], [
+            ("fill", "e1", "加急"), ("select", "e2", "Acme"), ("fill", "e3", "2026-10-01"),
+            ("fill", "e4", "2026-10-31"), ("click", "e5", None)])
+        self.assertFalse(sent[2][1]["commit"])     # the first box of a range waits for the second
+        self.assertIn("不存在：屏幕上没有这个字段", said)
+        self.assertIn("已点“搜索”", said)
+        self.assertEqual([label for label, _value in turn["touched"]], ["备注", "客户", "日期"])
+
     def test_the_check_is_told_which_controls_the_assistant_set_and_nothing_else_counts_as_changed(self):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "把地址清空"}]
@@ -508,6 +554,15 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.ran, ["click"])
         self.assertTrue(any(m["role"] == "tool" and m["content"].startswith("未执行") for m in executor._messages))
 
+    def test_a_step_that_names_no_element_number_still_runs_after_the_page_changed(self):
+        def tool(s, name, args, turn):
+            self.ran.append(name)
+            return "ok", name in ("goto", "fill_fields")
+        self.loop(reply(call("goto", path="/orders"), call("fill_fields", fields=[{"label": "客户", "value": "Acme"}]),
+                        call("click", index=10), call("call_api", path="/x")),
+                  reply(call("finish", status="cannot", answer="做不到")), tool=tool)
+        self.assertEqual(self.ran, ["goto", "fill_fields", "call_api"])
+
 
 class FindRecordTests(unittest.TestCase):
     class Port:
@@ -523,7 +578,8 @@ class FindRecordTests(unittest.TestCase):
         def index(self, *, context=None):
             return ApplicationIndex(
                 entities=(IndexEntity("crm/customer", "CRM 客户"), IndexEntity("erp/customer", "ERP 客户")),
-                pages=(IndexPage("crm-customer", "客户管理", "CRM 系统 / 客户管理", entity="crm/customer"),))
+                pages=(IndexPage("crm-customer", "客户管理", "CRM 系统 / 客户管理", entity="crm/customer"),
+                       IndexPage("orders", "订单", "销售 / 订单", entity="orders")))
 
     class Turn:
         step = 0
@@ -541,7 +597,7 @@ class FindRecordTests(unittest.TestCase):
 
     def find(self, port, name):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
-        executor.goal_port = port
+        executor.goal_port, executor.knowledge = port, ActorKnowledge(Client(), lambda: DOCS)
         return executor._find_record(self.Turn, name)
 
     def test_it_says_which_modules_hold_a_record_of_that_name_and_where(self):
@@ -550,6 +606,11 @@ class FindRecordTests(unittest.TestCase):
         self.assertEqual(told, ["CRM 客户（crm/customer；页面：CRM 系统 / 客户管理）：晨岚机电",
                                 "ERP 客户（erp/customer；页面：无）：晨岚机电"])
         self.assertEqual(port.asked, ["晨岚机电"])
+
+    def test_it_gives_the_page_s_path_and_the_list_to_read_when_the_application_has_them(self):
+        told = self.find(self.Port(hits=(("orders", "S1"),)), "S1")
+        self.assertIn("页面：销售 / 订单 /sale/order）：S1", told)
+        self.assertIn("    GET /admin-api/orders/page  [订单] 获得订单分页", told)
 
     def test_nothing_found_is_said_without_claiming_absence(self):
         told = self.find(self.Port(), "松原设备")

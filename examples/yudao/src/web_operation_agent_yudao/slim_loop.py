@@ -149,19 +149,55 @@ class ActorKnowledge:
         self._load()
         ranked = sorted(((_score(keyword, (2, o["summary"]), (2, o["tag"]), (1, o["path"])), o)
                          for o in self._ops), key=lambda pair: -pair[0])
-        lines = []
-        for score, op in ranked[:8]:
-            if score <= 2:
-                break
-            params = []
-            for p in op["op"].get("parameters") or []:
-                if p.get("in") != "query":
-                    continue
-                desc = (p.get("description") or "").split("，")[0][:24]
-                params.append(f"{p['name']}{'*' if p.get('required') else ''}({desc})")
-            lines.append(f"GET {op['path']}  [{op['tag']}] {op['summary']}\n    参数: "
-                         + (", ".join(params[:14]) or "无"))
+        lines = [self._api_line(op) for score, op in ranked[:8] if score > 2]
         return "\n".join(lines) or "没有匹配的只读接口。换一个业务词再试。"
+
+    @staticmethod
+    def _api_line(op) -> str:
+        params = []
+        for p in op["op"].get("parameters") or []:
+            if p.get("in") != "query":
+                continue
+            desc = (p.get("description") or "").split("，")[0][:24]
+            params.append(f"{p['name']}{'*' if p.get('required') else ''}({desc})")
+        return (f"GET {op['path']}  [{op['tag']}] {op['summary']}\n    参数: "
+                + (", ".join(params[:14]) or "无"))
+
+    def page_path(self, breadcrumb: str) -> str:
+        """The path of the menu page the application's navigation shows under these names."""
+        self._load()
+        wanted = [part.strip() for part in re.split(r"[/>]", breadcrumb) if part.strip()]
+        return next((m["path"] for m in self._menu
+                     if [part.strip() for part in m["name"].split(">")] == wanted), "")
+
+    def list_api(self, entity: str) -> str:
+        """The paged list an entity key names, when the application publishes one."""
+        self._load()
+        op = self._by_path.get(f"/admin-api/{entity.strip('/')}/page")
+        return self._api_line(op) if op else ""
+
+    def suggest(self, sentence: str) -> str:
+        """Pages and lists whose own names the person's words contain, found without a
+        model request. A first step usually asks for exactly these."""
+        self._load()
+        said = re.sub(r"\s+", "", sentence)
+        pages = sorted((m for m in self._menu if len(m["leaf"]) >= 2 and re.sub(r"\s+", "", m["leaf"]) in said),
+                       key=lambda m: -len(m["leaf"]))[:4]
+        lists = []
+        for op in self._ops:
+            noun = op["tag"].split()[-1] if op["tag"].split() else ""
+            if len(noun) >= 2 and noun in said and op["path"].endswith("/page"):
+                lists.append(op)
+        lists.sort(key=lambda op: -len(op["tag"].split()[-1]))
+        nouns = [op["tag"].split()[-1] for op in lists]
+        # "用户" inside "用户分组" names nothing of its own.
+        lists = [op for op, noun in zip(lists, nouns) if not any(noun != other and noun in other for other in nouns)][:3]
+        if not pages and not lists:
+            return ""
+        out = ["程序按字面先找到的（可能不全、也可能不是用户指的那个；不合适就用 search_menu / search_api 自己找）:"]
+        out += [f"页面 {m['path']}  {m['name']}" for m in pages]
+        out += [self._api_line(op) for op in lists]
+        return "\n".join(out)
 
     def _deref(self, schema):
         ref = schema.get("$ref") if isinstance(schema, dict) else None
@@ -283,18 +319,27 @@ class ActorKnowledge:
                 shown.update({k: v for k, v in _slim(data, deep=True).items() if k not in shown})
             out.append(json.dumps(shown, ensure_ascii=False)[:3500])
             return "\n".join(out)
+        # A list usually carries several instants (made, ordered, received). Which one a
+        # question means is the model's to read from the words, so every one is counted
+        # and named, not only the one it happened to ask for.
+        clocks = [k for k in dict.fromkeys((*fields, *(keys if fields else ()))) if _TIME_KEY.search(k)][:5]
+        if len(clocks) > 1:
+            named = [(k, (self._deref(props.get(k) or {}).get("description") or "")[:20]) for k in clocks]
+            out.append("这些行有几个时间列: " + "; ".join(f"{k}={d}" if d else k for k, d in named)
+                       + "。用户说的是哪个时间（创建、下单、入库…）就用哪一列的行数。")
+        for key in clocks:
+            # Counting the rows of a month is the program's work, not the model's.
+            months: dict[str, int] = {}
+            for row in rows:
+                shown = self._cell(key, row.get(key)) if isinstance(row, dict) else None
+                if isinstance(shown, str) and re.match(r"\d{4}-\d{2}", shown):
+                    months[shown[:7]] = months.get(shown[:7], 0) + 1
+            if months:
+                out.append(f"{key} 按月的行数: " + "，".join(
+                    f"{month} {count} 行" for month, count in sorted(months.items(), reverse=True)[:12]))
         for key in fields:
             values = [row.get(key) for row in rows if isinstance(row, dict)]
             if _TIME_KEY.search(key):
-                # Counting the rows of a month is the program's work, not the model's.
-                months: dict[str, int] = {}
-                for value in values:
-                    shown = self._cell(key, value)
-                    if isinstance(shown, str) and re.match(r"\d{4}-\d{2}", shown):
-                        months[shown[:7]] = months.get(shown[:7], 0) + 1
-                if months:
-                    out.append(f"{key} 按月的行数: " + "，".join(
-                        f"{month} {count} 行" for month, count in sorted(months.items(), reverse=True)[:12]))
                 continue
             if not values or _NOT_A_QUANTITY.search(key) or not all(
                     isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
@@ -340,6 +385,13 @@ TOOLS = [
         "index": {"type": "integer"}, "text": {"type": "string"}}, ["index", "text"]),
     _tool("select", "在带序号的下拉框或单选组里选中一个选项，option 写选项显示的文字。", {
         "index": {"type": "integer"}, "option": {"type": "string"}}, ["index", "option"]),
+    _tool("fill_fields", "按字段名一次填或选多个字段：表单字段、筛选条件、明细行（“明细第N行·列名”）都可以。"
+          "下拉和单选按选项文字选，文本、数字、日期直接填，日期范围写成“开始 ~ 结束”。逐个执行，返回每个字段的结果和最新观察。"
+          "字段名用最新观察里“表单当前值”“明细行当前值”中出现的名字。", {
+        "fields": {"type": "array", "items": {"type": "object", "properties": {
+            "label": {"type": "string"}, "value": {"type": "string"}}, "required": ["label", "value"]}},
+        "then_click": {"type": "string", "description": "全部填完后要点的按钮的文字，例如“搜索”；不需要就不给"}},
+        ["fields"]),
     _tool("scroll", "滚动页面；给出 index 时滚动那个元素所在的可滚动区域（例如弹窗）。", {
         "down": {"type": "boolean"}, "index": {"type": "integer"}}, ["down"]),
     _tool("search_api", "按业务词查找应用的只读数据接口。", {
@@ -366,6 +418,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 你能做三类事，一句话里可能同时包含几类，每一类都要做完：
 1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
    - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序会读完所有页，算好数值列的合计、最大、最小和日期列每个月的行数，直接用这些数，不要自己一页页翻、一行行加。
+   - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。
    - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以页面上显示的数字为准。
@@ -380,13 +433,15 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
    - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”），先进它的详情页，从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
-   - 填完后重新观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，再 finish。
+   - 一次要填或选两个以上字段（表单、筛选条件、明细行）时，用 fill_fields 按字段名一次做完，不要一个个 input/select；筛选可以带 then_click="搜索"。它报告某个字段没做成时，再对那个字段单独用 input 或 select。
+   - 填完后看返回的观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，再 finish。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：留空，在答复里提醒用户还有哪些必填项要自己补，然后照常以 done 结束。
    - 只有用户一个具体值都没给（比如只说“新增一家供应商”“帮我新增一个产品单位”）时，才用 need_input 问要填什么，不要自己编；这时可以先把表单打开，但不要 highlight 提交按钮，也不要以 done 结束。用户指明了关联对象（比如“给某客户新增联系人”“给某客户开一张订单”）就算给了值：打开表单并带上这个对象后以 done 结束，说明其余由用户补。
 
 通用规则：
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
+- 一次回复里可以连着调用几个工具，按顺序执行。页面变化之后，同一次回复里按序号的操作（click、input、select、highlight）不会执行，按路径或字段名的（goto、fill_fields、call_api）照常执行：能一次说清的就一次说完，例如 goto 之后接着 fill_fields 筛选。
 - 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
 - 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。记录存在但不属于当前账号的可见范围，是没有权限，不要说成不存在。
@@ -537,6 +592,11 @@ def _commits(element, elements) -> bool:
     return not (len(pair) == 2 and pair[0].ref == element.ref and not pair[1].attrs.get("value"))
 
 
+def _words(content: str) -> str:
+    """The person's own words in a message that also carries what the program added."""
+    return content.split("\n当前页面:")[0].split("\n程序按字面先找到的")[0]
+
+
 def _control_name(element) -> str:
     """What a person would call this control: its form label, its place in a line table,
     else its own text."""
@@ -635,8 +695,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
         self._messages: list[dict] = []
 
     # -- the page, through the executor's own dispatch ------------------------------------
-    def _settled(self, s, *, path: str = "", waits: int = 8) -> None:
-        """Let the page finish what the last step started before it is read again."""
+    def _settled(self, s, *, path: str = "", waits: int = 8, ms: int = 400) -> None:
+        """Let the page finish what the last step started before it is read again. A step
+        that only sets a control's value needs less than one that loads a page or a list;
+        every wait is a round trip of its own, so there is exactly one when nothing is
+        pending."""
         for _ in range(waits):
             obs = s.obs
             arrived = not path or urlsplit(obs.url).path == path
@@ -644,7 +707,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 break
             if self._dispatch(s, "wait_for", {"ms": 400}) is None:
                 return
-        self._dispatch(s, "wait_for", {"ms": 400})
+        self._dispatch(s, "wait_for", {"ms": ms})
 
     def _element(self, s, index):
         """The element the model named, if the page text it was last shown listed it."""
@@ -684,6 +747,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                      fields if isinstance(fields, list) else ())
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             return text, False
+        if name == "fill_fields":
+            fields = args.get("fields")
+            if not (isinstance(fields, list) and fields and all(isinstance(f, dict) for f in fields)):
+                return "fields 要给出至少一个 {label, value}。", False
+            return self._fill_fields(s, fields, str(args.get("then_click") or ""), turn), True
         if name == "observe":
             self._dispatch(s, "observe", {})
             return "观察如下。", True
@@ -717,14 +785,14 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                            "commit": _commits(element, s.obs.elements)})
             if not failed:
                 turn["touched"].append((_control_name(element), str(args.get("text", ""))))
-            self._settled(s, waits=2)
+            self._settled(s, waits=2, ms=200)
             return failed or "已填入。", True
         if name == "select":
             option = str(args.get("option", ""))
             failed = self._act(s, "select", {"ref": element.ref, "value": option, "option_label": option})
             if not failed:
                 turn["touched"].append((_control_name(element), option))
-            self._settled(s, waits=2)
+            self._settled(s, waits=2, ms=200)
             return failed or "已选中。", True
         if name == "scroll":
             command = {"direction": "down" if args.get("down", True) else "up", "pages": 1}
@@ -744,6 +812,60 @@ class SlimTurnExecutor(GoalTurnExecutor):
                             submitted=False, persisted=False)
             return f"已标出：{turn['marked']}", False
         return f"没有这个工具：{name}", False
+
+    def _fill_fields(self, s, fields, then_click: str, turn: dict) -> str:
+        """Fill or choose several named fields one after another, each found afresh on the
+        page as it then is, so that one model request does the work of several."""
+        said = []
+        for item in fields[:12]:
+            label, value = str(item.get("label", "")).strip().rstrip(":：").strip(), str(item.get("value", ""))
+            lines, _hints = _page_lines(s.obs)
+            shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
+            found = [e for e in s.obs.elements if e.ref[1:] in shown and label and label in (
+                str(e.attrs.get("field_label") or "").rstrip(":：").strip(), str(e.attrs.get("title") or ""))]
+            if not found:
+                said.append(f"{label}：屏幕上没有这个字段（先 scroll 让它出现，或核对字段名）")
+                continue
+            kind = _control_kind(found[0])
+            if kind.startswith("〔日期") and len(found) == 2:
+                ends = [part.strip() for part in re.split(r"\s*(?:~|～|至|到)\s*", value) if part.strip()]
+                if len(ends) != 2:
+                    said.append(f"{label}：这是日期范围，值写成“开始 ~ 结束”")
+                    continue
+                steps = list(zip(found, ends))
+            else:
+                steps = [(found[0], value)]
+            failed = ""
+            for element, text in steps:
+                if kind in ("〔下拉〕", "〔单选〕") and text.strip():
+                    failed = self._act(s, "select", {"ref": element.ref, "value": text, "option_label": text})
+                else:
+                    failed = self._act(s, "fill", {"ref": element.ref, "value": text,
+                                                   "commit": _commits(element, s.obs.elements)})
+                if failed or s.terminal_reason:
+                    break
+                self._settled(s, waits=2, ms=200)
+            if s.terminal_reason:
+                return "操作没有完成。"
+            if failed:
+                said.append(f"{label}：{failed}")
+            else:
+                turn["touched"].append((label, value))
+                turn["trace"].append(f"fill_fields[{label}]({json.dumps(value, ensure_ascii=False)[:60]})")
+                said.append(f"{label}：已{'选' if kind in ('〔下拉〕', '〔单选〕') else '填'}")
+        wanted = re.sub(r"\s+", "", then_click or "")
+        if wanted:
+            lines, _hints = _page_lines(s.obs)
+            shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
+            button = next((e for e in s.obs.elements if e.ref[1:] in shown and e.tag == "button"
+                           and re.sub(r"\s+", "", e.name) == wanted), None)
+            if button is None:
+                said.append(f"没有找到“{then_click}”按钮，没有点")
+            else:
+                failed = self._act(s, "click", {"ref": button.ref})
+                self._settled(s)
+                said.append(failed or f"已点“{then_click}”")
+        return "；".join(said) + "。"
 
     def _find_record(self, s, name: str) -> str:
         """Where the application has a record of this name, through the goal port's own
@@ -766,8 +888,15 @@ class SlimTurnExecutor(GoalTurnExecutor):
         for page in index.pages:
             if page.entity:
                 pages.setdefault(page.entity, page.breadcrumb or page.label)
-        return "\n".join(f"{labels.get(entity, entity)}（{entity}；页面：{pages.get(entity, '无')}）：{shown}"
-                         for entity, shown in hits)
+        told = []
+        for entity, shown in hits:
+            page = pages.get(entity, "")
+            path = self.knowledge.page_path(page) if page else ""
+            told.append(f"{labels.get(entity, entity)}（{entity}；页面：{page or '无'}{' ' + path if path else ''}）：{shown}")
+            api = self.knowledge.list_api(entity)
+            if api:
+                told.append("    " + api.replace("\n", "\n    "))
+        return "\n".join(told)
 
     # -- the loop ----------------------------------------------------------------------
     def _run(self, s) -> str:
@@ -799,8 +928,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
         turn = {"reads": [], "marked": "", "trace": [], "touched": [], "handoffs": handoffs,
                 "shown": [], "done": set(), "stalled": 0}
         prompt = s.message.text
+        found = self.knowledge.suggest(prompt)
         self._messages.append({"role": "user", "_observation": True,
-                               "content": prompt + "\n" + self._page(s, turn)})
+                               "content": prompt + ("\n" + found if found else "") + "\n" + self._page(s, turn)})
         try:
             return self._loop(s, prompt, turn, verified=not self.verify)
         finally:
@@ -823,8 +953,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
             if message.get("_observation"):
                 seen += 1
                 if seen > 2:
-                    message["content"] = message["content"].split("\n当前页面:")[0] \
-                        + "\n（更早的页面观察已省略）"
+                    message["content"] = _words(message["content"]) + "\n（更早的页面观察已省略）"
                     message["_observation"] = False
             elif message.get("_api"):
                 kept += len(message["content"])
@@ -878,11 +1007,15 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     finish = args
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
                     continue
-                if finish is not None or (position > 0 and changed_page):
+                # A step that names an element by its number was chosen on a page that is no
+                # longer there; one that names a path, a field or a record was not.
+                numbered = name in ("click", "input", "select", "highlight") or (
+                    name == "scroll" and args.get("index") is not None)
+                if finish is not None or (changed_page and numbered):
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                            "content": "未执行：页面已变化，请根据新的观察重新决定。"})
                     continue
-                acts = name in ("click", "input", "select", "scroll")
+                acts = name in ("click", "input", "select", "scroll", "fill_fields")
                 target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
                           and isinstance(args.get("index"), int) else None)
                 where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), s.obs.content_digest)
@@ -906,7 +1039,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 turn["trace"].append(f"{name}{'[' + _control_name(target) + ']' if target is not None else ''}"
                                      f"({json.dumps(args, ensure_ascii=False)[:120]})"
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
-                changed_page = changed and name != "observe"
+                changed_page = changed_page or (changed and name != "observe")
                 entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text}
                 if name == "call_api":
                     entry["_api"] = True
@@ -956,7 +1089,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
 
     def _verify(self, s, prompt: str, answer: str, turn: dict) -> list[str]:
         obs = s.obs
-        history = [m["content"].split("\n当前页面:")[0] for m in self._messages
+        history = [_words(m["content"]) for m in self._messages
                    if m["role"] == "user" and not m["content"].startswith(("验收", "请用工具", "只剩最后两步"))]
         said = re.sub(r"[\s,，。.：:]", "", " ".join(history))
         stray = [f"{label}←{value}" for label, value in turn["touched"]
