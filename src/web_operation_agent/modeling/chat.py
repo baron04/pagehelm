@@ -27,6 +27,10 @@ class ChatPort(Protocol):
     Both entry points are mandatory. Cancellation is not an optional capability discovered at
     call time: an implementation that cannot abort a dispatched request must say so by not
     satisfying this port, never by silently completing a run the user already stopped.
+
+    Per-call options may set tool_choice to auto (the default) or required. Required
+    needs a non-empty tool list and a tool-call response. Decorators must forward it
+    unchanged; provider configuration cannot select it for ordinary turns.
     """
 
     model: str

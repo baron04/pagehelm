@@ -171,7 +171,7 @@ class NativeCompletionTransport(unittest.TestCase):
                 payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
                            "choices": [{"finish_reason": "stop", "message": {"content": "done"}}]}
 
-                def respond(request, timeout):
+                def respond(request, timeout, *, context=None):
                     captured.append(json.loads(request.data))
                     return self._response(payload)
 
@@ -205,7 +205,7 @@ class NativeCompletionTransport(unittest.TestCase):
             payload = {"usage": {"prompt_tokens": 1, "completion_tokens": 1},
                        "choices": [{"finish_reason": "stop", "message": {"content": "done"}}]}
 
-            def respond(request, timeout):
+            def respond(request, timeout, *, context=None):
                 captured.append(json.loads(request.data))
                 return self._response(payload)
 
@@ -274,7 +274,7 @@ class NativeCompletionTransport(unittest.TestCase):
             }
             captured = []
 
-            def respond(request, timeout):
+            def respond(request, timeout, *, context=None):
                 captured.append((json.loads(request.data), timeout))
                 return self._response(payload)
 
@@ -608,7 +608,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 runtime_guard=guard,
             )
 
-            def unavailable(request, timeout):
+            def unavailable(request, timeout, *, context=None):
                 raise M.urllib.error.HTTPError(
                     request.full_url, 503, "unavailable", {}, io.BytesIO(b"ignored"))
 
@@ -649,7 +649,7 @@ class ProviderRuntimeProtection(unittest.TestCase):
                 "finish_reason": "stop", "message": {"content": "done"}}]}
             replies = []
 
-            def respond(request, timeout):
+            def respond(request, timeout, *, context=None):
                 replies.append((request.get_header("X-woa-request-id"), timeout))
                 response = io.BytesIO(json.dumps(payload).encode())
                 response.__enter__ = lambda stream=response: stream

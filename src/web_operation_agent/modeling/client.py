@@ -256,13 +256,24 @@ class ChatModel(_ConcreteChatProvider):
             raise ValueError("provider options must be an object or None")
         body = {"model": self.model, "messages": messages, "temperature": self.temperature,
                 "max_tokens": effective_max_tokens}
+        tool_choice = (options or {}).get("tool_choice", "auto")
+        if not isinstance(tool_choice, str) or tool_choice not in {"auto", "required"}:
+            raise ValueError("tool_choice must be auto or required")
+        if tool_choice == "required" and not tools:
+            raise ValueError("required tool_choice needs offered tools")
         selected = dict(self.options)
         if options:
             selected.update({k: v for k, v in options.items() if k not in _RESERVED_BODY})
         body.update(request_options(self.model, self.base, selected))
         if tools:
             body["tools"] = tools
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = tool_choice
+            # This deployment rejects required even with thinking disabled.
+            # Preserve the caller's required response contract below; only the
+            # wire encoding changes, and a text response still fails closed.
+            if (tool_choice == "required" and self.model == "deepseek-v4.1-flash"
+                    and urllib.parse.urlsplit(self.base).hostname == "token-plan.cn-beijing.maas.aliyuncs.com"):
+                body["tool_choice"] = "auto"
         data, request_id = self._request_completion_with_receipt(
             body, run_id, timeout_s=timeout_s, cancelled=cancelled)
         choices = data.get("choices") or []
@@ -274,6 +285,11 @@ class ChatModel(_ConcreteChatProvider):
         message = choice.get("message") or {}
         if not isinstance(message, dict):
             raise ProviderError("provider message must be an object", request_id=request_id)
+        if tool_choice == "required" and not (
+                isinstance(message.get("tool_calls"), list) and message["tool_calls"]):
+            raise ProviderError("provider did not return a required tool declaration",
+                code="provider_tool_response", retryable=False, dispatched=True,
+                request_id=request_id)
         message["finish_reason"] = choice.get("finish_reason") or ""
         message.setdefault("reasoning",
                            message.get("reasoning_content") or message.get("reasoning") or "")

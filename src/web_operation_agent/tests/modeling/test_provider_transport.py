@@ -22,10 +22,11 @@ REPLY = json.dumps({"id": "x", "object": "chat.completion",
 class _Server:
     """A local provider that counts the TCP connections it accepts."""
 
-    def __init__(self, *, http11=True, close_after_first=False, status=200):
+    def __init__(self, *, http11=True, close_after_first=False, status=200, reply=REPLY):
         outer = self
         self.connections = 0
         self.requests = 0
+        self.bodies = []
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1" if http11 else "HTTP/1.0"
@@ -35,13 +36,13 @@ class _Server:
                 outer.connections += 1
 
             def do_POST(self):
-                self.rfile.read(int(self.headers.get("content-length", "0")))
+                outer.bodies.append(json.loads(self.rfile.read(int(self.headers.get("content-length", "0")))))
                 outer.requests += 1
                 self.send_response(status)
                 self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(REPLY)))
+                self.send_header("content-length", str(len(reply)))
                 self.end_headers()
-                self.wfile.write(REPLY)
+                self.wfile.write(reply)
                 if close_after_first and outer.requests == 1:
                     # Keep-alive was promised, then the idle connection is dropped: what a
                     # provider or proxy does to a connection that sat idle too long.
