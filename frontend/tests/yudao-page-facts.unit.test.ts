@@ -775,7 +775,7 @@ describe('applied query facets for target settlement', () => {
 
 describe('the application opens its own page through its router, in this document', () => {
   /** A router and a tab store as the application has them, over an address that is only a value. */
-  function application({redirect = true, tabs = true, refuses = false, arrives = true} = {}) {
+  function application({redirect = true, tabs = true, refuses = false, arrives = true, over = [] as object[]} = {}) {
     const calls: string[] = []
     const location = {href: 'https://synthetic.test/crm/customer', origin: 'https://synthetic.test',
       pathname: '/crm/customer', search: '', hash: ''}
@@ -807,9 +807,10 @@ describe('the application opens its own page through its router, in this documen
       },
     }
     const store = tabs ? {delAllViews: () => { calls.push('drop kept pages') }} : undefined
-    const doc = {getElementById: (id: string) => id === 'app' ? {__vue_app__: {config: {globalProperties: {
-      $router: router, $pinia: {_s: new Map(store ? [['tagsView', store]] : [])}}}}} : null}
-    return {calls, location, options: {view: {location, setTimeout}, doc}}
+    const doc = {querySelectorAll: () => over,
+      getElementById: (id: string) => id === 'app' ? {__vue_app__: {config: {globalProperties: {
+        $router: router, $pinia: {_s: new Map(store ? [['tagsView', store]] : [])}}}}} : null}
+    return {calls, location, options: {view: {location, setTimeout}, doc, mounted: () => true}}
   }
 
   it('drops the kept pages, enters through the redirect route and says yes once the page is shown', async () => {
@@ -825,12 +826,34 @@ describe('the application opens its own page through its router, in this documen
       ['https://synthetic.test/crm/customer', {}],                 // already shown: only a load rebuilds it provably
       ['https://synthetic.test/system/post#part', {}],             // the redirect route carries no fragment
       ['https://elsewhere.invalid/system/post', {}],
+      // A dialog left open over the page would sit over the next one: only a load clears it.
+      ['https://synthetic.test/system/post', {over: [{getBoundingClientRect: () => ({width: 1440, height: 900})}]}],
     ] as const) {
       const app = application(options)
       await expect(openPage(url, app.options)).resolves.toBe(false)
       expect(app.calls).toEqual([])
     }
     await expect(openPage('/system/post', {view: window, doc: document})).resolves.toBe(false)   // no application mounted
+  })
+  it('a closed dialog still in the document does not stop it', async () => {
+    const app = application({over: [{getBoundingClientRect: () => ({width: 0, height: 0})}]})
+    await expect(openPage('https://synthetic.test/system/post', app.options)).resolves.toBe(true)
+  })
+  it('waits, within a bound, for the page itself and not only for its address', async () => {
+    const app = application()
+    let asked = 0
+    const opened = openPage('https://synthetic.test/system/post', {...app.options, mounted: () => ++asked > 3})
+    await expect(opened).resolves.toBe(true)
+    expect(asked).toBe(4)
+    // A page that never reports itself built is still open: the wait ends, the answer stands.
+    const slow = application()
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => (now += 400)
+    try {
+      await expect(openPage('https://synthetic.test/system/post', {...slow.options, mounted: () => false}))
+        .resolves.toBe(true)
+    } finally { Date.now = realNow }
   })
   it('says no when the router refuses, or the page never arrives', async () => {
     const refused = application({refuses: true})

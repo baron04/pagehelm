@@ -471,8 +471,14 @@ export const readPageQuery = () => installed?.readPageQuery()
 export const readPageRead = () => installed?.readPageRead()
 export const readPageFacets = () => installed ? installed.readPageFacets() : []
 export const disposeInstalledPageFacts = () => installed?.dispose()
-/** How long the application is given to show a page it was asked to open. */
+/** How long the application is given to show a page it was asked to open, and then how
+ * long the page's own component is given to be on the screen. Together they stay under the
+ * time the Runtime allows an application before it loads the page itself. */
 const OPEN_WAIT_MS = 3000
+const MOUNT_WAIT_MS = 2500
+/** What the component library puts over a page: dialogs, drawers and message boxes share
+ * the first, the image viewer has its own. A dropdown's popper is not one of them. */
+const OPEN_OVER_THE_PAGE = '.el-overlay, .el-image-viewer__wrapper'
 
 /**
  * Open one of the application's own pages through its router, in this document.
@@ -491,12 +497,23 @@ const OPEN_WAIT_MS = 3000
  * uses: a read the page being left starts on the way out belongs to the address in
  * between, and is never the destination's.
  *
+ * One thing a loaded document cleared cannot be cleared from here: a dialog, drawer or
+ * message box left open over the page. Some belong to the layout and outlive the page
+ * that raised them (the finance pages' account guide does), and would sit over the next
+ * page. While one is open the page is not opened here, and the document is loaded.
+ *
+ * The address changes before the page is there: a route's component is fetched when it is
+ * first entered. A loaded document was looked at seconds after its address; here the page
+ * is waited for, within a bound, so that the first look at it is at the page and not at
+ * the empty layout around it.
+ *
  * True only when the application now shows the wanted address, and it is another than
  * before. Everything else -- no router or tab store to ask, the address already shown, a
- * fragment, a navigation the router refused or took elsewhere -- is false, and the caller
- * loads the document.
+ * fragment, something open over the page, a navigation the router refused or took
+ * elsewhere -- is false, and the caller loads the document.
  */
-export async function openPage(url, {view = window, doc = document} = {}) {
+export async function openPage(url, {view = window, doc = document,
+                                      mounted = () => Boolean(currentPageComponent())} = {}) {
   const globals = doc.getElementById('app')?.__vue_app__?.config?.globalProperties
   const router = globals?.$router, tabs = globals?.$pinia?._s?.get?.('tagsView')
   if (typeof router?.push !== 'function' || typeof router.resolve !== 'function' ||
@@ -511,6 +528,8 @@ export async function openPage(url, {view = window, doc = document} = {}) {
     between = router.resolve({path: '/redirect' + wanted.path, query: wanted.query})
   } catch { return false }
   if (!wanted?.matched?.length || wanted.fullPath === shown() || between?.name !== 'Redirect') return false
+  if (Array.from(doc.querySelectorAll(OPEN_OVER_THE_PAGE)).some(element =>
+    element.getBoundingClientRect().width && element.getBoundingClientRect().height)) return false
   try {
     tabs.delAllViews()
     await new Promise(resolve => view.setTimeout(resolve, 0))
@@ -521,7 +540,14 @@ export async function openPage(url, {view = window, doc = document} = {}) {
       await new Promise(resolve => view.setTimeout(resolve, 25))
     }
   } catch { return false }
-  return view.location.pathname + view.location.search !== before
+  if (view.location.pathname + view.location.search === before) return false
+  const built = Date.now() + MOUNT_WAIT_MS
+  try {
+    while (shown() === wanted.fullPath && !mounted() && Date.now() < built) {
+      await new Promise(resolve => view.setTimeout(resolve, 25))
+    }
+  } catch { /* the page is open; whether it is built yet is the next observation's to say */ }
+  return true
 }
 
 /** Observe only the mounted application's default menu, not arbitrary menu-shaped DOM. */
