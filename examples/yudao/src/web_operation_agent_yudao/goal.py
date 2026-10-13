@@ -120,6 +120,12 @@ class YudaoGoalData:
         self._query_binding = uuid.uuid4().hex
 
     # -- index and schema ---------------------------------------------------------------------
+    def invalidate_reads(self, entities: frozenset[str]) -> None:
+        """Keep schema knowledge; discard record caches after verified native effects."""
+        with self._lock:
+            self._read.clear()
+            self._shown.clear()
+
     @property
     def _docs(self) -> dict:
         # Schema compilation owns _lock. Load only when the schema actually needs it;
@@ -653,7 +659,8 @@ class YudaoGoalData:
             displays = self._candidate_displays(entity, rows)
             picked = [r for r in rows if displays[_row_id(r)] == text.strip()]
             if picked:
-                return tuple(Ref(entity=entity, id=_row_id(r), display=text.strip(), name=name)
+                return tuple(Ref(entity=entity, id=_row_id(r), display=text.strip(),
+                                 name=self._display(entity, r))
                              for r in picked[:limit])
         rows = self._people(entity) if entity in (_USERS, _DEPTS) else self._fetch(
             entity, self._narrowing(entity, text))

@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 
 from web_operation_agent.business.runtime import BusinessToolRuntime
+from web_operation_agent.business.tools.contracts import ToolOperation
 from web_operation_agent.business.forms import ApplicationFormPort, NoApplicationForms
 from web_operation_agent.composition.descriptor import (APPLICATION_ADAPTER_VERSION,
                                                         ApplicationDescriptor)
@@ -56,8 +57,9 @@ class YudaoIdentityPort:
     required = True
     required_scopes = frozenset({"yudao.read"})
 
-    def __init__(self, base_url: str, client: YudaoClient, *, lifetime_s: int = 300):
+    def __init__(self, base_url: str, client: YudaoClient, *, lifetime_s: int = 300, native_writes=False):
         self._base_url, self._client, self.lifetime_s = base_url.rstrip("/"), client, lifetime_s
+        self.required_scopes = frozenset({"yudao.read", *(('yudao.write',) if native_writes else ())})
 
     def _assertion(self, user: dict, source: str) -> IdentityAssertion:
         issued = int(time.time() * 1000)
@@ -103,7 +105,10 @@ class YudaoApplication:
                  time_zone: str = "Asia/Shanghai", today: date | None = None, source=None,
                  conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None,
                  native_tabs: bool = False, native_navigation: bool = False, page_write_guard: str = "",
-                 forms: ApplicationFormPort | None = None):
+                 forms: ApplicationFormPort | None = None, native_writes: bool = False,
+                 mutation_journal=None):
+        if not isinstance(native_writes, bool):
+            raise TypeError("native_writes must be explicitly enabled")
         if not isinstance(native_tabs, bool) or (native_tabs and not page_write_guard):
             raise ValueError("native tabs require an explicitly configured page write guard")
         if not isinstance(native_navigation, bool) or native_navigation and not (native_tabs and page_write_guard):
@@ -156,18 +161,34 @@ class YudaoApplication:
             "find_page_entries": ("application.metadata", "application.route"),
             "resolve_goal_candidates": ("application.metadata", "application.route", "business.identifier"),
         }
-        data = DeclaredDataClassifier(tuple((name, classes[name]) for name in names))
-        postconditions = ResultPostconditionVerifier(())
+        from .writes import native_tools, NativePostconditions, CombinedTools
+        from .skill_packages import packaged_skills
+        from web_operation_agent.composition.business_operations import RegisteredOperations
+        from web_operation_agent.business.tools.registry import ToolRegistry
+        reviewed = native_tools(self.client, self.goal_data)
+        skills = packaged_skills()
+        if any(op not in {t.name for t in reviewed.definitions} for skill in skills.artifacts for op in skill.write_operations):
+            raise ValueError("Skill references an unreviewed native operation")
+        registry = native_tools(self.client, self.goal_data, runtime_dictionary=True) if native_writes else ToolRegistry(())
+        mutation_names = frozenset(t.name for t in registry.definitions)
+        data = DeclaredDataClassifier(tuple((name, classes[name]) for name in names) +
+            tuple((name, ("business.generic_record", "business.identifier")) for name in sorted(mutation_names)))
+        postconditions = NativePostconditions(mutation_names)
         routes = DeclaredRoutePort(APPLICATION_ID, _PAGE_ROUTES,
                                    session_handoff_query_keys=SESSION_HANDOFF_KEYS)
-        self.identity = YudaoIdentityPort(api_base, self.client)
+        self.identity = YudaoIdentityPort(api_base, self.client, native_writes=native_writes)
         self.business_tools = BusinessToolRuntime(
-            (), reads, application_id=APPLICATION_ID,
-            required_scopes={name: "yudao.read" for name in names}, data_classifier=data,
+            (), CombinedTools(reads, registry) if registry else reads, application_id=APPLICATION_ID,
+            required_scopes={**{name: "yudao.read" for name in names}, **{name: "yudao.write" for name in mutation_names}}, data_classifier=data,
+            operations={**{name: ToolOperation("application", "read") for name in names},
+                        **{t.name: t.operation for t in registry.definitions}},
+            skill_registry=skills, require_skill_for_writes=True, mutation_journal=mutation_journal,
             postcondition_verifier=postconditions, route_validator=routes)
         self.ports = ApplicationPorts(
             identity=self.identity, routes=routes, postconditions=postconditions,
-            reconciliation=ConservativeMutationReconciler(), data=data,
+            reconciliation=ConservativeMutationReconciler(mutation_names), data=data,
+            operations=RegisteredOperations(registry, skills, self.goal_data.invalidate_reads,
+                observed_mutation_operations=frozenset(d.name for d in registry.definitions)),
             goal_scopes=YudaoIdentityPort.required_scopes,
             forms=forms if forms is not None else NoApplicationForms())
         self.descriptor = ApplicationDescriptor(

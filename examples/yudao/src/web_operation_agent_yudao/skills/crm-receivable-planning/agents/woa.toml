@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["crm/receivable-plan", "crm/contract", "crm/customer", "system/user"]
+write_operations = ["crm_receivable_plan_create"]

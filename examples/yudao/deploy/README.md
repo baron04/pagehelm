@@ -312,8 +312,11 @@ field entry and submit remain disabled until their separate form qualification.
 - `conventions/reference.json` holds what the reference organisation means by some words, as the owner reviewed them (客户 is the CRM customer, 产品 the ERP product, 成交 an approved contract, 订单 every ERP sales order, 回款 money received, an approval process one of the person's own, 我能看的 every record the account may read). `YudaoApplication` loads it unless given another file or none; `--no-conventions` runs without it.
 - `YudaoSource` optionally compiles the deployment's rules from the bound release's server and admin UI (`--source-root` holding `server/` and `ui/`, `--source-release` naming the release): when a button shows (its `v-if` and `v-hasPermi`), when a form field cannot be changed (its input's `:disabled` condition on the record or on how the form was opened; conditions on the page's own state are left out), and what the operation a button calls refuses (the service method's `throw exception(...)` under its `if`, with the module's error message), both tied to the operation's URL and cited as `path:lines@release sha256:...`. The rules are shown to the model only for a question about how the application behaves; a question about data is read with the same index as without them.
 
-`YudaoApplication` composes the generic read tools under `yudao.read`, with no mutation
-tools, and an identity port that refuses unless the browser token and the server reader
+`YudaoApplication` composes generic read tools under `yudao.read`. Mutations are off
+by default; the goal host's explicit `--native-writes` enables thirty reviewed CRM, ERP, system organisation/notice, mall catalog, member tag/group and workflow category
+operations with a persistent mutation journal, supporting Skill, fresh visible approval
+and same-actor readback. It does not enable browser submission. The identity port refuses
+unless the browser token and the server reader
 identify the same user and tenant. Credential renewal invalidates data caches and metadata
 bindings; expired or denied reads preserve authentication/permission errors. The shared
 read contract carries API-declared fixed money units, refuses malformed amounts, and does

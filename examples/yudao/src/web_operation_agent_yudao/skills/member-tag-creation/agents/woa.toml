@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["member/tag"]
+write_operations = ["member_tag_create"]

@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["crm/customer"]
+write_operations = ["crm_customer_lock"]

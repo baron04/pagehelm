@@ -120,6 +120,8 @@ class YudaoHostConfig:
     native_filter_policies: tuple[Path, ...] = ()
     native_guard_port: int = 48093
     native_navigation: bool = False
+    #: Only reviewed server-side typed mutations; browser submission stays disabled.
+    native_writes: bool = False
     #: Explicit read-only page-planning pilot; never selected by browser messages or fallback.
     executor_mode: str = "goal"
     #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
@@ -139,6 +141,10 @@ class YudaoHostConfig:
     page_reach_steps: int = 8
 
     def __post_init__(self):
+        if not isinstance(self.native_writes, bool):
+            raise ValueError("native writes must be explicitly enabled")
+        if self.native_writes and self.executor_mode != "goal":
+            raise ValueError("native writes are qualified only through the goal host")
         if (not isinstance(self.native_action_effect_review, str)
                 or len(self.native_action_effect_review) > 200
                 or self.native_action_effect_review and not self.native_action_effect_review.strip()):
@@ -353,6 +359,7 @@ class YudaoHost:
 
     def _application(self, client: YudaoClient) -> YudaoApplication:
         from .guard_proxy import GUARD_PATH
+        from web_operation_agent.business.mutation import SQLiteMutationJournal
         forms = None
         if self.form_review is not None or self.create_reviews:
             from .form_entries import (NativeCustomerEntryVerifier, NativeCreateEntryVerifier,
@@ -373,7 +380,10 @@ class YudaoHost:
                                 native_tabs=self.native_proxy is not None,
                                 native_navigation=self.config.native_navigation,
                                 forms=forms,
-                                page_write_guard=GUARD_PATH if self.native_proxy is not None else "")
+                                page_write_guard=GUARD_PATH if self.native_proxy is not None else "",
+                                native_writes=self.config.native_writes,
+                                mutation_journal=SQLiteMutationJournal(self.config.state_dir / "mutations.sqlite3")
+                                    if self.config.native_writes else None)
         if self.filter_reviews:
             from datetime import datetime
             from zoneinfo import ZoneInfo
@@ -418,7 +428,8 @@ class YudaoHost:
                                            form_prefill=(self.form_review is not None or bool(self.create_reviews)
                                                          or self.live_forms),
                                            page_filtering=bool(self.filter_reviews),
-                                           deterministic_reads=self.config.executor_mode == "page-agent")
+                                           deterministic_reads=self.config.executor_mode == "page-agent",
+                                           native_writes=self.config.native_writes)
             common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
@@ -590,6 +601,9 @@ def main(argv=None) -> int:
                     help="under a method-fence read policy: fill the form a page shows and take "
                          "bounded page steps, inside the application's own read-only window")
     ap.add_argument("--executor", choices=("goal", "page-agent"), default="goal")
+    ap.add_argument("--native-writes", action="store_true",
+                    help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
+                         "does not enable browser submission")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,
@@ -621,6 +635,7 @@ def main(argv=None) -> int:
         native_create_class=a.native_create_class,
         native_filter_policies=tuple(a.native_filter_policy),
         executor_mode=a.executor, native_action_effect_review=a.native_action_effect_review,
+        native_writes=a.native_writes,
         native_live_forms=a.native_live_forms,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))

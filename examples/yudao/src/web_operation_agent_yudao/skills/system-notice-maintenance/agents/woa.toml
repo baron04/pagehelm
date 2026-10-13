@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["system/notice"]
+write_operations = ["system_notice_create"]

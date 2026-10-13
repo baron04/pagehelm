@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["crm/follow-up-record", "crm/customer", "crm/contact", "crm/clue", "crm/business", "crm/contract"]
+write_operations = ["crm_follow_up_create"]

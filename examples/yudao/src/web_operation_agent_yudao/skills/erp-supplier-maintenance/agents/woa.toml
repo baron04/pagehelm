@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["erp/supplier"]
+write_operations = ["erp_supplier_create", "erp_supplier_update"]

@@ -924,6 +924,15 @@ class NameLookupTests(unittest.TestCase):
         self.assertEqual(self.port.locate_names(("瑞达",), entities=("crm/contract",)),
                          (("瑞达", "crm/contract", "瑞达实施服务合同"),))
 
+    def test_ambiguous_name_is_not_a_unique_reference_but_offers_full_candidates(self):
+        port = DataGoalPort(YudaoGoalData(_TwinClient(), DOCS))
+        found = port.locate_names(("云帆企业版合同",), entities=("crm/contract",))
+        self.assertEqual(found, ())
+        candidates = port.candidates(entities=("crm/contract",),
+                                     known=(("crm/contract", "云帆企业版合同"),))
+        self.assertEqual([c.display for c in candidates], [
+            "云帆企业版合同（杭州云帆科技有限公司）", "云帆企业版合同（苏州瑞达精密机械有限公司）"])
+
 
 if __name__ == "__main__":
     unittest.main()

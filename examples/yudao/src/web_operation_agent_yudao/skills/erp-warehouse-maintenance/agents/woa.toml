@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["erp/warehouse"]
+write_operations = ["erp_warehouse_create", "erp_warehouse_update"]

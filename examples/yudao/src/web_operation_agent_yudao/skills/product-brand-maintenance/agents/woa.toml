@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["product/brand"]
+write_operations = ["product_brand_create", "product_brand_update"]

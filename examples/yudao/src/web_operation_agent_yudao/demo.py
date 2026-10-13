@@ -18,13 +18,14 @@ import sys
 import time
 import urllib.request
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
+from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.composition.live import LiveConversationRunner, LiveProductSession
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecution, AgentTurnExecutor
 from web_operation_agent.goal.executor import GoalTurnExecutor
@@ -74,22 +75,135 @@ def _browser_login(origin: str, account: YudaoAccount) -> dict:
     return payload["data"]
 
 
-def _next_outcome(page, conversation, timeout_s: float, operations: list):
+def _next_outcome(page, conversation, timeout_s: float, operations: list, *, write_cards=None,
+                  on_write_card=None, started=None, turn_events=None):
     deadline = time.monotonic() + timeout_s
+    answered = set()
+    first_card = False
+    def observed(outcome):
+        if turn_events is not None and not outcome.error:
+            try:
+                _observe_final_result(page, outcome.result, min(15, max(.1, deadline-time.monotonic())), turn_events)
+            except Exception:
+                # Keep the acknowledged normal outcome even when its UI endpoint is
+                # unavailable. Missing measurement is explicit, never a fake timestamp.
+                turn_events.incomplete(outcome.result.message.message_id)
+        return outcome
     while True:
+        # A terminal result can arrive while the panel is still projecting its last
+        # card. It takes precedence over another UI decision.
+        try:
+            return observed(conversation.next_outcome(timeout_s=0))
+        except TimeoutError:
+            pass
         if page.locator(_OPERATE_CARD).count():
             card = page.locator(_OPERATE_CARD)
-            operations.append(card.inner_text())
-            page.wait_for_timeout(500)
-            card.locator(_APPROVE_CONTROL).click()
-            page.locator(_OPERATE_CARD).wait_for(state="detached", timeout=10_000)
+            approval_id = card.get_attribute("data-approval-id")
+            if not approval_id:
+                raise RuntimeError("the panel did not expose the active approval identity")
+            if approval_id not in answered:
+                answered.add(approval_id)
+                operations.append(card.inner_text())
+                if turn_events:
+                    turn_events.begin_approval_driver(approval_id)
+                try:
+                    page.wait_for_timeout(700)
+                    card.locator(_APPROVE_CONTROL).click()
+                except BaseException:
+                    if turn_events:
+                        turn_events.end_approval_driver(approval_id)
+                    raise
+        writes = page.locator('section.woa-approval[data-kind="write"]')
+        if writes.count() and on_write_card is not None:
+            card = writes.first
+            approval_id = card.get_attribute("data-approval-id")
+            if not approval_id:
+                raise RuntimeError("the panel did not expose the active approval identity")
+            if approval_id in answered:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("timed out waiting for the turn's outcome")
+                try:
+                    return observed(conversation.next_outcome(timeout_s=min(0.25, remaining)))
+                except TimeoutError:
+                    continue
+            answered.add(approval_id)
+            visible = _observe_write_card(page, card, min(15, max(.1, deadline-time.monotonic())))
+            if turn_events is not None:
+                if not first_card:
+                    turn_events.emit("first_write_card_visible_observed", "existing-browser-observer")
+                    first_card = True
+                turn_events.begin_approval_driver(approval_id)
+            try:
+                decision = on_write_card(visible)
+            except BaseException:
+                if turn_events:
+                    turn_events.end_approval_driver(approval_id)
+                raise
+            if decision not in {"approved", "denied"}:
+                if turn_events:
+                    turn_events.end_approval_driver(approval_id)
+                raise ValueError("the isolated approval apparatus must approve or deny")
+            if write_cards is not None:
+                write_cards.append({**visible, "decision": decision,
+                    "seconds": time.monotonic() - started if started is not None else None})
+            button = card.locator(_APPROVE_CONTROL if decision == "approved" else '[data-testid="woa-deny"]')
+            button.scroll_into_view_if_needed()
+            try:
+                button.click()
+            except BaseException:
+                if turn_events:
+                    turn_events.end_approval_driver(approval_id)
+                raise
+            # A following approval may replace this card without an empty DOM frame.
+            # Poll by approval identity; never wait for every write card to disappear.
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("timed out waiting for the turn's outcome")
         try:
-            return conversation.next_outcome(timeout_s=min(0.25, remaining))
+            return observed(conversation.next_outcome(timeout_s=min(0.25, remaining)))
         except TimeoutError:
             continue
+
+
+def _observe_write_card(page, card, timeout_s):
+    deadline = time.monotonic() + timeout_s
+    def remaining_ms():
+        return max(1, (deadline-time.monotonic())*1000)
+    button = card.locator(_APPROVE_CONTROL)
+    button.scroll_into_view_if_needed(timeout=remaining_ms())
+    # The existing full-content gate must settle before the policy reads it.
+    page.wait_for_timeout(min(600, remaining_ms()))
+    visible = card.evaluate("""n => {
+        const r=n.getBoundingClientRect();
+        const button=n.querySelector('[data-testid="woa-approve"]');
+        if (r.width<=0 || r.height<=0 || r.bottom<=0 || r.top>=innerHeight || !button || button.disabled)
+            return null;
+        return {text:n.innerText, effect:n.querySelector('.woa-approval__effect').innerText,
+            targets:[...n.querySelectorAll('.woa-approval__targets li')].map(n=>n.innerText),
+            details:[...n.querySelectorAll('.woa-approval__detail')].map(n=>({kind:n.dataset.kind,
+                label:n.querySelector('strong').textContent,text:n.querySelector('pre').textContent}))};
+    }""", timeout=remaining_ms())
+    if not visible or time.monotonic() > deadline:
+        raise RuntimeError("the complete bound write card is not visible and actionable within its observation bound")
+    return visible
+
+
+def _observe_final_result(page, result, timeout_s, events):
+    """Read the settled result on the bound normal turn, not merely its server terminal."""
+    turn_id = result.message.message_id
+    deadline = time.monotonic() + timeout_s
+    def remaining_ms():
+        return max(1, (deadline-time.monotonic())*1000)
+    # Playwright's existing locator crosses the panel's open shadow root.
+    turn = page.locator(f'.woa-turn[data-turn-id="{turn_id}"][data-settled="true"]')
+    result = turn.locator('.woa-result, .woa-outcome')
+    result.wait_for(state="visible", timeout=remaining_ms())
+    result.locator('.woa-md__caret').wait_for(state="detached", timeout=remaining_ms())
+    if not result.evaluate("n => { const r=n.getBoundingClientRect(); return r.bottom>0 && r.top<innerHeight; }", timeout=remaining_ms()):
+        raise RuntimeError("the settled result was rendered outside the visible viewport")
+    result.inner_text(timeout=remaining_ms())
+    events.emit("final_result_visible_observed", "existing-browser-observer", turn_id=turn_id)
 
 
 @dataclass(frozen=True)
@@ -115,20 +229,35 @@ class YudaoSession:
     conventions: Path | None = REFERENCE_CONVENTIONS
     batch_id: str = ""
     executor_mode: str = "goal"
+    native_writes: bool = False
+    spend_ledger: Path | None = None
+    batch_cost_stop: float | None = None
+    model_options: dict | None = None
+    step_budget: int = 12
+    max_completion_tokens: int = 4000
 
     def __post_init__(self):
         if self.executor_mode not in {"goal", "agent", "hybrid"}:
             raise ValueError("executor_mode must be goal, agent or hybrid")
+        if not isinstance(self.native_writes, bool):
+            raise TypeError("native writes must be explicitly enabled")
+        for value in (self.step_budget, self.max_completion_tokens):
+            if type(value) is not int or value < 1:
+                raise ValueError("session budgets must be positive integers")
 
 
-def run_session(session: YudaoSession) -> dict:
+def run_session(session: YudaoSession, *, chat=None, meter=None, on_write_card=None, on_turn_event=None) -> dict:
     """Run the tasks; return each turn's record, the final page's address, the addresses
     the runtime reported along the way, and what the model calls cost."""
     api_base = (session.api_base or session.origin).rstrip("/")
+    source, rule_source = _session_sources(session)
+    from web_operation_agent.business.mutation import SQLiteMutationJournal
+    session.run_dir.mkdir(parents=True, exist_ok=True)
     app = YudaoApplication(session.origin, session.account, session.api_docs,
                            api_base_url=api_base, ui=session.ui, today=session.today,
-                           source=session.source if session.executor_mode == "goal" else None,
-                           conventions=session.conventions)
+                           source=rule_source,
+                           conventions=session.conventions, native_writes=session.native_writes,
+                           mutation_journal=SQLiteMutationJournal(session.run_dir / "mutations.sqlite3") if session.native_writes else None)
     bound = bind_application(app)
     if not app.health()["passed"]:
         raise RuntimeError("yudao is not reachable under this account")
@@ -138,25 +267,29 @@ def run_session(session: YudaoSession) -> dict:
     tokens = _browser_login(session.origin, session.account)
     principal = app.ports.identity.bind(app.identity.page_identity(tokens["accessToken"]),
                                         delegation_id="yudao-" + uuid.uuid4().hex)
-    meter = SpendMeter(batch_id=session.batch_id or f"yudao-demo-{run_dir.name}")
-    chat = ChatModel(meter, env=dict(session.model_env), model=session.model,
-                     max_completion_tokens=1024, timeout=int(session.turn_timeout_s),
+    meter = meter or SpendMeter(ledger=session.spend_ledger or run_dir / "spend.jsonl",
+        batch_id=session.batch_id or f"yudao-demo-{run_dir.name}", batch_cost_stop=session.batch_cost_stop)
+    chat = chat or ChatModel(meter, env=dict(session.model_env), model=session.model, options=session.model_options,
+                     max_completion_tokens=session.max_completion_tokens, timeout=int(session.turn_timeout_s),
                      egress_policy=ProviderEgressPolicy(
                          session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
     holder: dict = {}
+    from web_operation_agent.execution.events import TurnEvents
+    turn_events = TurnEvents(on_turn_event)
 
     def runner_factory(channel):
         common = dict(
             channel=channel,
+            turn_events=turn_events,
             chat=chat, application=bound, control=ReadOnlyControl(),
             run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16])
+        config = replace(yudao_turn_config(run_dir, timeout_s=int(session.turn_timeout_s),
+            source=source, native_writes=session.native_writes), step_budget=session.step_budget)
         if session.executor_mode == "agent":
             executor = AgentTurnExecutor(
-                **common, config=yudao_turn_config(run_dir,
-                    timeout_s=int(session.turn_timeout_s), source=session.source))
+                **common, config=config)
         elif session.executor_mode == "hybrid":
-            turn_config = yudao_turn_config(run_dir,
-                timeout_s=int(session.turn_timeout_s), source=session.source)
+            turn_config = config
             executor = GoalTurnExecutor(
                 **common, config=turn_config, disabled_page_actions=turn_config.disabled_actions,
                 repository_answers=True,
@@ -166,7 +299,9 @@ def run_session(session: YudaoSession) -> dict:
                 **common, config=AgentTurnConfig(
                     supported_scope="Read this account's available application records and open their pages.",
                     ledger_path=run_dir / "audit.jsonl", wall_budget_s=int(session.turn_timeout_s),
-                    transport_timeout_s=min(30, session.turn_timeout_s), require_identity=True),
+                    transport_timeout_s=min(30, session.turn_timeout_s), require_identity=True,
+                    allow_business_mutations=session.native_writes, step_budget=session.step_budget,
+                    time_zone="Asia/Shanghai"),
                 goal_port=app.goal_port)
         holder["conversation"] = LiveConversationRunner(channel, executor=executor)
         return holder["conversation"]
@@ -181,6 +316,7 @@ def run_session(session: YudaoSession) -> dict:
     visited: list[str] = []
     final_path = breadcrumb_last = ""
     active_tabs: list[str] = []
+    audit_offset = len((run_dir / "audit.jsonl").read_text().splitlines()) if (run_dir / "audit.jsonl").exists() else 0
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as playwright:
@@ -201,17 +337,46 @@ def run_session(session: YudaoSession) -> dict:
                     "async () => { const r = await window.__WOA_RUNTIME_READY__; "
                     "return !r.stored.taskInFlight && !r.stored.inFlight }", timeout=60_000))
                 # Submitted without waiting on it: the turn's outcome, bounded below, is the wait.
+                started = time.monotonic()
                 page.evaluate("task => { window.__WOA_RUNTIME_READY__.then(r => r.submitTask(task)); "
                               "return true; }", task)
                 operations: list = []
+                write_cards: list = []
                 outcome = _next_outcome(page, holder["conversation"], session.turn_timeout_s + 30,
-                                        operations)
+                                        operations, write_cards=write_cards, on_write_card=on_write_card,
+                                        started=started, turn_events=turn_events)
                 result = outcome.result
                 record = {"task": task, "error": outcome.error} if outcome.error else {
                     "task": task, "status": result.status.value if isinstance(result, AgentTurnExecution) else "",
                     "terminal_reason": getattr(result, "terminal_reason", ""),
                     "answer": getattr(result, "user_answer", ""), "url": page.url,
-                    "operations": len(operations)}
+                    "operations": len(operations), "write_cards": write_cards,
+                    "seconds": time.monotonic() - started,
+                    "business_result": result.business_result.content if result.business_result else None,
+                    "verified_answer": result.agent.verified_answer}
+                record["page_state"] = {"path": _address(page.url), "breadcrumb_last": _breadcrumb_last(page),
+                    "active_tabs": _active_tabs(page), "rendered": page.evaluate(_ADMIN_RENDERED)}
+                audit_lines = (run_dir / "audit.jsonl").read_text().splitlines()
+                events = [json.loads(line) for line in audit_lines[audit_offset:]]
+                audit_offset = len(audit_lines)
+                record["skill_evidence"] = [
+                    {"event": e["event"], "sequence": n, **{k: e[k] for k in
+                        ("step", "skill_id", "skill_sha256", "resource", "operations", "intent") if k in e}}
+                    for n, e in enumerate(events) if e["event"] in
+                    {"business_skill_loaded", "business_skill_auto_loaded", "business_skill_resource_loaded", "skill_task_declared"}]
+                record["mutation_evidence"] = [
+                    {"event": e["event"], "sequence": n, **{k: e[k] for k in
+                        ("step", "tool", "proposal", "proposal_digest", "result_digest", "audit", "reconciliation", "completed", "dispatched") if k in e}}
+                    for n, e in enumerate(events) if e["event"] in
+                    {"business_mutation_proposed", "business_mutation_execution_started", "business_mutation_result",
+                     "business_mutation_indeterminate", "business_mutation_cancelled_before_dispatch"}]
+                observation = turn_events.snapshot(turn_events.latest_turn_id)
+                record["passive_turn_events"] = observation["events"]
+                record["turn_event_delivery_complete"] = observation["delivery_complete"]
+                record["dispatch_receipts"] = observation["receipts"]
+                record["dispatch_coverage_complete"] = (
+                    bound.business_tools.mutation_tool_names <= bound.ports.operations.observed_mutation_operations
+                    and observation["unbound_mutations"] == 0)
                 records.append(record)
                 page.screenshot(path=str(run_dir / f"turn-{len(records)}.png"))
             # A route change still settling after the turn's outcome is part of it.
@@ -223,14 +388,32 @@ def run_session(session: YudaoSession) -> dict:
     finally:
         live.close()
         live.wait(timeout_s=10)
-    spend = {"batch_id": meter.batch_id, "model_calls": meter.calls,
-             "input_tokens": meter.total_in, "output_tokens": meter.total_out,
-             "cost": round(meter.batch_cost(), 6)}
+    spend = {**meter.report(), "model": getattr(chat, "model", None), "provider": getattr(chat, "provider", None),
+             "cost_cny": None if meter.unmetered_calls else round(meter.batch_cost(), 6),
+             "cost_basis": "reported usage at registered public reference rates; not the provider invoice",
+             "usage_complete": not bool(meter.unmetered_calls)}
     summary = {"run_dir": str(run_dir), "records": records, "final_path": final_path,
                "breadcrumb_last": breadcrumb_last, "active_tabs": active_tabs,
                "visited": visited, "spend": spend}
     (run_dir / "records.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1))
     return summary
+
+
+def _session_sources(session: YudaoSession):
+    """The legacy compiled-rule port and repository lookup are distinct contracts."""
+    if session.executor_mode == "goal":
+        rules = session.source
+        if isinstance(rules, SourceCapability):
+            if rules != SourceCapability.none():
+                raise ValueError("goal mode accepts compiled Yudao rules; use hybrid for repository lookup")
+            rules = None
+        if rules is not None and (not callable(getattr(rules, "rules", None))
+                                  or not isinstance(getattr(rules, "release", None), str)):
+            raise TypeError("goal source must implement the compiled rule contract")
+        return SourceCapability.none(), rules
+    if session.source is not None and not isinstance(session.source, SourceCapability):
+        raise TypeError("agent and hybrid sources must be SourceCapability")
+    return session.source or SourceCapability.none(), None
 
 
 class SessionStageTimeout(RuntimeError):

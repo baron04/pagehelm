@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["oa/announcement", "system/dept", "system/user"]
+write_operations = ["oa_announcement_create"]

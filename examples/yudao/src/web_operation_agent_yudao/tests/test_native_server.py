@@ -42,6 +42,9 @@ class NativeHostTests(unittest.TestCase):
             return port._assertion(actor(token), "page_session")
 
         def request(client, method, path, **kwargs):
+            if method == "GET" and path == "system/dict-data/simple-list":
+                actor(kwargs["token"])
+                return 0, {"code": 0, "data": [{"dictType": "crm_follow_up_type", "label": "合成电话", "value": "1"}]}
             if method != "GET" or path != "system/auth/get-permission-info":
                 raise AssertionError((method, path))
             return 0, {"code": 0, "data": {"user": actor(kwargs["token"])}}
@@ -133,6 +136,41 @@ class NativeHostTests(unittest.TestCase):
         self.assertNotIn("goto", executor.config.disabled_actions)
         policy = self.chat.call_args.kwargs["egress_policy"]
         self.assertTrue({k.casefold() for k in SESSION_HANDOFF_KEYS} <= policy.handoffs.query_keys)
+        self.chat.return_value.complete.assert_not_called()
+
+    def test_native_writes_require_explicit_host_enablement_and_keep_browser_submission_disabled(self):
+        self.assertFalse(self.config.native_writes)
+        for value in (1, "true", None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                replace(self.config, native_writes=value)
+        with self.assertRaises(ValueError):
+            replace(self.config, native_writes=True, executor_mode="page-agent")
+        self.config = replace(self.config, native_writes=True)
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "skill-write-host")
+        active = host._sessions[("1", "1")]
+        executor = active.session.runner.executor
+        self.assertIsInstance(executor, GoalTurnExecutor)
+        self.assertTrue(executor.config.allow_business_mutations)
+        self.assertIn("submit", executor.config.disabled_actions)
+        self.assertEqual(executor.application.business_tools.mutation_tool_names, frozenset({
+            "crm_customer_create", "crm_customer_update", "crm_contact_create", "crm_contact_update",
+            "crm_follow_up_create", "erp_supplier_create", "erp_supplier_update",
+            "erp_warehouse_create", "erp_warehouse_update", "erp_customer_create", "erp_customer_update",
+            "system_post_create", "member_tag_create", "member_group_create", "bpm_category_create",
+            "crm_clue_create", "crm_clue_update", "erp_product_create", "erp_product_update",
+            "system_dept_create", "product_brand_create", "product_brand_update", "product_category_create",
+            "crm_customer_put_pool", "crm_customer_receive", "crm_customer_lock", "crm_customer_deal_status",
+            "crm_receivable_plan_create"}))
+        # Required dictionary choices are absent in this actor fixture: these
+        # operations must not become malformed schemas or guessed numeric inputs.
+        self.assertNotIn("system_notice_create", executor.application.business_tools.mutation_tool_names)
+        self.assertNotIn("oa_announcement_create", executor.application.business_tools.mutation_tool_names)
+        follow = executor.application.ports.operations.tools.get("crm_follow_up_create")
+        self.assertEqual(follow.schema["function"]["parameters"]["properties"]["type"]["enum"], ["合成电话"])
+        self.assertIn("yudao.write", executor.application.ports.identity.required_scopes)
+        self.assertTrue((self.config.state_dir / "mutations.sqlite3").exists())
+        self.documents.assert_not_called()
         self.chat.return_value.complete.assert_not_called()
 
     def test_page_agent_selection_is_explicit_and_requires_a_reviewed_guard(self):

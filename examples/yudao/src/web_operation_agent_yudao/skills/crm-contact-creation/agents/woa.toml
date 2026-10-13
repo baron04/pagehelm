@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["crm/contact", "crm/customer"]
+write_operations = ["crm_contact_create"]

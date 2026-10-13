@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["crm/clue", "system/user"]
+write_operations = ["crm_clue_create", "crm_clue_update"]
