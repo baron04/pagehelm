@@ -7,6 +7,7 @@ capabilities it offers -- and never resolves a declaration itself.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import re
 import threading
 from datetime import date
@@ -96,7 +97,8 @@ class DataGoalPort:
 
         if self.reference_workers > 1 and len(entities) > 1:
             with ThreadPoolExecutor(max_workers=self.reference_workers) as pool:
-                hits = list(pool.map(find, entities))  # Keep index order, not completion order.
+                futures = [pool.submit(copy_context().run, find, entity) for entity in entities]
+                hits = [future.result() for future in futures]  # Keep index order.
         else:
             hits = [find(entity) for entity in entities]
         return tuple(hit for hit in hits if hit is not None)[:3]

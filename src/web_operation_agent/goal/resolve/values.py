@@ -45,6 +45,12 @@ class ValuesMixin:
             if self.view(entity) is None:
                 continue
             found = self._find_record(entity, name)
+            from .resolver import Ambiguous
+            if isinstance(found, Ambiguous):
+                if entity in wanted:
+                    for display in found:
+                        add(Candidate(kind="record", entity=entity, display=display))
+                continue
             if not (isinstance(found, tuple) and len(found) == 3):
                 continue
             model, rid, display = found

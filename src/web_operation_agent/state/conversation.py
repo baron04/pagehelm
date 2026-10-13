@@ -121,7 +121,9 @@ class ConversationState:
             "assistant": _redact_json(assistant_text.strip()),
             "status": status,
         }
-        if status == "finished" and business_result is not None:
+        if business_result is not None and (status == "finished" or isinstance(business_result.content.get("outcomes"), list)
+                and business_result.content["outcomes"]
+                and all(isinstance(item, dict) and item.get("verified") is True for item in business_result.content["outcomes"])):
             facts = _redact_json(business_result.content)
             if len(_canonical(facts)) <= self.max_business_bytes:
                 turn["prior_business_facts"] = facts

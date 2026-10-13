@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 import functools
 import json
@@ -24,14 +25,15 @@ from ..business.approvals import PAGE_OPERATIONS, ApprovalWatch, OperationPlan
 from ..business.control import ApprovalGate, ApprovalGrant
 from ..business.errors import BusinessToolRequestError
 from ..business.writes import WriteWatch
-from ..business.tools.contracts import form_control_unavailable
+from ..business.tools.contracts import form_control_unavailable, BusinessToolResult
 from ..answer.conclusion import ConclusionRefused
 from ..composition.binding import BoundApplication
 from ..execution.product import (AgentAnswerContext, AgentTurnError, AgentTurnErrorCode,
                                  AgentTurnExecution, AgentTurnMessage, AgentTurnStatus,
-                                 render_neutral_user_answer)
+                                 render_neutral_user_answer, _status_for)
 from ..execution.runstate import RunResult
 from ..execution.receipt import MeasuredChat, TurnReceipt
+from ..execution.events import observed_turn
 from ..execution.budget import TurnBudget
 from ..execution.click_policy import ClickPolicy, click_policy_refusal
 from ..modeling.chat import require_chat_port
@@ -713,6 +715,7 @@ class _TurnState:
     detail: str = ""
     chinese: bool = False
     write_intent: bool = False
+    mutation_outcomes: list = field(default_factory=list)
     cancelled: Callable[[], bool] = lambda: False
     #: The index the declaration was read against (the neighbourhood, when staged).
     index: object = None
@@ -755,6 +758,9 @@ class _TurnState:
     dropped: tuple[str, ...] = ()
     #: The turn's measured chat, for the one question a page step may ask of the model.
     chat: object = None
+    #: Admission is reversible only before approval and is consulted once a turn.
+    skill_consulted: bool = False
+    skill_limit: str = ""
 
 
 
@@ -769,7 +775,8 @@ class GoalTurnExecutor:
                  declaration_cache: bool = True,
                  disabled_page_actions: frozenset[str] = frozenset(),
                  repository_answers: bool = False,
-                 page_reach_steps: int = 0, page_reach_policy=None):
+                 page_reach_steps: int = 0, page_reach_policy=None, turn_events=None,
+                 complete_request_check: str = "single"):
         #: The staged path (the default): the request's hard references are located by
         #: the adapter, the model first picks entities and kinds from one-line summaries,
         #: then declares the details against those entities' neighbourhood of the index,
@@ -799,12 +806,22 @@ class GoalTurnExecutor:
         #: Candidate values offered before the details are declared, when the port has
         #: them; off only to measure what they change.
         self.values = bool(values)
+        if config.allow_business_mutations:
+            from ..business.mutation import MutationJournalDurability
+            if (application.ports.operations is None or not config.require_identity
+                    or config.deployment_profile == "production" and
+                    application.business_tools.mutation_journal_durability is not MutationJournalDurability.DURABLE):
+                raise ValueError("goal writes require registered operations, identity and a durable journal")
         #: How many independent readings of the request are declared before acting.
         #: With two, differing resolved answers get two additional independent readings
         #: and a vote; an unresolved vote falls back to a reconciliation declaration.
         #: One reading trusts the first declaration as it is.
         self.readings = max(1, int(readings))
+        if complete_request_check not in ("single", "anchored"):
+            raise ValueError("complete_request_check must be 'single' or 'anchored'")
+        self.complete_request_check = complete_request_check
         self.channel = channel
+        self.turn_events = turn_events
         self.config = config
         self.chat = require_chat_port(chat, role="executor chat")
         if not isinstance(application, BoundApplication):
@@ -817,6 +834,7 @@ class GoalTurnExecutor:
         self.conversation_state = conversation_state or ConversationState()
 
     # -- binding ----------------------------------------------------------------------
+    @observed_turn
     def execute(self, message: dict) -> AgentTurnExecution:
         turn_message = AgentTurnMessage.from_wire(message)
         dropped = (self.conversation_state.clear()
@@ -905,14 +923,26 @@ class GoalTurnExecutor:
                                      operation_context_digest=(
                                          context.binding_digest if context else ""))
 
+        def approve_business(proposal, *, context=None):
+            try:
+                return gate.decide_plan(proposal, effect=proposal.effect, targets=proposal.targets,
+                                        ttl_s=self.config.approval_ttl_s, context=context)
+            except RemoteProtocolError as exc:
+                if exc.code != "approval_expired":
+                    raise
+                return ApprovalGrant(approval_id="", decision="expired",
+                    plan_digest=proposal.content_digest, decided_at=time.time(),
+                    operation_context_digest=context.binding_digest if context else "")
+
         approvals = ApprovalWatch(
             ledger=ledger, run_id=run_id, principal=principal,
             session_id=(self.channel.session_id if principal is not None else ""),
             turn_id=(turn_message.message_id if principal is not None else ""),
-            business_approval=None,
+            business_approval=(approve_business if self.config.allow_business_mutations else None),
             operation_confirmation=(confirm_operation if self.config.confirm_page_operations
                                     else None),
             cancelled=cancelled,
+            approval_hold_s=self.config.approval_ttl_s,
             operation_hold_s=self.config.operation_approval_ttl_s)
         writes = WriteWatch(control=self.control, ledger=ledger, run_id=run_id,
                             write_guard_declared=bool(self.application.descriptor.page_write_guard))
@@ -929,12 +959,15 @@ class GoalTurnExecutor:
                            cancelled=cancelled, chosen=chosen)
         state.receipt.started -= max(0.0, time.time() - started_at)
         state.budget = TurnBudget(steps=self.config.step_budget, seconds=self.config.wall_budget_s,
-                                  cancelled=cancelled)
+                                  cancelled=cancelled,
+                                  clock=lambda: time.monotonic() - approvals.waited_ms / 1000)
         state.budget.started -= max(0.0, time.time() - started_at)
         self.channel.publish("progress", {"state": "agent_started"},
                              turn_id=turn_message.message_id)
         try:
             text = self._run(state)
+            if state.skill_limit:
+                text = self._say(state, state.skill_limit) + ("\n\n" + text if text else "")
         except TurnCancelled:
             state.terminal_reason = "user_cancelled"
             text = "操作已停止。" if state.chinese else "The task was stopped."
@@ -1048,11 +1081,19 @@ class GoalTurnExecutor:
         scope_parts: list[dict] = []
         scope_unsupported = ""
         known = ()
+        skill_knowledge = ()
         # A follow-up is read with what was said before it, and the records it may mean
         # are looked for in the earlier request as well as in its own words.
         earlier, before = self._earlier()
         lookup = (before + " " + s.message.text).strip()
         parts = None
+        operations = self.application.ports.operations
+        # Knowledge routing shares the original scope call. Ordinary declarations
+        # keep their existing wire even when this deployment enables writes.
+        skill_candidates = tuple(skill.candidate_card() for skill in operations.skills.artifacts
+            if any(d.effect_contract is not None and d.name in skill.write_operations
+                   for d in operations.tools.definitions)
+            ) if self.config.allow_business_mutations and operations else ()
         if self.staged:
             with s.receipt.stage("business"):
                 known = locate(self.goal_port, lookup,
@@ -1071,12 +1112,18 @@ class GoalTurnExecutor:
                         cancelled=s.cancelled, today=today_text, earlier=earlier,
                         cache=self.declaration_cache, cache_namespace=(cache_owner, "scope"),
                         repository_source=self.repository_answers,
+                        skill_candidates=skill_candidates,
                         current_page=current_page())
             except ValueError as exc:
                 # A legacy full-index declaration can recover business scope, but
                 # cannot carry repository questions or their live-read dependencies.
                 s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
                 s.ledger.append("goal_scope_unread", step=s.step)
+                if skill_candidates:
+                    from .skill_admission import consult_execution
+                    answer = consult_execution(self, s)
+                    if answer is not None:
+                        return answer
                 if self.repository_answers:
                     s.terminal_reason = "agent_refused"
                     return self._say(s, _cannot(s.message.text,
@@ -1089,16 +1136,59 @@ class GoalTurnExecutor:
                                 provider_error_code=getattr(exc, "code", "provider_error"))
                 s.terminal_reason, s.detail = "provider_error", str(exc)[:200]
                 return self._say(s, _provider_failed(exc, s.chinese))
+        if self.staged and parts is not None and projection.get("selected_skill_ids"):
+            from .skill_execution import execute_skill_plan, load_skill_context
+            selected = projection["selected_skill_ids"]
+            s.scope_parts = list(parts)
+            s.source_requests = tuple(projection.get("source_requests", ()))
+            s.unsupported = unsupported
+            s.ledger.append("goal_skill_selected", step=s.step, skill_ids=list(selected),
+                            source_parts=len(s.source_requests), side_effect_possible=False)
+            context = load_skill_context(self, s, selected)
+            return execute_skill_plan(self, s, selected, context=context, native_proposals=True)
         if self.staged and parts is not None:
+            from .source_scope import scope_page_keys
             scope_parts = parts
             scope_unsupported = unsupported
             s.scope_parts = list(parts)
-            s.page_keys = tuple(dict.fromkeys(p["page"] for p in parts if p.get("page")))
+            s.page_keys = scope_page_keys(parts)
             s.ledger.append("goal_scope_declared", step=s.step, parts=parts,
                             write_intent=write_intent, unsupported=unsupported,
                             about_assistant=about_assistant, **projection)
             sources = projection.get("source_requests", ())
             s.source_requests = tuple(sources)
+            if (write_intent or any(p.get("kind") == "handoff" and not p.get("rules") for p in parts)
+                    or (not parts and (sources or not about_assistant))):
+                from .skill_admission import consult_execution
+                answer = consult_execution(self, s)
+                if answer is not None:
+                    return answer
+            operations = self.application.ports.operations
+            if operations is not None:
+                from .skill_execution import skills_for_scope
+                projection["skill_ids"] = skills_for_scope(operations, parts)
+            if projection.get("skill_ids"):
+                from .skill_execution import execute_skill_plan, load_skill_context
+                context = load_skill_context(self, s, projection["skill_ids"])
+                # Loading knowledge must not replace the existing query/page/source
+                # interpreter, its independent readings or bounded repairs.
+                # Preserve the enabled deployment's existing static excerpt path;
+                # disabled writes always retain main's ordinary interpreter.
+                static_skill_only = not sources and parts and all(
+                    p.get("rules") and not p.get("names") for p in parts)
+                legacy_change = not skill_candidates and (write_intent or (
+                    any(skill.write_operations for skill in context.loaded)
+                    and any(p.get("kind") == "handoff" and not p.get("rules") for p in parts)))
+                if self.config.allow_business_mutations and (static_skill_only or legacy_change):
+                    s.unsupported, s.write_intent = unsupported, write_intent
+                    s.index = neighbourhood(s.full_index,
+                        tuple(dict.fromkeys(p["entity"] for p in parts if p.get("entity"))),
+                        request=s.message.text, page_keys=s.page_keys)
+                    return execute_skill_plan(self, s, projection["skill_ids"], context=context)
+                skill_knowledge = tuple(skill.loaded_card() for skill in context.loaded)
+                s.ledger.append("goal_skill_knowledge_applied", step=s.step,
+                    skills=[skill.skill_id for skill in context.loaded],
+                    business_parts=len(parts), source_parts=len(sources), side_effect_possible=False)
             if sources and not parts:
                 s.write_intent = write_intent
                 self._complete_sources(s, chat)
@@ -1176,7 +1266,8 @@ class GoalTurnExecutor:
             timeout_s=max(1.0, self.config.wall_budget_s - elapsed), cancelled=s.cancelled,
             today=today_text, scope=scope_text, values=render_values(candidates),
             earlier=earlier, form_values=(not scope_parts or write_intent
-                or any(p.get("kind") == "handoff" for p in scope_parts)))
+                or any(p.get("kind") == "handoff" for p in scope_parts)),
+            skill_knowledge=skill_knowledge)
 
         def read(*, cache_slot=None, stage=None, **kwargs):
             # Every reading -- the first, the second, the deciding one, the repair --
@@ -1200,13 +1291,17 @@ class GoalTurnExecutor:
         second_reading = None
         if self.readings > 1:
             pool = ThreadPoolExecutor(max_workers=1)
-            second_reading = pool.submit(read, cache_slot="second")
+            second_reading = pool.submit(copy_context().run, read, cache_slot="second")
             s.model_futures.append(second_reading)
             pool.shutdown(wait=False)
         try:
             spec, projection = read(cache_slot="first")
         except ValueError as exc:
             s.ledger.append("goal_declaration_invalid", step=s.step, detail=str(exc)[:200])
+            from .skill_admission import consult_execution
+            answer = consult_execution(self, s)
+            if answer is not None:
+                return answer
             s.terminal_reason = "agent_refused"
             return self._say(s, "没能理解这个请求要做什么，请换个说法。" if s.chinese
                              else "I could not work out what this request asks for.")
@@ -1309,6 +1404,12 @@ class GoalTurnExecutor:
         if (not spec.deliverables and not spec.about_assistant and s.focus
                 and not any(p.get("rules") for p in scope_parts)):
             spec = self._held_reading(s, spec)
+        if s.write_intent or (not spec.deliverables and not spec.about_assistant):
+            from .skill_admission import consult_execution
+            answer = consult_execution(self, s,
+                entities=tuple(d.entity for d in spec.deliverables if d.entity))
+            if answer is not None:
+                return answer
         if not spec.deliverables and spec.about_assistant:
             return self._say(s, assistant_answer(capabilities_of(self.goal_port),
                 chinese=s.chinese, areas=_areas(s.full_index),
@@ -1325,6 +1426,10 @@ class GoalTurnExecutor:
                         else f"The deployed source holds no rule about \"{asked}\".")
                        + (f" {why}" if why else ""))
             return self._say(s, _cannot(s.message.text, why, s.chinese))
+        return self._execute_declared_goal(s, spec)
+
+    def _execute_declared_goal(self, s: _TurnState, spec: GoalSpec) -> str:
+        """Resolve a declaration in this turn, retaining the existing page/form contract."""
         s.step += 1
         try:
             resolution = self._resolve(s, spec)
@@ -1334,6 +1439,8 @@ class GoalTurnExecutor:
                              else "The application could not resolve this request completely.")
         resolution = self._open_form_meant(s, spec, resolution)
         for _round in range(_REPAIRS):
+            if s.read is None:
+                break
             problems = _repairable(spec, resolution, observed_empty_entities=frozenset(
                 q["entity"] for q in s.source_requests if q.get("current") and q.get("entity")))
             if not problems:
@@ -1426,7 +1533,7 @@ class GoalTurnExecutor:
                            **({"field_key": f.field_key, "native_value": f.native_value}
                               if f.native_value else {})}
                           for r in resolution.deliverables for f in r.facts)
-            self._complete_sources(s, chat, current_facts=facts)
+            self._complete_sources(s, s.chat, current_facts=facts)
         input_fields = tuple(dict.fromkeys(f for r in resolution.deliverables for f in r.input_fields))
         if input_fields:
             s.terminal_reason = "needs_clarification"
@@ -1734,7 +1841,7 @@ class GoalTurnExecutor:
         to, when that answer finds what it describes and at least two agree on it alone;
         None otherwise, and the deciding reading settles it."""
         with ThreadPoolExecutor(max_workers=_MORE_READINGS) as pool:
-            futures = [pool.submit(s.read, stage="vote") for _ in range(_MORE_READINGS)]
+            futures = [pool.submit(copy_context().run, s.read, stage="vote") for _ in range(_MORE_READINGS)]
         readings = [(first, pair[0]), (second, pair[1])]
         for future in futures:
             try:
@@ -2689,6 +2796,9 @@ class GoalTurnExecutor:
         if s.cancelled():
             s.terminal_reason = "user_cancelled"
             text = "操作已停止。" if s.chinese else "The task was stopped."
+        if s.mutation_outcomes and s.terminal_reason != "agent_finished":
+            confirmed = "、".join(item["effect"] for item in s.mutation_outcomes)
+            text = ("已完成并核对的操作仍然有效：" if s.chinese else "These verified effects remain completed: ") + confirmed + "\n\n" + text
         if s.source_answer:
             text = "\n\n".join(part for part in (text, s.source_answer) if part)
             if not s.source_complete and s.terminal_reason in ("", "agent_finished"):
@@ -2731,18 +2841,20 @@ class GoalTurnExecutor:
             message=s.message, entry_observation_id=current.observation_id,
             entry_observation_digest=current.observation.content_digest,
             status=status, terminal_reason=terminal, user_answer=user_answer, agent=agent,
-            business_result=None, answer_fallback_used=fallback,
+            business_result=(BusinessToolResult(
+                {"outcomes": s.mutation_outcomes}, {"verified_outcomes": len(s.mutation_outcomes)})
+                if s.mutation_outcomes else None), answer_fallback_used=fallback,
             started_at=s.started_at, finished_at=time.time())
         self.conversation_state.record(
             message_id=s.message.message_id, user_text=s.message.text,
-            assistant_text=user_answer, status=status.value, business_result=None,
+            assistant_text=user_answer, status=status.value, business_result=execution.business_result,
             clarification=s.clarification if status == AgentTurnStatus.NEEDS_INPUT else None)
         s.ledger.append("conversation_state_updated",
                         retained_turns=self.conversation_state.turn_count,
                         context_digest=self.conversation_state.content_digest)
         s.ledger.append("product_turn_finished", status=status.value,
                         terminal_reason=terminal, answer_fallback_used=fallback,
-                        business_result_digest="")
+                        business_result_digest=execution.business_result.content_digest if execution.business_result else "")
         s.ledger.append("goal_run_receipt", budget=s.budget.projection(),
                         **s.receipt.report(self.chat, s.run_id))
         try:
@@ -2890,18 +3002,6 @@ def _clarification(s: _TurnState, names: tuple[str, ...]) -> dict:
     return {"schema_version": 1, "clarification_id": f"{s.run_id}-choice"[:100],
             "task_id": s.run_id[:100], "question": question[:500],
             "response_kind": "single_choice", "choices": choices}
-
-
-def _status_for(terminal_reason: str) -> AgentTurnStatus:
-    if terminal_reason == "agent_finished":
-        return AgentTurnStatus.FINISHED
-    if terminal_reason in {"agent_refused", "permission_denied"}:
-        return AgentTurnStatus.REFUSED
-    if terminal_reason == "needs_clarification":
-        return AgentTurnStatus.NEEDS_INPUT
-    if terminal_reason in {"user_cancelled", "operation_not_confirmed", "approval_expired"}:
-        return AgentTurnStatus.CANCELLED
-    return AgentTurnStatus.FAILED
 
 
 def _same_refusal_elsewhere(index, entity, rule) -> list:

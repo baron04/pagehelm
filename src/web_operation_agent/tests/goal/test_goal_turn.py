@@ -1120,6 +1120,33 @@ class GoalTurnTests(unittest.TestCase):
                                            "name": "厦门海湾食品有限公司"}])
         self.assertIn('"entity":"partner"', chat.messages[1][1]["content"])
 
+    def test_scoped_name_resolves_after_ordinary_reference_lookup(self):
+        asked = []
+        looked_up = []
+
+        class ScopedPort(_Port):
+            def locate_reference(self, text, *, context=None):
+                looked_up.append(text)
+                return ()
+
+            def locate_names(self, names, *, entities=(), context=None):
+                asked.append((names, entities))
+                return (("Azure Interior", "order", "Azure Interior"),)
+
+        port = ScopedPort([Resolved(kind="fact", facts=(Fact("Azure Interior", "Total", "42"),))])
+        result, _, chat, _, events = self._run([
+            ("declare_scope", {"parts": [{"kind": "fact", "entity": "order",
+                                          "names": ["Azure Interior"]}]}),
+            _declaration(kind="fact", entity="order", record="Azure Interior", fields=["Total"])],
+            [], text="Read the Total of Sales Order Azure Interior.", staged=True, port=port)
+        self.assertEqual(result.terminal_reason, "agent_finished", result.user_answer)
+        self.assertIn("42", result.user_answer)
+        self.assertTrue(looked_up)
+        self.assertEqual(asked, [(("Azure Interior",), ("order",))])
+        self.assertEqual(len(chat.messages), 3)  # scope + existing two independent readings
+        self.assertIn('"name":"Azure Interior"', chat.messages[1][1]["content"])
+        self.assertEqual(next(e["references"] for e in events if e["event"] == "goal_references"), [])
+
     def test_a_staged_scope_with_no_parts_ends_the_turn_honestly(self):
         execution, _channel, chat, port, _events = self._run(
             [("declare_scope", {"parts": [], "unsupported": "索引里没有银行数据"})],

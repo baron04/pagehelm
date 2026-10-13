@@ -350,6 +350,7 @@ def retrieve(source, requests: tuple[dict, ...], ledger) -> tuple[dict, TurnEvid
                         refs[-1]["derived_summary"] = hit.text[:1800]
         questions.append({"question_id": qid, "question": request["question"],
                           "subject": request.get("entity", ""),
+                          **({"page_context": request["page_context"]} if request.get("page_context") else {}),
                           "basis": request.get("basis", "repository"),
                           "current": request.get("current", False),
                           "evidence": refs})
