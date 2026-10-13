@@ -1,10 +1,10 @@
-"""A read-only client of yudao's admin API under one account.
+"""Actor-bound admin reads and separately approved, once-only native dispatch.
 
 Every request carries the tenant and the account's access token. A client made with an
 account renews an expired token by logging in again once; one made from a person's own
 token (`for_token`) never logs in: an expired token is refused, and the page's newer token
-is installed with `renew`. The client never sends anything but GET requests after login,
-and it never follows a URL a response names.
+is installed with `renew`. Ordinary reads use GET. The explicit `write_once` entry never
+retries or renews a token, and it never follows a URL a response names.
 """
 from __future__ import annotations
 
@@ -100,6 +100,55 @@ class YudaoClient:
             return self._data(path, code, body)
         raise DataRefused(f"{path}: not authorised")
 
+    def write_once(self, method: str, path: str, *, body: dict, params=None):
+        """One approved native dispatch; never retry, relogin, or follow redirects.
+
+        Business errors after native dispatch may have partial effects. Only an
+        authentication/permission refusal at the application's outer gate proves
+        zero effects; everything else retains the unresolved journal entry.
+        """
+        from web_operation_agent.business.errors import (BusinessMutationIndeterminate,
+            BusinessToolAuthenticationError, BusinessToolPermissionError)
+        if method not in {"POST", "PUT"} or not re_safe_native_path(path):
+            raise ValueError("native write requires a reviewed method and path")
+        with self._lock:
+            token = self._token
+        if not token:
+            raise BusinessToolAuthenticationError("authenticate before preparing the write")
+        url = f"{self.base_url}/admin-api/{path}"
+        if params:
+            url += "?" + urllib.parse.urlencode(params, doseq=True)
+        request = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False,
+            allow_nan=False).encode(), method=method, headers={"tenant-id": self._tenant,
+            "Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl): return None
+        opener = urllib.request.build_opener(NoRedirect())
+        self.calls.append(f"{method} {path}")
+        from web_operation_agent.business.dispatch_evidence import mutation_transport
+        with mutation_transport() as transport:
+            try:
+                with opener.open(request, timeout=self._timeout) as response:
+                    payload = json.load(response)
+            except urllib.error.HTTPError as exc:
+                if exc.code in (401, 403):
+                    transport.rejected()
+                    raise BusinessToolPermissionError("the application denied this write") from exc
+                raise BusinessMutationIndeterminate("native dispatch returned no safe outcome", phase="dispatch") from exc
+            except (OSError, ValueError, urllib.error.URLError) as exc:
+                raise BusinessMutationIndeterminate("native dispatch returned no safe outcome", phase="dispatch") from exc
+            if not isinstance(payload, dict) or payload.get("code") != 0:
+                if isinstance(payload, dict) and payload.get("code") in (401, 403):
+                    transport.rejected()
+                    raise BusinessToolPermissionError("the application denied this write")
+                raise BusinessMutationIndeterminate("native operation may have partially completed", phase="dispatch")
+            value = payload.get("data")
+            acknowledged = (value is True if method == "PUT" else type(value) is int and value > 0)
+            if not acknowledged:
+                raise BusinessMutationIndeterminate("native operation returned no effect acknowledgement", phase="acknowledgement")
+            transport.applied()
+            return value
+
     @contextmanager
     def read_window(self, checkpoint):
         """Bound every paginated/detail subrequest without changing another thread's client."""
@@ -120,6 +169,11 @@ class YudaoClient:
             return self._token
 
     def _request(self, method: str, path: str, *, params=None, body=None, token=None):
+        from web_operation_agent.execution.events import turn_interval
+        with turn_interval("application"):
+            return self._request_transport(method, path, params=params, body=body, token=token)
+
+    def _request_transport(self, method: str, path: str, *, params=None, body=None, token=None):
         url = f"{self.base_url}/admin-api/{path}"
         if params:
             url += "?" + urllib.parse.urlencode(
@@ -154,3 +208,8 @@ class YudaoClient:
 
 
 __all__ = ["YudaoAccount", "YudaoClient"]
+
+
+def re_safe_native_path(path):
+    import re
+    return isinstance(path, str) and re.fullmatch(r"[a-z][a-z0-9/-]{1,120}", path) is not None
