@@ -1,18 +1,33 @@
 """The slim loop's own parts over synthetic pages and a synthetic API; no model, no browser."""
 from __future__ import annotations
 
+import contextlib
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace as NS
+from unittest.mock import patch
 
+from web_operation_agent.business.approvals import ApprovalWatch
+from web_operation_agent.business.runtime import BusinessToolRuntime
+from web_operation_agent.composition.business_operations import RegisteredOperations
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.index import ApplicationIndex, IndexConvention, IndexEntity, IndexPage
+from web_operation_agent.goal.skill_writes import SkillWrites
 from web_operation_agent.privacy import SessionHandoffPolicy
 from web_operation_agent.schemas.browser import ElementRef, PageObservation
+from web_operation_agent.state.identity import PrincipalContext
+from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
-from web_operation_agent_yudao.slim_loop import (ActorKnowledge, SlimTurnExecutor, _commits, _fields, _lines,
-                                                 _page_lines, _scroll_anchor, _today, conventions_text, page_text)
+from web_operation_agent_yudao.skill_packages import packaged_skills
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, ActorKnowledge, SlimTurnExecutor, _commits,
+                                                 _fields, _lines, _page_lines, _scroll_anchor, _today,
+                                                 conventions_text, page_text, system_text)
+from web_operation_agent_yudao.tests import test_native_writes as native
+from web_operation_agent_yudao.writes import native_tools
 
 
 def element(number: int, role: str, name: str = "", tag: str = "div", **attrs) -> ElementRef:
@@ -353,11 +368,12 @@ class Script:
     """A chat that answers from a script and keeps what it was sent."""
 
     def __init__(self, *replies):
-        self.replies, self.seen = list(replies), []
+        self.replies, self.seen, self.offered = list(replies), [], []
 
     def complete_cancellable(self, messages, tools, run_id, *, cancelled, max_tokens=None,
                              options=None, timeout_s=None):
         self.seen.append(messages)
+        self.offered.append(tools)
         return self.replies.pop(0)
 
 
@@ -622,6 +638,272 @@ class FindRecordTests(unittest.TestCase):
         port = self.Port()
         self.assertIn("请给出", self.find(port, ""))
         self.assertEqual(port.asked, [])
+
+
+class Person:
+    """Answers each approval card as scripted and keeps what it was shown."""
+
+    def __init__(self, decision="approved"):
+        self.decision, self.shown = decision, []
+
+    def __call__(self, proposal, *, context=None):
+        self.shown.append(proposal)
+        return NS(decision=self.decision, plan_digest=proposal.content_digest,
+                  operation_context_digest=context.binding_digest, approval_id=f"a{len(self.shown)}")
+
+
+class WriteTurnTests(unittest.TestCase):
+    """Skill writes in the loop, over the adapter's own operations and packaged Skills."""
+
+    ASKED = "把联系人林舟的手机改成13800000002"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.client = native.Client()
+        self.data = native.Data(self.client)
+        tools, skills = native_tools(self.client, self.data), packaged_skills()
+        runtime = BusinessToolRuntime.from_registry(tools, application_id="yudao", skill_registry=skills,
+                                                    require_skill_for_writes=True)
+        self.application = NS(business_tools=runtime, ports=NS(
+            operations=RegisteredOperations(tools, skills, self.data.invalidate_reads),
+            routes=NS(session_handoff_query_keys=frozenset())))
+        self.person = Person()
+
+    def state(self, *replies, enabled=True):
+        now = int(time.time() * 1000)
+        principal = PrincipalContext(1, "yudao", "1", "7", "9", "synthetic", now - 1000, now + 60000,
+                                     ("yudao.read", "yudao.write"))
+        ledger = SessionLedger(Path(self.tmp.name) / "audit.jsonl", "run-1")
+        approvals = ApprovalWatch(ledger=ledger, run_id="run-1", principal=principal, session_id="s",
+                                  turn_id="t", business_approval=self.person if enabled else None,
+                                  cancelled=lambda: False, approval_hold_s=30)
+        approvals.start_turn(now + 30000)
+        return NS(terminal_reason="", detail="", clarification=None, step=0, run_id="run-1",
+                  obs=observation(), chat=Script(*replies), ledger=ledger, approvals=approvals,
+                  budget=NS(remaining=lambda: 60.0, check=lambda: 60.0),
+                  receipt=NS(stage=lambda name: contextlib.nullcontext()),
+                  write_intent=False, mutation_outcomes=[], cancelled=lambda: False,
+                  message=NS(text=self.ASKED), started_at=time.time(), model_stop=threading.Event(),
+                  writes=NS(begin_control=lambda: None, start_observing=lambda: None))
+
+    def executor(self, *, knowledge=True, asked=None):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.application, executor.skill_knowledge = self.application, knowledge
+        executor.knowledge = ActorKnowledge(Client(), lambda: DOCS)
+        executor.model_steps, executor.verify, executor._carried_skills = 8, True, ()
+        executor._messages = [{"role": "system", "content": "s"},
+                              {"role": "user", "content": (asked or self.ASKED) + "\n当前页面: /crm/contact"}]
+        self.checked = []
+        executor._verify = lambda s, prompt, answer, turn: self.checked.append(list(turn["written"])) or []
+        return executor
+
+    def loop(self, *replies, **kw):
+        executor, state = self.executor(**kw), self.state(*replies)
+        self.turn = {"reads": [], "marked": "", "trace": [], "touched": [],
+                     "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0,
+                     "writes": SkillWrites(self.application, state.approvals), "written": [],
+                     "corrections": 0, "final": "", "skills": set()}
+        return executor, state, executor._loop(state, self.ASKED, self.turn, verified=False)
+
+    LOAD = staticmethod(lambda: reply(call("load_skill", skill="crm-contact-update")))
+    UPDATE = staticmethod(lambda **changes: reply(call(
+        "crm_contact_update", target="林舟", changes=changes or {"mobile": "13800000002"})))
+
+    def test_a_requested_change_is_loaded_proposed_approved_and_written_once(self):
+        executor, state, text = self.loop(
+            self.LOAD(), self.UPDATE(), reply(call("finish", status="done", answer="已把林舟的手机改为 13800000002")))
+        self.assertEqual((text, state.terminal_reason), ("已把林舟的手机改为 13800000002", ""))
+        self.assertEqual([(method, path, body["mobile"]) for method, path, body in self.client.writes],
+                         [("PUT", "crm/contact/update", "13800000002")])
+        self.assertEqual(self.client.records[("crm/contact", 10)]["remark"], "保留备注")
+        # One card, with the change and what the update keeps, bound to the loaded Skill.
+        self.assertEqual(len(self.person.shown), 1)
+        shown = self.person.shown[0]
+        self.assertEqual(shown.skill_id, "yudao.crm-contact-update")
+        self.assertIn(("change", "mobile", "13800000001 → 13800000002"),
+                      [(d.kind, d.label, d.text) for d in shown.details])
+        self.assertTrue(state.write_intent)
+        self.assertEqual([(o["effect"], o["verified"]) for o in state.mutation_outcomes], [("修改CRM 联系人资料", True)])
+        # The Skill's text and then its operation's own schema reached the model.
+        loaded = next(m["content"] for m in executor._messages if m["role"] == "tool" and "已加载 Skill" in m["content"])
+        self.assertIn("修改联系人", loaded)
+        self.assertIn("references/disambiguation.md", loaded)
+        self.assertIn("crm_contact_update", loaded)
+        result = next(m["content"] for m in executor._messages if m["role"] == "tool" and m["content"].startswith("已执行并核对"))
+        self.assertIn("13800000001 → 13800000002", result)
+        self.assertEqual(self.checked, [self.turn["written"]])
+        self.assertEqual(len(self.turn["written"]), 1)
+        events = [event["event"] for event in state.ledger.events]
+        self.assertEqual([e for e in events if e.startswith(("business_", "skill_"))], [
+            "business_skill_loaded", *["business_skill_resource_loaded"] * 4,
+            "skill_effect_bound", "business_mutation_proposed",
+            "business_mutation_execution_started", "business_mutation_result"])
+
+    def test_an_operation_is_offered_as_a_tool_only_once_its_skill_is_loaded(self):
+        executor, state, _text = self.loop(
+            self.LOAD(), reply(call("finish", status="need_input", answer="要改成什么？")))
+        first, second = (state.chat.offered[0], state.chat.offered[1])
+        names = [tool["function"]["name"] for tool in first]
+        self.assertEqual(names, [t["function"]["name"] for t in TOOLS[:-1]]
+                         + ["load_skill", "read_skill_resource", "finish"])
+        added = [tool for tool in second if tool["function"]["name"] not in names]
+        self.assertEqual([tool["function"]["name"] for tool in added], ["crm_contact_update"])
+        self.assertTrue(added[0]["function"]["description"].startswith("【写入提案】"))
+        self.assertEqual(added[0]["function"]["parameters"],
+                         self.application.ports.operations.tools.get("crm_contact_update").schema["function"]["parameters"])
+        self.assertEqual(self.person.shown, [])
+
+    def test_an_operation_named_before_its_skill_is_loaded_is_not_prepared(self):
+        _executor, state, _text = self.loop(
+            self.UPDATE(), reply(call("finish", status="cannot", answer="没有办成")))
+        told = next(m["content"] for m in _executor._messages if m["role"] == "tool")
+        self.assertIn('load_skill("crm-contact-update")', told)
+        self.assertEqual((self.person.shown, self.client.writes), ([], []))
+
+    def test_a_declined_card_ends_the_turn_without_a_write(self):
+        self.person.decision = "denied"
+        executor, state, text = self.loop(self.LOAD(), reply(
+            call("crm_contact_update", target="林舟", changes={"mobile": "13800000002"}),
+            call("finish", status="done", answer="已修改")))
+        self.assertEqual((state.terminal_reason, text), ("approval_denied", "你没有批准这项修改，没有执行。"))
+        self.assertEqual(self.client.writes, [])
+        self.assertEqual(self.checked, [])
+        # Every call of the unfinished reply has a result, so the conversation can go on.
+        calls = [c["id"] for m in executor._messages for c in m.get("tool_calls", ())]
+        self.assertEqual(sorted(calls), sorted(m["tool_call_id"] for m in executor._messages if m["role"] == "tool"))
+
+    def test_a_value_the_person_did_not_give_comes_back_for_correction_and_then_stops(self):
+        wrong = lambda: self.UPDATE(mobile="13900000000")  # noqa: E731
+        executor, state, text = self.loop(self.LOAD(), wrong(), wrong(), wrong(), wrong())
+        told = [m["content"] for m in executor._messages if m["role"] == "tool" and m["content"].startswith("没有执行")]
+        self.assertEqual(len(told), 3)
+        self.assertIn("还没有请求用户批准", told[0])
+        self.assertEqual((state.terminal_reason, text), ("agent_refused", "几次提案都没有通过应用的预检，这项修改没有执行。"))
+        self.assertEqual((self.person.shown, self.client.writes), ([], []))
+
+    def test_a_target_the_application_cannot_find_is_told_without_asking_the_person(self):
+        executor, state, _text = self.loop(
+            self.LOAD(), reply(call("crm_contact_update", target="林", changes={"mobile": "13800000002"})),
+            reply(call("finish", status="cannot", answer="没有找到联系人“林”")))
+        told = next(m["content"] for m in executor._messages
+                    if m["role"] == "tool" and m["content"].startswith("没有执行"))
+        self.assertIn("还没有请求用户批准", told)
+        self.assertEqual((self.person.shown, self.client.writes, state.terminal_reason), ([], [], "agent_refused"))
+
+    def test_an_uncertain_write_ends_the_turn_and_is_not_sent_again(self):
+        self.client.partial = True
+        follow = reply(call("crm_follow_up_create", entity="crm/customer", target="合成星河", type="电话",
+                            content="已电话回访", nextTime="2026-10-20 10:00:00"),
+                       call("crm_follow_up_create", entity="crm/customer", target="合成星河", type="电话",
+                            content="已电话回访", nextTime="2026-10-20 10:00:00"))
+        asked = "给客户合成星河写一条电话跟进：已电话回访，下次联系 10 月 20 日 10 点"
+        executor, state, text = self.loop(reply(call("load_skill", skill="crm-follow-up")), follow, asked=asked)
+        self.assertEqual(state.terminal_reason, "indeterminate_write")
+        self.assertIn("不会重发", text)
+        self.assertEqual(len(self.client.writes), 1)
+        self.assertEqual(state.approvals.business_result()["mutation_indeterminate"], 1)
+
+    def test_without_skill_knowledge_the_same_operation_is_offered_and_no_skill_text_is_told(self):
+        executor, state, text = self.loop(
+            self.LOAD(), self.UPDATE(), reply(call("finish", status="done", answer="已修改")), knowledge=False)
+        loaded = next(m["content"] for m in executor._messages if m["role"] == "tool" and "已加载 Skill" in m["content"])
+        self.assertNotIn("修改联系人", loaded)
+        self.assertNotIn("references/", loaded)
+        self.assertIn("crm_contact_update", loaded)
+        self.assertEqual(len(self.client.writes), 1)
+        self.assertNotIn("business_skill_resource_loaded", [event["event"] for event in state.ledger.events])
+        catalog = self.turn["writes"].catalog()
+        told = system_text(user="u", date="2026-10-13", tz="Asia/Shanghai", catalog=catalog, knowledge=False)
+        self.assertIn("- crm-contact-update：crm_contact_update 修改CRM 联系人资料", told)
+        self.assertNotIn("与修改 ERP 客户资料区分", told)
+
+    def test_writes_are_told_only_to_an_actor_who_is_offered_an_operation(self):
+        plain = system_text(user="u", date="2026-10-13", tz="Asia/Shanghai")
+        self.assertEqual(plain, SYSTEM.format(user="u", date="2026-10-13", tz="Asia/Shanghai"))
+        catalog = SkillWrites(self.application, self.state().approvals).catalog()
+        self.assertEqual(len(catalog), 24)
+        told = system_text(user="u", date="2026-10-13", tz="Asia/Shanghai", catalog=catalog)
+        self.assertIn("你能做四类事", told)
+        self.assertIn("- crm-contact-update：", told)
+        self.assertLess(told.index("已安装的 Skill"), told.index("通用规则："))
+        self.assertEqual(SkillWrites(self.application, self.state(enabled=False).approvals).catalog(), ())
+
+    def run_turn(self, executor, state):
+        with patch("web_operation_agent_yudao.slim_loop.MeasuredChat", lambda *a, **k: state.chat), \
+                patch("web_operation_agent_yudao.slim_loop.AuditedChat", lambda chat, ledger: chat):
+            return executor._run(state)
+
+    def test_the_next_turn_starts_with_the_skills_the_last_one_loaded(self):
+        executor = self.executor()
+        executor._messages, executor.conventions, executor.actor_name = [], (), ""
+        executor.today, executor.time_zone, executor.chat = "2026-10-13", "Asia/Shanghai", None
+        executor.config = NS(wall_budget_s=60)
+        executor.conversation_state = NS(turn_count=0)
+        first = self.state(self.LOAD(), reply(call("finish", status="need_input", answer="要把手机改成什么号码？")))
+        first.message = NS(text="改一下联系人林舟的手机")
+        self.assertEqual(self.run_turn(executor, first), "要把手机改成什么号码？")
+        self.assertIn("已安装的 Skill", executor._messages[0]["content"])
+        self.assertEqual(executor._carried_skills, ("yudao.crm-contact-update",))
+        executor.conversation_state = NS(turn_count=1)
+        second = self.state(self.UPDATE(), reply(call("finish", status="done", answer="已改为 13800000002")))
+        second.message = NS(text="13800000002")
+        self.assertEqual(self.run_turn(executor, second), "已改为 13800000002")
+        self.assertIn("crm_contact_update", [tool["function"]["name"] for tool in second.chat.offered[0]])
+        self.assertEqual(len(self.client.writes), 1)
+        self.assertIn("business_skill_loaded", [event["event"] for event in second.ledger.events])
+        # A turn that does not use them still has them; the turn after it does not, and
+        # their text leaves the conversation with them.
+        loaded = next(m for m in executor._messages if m.get("_skill"))
+        self.assertIn("修改联系人", loaded["content"])
+        for expected in (True, False):
+            executor.conversation_state = NS(turn_count=executor.conversation_state.turn_count + 1)
+            later = self.state(reply(call("finish", status="done", answer="好")))
+            later.message = NS(text="谢谢")
+            self.run_turn(executor, later)
+            self.assertEqual("crm_contact_update" in [tool["function"]["name"] for tool in later.chat.offered[0]],
+                             expected)
+        self.assertEqual(loaded["content"], "已加载 Skill：crm-contact-update\n（这个 Skill 的说明已省略；要用时重新 load_skill）")
+        self.assertEqual(executor._carried_skills, ())
+        # A new conversation starts without any.
+        executor._carried_skills = ("yudao.crm-contact-update",)
+        executor.conversation_state = NS(turn_count=0)
+        third = self.state(reply(call("finish", status="done", answer="好")))
+        self.run_turn(executor, third)
+        self.assertNotIn("crm_contact_update", [tool["function"]["name"] for tool in third.chat.offered[0]])
+
+    def test_a_deployment_without_writes_offers_the_read_only_turn_unchanged(self):
+        executor = self.executor()
+        executor._messages, executor.conventions, executor.actor_name = [], (), ""
+        executor.today, executor.time_zone, executor.chat = "2026-10-13", "Asia/Shanghai", None
+        executor.config = NS(wall_budget_s=60)
+        executor.conversation_state = NS(turn_count=0)
+        state = self.state(reply(call("load_skill", skill="crm-contact-update")),
+                           reply(call("finish", status="cannot", answer="做不到")), enabled=False)
+        self.run_turn(executor, state)
+        self.assertEqual(state.chat.offered[0], TOOLS)
+        self.assertEqual(executor._messages[0]["content"],
+                         SYSTEM.format(user="合成用户", date="2026-10-13", tz="Asia/Shanghai"))
+        self.assertIn("没有这个工具：load_skill", executor._messages[3]["content"])
+
+
+class OpenCallTests(unittest.TestCase):
+    def test_a_call_left_without_a_result_gets_one_before_the_next_request(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        first, second, third = call("goto", path="/a"), call("click", index=1), call("finish", status="done", answer="x")
+        second["id"], third["id"] = "c2", "c3"
+        executor._messages = [
+            {"role": "system", "content": "s"}, {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "", "tool_calls": [first, second, third]},
+            {"role": "tool", "tool_call_id": first["id"], "content": "已打开。"},
+            {"role": "user", "content": "下一句"}]
+        executor._answer_open_calls()
+        self.assertEqual([(m["role"], m.get("tool_call_id")) for m in executor._messages], [
+            ("system", None), ("user", None), ("assistant", None), ("tool", first["id"]),
+            ("tool", "c2"), ("tool", "c3"), ("user", None)])
+        before = list(executor._messages)
+        executor._answer_open_calls()
+        self.assertEqual(executor._messages, before)
 
 
 class HostConfigTests(unittest.TestCase):

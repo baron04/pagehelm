@@ -362,6 +362,31 @@ class NativeHostTests(unittest.TestCase):
             self.assertIn("submit", executor.disabled_page_actions)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_the_slim_turn_proposes_reviewed_writes_only_where_the_host_enables_them(self):
+        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+        from web_operation_agent_yudao.ui_source import UiSource
+        for enabled in (False, True):
+            with self.subTest(native_writes=enabled), \
+                    patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
+                    patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
+                    patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+                self.config = replace(self._fence(), executor_mode="slim", native_writes=enabled,
+                                      state_dir=Path(self.tmp.name) / str(enabled))
+                host = self.host()
+                host.bootstrap("synthetic-a", "1", "slim-tab")
+                executor = host._sessions[("1", "1")].session.runner.executor
+                self.assertIsInstance(executor, SlimTurnExecutor)
+                self.assertIs(executor.config.allow_business_mutations, enabled)
+                self.assertTrue(executor.skill_knowledge)
+                # The page's own submit control is never pressed, with or without writes.
+                self.assertIn("submit", executor.disabled_page_actions)
+                self.assertEqual(bool(executor.application.business_tools.mutation_tool_names), enabled)
+                self.assertEqual((self.config.state_dir / "mutations.sqlite3").exists(), enabled)
+        self.assertFalse(replace(self.config, slim_skill_knowledge=False).slim_skill_knowledge)
+        with self.assertRaises(ValueError):
+            replace(self.config, slim_skill_knowledge=None)
+        self.chat.return_value.complete.assert_not_called()
+
     def test_inside_the_applications_window_only_reads_it_cannot_refuse_stay_fenced(self):
         from web_operation_agent_yudao.ui_source import UiSource
         gets = ["/admin-api/pms/pm/project-group/list", "/admin-api/infra/redis/get-monitor-info",

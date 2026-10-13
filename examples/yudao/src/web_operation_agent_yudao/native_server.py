@@ -5,7 +5,8 @@ loader (`deploy/cloud/yudao-loader.js`) adds that token to the one request the r
 to `/bootstrap`; this host asks yudao whose token it is, and opens (or renews) a session that
 reads yudao with that same token, so the assistant sees exactly what the person may see. The
 token is held in memory for the session only: it is not written to disk or logged, and a
-renewal installs the page's newer one. Writes are not offered.
+renewal installs the page's newer one. Writes are offered only where the deployment enables
+them (`--native-writes`): reviewed typed operations, each after its own approval.
 
 A person has one session, whichever pages they have it open on: one conversation, which any
 of those pages may ask in, each turn running on the page that asked it. The session's
@@ -122,8 +123,11 @@ class YudaoHostConfig:
     native_navigation: bool = False
     #: Only reviewed server-side typed mutations; browser submission stays disabled.
     native_writes: bool = False
-    #: Explicit read-only page-planning pilot; never selected by browser messages or fallback.
+    #: Which executor decides a turn's steps; never selected by browser messages or fallback.
     executor_mode: str = "goal"
+    #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
+    #: what that text changes; the operations and every check on a write are the same.
+    slim_skill_knowledge: bool = True
     #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
     native_action_effect_review: str = ""
     #: Extend the reviewed read fence with every list endpoint compiled from the UI
@@ -143,8 +147,10 @@ class YudaoHostConfig:
     def __post_init__(self):
         if not isinstance(self.native_writes, bool):
             raise ValueError("native writes must be explicitly enabled")
-        if self.native_writes and self.executor_mode != "goal":
-            raise ValueError("native writes are qualified only through the goal host")
+        if self.native_writes and self.executor_mode not in {"goal", "slim"}:
+            raise ValueError("native writes run only through the goal or slim executor")
+        if not isinstance(self.slim_skill_knowledge, bool):
+            raise ValueError("slim_skill_knowledge is on or off")
         if (not isinstance(self.native_action_effect_review, str)
                 or len(self.native_action_effect_review) > 200
                 or self.native_action_effect_review and not self.native_action_effect_review.strip()):
@@ -444,7 +450,8 @@ class YudaoHost:
             if self.config.executor_mode == "slim":
                 # A measured prototype: the goal turn's protocol with a model-driven loop
                 # deciding its steps (slim_loop.py). Every page command still runs under
-                # the turn's leave, the write watch and the application's own window.
+                # the turn's leave, the write watch and the application's own window; with
+                # native writes it may also propose a loaded Skill's typed operations.
                 from web_operation_agent.goal.conventions import load_conventions
                 from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
                 executor = SlimTurnExecutor(
@@ -454,7 +461,8 @@ class YudaoHost:
                     knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                              time_zone=app.goal_data.time_zone()),
                     conventions=load_conventions(REFERENCE_CONVENTIONS),
-                    time_zone=app.goal_data.time_zone())
+                    time_zone=app.goal_data.time_zone(),
+                    skill_knowledge=self.config.slim_skill_knowledge)
             elif self.config.executor_mode == "page-agent":
                 # The same Agent receives optional source evidence and reviewed form
                 # entries. Source grants no actions; form review grants no submission.

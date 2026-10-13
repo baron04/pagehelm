@@ -209,8 +209,9 @@ step: one conversation in which the model searches the actor's menu, searches an
 the application's read-only API as the actor, works the page with the Runtime's fixed
 actions and marks a submit control for the person. Startup refuses it without the method
 fence (`--native-read-policy` in `method-fence` mode) and the application's own window.
-It uses no form or filter review, declares no goal-port capability of its own, and has
-no write path. What the model is shown leaves out the application's navigation menu and
+It uses no form or filter review and declares no goal-port capability of its own.
+Without `--native-writes` it has no write path; with it, see the end of this section.
+What the model is shown leaves out the application's navigation menu and
 names the regions that scroll; only an element listed there may be acted on. A dropdown,
 a radio group and a date box are marked as what they are, and the two boxes of a date
 range as its start and its end: the first is committed with the second, since the
@@ -256,6 +257,23 @@ back once. It is told which controls the turn itself filled or chose; every othe
 form holds was there when it opened and is not a change. Before its last two steps the
 turn is told to report what it has. Set `WOA_SLIM_DEBUG_DIR` only in development: it
 writes what the model was shown.
+
+With `--native-writes` the same turn may also carry out a change an installed Skill
+covers. The model is told the installed Skills that offer the current account an
+operation, loads one with `load_skill`, and reads its instructions and shared
+references in the result; the Skill's operations then appear as tools with their
+installed input schemas and the account's current dictionary choices. Calling one is a
+proposal: the host checks the inputs against the schema and the person's own words,
+prepares the change read-only as the account, compares what the application prepared
+with what was proposed, shows the complete approval card, dispatches once after
+approval and reads the result back as the same account. A proposal refused before the
+card is shown returns to the conversation with the reason, at most three times a turn.
+A declined card, a refusal after approval and an uncertain result each end the turn;
+nothing is sent twice, and an identical proposal that already completed in the turn is
+not repeated. A request a Skill covers goes through the Skill rather than through a
+prefilled form; the page's own submit controls stay unpressed. The closing check is
+given the turn's verified writes. An account that is offered no operation is told
+nothing about writes, and its turn is the read-only one.
 
 The explicit `--executor page-agent` pilot uses the same configured optional source
 lookup and reviewed forms as the goal composition. Its same server Agent discovers
@@ -367,7 +385,7 @@ field entry and submit remain disabled until their separate form qualification.
 - `YudaoSource` optionally compiles the deployment's rules from the bound release's server and admin UI (`--source-root` holding `server/` and `ui/`, `--source-release` naming the release): when a button shows (its `v-if` and `v-hasPermi`), when a form field cannot be changed (its input's `:disabled` condition on the record or on how the form was opened; conditions on the page's own state are left out), and what the operation a button calls refuses (the service method's `throw exception(...)` under its `if`, with the module's error message), both tied to the operation's URL and cited as `path:lines@release sha256:...`. The rules are shown to the model only for a question about how the application behaves; a question about data is read with the same index as without them.
 
 `YudaoApplication` composes generic read tools under `yudao.read`. Mutations are off
-by default; the goal host's explicit `--native-writes` enables thirty reviewed CRM, ERP, system organisation/notice, mall catalog, member tag/group and workflow category
+by default; the host's explicit `--native-writes` (goal or slim executor) enables thirty reviewed CRM, ERP, system organisation/notice, mall catalog, member tag/group and workflow category
 operations with a persistent mutation journal, supporting Skill, fresh visible approval
 and same-actor readback. It does not enable browser submission. The identity port refuses
 unless the browser token and the server reader

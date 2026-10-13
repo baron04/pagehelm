@@ -66,8 +66,8 @@ methods or raw native request bodies as Agent arguments. The application handler
 resolves business names under the actor, prepares exact effects and full approval
 details, performs conflict checks, dispatches once and verifies every promised effect.
 
-`BusinessWriteService` shares this chain between goal declarations and the bounded
-Agent loop. Execute intent is required before a proposal; each independent write
+`BusinessWriteService` shares this chain between goal declarations, the bounded
+Agent loop and a model-driven turn's Skill writes (below). Execute intent is required before a proposal; each independent write
 requires fresh visible one-use approval. Earlier verified results can bind later
 declared reference inputs. Earlier success survives a later refusal or uncertain
 write; the workflow is not a transaction and does not retry or roll back automatically.
@@ -188,6 +188,43 @@ an already verified mutation receipt.
 The goal and loop strategies are experimental. Scripted contract coverage does not
 establish model success rate, performance or which strategy should be the default.
 
+## Skill writes in a model-driven turn
+
+`goal.skill_writes.SkillWrites` offers the same packages and operations to a turn whose
+model chooses its own steps. It is application-neutral and holds one turn's loaded
+packages. `catalog()` lists the installed Skills that offer the current actor at least
+one write under the deployment's enablement and the actor's scopes. `load()` snapshots a
+Skill for the turn and records it; from then on `definitions()` includes that Skill's
+offered operations, which the host presents as tools with their installed input schemas.
+`propose()` takes plain installed inputs, with no planning envelope:
+
+- the inputs are validated against the installed schema;
+- every registered `literal_inputs` value must be complete text from the person's own
+  messages in the conversation (`require_literal_inputs`);
+- the expected change is the operation's own `effect_contract.project_inputs`;
+- `BusinessWriteService.run` prepares read-only, requires the application's projection
+  of the prepared effect to be that change, asks for one approval, dispatches once and
+  records the verified result.
+
+`propose()` returns an `OperationOutcome`. `completed` carries the application-verified
+result. A refusal with `asked` false happened before the person saw anything and may be
+corrected by the proposer; a host bounds how often. Every outcome after the approval
+request (`not_approved`, a refusal at dispatch, `indeterminate`) is final for that
+proposal. A proposal that already completed in the turn is answered `repeated` without
+another approval or dispatch. Explicit `preserve` constraints and `@result:N`
+dependencies are not part of this surface: unmentioned-field preservation remains the
+application's and is still verified through its receipts, and a later operation names
+an earlier result by the business name the earlier result returned.
+
+The Yudao host's `--executor slim` uses this with `--native-writes`. Its model is told
+the catalog once a conversation, loads a Skill with `load_skill`, and receives the
+Skill's instructions and bounded references in the tool result. A turn starts with the
+Skills the previous turn of the same conversation loaded, each recorded again. The
+goal executor's `select_skills`, single-proposal declaration, consultation and yield
+are not part of this turn. `YudaoHostConfig.slim_skill_knowledge=False` withholds the
+Skill text while keeping the same operations, schemas and checks; it exists to measure
+what the text changes.
+
 Hosts may pass a `TurnEvents` collector to either executor. Its optional callback
 receives only lifecycle metadata from one thread-safe monotonic clock. Model,
 application, page and verification intervals close on exceptions too. The existing
@@ -226,7 +263,7 @@ Contacts proves the same transport contract over a REST creation endpoint. Odoo
 declares no observed mutation boundary. Request/body capture is absent, so these
 metadata receipts cannot attribute incorrect values to model, card or body layers.
 
-The normal Yudao host also supports explicit `--native-writes` (goal executor only)
+The normal Yudao host also supports explicit `--native-writes` (goal or slim executor)
 and uses a persistent SQLite mutation journal. The default remains read-only and
 generic browser submission stays disabled. The original nine operations have scripted
 real-browser approval and native readback coverage through the disposable demo;
