@@ -41,7 +41,7 @@ from web_operation_agent.modeling.provider import ProviderError
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
 
-from .api_content import composed, fenced, program_lines, redacted
+from .api_content import REDACTED, composed, fenced, program_lines, redacted
 from .goal import _SCENES
 
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
@@ -334,8 +334,13 @@ class ActorKnowledge:
             keys = list(data.keys()) if isinstance(data, dict) else []
         else:
             keys = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
+        # A field told blanked needs no gloss; `password=...` here would also read as a
+        # credential assignment where the request leaves for the provider.
+        blanked = {k for row in (rows if rows is not None else [data]) if isinstance(row, dict)
+                   for k, v in row.items() if v == REDACTED}
         notes = [f"{k}={(self._deref(props[k]).get('description') or '')[:40]}"
-                 for k in (fields or keys) if k in props and self._deref(props[k]).get("description")]
+                 for k in (fields or keys) if k in props and self._deref(props[k]).get("description")
+                 and k not in blanked]
         if notes:
             out.append("字段说明: " + "; ".join(notes[:30]))
         if rows is None:
@@ -392,11 +397,11 @@ class ActorKnowledge:
                           "要统计、比较或找最大最小：用 fields 只取要用的列，会读完所有页并算好合计、最大、最小。"))
         return self._told(out, data_lines)
 
-    @staticmethod
-    def _told(out: list, data_lines: set) -> str:
+    def _told(self, out: list, data_lines: set) -> str:
         """A read as the model is told it: what the program says about it in the open, the
-        application's own rows and values fenced as data."""
-        return composed((index in data_lines, line) for index, line in enumerate(out))
+        application's own rows and values fenced as data. The whole text is blanked once
+        more, as a page's is: whatever is composed here leaves for the provider as text."""
+        return redacted(composed((index in data_lines, line) for index, line in enumerate(out)), self.handoffs)
 
 
 # -- tools ------------------------------------------------------------------------------
