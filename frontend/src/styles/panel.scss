@@ -380,7 +380,7 @@ button:disabled { cursor: not-allowed; }
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
 }
 .woa-thread__content { display: flex; flex-direction: column; min-height: 100%; }
-.woa-thread__content:not([data-empty])::after {
+.woa-thread__content:not([data-empty]):not([data-approval])::after {
   content: '';
   flex: 0 0 100px;
 }
@@ -918,6 +918,11 @@ button.woa-step__line:focus-visible {
   to { opacity: 1; transform: none; }
 }
 .woa-approval__inner { padding: 12px 14px; }
+.woa-approval__detail pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
 
 /* The header is a caption, not a headline: the effect below it is what is being asked. */
 .woa-approval h2 {

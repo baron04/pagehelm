@@ -222,7 +222,11 @@ class _Chat(CancellableChatDouble):
     def complete(self, messages, tools, _run_id, **_kwargs):
         self.messages.append([dict(message) for message in messages])
         self.tool_names.append({tool["function"]["name"] for tool in tools})
-        name, args = self.script.pop(0)
+        item = self.script.pop(0)
+        if isinstance(item, list):
+            return {"tool_calls": [{"id": f"{len(self.messages)}-{index}", "function": {
+                "name": name, "arguments": json.dumps(args)}} for index, (name, args) in enumerate(item)]}
+        name, args = item
         if name is None:
             return {"content": args["content"]}
         return {"tool_calls": [{"id": str(len(self.messages)), "function": {

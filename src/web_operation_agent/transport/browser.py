@@ -15,6 +15,7 @@ from typing import Protocol, runtime_checkable
 from ..schemas import (SCHEMA_VERSIONS, ActionCommand, ActionEnvelope, ActionReceipt,
                       ObservationEnvelope, PageObservation, RECEIPT_ERRORS)
 from .protocol import RemoteProtocolError, _copy_wire, _now_ms, _remote_args_echo
+from ..execution.events import observed_interval
 
 
 class TransportError(Exception):
@@ -83,6 +84,7 @@ class RemoteBrowserClient:
             observation=_copy_wire(fresh).observation,
         )
 
+    @observed_interval("page")
     def start(self, **_ignored) -> dict:
         try:
             hello = self.channel.wait_for_client(self.timeout_s)
@@ -93,6 +95,7 @@ class RemoteBrowserClient:
         return {"ok": True, "client_id": hello.client_id,
                 "url": observation.observation.url, "embedded": True}
 
+    @observed_interval("page")
     def observe(self) -> PageObservation:
         try:
             observation = self.channel.wait_for_observation(timeout_s=self.timeout_s)
@@ -114,6 +117,7 @@ class RemoteBrowserClient:
         return self._execute(action, args, expect_navigation=expect_navigation,
                              timeout_s=min(self.timeout_s, timeout_s))
 
+    @observed_interval("page")
     def _execute(self, action: str, args: dict | None, *,
                  timeout_s: float, expect_navigation: bool) -> ActionReceipt:
         observation = self._delivered_observation

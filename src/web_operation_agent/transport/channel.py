@@ -131,6 +131,7 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._pending_action_id = ""
         self._events: list[TaskEvent] = []
         self._messages: deque[dict] = deque()
+        self.turn_events = None
         self._message_digests: dict[str, str] = {}
         self._cancelled_message_ids: set[str] = set()
         self._completed_message_ids: set[str] = set()

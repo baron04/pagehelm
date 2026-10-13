@@ -103,12 +103,25 @@ class ToolSurface:
             if (not session._auto_loaded_business_skill_ids
                     or session._loaded_business_skill_ids != session._task_business_skill_ids):
                 tools += [LOAD_SKILL_TOOL]
+            if session.business_tools.skill_registry is not None:
+                from .business_tools import READ_SKILL_RESOURCE_TOOL
+                tools += [READ_SKILL_RESOURCE_TOOL]
         if session.business_tools is not None:
             principal = session._approvals.principal
             business_schemas = session.business_tools.available_schemas(
                 allow_mutations=session._approvals.mutations_enabled,
                 actor_scopes=(principal.scopes if principal is not None else None),
-                writes=session._requested_writes)
+                writes=session._requested_writes,
+                loaded_ids=session._loaded_business_skill_ids)
+            if session.business_tools.require_skill_for_writes:
+                business_schemas = deepcopy(business_schemas)
+                for schema in business_schemas:
+                    if session.business_tools.is_mutation(schema['function']['name']):
+                        parameters = schema['function']['parameters']
+                        parameters['properties'].update({
+                            'supporting_skill': {'type': 'string', 'description': 'Loaded Skill supporting this exact operation'},
+                            'intent': {'type': 'string', 'enum': ['execute'], 'description': 'Only actual execute requests; questions, hypotheticals and negations do not propose writes'}})
+                        parameters.setdefault('required', []).extend(['supporting_skill', 'intent'])
             if session.data_reads is not None:
                 # One business-answer surface when the deterministic resolver is
                 # configured. Record addresses, custom reads and forms remain offered.

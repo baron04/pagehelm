@@ -524,7 +524,7 @@ class AgentTurnExecution:
 def _status_for(terminal_reason: str) -> AgentTurnStatus:
     if terminal_reason == "agent_finished":
         return AgentTurnStatus.FINISHED
-    if terminal_reason == "needs_input":
+    if terminal_reason in {"needs_input", "needs_clarification"}:
         return AgentTurnStatus.NEEDS_INPUT
     if terminal_reason == "agent_refused":
         return AgentTurnStatus.REFUSED

@@ -543,6 +543,24 @@ class TurnEvidence:
 
     _items: dict[str, Evidence] = field(default_factory=dict)
 
+    def discard_runtime(self, *, records: frozenset[str] | None = None,
+                        collections: frozenset[str] | None = None) -> None:
+        """Invalidate affected live facts and their derivations; retain static knowledge.
+
+        An adapter without an exact invalidation projection uses the conservative
+        default. The projection must include every collection affected by its effects.
+        """
+        removed = {key for key, value in self._items.items()
+            if isinstance(value, PageEvidence)
+            or isinstance(value, RecordEvidence) and (records is None or value.record_id in records)
+            or isinstance(value, QueryEvidence) and (collections is None or value.collection in collections)}
+        while True:
+            dependent = {key for key, value in self._items.items()
+                if isinstance(value, (ComputationEvidence, SelectionEvidence)) and removed.intersection(value.inputs)}
+            if dependent <= removed: break
+            removed |= dependent
+        self._items = {key: value for key, value in self._items.items() if key not in removed}
+
     def discard_pages(self) -> None:
         """A newer observation invalidates page-local facts, never typed API reads."""
         removed = {key for key, value in self._items.items() if isinstance(value, PageEvidence)}

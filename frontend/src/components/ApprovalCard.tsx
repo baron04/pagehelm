@@ -21,7 +21,7 @@ export interface ApprovalCardProps {
 }
 
 export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
-  const {approval, labels, limits, visibility, busy, onDecide, onRefused} = props
+  const {approval, labels, visibility, busy, onDecide, onRefused} = props
   const card = useRef<HTMLElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
   const confirm = useRef<HTMLButtonElement>(null)
@@ -104,6 +104,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   return (
     <section className="woa-approval" ref={card} role="alertdialog" aria-modal="false"
              data-kind={approval.kind ?? 'write'}
+             data-approval-id={approval.approval_id}
              aria-labelledby={titleId}
              aria-describedby={`${effectId} ${targetsId} ${hintId}`}
              onKeyDown={onKeyDown}>
@@ -128,15 +129,21 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
           )}
         </h2>
         <p className="woa-approval__effect" id={effectId}>
-          {approval.effect.slice(0, limits.effect_max_chars)}
+          {approval.effect}
         </p>
         {/* Read out with the effect: an effect names what kind of change, the targets which
             record it falls on, and an answer given without hearing them is not informed. */}
         <ul className="woa-approval__targets" id={targetsId}>
-          {approval.targets.slice(0, limits.max_targets).map((target, index) => (
-            <li key={`${index}-${target}`}>{target.slice(0, limits.target_max_chars)}</li>
+          {approval.targets.map((target, index) => (
+            <li key={`${index}-${target}`}>{target}</li>
           ))}
         </ul>
+        {approval.details?.map((detail, index) => (
+          <div className="woa-approval__detail" data-kind={detail.kind} key={index}>
+            <strong>{detail.label}</strong>
+            <pre>{detail.text}</pre>
+          </div>
+        ))}
         {blocked
           ? (
             <p className="woa-approval__blocked">

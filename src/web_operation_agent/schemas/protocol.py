@@ -374,9 +374,12 @@ class ApprovalRequest:
     #: opening pages, clicking, filling, choosing -- and can be declined too, which ends the
     #: turn with the page untouched.
     kind: str = "write"
+    details: tuple = ()
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ApprovalRequest")
+        from .approval_details import validate_details
+        validate_details(self.details)
         _require(self.kind in APPROVAL_KINDS,
                  f"kind must be one of {sorted(APPROVAL_KINDS)}")
         _str(self.approval_id, "approval_id")
@@ -400,22 +403,30 @@ class ApprovalRequest:
                 "principal_digest": self.principal_digest,
                 "turn_id": self.turn_id,
                 "operation_id": self.operation_id,
-                "kind": self.kind}
+                "kind": self.kind,
+                **({"details": [d.to_json() for d in self.details]} if self.details else {})}
 
     @staticmethod
     def from_json(d: dict) -> "ApprovalRequest":
         allowed = {"schema_version", "approval_id", "effect", "targets", "expires_at",
-                   "principal_digest", "turn_id", "operation_id", "kind"}
-        required = allowed - {"principal_digest", "turn_id", "operation_id", "kind"}
+                   "principal_digest", "turn_id", "operation_id", "kind", "details"}
+        required = allowed - {"principal_digest", "turn_id", "operation_id", "kind", "details"}
         d = _strict_object(d, "ApprovalRequest", allowed=allowed, required=required)
         _require(isinstance(d["targets"], list), "targets must be an array")
+        from .approval_details import ApprovalDetail
+        _require(isinstance(d.get("details", []), list), "details must be an array")
+        details = []
+        for item in d.get("details", []):
+            item = _strict_object(item, "ApprovalDetail", allowed={"kind", "label", "text"},
+                                  required={"kind", "label", "text"})
+            details.append(ApprovalDetail(**item))
         return ApprovalRequest(schema_version=d["schema_version"],
                                approval_id=d["approval_id"], effect=d["effect"],
                                targets=d["targets"], expires_at=d["expires_at"],
                                principal_digest=d.get("principal_digest", ""),
                                turn_id=d.get("turn_id", ""),
                                operation_id=d.get("operation_id", ""),
-                               kind=d.get("kind", "write"))
+                               kind=d.get("kind", "write"), details=tuple(details))
 
     @property
     def content_digest(self) -> str:

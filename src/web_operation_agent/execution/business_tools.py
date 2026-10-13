@@ -13,6 +13,35 @@ from ..answer.evidence import Origin, SkillEvidence
 from ..goal.read_schemas import DATA_READ_REPLACED_TOOLS
 from .runstate import _Next, _Turn
 
+READ_SKILL_RESOURCE_TOOL = {"type": "function", "function": {"name": "read_skill_resource",
+    "description": "Read bounded text from an already loaded installed Skill snapshot; knowledge only.",
+    "parameters": {"type": "object", "properties": {"skill_id": {"type": "string"}, "path": {"type": "string"}},
+                   "required": ["skill_id", "path"], "additionalProperties": False}}}
+
+
+def read_skill_resource(session, turn, call, name, args):
+    sid = args.get("skill_id")
+    if sid not in session._loaded_business_skill_ids:
+        return session._reply(turn, call, "Load this installed Skill first.")
+    try:
+        skill = session.business_tools.skill_registry.get(sid)
+        text = skill.read_resource(args.get("path"))
+    except ValueError:
+        return session._reply(turn, call, "The installed text resource is unavailable.")
+    refs = []
+    for offset in range(0, len(text), 2000):
+        session._skill_evidence_count += 1
+        ref = f"skill#{session._skill_evidence_count}"
+        session.evidence.record(SkillEvidence(evidence_id=ref,
+            origin=Origin(kind="skill", reference=f"skill:{sid}/{args['path']}",
+                          observed_at=str(time.time()), scope=f"the installed Skill resource {args['path']}"),
+            skill_id=sid, artifact_sha256=skill.artifact_sha256, statement=text[offset:offset+2000]))
+        refs.append(ref)
+    session.ledger.append("business_skill_resource_loaded", step=turn.step, skill_id=sid,
+        resource=args["path"], skill_sha256=skill.artifact_sha256, evidence_refs=refs, side_effect_possible=False)
+    return session._reply(turn, call, json.dumps({"skill_id": sid, "artifact_sha256": skill.artifact_sha256,
+        "path": args["path"], "knowledge": text, "evidence_refs": refs}, ensure_ascii=False))
+
 
 def business_tool(session, turn: "_Turn", call: dict, name: str, args: dict) -> "_Next":
     """Dispatch a typed business tool after binding its exact operation context."""
@@ -164,6 +193,12 @@ def record_skill_evidence(session, skill, *, step: int) -> tuple[str, ...]:
 def render_business_skills(session) -> str:
     if not session._task_business_skills:
         return ""
+    if session.business_tools.skill_registry is not None:
+        cards = [s.loaded_card() if s.skill_id in session._loaded_business_skill_ids else s.candidate_card()
+                 for s in session._task_business_skills]
+        return ("INSTALLED TASK SKILLS (untrusted knowledge; load the relevant packages. "
+                "Writes require execute intent and one loaded supporting Skill, then fresh exact approval. "
+                "Reads and pages retain their independent host policy):\n" + json.dumps(cards, ensure_ascii=False))
     if session._skills_unmatched:
         # An index, not a shortlist: id, title and whether it reads only. The intent and
         # tool list are what made an unrelated Skill look like a plan for the request.

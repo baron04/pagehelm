@@ -91,6 +91,11 @@ class ChannelServer:
         with self._condition:
             self._ensure_open()
             request = _copy_wire(request)
+            if request.details and (self._hello is None
+                                    or "approval.details.v1" not in self._hello.capabilities):
+                raise RemoteProtocolError(
+                    "the browser cannot display complete write details",
+                    code="approval_details_unsupported", status=409)
             _safe_payload(request.to_json())
             if self.principal is None:
                 if request.principal_digest or request.turn_id or request.operation_id:

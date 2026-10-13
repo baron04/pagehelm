@@ -1,7 +1,7 @@
 """Confirmed typed business mutations and their fresh-page settlement."""
 from __future__ import annotations
 
-from ..answer.evidence import TurnEvidence
+from ..business.write_service import BusinessWriteService
 from ..transport.browser import TransportError, TurnCancelled
 from ..business.errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate,
                                BusinessMutationRefusedError, BusinessToolError,
@@ -17,11 +17,17 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
     result, t0, step = turn.result, turn.started_at, turn.step
     messages, obs = turn.messages, turn.obs
     successful_business_tools = turn.successful_business_tools
-    session._answer_action_receipt = None
+    service = BusinessWriteService(session.business_tools, session._approvals,
+                                  session._loaded_business_skill_ids)
     try:
-        proposal = session.business_tools.prepare_mutation(
-            name, args, session._loaded_business_skill_ids,
-            context=operation_context)
+        supporting = ""
+        if session.business_tools.require_skill_for_writes:
+            if args.get("intent") != "execute" or not isinstance(args.get("supporting_skill"), str):
+                from ..business.errors import BusinessToolRequestError
+                raise BusinessToolRequestError("write requires execute intent and a loaded supporting Skill")
+            supporting = args["supporting_skill"]
+            args = {k: v for k, v in args.items() if k not in {"intent", "supporting_skill"}}
+        proposal = service.prepare(name, args, context=operation_context, skill_id=supporting)
     except BusinessToolPermissionError as exc:
         # The actor's authority answered, and it is final for this turn.
         # Handing it back to the model would only invite a page route to the
@@ -51,21 +57,16 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
         messages = _trim(messages, session.keep_observations)
         return session._resume(turn, messages, obs, successful_business_tools)
 
-    approval = session._approvals.approve_mutation(
-        proposal, step=step, tool=name, context=operation_context,
+    approval = service.approve(
+        proposal, step=step, context=operation_context,
         identity=operation_identity)
     if not approval.approved:
         return _Next(session._finish(
             result, t0, approval.reason, approval.detail, steps=step))
     approval_id = approval.approval_id
-    def mutation_claimed() -> None:
-        session._approvals.mutation_claimed(
-            proposal, step=step, tool=name, approval_id=approval_id,
-            identity=operation_identity)
     try:
-        tool_result = session.business_tools.execute_mutation(
-            proposal, approval.approved_digest, session._loaded_business_skill_ids,
-            context=operation_context, on_claimed=mutation_claimed)
+        tool_result = service.dispatch(proposal, approval, step=step,
+            context=operation_context, identity=operation_identity)
     except BusinessMutationBlockedError as exc:
         detail = str(exc)[:500]
         session.ledger.append(
@@ -106,7 +107,6 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
             side_effect_possible=False, identity=operation_identity)
         return _Next(session._finish(
             result, t0, "business_mutation_failed", detail, steps=step))
-    session._approvals.mutation_completed()
     # A write changes what a read may return; a read after it is a check, not a repeat.
     session._read_digests.clear()
     session.ledger.append(
@@ -125,10 +125,14 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
     session._form_draft_verification = None
     # A successful write invalidates values read before it. The receipt
     # remains authoritative even when this adapter supplies no new fields.
-    session.evidence = TurnEvidence()
+    session.evidence.discard_runtime()
+    if not hasattr(session, "_mutation_receipts"):
+        session._mutation_receipts = []
+    session._mutation_receipts.append({"effect": proposal.effect, "targets": list(proposal.targets),
+                                      "result_digest": tool_result.content_digest, "verified": True})
     session._answer_action_receipt = {
         "kind": "mutation", "effect": proposal.effect,
-        "targets": list(proposal.targets)}
+        "targets": list(proposal.targets), "completed": list(session._mutation_receipts)}
     session._answers.collect_evidence(tool_result, step=step)
     session._latest_business_query_page_actions = (
         session.page_actions if tool_result.query_answer is not None else None)
@@ -160,8 +164,11 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
         return _Next(session._finish(
             result, t0, "user_cancelled", detail, steps=step))
     except TransportError as exc:
+        session.ledger.append("business_mutation_followup_failed", step=step, tool=name,
+                              completed=True, proposal_digest=proposal.content_digest,
+                              error_type=type(exc).__name__, side_effect_possible=False)
         return _Next(session._finish(
-            result, t0, "indeterminate_write",
+            result, t0, "observation_failed",
             "business mutation completed but fresh page observation failed: "
             + str(exc), steps=step))
     # Deliberately not `WriteWatch.settle_write`: the typed acknowledgement and the
@@ -169,13 +176,13 @@ def execute_business_mutation(session, turn: "_Turn", call: dict, name: str, arg
     # `uncertain_write` here would downgrade a known write to an unknown
     # one and invite reconciliation for something already settled.
     if write["state"] in (WRITE_UNKNOWN, "control_error"):
-        reason = ("indeterminate_write" if write["state"] == WRITE_UNKNOWN
+        reason = ("observation_failed" if write["state"] == WRITE_UNKNOWN
                   else "control_plane_error")
         return _Next(session._finish(
             result, t0, reason, write["detail"], steps=step))
     if not fresh:
         return _Next(session._finish(
-            result, t0, "indeterminate_write",
+            result, t0, "observation_failed",
             f"{name} completed but no fresh observation was available",
             steps=step))
     obs = receipt.observation

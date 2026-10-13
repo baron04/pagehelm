@@ -35,6 +35,7 @@ INVALIDATING_TERMINAL_REASONS = frozenset({
     "leak_detected",
     "approval_unavailable",   # the write-capable runner omitted its approval channel
     "approval_failed",        # the authenticated approval exchange failed before dispatch
+    "observation_failed",     # a verified business effect survives a failed page follow-up
 })
 
 #: A write may or may not have landed. Never scored, never retried.

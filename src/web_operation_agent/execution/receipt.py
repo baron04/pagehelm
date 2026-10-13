@@ -13,6 +13,7 @@ import time
 from ..modeling.chat import require_chat_port
 from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted
+from .events import current_events
 
 STAGES = frozenset({"scope", "interpret", "vote", "reconcile", "repair", "source",
                     "business", "ui", "wait", "model"})
@@ -40,6 +41,7 @@ class TurnReceipt:
 
     def __init__(self, *, clock=time.monotonic):
         self.clock = clock
+        self.events = current_events()
         self.started = clock()
         self._stage = ContextVar("turn_receipt_stage", default="model")
         self._lock = threading.Lock()
@@ -70,14 +72,19 @@ class TurnReceipt:
         size = len(json.dumps({"messages": messages, "tools": tools}, ensure_ascii=False,
                               separators=(",", ":"), allow_nan=False).encode())
         name, start = self._stage.get(), self.clock()
+        interval = (self.events[0].interval("model", turn_id=self.events[1]) if self.events else None)
+        if interval:
+            interval.__enter__()
         with self._lock:
             self._counts[name] += 1
             self._inputs[name] += size
             self._inflight += 1
-        return name, start
+        return name, start, interval
 
     def end_model(self, handle, *, succeeded):
-        name, start = handle
+        name, start, interval = handle
+        if interval:
+            interval.__exit__(None, None, None)
         end = self.clock()
         with self._lock:
             self._models.append((start, end))

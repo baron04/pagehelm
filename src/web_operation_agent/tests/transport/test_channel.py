@@ -36,6 +36,20 @@ from web_operation_agent.tests.transport.support import (
 
 
 class ChannelTests(unittest.TestCase):
+    def test_complete_write_details_require_the_active_browser_capability(self):
+        from web_operation_agent.schemas.approval_details import ApprovalDetail
+        request = ApprovalRequest(1, "long-write", "Publish synthetic note", ("Synthetic team",),
+            int(time.time()*1000)+30000, details=(ApprovalDetail("body", "Body", "complete body"),))
+        with self.assertRaises(RemoteProtocolError) as caught:
+            self.channel.request_approval(request)
+        self.assertEqual(caught.exception.code, "approval_details_unsupported")
+        self.assertFalse(self.channel._approvals)
+        advertised = dataclasses.replace(hello(self.grant.session_id, runtime_instance_id="upgraded-document"),
+            capabilities=hello(self.grant.session_id).capabilities + ("approval.details.v1",))
+        self.channel.accept_hello(advertised)
+        event = self.channel.request_approval(request)
+        self.assertEqual(event.payload["details"][0]["text"], "complete body")
+
     def test_read_context_uses_the_active_turn_document_and_rejects_foreign_bindings(self):
         from web_operation_agent.state.identity import PrincipalError
         now = int(time.time()*1000)

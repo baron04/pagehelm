@@ -18,6 +18,10 @@ Re-record deliberately, never reflexively:
 and read the diff. A diff that nobody can explain in one sentence is a defect, not a
 re-record.
 
+Write snapshots include Skill binding in the approval audit and the completed
+mutation receipt in subsequent model context; dispatch counts and terminal states
+remain part of the recorded contract.
+
 `GoldenIsChangeSensitive` is the other half. A snapshot suite can rot into a snapshot of
 nothing -- if the capture accidentally drops the fields that carry behaviour, it stays green
 through any change. Each test there mutates one thing in the product, re-captures, and

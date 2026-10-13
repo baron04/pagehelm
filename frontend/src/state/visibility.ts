@@ -40,9 +40,17 @@ export function useVisibilityGate(options: {
       const box = record.boundingClientRect
       const view = record.rootBounds
       const shown = record.intersectionRect.width * record.intersectionRect.height
-      const coverable = view
-        ? box.width * Math.min(box.height, view.height)
-        : box.width * box.height
+      let coverableHeight = view ? Math.min(box.height, view.height) : box.height
+      let coverableWidth = view ? Math.min(box.width, view.width) : box.width
+      // The conversation clips a long card inside the window. Measure the part
+      // that can be shown through that scrollport, including its ancestor clips.
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent)
+        const clip = parent.getBoundingClientRect()
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) coverableHeight = Math.min(coverableHeight, clip.height)
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) coverableWidth = Math.min(coverableWidth, clip.width)
+      }
+      const coverable = coverableWidth * coverableHeight
       const ratio = coverable > 0 ? shown / coverable : 0
       const visible = record.isIntersecting && ratio >= minVisibleRatio
       if (visible && !visibleSince.current) visibleSince.current = performance.now()

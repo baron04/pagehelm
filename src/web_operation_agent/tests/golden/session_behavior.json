@@ -2645,6 +2645,8 @@
             "digest": "<proposal-digest:0>",
             "operation_context_digest": "",
             "schema_version": 1,
+            "skill_digest": "",
+            "skill_id": "",
             "target_count": 1,
             "tool": "create_tray"
           },
@@ -2734,8 +2736,8 @@
             "user_intent"
           ],
           "event": "provider_egress",
-          "input_bytes": 13966,
-          "input_digest": "99b2ad8ae37e03277848e1e35ce02c2d44b08330bae0a49776968c8dd28798c4",
+          "input_bytes": 16677,
+          "input_digest": "d0c044a7340d5a64dff48688676ae74d5a950ffb7221fdfdeba8869bdccef9d0",
           "message_count": 6,
           "roles": {
             "assistant": 2,
@@ -2879,8 +2881,8 @@
           ]
         },
         {
-          "system_chars": 6476,
-          "system_digest": "sha256:7de75cece5b44be8493f48bf7a5c2762a2e7546cd5be400e7c6a83a9293409ae",
+          "system_chars": 9153,
+          "system_digest": "sha256:04ad31f0c6f4107a94ef51a48d756e0ea89c76b1e7b5b0b7949ca4e707325028",
           "tool_results": [
             {
               "name": "create_tray",
@@ -3081,6 +3083,8 @@
             "digest": "<proposal-digest:0>",
             "operation_context_digest": "",
             "schema_version": 1,
+            "skill_digest": "",
+            "skill_id": "",
             "target_count": 1,
             "tool": "create_tray"
           },
@@ -3385,6 +3389,8 @@
             "digest": "<proposal-digest:0>",
             "operation_context_digest": "",
             "schema_version": 1,
+            "skill_digest": "",
+            "skill_id": "",
             "target_count": 1,
             "tool": "create_tray"
           },

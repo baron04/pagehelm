@@ -16,6 +16,34 @@ import {
 } from './harness'
 
 test.describe('the launcher', () => {
+  test('a multi-field write card fills its scrollport without a tail gap blocking approval', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.raiseApproval({details: Array.from({length: 12}, (_, i) => ({
+      kind: 'change' as const, label: `合成字段 ${i + 1}`, text: `旧值 ${i + 1} → 新值 ${i + 1}`,
+    }))})
+    const card = panel.page.locator('.woa-approval')
+    await expect(card).toHaveAttribute('data-approval-id', 'a-1')
+    const button = card.locator('[data-testid="woa-approve"]')
+    await button.scrollIntoViewIfNeeded()
+    await panel.page.waitForTimeout(600)
+    await button.click()
+    expect(await panel.calls()).toContainEqual(['decide', 'a-1', 'approved'])
+    expect(panel.errors).toEqual([])
+  })
+  test('a long write card exposes the whole body and remains approvable after scrolling', async ({open}) => {
+    const panel = await open(snapshot())
+    const body = Array.from({length: 180}, (_, i) => `合成公告第 ${i + 1} 行：完整正文，不得截断。`).join('\n') + '\n正文结尾校验'
+    await panel.raiseApproval({details: [{kind: 'body', label: '公告正文', text: body},
+      {kind: 'target_rule', label: '接收规则', text: '按执行时的部门下属规则确定接收人'}]})
+    const card = panel.page.locator('.woa-approval')
+    await expect(card.locator('pre').first()).toHaveText(body)
+    const button = card.locator('[data-testid="woa-approve"]')
+    await button.scrollIntoViewIfNeeded()
+    await panel.page.waitForTimeout(600)
+    await button.click()
+    expect(await panel.calls()).toContainEqual(['decide', 'a-1', 'approved'])
+    expect(panel.errors).toEqual([])
+  })
   test('carries the state the header no longer shows', async ({open}) => {
     const panel = await open(snapshot())
     const launcher = panel.page.locator('.woa-launcher')

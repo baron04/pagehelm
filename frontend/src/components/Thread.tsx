@@ -514,6 +514,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       {/* One box holding everything that can change height, so a single ResizeObserver
           sees every kind of growth instead of one effect per kind. */}
       <div className="woa-thread__content" ref={content}
+           data-approval={props.footer ? 'true' : undefined}
            data-empty={empty && !loading && !historyUnavailable ? 'true' : undefined}>
       <div ref={top} aria-hidden="true" />
       {snapshot.hasOlder && (

@@ -58,6 +58,7 @@ export interface ApprovalRequest {
   approval_id: string
   effect: string
   targets: string[]
+  details?: {kind: string; label: string; text: string}[]
   expires_at: number
   principal_digest: string
   turn_id: string

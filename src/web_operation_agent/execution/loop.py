@@ -19,7 +19,7 @@ from ..modeling.egress import ProviderEgressError
 from ..modeling.provider import ProviderError
 from ..modeling.spend import BudgetExhausted
 from ..privacy import safe_tool_arguments as _safe
-from .business_tools import apply_skill_first, business_tool, load_skill, prefill_form
+from .business_tools import apply_skill_first, business_tool, load_skill, prefill_form, read_skill_resource
 from .data_tools import data_tool
 from ..goal.read_tools import DATA_READ_NAMES
 from .form_tools import describe_form, prepare_form
@@ -61,6 +61,8 @@ def named_tools(session):
             available["read_source"] = partial(read_source_tool, session)
     if session._task_business_skills:
         available["load_skill"] = partial(load_skill, session)
+        if session.business_tools.skill_registry is not None:
+            available["read_skill_resource"] = partial(read_skill_resource, session)
     if session.allow_form_prefill:
         available["prefill_form"] = partial(prefill_form, session)
         if session._application_form_tools is not None:

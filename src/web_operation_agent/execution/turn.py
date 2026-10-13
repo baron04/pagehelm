@@ -34,6 +34,7 @@ from .product import (
 from .session import ServerAgentSession, TaskSpec
 from .budget import TurnBudget
 from .receipt import MeasuredChat, TurnReceipt
+from .events import observed_turn
 
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -81,8 +82,9 @@ class AgentTurnExecutor:
                  run_id_factory: RunIdFactory,
                  answer_renderer: AnswerRenderer = render_neutral_user_answer,
                  ledger_factory: LedgerFactory = SessionLedger,
-                 conversation_state: ConversationState | None = None):
+                 conversation_state: ConversationState | None = None, turn_events=None):
         self.channel = channel
+        self.turn_events = turn_events
         self.config = config
         # Checked here, not on the first model call: a wrong chat shape is a wiring error and
         # must surface where the executor is composed.
@@ -143,6 +145,7 @@ class AgentTurnExecutor:
             )
         return self.execute(message)
 
+    @observed_turn
     def execute(self, message: dict) -> AgentTurnExecution:
         turn_message = AgentTurnMessage.from_wire(message)
         # "New conversation" means the model's reference history ends here. It is consumed

@@ -281,6 +281,8 @@ class ChannelIngress:
                 return {"accepted": True, "duplicate": True}
             self._message_digests[message_id] = fingerprint
             self._message_leases[message_id] = lease_id
+            if self.turn_events is not None:
+                self.turn_events.accepted(message_id)
             self._messages.append(_copy_json(message))
             # The panel replays its timeline from this event stream.  Without the goal here
             # a full page navigation would leave the user looking at progress lines that

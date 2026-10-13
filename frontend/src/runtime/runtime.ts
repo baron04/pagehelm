@@ -46,6 +46,7 @@ import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResult
 // `policies/page_controller.json`; `test_page_controller.py` fails if this string drifts.
 const RUNTIME_NAME = 'woa-embedded/page-controller-1.12.4'
 const CAPABILITIES = [
+  'approval.details.v1',
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
   'page.goto', 'page.back', 'page.scroll', 'page.wait', 'page.apply_facet',
   'page.highlight', 'page.handoff_form', 'page.reveal',
