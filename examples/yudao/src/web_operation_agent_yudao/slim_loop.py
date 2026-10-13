@@ -38,6 +38,7 @@ from web_operation_agent.goal.skill_writes import SkillWrites
 from web_operation_agent.execution.receipt import MeasuredChat
 from web_operation_agent.modeling.egress import AuditedChat
 from web_operation_agent.modeling.provider import ProviderError
+from web_operation_agent.panel_view import describe_step, step_facts
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
 
@@ -116,6 +117,10 @@ class ActorKnowledge:
         #: The session parameters of the application this actor is signed in to; the turn
         #: sets its own, so a read is redacted of them like a page is.
         self.handoffs = BASELINE_SESSION_HANDOFFS
+        #: What the last `call_api` read, for whoever is watching the turn: how many rows
+        #: (one for a single record) and which of the application's lists; None when the
+        #: read was refused or named no interface.
+        self.last_read: dict | None = None
 
     def _load(self):
         if self._ops is not None:
@@ -280,6 +285,7 @@ class ActorKnowledge:
 
     def call_api(self, path: str, params: dict, fields=()) -> str:
         self._load()
+        self.last_read = None
         if not path.startswith("/admin-api/"):
             path = "/admin-api/" + path.lstrip("/")
         if path not in self._by_path:
@@ -330,6 +336,7 @@ class ActorKnowledge:
                                + ("（已读完所有页）" if whole and fields else ""))
         except DataRefused as exc:
             return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
+        self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"]}
         if rows is None:
             keys = list(data.keys()) if isinstance(data, dict) else []
         else:
@@ -852,27 +859,50 @@ class SlimTurnExecutor(GoalTurnExecutor):
             return f"没有成功：{receipt.error_code} {str(receipt.error_detail)[:160]}".strip()
         return ""
 
+    def _note(self, s, **facts) -> None:
+        """One thing the turn is doing, on the timeline of whoever is watching it. Facts
+        only: the sentence is the panel view's, and a step it has no sentence for says
+        nothing. A panel that cannot be told is not a failed turn."""
+        text = describe_step(facts)
+        if not text:
+            return
+        try:
+            self.channel.publish("progress", {"state": "step", "message": text, "step": step_facts(facts)},
+                                 turn_id=s.message.message_id)
+        except Exception as exc:  # noqa: BLE001 -- see the docstring
+            s.ledger.append("progress_publish_failed", error_type=type(exc).__name__)
+
     def _tool(self, s, name: str, args: dict, turn: dict) -> tuple[str, bool]:
         know = self.knowledge
         writes = turn.get("writes")
+        said = {key: value for key, value in args.items() if isinstance(value, (str, int, float))
+                and not isinstance(value, bool)}
         if writes is not None:
             if name == "load_skill":
+                self._note(s, stage="tool", tool="load_skill", arguments=said)
                 return self._load_skill(s, writes, str(args.get("skill", "")).strip(), turn), False
             if name == "read_skill_resource":
+                self._note(s, stage="tool", tool="load_skill", arguments=said)
                 return self._skill_resource(s, writes, args), False
             if any(d.name == name for d in writes.definitions()):
+                # What it would change is on the approval card, not on the timeline.
+                self._note(s, stage="tool", tool=name, mutation=True)
                 return self._propose(s, writes, name, args, turn), False
             owner = next((skill.name for skill, definitions in writes.catalog()
                           if any(d.name == name for d in definitions)), "")
             if owner:
                 return f"这个操作所属的 Skill 本轮还没有加载：先 load_skill(\"{owner}\")，再调用它。", False
         if name == "search_menu":
+            self._note(s, stage="search", what="page", term=args.get("keyword"), tool=name, arguments=said)
             return know.search_menu(str(args.get("keyword", ""))), False
         if name == "search_api":
+            self._note(s, stage="search", what="source", term=args.get("keyword"), tool=name, arguments=said)
             return know.search_api(str(args.get("keyword", ""))), False
         if name == "find_record":
+            self._note(s, stage="search", what="record", term=args.get("name"), tool=name, arguments=said)
             return self._find_record(s, str(args.get("name", "")).strip()), False
         if name == "call_api":
+            self._note(s, stage="tool", tool=name, arguments=said)
             params = args.get("params")
             if isinstance(params, str):
                 try:
@@ -884,6 +914,8 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 text = know.call_api(str(args.get("path", "")), params if isinstance(params, dict) else {},
                                      fields if isinstance(fields, list) else ())
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
+            if know.last_read:
+                self._note(s, stage="read_done", tool=name, **know.last_read)
             return text, False
         if name == "fill_fields":
             fields = args.get("fields")
@@ -1342,6 +1374,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 continue
             status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
             if status == "done" and not verified:
+                self._note(s, stage="check")
                 problems = self._verify(s, prompt, answer, turn)
                 if problems:
                     s.ledger.append("slim_verify_sent_back", problems=len(problems))

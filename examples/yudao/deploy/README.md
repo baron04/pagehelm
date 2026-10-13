@@ -261,6 +261,18 @@ the closing check is told the same. This is a statement to the model, not an enf
 writes remain behind the approval card and reads behind the method fence whatever a
 record says.
 
+What the turn is doing between its page actions is published on the session's existing
+progress channel as `step` events, facts only: a search (`search_menu`, `search_api`,
+`find_record`) with what is looked for and the word, a read (`call_api`) and then how many
+rows of which list it returned, a Skill being loaded, a change being prepared (its values
+are on the approval card, never on the timeline), and the closing check. The sentences are
+written by the core's panel view (`describe_step`), which has a neutral `search` and
+`check` stage for this; the panel renders them as it renders any step. Page actions are not
+reported a second time: the channel already publishes each dispatched action. A page the
+assistant opens loads with the panel closed, as every page load does; the launcher shows
+that a turn is under way, and the timeline is there when the panel is opened. A panel that
+cannot be told does not fail the turn.
+
 Round trips to the model are most of a turn's time, so fewer are asked for. The first
 request already carries the menu pages and paged lists whose own names the person's words
 contain, found by the program; `find_record` returns each entity's page and list with

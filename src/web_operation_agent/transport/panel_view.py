@@ -97,6 +97,11 @@ _PAGE_TOOLS = frozenset({
     "prefill_form", "finish", "ask_user"})
 
 
+#: What a turn may say it is looking for, and how much of the word it looks for is shown.
+_SEARCHED = {"page": "页面", "source": "数据来源", "record": "记录"}
+_SEARCH_TERM_CHARS = 24
+
+
 #: What a step node may carry beyond its sentence, so the panel can show the reader what
 #: the assistant actually called and what came back without the panel inventing any of it.
 _STEP_DETAIL_CHARS = 200
@@ -167,6 +172,16 @@ def describe_step(facts: dict) -> str:
         return f"已读取 {count} 条：{scope}" if scope else f"已读取 {count} 条"
     if stage == "write_done":
         return "更改已执行，正在核对结果"
+    if stage == "search":
+        # Looking for where something is, before anything is read or opened: a page of the
+        # application, a source of its data, or a record by its name.
+        what = _SEARCHED.get(str(facts.get("what") or ""))
+        if not what:
+            return ""
+        term = " ".join(_clip(facts.get("term"), _SEARCH_TERM_CHARS).split())
+        return f"正在查找{what}：{term}" if term else f"正在查找{what}"
+    if stage == "check":
+        return "正在核对结果"
     return ""
 
 

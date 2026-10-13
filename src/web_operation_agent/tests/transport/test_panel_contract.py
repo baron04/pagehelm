@@ -14,9 +14,10 @@ import unittest
 from pathlib import Path
 
 from web_operation_agent.transport.panel_view import (action_target, collapse_timeline,
-                                                       describe_action, label_keys,
+                                                       describe_action, describe_step, label_keys,
                                                        panel_contract, panel_limits,
-                                                       project_event, project_history_record)
+                                                       project_event, project_history_record,
+                                                       step_facts)
 from web_operation_agent.execution.product import AgentTurnStatus
 from web_operation_agent.transport import RemoteSessionChannel
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionCommand,
@@ -205,6 +206,28 @@ class PanelContractTests(unittest.TestCase):
                       {"stage": "tool", "tool": "query_customers"},
                       {"stage": "write_done"}):
             self.assertNotIn("transient", step(facts))
+
+    def test_a_search_says_what_is_looked_for_and_for_which_word(self):
+        self.assertEqual(describe_step({"stage": "search", "what": "page", "term": "订单"}), "正在查找页面：订单")
+        self.assertEqual(describe_step({"stage": "search", "what": "source", "term": " 客户 \n合同 "}),
+                         "正在查找数据来源：客户 合同")
+        self.assertEqual(describe_step({"stage": "search", "what": "record", "term": "晨" * 40}),
+                         "正在查找记录：" + "晨" * 24)
+        self.assertEqual(describe_step({"stage": "search", "what": "page"}), "正在查找页面")
+        # What is looked for is one of the three the panel has a word for, or nothing is said.
+        self.assertEqual(describe_step({"stage": "search", "what": "secrets", "term": "x"}), "")
+        self.assertEqual(describe_step({"stage": "search", "what": "page", "term": "a?token=abc123"}),
+                         "正在查找页面：a?token=[redacted]")
+
+    def test_the_closing_check_is_said_and_a_search_s_node_carries_what_was_asked(self):
+        self.assertEqual(describe_step({"stage": "check"}), "正在核对结果")
+        facts = {"stage": "search", "what": "page", "term": "订单", "tool": "search_menu",
+                 "arguments": {"keyword": "订单", "nested": {"x": 1}}}
+        self.assertEqual(step_facts(facts), {"stage": "search", "tool": "search_menu", "arguments": "keyword=订单"})
+        entry = project_event(_event("progress", {
+            "state": "step", "message": describe_step(facts), "step": step_facts(facts)}), at=0)
+        self.assertEqual((entry["kind"], entry["text"], entry["panel_state"]), ("progress", "正在查找页面：订单", "acting"))
+        self.assertNotIn("transient", entry)
 
     def test_repeats_collapse_without_anything_being_discarded(self):
         entries = [

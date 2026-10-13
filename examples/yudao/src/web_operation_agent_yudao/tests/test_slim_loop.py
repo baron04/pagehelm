@@ -464,10 +464,27 @@ class Budget:
         return 60.0
 
 
+class Channel:
+    """What a turn published for whoever is watching it."""
+
+    def __init__(self, broken=False):
+        self.broken, self.published = broken, []
+
+    def publish(self, kind, payload, *, turn_id=""):
+        if self.broken:
+            raise RuntimeError("the panel is gone")
+        self.published.append((kind, payload, turn_id))
+
+    def steps(self):
+        return [payload["message"] for kind, payload, _turn in self.published
+                if kind == "progress" and payload["state"] == "step"]
+
+
 class State:
     def __init__(self, *replies):
         self.terminal_reason, self.detail, self.clarification = "", "", None
         self.mutation_outcomes = []
+        self.message = NS(text="q", message_id="m-1")
         self.step, self.run_id, self.obs = 0, "run-1", observation()
         self.chat, self.ledger, self.budget = Script(*replies), Ledger(), Budget()
 
@@ -480,6 +497,7 @@ class LoopTests(unittest.TestCase):
     def loop(self, *replies, steps: int = 6, tool=None, problems=()):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         executor.model_steps, executor.verify = steps, True
+        executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
         self.ran, self.checked = [], []
         executor._tool = tool or (lambda s, name, args, turn: (self.ran.append(name) or "ok", False))
@@ -785,7 +803,7 @@ class WriteTurnTests(unittest.TestCase):
                   budget=NS(remaining=lambda: 60.0, check=lambda: 60.0),
                   receipt=NS(stage=lambda name: contextlib.nullcontext()),
                   write_intent=False, mutation_outcomes=[], cancelled=lambda: False,
-                  message=NS(text=self.ASKED), started_at=time.time(), model_stop=threading.Event(),
+                  message=NS(text=self.ASKED, message_id="m-1"), started_at=time.time(), model_stop=threading.Event(),
                   writes=NS(begin_control=lambda: None, start_observing=lambda: None))
 
     def executor(self, *, knowledge=True, asked=None):
@@ -794,6 +812,7 @@ class WriteTurnTests(unittest.TestCase):
         executor.knowledge = ActorKnowledge(Client(), lambda: DOCS)
         executor.model_steps, executor.verify, executor._carried_skills = 8, True, ()
         executor._earlier_words = []
+        executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"},
                               {"role": "user", "content": (asked or self.ASKED) + "\n当前页面: /crm/contact"}]
         self.checked = []
@@ -802,7 +821,7 @@ class WriteTurnTests(unittest.TestCase):
 
     def loop(self, *replies, **kw):
         executor, state = self.executor(**kw), self.state(*replies)
-        state.message = NS(text=kw.get("asked") or self.ASKED)
+        state.message = NS(text=kw.get("asked") or self.ASKED, message_id="m-1")
         self.turn = {"reads": [], "marked": "", "trace": [], "touched": [],
                      "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0,
                      "writes": SkillWrites(self.application, state.approvals), "written": [],
@@ -844,6 +863,55 @@ class WriteTurnTests(unittest.TestCase):
             "business_skill_loaded", *["business_skill_resource_loaded"] * 4,
             "skill_effect_bound", "business_mutation_proposed",
             "business_mutation_execution_started", "business_mutation_result"])
+
+    def test_searches_reads_and_the_closing_check_are_told_to_whoever_is_watching(self):
+        find = {"id": "call-find", "type": "function", "function": {
+            "name": "find_record", "arguments": json.dumps({"name": "晨岚机电"}, ensure_ascii=False)}}
+        with patch.object(SlimTurnExecutor, "goal_port", FindRecordTests.Port(hits=(("orders", "晨岚机电"),)),
+                          create=True):
+            executor, state, _text = self.loop(
+                reply(call("search_menu", keyword="订单")), reply(call("search_api", keyword="订单")), reply(find),
+                reply(call("call_api", path="/admin-api/orders/page", params={"pageNo": 1})),
+                reply(call("finish", status="done", answer="共 2 张")))
+        self.assertEqual(self.channel.steps(), [
+            "正在查找页面：订单", "正在查找数据来源：订单", "正在查找记录：晨岚机电",
+            "正在读取业务数据", "已读取 2 条：订单", "正在核对结果"])
+        self.assertEqual({turn for _kind, _payload, turn in self.channel.published}, {"m-1"})
+        nodes = [payload["step"] for _kind, payload, _turn in self.channel.published]
+        self.assertEqual(nodes[0], {"stage": "search", "tool": "search_menu", "arguments": "keyword=订单"})
+        self.assertEqual(nodes[3], {"stage": "tool", "tool": "call_api", "arguments": "path=/admin-api/orders/page"})
+        self.assertEqual(nodes[4], {"stage": "read_done", "tool": "call_api", "result": "2 条 · 订单"})
+        self.assertNotIn("progress_publish_failed", [event["event"] for event in state.ledger.events])
+
+    def test_a_read_the_application_refused_is_not_told_as_read(self):
+        self.loop(reply(call("call_api", path="/admin-api/orders/page", params={"pageNo": 1, "customerId": "0"})),
+                  reply(call("call_api", path="/admin-api/nothing/page", params={})),
+                  reply(call("finish", status="cannot", answer="读不到")))
+        self.assertEqual(self.channel.steps(), ["正在读取业务数据", "正在读取业务数据"])
+
+    def test_a_write_is_told_as_being_prepared_and_never_with_its_values(self):
+        self.loop(self.LOAD(), self.UPDATE(), reply(call("finish", status="done", answer="已改")))
+        self.assertEqual(self.channel.steps(), ["正在选择操作方式", "正在准备这次更改", "正在核对结果"])
+        told = json.dumps([payload for _kind, payload, _turn in self.channel.published], ensure_ascii=False)
+        self.assertNotIn("13800000002", told)
+        self.assertIn('"tool": "crm_contact_update"', told)
+
+    def test_a_question_back_is_not_followed_by_a_check(self):
+        self.loop(reply(call("search_menu", keyword="联系人")),
+                  reply(call("finish", status="need_input", answer="哪一位？")))
+        self.assertEqual(self.channel.steps(), ["正在查找页面：联系人"])
+
+    def test_a_panel_that_cannot_be_told_does_not_fail_the_turn(self):
+        executor, state = self.executor(), self.state(
+            reply(call("search_menu", keyword="订单")), reply(call("finish", status="done", answer="好")))
+        executor.channel = Channel(broken=True)
+        self.turn = {"reads": [], "marked": "", "trace": [], "touched": [],
+                     "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0,
+                     "writes": None, "written": [], "corrections": 0, "final": "", "skills": set()}
+        text = executor._loop(state, self.ASKED, self.turn, verified=False)
+        self.assertEqual((text, state.terminal_reason), ("好", ""))
+        self.assertEqual([event["error_type"] for event in state.ledger.events
+                          if event["event"] == "progress_publish_failed"], ["RuntimeError", "RuntimeError"])
 
     def test_an_operation_is_offered_as_a_tool_only_once_its_skill_is_loaded(self):
         executor, state, _text = self.loop(
@@ -959,7 +1027,7 @@ class WriteTurnTests(unittest.TestCase):
     def take_turn(self, executor, said, *replies, enabled=True):
         """One turn through `_run`, then what the turn's settlement records of it."""
         state = self.state(*replies, enabled=enabled)
-        state.message = NS(text=said)
+        state.message = NS(text=said, message_id="m-1")
         text = self.run_turn(executor, state)
         status = {"": "finished", "agent_finished": "finished", "needs_clarification": "needs_input",
                   "agent_refused": "refused", "approval_denied": "cancelled"}[state.terminal_reason]
