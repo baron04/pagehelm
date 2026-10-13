@@ -16,6 +16,11 @@ result. The page's own submit controls stay unpressed either way.
 
 When the model says it is done, one separate model request checks the person's words
 against what the page then shows, and may send the turn back once.
+
+A turn's conversation with the model lasts that turn. What later turns keep of it is the
+executor's bounded conversation state: the person's words, the answer each turn gave and
+the writes it verified, persisted by the host under the session's identifier. A new turn
+starts from those and reads the page and the data again.
 """
 from __future__ import annotations
 
@@ -654,7 +659,26 @@ def _commits(element, elements) -> bool:
 
 def _words(content: str) -> str:
     """The person's own words in a message that also carries what the program added."""
-    return content.split("\n当前页面:")[0].split("\n程序按字面先找到的")[0]
+    return content.split("\n当前页面:")[0].split("\n上一轮用到的 Skill")[0].split("\n程序按字面先找到的")[0]
+
+
+def history_messages(context) -> list[dict]:
+    """Earlier turns of the conversation as the model reads them, from the bounded
+    conversation state: what the person said and the answer it got, with the writes that
+    turn verified. What a turn read or saw on the page is not kept."""
+    told = []
+    for turn in (context or {}).get("prior_turns") or ():
+        answer = str(turn["assistant"])
+        outcomes = (turn.get("prior_business_facts") or {}).get("outcomes")
+        written = ["{} — {}{}".format(
+            item.get("effect", ""), "、".join(str(t) for t in item.get("targets") or ()),
+            "，记录 " + str(item["receipt"]["reference"])
+            if isinstance(item.get("receipt"), dict) and item["receipt"].get("reference") else "")
+            for item in outcomes or () if isinstance(item, dict) and item.get("verified") is True]
+        if written:
+            answer += "\n（程序记录：这一轮已由用户批准、执行并回读核对的写入：" + "；".join(written) + "）"
+        told += [{"role": "user", "content": str(turn["user"])}, {"role": "assistant", "content": answer}]
+    return told
 
 
 def _control_name(element) -> str:
@@ -758,8 +782,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
         self.conventions = tuple(conventions)
         self.today, self.time_zone = today, time_zone
         self.verify, self.model_steps = bool(verify), int(model_steps)
-        #: This session's conversation as the model saw it; a new conversation starts it over.
+        #: The current turn's conversation as the model sees it, rebuilt at each turn from
+        #: the conversation state.
         self._messages: list[dict] = []
+        #: What the person said in the earlier turns the conversation state still holds.
+        self._earlier_words: list[str] = []
 
     # -- the page, through the executor's own dispatch ------------------------------------
     def _settled(self, s, *, path: str = "", waits: int = 8, ms: int = 400) -> None:
@@ -904,6 +931,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
         except ValueError:
             return "没有这个 Skill，或者它在当前部署、当前账号下没有可用的操作。名字取自“已安装的 Skill”清单。"
         turn["skills"].add(skill.skill_id)
+        return self._skill_text(s, writes, skill)
+
+    def _skill_text(self, s, writes, skill) -> str:
+        """A loaded Skill as the model reads it: its instructions, the references that fit,
+        and the operations it now offers."""
         told = [f"已加载 Skill：{skill.name}"]
         if self.skill_knowledge:
             body = skill.body.strip()
@@ -934,10 +966,10 @@ class SlimTurnExecutor(GoalTurnExecutor):
             return "读不到：先 load_skill，路径取自加载结果里列出的参考资料。"
         return text[:_SKILL_CHARS] + ("\n……（已截断）" if len(text) > _SKILL_CHARS else "")
 
-    def _said(self) -> list[str]:
-        """The person's own words in this conversation, oldest first."""
-        return [_words(m["content"]) for m in self._messages
-                if m["role"] == "user" and not m["content"].startswith(("验收", "请用工具", "只剩最后两步"))]
+    def _said(self, prompt: str) -> list[str]:
+        """The person's own words in this conversation, oldest first: the earlier turns
+        the conversation state holds, then this turn's."""
+        return [*self._earlier_words, prompt]
 
     def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> str:
         """One proposed write, from its preparation to what the application read back.
@@ -948,7 +980,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
         turn["skills"].update(skill.skill_id for skill in writes.context.loaded
                               if operation in skill.write_operations)
         with s.receipt.stage("business"):
-            outcome = writes.propose(operation, inputs, step=s.step, texts=self._said())
+            outcome = writes.propose(operation, inputs, step=s.step, texts=self._said(s.message.text))
         if outcome.asked:
             s.write_intent = True
         if outcome.state == "completed":
@@ -1104,31 +1136,33 @@ class SlimTurnExecutor(GoalTurnExecutor):
             writes = SkillWrites(self.application, s.approvals)
             catalog = writes.catalog()
             writes = writes if catalog else None
-        if self.conversation_state.turn_count == 0 or not self._messages:
+        # The turn starts from what the conversation state kept of the earlier ones, not
+        # from an earlier turn's requests to the model: bounded, and the same after the
+        # session was let go or the host restarted.
+        earlier = history_messages(self.conversation_state.model_context())
+        self._earlier_words = [m["content"] for m in earlier if m["role"] == "user"]
+        if not earlier:
             self._carried_skills = ()
-            self._messages = [{"role": "system", "content": system_text(
-                user=self.actor_name or self.knowledge.user_name or "当前用户",
-                date=_today(self.today, self.time_zone), tz=self.time_zone,
-                conventions=self.conventions, catalog=catalog, knowledge=self.skill_knowledge)}]
-        self._answer_open_calls()
+        self._messages = [{"role": "system", "content": system_text(
+            user=self.actor_name or self.knowledge.user_name or "当前用户",
+            date=_today(self.today, self.time_zone), tz=self.time_zone,
+            conventions=self.conventions, catalog=catalog, knowledge=self.skill_knowledge)}, *earlier]
+        carried = []
         for skill_id in self._carried_skills if writes is not None else ():
             try:
-                writes.load(skill_id, step=s.step)
+                carried.append(self._skill_text(s, writes, writes.load(skill_id, step=s.step)))
             except ValueError:
                 pass
-        for message in self._messages:
-            # A Skill's text stays in the conversation only while its operations are offered.
-            if message.get("_skill") and message["_skill"] not in (writes.loaded_ids if writes else ()):
-                message["content"] = (message["content"].split("\n")[0]
-                                      + "\n（这个 Skill 的说明已省略；要用时重新 load_skill）")
-                message["_skill"] = ""
         turn = {"reads": [], "marked": "", "trace": [], "touched": [], "handoffs": handoffs,
                 "shown": [], "done": set(), "stalled": 0,
                 "writes": writes, "written": [], "corrections": 0, "final": "", "skills": set()}
         prompt = s.message.text
         found = self.knowledge.suggest(prompt)
-        self._messages.append({"role": "user", "_observation": True,
-                               "content": prompt + ("\n" + found if found else "") + "\n" + self._page(s, turn)})
+        self._messages.append({"role": "user", "_observation": True, "content":
+                               prompt + ("\n" + found if found else "")
+                               + ("\n上一轮用到的 Skill（已加载，它的操作可以直接调用）:\n" + "\n\n".join(carried)
+                                  if carried else "")
+                               + "\n" + self._page(s, turn)})
         try:
             return self._loop(s, prompt, turn, verified=not self.verify)
         finally:
@@ -1145,26 +1179,6 @@ class SlimTurnExecutor(GoalTurnExecutor):
         if _DEBUG_DIR:
             turn["shown"].append(text)
         return text
-
-    def _answer_open_calls(self) -> None:
-        """Give every tool call in the conversation a result, as a model request requires.
-        A turn that ended in the middle of a reply left the rest of its calls without one."""
-        kept, position = [], 0
-        while position < len(self._messages):
-            message = self._messages[position]
-            kept.append(message)
-            position += 1
-            calls = message.get("tool_calls") if message["role"] == "assistant" else None
-            if not calls:
-                continue
-            answered = set()
-            while position < len(self._messages) and self._messages[position]["role"] == "tool":
-                answered.add(self._messages[position].get("tool_call_id"))
-                kept.append(self._messages[position])
-                position += 1
-            kept.extend({"role": "tool", "tool_call_id": call.get("id"), "content": "未执行：那一轮已结束。"}
-                        for call in calls if call.get("id") not in answered)
-        self._messages = kept
 
     def _tools(self, turn: dict) -> list:
         """The fixed tools, and in a turn that may write: Skill loading and one tool for
@@ -1282,14 +1296,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text}
                 if name == "call_api":
                     entry["_api"] = True
-                if name == "load_skill" and turn.get("writes") is not None:
-                    entry["_skill"] = self._skill_id(turn["writes"], str(args.get("skill", "")).strip())
                 if changed:
                     entry["content"] = text + "\n" + self._page(s, turn)
                     entry["_observation"] = True
                 self._messages.append(entry)
                 if s.terminal_reason:
-                    self._answer_open_calls()
                     return turn.get("final") or "操作没有完成。"
             if finish is None:
                 continue
@@ -1336,7 +1347,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
 
     def _verify(self, s, prompt: str, answer: str, turn: dict) -> list[str]:
         obs = s.obs
-        history = self._said()
+        history = self._said(prompt)
         said = re.sub(r"[\s,，。.：:]", "", " ".join(history))
         stray = [f"{label}←{value}" for label, value in turn["touched"]
                  if value and re.sub(r"[\s,，。.：:]", "", value) not in said]
@@ -1380,5 +1391,5 @@ class SlimTurnExecutor(GoalTurnExecutor):
         return []
 
 
-__all__ = ["ActorKnowledge", "SlimTurnExecutor", "conventions_text", "page_text", "skills_text",
-           "system_text"]
+__all__ = ["ActorKnowledge", "SlimTurnExecutor", "conventions_text", "history_messages", "page_text",
+           "skills_text", "system_text"]

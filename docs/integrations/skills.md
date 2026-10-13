@@ -219,7 +219,9 @@ an earlier result by the business name the earlier result returned.
 The Yudao host's `--executor slim` uses this with `--native-writes`. Its model is told
 the catalog once a conversation, loads a Skill with `load_skill`, and receives the
 Skill's instructions and bounded references in the tool result. A turn starts with the
-Skills the previous turn of the same conversation loaded, each recorded again. The
+Skills the previous turn of the same conversation used, each recorded again and told
+again with its text; the model's conversation itself is rebuilt each turn from the
+bounded conversation state. The
 goal executor's `select_skills`, single-proposal declaration, consultation and yield
 are not part of this turn. `YudaoHostConfig.slim_skill_knowledge=False` withholds the
 Skill text while keeping the same operations, schemas and checks; it exists to measure

@@ -258,6 +258,16 @@ form holds was there when it opened and is not a change. Before its last two ste
 turn is told to report what it has. Set `WOA_SLIM_DEBUG_DIR` only in development: it
 writes what the model was shown.
 
+The model's conversation lasts one turn. A turn starts from the host's bounded
+conversation state (`conversation-state.sqlite3`, keyed by the session's stable
+identifier): the person's words and the answer of each of the last four turns, within
+32 KiB, and under an answer the writes that turn verified. Nothing an earlier turn asked
+of its tools or saw on the page is carried; the page is observed and the data read again.
+The same state is what a session finds when it is opened again after its sign-in lapsed
+or the host restarted, so the conversation goes on from there. A new conversation clears
+it. A value for a write must still be in the person's own words of those turns: one that
+only an earlier answer showed is refused before any card.
+
 With `--native-writes` the same turn may also carry out a change an installed Skill
 covers. The model is told the installed Skills that offer the current account an
 operation, loads one with `load_skill`, and reads its instructions and shared
@@ -272,7 +282,9 @@ a `finish` written in the same reply as such a proposal does not end the turn.
 A declined card, a refusal after approval and an uncertain result each end the turn;
 nothing is sent twice, and an identical proposal that already completed in the turn is
 not repeated. A request a Skill covers goes through the Skill rather than through a
-prefilled form; the page's own submit controls stay unpressed. The closing check is
+prefilled form; the page's own submit controls stay unpressed. The next turn starts
+with the Skills the last one loaded or proposed through, told again with their text; one it
+does not use is dropped after it. The closing check is
 given the turn's verified writes. An account that is offered no operation is told
 nothing about writes, and its turn is the read-only one.
 
