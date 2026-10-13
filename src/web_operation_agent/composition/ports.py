@@ -365,8 +365,12 @@ class ApplicationPorts:
     #: Scopes the adapter's goal data reads under (`goal.resolve.service.GoalData`), for an
     #: application whose goal-directed reads are not already covered by a tool's scope.
     goal_scopes: frozenset[str] = frozenset()
+    operations: object = None
 
     def __post_init__(self) -> None:
+        from .business_operations import BusinessOperationPort
+        if self.operations is not None and not isinstance(self.operations, BusinessOperationPort):
+            raise TypeError("operations must implement the optional BusinessOperationPort")
         if (not isinstance(self.goal_scopes, frozenset)
                 or not all(isinstance(s, str) and s.strip() for s in self.goal_scopes)):
             raise TypeError("goal scopes must be a frozenset of non-empty strings")

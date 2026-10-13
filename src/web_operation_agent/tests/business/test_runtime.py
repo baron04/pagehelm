@@ -87,7 +87,7 @@ class SkillCitations(unittest.TestCase):
                 BusinessSkill.load(path)
 
     def test_every_shipped_skill_artifact_parses(self):
-        """The nine artifacts in `examples/` are the thing this grammar had to fit.
+        """Shipped Markdown packages parse without importing an application.
 
         Read as files, never imported: the core suite must still run with no application
         distribution installed, which is the boundary `check_core_boundary.py` guards. From
@@ -96,14 +96,15 @@ class SkillCitations(unittest.TestCase):
         root = Path(__file__).resolve().parents[4] / "examples"
         if not root.is_dir():
             self.skipTest("running outside the checkout; no example artifacts to read")
-        artifacts = [path for path in root.rglob("skills/*.json")
-                     if "/build/" not in str(path)]
-        self.assertGreaterEqual(len(artifacts), 9, "the example Skills moved")
+        from web_operation_agent.skills import SkillArtifact
+        artifacts = [path for path in root.rglob("SKILL.md")
+                     if "skills" in path.parts and "build" not in path.parts]
+        self.assertTrue(artifacts, "no packaged example Skills found")
         for path in artifacts:
-            with self.subTest(path=path.name):
-                skill = BusinessSkill.load(path)
-                kinds = {Citation.parse(entry).kind for entry in skill.provenance}
-                self.assertTrue(kinds <= {"src", "api"})
+            with self.subTest(path=str(path.relative_to(root))):
+                namespace = path.relative_to(root).parts[0]
+                skill = SkillArtifact.load(path.parent, namespace=namespace)
+                self.assertTrue(skill.body.strip())
 
 
 class BusinessRuntimeValidation(unittest.TestCase):

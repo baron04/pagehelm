@@ -49,7 +49,19 @@ class BusinessToolRuntime:
                  operations: dict[str, ToolOperation] | None = None,
                  forbidden_operations: tuple[ForbiddenOperation, ...] = (),
                  answer_labels: dict[str, dict[str, str]] | None = None,
-                 numeric_goal_binding: bool = False):
+                 numeric_goal_binding: bool = False,
+                 skill_registry=None, require_skill_for_writes: bool = False):
+        from ...skills import SkillRegistry
+        if not isinstance(require_skill_for_writes, bool):
+            raise TypeError("require_skill_for_writes must be boolean")
+        if skill_registry is not None and not isinstance(skill_registry, SkillRegistry):
+            raise TypeError("skill_registry must be an installed SkillRegistry")
+        if skill_registry is not None:
+            if skills:
+                raise ValueError("use one Skill registry per runtime")
+            skills = skill_registry.artifacts
+        self.skill_registry = skill_registry
+        self.require_skill_for_writes = require_skill_for_writes
         if not isinstance(numeric_goal_binding, bool):
             raise TypeError("numeric_goal_binding must be a boolean")
         self.numeric_goal_binding = numeric_goal_binding
@@ -70,19 +82,19 @@ class BusinessToolRuntime:
                 raise ValueError("business tool schema requires parameters")
             schemas[name] = schema
         declared = {name for skill in skills for name in skill.tool_names}
-        if not declared <= set(schemas):
+        if skill_registry is None and not declared <= set(schemas):
             raise ValueError("Business Skills reference tools not registered by the executor")
         effects = executor.tool_effects()
         if (not isinstance(effects, dict) or set(effects) != set(schemas)
                 or any(value not in {"read", "write"} for value in effects.values())):
             raise ValueError("executor must declare one read/write effect for every tool")
         for skill in skills:
-            if skill.read_only and any(effects[name] == "write" for name in skill.tool_names):
+            if skill.read_only and any(effects.get(name) == "write" for name in skill.tool_names):
                 raise ValueError("read-only Business Skills may not declare write tools")
         callable_tools = (set(schemas) | set(BROWSER_ACTIONS)
                           | {"finish", "load_skill", "describe_form", "prepare_form",
                              "prefill_form"})
-        for skill in skills:
+        for skill in skills if skill_registry is None else ():
             references = {
                 match.group(1) for instruction in skill.instructions
                 for match in _EXPLICIT_TOOL_REFERENCE.finditer(instruction)
@@ -188,6 +200,15 @@ class BusinessToolRuntime:
         self._mutation_lock = threading.RLock()
         self._prepared_mutations: dict[
             str, tuple[BusinessMutationProposal, int]] = {}
+
+    @classmethod
+    def from_registry(cls, registry, *, skill_registry=None, **kwargs):
+        from .registry import ToolRegistry
+        if not isinstance(registry, ToolRegistry):
+            raise TypeError("registry must contain installed tool definitions")
+        return cls((), registry, skill_registry=skill_registry,
+                   required_scopes={t.name: t.scope for t in registry.definitions},
+                   operations={t.name: t.operation for t in registry.definitions}, **kwargs)
 
     @classmethod
     def from_paths(cls, paths: list[str | Path] | tuple[str | Path, ...],
@@ -367,7 +388,8 @@ class BusinessToolRuntime:
 
     def available_schemas(self, *, allow_mutations: bool,
                           actor_scopes: tuple[str, ...] | None = None,
-                          writes: frozenset[str] | None = None) -> list[dict]:
+                          writes: frozenset[str] | None = None,
+                          loaded_ids: set[str] | None = None) -> list[dict]:
         """Offer deployed tools allowed by this turn, never by loaded Skill IDs.
 
         `writes`, when given, is the write tools the request asks to use; no other write
@@ -377,6 +399,10 @@ class BusinessToolRuntime:
         if not isinstance(allow_mutations, bool):
             raise TypeError("allow_mutations must be a boolean")
         scopes = None if actor_scopes is None else set(actor_scopes)
+        if self.require_skill_for_writes:
+            supported = {op for sid in (loaded_ids or ()) if sid in self._skills
+                         for op in self._skills[sid].write_operations}
+            writes = supported if writes is None else supported & writes
         return [self._schemas[name] for name in sorted(self._schemas)
                 if (self._effects[name] == "read"
                     or allow_mutations and (writes is None or name in writes))
@@ -439,11 +465,20 @@ class BusinessToolRuntime:
 
     def prepare_mutation(self, name: str, args: object,
                          loaded_ids: set[str], *,
-                         context: OperationContext | None = None
+                         context: OperationContext | None = None,
+                         skill_id: str = ""
                          ) -> BusinessMutationProposal:
         args = self._validate_call(name, args, loaded_ids, context)
         if not self.is_mutation(name):
             raise BusinessToolRequestError("business tool is read-only")
+        if self.require_skill_for_writes or skill_id:
+            candidates = [self._skills[s] for s in loaded_ids if s in self._skills
+                          and name in getattr(self._skills[s], "write_operations", ())
+                          and (not skill_id or s == skill_id)]
+            if len(candidates) != 1:
+                raise BusinessToolRequestError("write requires one explicit loaded supporting Skill")
+            skill_id = candidates[0].skill_id
+        supporting = self._skills.get(skill_id) if skill_id else None
         try:
             spec = (self._executor.prepare_mutation(name, args)
                     if context is None
@@ -461,7 +496,10 @@ class BusinessToolRuntime:
         proposal = BusinessMutationProposal(
             tool=name, args=spec.args, effect=spec.effect, targets=spec.targets,
             nonce=uuid.uuid4().hex,
-            operation_context_digest=(context.binding_digest if context else ""))
+            operation_context_digest=(context.binding_digest if context else ""),
+            details=spec.details, skill_id=skill_id,
+            skill_digest=(supporting.artifact_sha256 if supporting else ""),
+            effect_projection=spec.effect_projection)
         principal = context.principal if context is not None else None
         key_payload = [self.application_id, name,
                        principal.tenant_id if principal else "",
@@ -486,7 +524,7 @@ class BusinessToolRuntime:
                     proposal.content_digest, proposal.operation_context_digest,
                     expires_at=expires_at, now_ms=now_ms, business_key=business_key,
                     reconciliation={"application_id": self.application_id, "tool": name,
-                                    "args": spec.args,
+                                    "args": (spec.reconciliation if spec.reconciliation is not None else spec.args),
                                     "identity": ({key: value for key, value in
                                         principal.audit_projection().items() if key in {
                                             "tenant_digest", "workspace_digest", "actor_digest"}}
@@ -516,6 +554,12 @@ class BusinessToolRuntime:
                 raise BusinessToolError(
                     "business mutation approval does not match the proposal")
             self._validate_call(proposal.tool, proposal.args, loaded_ids, context)
+            if self.require_skill_for_writes or proposal.skill_id:
+                skill = self._skills.get(proposal.skill_id)
+                if (skill is None or proposal.skill_id not in loaded_ids
+                        or proposal.skill_digest != skill.artifact_sha256
+                        or proposal.tool not in getattr(skill, "write_operations", ())):
+                    raise BusinessToolRequestError("write Skill binding is no longer valid")
             context_digest = context.binding_digest if context is not None else ""
             if proposal.operation_context_digest != context_digest:
                 raise BusinessToolError(
@@ -598,6 +642,8 @@ class BusinessToolRuntime:
                 "business mutation returned an invalid acknowledgement")
         try:
             result = self._classify_result(proposal.tool, result)
+            if proposal.effect_projection is not None:
+                proposal.effect_projection.require_receipt(result.content)
             if self._postcondition_verifier is not None:
                 postcondition = self._postcondition_verifier.verify(
                     proposal.tool, proposal.args, result, context=context)

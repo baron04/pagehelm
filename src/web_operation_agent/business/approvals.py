@@ -208,6 +208,10 @@ class ApprovalWatch:
                 grant = (self.business_approval(proposal)
                          if context is None
                          else self.business_approval(proposal, context=context))
+            from ..execution.events import current_events
+            observed = current_events()
+            if observed:
+                observed[0].end_approval_driver(str(getattr(grant, "approval_id", "")))
         except Exception as exc:
             self.ledger.append(
                 "business_mutation_approval_failed", step=step,
@@ -322,6 +326,10 @@ class ApprovalWatch:
             context = self.context(step, "operate", hold_ms=self.operation_hold_ms)
             with self.awaiting_person():
                 grant = self.operation_confirmation(plan, context=context)
+            from ..execution.events import current_events
+            observed = current_events()
+            if observed:
+                observed[0].end_approval_driver(str(getattr(grant, "approval_id", "")))
         except Exception as exc:
             self.operation_counts["not_confirmed"] += 1
             self.ledger.append("operation_confirmation_failed", step=step, tool=action,

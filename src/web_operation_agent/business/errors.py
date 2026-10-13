@@ -14,6 +14,28 @@ class BusinessToolRequestError(BusinessToolError):
     code = "business_request"
 
 
+class BusinessToolReferenceError(BusinessToolRequestError):
+    """A write target could not be resolved before any mutation was dispatched.
+
+    The adapter supplies the actor-visible entity and current candidate displays so a
+    host may offer a bounded clarification.  This remains a request error: it never
+    authorizes a retry and is safe to expose only before approval/dispatch.
+    """
+
+    code = "business_reference"
+
+    def __init__(self, message: str, *, entity: str, choices: tuple[str, ...] = ()):
+        super().__init__(message)
+        if not isinstance(entity, str) or not entity or len(entity) > 200:
+            raise ValueError("reference entity is invalid")
+        if (not isinstance(choices, tuple) or len(choices) > 6
+                or any(not isinstance(c, str) or not c or len(c) > 500 for c in choices)
+                or len(set(choices)) != len(choices)):
+            raise ValueError("reference choices are invalid")
+        self.entity = entity
+        self.choices = choices
+
+
 class BusinessToolIdentityError(BusinessToolError):
     """The application credential or bound principal cannot authorize the call."""
 
@@ -113,14 +135,26 @@ class BusinessMutationIndeterminate(RuntimeError):
     and the redacted audit ledger, and nowhere else.
     """
 
-    def __init__(self, message: str, *, phase: str = "", record_id: str = ""):
+    def __init__(self, message: str, *, phase: str = "", record_id: str = "",
+                 reconciliation: dict | None = None):
         super().__init__(message)
         self.phase = phase if isinstance(phase, str) and len(phase) <= 64 else ""
         self.record_id = (record_id if isinstance(record_id, str) and len(record_id) <= 200
                           else "")
+        import json
+        from .tools.contracts import _has_sensitive_key
+        if reconciliation is not None and (not isinstance(reconciliation, dict)
+                                           or _has_sensitive_key(reconciliation)):
+            raise ValueError("unsafe indeterminate reconciliation")
+        raw = json.dumps(reconciliation or {}, ensure_ascii=False, allow_nan=False)
+        if len(raw.encode()) > 8000:
+            raise ValueError("indeterminate reconciliation exceeds 8 KiB")
+        self._reconciliation_json = raw
 
     @property
     def reconciliation(self) -> dict:
         """The bounded post-dispatch facts, or an empty mapping when there are none."""
-        return {key: value for key, value in
+        import json
+        return {**json.loads(self._reconciliation_json), **{key: value for key, value in
                 (("phase", self.phase), ("record_id", self.record_id)) if value}
+                }

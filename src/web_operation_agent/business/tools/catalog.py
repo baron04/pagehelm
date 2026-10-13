@@ -96,6 +96,10 @@ class BusinessSkillCatalog:
         the person's request.
         """
         text = str(task or "")
+        if any(hasattr(skill, "write_operations") for skill in self._skills.values()):
+            # Descriptive discovery only. The request's execute/explain intent and
+            # loaded support are checked by the turn and exact approval service.
+            return frozenset(n for n in self._schemas if self._effects[n] == "write")
         found = set()
         for name in self._schemas:
             if self._effects[name] != "write":
@@ -163,6 +167,15 @@ class BusinessSkillCatalog:
             raise ValueError("allow_mutations must be a boolean")
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
             raise ValueError("Skill candidate limit must be an integer from 1 to 20")
+        if any(hasattr(skill, "write_operations") for skill in self._skills.values()):
+            # Standard packages are selected by their task descriptions, never by
+            # a subset relation between tool lists. One decision offers every
+            # installed description, so the catalog size itself is the bound; each
+            # description is separately bounded. A larger catalog must supply a
+            # retrieval surface -- exceeding the bound is refused, never truncated.
+            if len(self._skills) > 24:
+                raise ValueError("Skill catalog requires bounded description retrieval")
+            return BusinessSkillSelection("skill-description-v1", tuple(self._skills.values()), (), False)
         if trusted_entry_path and (
                 not isinstance(trusted_entry_path, str)
                 or not trusted_entry_path.startswith("/")

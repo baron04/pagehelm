@@ -12,6 +12,7 @@ from ...answer.answering import StructuredQueryAnswer
 from ...answer.evidence import RecordEvidence
 from ...state.identity import OperationContext
 from ...schemas.browser import MAX_FORM_LABEL_CHARS, FORM_INPUT_CONTROLS
+from ..effects import EffectProjection
 
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -568,8 +569,24 @@ class BusinessMutationSpec:
     effect: str
     targets: tuple[str, ...]
     reconcile_key: str = ""
+    details: tuple = ()
+    reconciliation: dict | None = None
+    effect_projection: EffectProjection | None = None
 
     def __post_init__(self) -> None:
+        from ...schemas.approval_details import validate_details
+        validate_details(self.details)
+        if self.effect_projection is not None and not isinstance(self.effect_projection, EffectProjection):
+            raise ValueError("mutation effect projection is invalid")
+        if self.effect_projection is not None and _has_sensitive_key(self.effect_projection.to_json()):
+            raise ValueError("mutation effect projection may not contain credentials")
+        if self.reconciliation is not None:
+            if not isinstance(self.reconciliation, dict) or _has_sensitive_key(self.reconciliation):
+                raise ValueError("mutation reconciliation must be a credential-free object")
+            raw = json.dumps(self.reconciliation, ensure_ascii=False, allow_nan=False)
+            if len(raw.encode()) > 8000:
+                raise ValueError("mutation reconciliation exceeds its bounded journal projection")
+            object.__setattr__(self, "reconciliation", json.loads(raw))
         if not isinstance(self.reconcile_key, str) or len(self.reconcile_key) > 1000:
             raise ValueError("mutation reconcile key must be a bounded string")
         if (not isinstance(self.args, dict)
@@ -606,11 +623,16 @@ class BusinessMutationProposal:
     targets: tuple[str, ...]
     nonce: str
     operation_context_digest: str = ""
+    details: tuple = ()
+    skill_id: str = ""
+    skill_digest: str = ""
+    effect_projection: EffectProjection | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.tool, str) or not _TOOL_NAME.fullmatch(self.tool):
             raise ValueError("mutation tool is invalid")
-        validated = BusinessMutationSpec(self.args, self.effect, self.targets)
+        validated = BusinessMutationSpec(self.args, self.effect, self.targets, details=self.details,
+                                         effect_projection=self.effect_projection)
         object.__setattr__(self, "args", validated.args)
         object.__setattr__(self, "effect", validated.effect)
         object.__setattr__(self, "targets", validated.targets)
@@ -619,6 +641,9 @@ class BusinessMutationProposal:
         if self.operation_context_digest and not re.fullmatch(
                 r"[0-9a-f]{64}", self.operation_context_digest):
             raise ValueError("mutation operation context digest is invalid")
+        if (bool(self.skill_id) != bool(self.skill_digest)
+                or self.skill_digest and not re.fullmatch(r"[0-9a-f]{64}", self.skill_digest)):
+            raise ValueError("mutation Skill binding is invalid")
 
     @property
     def content_digest(self) -> str:
@@ -630,6 +655,10 @@ class BusinessMutationProposal:
             "targets": list(self.targets),
             "nonce": self.nonce,
             "operation_context_digest": self.operation_context_digest,
+            "details": [d.to_json() for d in self.details],
+            "skill_id": self.skill_id,
+            "skill_digest": self.skill_digest,
+            **({"effect_projection": self.effect_projection.to_json()} if self.effect_projection else {}),
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
             allow_nan=False).encode("utf-8")
         return hashlib.sha256(raw).hexdigest()
@@ -642,4 +671,6 @@ class BusinessMutationProposal:
             "target_count": len(self.targets),
             "digest": self.content_digest,
             "operation_context_digest": self.operation_context_digest,
+            "skill_id": self.skill_id,
+            "skill_digest": self.skill_digest,
         }

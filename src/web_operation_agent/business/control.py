@@ -126,6 +126,7 @@ class ApprovalGate:
             turn_id=(context.turn_id if context else ""),
             operation_id=(context.operation_id if context else ""),
             kind=kind,
+            details=getattr(plan, "details", ()),
         )
         ensure_safe_browser_payload(request.to_json())
         self.ledger.append(

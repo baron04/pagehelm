@@ -73,6 +73,12 @@ def bind_application(adapter: ApplicationAdapter) -> BoundApplication:
         raise ValueError("business runtime is not bound to the adapter postcondition port")
     if tools.route_validator is not ports.routes:
         raise ValueError("business runtime is not bound to the adapter route port")
+    if ports.operations is not None:
+        if tools.skill_registry is not ports.operations.skills:
+            raise ValueError("operation port and runtime require the same installed Skills")
+        if not all(
+                t.name in tools.mutation_tool_names for t in ports.operations.tools.definitions):
+            raise ValueError("operation port contains an uninstalled mutation")
     return BoundApplication(
         descriptor=descriptor,
         business_tools=tools,

@@ -89,6 +89,11 @@ class LiveConversationRunner:
         else:
             raise TypeError("an AgentTurnExecutor is required")
         self.channel = channel
+        events = getattr(self.executor, "turn_events", None)
+        if events is not None:
+            if channel.turn_events is not None and channel.turn_events is not events:
+                raise ValueError("the channel already has a different event collector")
+            channel.turn_events = events
         self._outcomes: queue.Queue[LiveTurnOutcome] = queue.Queue()
         self.turns_completed = 0
 
