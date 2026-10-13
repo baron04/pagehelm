@@ -119,8 +119,10 @@ class YudaoApplication:
         api_base = (api_base_url or self.origin).rstrip("/")
         # A client of its own account, or the one given (a person's own token).
         self.client = client if client is not None else YudaoClient(api_base, account)
+        # The data port's own reads of application metadata go out four at a time, as its
+        # lookups by name do (`reference_workers` below).
         self.goal_data = YudaoGoalData(self.client, api_docs, ui=ui, time_zone=time_zone,
-                                      native_sections=native_tabs)
+                                      native_sections=native_tabs, read_workers=4)
         from .native_tabs import NativeTabPolicy
         self.native_tab_policy = NativeTabPolicy((ui or UiSource.none()).records.values()) if native_tabs else None
         if native_navigation:

@@ -17,6 +17,8 @@ left out.
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 import re
 import math
 import json
@@ -87,10 +89,15 @@ class _QueryScope:
 class YudaoGoalData:
     def __init__(self, client: YudaoClient, api_docs: dict | Callable[[], dict], *, ui: UiSource | None = None,
                  modules: tuple[str, ...] = MODULES, time_zone: str = "Asia/Shanghai",
-                 max_rows: int = _MAX_ROWS, native_sections: bool = False):
+                 max_rows: int = _MAX_ROWS, native_sections: bool = False, read_workers: int = 1):
         if not isinstance(native_sections, bool):
             raise TypeError("native sections must be explicitly enabled")
         self._native_sections = native_sections
+        if isinstance(read_workers, bool) or not isinstance(read_workers, int) or not 1 <= read_workers <= 8:
+            raise ValueError("read_workers must be an integer between 1 and 8")
+        #: How many of the metadata's own reads may be under way at once. They are the
+        #: same actor-bound GETs a lookup by name already sends side by side.
+        self._read_workers = read_workers
         if not isinstance(api_docs, dict) and not callable(api_docs):
             raise TypeError("API documents require a snapshot or a loader")
         self._client, self._documents = client, api_docs
@@ -305,8 +312,18 @@ class YudaoGoalData:
                 FieldSchema("id", "编号", "number", listed=True),), operations=frozenset({"read"}),
                 name_field="name")
         self._lines = {}
-        for key in list(entities):
-            for line in self._discover_lines(key, entities[key]):
+        owners = list(entities)
+        # One record's detail per entity is most of what compiling costs: two reads each,
+        # for every entity whose page labels line columns. They do not depend on each
+        # other, so they are sent side by side and used in the entities' order.
+        if self._read_workers > 1 and len(owners) > 1:
+            with ThreadPoolExecutor(max_workers=self._read_workers) as pool:
+                futures = [pool.submit(copy_context().run, self._line_sample, key) for key in owners]
+                samples = [future.result() for future in futures]
+        else:
+            samples = [self._line_sample(key) for key in owners]
+        for key, sample in zip(owners, samples):
+            for line in self._discover_lines(key, entities[key], sample):
                 self._lines[line.key] = line
                 entities[line.key] = line.schema
                 owner = entities[key]
@@ -315,17 +332,14 @@ class YudaoGoalData:
                     on_form=True, inverse=_OWNER, columns=line.columns),))
         return Schema(entities=tuple(entities.values()), pages=tuple(pages))
 
-    def _discover_lines(self, key: str, owner: EntitySchema) -> list["_Lines"]:
-        """The line tables a record's detail carries (an order's items, a contract's
-        products), named as the page's own tables label their columns. Found by reading one
-        record's detail: yudao's documentation gives every nested item the same schema."""
+    def _line_sample(self, key: str) -> dict | None:
+        """One record's detail of an entity whose page labels line columns, or None: the
+        reads `_discover_lines` works from, and nothing but reads."""
         spec = self._entities.get(key)
         if spec is None or not spec.has_get or not spec.component:
-            return []
-        labels = self._ui.line_labels(spec.component.rsplit("/", 1)[0])
-        dictionaries = self._ui.line_dicts(spec.component.rsplit("/", 1)[0])
-        if not labels:
-            return []
+            return None
+        if not self._ui.line_labels(spec.component.rsplit("/", 1)[0]):
+            return None
         try:
             listed = self._client.get(spec.list_path, pageNo=1, pageSize=1,
                                       **{**({"sceneType": 1} if "sceneType" in spec.params else {}),
@@ -333,9 +347,19 @@ class YudaoGoalData:
             first = listed if isinstance(listed, list) else (listed.get("list") or [])
             detail = self._client.get(spec.get_path, id=first[0]["id"]) if first else None
         except (DataRefused, KeyError, TypeError):
+            return None
+        return detail if isinstance(detail, dict) else None
+
+    def _discover_lines(self, key: str, owner: EntitySchema, detail: dict | None) -> list["_Lines"]:
+        """The line tables a record's detail carries (an order's items, a contract's
+        products), named as the page's own tables label their columns. Found in one
+        record's detail (`_line_sample`): yudao's documentation gives every nested item the
+        same schema."""
+        spec = self._entities.get(key)
+        if spec is None or detail is None:
             return []
-        if not isinstance(detail, dict):
-            return []
+        labels = self._ui.line_labels(spec.component.rsplit("/", 1)[0])
+        dictionaries = self._ui.line_dicts(spec.component.rsplit("/", 1)[0])
         out = []
         for list_key, items in (detail or {}).items():
             if not (isinstance(items, list) and items and isinstance(items[0], dict)):

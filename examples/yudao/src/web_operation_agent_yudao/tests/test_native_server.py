@@ -362,6 +362,35 @@ class NativeHostTests(unittest.TestCase):
             self.assertIn("submit", executor.disabled_page_actions)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_the_application_index_is_built_ahead_only_where_the_host_asks_for_it(self):
+        import threading
+        from types import SimpleNamespace
+        built, done = [], threading.Event()
+
+        def warm(app):
+            built.append(app)
+            done.set()
+        with patch.object(YudaoHost, "_warm_index", staticmethod(warm)):
+            self.host().bootstrap("synthetic-a", "1", "plain")
+            self.assertFalse(done.wait(.2))            # off by default: nothing is read ahead
+            self.config = replace(self.config, warm_index=True, state_dir=Path(self.tmp.name) / "warm")
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "warm")
+            self.assertTrue(done.wait(5))
+            # The index built is the one this actor's turns will read.
+            self.assertTrue(built[0].goal_port is host._sessions[("1", "1")].session.runner.executor.goal_port)
+            host.bootstrap("synthetic-a", "1", "another page")     # the same session: not built again
+            self.assertEqual(len(built), 1)
+        # A build that fails ahead of time is not an error of the session.
+        calls = []
+        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(index=lambda: calls.append("index"))))
+        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(
+            index=lambda: (_ for _ in ()).throw(OSError("the application is away")))))
+        self.assertEqual(calls, ["index"])
+        with self.assertRaises(ValueError):
+            replace(self.config, warm_index=None)
+        self.chat.return_value.complete.assert_not_called()
+
     def test_the_slim_turn_proposes_reviewed_writes_only_where_the_host_enables_them(self):
         from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
         from web_operation_agent_yudao.ui_source import UiSource

@@ -128,6 +128,11 @@ class YudaoHostConfig:
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
     #: what that text changes; the operations and every check on a write are the same.
     slim_skill_knowledge: bool = True
+    #: Build the actor's application index when their session opens, in the background,
+    #: rather than inside the first turn that needs it (a record looked up by name, a
+    #: write prepared). It costs the application a few hundred small reads per session,
+    #: whether or not a turn ever needs the index. Off by default.
+    warm_index: bool = False
     #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
     native_action_effect_review: str = ""
     #: Extend the reviewed read fence with every list endpoint compiled from the UI
@@ -151,6 +156,8 @@ class YudaoHostConfig:
             raise ValueError("native writes run only through the goal or slim executor")
         if not isinstance(self.slim_skill_knowledge, bool):
             raise ValueError("slim_skill_knowledge is on or off")
+        if not isinstance(self.warm_index, bool):
+            raise ValueError("warm_index is on or off")
         if (not isinstance(self.native_action_effect_review, str)
                 or len(self.native_action_effect_review) > 200
                 or self.native_action_effect_review and not self.native_action_effect_review.strip()):
@@ -520,7 +527,7 @@ class YudaoHost:
                     goal_port=app.goal_port, **reach)
             return LiveConversationRunner(channel, executor=executor)
 
-        return self.server.create_session(
+        session = self.server.create_session(
             allowed_origin=bound.descriptor.origin,
             page_controller_module=bound.descriptor.page_controller_module,
             runner_factory=runner_factory, session_id=session_id,
@@ -528,6 +535,21 @@ class YudaoHost:
             page_write_guard=bound.descriptor.page_write_guard,
             sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
             principal=principal).start()
+        if self.config.warm_index:
+            threading.Thread(target=self._warm_index, args=(app,), name="yudao-warm-index",
+                             daemon=True).start()
+        return session
+
+    @staticmethod
+    def _warm_index(app: YudaoApplication) -> None:
+        """Build the actor's application index ahead of the turn that will ask for it. The
+        data port compiles it under its own lock, so a turn that arrives meanwhile waits
+        for this build instead of starting another. A build that fails here is not kept:
+        the turn that needs the index builds it again and says what went wrong."""
+        try:
+            app.goal_port.index()
+        except Exception:  # noqa: BLE001 -- see the docstring
+            pass
 
     def _browser_bootstrap(self, session) -> dict:
         now_ms = int(time.time() * 1000)
@@ -630,6 +652,9 @@ def main(argv=None) -> int:
                     help="under a method-fence read policy: fill the form a page shows and take "
                          "bounded page steps, inside the application's own read-only window")
     ap.add_argument("--executor", choices=("goal", "page-agent", "slim"), default="goal")
+    ap.add_argument("--warm-index", action="store_true",
+                    help="build each actor's application index when their session opens, in the "
+                         "background; a few hundred small reads per session")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")
@@ -664,7 +689,7 @@ def main(argv=None) -> int:
         native_create_class=a.native_create_class,
         native_filter_policies=tuple(a.native_filter_policy),
         executor_mode=a.executor, native_action_effect_review=a.native_action_effect_review,
-        native_writes=a.native_writes,
+        native_writes=a.native_writes, warm_index=a.warm_index,
         native_live_forms=a.native_live_forms,
         max_sessions=a.max_sessions,
         daily_allowance_cny=a.daily_allowance_cny))

@@ -306,6 +306,14 @@ change, the steps of the same reply that name a path or a field still run; those
 name an element by its number do not, since the numbers are the old page's. A scroll that
 names a region moves that region and says so when nothing moved.
 
+The first turn of a session that looks a record up by name, or prepares a write, needs the
+actor's application index, and building it reads one record's detail for every entity
+whose page labels line columns: a few hundred small reads. They go out four at a time, as
+a lookup by name's own reads do. The host's `--warm-index` builds the index in the
+background when the actor's session opens instead, so that the turn finds it built (or
+waits for the rest of the same build); the application then answers those reads once per
+session whether or not a turn ever needs the index, which is why it is off by default.
+
 A closing model request checks the person's words against the page and may send the turn
 back once. It is told which controls the turn itself filled or chose; every other value a
 form holds was there when it opened and is not a change. Before its last two steps the

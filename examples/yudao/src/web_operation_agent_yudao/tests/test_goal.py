@@ -638,6 +638,52 @@ class LineTests(unittest.TestCase):
         rows = data.rows("crm/contract/products", Compare("__owner", "eq", "12"), fields=("measureCode",))
         self.assertEqual(rows[0].shown["measureCode"], "1")
 
+    def test_the_details_the_metadata_reads_go_out_side_by_side_and_compile_the_same_schema(self):
+        import copy
+        import threading
+        # Two entities whose pages label line columns and whose records have a detail.
+        ui = UiSource(tables={"crm/contract/components/ContractProductForm": {
+            "productName": "产品名称", "count": "数量", "productPrice": "价格（元）", "id": "操作"},
+            "crm/customer/components/CustomerContacts": {"contactName": "联系人"}})
+        docs = copy.deepcopy(DOCS)
+        docs["paths"]["/admin-api/crm/customer/get"] = {"get": {"parameters": [{"name": "id", "in": "query"}]}}
+
+        class Slow(_LinesClient):
+            """Each detail read waits for another to be under way, or for a moment."""
+            def __init__(self):
+                super().__init__()
+                self.lock, self.reading, self.most, self.details = threading.Lock(), 0, 0, 0
+                self.together = threading.Event()
+
+            def get(self, path, **params):
+                if not path.endswith("/get"):
+                    return super().get(path, **params)
+                with self.lock:
+                    self.reading += 1
+                    self.details += 1
+                    self.most = max(self.most, self.reading)
+                    if self.reading > 1:
+                        self.together.set()
+                self.together.wait(.3)
+                try:
+                    return {"id": params["id"]} if path == "crm/customer/get" else super().get(path, **params)
+                finally:
+                    with self.lock:
+                        self.reading -= 1
+
+        one, four = Slow(), Slow()
+        serial = YudaoGoalData(one, docs, ui=ui).schema()
+        parallel = YudaoGoalData(four, docs, ui=ui, read_workers=4).schema()
+        self.assertEqual(parallel, serial)
+        self.assertEqual(parallel.entity("crm/contract/products").lines_of, "crm/contract")
+        # The same reads either way; only how many are under way at once differs.
+        self.assertEqual((one.details, one.most), (four.details, 1))
+        self.assertGreaterEqual(one.details, 2)
+        self.assertGreaterEqual(four.most, 2)
+        for bad in (0, 9, True, "4"):
+            with self.assertRaises(ValueError):
+                YudaoGoalData(_LinesClient(), DOCS, ui=ui, read_workers=bad)
+
     def test_a_detail_s_line_table_is_an_entity_of_its_own(self):
         lines = self.data.schema().entity("crm/contract/products")
         self.assertEqual(lines.lines_of, "crm/contract")
