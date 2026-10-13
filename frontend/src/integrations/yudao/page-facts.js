@@ -471,6 +471,59 @@ export const readPageQuery = () => installed?.readPageQuery()
 export const readPageRead = () => installed?.readPageRead()
 export const readPageFacets = () => installed ? installed.readPageFacets() : []
 export const disposeInstalledPageFacts = () => installed?.dispose()
+/** How long the application is given to show a page it was asked to open. */
+const OPEN_WAIT_MS = 3000
+
+/**
+ * Open one of the application's own pages through its router, in this document.
+ *
+ * Loading a document for it throws away the assistant's open window, the person's place
+ * and the seconds the application takes to start, so the application's router is asked
+ * instead. The router's history entries are its own (`back`, `current`, `position`):
+ * nothing here writes to the History API, which is what left the router without them.
+ *
+ * What a loaded document gave is kept: the page is built fresh, and no other page lives on
+ * behind it. The layout keeps every visited page alive with the filters and the tab it was
+ * left with, and such a page goes on reading its own list whenever the route changes; read
+ * on another page's address, that list would be taken for that page's. So the kept pages
+ * are dropped first, as a document load drops them (the tab strip is not stored), and the
+ * page is entered through the application's own `/redirect` route, the one its tab refresh
+ * uses: a read the page being left starts on the way out belongs to the address in
+ * between, and is never the destination's.
+ *
+ * True only when the application now shows the wanted address, and it is another than
+ * before. Everything else -- no router or tab store to ask, the address already shown, a
+ * fragment, a navigation the router refused or took elsewhere -- is false, and the caller
+ * loads the document.
+ */
+export async function openPage(url, {view = window, doc = document} = {}) {
+  const globals = doc.getElementById('app')?.__vue_app__?.config?.globalProperties
+  const router = globals?.$router, tabs = globals?.$pinia?._s?.get?.('tagsView')
+  if (typeof router?.push !== 'function' || typeof router.resolve !== 'function' ||
+      typeof tabs?.delAllViews !== 'function') return false
+  let target, wanted, between
+  try { target = new URL(String(url), view.location.href) } catch { return false }
+  if (target.origin !== view.location.origin || target.hash) return false
+  const shown = () => router.currentRoute?.value?.fullPath
+  const before = view.location.pathname + view.location.search
+  try {
+    wanted = router.resolve(target.pathname + target.search)
+    between = router.resolve({path: '/redirect' + wanted.path, query: wanted.query})
+  } catch { return false }
+  if (!wanted?.matched?.length || wanted.fullPath === shown() || between?.name !== 'Redirect') return false
+  try {
+    tabs.delAllViews()
+    await new Promise(resolve => view.setTimeout(resolve, 0))
+    if (await router.push(between)) return false
+    const until = Date.now() + OPEN_WAIT_MS
+    while (shown() !== wanted.fullPath) {
+      if (Date.now() > until) return false
+      await new Promise(resolve => view.setTimeout(resolve, 25))
+    }
+  } catch { return false }
+  return view.location.pathname + view.location.search !== before
+}
+
 /** Observe only the mounted application's default menu, not arbitrary menu-shaped DOM. */
 export function readElementNavigation(element) {
   if (!(element instanceof HTMLElement) || !element.isConnected || element.closest('form,[role="dialog"]')) return undefined

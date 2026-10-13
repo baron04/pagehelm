@@ -95,12 +95,28 @@ python3 seed.py
 
 ## Known application behaviour
 
-Assistant-requested page changes use document navigation so Vue Router initializes and owns
-its browser-history state. The generic SPA tool's synthetic state omits Vue Router's
-`current` field: after that navigation, an ordinary menu change can try to navigate to
-the origin with `undefined` appended. This was reproduced on the public site. Manual menu
-changes still use the application's own SPA router; opening a page through the assistant
-incurs a full page load.
+A page the assistant opens is opened by the application's own router, in the document the
+person is on, so the assistant's window stays open and the application does not start
+again. The application's page module (`page-facts.js`, `openPage`) asks the mounted Vue
+application's router; the Runtime calls it for a `goto` and still proves the navigation by
+the address, as for any other. Nothing writes to the History API: the generic SPA tool's
+synthetic state omits Vue Router's `current` field, after which an ordinary menu change
+could try to navigate to the origin with `undefined` appended (reproduced on the public
+site), which is why the adapter's `navigation_mode` stays `document`.
+
+What a loaded document gave is kept. The layout keeps every visited page alive with the
+filters and tab it was left with, and a kept page may read its own list again whenever
+the route changes (the CRM customer list does); read on another page's address, that
+list would be taken for that page's. So `openPage` first drops the kept pages through the
+tab store's `delAllViews` -- the tab strip is not stored, so a document load drops them
+too -- and enters the page through the application's `/redirect` route, the one its own
+tab refresh uses: the page is built fresh, and a read the page being left starts on the
+way out belongs to the address in between.
+
+The page is loaded as a document, as before, when the application cannot be asked (no
+mounted router, no tab store, no `/redirect` route), when the address is the one already
+shown or carries a fragment, when the router refuses or takes the navigation elsewhere,
+or when the application does not answer within six seconds.
 
 - CRM list endpoints apply record permissions only for the `sceneType` they are given (1 owned, 2 involved, 3 subordinates'). Without it a non-admin account reads every record: `evaluator` sees 15 contracts without `sceneType` and 2 with `sceneType=1`. The UI always sends it.
 - springdoc names schemas by simple class name, so same-named nested classes overwrite each other: the published line-item schema of ERP orders is a MES class. Line-item shapes must come from the source.

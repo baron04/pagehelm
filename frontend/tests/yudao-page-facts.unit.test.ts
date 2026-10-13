@@ -1,7 +1,7 @@
 import {afterAll, beforeEach, describe, expect, it} from 'vitest'
 import {createHash} from 'node:crypto'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, readElementPageControl, nativeControlElement} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, readElementPageControl, nativeControlElement, openPage} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -770,5 +770,78 @@ describe('applied query facets for target settlement', () => {
     expect(facets).toContainEqual({kind:'filter', name:'订单状态'})
     // An empty default control is not an applied condition.
     expect(facets).not.toContainEqual({kind:'filter', name:'创建时间'})
+  })
+})
+
+describe('the application opens its own page through its router, in this document', () => {
+  /** A router and a tab store as the application has them, over an address that is only a value. */
+  function application({redirect = true, tabs = true, refuses = false, arrives = true} = {}) {
+    const calls: string[] = []
+    const location = {href: 'https://synthetic.test/crm/customer', origin: 'https://synthetic.test',
+      pathname: '/crm/customer', search: '', hash: ''}
+    const current = {value: {fullPath: '/crm/customer'}}
+    const show = (fullPath: string) => {
+      const url = new URL(fullPath, location.origin)
+      Object.assign(location, {href: url.href, pathname: url.pathname, search: url.search})
+      current.value = {fullPath}
+    }
+    const router = {
+      currentRoute: current,
+      resolve(to: string | {path: string; query?: Record<string, string>}) {
+        if (typeof to === 'string') {
+          const url = new URL(to, location.origin)
+          return {fullPath: url.pathname + url.search, path: url.pathname,
+            query: Object.fromEntries(url.searchParams), name: 'Page', matched: [{}]}
+        }
+        const search = new URLSearchParams(to.query || {}).toString()
+        return {fullPath: to.path + (search ? '?' + search : ''), path: to.path, query: to.query || {},
+          name: redirect && to.path.startsWith('/redirect/') ? 'Redirect' : 'NotFound', matched: [{}]}
+      },
+      async push(to: {fullPath: string; path: string}) {
+        calls.push('push ' + to.fullPath)
+        if (refuses) return {type: 4}
+        show(to.fullPath)
+        // The application's redirect view replaces itself with the page it was asked for.
+        if (arrives) setTimeout(() => show(to.fullPath.slice('/redirect'.length)), 10)
+        return undefined
+      },
+    }
+    const store = tabs ? {delAllViews: () => { calls.push('drop kept pages') }} : undefined
+    const doc = {getElementById: (id: string) => id === 'app' ? {__vue_app__: {config: {globalProperties: {
+      $router: router, $pinia: {_s: new Map(store ? [['tagsView', store]] : [])}}}}} : null}
+    return {calls, location, options: {view: {location, setTimeout}, doc}}
+  }
+
+  it('drops the kept pages, enters through the redirect route and says yes once the page is shown', async () => {
+    const app = application()
+    await expect(openPage('https://synthetic.test/system/post?status=0', app.options)).resolves.toBe(true)
+    expect(app.calls).toEqual(['drop kept pages', 'push /redirect/system/post?status=0'])
+    expect(app.location.pathname + app.location.search).toBe('/system/post?status=0')
+  })
+  it('leaves the page to be loaded when there is nothing to ask or nothing would change', async () => {
+    for (const [url, options] of [
+      ['https://synthetic.test/system/post', {tabs: false}],       // no tab store: a fresh page cannot be promised
+      ['https://synthetic.test/system/post', {redirect: false}],   // no redirect route to enter through
+      ['https://synthetic.test/crm/customer', {}],                 // already shown: only a load rebuilds it provably
+      ['https://synthetic.test/system/post#part', {}],             // the redirect route carries no fragment
+      ['https://elsewhere.invalid/system/post', {}],
+    ] as const) {
+      const app = application(options)
+      await expect(openPage(url, app.options)).resolves.toBe(false)
+      expect(app.calls).toEqual([])
+    }
+    await expect(openPage('/system/post', {view: window, doc: document})).resolves.toBe(false)   // no application mounted
+  })
+  it('says no when the router refuses, or the page never arrives', async () => {
+    const refused = application({refuses: true})
+    await expect(openPage('https://synthetic.test/system/post', refused.options)).resolves.toBe(false)
+    const lost = application({arrives: false})
+    const realNow = Date.now
+    let now = realNow()
+    Date.now = () => (now += 500)
+    try {
+      await expect(openPage('https://synthetic.test/system/post', lost.options)).resolves.toBe(false)
+    } finally { Date.now = realNow }
+    expect(lost.calls).toEqual(['drop kept pages', 'push /redirect/system/post'])
   })
 })

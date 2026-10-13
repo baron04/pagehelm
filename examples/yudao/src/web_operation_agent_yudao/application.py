@@ -194,8 +194,9 @@ class YudaoApplication:
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION, application_id=APPLICATION_ID,
             # Vue Router owns its history entry's current/back/position fields. The
-            # generic SPA goto cannot manufacture that state: navigate a document and
-            # let the application initialize its router on the destination instead.
+            # generic SPA goto cannot manufacture that state, so that mode stays off. The
+            # application's page module opens a page through the router itself
+            # (`openPage`); a page it does not open is loaded as a document.
             display_name="芋道管理系统", origin=self.origin, navigation_mode="document",
             page_write_guard=page_write_guard,
             page_controller_module=self.origin + (NATIVE_PAGE_CONTROLLER_PATH if native_tabs else PAGE_CONTROLLER_PATH),

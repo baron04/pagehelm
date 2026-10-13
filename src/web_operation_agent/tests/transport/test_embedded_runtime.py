@@ -927,6 +927,40 @@ class EmbeddedRuntimeTests(unittest.TestCase):
         self.assertIn("idle runtime", result["busy"])
 
     @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
+    def test_goto_asks_the_application_to_open_its_own_page_before_loading_it(self):
+        source = _runtime_module_url()
+        script = f"""
+          const mod = await import('{source}');
+          const pageLocation = {{href:'https://app.test/start', origin:'https://app.test',
+            assign(value) {{ assigned.push(value); }}}};
+          globalThis.location = pageLocation;
+          globalThis.window = new EventTarget();
+          window.location = pageLocation;
+          const assigned = [], asked = [];
+          const run = async (openPage, url) => {{
+            const runtime = Object.create(mod.EmbeddedWebRuntime.prototype);
+            runtime.config = {{navigationMode:'document'}};
+            runtime.openPage = openPage;
+            return (await runtime._execute({{action:'goto', args:{{url}}}})).message;
+          }};
+          const opened = await run(async url => {{ asked.push(url); return true; }}, '/orders?status=1');
+          const declined = await run(async url => {{ asked.push(url); return false; }}, '/declined');
+          const broken = await run(async () => {{ throw new Error('router gone'); }}, '/broken');
+          const none = await run(undefined, '/none');
+          process.stdout.write(JSON.stringify({{opened, declined, broken, none, assigned, asked}}));
+        """
+        proc = subprocess.run(["node", "--input-type=module", "-e", script],
+                              text=True, capture_output=True, timeout=10, check=True)
+        result = json.loads(proc.stdout)
+        # The application is asked with the address on this origin; a page it opened is not
+        # loaded, and one it declined, failed on or cannot open at all is loaded as before.
+        self.assertEqual(result["asked"], ["https://app.test/orders?status=1", "https://app.test/declined"])
+        self.assertEqual(result["opened"], "application navigation requested")
+        self.assertEqual([result["declined"], result["broken"], result["none"]], ["navigation requested"] * 3)
+        self.assertEqual(result["assigned"], ["https://app.test/declined", "https://app.test/broken",
+                                              "https://app.test/none"])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is needed to execute the runtime module")
     def test_goto_uses_opt_in_spa_navigation_and_keeps_document_default(self):
         source = _runtime_module_url()
         script = f"""

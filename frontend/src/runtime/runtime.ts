@@ -27,7 +27,7 @@ import {Page, loadPageController, formFieldMatches, type FormHandoffField,
   type FormSubmitTarget, type PageControllerApi, type PageFacetReader,
   type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
   type ActiveViewReader, type FacetCandidateReader, type FacetApplier,
-  type PageRouteReader, type PageQueryReader, type ElementNavigationReader} from './page'
+  type PageRouteReader, type PageQueryReader, type ElementNavigationReader, type PageOpener} from './page'
 import type {ElementLookup} from './pageModel'
 import {createShell, type PanelShell} from './shell'
 import {DEFAULT_CONFIGURATION} from '../contract/panel'
@@ -68,6 +68,9 @@ interface Freshness { fresh: boolean; reason: string }
 /** Commands that only look at the page: they leave it as the person has it. */
 const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll'])
 
+/** How long an application is given to open one of its own pages before it is loaded. */
+const APPLICATION_OPEN_MS = 6_000
+
 export class EmbeddedWebRuntime {
   config!: RuntimeConfig
   endpoint = ''
@@ -106,6 +109,7 @@ export class EmbeddedWebRuntime {
   readPageRead: PageQueryReader | undefined
   readElementNavigation: ElementNavigationReader | undefined
   readElementPageControl: ElementNavigationReader | undefined
+  openPage: PageOpener | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -275,7 +279,7 @@ export class EmbeddedWebRuntime {
   async start(): Promise<this> {
     const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
       readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute, readPageQuery,
-      readElementNavigation, readPageRead, readElementPageControl} = await loadPageController(
+      readElementNavigation, readPageRead, readElementPageControl, openPage} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
@@ -290,6 +294,7 @@ export class EmbeddedWebRuntime {
     this.readElementNavigation = readElementNavigation
     this.readPageRead = readPageRead
     this.readElementPageControl = readElementPageControl
+    this.openPage = openPage
     return this._startConnectedRuntime()
   }
 
@@ -1212,7 +1217,26 @@ export class EmbeddedWebRuntime {
     if (command.action === 'apply_facet' && !this._actionFreshness(command).fresh) {
       throw new Error('bad_arguments: page facet changed before dispatch')
     }
-    return executeCommand(command, () => this.page, this.config ?? {})
+    return executeCommand(command, () => this.page, this.config ?? {},
+      this.openPage ? url => this._openInApplication(url) : undefined)
+  }
+
+  /**
+   * Ask the application to open one of its own pages in this document. An application
+   * that throws, answers anything but true, or does not answer in time has not opened it:
+   * the page is then loaded, which is right whatever the application went on to do.
+   */
+  async _openInApplication(url: string): Promise<boolean> {
+    const opener = this.openPage
+    if (!opener) return false
+    try {
+      return await Promise.race([
+        Promise.resolve(opener(url)).then(opened => opened === true),
+        sleep(APPLICATION_OPEN_MS).then(() => false),
+      ])
+    } catch {
+      return false
+    }
   }
 
   /** Whether `command` can leave the page. Kept as a method: it is a conformance seam. */

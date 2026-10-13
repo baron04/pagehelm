@@ -75,3 +75,32 @@ describe('a same-document fragment anchor is a click, not a navigation', () => {
     expect(mayNavigate({...click('e37'), expect_navigation: true}, () => page)).toBe(true)
   })
 })
+
+describe('a page the application can open itself is not loaded as a document', () => {
+  const goto = {command_id: 'g1', action: 'goto', args: {url: '/sale/order?status=1'}, expect_navigation: true}
+  const noPage = () => { throw new Error('page_error: no page') }
+
+  it('asks the application first, with the address on this origin, and loads nothing when it opened it', async () => {
+    const open = vi.fn().mockResolvedValue(true)
+    const pushed = vi.spyOn(window.history, 'pushState')
+    const result = await executeCommand(goto, noPage, {navigationMode: 'document'}, open)
+    expect(open).toHaveBeenCalledWith(new URL('/sale/order?status=1', window.location.href).href)
+    expect(result).toEqual({success: true, message: 'application navigation requested'})
+    // Nor does the Runtime write a history entry of its own for it.
+    expect(pushed).not.toHaveBeenCalled()
+    pushed.mockRestore()
+  })
+  it('an application that manages its history through the generic route is not asked', async () => {
+    const open = vi.fn().mockResolvedValue(true)
+    const result = await executeCommand(goto, noPage, {navigationMode: 'spa'}, open)
+    expect(open).not.toHaveBeenCalled()
+    expect(result).toEqual({success: true, message: 'SPA navigation requested'})
+    window.history.replaceState({}, '', '/')
+  })
+  it('an address on another origin is refused before the application hears of it', async () => {
+    const open = vi.fn().mockResolvedValue(true)
+    await expect(executeCommand({...goto, args: {url: 'https://elsewhere.invalid/x'}}, noPage, {}, open))
+      .rejects.toThrow('origin_refused')
+    expect(open).not.toHaveBeenCalled()
+  })
+})

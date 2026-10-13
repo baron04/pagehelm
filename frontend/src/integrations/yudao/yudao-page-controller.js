@@ -55,4 +55,4 @@ export function getElementByIndex(selectorMap, index) {
   return nativeControlElement(controllerElement(selectorMap, index))
 }
 export {readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
-  readElementNavigation, readElementPageControl} from './page-facts.js'
+  readElementNavigation, readElementPageControl, openPage} from './page-facts.js'

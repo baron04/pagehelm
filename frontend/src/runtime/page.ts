@@ -84,8 +84,14 @@ interface PageControllerModule {
   readPageRead?: () => unknown
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
+  openPage?: PageOpener
 }
 
+/**
+ * The application opening one of its own pages in this document. It answers true only
+ * when it now shows another address; anything else leaves the Runtime to load the page.
+ */
+export type PageOpener = (url: string) => Promise<unknown> | unknown
 export type PageFacetReader = () => unknown
 /** How long a menu is given to open under the pointer before its control is pressed. */
 const REVEAL_HOVER_MS = 350
@@ -910,6 +916,7 @@ export interface LoadedPageController {
   readPageRead?: PageQueryReader
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
+  openPage?: PageOpener
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -983,5 +990,6 @@ export async function loadPageController(moduleUrl: string | undefined,
     ...(typeof module.readElementPageControl === 'function'
       ? {readElementPageControl: module.readElementPageControl} : {}),
     ...(typeof module.readElementNavigation === 'function'
-      ? {readElementNavigation: module.readElementNavigation} : {})}
+      ? {readElementNavigation: module.readElementNavigation} : {}),
+    ...(typeof module.openPage === 'function' ? {openPage: module.openPage} : {})}
 }

@@ -107,8 +107,16 @@ async function withSubmitEvidence(native: NativeForm,
  */
 export type PageAccess = () => Page
 
+/**
+ * The application opening one of its own pages in this document: true only when it now
+ * shows another address. The Runtime still proves the navigation by the address, as for
+ * any other, and loads the page itself when the application answers anything else.
+ */
+export type ApplicationOpen = (url: string) => Promise<boolean>
+
 export async function executeCommand(command: ActionCommand, access: PageAccess,
-                                     config: Pick<RuntimeConfig, 'navigationMode'>): Promise<CommandOutcome | unknown> {
+                                     config: Pick<RuntimeConfig, 'navigationMode'>,
+                                     open?: ApplicationOpen): Promise<CommandOutcome | unknown> {
   const args = command.args || {}
   switch (command.action) {
     case 'observe':
@@ -181,6 +189,10 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
         window.dispatchEvent(new PopStateEvent('popstate', {state: history.state ?? state}))
         return {success: true, message: 'SPA navigation requested'}
       }
+      // An application that opens its own pages keeps this document, and with it the
+      // assistant's open window and whatever the person had on screen. A page it does not
+      // open is loaded, as every page was before.
+      if (open && await open(href)) return {success: true, message: 'application navigation requested'}
       location.assign(href)
       return {success: true, message: 'navigation requested'}
     }
