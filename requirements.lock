@@ -11,7 +11,7 @@
 # written pins that machine's wheels and refuses to install anywhere else, with no
 # message that says why.
 #
-# The Odoo distribution depends on the core and on nothing else; if that ever
+# The example distributions depend on the core and on nothing else; if that ever
 # stops being true, a new name appears here.
 
 # MIT AND PSF-2.0 (required by examples/odoo, web-operation-agent)
@@ -30,6 +30,14 @@ playwright==1.52.0 \
 # MIT (required by examples/odoo, web-operation-agent)
 pyee==13.0.1 \
     --hash=sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228
+# MIT (required by examples/odoo, web-operation-agent)
+PyYAML==6.0.3 \
+    --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0 \
+    --hash=sha256:2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6 \
+    --hash=sha256:9149cad251584d5fb4981be1ecde53a1ca46c891a79788c0df828d2f166bda28 \
+    --hash=sha256:ee2922902c45ae8ccada2c5b501ab86c36525b883eff4255313a253a3160861c
 # PSF-2.0 (required by examples/odoo, web-operation-agent)
 typing_extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8

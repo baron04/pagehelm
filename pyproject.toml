@@ -18,6 +18,8 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+  "PyYAML>=6.0.2,<7",
+  "jsonschema>=4.23,<5",
   # The browser contract is qualified on Playwright 1.52.0. Keep installations
   # within that minor line until a newer runtime is exercised by the test suite.
   "playwright>=1.52,<1.53",

@@ -30,6 +30,7 @@ it; see *The assistant panel bundle* below.
 
 | Component | Constraint | License | Source | Use |
 | --- | --- | --- | --- | --- |
+| [PyYAML](https://github.com/yaml/pyyaml) (`PyYAML`) | `>=6.0.2,<7` | MIT | PyPI and the linked source repository | Safe YAML parser for standard Skill metadata; aliases, tags and duplicate keys are rejected |
 | [Playwright for Python](https://github.com/microsoft/playwright-python) (`playwright`) | `>=1.52,<1.53` | Apache-2.0 | PyPI and the linked source repository | Browser worker and browser-build attestation; installed separately from this wheel |
 
 Playwright 1.52 metadata declares `pyee>=13,<14` and

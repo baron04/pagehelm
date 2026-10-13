@@ -17850,6 +17850,41 @@
       "purl": "pkg:pypi/typing_extensions@4.16.0",
       "type": "library",
       "version": "4.16.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "PyYAML",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "classifier"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "examples/odoo, web-operation-agent"
+        },
+        {
+          "name": "woa:direct",
+          "value": "true"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:pypi/pyyaml@6.0.3",
+      "type": "library",
+      "version": "6.0.3"
     }
   ],
   "metadata": {
