@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["contacts"]
+write_operations = ["create_contact"]

@@ -39,7 +39,8 @@ class ContactsGoalPort:
             raise TypeError("form_prefill must be boolean")
         self._form_prefill = form_prefill
         self._adapter = adapter
-        self._executor = adapter.business_tools._executor
+        executor = adapter.business_tools._executor
+        self._executor = getattr(executor, "reads", executor)
         self.page_reader = None
 
     def _require_actor(self, context: OperationContext | None) -> frozenset[str]:

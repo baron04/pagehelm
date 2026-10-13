@@ -8,7 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from web_operation_agent.business.entities import (
-    ENTITY_READ_TOOLS, EntityAggregate, EntityField, EntityReadTools,
+    ENTITY_READ_TOOLS, ENTITY_READ_SCHEMAS, RESOLVE_RECORD_REFERENCE_SCHEMA,
+    EntityAggregate, EntityField, EntityReadTools,
     ReferenceLookupTools,
 )
 from web_operation_agent.business.runtime import (
@@ -16,6 +17,8 @@ from web_operation_agent.business.runtime import (
     BusinessToolRequestError,
 )
 from web_operation_agent.answer.evidence import TurnEvidence
+from web_operation_agent.goal.planning_reads import PlanningReads
+from jsonschema import Draft202012Validator
 from web_operation_agent.answer.conclusion import Aggregate
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
@@ -46,6 +49,25 @@ class _FakeContactsExecutor:
 
 
 class ContactsEntityReadContractTests(unittest.TestCase):
+    def test_skill_read_surface_tracks_identities_from_the_real_rest_adapter(self):
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
+            reads = adapter.business_tools._executor
+            surface = PlanningReads((*ENTITY_READ_SCHEMAS, RESOLVE_RECORD_REFERENCE_SCHEMA))
+            def execute(name, args):
+                schema = next(s['function']['parameters'] for s in surface.schemas() if s['function']['name'] == name)
+                Draft202012Validator(schema).validate(args)
+                result = reads.execute(name, args).content
+                surface.observe(name, result)
+                return result
+            found = execute('resolve_record_reference', {'entity_query': 'Contacts', 'reference': 'Grace Hopper'})
+            entity = found['candidates'][0]['entity_id']
+            description = execute('describe_entity', {'entity_id': entity})
+            email = next(f['field_id'] for f in description['fields'] if f['label'] == 'Email')
+            result = execute('query_entity_records', {'entity_id': entity, 'field_ids': [email]})
+            self.assertTrue(result['records'])
+            self.assertEqual(application.write_requests, 0)
+
     def test_count_only_exact_evidence_does_not_depend_on_returned_page(self):
         entity = self.tools.execute("discover_entities", {"query": "contacts"}).content["candidates"][0]["entity_id"]
         for offset in (0, 1, 20):

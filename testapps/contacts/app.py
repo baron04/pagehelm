@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import html
+import hashlib
 import json
 import re
 import socket
@@ -517,8 +518,12 @@ class MinimalContactsApplication:
                     return
                 with owner._lock:
                     store = owner.workspaces[actor.workspace]
-                    identifier = urllib.parse.quote(
-                        name.casefold().replace(" ", "-"), safe="")
+                    identifier = name.casefold().replace(" ", "-")
+                    if not re.fullmatch(r"[a-z0-9-]{1,120}", identifier):
+                        # Names are Unicode values; record identities follow the
+                        # same opaque ASCII contract as the application's reader.
+                        identifier = "contact-" + hashlib.sha256(
+                            name.casefold().encode("utf-8")).hexdigest()
                     if any(item["id"] == identifier for item in store):
                         self._reply(409, _json_bytes({"error": "already_exists"}),
                                     "application/json")

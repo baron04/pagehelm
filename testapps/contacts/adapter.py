@@ -41,6 +41,8 @@ import urllib.request
 from pathlib import Path
 from datetime import datetime, timezone
 
+from web_operation_agent.execution.events import observed_interval, turn_interval
+
 from web_operation_agent.composition.descriptor import (
     APPLICATION_ADAPTER_VERSION,
     ApplicationDescriptor,
@@ -279,6 +281,7 @@ class _ContactsToolExecutor:
             evidence=tuple(evidence),
         )
 
+    @observed_interval("application")
     def _contact_rows(self) -> list[dict]:
         """Read and validate the complete actor-visible synthetic collection once."""
         # Reads go out under the delegated actor too. What comes back is what the
@@ -323,27 +326,39 @@ class _ContactsToolExecutor:
 
     # -- the write -----------------------------------------------------------------------
     def _post(self, path: str, payload: dict) -> dict:
+        from web_operation_agent.business.dispatch_evidence import mutation_transport
         request = urllib.request.Request(
             self.origin + path, json.dumps(payload).encode("utf-8"), method="POST")
         request.add_header("Content-Type", "application/json")
         request.add_header("Authorization", f"Bearer {self._api_token}")
+        with mutation_transport() as transport:
+            return self._post_transport(request, transport)
+
+    def _post_transport(self, request, transport):
         try:
             with urllib.request.urlopen(request, timeout=3) as response:
-                return json.load(response)
+                result = json.load(response)
+                if not isinstance(result, dict) or not isinstance(result.get("contact"), dict) or not result["contact"].get("id"):
+                    raise BusinessMutationIndeterminate("contacts create returned no acknowledgement", phase="acknowledgement")
+                transport.applied()
+                return result
         except urllib.error.HTTPError as exc:
             # The application's own refusal, classified rather than passed through: its
             # body may quote record content, and only the shape of the answer crosses.
             if exc.code == 409:
+                transport.rejected()
                 raise BusinessToolError("a contact with that name already exists") from exc
             if exc.code == 401:
+                transport.rejected()
                 raise BusinessToolAuthenticationError(
                     "the delegated credential was refused") from exc
             if exc.code == 403:
+                transport.rejected()
                 # Definite: the application turned the request away before storing anything,
                 # so this is an authorization result and not an uncertain write.
                 raise BusinessToolPermissionError(
                     "the application does not let this actor create contacts") from exc
-            raise BusinessToolError(f"the contacts API returned HTTP {exc.code}") from exc
+            raise BusinessMutationIndeterminate("contacts create returned no safe outcome", phase="dispatch") from exc
         except (OSError, ValueError) as exc:
             # Unlike the refusals above, this may have arrived and been lost on the way
             # back. The caller decides; it must not be reported as a plain failure.
@@ -401,19 +416,20 @@ class _ContactsToolExecutor:
                 "the contacts API accepted the create but returned no record",
                 phase="acknowledgement")
         record_id = str(created["id"])
-        try:
-            readback = [row for row in self._existing(proposed["name"])
-                        if row["id"] == record_id]
-        except BusinessToolError as exc:
-            raise BusinessMutationIndeterminate(
-                "the contact was created but same-actor readback was unavailable",
-                phase="readback", record_id=record_id) from exc
-        if len(readback) != 1 or readback[0]["email"] != proposed["email"]:
-            # Created, and not what was approved. Not a failure -- a failure would invite a
-            # retry, and something is already there.
-            raise BusinessMutationIndeterminate(
-                "the contact was created but the same-actor readback did not match",
-                phase="readback", record_id=record_id)
+        with turn_interval("verification"):
+            try:
+                readback = [row for row in self._existing(proposed["name"])
+                            if row["id"] == record_id]
+            except BusinessToolError as exc:
+                raise BusinessMutationIndeterminate(
+                    "the contact was created but same-actor readback was unavailable",
+                    phase="readback", record_id=record_id) from exc
+            if len(readback) != 1 or readback[0]["email"] != proposed["email"]:
+                # Created, and not what was approved. Not a failure -- a failure would invite a
+                # retry, and something is already there.
+                raise BusinessMutationIndeterminate(
+                    "the contact was created but the same-actor readback did not match",
+                    phase="readback", record_id=record_id)
         ui_path = f"/contacts/{record_id}"
         return BusinessToolResult(
             content={
@@ -808,7 +824,7 @@ class MinimalContactsAdapter:
 
     def __init__(self, origin: str, *, api_token: str = "",
                  allow_mutations: bool = False, mutation_journal=None,
-                 extra_skills: tuple[BusinessSkill, ...] = ()):
+                 extra_skills: tuple[BusinessSkill, ...] = (), standard_skills: bool = False):
         if allow_mutations and mutation_journal is None:
             raise ValueError("allow_mutations=True requires an explicit mutation journal")
         if (not isinstance(extra_skills, tuple)
@@ -821,6 +837,13 @@ class MinimalContactsAdapter:
         skills.extend(extra_skills)
         executor = _ContactsToolExecutor(origin, api_token=api_token,
                                          allow_mutations=allow_mutations)
+        operations = None
+        if standard_skills:
+            if extra_skills:
+                raise ValueError("standard packages use their independent installed registry")
+            from .packages import contact_operations
+            operations = contact_operations(executor, allow_mutations)
+            skills = []
         declarations = [("list_contacts", ("synthetic.contact", "business.identifier",
                                            "application.route"))]
         declarations.extend((
@@ -857,6 +880,14 @@ class MinimalContactsAdapter:
             mutation_journal=mutation_journal,
             data_classifier=data, postcondition_verifier=postconditions,
             route_validator=routes)
+        if operations is not None:
+            from .packages import ContactsTools
+            # The narrow adapter bridge reuses existing reads and the reviewed REST
+            # handler; new operation declarations and step tools share one registry.
+            self.business_tools = BusinessToolRuntime((), ContactsTools(executor, operations.tools), application_id=APPLICATION_ID,
+                required_scopes=self.business_tools.required_scopes, mutation_journal=mutation_journal,
+                data_classifier=data, postcondition_verifier=postconditions, route_validator=routes,
+                skill_registry=operations.skills, require_skill_for_writes=True)
         forms = _ContactsFormPort(executor)
         self.identity = _ContactsIdentityPort(
             origin, api_token=api_token,
@@ -869,6 +900,7 @@ class MinimalContactsAdapter:
             reconciliation=_ContactsReconciler(executor, allow_mutations),
             data=data,
             forms=forms,
+            operations=operations,
         )
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,

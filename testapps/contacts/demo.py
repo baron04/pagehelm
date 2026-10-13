@@ -92,7 +92,12 @@ class ScriptedDemoChat:
         if self.calls > len(replies):
             name, arguments = "finish", {"done": False, "why": "Script exhausted."}
         else:
-            name, arguments = replies[self.calls - 1]
+            reply = replies[self.calls - 1]
+            if isinstance(reply, list):
+                return {"tool_calls": [{"id": f"scripted-call-{self.calls}-{index}",
+                    "function": {"name": name, "arguments": json.dumps(arguments)}}
+                    for index, (name, arguments) in enumerate(reply)]}
+            name, arguments = reply
         return {"tool_calls": [{
             "id": f"scripted-call-{self.calls}",
             "function": {"name": name, "arguments": json.dumps(arguments)},
