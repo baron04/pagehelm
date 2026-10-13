@@ -1226,7 +1226,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 self._messages.append({"role": "user", "content":
                                        "请用工具继续；全部完成或确实做不到时调用 finish。"})
                 continue
-            finish, changed_page = None, False
+            finish, changed_page, unwritten = None, False, False
             for position, call in enumerate(calls):
                 name = (call.get("function") or {}).get("name") or ""
                 try:
@@ -1235,6 +1235,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     args = {}
                 if not isinstance(args, dict):
                     args = {}
+                if name == "finish" and unwritten:
+                    # Written before the proposal's refusal could be read: not an ending.
+                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
+                                           "没有结束：同一次回复里的写入提案没有执行。先按它返回的原因处理，再决定怎么结束。"})
+                    continue
                 if name == "finish":
                     finish = args
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
@@ -1273,6 +1278,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                      f"({json.dumps(args, ensure_ascii=False)[:120]})"
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
                 changed_page = changed_page or (changed and name != "observe")
+                unwritten = unwritten or text.startswith("没有执行")
                 entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text}
                 if name == "call_api":
                     entry["_api"] = True

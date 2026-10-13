@@ -267,7 +267,8 @@ proposal: the host checks the inputs against the schema and the person's own wor
 prepares the change read-only as the account, compares what the application prepared
 with what was proposed, shows the complete approval card, dispatches once after
 approval and reads the result back as the same account. A proposal refused before the
-card is shown returns to the conversation with the reason, at most three times a turn.
+card is shown returns to the conversation with the reason, at most three times a turn;
+a `finish` written in the same reply as such a proposal does not end the turn.
 A declined card, a refusal after approval and an uncertain result each end the turn;
 nothing is sent twice, and an identical proposal that already completed in the turn is
 not repeated. A request a Skill covers goes through the Skill rather than through a

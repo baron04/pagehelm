@@ -782,6 +782,17 @@ class WriteTurnTests(unittest.TestCase):
         self.assertEqual((state.terminal_reason, text), ("agent_refused", "几次提案都没有通过应用的预检，这项修改没有执行。"))
         self.assertEqual((self.person.shown, self.client.writes), ([], []))
 
+    def test_a_finish_beside_a_proposal_that_did_not_run_does_not_end_the_turn(self):
+        executor, state, text = self.loop(
+            self.LOAD(),
+            reply(call("crm_contact_update", target="林舟", changes={"mobile": "13900000000"}),
+                  call("finish", status="done", answer="已把手机改为 13900000000")),
+            reply(call("finish", status="need_input", answer="要改成哪个号码？")))
+        self.assertEqual((state.terminal_reason, text), ("needs_clarification", "要改成哪个号码？"))
+        self.assertEqual((self.person.shown, self.client.writes, self.checked), ([], [], []))
+        told = [m["content"] for m in executor._messages if m["role"] == "tool"]
+        self.assertTrue(any(t.startswith("没有结束") for t in told))
+
     def test_a_target_the_application_cannot_find_is_told_without_asking_the_person(self):
         executor, state, _text = self.loop(
             self.LOAD(), reply(call("crm_contact_update", target="林", changes={"mobile": "13800000002"})),
