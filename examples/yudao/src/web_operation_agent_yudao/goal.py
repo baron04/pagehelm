@@ -48,7 +48,7 @@ MODULES: tuple[str, ...] = ()
 #: Fields that hold credentials or a channel's secret configuration (a payment channel's
 #: keys, a storage's access secret, a mail account's password): never read, even where
 #: the account may read the record.
-_SECRET = re.compile(r"(?i)secret|password|passwd|private_?key|api_?key|token|credential|"
+_SECRET = re.compile(r"(?i)secret|password|passwd|private_?key|api_?key|aes_?key|token|credential|"
                      r"sign_?key|mch_?key|^config$|config$")
 #: Scenes a CRM list is read under: the account's own records, the ones it takes part
 #: in, and its subordinates'.

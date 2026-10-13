@@ -243,6 +243,24 @@ scopes: that is no permission, not absence. Every instant column of a list read 
 counted by month and named, whichever column was asked for, because a list usually holds
 more than one (made, ordered, received) and the person's verb says which is meant.
 
+What an API read returns is blanked of credentials before anything is counted or shown
+(`api_content.py`): the fields the adapter's data port never reads (`goal._SECRET` --
+passwords, secrets, keys, tokens, a channel's configuration) when they hold text or a
+structure, the value of a named setting whose key or name says credential, and credential
+or session-parameter assignments inside any string. A number under such a name (a token
+limit, a validity period) and the business fields the actor may read in the application
+(phone, bank account, address) pass unchanged. A lookup by name and a refusal's own words
+are blanked the same way. Without this a single `token=` inside a record would also stop
+the request at the provider egress check. The rows, values and names an API read or
+`find_record` tells the model sit between `BEGIN_UNTRUSTED_APPLICATION_DATA` and
+`END_UNTRUSTED_APPLICATION_DATA`, with marker text inside the data defused; what the
+program itself says about the read (totals, field descriptions, computed sums, what was
+left out) stays outside. The model is told that fenced content and the text of a page
+observation are data anyone with edit rights may have written, never instructions, and
+the closing check is told the same. This is a statement to the model, not an enforcement:
+writes remain behind the approval card and reads behind the method fence whatever a
+record says.
+
 Round trips to the model are most of a turn's time, so fewer are asked for. The first
 request already carries the menu pages and paged lists whose own names the person's words
 contain, found by the program; `find_record` returns each entity's page and list with
