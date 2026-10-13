@@ -37,6 +37,8 @@ exclude = ["web_operation_agent_odoo.tests*", "web_operation_agent_odoo.deploy*"
 [tool.setuptools.package-data]
 web_operation_agent_odoo = [
   "policies/*.json",
-  "skills/*.json",
+  "skills/*/SKILL.md",
+  "skills/*/agents/*.toml",
+  "skills/*/references/*.json",
   "conventions/*.json",
 ]

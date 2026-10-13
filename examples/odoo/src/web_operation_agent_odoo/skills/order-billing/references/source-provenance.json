@@ -1,0 +1,10 @@
+{
+  "provenance": [
+    "src:odoo@18.0:addons/account/views/account_move_views.xml#account.action_move_out_invoice",
+    "src:odoo@18.0:addons/account/views/account_menuitem.xml#account.action_move_out_invoice",
+    "src:odoo@18.0:addons/account/models/account_move.py#account.move",
+    "api:odoo@18.0:/jsonrpc#object.execute_kw",
+    "src:odoo@18.0:addons/sale/wizard/sale_make_invoice_advance.py#sale.advance.payment.inv.create_invoices",
+    "src:odoo@18.0:addons/sale/models/sale_order.py#sale.order._create_invoices"
+  ]
+}

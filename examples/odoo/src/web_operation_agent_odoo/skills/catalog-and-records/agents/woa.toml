@@ -1,0 +1,3 @@
+schema_version = 1
+scope_entities = ["product.template", "res.partner", "sale.order", "sale.order.line", "account.move", "account.move.line"]
+write_operations = []

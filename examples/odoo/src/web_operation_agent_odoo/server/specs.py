@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from importlib import resources
 from urllib.parse import urlsplit
 
-from web_operation_agent.business.runtime import BusinessSkill
 
 
 APPLICATION_ID = "odoo"
@@ -17,18 +15,6 @@ _MAX_PAGES = 25
 _EMAIL = re.compile(r"[^@\s,;<>]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
                     r"[a-z]{2,24}\Z", re.I)
 _SESSION_COOKIE = "session_id"
-#: The read Skills a deployment always gets, and the write Skills it gets only when
-#: mutations are explicitly enabled. Split by effect rather than listed and sliced by index:
-#: the previous `_SKILLS[:3]` / `_SKILLS[3]` silently made the fourth entry the only write
-#: Skill, which is a fact no reader could see and a fifth entry would have broken.
-_READ_SKILLS = ("sale-orders-query.json", "customers-query.json", "customers-draft.json",
-                "products-query.json", "quotations-query.json",
-                "customer-invoices-query.json", "runtime-records-query.json")
-_WRITE_SKILLS = ("customers-create.json", "customers-edit.json",
-                 "customers-archive.json",
-                 "sale-orders-confirm.json", "sale-orders-invoice.json")
-
-
 def _validated_origin(value: str, *, allow_private_http: bool = False) -> str:
     parsed = urlsplit(value if isinstance(value, str) else "")
     if (parsed.scheme not in {"http", "https"} or not parsed.hostname
@@ -44,16 +30,6 @@ def _validated_origin(value: str, *, allow_private_http: bool = False) -> str:
     suffix = f":{port}" if port is not None and port != default else ""
     host = parsed.hostname.casefold()
     return f"{parsed.scheme}://{f'[{host}]' if ':' in host else host}{suffix}"
-
-
-def _packaged_skill(filename: str) -> BusinessSkill:
-    artifact = resources.files("web_operation_agent_odoo").joinpath("skills", filename)
-    try:
-        raw = artifact.read_bytes()
-    except OSError as exc:
-        raise RuntimeError(f"packaged Odoo Skill is unavailable: {filename}") from exc
-    return BusinessSkill.from_bytes(
-        raw, artifact_uri=f"package://web_operation_agent_odoo/skills/{filename}")
 
 
 # ---------------------------------------------------------------------------- collections

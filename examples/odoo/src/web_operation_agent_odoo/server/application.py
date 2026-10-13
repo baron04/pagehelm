@@ -30,6 +30,7 @@ from web_operation_agent.composition.ports import (
     ResultPostconditionVerifier,
 )
 from web_operation_agent.composition.sources import SourceCapability
+from web_operation_agent.composition.business_operations import RegisteredOperations
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.planning.repository_source import (CombinedSourceLookup,
                                                             RepositorySourceLookup)
@@ -37,6 +38,7 @@ from web_operation_agent.planning.source_facts import CompiledSourceLookup
 from web_operation_agent.planning.source_history import GitSourceHistory
 from web_operation_agent.state.identity import (IdentityAssertion, PrincipalContext,
                                                 PrincipalError, bind_matching_identity)
+from web_operation_agent.skills import SkillArtifact
 
 from ..route import ODOO_ROUTE_PORT, ODOO_SOURCE_SCOPE
 from ..sourcemap import OdooCompiler, module_of, odoo_source_tree
@@ -46,11 +48,12 @@ from .identity import OdooApiKeyStore, OdooPageSessionIdentityResolver
 from .generic_forms import OdooFormPort
 from ..click_policy import OdooReviewedClickPolicy, load_review
 from ..goal import OdooGoalData
+from ..skill_packages import packaged_skills
+from .operations import operation_registry, OdooRegisteredTools
 from .specs import (ANSWER_LABELS_ZH, APPLICATION_ID, ARCHIVE_CUSTOMER_TOOL,
                     COLLECTIONS, CREATE_CUSTOMER_TOOL, MUTATION_SPECS, MUTATION_TOOLS,
                     PREPARE_CUSTOMER_EDIT_TOOL, PREPARE_CUSTOMER_FORM_TOOL,
-                    _CUSTOMERS, _MAX_RESPONSE_BYTES, _READ_SKILLS, _WRITE_SKILLS,
-                    _packaged_skill, _validated_origin)
+                    _CUSTOMERS, _MAX_RESPONSE_BYTES, _validated_origin)
 
 #: Served by the woa_runtime addon (1.5 and later): while the Agent acts on the page, every
 #: request of the person's session runs in a read-only transaction and a write is refused.
@@ -203,7 +206,7 @@ class OdooApplicationAdapter:
                  timeout_s: float = 20,
                  public_origin: str | None = None,
                  allow_private_http: bool = False,
-                 extra_skills: tuple[BusinessSkill, ...] = ()):
+                 extra_skills: tuple[BusinessSkill | SkillArtifact, ...] = ()):
         if not isinstance(allow_mutations, bool):
             raise ValueError("allow_mutations must be a boolean")
         if allow_mutations and mutation_journal is None:
@@ -225,18 +228,12 @@ class OdooApplicationAdapter:
         # Read-only Skill artifacts supplied by the host -- an evaluation's hand-written
         # procedure, say. They reuse the packaged typed tools and add no capability.
         if (not isinstance(extra_skills, tuple)
-                or any(not isinstance(skill, BusinessSkill) or not skill.read_only
+                or any(not isinstance(skill, (BusinessSkill, SkillArtifact)) or not skill.read_only
                        for skill in extra_skills)):
             raise TypeError("extra_skills must be read-only Skill artifacts")
-        skills = [_packaged_skill(name) for name in _READ_SKILLS] + list(extra_skills)
-        withheld: list[BusinessSkill] = []
-        if allow_mutations:
-            skills += [_packaged_skill(name) for name in _WRITE_SKILLS]
-        else:
-            # Installed here, not granted to this actor. The catalog this session can run
-            # omits them; a refusal that did not know about them would tell the person the
-            # deployment cannot do what it does every day (P7.5 CR-37).
-            withheld = [_packaged_skill(name) for name in _WRITE_SKILLS]
+        skills = packaged_skills(extra_skills)
+        operations = operation_registry(executor, TOOL_OPERATIONS)
+        registered = OdooRegisteredTools(executor, operations)
         required_scopes = {"query_sale_orders": "sale_orders:read",
                            "query_customers": "customers:read",
                            "query_products": "products:read",
@@ -288,13 +285,11 @@ class OdooApplicationAdapter:
             if allow_mutations else ())
         routes = ODOO_ROUTE_PORT
         self.business_tools = BusinessToolRuntime(
-            tuple(skills), executor, application_id=APPLICATION_ID,
+            (), registered, application_id=APPLICATION_ID,
+            skill_registry=skills, require_skill_for_writes=True,
             required_scopes=required_scopes, mutation_journal=mutation_journal,
             data_classifier=data, postcondition_verifier=postconditions,
             route_validator=routes,
-            route_skill_hints=((r"^/odoo/customers(?:/[^/?#]+)?$",
-                                "odoo.sales.customers-query"),),
-            withheld_skills=tuple(withheld),
             operations={name: ToolOperation(entity, operation)
                         for name, (entity, operation) in TOOL_OPERATIONS.items()
                         if name in {schema["function"]["name"]
@@ -303,6 +298,8 @@ class OdooApplicationAdapter:
             answer_labels={"zh": ANSWER_LABELS_ZH},
             numeric_goal_binding=True)
         self._executor = executor
+        self.goal_data = OdooGoalData(executor)
+        self.goal_port = DataGoalPort(self.goal_data)
         self._click_policy: OdooReviewedClickPolicy | None = None
         # The form port recognizes bounded create pages. It declares the draft's
         # persistence semantics; save-on-leave edits require approval before input.
@@ -317,10 +314,9 @@ class OdooApplicationAdapter:
             reconciliation=_OdooMutationReconciler(executor, allow_mutations),
             data=data,
             forms=forms,
+            # Goal data reads go directly to RPC; no record-value cache survives a write.
+            operations=RegisteredOperations(operations, skills, lambda entities: None),
         )
-        #: The index and reads goal-directed turns resolve against; the core resolves.
-        self.goal_data = OdooGoalData(executor)
-        self.goal_port = DataGoalPort(self.goal_data)
         self.descriptor = ApplicationDescriptor(
             schema_version=APPLICATION_ADAPTER_VERSION,
             application_id=APPLICATION_ID,

@@ -166,50 +166,41 @@ names, arbitrary domains, OR/NOT expressions, caller-controlled ordering, groupi
 transient models, settings/users/messages/attachments, and unbounded fields are not accepted.
 Domain-specific typed tools remain preferable when their narrower business semantics apply.
 
-## Keeping Skills current
+## Skills and business workflows
 
-Two commands, and `verify` is the entry to both:
+The adapter ships four standard `SKILL.md` packages. Their Markdown bodies describe
+business meaning, queries, page navigation, handoffs and writes. Tool definitions remain
+independent; `agents/woa.toml` limits each package's proposed native operations without
+granting permission. Every write binds execute intent and one loaded supporting package
+before the existing exact approval, once-only RPC dispatch and same-actor readback chain.
+
+| Package | Business scope |
+| --- | --- |
+| `customer-maintenance` | Customer reads, creation, archive and edit or create-form handoff; current name ambiguity and automatic-save warnings |
+| `sales-processing` | Quotations and confirmed orders, current state queries, record navigation and quotation confirmation |
+| `order-billing` | Customer invoice reads and ordinary draft invoicing of an invoiceable order; no posting or sending |
+| `catalog-and-records` | Saleable products and actor-visible entity, field, record and page discovery outside dedicated collections |
+
+The existing application handlers remain responsible for duplicate and state checks,
+customer scope and verification. Invoicing retains the native wizard creation followed
+by `create_invoices`, with the regular method pinned. Form input retains its separate
+approval and automatic-save contract. A workflow is not an atomic multi-operation transaction.
+
+Source references live in `references/source-provenance.json` and load on demand.
+The source checker resolves their `src:` citations against the deployed map:
 
 ```bash
-python -m web_operation_agent_odoo.demo.skills verify  --source-root … --release …
-python -m web_operation_agent_odoo.demo.skills reissue --source-root … --release … \
-    --accept provenance          # add --apply to write
+python -m web_operation_agent_odoo.demo.skills verify --source-root … --release …
 ```
 
-`verify` resolves every `src:` citation in every packaged Skill against the compiled map.
-`reissue` takes the ones it judged red, recompiles their compiled facts, and keeps what a
-person wrote: `instructions`, `intent`, `tool_names` and `read_only` cross over untouched,
-and an `api:` citation — which names a published interface no source map can confirm — is
-carried verbatim rather than dropped or reinvented. It prints a field-by-field diff and
-writes nothing without `--apply`.
+The `draft` command produces source facts for manual review. A source compiler cannot
+write or refresh a complete business workflow automatically. Current runtime facts take
+precedence over these references. The published read-only `extra_skills` argument accepts
+standard packages and translates existing `BusinessSkill` objects as knowledge only;
+legacy routes and tool lists grant no capability.
 
-`--accept` names which compiled fields to take. It defaults to all three a compiler can
-derive, and `provenance` alone is the one that repairs citation rot without touching anything
-a person edited: these Skills' titles are hand-written and their trigger lists are bilingual,
-and neither the Chinese aliases nor the chosen phrasing appear in any Odoo descriptor.
-
-`reissue` needs to know which declared request each Skill was compiled from, and that is
-declared in `skill_sources.py` rather than recovered from the artifact. Recovering it would
-mean reading the subject out of the citations that are exactly what went wrong. A subject
-this release's map no longer contains fails loudly: when Odoo renames or removes an action, a
-person decides what the Skill is now about.
-
-What none of this fixes: when the workflow itself changes, the instructions are still written
-by a person. No retrieval scheme removes that, because what needs reviewing is judgement
-rather than fact.
-
-### Which Skills stay, and why (2026-09-23)
-
-Phase 8 asked whether deployed source removes the need for hand-written Skills. It does not remove these, and the verdict is per Skill rather than for the catalog as a whole. Tools are registered by the adapter independently of Skills; an eligible tool does not require a Skill to be loaded. Skills supply optional business guidance, never authority.
-
-| Skill | Verdict | Why |
-|---|---|---|
-| `customers-query`, `products-query`, `quotations-query`, `sale-orders-query`, `customer-invoices-query` | Keep | These explain the typed reads' business scope. The quotations one also carries organizational semantics no source states: this deployment counts only draft orders as quotations, and that is the one task the four-arm run's Skill arm won outright. |
-| `runtime-records-query` | Keep | The generic entity read for everything without a typed collection. Three tool schemas serve every entity, so this is what keeps the surface from growing with the application. |
-| `customers-draft`, `customers-edit` | Keep | Form preparation, read-only. They hand the person a filled form to save themselves. |
-| `customers-create`, `customers-archive`, `sale-orders-confirm`, `sale-orders-invoice` | Keep | These describe business procedures around registered writes. The tool contract, actor scope, precise proposal, fresh approval and readback authorize and verify each operation independently of Skill loading. Source can explain the operation but cannot authorize it. |
-
-Nothing here is removed on the strength of "source could derive it". A Skill can still provide organizational meaning, such as which records count and how a procedure should be explained. That knowledge is separate from the registered tool and its permissions.
+This adaptation was reviewed statically. Odoo tests, live qualification and model
+comparisons have not been run for it. It carries no new Odoo reliability claim.
 
 ## Tools
 
