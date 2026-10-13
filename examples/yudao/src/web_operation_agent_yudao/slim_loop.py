@@ -1314,6 +1314,11 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                    "response_kind": "free_text", "choices": []}
             elif status == "cannot":
                 s.terminal_reason = "agent_refused"
+            elif s.mutation_outcomes:
+                # Said outright, as the goal turn's Skill path says it: settlement names
+                # the verified writes ahead of the answer of any turn it is not told
+                # finished, which is for a turn that stopped part-way.
+                s.terminal_reason = "agent_finished"
             return answer or "已完成。"
         if not s.terminal_reason:
             s.terminal_reason, s.detail = "agent_refused", "the turn's model steps were used up"

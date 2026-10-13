@@ -394,6 +394,7 @@ class Budget:
 class State:
     def __init__(self, *replies):
         self.terminal_reason, self.detail, self.clarification = "", "", None
+        self.mutation_outcomes = []
         self.step, self.run_id, self.obs = 0, "run-1", observation()
         self.chat, self.ledger, self.budget = Script(*replies), Ledger(), Budget()
 
@@ -713,7 +714,9 @@ class WriteTurnTests(unittest.TestCase):
     def test_a_requested_change_is_loaded_proposed_approved_and_written_once(self):
         executor, state, text = self.loop(
             self.LOAD(), self.UPDATE(), reply(call("finish", status="done", answer="已把林舟的手机改为 13800000002")))
-        self.assertEqual((text, state.terminal_reason), ("已把林舟的手机改为 13800000002", ""))
+        # A turn that wrote and then finished says so itself; settlement prefixes the
+        # verified writes only to a turn it is not told finished.
+        self.assertEqual((text, state.terminal_reason), ("已把林舟的手机改为 13800000002", "agent_finished"))
         self.assertEqual([(method, path, body["mobile"]) for method, path, body in self.client.writes],
                          [("PUT", "crm/contact/update", "13800000002")])
         self.assertEqual(self.client.records[("crm/contact", 10)]["remark"], "保留备注")
