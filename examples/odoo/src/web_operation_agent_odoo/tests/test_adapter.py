@@ -366,18 +366,27 @@ class AdapterContract(unittest.TestCase):
         self.assertIn("generic_forms:prepare",
                       bound.ports.identity.required_scopes)
 
-    def test_registered_write_catalog_is_independent_of_odoo_skill_loading(self):
+    def test_registered_writes_require_skill_support_and_live_actor_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
                 allow_mutations=True, mutation_journal=MemoryMutationJournal())
         runtime = adapter.business_tools
         writer = {item["function"]["name"] for item in runtime.available_schemas(
-            allow_mutations=True, actor_scopes=("customers:write",))}
+            allow_mutations=True, actor_scopes=("customers:write",),
+            loaded_ids={"odoo.customer-maintenance"})}
         self.assertIn("create_customer", writer)
         self.assertNotIn("create_customer", {
             item["function"]["name"] for item in runtime.available_schemas(
-                allow_mutations=False, actor_scopes=("customers:write",))})
+                allow_mutations=False, actor_scopes=("customers:write",),
+                loaded_ids={"odoo.customer-maintenance"})})
+        self.assertNotIn("create_customer", {
+            item["function"]["name"] for item in runtime.available_schemas(
+                allow_mutations=True, actor_scopes=("customers:write",))})
+        self.assertNotIn("create_customer", {
+            item["function"]["name"] for item in runtime.available_schemas(
+                allow_mutations=True, actor_scopes=("customers:read",),
+                loaded_ids={"odoo.customer-maintenance"})})
 
     def test_a_mutation_adapter_satisfies_the_shared_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,7 +400,7 @@ class AdapterContract(unittest.TestCase):
         for scope in ("customers:write", "sale_orders:write", "invoices:write"):
             self.assertIn(scope, bound.ports.identity.required_scopes)
 
-    def test_customer_page_context_narrows_an_entityless_open_without_granting_a_write(self):
+    def test_page_context_offers_workflow_descriptions_without_granting_a_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
@@ -401,13 +410,14 @@ class AdapterContract(unittest.TestCase):
             "打开 azur", allow_mutations=True,
             trusted_entry_path="/odoo/customers")
 
-        self.assertTrue(selection.route_context_used)
+        self.assertFalse(selection.route_context_used)
         self.assertFalse(selection.fallback_used)
-        self.assertEqual(selection.candidate_ids,
-                         ("odoo.sales.customers-query",))
-        self.assertTrue(all(skill.read_only for skill in selection.skills))
+        self.assertIn("odoo.customer-maintenance", selection.candidate_ids)
+        self.assertNotIn("create_customer", {
+            item["function"]["name"] for item in adapter.business_tools.available_schemas(
+                allow_mutations=True)})
 
-    def test_real_product_scope_cannot_route_an_open_request_to_the_form_draft(self):
+    def test_product_does_not_autoload_workflows_or_expose_writes(self):
         """Exercise the shipped catalog through the product session's actual boundary."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -428,12 +438,11 @@ class AdapterContract(unittest.TestCase):
                 deterministic_read_navigation=True,
             )
 
-        self.assertEqual(session._task_business_skill_ids,
-                         {"odoo.sales.customers-query"})
-        self.assertEqual(session._auto_loaded_business_skill_ids,
-                         {"odoo.sales.customers-query"})
-        self.assertNotIn("odoo.sales.customers-draft",
-                         session._task_business_skill_ids)
+        self.assertIn("odoo.customer-maintenance", session._task_business_skill_ids)
+        self.assertEqual(session._auto_loaded_business_skill_ids, set())
+        self.assertEqual(session._requested_writes, frozenset(adapter.business_tools.mutation_tool_names))
+        self.assertNotIn("create_customer", {item["function"]["name"] for item in
+            adapter.business_tools.available_schemas(allow_mutations=True)})
 
     def test_real_product_opens_a_fuzzy_unique_customer_in_one_model_decision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -561,6 +570,8 @@ class AdapterContract(unittest.TestCase):
             }
             second_chat = _ProductRoutingChat([
                 ("query_customers", {"name_contains": "Azure Interior"}),
+                ("goto", {"url": "/odoo/customers/11"}),
+                ("finish", {"outcome": "acted"}),
             ])
             second_browser = _ProductRoutingBrowser()
             second = ServerAgentSession(
@@ -586,11 +597,11 @@ class AdapterContract(unittest.TestCase):
             "Azure Interior — azure@example.test — Paris",
         ])
         self.assertEqual(opened.terminal_reason, "agent_finished")
-        self.assertEqual(second_chat.calls, 1)
-        self.assertEqual(second_browser.actions, ["goto"])
+        self.assertEqual(second_chat.calls, 3)
+        self.assertEqual(second_browser.actions, ["observe", "goto"])
         self.assertEqual(second_browser.url, BASE + "/odoo/customers/11")
 
-    def test_customer_creation_selects_the_mutation_skill_without_route_context(self):
+    def test_customer_creation_offers_workflow_without_route_context(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
@@ -601,9 +612,9 @@ class AdapterContract(unittest.TestCase):
             allow_mutations=True, trusted_entry_path="/odoo/customers")
 
         self.assertFalse(selection.route_context_used)
-        self.assertIn("odoo.sales.customers-create", selection.candidate_ids)
+        self.assertIn("odoo.customer-maintenance", selection.candidate_ids)
 
-    def test_customer_creation_keeps_write_intent_with_a_malformed_email(self):
+    def test_malformed_customer_email_is_rejected_by_the_application(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
@@ -613,22 +624,18 @@ class AdapterContract(unittest.TestCase):
             "创建客户名称为abc,邮箱test@com", allow_mutations=True,
             trusted_entry_path="/odoo/customers")
 
-        self.assertEqual(selection.candidate_ids,
-                         ("odoo.sales.customers-create",))
+        self.assertIn("odoo.customer-maintenance", selection.candidate_ids)
         create_schema = next(
             schema for schema in adapter.business_tools.available_schemas(
-                allow_mutations=True)
+                allow_mutations=True, loaded_ids={"odoo.customer-maintenance"})
             if schema["function"]["name"] == "create_customer")
-        self.assertEqual(
-            create_schema["function"]["parameters"]["properties"]["email"]["format"],
-            "email")
+        self.assertNotIn("format", create_schema["function"]["parameters"]["properties"]["email"])
         with self.assertRaisesRegex(
                 BusinessToolRequestError, "complete address such as name@example.com"):
             OdooBusinessToolExecutor._normalize_customer(
                 {"name": "abc", "email": "test@com"})
 
-    def test_customer_edit_accepts_natural_object_before_verb_wording(self):
-        """Chinese commonly puts the field before 改成; that is still an edit request."""
+    def test_customer_edit_wording_offers_knowledge_without_lexical_write_routing(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
@@ -642,14 +649,14 @@ class AdapterContract(unittest.TestCase):
                 selection = adapter.business_tools.select(
                     task, allow_mutations=True,
                     trusted_entry_path="/odoo/customers/13")
-                self.assertIn("odoo.sales.customers-edit", selection.trigger_matches)
-                self.assertIn("odoo.sales.customers-edit", selection.candidate_ids)
+                self.assertEqual(selection.trigger_matches, ())
+                self.assertIn("odoo.customer-maintenance", selection.candidate_ids)
                 self.assertEqual(
                     adapter.business_tools.resolve_capability(
                         task, allow_mutations=True),
-                    (), "form preparation is not an authorized write tool")
+                    (), "descriptions do not provide lexical write routing")
 
-    def test_customer_archive_selects_the_typed_write_skill(self):
+    def test_customer_archive_wording_does_not_resolve_an_operation(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
@@ -659,13 +666,13 @@ class AdapterContract(unittest.TestCase):
                 "归档客户 P75 Harbor Lights", allow_mutations=True,
                 trusted_entry_path="/odoo/customers")
 
-            self.assertIn("odoo.sales.customers-archive", selection.candidate_ids)
+            self.assertIn("odoo.customer-maintenance", selection.candidate_ids)
             self.assertEqual(
                 adapter.business_tools.resolve_capability(
                     "归档客户 P75 Harbor Lights", allow_mutations=True),
-                ("archive_customer",))
+                (), "descriptions do not provide lexical write routing")
 
-    def test_customer_invoice_wording_selects_the_mutation_skill_directly(self):
+    def test_invoice_request_offers_billing_workflow_knowledge(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)),
@@ -675,11 +682,11 @@ class AdapterContract(unittest.TestCase):
             "为销售订单 S00001 创建客户发票。", allow_mutations=True,
             trusted_entry_path="/odoo/sales")
 
-        self.assertIn("odoo.sales.sale-orders-invoice", selection.trigger_matches)
-        self.assertIn("odoo.sales.sale-orders-invoice", selection.candidate_ids)
+        self.assertEqual(selection.trigger_matches, ())
+        self.assertIn("odoo.order-billing", selection.candidate_ids)
         invoice = next(
             skill for skill in selection.skills
-            if skill.skill_id == "odoo.sales.sale-orders-invoice")
+            if skill.skill_id == "odoo.order-billing")
         self.assertFalse(invoice.read_only)
 
     def test_mutations_require_an_explicit_journal(self):

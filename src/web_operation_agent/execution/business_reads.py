@@ -147,14 +147,17 @@ def execute_business_read(session, turn: "_Turn", call: dict, name: str, args: d
             # the one it names.
             identified = any(getattr(item, "looked_for", "")
                              for item in tool_result.evidence or ())
+            # Markdown workflow descriptions can include write knowledge even
+            # when this turn only asks to navigate.
             if (session.allow_clarification and session._navigation_only and identified
                     and projection.complete
                     and 1 < projection.matched_count
                     <= CLARIFICATION_CHOICE_LIMIT
                     and len(session._clarification_choices)
                     == projection.matched_count
-                    and all(skill.read_only
-                            for skill in session._task_business_skills)):
+                    and (session.business_tools.skill_registry is not None
+                         or all(skill.read_only
+                                for skill in session._task_business_skills))):
                 # The current typed read already proved both the ambiguity and
                 # the complete set of choices. Asking the model to copy those
                 # choices into ask_user adds latency and lets it omit or rename

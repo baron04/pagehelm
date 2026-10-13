@@ -274,9 +274,9 @@ class SkillRoutesOnOdoo(unittest.TestCase):
         # Only the exact reviewed pair resolves, not everything its module and name match.
         self.assertNotIn("5", policy.actions)
 
-    def test_an_unreviewed_action_route_refuses_the_composition(self):
-        with self.assertRaisesRegex(ValueError, "not reviewed read-only pages"):
-            self._adapter(["/odoo/action-999"]).click_policy()
+    def test_extra_skill_text_does_not_add_an_unreviewed_route(self):
+        policy = self._adapter(["/odoo/action-999"]).click_policy()
+        self.assertFalse(policy.destination_allowed("/odoo/action-999"))
 
 
 if __name__ == "__main__":

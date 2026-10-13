@@ -1,4 +1,3 @@
-/* global document */
 import {afterEach, expect, it} from 'vitest'
 import {readActiveView} from '../../testapps/contacts/assets/page_controller.js'
 

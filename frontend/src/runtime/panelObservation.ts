@@ -1,3 +1,5 @@
+import {soon} from './contain'
+
 /** Ignore only our panel's hit targets during the controller's synchronous DOM sample. */
 export function suspendPanelHitTargets(container: HTMLElement | undefined): () => void {
   if (!container?.isConnected) return () => {}
@@ -28,6 +30,6 @@ export function suspendPanelHitTargets(container: HTMLElement | undefined): () =
   }
   // A controller that yields or fails before afterUpdate cannot leave the panel
   // transparent to a later user event. The pinned extractor samples synchronously.
-  queueMicrotask(restore)
+  soon('restore panel hit targets', restore)
   return restore
 }

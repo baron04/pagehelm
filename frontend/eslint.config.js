@@ -12,8 +12,11 @@ export default [
     languageOptions: {globals: {process: 'readonly'}},
   },
   {
-    files: ['src/integrations/**/*.js'],
-    languageOptions: {globals: {window: 'readonly', document: 'readonly', URL: 'readonly'}},
+    files: ['src/integrations/**/*.js', 'tests/**/*.js'],
+    languageOptions: {globals: {window: 'readonly', document: 'readonly', URL: 'readonly',
+      location: 'readonly', crypto: 'readonly', TextEncoder: 'readonly',
+      HTMLElement: 'readonly', HTMLInputElement: 'readonly', HTMLLabelElement: 'readonly',
+      setTimeout: 'readonly'}},
   },
   {
     files: ['**/*.{ts,tsx}'],

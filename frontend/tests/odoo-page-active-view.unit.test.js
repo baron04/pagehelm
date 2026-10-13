@@ -1,4 +1,3 @@
-/* global document */
 import {afterEach, expect, it} from 'vitest'
 import {readActiveView} from '../../examples/odoo/deploy/addons/woa_runtime/static/src/page-active-view.js'
 

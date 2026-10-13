@@ -708,19 +708,21 @@ class GenericSkillRoutingTests(unittest.TestCase):
                                     "api_key": "x" * 40}))
         return path
 
-    def test_generic_is_a_fallback_but_does_not_displace_a_dedicated_skill(self):
+    def test_read_tools_remain_available_without_a_workflow_match(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url="http://127.0.0.1:8069",
                 api_key_path=self._key_file(Path(tmp)))
-        generic = adapter.business_tools.select(
-            "show inventory transfers", allow_mutations=False)
-        self.assertTrue(generic.fallback_used)
-        self.assertEqual(generic.candidate_ids[0], "odoo.runtime.records-query")
-
-        dedicated = adapter.business_tools.select("show products", allow_mutations=False)
-        self.assertFalse(dedicated.fallback_used)
-        self.assertEqual(dedicated.candidate_ids, ("odoo.sales.products-query",))
+        runtime = adapter.business_tools
+        for prompt in ("show inventory transfers", "show products"):
+            with self.subTest(prompt=prompt):
+                selection = runtime.select(prompt, allow_mutations=False)
+                self.assertIn("odoo.catalog-and-records", selection.candidate_ids)
+                self.assertEqual(selection.trigger_matches, ())
+        offered = {s["function"]["name"] for s in runtime.available_schemas(
+            allow_mutations=False)}
+        self.assertTrue({"query_products", "query_entity_records", "discover_entities"} <= offered)
+        self.assertNotIn("create_customer", offered)
 
     def test_runtime_refuses_missing_scope_before_odoo_rpc(self):
         with tempfile.TemporaryDirectory() as tmp:

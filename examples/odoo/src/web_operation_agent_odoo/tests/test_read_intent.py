@@ -19,49 +19,25 @@ from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.mutation import MemoryMutationJournal
 from web_operation_agent.execution.session import ServerAgentSession, TaskSpec
-from web_operation_agent_odoo.adapter import (_WRITE_SKILLS, OdooApplicationAdapter,
-                                              _packaged_skill)
+from web_operation_agent_odoo.adapter import OdooApplicationAdapter
 from web_operation_agent_odoo.tests.test_adapter import (
     BASE, ReadOnlyControl, _FakeOdoo, _key_file, _ProductRoutingBrowser, _ProductRoutingChat,
     _quotations)
 
 
 class EveryPartOfTheQuestionHasSomethingToReadIt(unittest.TestCase):
-    """A question about two things gets a Skill for each (P7.5 CR-33).
-
-    Triggers named entities only, so "Azure Interior 的电话是多少？它有哪些销售订单？" matched
-    the sales-order Skill and nothing else: a trigger did match, so the empty fallback never
-    ran, and the half about the phone had no tool that could read it -- for any account.
-    """
-
-    def _select(self, task: str):
+    def test_mixed_queries_keep_all_read_tools_available_before_skill_loading(self):
         with tempfile.TemporaryDirectory() as tmp:
             adapter = OdooApplicationAdapter(
                 base_url=BASE, api_key_path=_key_file(Path(tmp)))
-            return adapter.business_tools.select(task, allow_mutations=False)
-
-    def _candidates(self, task: str) -> set[str]:
-        return set(self._select(task).candidate_ids)
-
-    def test_a_two_part_question_offers_a_read_for_each_part(self):
-        self.assertEqual(
-            self._candidates("Azure Interior 的电话是多少？它有哪些销售订单？"),
-            {"odoo.sales.sale-orders-query", "odoo.sales.customers-query"})
-
-    def test_a_customer_field_names_the_customer_read_without_the_fallback(self):
-        """Matched by its own trigger, not by the empty fallback.
-
-        These questions reach the customer read either way today, because nothing else
-        matches them and the fallback then offers every read-only Skill. That stops being
-        true as soon as another Skill's trigger appears in the same sentence, which is
-        exactly the two-part case above.
-        """
-        for task in ("Azure Interior 的电话是多少？", "这家公司的邮箱是什么？",
-                     "Acme 的税号是多少？", "What is Acme's phone number?"):
-            with self.subTest(task=task):
-                selection = self._select(task)
-                self.assertIn("odoo.sales.customers-query", selection.trigger_matches)
-                self.assertFalse(selection.fallback_used)
+        runtime = adapter.business_tools
+        selection = runtime.select("Azure Interior 的电话是多少？它有哪些销售订单？",
+                                   allow_mutations=False)
+        self.assertIn("odoo.customer-maintenance", selection.candidate_ids)
+        self.assertIn("odoo.sales-processing", selection.candidate_ids)
+        offered = {s["function"]["name"] for s in runtime.available_schemas(allow_mutations=False)}
+        self.assertTrue({"query_customers", "query_sale_orders"} <= offered)
+        self.assertNotIn("confirm_quotation", offered)
 
 
 class AStateIsNotARequest(unittest.TestCase):
@@ -78,14 +54,8 @@ class AStateIsNotARequest(unittest.TestCase):
             with self.subTest(task=task):
                 self.assertFalse(trigger_requests_action("确认报价单", task))
 
-    def test_every_shipped_write_trigger_reads_a_state_as_a_state(self):
-        """Every Han trigger of every write Skill the Odoo distribution ships, not just the
-        one the dry run happened to ask about: "未开票的订单" is not a request to invoice."""
-        triggers = [trigger for name in _WRITE_SKILLS
-                    for trigger in _packaged_skill(name).triggers
-                    if any("\u4e00" <= character <= "\u9fff" for character in trigger)]
-        self.assertTrue(triggers)
-        for trigger in triggers:
+    def test_action_words_in_a_record_state_are_not_imperatives(self):
+        for trigger in ("确认报价单", "创建客户", "归档客户", "开票"):
             with self.subTest(trigger=trigger):
                 for task in (f"未{trigger}的记录有哪些？", f"没有{trigger}的记录有几条？",
                              f"待{trigger}的记录有哪些？"):
@@ -118,7 +88,7 @@ class TheUnconfirmedQuotationsQuestionIsAnswered(unittest.TestCase):
                 issued_at=now - 1_000, expires_at=now + 300_000,
                 scopes=tuple(sorted(adapter.ports.identity.required_scopes)))
             chat = _ProductRoutingChat([
-                ("load_skill", {"skill_id": "odoo.sales.sale-orders-confirm"}),
+                ("load_skill", {"skill_id": "odoo.sales-processing"}),
                 ("query_quotations", {"limit": 50}),
                 ("finish", {"outcome": "answered", "answer": {
                     "version": 1, "coverage": "complete", "presentation": "table",
@@ -155,39 +125,24 @@ class TheUnconfirmedQuotationsQuestionIsAnswered(unittest.TestCase):
             self.assertEqual(browser.actions, ["observe"])
 
 
+class ReadOnlyDeploymentWithholdsRegisteredWrites(unittest.TestCase):
+    def test_loading_workflow_knowledge_does_not_install_or_authorize_a_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reader = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp))).business_tools
+            writer = OdooApplicationAdapter(
+                base_url=BASE, api_key_path=_key_file(Path(tmp)), allow_mutations=True,
+                mutation_journal=MemoryMutationJournal()).business_tools
+        loaded = {"odoo.customer-maintenance"}
+        self.assertEqual(reader.mutation_tool_names, frozenset())
+        self.assertNotIn("create_customer", {s["function"]["name"] for s in
+            reader.available_schemas(allow_mutations=True, loaded_ids=loaded)})
+        self.assertNotIn("create_customer", {s["function"]["name"] for s in
+            writer.available_schemas(allow_mutations=False, loaded_ids=loaded)})
+        self.assertIn("create_customer", {s["function"]["name"] for s in
+            writer.available_schemas(allow_mutations=True, loaded_ids=loaded,
+                                     actor_scopes=("customers:write",))})
+
+
 if __name__ == "__main__":
     unittest.main()
-
-
-class AReaderHearsWhichKindOfNoItIs(unittest.TestCase):
-    """The catalog a reader can run omits the write Skills, and a refusal must not read as
-    "this deployment cannot" when the truth is "you were not granted it" (P7.5 CR-37).
-
-    The adapter builds its catalog per grant, so for a reader the create Skill is not in it
-    at all -- the capability search that decides the sentence would have found nothing to
-    withhold, and every refusal would have blamed the deployment.
-    """
-
-    def _runtime(self, *, allow_mutations: bool):
-        with tempfile.TemporaryDirectory() as tmp:
-            adapter = OdooApplicationAdapter(
-                base_url=BASE, api_key_path=_key_file(Path(tmp)),
-                allow_mutations=allow_mutations,
-                mutation_journal=MemoryMutationJournal() if allow_mutations else None)
-            return adapter.business_tools
-
-    def test_a_reader_asking_to_create_is_told_it_is_their_permission(self):
-        runtime = self._runtime(allow_mutations=False)
-        self.assertEqual(runtime.resolve_capability("创建客户 Ivydell Works", allow_mutations=False), ())
-        self.assertEqual(runtime.withheld_capability("创建客户 Ivydell Works"),
-                         ("create_customer",))
-
-    def test_a_capability_nobody_installed_is_withheld_by_nobody(self):
-        runtime = self._runtime(allow_mutations=False)
-        self.assertEqual(runtime.withheld_capability("删除客户 Ivydell Works"), ())
-
-    def test_a_writer_withholds_nothing(self):
-        runtime = self._runtime(allow_mutations=True)
-        self.assertEqual(runtime.withheld_capability("创建客户 Ivydell Works"), ())
-        self.assertEqual(runtime.resolve_capability("创建客户 Ivydell Works", allow_mutations=True),
-                         ("create_customer",))

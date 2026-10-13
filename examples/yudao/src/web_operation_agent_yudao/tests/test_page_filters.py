@@ -11,11 +11,11 @@ from web_operation_agent.goal.ports import PagePlan
 from web_operation_agent.goal.spec import Filter
 from web_operation_agent.schemas import ElementRef
 from web_operation_agent_yudao.page_filters import NativePageFilterReview,NativePageFilters
-from web_operation_agent_yudao.tests.test_form_entries import EntryTests
+from web_operation_agent_yudao.tests import test_form_entries as entries_fixture
 
 
 class NativePageFilterTests(unittest.TestCase):
-    setUp=EntryTests.setUp
+    setUp=entries_fixture.EntryTests.setUp
     def query(self):
         component='ui/src/views/erp/sale/order/index.vue';api='ui/src/api/erp/sale/order/index.ts'
         source='<template><el-form :model="queryParams"><el-form-item label="订单时间" prop="orderTime">' \

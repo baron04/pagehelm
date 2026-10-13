@@ -57,9 +57,8 @@ def _answer(prompt: str, script: list, rows=QUOTATIONS) -> tuple:
         return result, [json.loads(line) for line in ledger.read_text().splitlines()]
 
 
-#: The Skill the session offers for these questions: "未确认报价单" selects the confirm Skill,
-#: whose read tool the model uses, as in the dry run (see test_read_intent).
-_LIST = [("load_skill", {"skill_id": "odoo.sales.sale-orders-confirm"}),
+# The model loads sales workflow knowledge before querying open quotations.
+_LIST = [("load_skill", {"skill_id": "odoo.sales-processing"}),
          ("query_quotations", {"limit": 50}),
          ("finish", {"outcome": "answered", "answer": {
              "version": 1, "coverage": "complete", "presentation": "table",
@@ -95,13 +94,13 @@ class AChineseAnswerSpeaksChinese(unittest.TestCase):
 
     def test_an_english_question_keeps_the_applications_own_words(self):
         result, _ = _answer("Which quotations are open?",
-                            [("load_skill", {"skill_id": "odoo.sales.quotations-query"}),
+                            [("load_skill", {"skill_id": "odoo.sales-processing"}),
                              *_LIST[1:]])
-        self.assertIn("| name | amount\\_total | state |", result.agent_said)
+        self.assertIn("| name | total including taxes | state |", result.agent_said)
         self.assertIn("open quotations, neither confirmed nor cancelled", result.agent_said)
 
     def test_a_filtered_total_names_its_filter_and_hides_the_query(self):
-        script = [("load_skill", {"skill_id": "odoo.sales.sale-orders-confirm"}),
+        script = [("load_skill", {"skill_id": "odoo.sales-processing"}),
                   ("query_quotations", {"limit": 50, "answer_goals": [
                       {"target_read_tool": "query_quotations", "measures": ["sum"]}]}),
                   ("compute", {"operation": "filter", "dataset_ref": "call2-query#1",

@@ -1,4 +1,3 @@
-/* global document */
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {applyPageFacet, readFacetCandidates, readPageFacets}
   from '../../examples/odoo/deploy/addons/woa_runtime/static/src/page-facets.js'
