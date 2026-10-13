@@ -16,7 +16,7 @@ export default [
     languageOptions: {globals: {window: 'readonly', document: 'readonly', URL: 'readonly',
       location: 'readonly', crypto: 'readonly', TextEncoder: 'readonly',
       HTMLElement: 'readonly', HTMLInputElement: 'readonly', HTMLLabelElement: 'readonly',
-      setTimeout: 'readonly'}},
+      HTMLTableCellElement: 'readonly', setTimeout: 'readonly'}},
   },
   {
     files: ['**/*.{ts,tsx}'],
