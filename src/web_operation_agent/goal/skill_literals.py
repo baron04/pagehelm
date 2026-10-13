@@ -44,6 +44,26 @@ def user_texts(request, conversation=None):
         if isinstance(item, dict))) if isinstance(conversation, dict) else (request,)
 
 
+def require_literal_inputs(inputs, definition, texts):
+    """Every plain literal input is complete text the person supplied, found by the server.
+
+    For a proposer that writes the installed inputs directly, without the planning source
+    envelope. The person's own messages are the only anchor; an empty string remains an
+    explicit clearing and missing fields are left to the installed schema.
+    """
+    for path in definition.literal_inputs:
+        target = inputs
+        keys = path.split(".")
+        for key in keys[:-1]:
+            target = target.get(key) if isinstance(target, dict) else None
+        if not isinstance(target, dict) or keys[-1] not in target:
+            continue
+        value = target[keys[-1]]
+        if isinstance(value, str) and value and not literal_supplied(value, texts):
+            raise BusinessToolRequestError(
+                f"input.{path} must copy a value supplied by the person in full, preserving case")
+
+
 def bind_input_sources(inputs, definition, texts):
     """Resolve literal source references before validating the installed inputs.
 

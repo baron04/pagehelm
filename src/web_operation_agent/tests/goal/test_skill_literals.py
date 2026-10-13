@@ -6,7 +6,8 @@ import unittest
 from web_operation_agent.business.errors import BusinessToolRequestError
 from web_operation_agent.business.tools.contracts import ToolOperation
 from web_operation_agent.business.tools.registry import ToolDefinition
-from web_operation_agent.goal.skill_literals import bind_input_sources, user_texts
+from web_operation_agent.goal.skill_literals import (bind_input_sources, require_literal_inputs,
+                                                      user_texts)
 
 
 class LiteralBindingTests(unittest.TestCase):
@@ -41,6 +42,20 @@ class LiteralBindingTests(unittest.TestCase):
                 self.bind({"source": 0, "text": name}, 'Create SyntheticCedarResearch with cedar@example.test.')
         self.assertEqual(self.bind({"source": 0, "text": "SyntheticCedarResearch"},
             'Create SyntheticCedarResearch with cedar@example.test.')["name"], "SyntheticCedarResearch")
+
+    def test_plain_literal_inputs_are_found_in_the_person_s_own_messages(self):
+        definition = self.definition()
+        texts = ("Name it Original Cedar Research.", "Create it with cedar@example.test.")
+        require_literal_inputs({"name": "Original Cedar Research", "email": "cedar@example.test"},
+                               definition, texts)
+        # An explicit clearing and a field the proposal leaves out are the schema's to judge.
+        require_literal_inputs({"name": ""}, definition, texts)
+        for name in ("Invented Cedar", "original cedar research", "Cedar Resear"):
+            with self.subTest(name=name), self.assertRaises(BusinessToolRequestError):
+                require_literal_inputs({"name": name, "email": "cedar@example.test"}, definition, texts)
+        with self.assertRaises(BusinessToolRequestError):
+            require_literal_inputs({"name": "Original Cedar Research", "email": "cedar@example.test"},
+                                   definition, ("Create it.",))
 
     def test_malformed_or_missing_source_identity_never_binds(self):
         for source in ("合成杉木研究中心", {}, {"source": 0}, {"source": True, "text": "合成杉木研究中心"},
