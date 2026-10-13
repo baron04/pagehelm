@@ -775,7 +775,7 @@ describe('applied query facets for target settlement', () => {
 
 describe('the application opens its own page through its router, in this document', () => {
   /** A router and a tab store as the application has them, over an address that is only a value. */
-  function application({redirect = true, tabs = true, refuses = false, arrives = true, over = [] as object[]} = {}) {
+  function application({redirect = true, tabs = true, refuses = false, arrives = true, over = [] as readonly object[]} = {}) {
     const calls: string[] = []
     const location = {href: 'https://synthetic.test/crm/customer', origin: 'https://synthetic.test',
       pathname: '/crm/customer', search: '', hash: ''}
