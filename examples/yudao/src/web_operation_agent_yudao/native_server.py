@@ -544,12 +544,18 @@ class YudaoHost:
 
     @staticmethod
     def _warm_index(app: YudaoApplication, knowledge=None) -> None:
-        """Read ahead what the actor's turns will ask for: the menu and API description a
-        slim turn searches, which its first request needs, then the application index.
-        Each is built under its own lock, so a turn that arrives meanwhile waits for this
-        build instead of starting another. One that fails here is not kept: the turn that
-        needs it builds it again and says what went wrong."""
-        for build in (getattr(knowledge, "_load", None), app.goal_port.index):
+        """Read ahead what the actor's turns will ask for. For a goal turn, the application
+        index. For a slim turn, the menu and API description it searches, which its first
+        request needs, then the outline of the index its lookups by name read: a slim turn
+        reads no line table, so the detail reads that find them (most of what an index
+        costs) are left for whatever turn first needs them, rather than sent while the
+        person's own first lookups are. Each is built under its own lock, so a turn that
+        arrives meanwhile waits for this build instead of starting another. One that fails
+        here is not kept: the turn that needs it builds it again and says what went wrong."""
+        index = app.goal_port.index
+        if knowledge is not None:
+            index = getattr(app.goal_port, "outline_index", index)
+        for build in (getattr(knowledge, "_load", None), index):
             try:
                 if build is not None:
                     build()

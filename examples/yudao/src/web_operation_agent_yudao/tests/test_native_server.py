@@ -385,17 +385,21 @@ class NativeHostTests(unittest.TestCase):
             self.assertIsNone(read[0])
             host.bootstrap("synthetic-a", "1", "another page")     # the same session: not built again
             self.assertEqual(len(built), 1)
-        # What a slim turn searches is read first, then the index; one that fails ahead of
-        # time is not an error of the session and does not keep the other from being built.
+        # What a slim turn searches is read first, then the outline its lookups read, not
+        # the whole index; one that fails ahead of time is not an error of the session and
+        # does not keep the other from being built.
         calls = []
         away = lambda: (_ for _ in ()).throw(OSError("the application is away"))  # noqa: E731
-        index = SimpleNamespace(goal_port=SimpleNamespace(index=lambda: calls.append("index")))
+        index = SimpleNamespace(goal_port=SimpleNamespace(index=lambda: calls.append("index"),
+                                                          outline_index=lambda: calls.append("outline")))
         YudaoHost._warm_index(index)
         YudaoHost._warm_index(index, SimpleNamespace(_load=lambda: calls.append("menu")))
         YudaoHost._warm_index(index, SimpleNamespace(_load=away))
-        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(index=away)),
+        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(index=away, outline_index=away)),
                               SimpleNamespace(_load=lambda: calls.append("menu")))
-        self.assertEqual(calls, ["index", "menu", "index", "index", "menu"])
+        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(index=lambda: calls.append("index"))),
+                              SimpleNamespace(_load=lambda: calls.append("menu")))     # a port without an outline
+        self.assertEqual(calls, ["index", "menu", "outline", "outline", "menu", "menu", "index"])
         with self.assertRaises(ValueError):
             replace(self.config, warm_index=None)
         self.chat.return_value.complete.assert_not_called()
