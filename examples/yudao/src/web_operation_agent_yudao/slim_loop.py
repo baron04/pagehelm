@@ -745,6 +745,21 @@ def _lines(observation) -> dict[int, dict[str, str]]:
     return rows
 
 
+_NEW_SINCE_LAST_LOOK = re.compile(r"(?m)^(\s*)\*(?=\[\d+\])")
+
+
+def _shown(observation) -> str:
+    """What a look at the page showed, whenever it was taken. An observation's own digest
+    also covers its epoch and each element's, new at every look, and the controller stars
+    in its text what was not there at its last look: the same page a look later has none."""
+    seen = observation.to_json()
+    seen.pop("epoch", None)
+    for element in seen.get("elements") or ():
+        element.pop("epoch", None)
+    seen["content"] = _NEW_SINCE_LAST_LOOK.sub(r"\1", seen.get("content") or "")
+    return json.dumps(seen, sort_keys=True, ensure_ascii=False)
+
+
 def page_text(observation, *, handoffs, marked: str = "") -> str:
     """The page as the loop's model reads it; what it may act on is marked [n]."""
     head = [f"当前页面: {urlsplit(observation.url).path}  {observation.title}"]
@@ -1337,9 +1352,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 acts = name in ("click", "input", "select", "scroll", "fill_fields")
                 target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
                           and isinstance(args.get("index"), int) else None)
-                where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), s.obs.content_digest)
+                where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), _shown(s.obs))
                 if acts and where in turn["done"]:
-                    # The same step from the same page: it led nowhere the first time.
+                    # The same step from a page that shows the same: it led nowhere the first time.
                     turn["stalled"] += 1
                     if turn["stalled"] > 3:
                         s.terminal_reason, s.detail = "agent_refused", "the same page step was repeated without effect"

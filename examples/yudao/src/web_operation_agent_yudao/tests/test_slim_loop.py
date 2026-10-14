@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
@@ -26,8 +27,8 @@ from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
 from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor,
-                                                 _commits, _fields, _lines, _page_lines, _scroll_anchor, _today,
-                                                 conventions_text, page_text, system_text)
+                                                 _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
+                                                 _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.tests import test_native_writes as native
 from web_operation_agent_yudao.writes import native_tools
 
@@ -59,14 +60,16 @@ CONTENT = "\n".join([
 ])
 
 
-def observation(**kw) -> PageObservation:
+def observation(epoch: int = 1, customer: str = "Acme", **kw) -> PageObservation:
+    """One look at the synthetic page. A live page is given a new epoch at every look, and
+    every element of that look carries it."""
     elements = [element(0, "link", "Synthetic", "a", href="/"), element(1, "div", "Sales\nOrders"),
                 *[element(n, "menuitem", "m", "li") for n in range(2, 7)],
                 element(7, "div", "Orders"), element(8, "div", ""),
-                element(9, "combobox", "Customer", "input", field_label="Customer", value="Acme"),
+                element(9, "combobox", "Customer", "input", field_label="Customer", value=customer),
                 element(10, "button", "Search", "button"), element(11, "button", "Details", "button")]
-    return PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], elements,
-                           content=CONTENT, **kw)
+    return PageObservation(1, epoch, "https://synthetic.test/orders", "Orders", [],
+                           [replace(item, epoch=epoch) for item in elements], **{"content": CONTENT, **kw})
 
 
 class PageTextTests(unittest.TestCase):
@@ -167,6 +170,20 @@ class PageTextTests(unittest.TestCase):
     def test_a_region_is_scrolled_from_an_element_inside_it(self):
         self.assertEqual(_scroll_anchor(observation(), "7"), "8")    # the runtime moves what is around its anchor
         self.assertEqual(_scroll_anchor(observation(), "10"), "10")  # an ordinary element anchors itself
+
+    def test_what_a_look_showed_is_the_same_at_any_epoch_and_differs_when_the_page_does(self):
+        first, again = observation(epoch=1), observation(epoch=2)
+        self.assertNotEqual(first.content_digest, again.content_digest)   # the digest covers the epoch
+        self.assertEqual(_shown(first), _shown(again))
+        self.assertNotIn('"epoch"', _shown(again))
+        self.assertNotEqual(_shown(first), _shown(observation(epoch=2, customer="Beta")))
+        self.assertNotEqual(_shown(first), _shown(observation(epoch=2, messages=["已保存"])))
+        self.assertEqual(again.to_json()["elements"][0]["epoch"], 2)      # and reading it changed nothing
+        # The controller stars what is new since its last look; a look later the same page has none.
+        starred = observation(epoch=3, content=CONTENT.replace("\t[10]<button", "\t*[10]<button"))
+        self.assertIn("*[10]", starred.content)
+        self.assertEqual(_shown(starred), _shown(first))
+        self.assertNotEqual(_shown(first), _shown(observation(content=CONTENT.replace("Order 1", "Order *[1]"))))
 
     def test_fields_are_read_by_their_labels(self):
         self.assertEqual(_fields(observation()), {"Customer": "Acme"})
@@ -494,14 +511,24 @@ class State:
 
 
 class LoopTests(unittest.TestCase):
-    def loop(self, *replies, steps: int = 6, tool=None, problems=()):
+    def loop(self, *replies, steps: int = 6, tool=None, problems=(), page=()):
+        """`page` is what each step on the page in turn changes of it; a step past the
+        end of it leaves the page as it was."""
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         executor.model_steps, executor.verify = steps, True
         executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
         self.ran, self.checked = [], []
-        executor._tool = tool or (lambda s, name, args, turn: (self.ran.append(name) or "ok", False))
-        pending = list(problems)
+
+        def ran(s, name, args, turn):
+            # The page is looked at again after a step on it, and a look at a live page has a
+            # new epoch whether or not the page changed.
+            self.ran.append(name)
+            if name in ("click", "input", "select", "scroll", "fill_fields"):
+                s.obs = observation(epoch=s.obs.epoch + 1, **(changes.pop(0) if changes else {}))
+            return "ok", False
+        executor._tool = tool or ran
+        pending, changes = list(problems), list(page)
 
         def verify(s, prompt, answer, turn):
             self.checked.append(answer)
@@ -570,13 +597,32 @@ class LoopTests(unittest.TestCase):
             reply(call("click", index=10)), reply(call("click", index=10)),
             reply(call("finish", status="cannot", answer="做不到")))
         self.assertEqual(self.ran, ["click"])
+        self.assertEqual(state.obs.epoch, 2)    # looked at again since, and it showed the same
         self.assertTrue(any(m["role"] == "tool" and "没有带来进展" in m["content"] for m in executor._messages))
         self.assertEqual(state.terminal_reason, "agent_refused")
+
+    def test_a_step_repeated_from_a_page_that_changed_is_run_again(self):
+        executor, state, _text = self.loop(
+            reply(call("click", index=10)), reply(call("click", index=10)), reply(call("click", index=10)),
+            reply(call("finish", status="cannot", answer="做不到")),
+            page=[{"customer": "Beta"}, {"customer": "Acme"}])
+        # The second is from another page; the third is from the first one again.
+        self.assertEqual(self.ran, ["click", "click"])
+        self.assertEqual(sum("没有带来进展" in m["content"] for m in executor._messages if m["role"] == "tool"), 1)
+        self.assertEqual(state.detail, "")
+
+    def test_a_step_repeated_with_other_arguments_is_another_step(self):
+        self.loop(reply(call("input", index=9, text="Beta")), reply(call("input", index=9, text="Delta")),
+                  reply(call("scroll", down=True)), reply(call("scroll", down=False)),
+                  reply(call("finish", status="cannot", answer="做不到")), steps=8)
+        self.assertEqual(self.ran, ["input", "input", "scroll", "scroll"])
 
     def test_a_turn_that_keeps_repeating_one_step_ends(self):
         _executor, state, text = self.loop(*[reply(call("click", index=10)) for _ in range(5)], steps=10)
         self.assertEqual(self.ran, ["click"])
-        self.assertEqual(state.terminal_reason, "agent_refused")
+        self.assertEqual(state.obs.epoch, 2)
+        self.assertEqual((state.terminal_reason, state.detail),
+                         ("agent_refused", "the same page step was repeated without effect"))
         self.assertIn("重复", text)
 
     def test_the_trace_names_the_control_a_step_was_on(self):
