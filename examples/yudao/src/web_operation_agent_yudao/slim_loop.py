@@ -1013,9 +1013,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
             command = {"direction": "down" if args.get("down", True) else "up", "pages": 1}
             if args.get("index") is not None:
                 command["ref"] = "e" + _scroll_anchor(s.obs, element.ref[1:])
-            before = s.obs.content_digest
+            before = _shown(s.obs)
             failed = self._act(s, "scroll", command)
-            if not failed and s.obs.content_digest == before:
+            if not failed and _shown(s.obs) == before:
                 return "滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。", True
             return failed or "已滚动。", True
         if name == "highlight":
@@ -1388,9 +1388,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 acts = name in ("click", "input", "select", "scroll", "fill_fields")
                 target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
                           and isinstance(args.get("index"), int) else None)
-                where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), s.obs.content_digest)
+                where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), _shown(s.obs))
                 if acts and where in turn["done"]:
-                    # The same step from the same page: it led nowhere the first time.
+                    # The same step from a page that shows the same: it led nowhere the first time.
                     turn["stalled"] += 1
                     if turn["stalled"] > 3:
                         s.terminal_reason, s.detail = "agent_refused", "the same page step was repeated without effect"
