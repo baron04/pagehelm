@@ -766,4 +766,3 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         s.terminal_reason, s.detail = (outcome.reason or 'agent_refused', error[:200])
         turn['final'] = {'approval_denied': '你没有批准这项修改，没有执行。', 'approval_expired': '批准卡片已过期，这项修改没有执行。', 'user_cancelled': '操作已停止，这项修改没有执行。', 'permission_denied': '当前账号没有执行这项操作的权限，没有执行。', 'indeterminate_write': '这项修改已经发出，但结果没有得到确认：可能已经生效，也可能没有。已停止后续操作，不会重发；请到应用里核对这条记录后再决定。', 'business_mutation_refused': '批准之后、执行之前，应用里的相关记录或选项发生了变化，这项修改没有执行。请重新发起。', 'business_mutation_blocked': '同一项修改还有一次结果未确认的记录，这次没有执行。请先核对上一次的结果。'}.get(s.terminal_reason, '这项修改没有执行。')
         return result(turn['final'])
-
