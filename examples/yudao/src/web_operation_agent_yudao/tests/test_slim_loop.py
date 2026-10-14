@@ -318,6 +318,34 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("export", found)
         self.assertNotIn("create", found)
 
+    def test_parameter_correction_names_required_fields_and_never_supplied_values(self):
+        from copy import deepcopy
+        from web_operation_agent_yudao.slim_loop import QueryParametersError
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/orders/page"]["get"]["parameters"].append(
+            {"name": "pool", "in": "query", "required": True, "schema": {"type": "boolean"}})
+        know = ActorKnowledge(self.client, docs)
+        with self.assertRaisesRegex(QueryParametersError, "missing: pool"):
+            know.call_api("orders/page", {"pageNo": 1})
+        for values in ({"pageNo": 1, "pool": "private-input"},
+                       {"pageNo": 1, "pool": False, "private-key": "private-input"}):
+            with self.assertRaises(QueryParametersError) as caught:
+                know.call_api("orders/page", values)
+            self.assertNotIn("private-input", str(caught.exception))
+            self.assertNotIn("private-key", str(caught.exception))
+        self.assertFalse(any(path == "orders/page" for path, _ in self.client.calls))
+
+    def test_typed_permission_and_operational_refusals_reach_the_shared_loop(self):
+        from unittest.mock import patch
+        for flags in ({"permission_denied": True}, {"read_failed": True}):
+            with self.subTest(flags=flags):
+                self.know._load()
+                error = DataRefused("private application text", **flags)
+                with patch.object(self.client, "get", side_effect=error):
+                    with self.assertRaises(DataRefused) as caught:
+                        self.know.call_api("orders/page", {"pageNo": 1})
+                self.assertIs(error, caught.exception)
+
     def test_a_read_returns_its_total_its_rows_and_what_the_fields_mean(self):
         text = self.know.call_api("/admin-api/orders/page", {"pageNo": 1})
         self.assertEqual(text.splitlines(), [
@@ -1413,7 +1441,8 @@ class FindRecordTests(unittest.TestCase):
         self.assertIn("可能不存在", told)
 
     def test_a_refused_read_is_told_and_an_empty_name_is_not_looked_up(self):
-        self.assertIn("查找失败", self.find(self.Port(refuse=True), "晨岚机电"))
+        with self.assertRaises(DataRefused):
+            self.find(self.Port(refuse=True), "晨岚机电")
         port = self.Port()
         self.assertIn("请给出", self.find(port, ""))
         self.assertEqual(port.asked, [])

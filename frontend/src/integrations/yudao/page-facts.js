@@ -690,7 +690,14 @@ export function readElementPageControl(element) {
     const itemRoot = element.closest('.el-form-item')
     const item = itemRoot && pageComponentForRoot(itemRoot, 'ElFormItem')
     const field = item?.instance.props?.prop
-    return {kind: 'query', ...(typeof field === 'string' ? {field} : {})}
+    const value = typeof field === 'string' ? model[field] : undefined
+    // Only an actor-rendered select's scalar native ID/code. Text and other
+    // component state stay in the browser; this binds later applied-query proof.
+    const choice = element.closest('.el-select') &&
+      (typeof value === 'boolean' || Number.isSafeInteger(value) && value >= 0 ||
+        typeof value === 'string' && /^(?:[0-9]{1,20}|true|false)$/.test(value))
+    return {kind: 'query', ...(typeof field === 'string' ? {field} : {}),
+      ...(choice ? {queryValue: String(value)} : {})}
   }
   const root = element.closest('.el-pagination')
   // The rows-per-page choice of the same pagination: its own select, nothing else in it.

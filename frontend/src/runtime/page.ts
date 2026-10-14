@@ -711,7 +711,7 @@ export class Page {
         const element = this.element(item.ref)
         if (!(element instanceof HTMLElement) || !element.isConnected) continue
         const fact = this.readElementPageControl?.(element) as
-          {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown} | undefined
+          {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown; queryValue?: unknown} | undefined
         if (fact?.kind === 'pagination' && Number.isSafeInteger(fact.page) &&
             Number(fact.page) > 0 && Number.isSafeInteger(fact.pageSize) && Number(fact.pageSize) > 0) {
           item.attrs.page_control = 'pagination'
@@ -725,7 +725,12 @@ export class Page {
           item.attrs.page_control = 'query'
           if (typeof fact.field === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(fact.field) &&
               fact.field.length <= browserContract.observation.max_query_key_chars &&
-              !this.redactor.isSensitiveName(fact.field)) item.attrs.query_field = fact.field
+              !this.redactor.isSensitiveName(fact.field)) {
+            item.attrs.query_field = fact.field
+            if (typeof fact.queryValue === 'string' && /^(?:[0-9]{1,20}|true|false)$/.test(fact.queryValue) &&
+                this.redactor.redactString(fact.queryValue) === fact.queryValue &&
+                !isSensitiveFormControl(element, this.redactor)) item.attrs.query_value = fact.queryValue
+          }
         }
       } catch { /* An unavailable application fact grants no control. */ }
     }

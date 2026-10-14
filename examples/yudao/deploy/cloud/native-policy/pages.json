@@ -406,7 +406,10 @@
       "route": "/hrm/employee/list",
       "evidence": "v2026.09-page-handlers.md#hrm-employee",
       "sha256": "d38a9e358c48e2af1bdd23d0b26c773bfb769bb2f770aa5a5b7a55af431077f1",
-      "controls": []
+      "controls": [
+        "展开",
+        "收起"
+      ]
     },
     {
       "kind": "paging",
@@ -737,6 +740,13 @@
       "controls": [
         "+ 添加入库产品"
       ]
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/business",
+      "evidence": "v2026.09-page-handlers.md#crm-business",
+      "sha256": "211e7bbff748510d65728652aaed39bb916cb12331513de31ffe9fb8beda4624",
+      "controls": []
     }
   ]
 }

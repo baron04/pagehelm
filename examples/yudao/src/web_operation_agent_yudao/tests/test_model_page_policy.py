@@ -77,6 +77,61 @@ class QueryTests(unittest.TestCase):
         with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
             self.transact(before, replace(after, page_read={**proof, "query_fields": {}}), "click", {"ref": "e2"})
 
+    def test_live_query_choice_binds_label_native_code_and_applied_read_without_source(self):
+        attrs = {"page_control":"query", "query_field":"productId", "form_scope":"form:query",
+                 "form_instance":"live", "field_label":"Product", "aria-haspopup":"listbox",
+                 "aria-controls":"owned-options"}
+        choice = ElementRef("e1", "combobox", "Product", "input", 1, attrs)
+        before = replace(self.page(elements=(choice,), path="/crm/customer"), page_read=self.proof)
+        selected = replace(choice, epoch=2, attrs={**attrs, "selected_option":"Synthetic", "query_value":"7"})
+        after = replace(before, epoch=2, elements=[selected])
+        self.transact(before, after, "select", {"ref":"e1", "value":"Synthetic", "option_label":"Synthetic"})
+        button = ElementRef("e2", "button", "搜索", "button", 2,
+                            {"page_control":"query", "form_scope":"form:query", "form_instance":"live"})
+        before = replace(after, elements=[selected, button])
+        proof = {**self.proof, "revision":2,
+                 "query_fields":{"productId":hashlib.sha256(b'["7"]').hexdigest()}}
+        after = replace(before, epoch=3, elements=[replace(selected, epoch=3), replace(button, epoch=3)], page_read=proof)
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        self.transact(before, after, "click", {"ref":"e2"})
+        for native in (None, "private-text"):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            initial = replace(before, epoch=1, elements=[choice])
+            selected_attrs = {**attrs, "selected_option":"Synthetic"}
+            if native is not None: selected_attrs["query_value"] = native
+            changed = replace(initial, epoch=2, elements=[replace(choice, epoch=2, attrs=selected_attrs)])
+            with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+                self.transact(initial, changed, "select", {"ref":"e1", "value":"Synthetic", "option_label":"Synthetic"})
+
+    def test_only_explicit_reviewed_query_toggle_can_reveal_fields(self):
+        attrs = {"page_control":"query", "form_scope":"form:query", "form_instance":"live"}
+        button = ElementRef("e1", "button", "展开", "button", 1, attrs)
+        before = replace(self.page(elements=(button,), path="/crm/customer"), page_read=self.proof)
+        after = replace(before, epoch=2, elements=[replace(button, epoch=2, name="收起")])
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.transact(before, after, "click", {"ref":"e1"})
+        document = review_document()
+        next(h for h in document["handlers"] if h["kind"]=="query")["controls"] = ["展开", "收起"]
+        self.policy.page_review = NativePageReview.load(document, "synthetic-v1")
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        self.transact(before, after, "click", {"ref":"e1"})
+        for changed in (replace(after, page_read={**self.proof,"revision":2}),
+                        replace(after, elements=[replace(button, epoch=2, name="收起", attrs={**attrs,"form_instance":"other"})])):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+                self.transact(before, changed, "click", {"ref":"e1"})
+
+    def test_menu_authorization_binds_reviewed_destination_from_any_page(self):
+        menu = ElementRef("e1", "menuitem", "Customers", "li", 1,
+            {"navigation_kind":"page", "navigation_path":"/crm/customer", "href":"/crm/customer"})
+        before = self.page(elements=(menu,))
+        after = self.page(2, path="/crm/customer")
+        self.transact(before, after, "click", {"ref":"e1"})
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        unknown = replace(menu, attrs={**menu.attrs,"navigation_path":"/unreviewed","href":"/unreviewed"})
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.transact(replace(before, elements=[unknown]), after, "click", {"ref":"e1"})
+
     def test_paging_option_requires_owned_popup_and_fresh_matching_read(self):
         owner = ElementRef("e1", "combobox", "每页", "input", 1,
                            {"page_control": "page_size", "aria-controls": "owned-list"})

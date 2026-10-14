@@ -49,7 +49,8 @@ class NativePageReview:
                     or not isinstance(item["controls"], list) or len(item["controls"]) > 32
                     or any(not isinstance(c, str) or not 0 < len(c) <= 100 for c in item["controls"])
                     or len(set(item["controls"])) != len(item["controls"])
-                    or (item["kind"] in {"form_entry", "lines"}) != bool(item["controls"])
+                    or (item["kind"] in {"form_entry", "lines"} and not item["controls"])
+                    or (item["kind"] not in {"form_entry", "lines", "query"} and item["controls"])
                     or not isinstance(item["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])):
                 raise ValueError("native page policy contains an unknown or unbound handler")
             scope = (*tuple(item[k] for k in ("kind", "route", "evidence", "sha256")), tuple(item["controls"]))
@@ -110,6 +111,15 @@ class NativeModelReadActions(NativeReadActions):
                 raise ActionAdmissionRefused("unreviewed")
             return super().admit(intent, context=context, checkpoint=checkpoint)
         element = next(e for e in before.elements if e.ref == args["ref"])
+        navigation = element.attrs.get("navigation_kind")
+        if navigation in {"page", "branch"}:
+            target = element.attrs.get("navigation_path", "")
+            reviewed = (self.page_review.permits("navigation", target) if navigation == "page" else
+                any(family == "navigation" and route.startswith(target.rstrip("/") + "/")
+                    for family, route, *_ in self.page_review.scopes))
+            if not reviewed:
+                raise ActionAdmissionRefused("unreviewed")
+            return super().admit(intent, context=context, checkpoint=checkpoint)
         category = "tabs" if element.role == "tab" else "navigation"
         if element.attrs.get("page_control") in {"query", "pagination", "page_size"} or element.role == "option":
             return self._query(intent, element, context, checkpoint)
@@ -148,23 +158,15 @@ class NativeModelReadActions(NativeReadActions):
                 field += "[" + str(pair.index(element)) + "]"
             value = args["value"]
             if intent.action == "select":
-                from web_operation_agent.goal.ports import PagePlan
-                from web_operation_agent.goal.spec import Filter
-                label, choice = attrs.get("field_label", ""), args.get("option_label", "")
-                filters = getattr(self.goal_port, "page_filters", None)
-                if not label or not choice or filters is None:
-                    raise ActionAdmissionRefused("unreviewed")
-                try:
-                    bound = BoundDataReads(self.data, context, checkpoint)
-                    with self.data._client.read_window(bound._check):
-                        draft = filters.prepare(PagePlan(path, label, expected_path=path,
-                            conditions=(Filter(label, (choice,)),)), before, context=context)
-                    if (len(draft.fields) != 1 or draft.scope != attrs["form_scope"]
-                            or draft.instance != attrs["form_instance"] or draft.fields[0].option_label != choice):
-                        raise ActionAdmissionRefused("invalid_target")
-                    value = draft.fields[0].value
-                except BusinessToolRequestError as exc:
-                    raise ActionAdmissionRefused("unreviewed") from exc
+                choice = args.get("option_label", "")
+                if (not attrs.get("field_label") or not choice or value != choice
+                        or element.role != "combobox" or attrs.get("aria-haspopup") != "listbox"
+                        or not attrs.get("aria-controls")):
+                    raise ActionAdmissionRefused("invalid_target")
+                # The Runtime selects exactly one enabled owned option and checks
+                # its visible label. Native query-value proof comes from the same
+                # current application form after selection, not from source lookup.
+                expected["choice_readback"] = True
             values = [value]
             if pair:
                 values.append(value + (" 00:00:00" if pair.index(element) == 0 else " 23:59:59"))
@@ -175,6 +177,14 @@ class NativeModelReadActions(NativeReadActions):
                             option=args.get("option_label", ""))
         elif intent.action == "click":
             if family == "query":
+                if (element.tag == "button" and self.page_review.permits("query", path, element.name.strip())
+                        and element.name.strip() in {"展开", "收起"} and attrs.get("form_instance")):
+                    expected.update(toggle=element.name.strip(), scope=attrs.get("form_scope"),
+                                    instance=attrs["form_instance"])
+                    digest = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+                    self._queries[intent.binding_digest] = expected
+                    return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY,
+                                        self.page_review.reference, digest)
                 if element.tag != "button" or element.name.strip() not in {"搜索", "查询"}:
                     raise ActionAdmissionRefused("unreviewed")
                 if not attrs.get("form_instance"):
@@ -213,6 +223,12 @@ class NativeModelReadActions(NativeReadActions):
         if (observation.page_route != expected["route"] or observation.url != intent.observation.url
                 or self.data._client.read_generation != expected["generation"]):
             return False
+        if "toggle" in expected:
+            buttons = [e for e in observation.elements if e.tag == "button"
+                       and e.attrs.get("form_scope") == expected["scope"]
+                       and e.attrs.get("form_instance") == expected["instance"]
+                       and e.name.strip() == ({"展开": "收起", "收起": "展开"}[expected["toggle"]])]
+            return len(buttons) == 1 and observation.page_read == expected["read"]
         if "field" in expected:
             controls = [e for e in observation.elements if e.attrs.get("query_field") == expected["field"]
                         and e.attrs.get("form_scope") == expected["scope"]
@@ -227,7 +243,16 @@ class NativeModelReadActions(NativeReadActions):
             shown = controls[0].attrs.get("selected_option") if expected["option"] else controls[0].attrs.get("value", "")
             if shown != (expected["option"] or expected["value"]):
                 return False
-            self._drafts.setdefault((expected["route"], expected["instance"]), {})[expected["key"]] = expected["digests"]
+            digests = expected["digests"]
+            if expected.get("choice_readback"):
+                if observation.page_read != expected["read"]:
+                    return False
+                value = controls[0].attrs.get("query_value", "")
+                if not re.fullmatch(r"(?:[0-9]{1,20}|true|false)", value):
+                    return False
+                digests = (hashlib.sha256(json.dumps([value], ensure_ascii=False,
+                    separators=(",", ":")).encode()).hexdigest(),)
+            self._drafts.setdefault((expected["route"], expected["instance"]), {})[expected["key"]] = digests
             return True
         if expected.get("open_paging"):
             return any(e.role == "option" for e in observation.elements)

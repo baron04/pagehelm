@@ -118,6 +118,10 @@ def _amount(value) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+class QueryParametersError(ValueError):
+    """Safe structural correction, generated only from installed parameter names."""
+
+
 class ActorKnowledge:
     """The signed-in actor's menu pages and the application's read-only API, searchable."""
 
@@ -198,11 +202,14 @@ class ActorKnowledge:
     @staticmethod
     def _api_line(op) -> str:
         params = []
-        for p in op["op"].get("parameters") or []:
+        published = sorted(op["op"].get("parameters") or [], key=lambda p: p.get("required") is not True)
+        for p in published:
             if p.get("in") != "query":
                 continue
             desc = (p.get("description") or "").split("，")[0][:24]
-            params.append(f"{p['name']}{'*' if p.get('required') else ''}({desc})")
+            kind = (p.get("schema") or {}).get("type")
+            params.append(f"{p['name']}{'*' if p.get('required') else ''}({desc}"
+                          + (f"; {kind}" if kind in {"string", "integer", "number", "boolean", "array"} else "") + ")")
         return (f"GET {op['path']}  [{op['tag']}] {op['summary']}\n    参数: "
                 + (", ".join(params[:14]) or "无"))
 
@@ -363,6 +370,8 @@ class ActorKnowledge:
                     out.append(f"total={total}（符合条件的总数），本次读了 {len(rows)} 行"
                                + ("（已读完所有页）" if whole and fields else ""))
         except DataRefused as exc:
+            if exc.permission_denied or exc.read_failed:
+                raise
             return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
         self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"]}
         if rows is None:
@@ -482,14 +491,16 @@ class ActorKnowledge:
         """
         import math
         if not isinstance(params, dict) or len(params) > 32:
-            raise ValueError("query parameters must be a bounded object")
+            raise QueryParametersError("query parameters must be a bounded object (maximum 32 fields)")
         published = {q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
                      if isinstance(q, dict) and q.get("in") == "query"}
         if set(params) - set(published):
-            raise ValueError("query parameter is not declared by this endpoint")
+            raise QueryParametersError("query parameter is not declared by this endpoint; use search_api for its fields")
         missing = {key for key, q in published.items() if q.get("required") is True} - set(params)
         if missing:
-            raise ValueError("required query parameters are missing")
+            names = sorted(key for key in missing if isinstance(key, str)
+                           and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key))
+            raise QueryParametersError("required query parameters are missing: " + ", ".join(names[:32]))
         def check(value, schema):
             kind = self._deref(schema).get("type")
             if isinstance(value, list):
@@ -521,12 +532,16 @@ class ActorKnowledge:
             if choices and value not in choices and str(value) not in {str(v) for v in choices}:
                 raise ValueError("query choice is not declared")
         for key, value in params.items():
-            check(value, published[key].get("schema", {}))
+            try:
+                check(value, published[key].get("schema", {}))
+            except ValueError as exc:
+                name = key if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key) else "parameter"
+                raise QueryParametersError(name + ": " + str(exc)) from None
             if key in {"pageNo", "pageSize"}:
                 if isinstance(value, bool) or not re.fullmatch(r"[1-9][0-9]{0,5}", str(value)):
-                    raise ValueError("paging requires a positive bounded integer")
+                    raise QueryParametersError(key + ": paging requires a positive bounded integer")
                 if key == "pageSize" and int(value) > 1000:
-                    raise ValueError("query page size exceeds its bound")
+                    raise QueryParametersError("pageSize: maximum 1000")
 
     def _names(self, path: str) -> dict:
         if self._codes is None:
@@ -1117,15 +1132,23 @@ class YudaoLoopProcedures:
             return LoopToolResult(know.search_api(args["keyword"]))
         if name == "find_record":
             self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
-            return LoopToolResult(self._find_record(s, args["name"].strip(), args.get("kind", "").strip()),
-                                  kind="read")
+            try:
+                text = self._find_record(s, args["name"].strip(), args.get("kind", "").strip())
+            except QueryParametersError as exc:
+                return LoopToolResult("查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
+                                      kind="read", state="refused", error_code="invalid_arguments")
+            return LoopToolResult(text, kind="read")
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
             params = json.loads(args.get("params", "{}"))
             if not isinstance(params, dict):
                 raise ValueError("query parameters must be an object")
             with s.measure("business"):
-                text = know.call_api(args["path"], params, args.get("fields", ()))
+                try:
+                    text = know.call_api(args["path"], params, args.get("fields", ()))
+                except QueryParametersError as exc:
+                    return LoopToolResult("未执行：" + str(exc), kind="read", state="refused",
+                                          error_code="invalid_arguments")
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
@@ -1359,6 +1382,8 @@ class YudaoLoopProcedures:
                         if path:
                             lists.append((entity, self.knowledge.call_api(path, {"pageNo": 1, "pageSize": 20})))
         except DataRefused as exc:
+            if exc.permission_denied or exc.read_failed:
+                raise
             return f"查找失败：{redacted(str(exc)[:160], self.knowledge.handoffs)}"
         labels = {e.key: e.label for e in index.entities}
         pages = {}

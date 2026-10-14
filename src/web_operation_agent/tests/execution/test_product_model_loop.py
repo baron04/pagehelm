@@ -7,6 +7,7 @@ import unittest
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
 from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
+from web_operation_agent.goal.data import DataRefused
 
 
 def page(epoch=1, *, content="List", route="/list"):
@@ -74,6 +75,28 @@ class LoopFixture(ModelDrivenTurnExecutor):
 
 
 class ModelLoopTests(unittest.TestCase):
+    def test_typed_read_denial_stops_without_correction_or_later_dispatch(self):
+        def denied(*_):
+            raise DataRefused("untrusted denial text", permission_denied=True)
+        fixture = LoopFixture([reply(call("read_records"), call("click", index=1),
+                                    call("finish", status="done", answer="false success"))], denied)
+        self.assertIn("没有读取", fixture.run())
+        self.assertEqual("permission_denied", fixture.state.terminal_reason)
+        self.assertEqual([], fixture.actions)
+        result = next(facts for event, facts in fixture.events if event == "model_loop_result")
+        self.assertEqual(("refused", "permission_denied"), (result["state"], result["error_code"]))
+        self.assertNotIn("untrusted denial text", str(fixture._messages))
+
+    def test_unavailable_read_is_distinct_from_permission_denial(self):
+        def unavailable(*_):
+            raise DataRefused("untrusted transport text", read_failed=True)
+        fixture = LoopFixture([reply(call("read_records")),
+            reply(call("finish", status="cannot", answer="unavailable"))], unavailable)
+        self.assertEqual("unavailable", fixture.run())
+        self.assertEqual(["observe"], fixture.actions)
+        result = next(facts for event, facts in fixture.events if event == "model_loop_result")
+        self.assertEqual(("unavailable", "application_unavailable"), (result["state"], result["error_code"]))
+
     def test_read_result_and_fresh_page_precede_next_decision(self):
         fixture = LoopFixture([
             reply(call("read_records"), call("finish", status="done", answer="unread")),

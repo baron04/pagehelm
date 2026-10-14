@@ -565,7 +565,14 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     s.terminal_reason = "permission_denied"
                     result = LoopToolResult("当前账号的身份或权限已失效。", state="refused",
                                             terminal_reason="permission_denied")
-                except (DataRefused, BusinessToolUnavailableError):
+                except DataRefused as exc:
+                    if exc.permission_denied:
+                        result = LoopToolResult("当前账号没有读取这项数据的权限。", kind="read", state="refused",
+                                                error_code="permission_denied", terminal_reason="permission_denied")
+                    else:
+                        result = LoopToolResult("应用读取未能完成。", kind="read", state="unavailable",
+                                                error_code="application_unavailable")
+                except BusinessToolUnavailableError:
                     result = LoopToolResult("应用读取未能完成。", kind="read", state="unavailable",
                                             error_code="application_unavailable")
                 except (ValueError, TypeError, BusinessToolRequestError):
@@ -581,6 +588,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     result = replace(result, dispatch="acknowledged" if dispatched else "not_dispatched")
                 text = result.feedback
                 confirmed = result.state == "completed" and self._completion_proved(s, name, args)
+                if result.terminal_reason:
+                    s.terminal_reason = s.terminal_reason or result.terminal_reason
                 # API and Skill reads have no browser receipt; obtain the current page
                 # before returning their result to the same decision conversation.
                 if not any(r.observation is not None for r in self._tool_receipts) and not s.terminal_reason:
@@ -588,8 +597,6 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     if fresh is None or not fresh.ok or fresh.observation is None:
                         s.terminal_reason = s.terminal_reason or "transport_error"
                         s.detail = "fresh page observation unavailable"
-                if result.terminal_reason:
-                    s.terminal_reason = s.terminal_reason or result.terminal_reason
                 changed = before_epoch != s.obs.epoch
                 s.ledger.append("model_loop_result", tool=name, kind=result.kind,
                                 state=result.state, dispatch=result.dispatch,
@@ -627,7 +634,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     entry["_observation"] = True
                 self._messages.append(entry)
                 if s.terminal_reason:
-                    return turn.get("final") or "操作没有完成。"
+                    return turn.get("final") or (text + "本次没有完成。"
+                        if s.terminal_reason == "permission_denied" else "操作没有完成。")
             if finish is None:
                 continue
             status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()

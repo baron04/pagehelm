@@ -278,6 +278,11 @@ describe('Page.describe bounds an observation before it crosses the browser boun
         content: '[1]<input />'}, 1).observation.elements[0]?.attrs
       expect(read({kind: 'query'})).toMatchObject({page_control: 'query'})
       expect(read({kind: 'query', field: 'searchTerm'})).toMatchObject({query_field: 'searchTerm'})
+      expect(read({kind: 'query', field: 'productId', queryValue: '7'})).toMatchObject({query_value: '7'})
+      for (const queryValue of ['private-text', '-1', '1'.repeat(100), {}, 7]) {
+        expect(read({kind: 'query', field: 'productId', queryValue})?.query_value).toBeUndefined()
+      }
+      expect(read({kind: 'query', field: 'password', queryValue: '7'})?.query_value).toBeUndefined()
       for (const field of ['password', 'accessToken', '../outside', 'x'.repeat(500), 1]) {
         expect(read({kind: 'query', field})?.query_field).toBeUndefined()
       }
