@@ -388,7 +388,7 @@ export class Page {
       this.rememberEntered(group)
       return {success: true}
     }
-    const state = await this.browserState()
+    const state = await this.read()
     const indexes = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
       .filter(i => this.lookup(this.controller.selectorMap, i) === matches[0])
     if (indexes.length !== 1 || !current() || !radioEnabled(matches[0]!)) {
@@ -430,8 +430,10 @@ export class Page {
     // What the last scroll was asked for over what it moved: PageController scales the
     // distance it is given, by a factor that is its own.
     let gain = 1
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const state = await this.browserState()
+    // Eight moves may make the option visible only after the last move. Inspect
+    // that result once more; the final inspection may choose, but never scrolls.
+    for (let attempt = 0; attempt <= 8; attempt++) {
+      const state = await this.read()
       if (!current() || ownedListbox(element) !== list) {
         throw new Error('execution_failed: combobox changed before selection')
       }
@@ -441,7 +443,14 @@ export class Page {
         if (matches.length === 0) {
           // The list is open and does not offer this choice. Nothing was chosen; the
           // list is closed again so that the rest of the form is not left under it.
-          if (element.getAttribute('aria-expanded') === 'true') await this.controller.clickElement(index)
+          if (element.getAttribute('aria-expanded') === 'true') {
+            const controls = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)]
+              .map(m => Number(m[1])).filter(i => this.lookup(this.controller.selectorMap, i) === element)
+            if (controls.length !== 1 || !current()) {
+              throw new Error('execution_failed: combobox has no unique fresh close reference')
+            }
+            await this.controller.clickElement(controls[0]!)
+          }
           throw new Error('option_unavailable: the list does not offer this option')
         }
         if (matches.length !== 1 || !visibleElement(matches[0]!) ||
@@ -453,6 +462,7 @@ export class Page {
         const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
         const indexes = indexed.filter(i => this.lookup(this.controller.selectorMap, i) === option)
         if (indexes.length === 0) {
+          if (attempt === 8) break
           // Reuse PageController's scoped scroll. Anchor it to an indexed option in
           // this owned menu; never scroll an unrelated popup or choose an old index.
           const anchors = indexed.filter(i => {

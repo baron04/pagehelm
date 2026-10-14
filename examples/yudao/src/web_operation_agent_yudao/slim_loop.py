@@ -1084,6 +1084,14 @@ class YudaoLoopProcedures:
         return next((e for e in s.obs.elements if e.ref == f"e{number}"), None)
 
     def _act(self, s, action: str, args: dict, *, navigating: bool = False) -> str:
+        if action == "select":
+            element = next((e for e in s.obs.elements if e.ref == args.get("ref")), None)
+            if element is not None and element.role == "radiogroup":
+                from .live_forms import observed_radio_choices
+                choices = [c for c in observed_radio_choices(element) if c.label == args.get("option_label")]
+                if len(choices) != 1:
+                    return "未执行：当前单选组没有唯一可用的选项，请根据最新观察核对。"
+                args = {**args, "value": choices[0].value}
         receipt = s.page.execute(action, args, navigating=navigating)
         if receipt is None:
             return "未执行：当前页面操作未获授权或本轮已结束。"

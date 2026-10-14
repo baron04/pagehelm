@@ -20,6 +20,8 @@
   "form_handoff": {
     "scoped_capability": "page.scoped_form_handoff",
     "max_label_chars": 120,
+    "max_choice_options": 50,
+    "max_choice_value_chars": 120,
     "input_controls": [
       "textbox",
       "combobox",

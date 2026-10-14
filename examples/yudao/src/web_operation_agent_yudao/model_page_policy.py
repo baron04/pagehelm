@@ -380,7 +380,8 @@ class NativeDraftSteps:
             matches = [e for e in controls if (e.attrs.get("field_label") or e.attrs.get("title")) == expected["label"]]
         if len(matches) != 1:
             return False
-        shown = matches[0].attrs.get("selected_option") if expected["option"] else matches[0].attrs.get("value", "")
+        shown = (matches[0].attrs.get("value", "") if matches[0].role == "radiogroup" else
+                 matches[0].attrs.get("selected_option") if expected["option"] else matches[0].attrs.get("value", ""))
         if not expected["option"] and matches[0].role == "spinbutton":
             try:
                 actual, requested = Decimal(shown), Decimal(expected["value"])

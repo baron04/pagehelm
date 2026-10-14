@@ -392,7 +392,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                       kind="write", state="refused", error_code="skill_not_loaded")
             return LoopToolResult("当前应用没有提供这个工具。", state="unavailable",
                                   error_code="tool_unavailable")
-        validate_input(schema, args)
+        try:
+            validate_input(schema, args)
+        except BusinessToolRequestError as exc:
+            # This validator reports installed schema paths and bounds, never supplied
+            # values or unexpected keys. Give the Agent the exact structural correction.
+            return LoopToolResult("工具参数有误：" + str(exc), state="refused", error_code="invalid_arguments")
         return self._tool(s, name, args, turn)
 
     def _completion_proved(self, s, name, args):

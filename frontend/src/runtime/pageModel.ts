@@ -12,7 +12,7 @@ import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formLifetime, formInstance} from './formInstance'
 import {listboxCombobox, selectedOption} from './combobox'
-import {radioGroup, radioChoices, selectedRadio} from './radio'
+import {radioGroup, radioChoices, radioLabel, radioEnabled, selectedRadio} from './radio'
 
 /** Maximum live controls one observation may expose across the browser boundary. */
 export const MAX_OBSERVATION_ELEMENTS = browserContract.observation.max_elements
@@ -382,7 +382,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // The parsed summary may lack a sensitive name that only the live DOM exposes.
       if (isSensitiveFormControl(element, redactor) ||
           (group && isSensitiveFormControl(group, redactor))) {
-        for (const key of ['value', 'form_scope', 'form_instance', 'form_lifetime', 'field_label', 'field', 'selected_option', 'listbox_owner']) {
+        for (const key of ['value', 'form_scope', 'form_instance', 'form_lifetime', 'field_label', 'field', 'selected_option', 'radio_options', 'listbox_owner']) {
           delete item.attrs[key]
         }
         item.name = ''
@@ -425,6 +425,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       delete item.attrs.field_label
       delete item.attrs.field
       delete item.attrs.selected_option
+      delete item.attrs.radio_options
       // Two indexed hit areas can resolve to one live control: a select's wrapper and the
       // input inside it. Only the first carries that control's form facts, so a field a
       // draft names is still exactly one control.
@@ -477,6 +478,19 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
         delete item.attrs.value
         const selected = selectedRadio(group)
         if (selected && !sensitive) item.attrs.value = redactor.redactString(selected).slice(0, 120)
+        const choices = radioChoices(group).filter(radioEnabled).map(option => {
+          const label = radioLabel(option)
+          const value = option instanceof HTMLInputElement ? option.value : label
+          return {label, value}
+        })
+        if (!sensitive && choices.length && choices.every(({label, value}) => label && value &&
+            label.length <= browserContract.form_handoff.max_label_chars &&
+            value.length <= browserContract.form_handoff.max_choice_value_chars &&
+            redactor.redactString(label) === label && redactor.redactString(value) === value) &&
+            new Set(choices.map(c => c.label)).size === choices.length &&
+            new Set(choices.map(c => c.value)).size === choices.length) {
+          item.attrs.radio_options = JSON.stringify(choices)
+        }
       }
       if (rawField !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(rawField)
           && !redactor.isSensitiveName(rawField)) {

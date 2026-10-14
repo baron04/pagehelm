@@ -465,7 +465,7 @@
     },
     {
       "kind": "navigation",
-      "route": "/hrm/recruit/channel",
+      "route": "/hrm/recruit/settings/channel",
       "evidence": "v2026.09-page-handlers.md#hrm-recruit-channel",
       "sha256": "cd19f3a9f09196f3ffdb51b8b6f0a3b8dbd620c7aa931d6f6047b8ab4fd5f9df",
       "controls": []

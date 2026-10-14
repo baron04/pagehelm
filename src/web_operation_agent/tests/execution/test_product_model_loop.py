@@ -148,6 +148,16 @@ class ModelLoopTests(unittest.TestCase):
             self.assertEqual("invalid finish", fixture.run())
             self.assertEqual(2, len(fixture.state.chat.seen))
 
+    def test_schema_correction_names_the_installed_field_without_echoing_supplied_values(self):
+        fixture = LoopFixture([], lambda *_: self.fail('invalid input dispatched'))
+        fixture._tools = lambda _: [{'function': {'name':'click', 'parameters': {
+            'type':'object','properties':{'index':{'type':'integer'}},'required':['index']}}}]
+        result = ModelDrivenTurnExecutor._invoke_tool(fixture, fixture.state, 'click',
+            {'index':'private-synthetic-value'}, fixture.turn)
+        self.assertEqual('invalid_arguments', result.error_code)
+        self.assertIn('input.index must be integer', result.feedback)
+        self.assertNotIn('private-synthetic-value', result.feedback)
+
     def test_completion_correction_cannot_reset_model_step_limit(self):
         fixture = LoopFixture([reply(call("finish", status="done", answer="suspect")),
             reply(call("finish", status="done", answer="corrected"))], lambda *_: None)
