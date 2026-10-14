@@ -628,6 +628,54 @@ class LoopTests(unittest.TestCase):
         self.assertIn("没有标出提交按钮", sent_back[0]["content"])
         self.assertIn("意见不对，就保持原来的结果", sent_back[0]["content"])   # a second reading, not a ruling
 
+    # What each fixed step says when it did what was asked, as the executor's own steps do.
+    SAYS = {"goto": ("已打开。", True), "highlight": ("已标出：确 定", False), "click": ("已点击。", True),
+            "call_api": ("total=3", False)}
+
+    def said(self, s, name, args, turn):
+        self.ran.append(name)
+        return self.SAYS.get(name, ("ok", False))
+
+    def test_a_turn_may_end_in_the_reply_that_opened_the_page_it_was_asked_for(self):
+        _executor, state, text = self.loop(
+            reply(call("goto", path="/orders"), call("finish", status="done", answer="已打开订单页")), tool=self.said)
+        self.assertEqual((text, state.terminal_reason, self.ran), ("已打开订单页", "", ["goto"]))
+        self.assertEqual(len(state.chat.seen), 1)          # one request, not two
+
+    def test_a_turn_may_end_in_the_reply_that_marked_the_submit_control(self):
+        _executor, state, text = self.loop(
+            reply(call("highlight", index=10), call("finish", status="done", answer="已填好")), tool=self.said)
+        self.assertEqual((text, state.terminal_reason, len(state.chat.seen)), ("已填好", "", 1))
+
+    def test_a_finish_written_before_a_result_could_be_read_does_not_end_the_turn(self):
+        for step in (call("call_api", path="/admin-api/orders/page"), call("click", index=10)):
+            with self.subTest(step=step["function"]["name"]):
+                executor, state, text = self.loop(
+                    reply(step, call("finish", status="done", answer="共 9 条")),
+                    reply(call("finish", status="done", answer="共 3 条")), tool=self.said)
+                self.assertEqual((text, len(state.chat.seen)), ("共 3 条", 2))
+                held = [m["content"] for m in executor._messages if m["role"] == "tool" and m["content"].startswith("没有结束")]
+                self.assertEqual(len(held), 1)
+                self.assertIn(step["function"]["name"], held[0])
+
+    def test_a_page_that_was_not_reached_cannot_be_ended_on(self):
+        lost = lambda s, name, args, turn: ("没有成功：浏览器现在在 /index，没有到 /orders。", True)  # noqa: E731
+        _executor, state, text = self.loop(
+            reply(call("goto", path="/orders"), call("finish", status="done", answer="已打开")),
+            reply(call("finish", status="cannot", answer="打不开")), tool=lost)
+        self.assertEqual((text, state.terminal_reason), ("打不开", "agent_refused"))
+
+    def test_a_page_the_browser_did_not_reach_is_not_reported_as_opened(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.application, executor.knowledge = NS(descriptor=NS(origin="https://synthetic.test")), None
+        executor._act = lambda s, action, args, **kw: ""
+        executor._settled = lambda s, **kw: None
+        state = State()                                    # the browser is at /orders
+        self.assertEqual(executor._tool(state, "goto", {"path": "/orders"}, {}), ("已打开。", True))
+        said, changed = executor._tool(state, "goto", {"path": "/crm/customer"}, {})
+        self.assertTrue(changed)
+        self.assertEqual(said, "没有成功：浏览器现在在 /orders，没有到 /crm/customer。")
+
     def test_the_turn_is_refused_when_its_model_steps_run_out(self):
         _executor, state, text = self.loop(*[reply(call("search_menu", keyword="x")) for _ in range(3)], steps=3)
         self.assertEqual(state.terminal_reason, "agent_refused")

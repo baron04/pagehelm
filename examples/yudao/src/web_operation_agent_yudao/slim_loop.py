@@ -55,6 +55,13 @@ MODEL_STEPS = 24
 _PENDING_MS, _LOOK_MS = 400, 150
 #: Looks a page that keeps changing is given before it is taken as it is.
 _STILL_LOOKS = 2
+#: What the two steps a turn may end on in the same reply say when they did what was asked:
+#: the program itself knows the page was reached, or the control marked.
+_OPENED, _MARKED = "已打开。", "已标出："
+#: Steps whose result has to be read before a turn can end: what they return, or the page
+#: they leave, is what the answer would be about.
+_READ_BEFORE_ENDING = frozenset({"search_menu", "search_api", "find_record", "call_api", "observe",
+                                 "click", "input", "select", "fill_fields", "scroll"})
 #: Development only: a directory to which each turn's conversation is written as the model
 #: saw it. Unset in any deployment; what a page shows does not belong in a log.
 _DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
@@ -527,7 +534,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”），先进它的详情页，从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
    - 一次要填或选两个以上字段（表单、筛选条件、明细行）时，用 fill_fields 按字段名一次做完，不要一个个 input/select；筛选可以带 then_click="搜索"。它报告某个字段没做成时，再对那个字段单独用 input 或 select。
-   - 填完后看返回的观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，再 finish。
+   - 填完后看返回的观察，确认每个值都显示正确；然后在同一次回复里先用 highlight 标出表单的“确定/保存/提交”按钮、接着调用 finish。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：留空，在答复里提醒用户还有哪些必填项要自己补，然后照常以 done 结束。
    - 只有用户一个具体值都没给（比如只说“新增一家供应商”“帮我新增一个产品单位”）时，才用 need_input 问要填什么，不要自己编；这时可以先把表单打开，但不要 highlight 提交按钮，也不要以 done 结束。用户指明了关联对象（比如“给某客户新增联系人”“给某客户开一张订单”）就算给了值：打开表单并带上这个对象后以 done 结束，说明其余由用户补。
@@ -535,6 +542,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 通用规则：
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
 - 一次回复里可以连着调用几个工具，按顺序执行。页面变化之后，同一次回复里按序号的操作（click、input、select、highlight）不会执行，按路径或字段名的（goto、fill_fields、call_api）照常执行：能一次说清的就一次说完，例如 goto 之后接着 fill_fields 筛选。
+- finish 可以和最后一步写在同一次回复里，只限两种最后一步：goto 打开页面，或 highlight 标出按钮。这一步没有成功时程序不会结束本轮，会把结果交给你。用户只要求打开某个页面、或要回答的值已经读到而只差打开页面时，就这样一次说完；答复里不要写你还没看到的页面内容（条数、某一行的值）。其它工具（call_api、find_record、click、fill_fields、select、input、scroll）的结果必须先看到，再 finish。
 - 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
 - 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。记录存在但不属于当前账号的可见范围，是没有权限，不要说成不存在。
@@ -968,7 +976,10 @@ class SlimTurnExecutor(GoalTurnExecutor):
             if failed:
                 return failed, True
             self._settled(s, path=path)
-            return "已打开。", True
+            there = urlsplit(s.obs.url).path
+            if there != path:
+                return f"没有成功：浏览器现在在 {there}，没有到 {path}。", True
+            return _OPENED, True
         if name in ("click", "input", "select", "highlight") or (name == "scroll" and args.get("index") is not None):
             element = self._element(s, args.get("index", -1))
             if element is None:
@@ -1014,7 +1025,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
             turn["marked"] = element.name.splitlines()[0][:60] if element.name else "(控件)"
             s.ledger.append("page_handoff_ready", step=s.step, observation_epoch=s.obs.epoch,
                             submitted=False, persisted=False)
-            return f"已标出：{turn['marked']}", False
+            return _MARKED + turn["marked"], False
         return f"没有这个工具：{name}", False
 
     # -- installed Skills and the writes they propose ---------------------------------
@@ -1342,7 +1353,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 self._messages.append({"role": "user", "content":
                                        "请用工具继续；全部完成或确实做不到时调用 finish。"})
                 continue
-            finish, changed_page, unwritten = None, False, False
+            finish, changed_page, unwritten, unseen = None, False, False, ""
             for position, call in enumerate(calls):
                 name = (call.get("function") or {}).get("name") or ""
                 try:
@@ -1355,6 +1366,12 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     # Written before the proposal's refusal could be read: not an ending.
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                                            "没有结束：同一次回复里的写入提案没有执行。先按它返回的原因处理，再决定怎么结束。"})
+                    continue
+                if name == "finish" and unseen:
+                    # Written before that step's result could be read. Only a page the
+                    # program saw opened, or a control it saw marked, can be ended on unseen.
+                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
+                                           f"没有结束：同一次回复里 {unseen} 的结果你还没有看到。先看它返回了什么，再决定怎么结束。"})
                     continue
                 if name == "finish":
                     finish = args
@@ -1395,6 +1412,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
                 changed_page = changed_page or (changed and name != "observe")
                 unwritten = unwritten or text.startswith("没有执行")
+                if name in _READ_BEFORE_ENDING or (name == "goto" and text != _OPENED) or (
+                        name == "highlight" and not text.startswith(_MARKED)):
+                    unseen = unseen or name
                 entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text}
                 if name == "call_api":
                     entry["_api"] = True

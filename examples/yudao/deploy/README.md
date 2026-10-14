@@ -305,7 +305,13 @@ it. `fill_fields` fills or chooses several controls of the shown form, filter or
 table by their labels in one step and may end by clicking a named button. After a page
 change, the steps of the same reply that name a path or a field still run; those that
 name an element by its number do not, since the numbers are the old page's. A scroll that
-names a region moves that region and says so when nothing moved.
+names a region moves that region and says so when nothing moved. A turn may end in the
+reply of its last step when that step opened a page (`goto`) or marked a control
+(`highlight`): the program itself knows whether either happened. A `finish` written after
+one that did not, or after a step whose result has to be read first (an API read, a
+lookup, a click, a fill, a choice, a scroll), does not end the turn; the result goes back
+to the model. A `goto` that leaves the browser at another path is reported as not having
+succeeded.
 
 After a step that opens, clicks, fills or chooses, the page is given time before the model
 reads it: until the browser is at the page that was opened, nothing the page reads from
