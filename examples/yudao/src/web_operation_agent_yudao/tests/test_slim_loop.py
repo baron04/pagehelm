@@ -1200,7 +1200,7 @@ class FindRecordTests(unittest.TestCase):
             return ApplicationIndex(
                 entities=(IndexEntity("crm/customer", "CRM 客户"), IndexEntity("erp/customer", "ERP 客户"),
                           IndexEntity("erp/sale-return", "销售退货"), IndexEntity("hrm/employee", "员工档案"),
-                          IndexEntity("erp/supplier", "ERP 供应商", ("供应商信息",))),
+                          IndexEntity("erp/supplier", "ERP 供应商", ("供应商信息",)), IndexEntity("orders", "订单")),
                 pages=(IndexPage("crm-customer", "客户管理", "CRM 系统 / 客户管理", entity="crm/customer"),
                        IndexPage("orders", "订单", "销售 / 订单", entity="orders")))
 
@@ -1247,6 +1247,12 @@ class FindRecordTests(unittest.TestCase):
                       "都没有名称是或包含“恒昌五金”的记录。", told)
         self.assertIn("如实说明这些模块里没有它（cannot），不要再换名字查", told)
         self.assertIn("不带 kind 再查一次", told)
+
+    def test_a_list_of_the_named_kind_is_shown_with_what_was_not_found_in_it(self):
+        told = self.find(self.Port(), "松原设备", "订单")
+        self.assertIn("订单 的列表第一页（看现有的名称用；不用再读）：", told)
+        self.assertIn("total=", told)
+        self.assertNotIn("ERP 供应商 的列表", self.find(self.Port(), "恒昌五金", "供应商"))   # it publishes none
 
     def test_records_a_part_of_the_name_finds_are_said_not_to_be_the_one_asked_for(self):
         port = self.Port(parts={"周远": (), "远航": (("hrm/employee", (("8", "李远航", ""),)),)})

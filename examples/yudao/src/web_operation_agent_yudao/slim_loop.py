@@ -209,6 +209,12 @@ class ActorKnowledge:
         return next((m["path"] for m in self._menu
                      if [part.strip() for part in m["name"].split(">")] == wanted), "")
 
+    def list_path(self, entity: str) -> str:
+        """The path of the paged list an entity key names, when the application publishes one."""
+        self._load()
+        path = f"/admin-api/{entity.strip('/')}/page"
+        return path if path in self._by_path else ""
+
     def list_api(self, entity: str) -> str:
         """The paged list an entity key names, when the application publishes one."""
         self._load()
@@ -1373,10 +1379,16 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 among = _of_kind(index, kind)
                 hits = (self.goal_port.records_named(name, context=context, entities=among) if among
                         else self.goal_port.records_named(name, context=context))[:4]
-                near = []
+                near, lists = [], []
                 if not hits and among:
                     for part in _name_parts(name):
                         near += self.goal_port.records_named(part, context=context, entities=among)
+                    # What the model went on to read to see the names a list does hold: the
+                    # first page of each, for the few entities a kind names.
+                    for entity in among[:3]:
+                        path = self.knowledge.list_path(entity)
+                        if path:
+                            lists.append((entity, self.knowledge.call_api(path, {"pageNo": 1, "pageSize": 20})))
         except DataRefused as exc:
             return f"查找失败：{redacted(str(exc)[:160], self.knowledge.handoffs)}"
         labels = {e.key: e.label for e in index.entities}
@@ -1392,6 +1404,8 @@ class SlimTurnExecutor(GoalTurnExecutor):
             if near:
                 names = sorted({display for _entity, records in near for _rid, display, _address in records})[:8]
                 told += ["按名称的一部分查到的记录，名称与用户说的不同，不是它：", fenced("、".join(names))]
+            for entity, text in lists:
+                told += [f"{labels.get(entity, entity)} 的列表第一页（看现有的名称用；不用再读）：", text[:2500]]
             told.append("用户说的就是这一类记录时，这就是结果：如实说明这些模块里没有它（cannot），不要再换名字查；"
                         "用户没说清是哪一类，它也可能在别的模块里，那样就不带 kind 再查一次。")
             return redacted("\n".join(told), self.knowledge.handoffs)
