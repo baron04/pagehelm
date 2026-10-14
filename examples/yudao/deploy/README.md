@@ -304,7 +304,15 @@ contain, found by the program; `find_record` returns each entity's page and list
 it. Given the person's word for the kind of record (员工, 供应商, 销售退货单), it looks only
 at the entities whose name, other names or page carry that word, a few reads instead of
 one or two for each of the application's entities; a word that names none looks
-everywhere, and nothing found among the named ones says where it looked. `fill_fields` fills or chooses several controls of the shown form, filter or line
+everywhere. Nothing found among the named ones is looked for once more by the first and
+last two characters of the name, and the result says what was looked for and where, and
+names the records those parts found as other records. Several records an entity may mean
+are listed with their numbers, for the person to choose from; a record the application
+gives a page of its own (its record address names its number) is told with that address,
+so that it is opened directly rather than from its list. `fill_fields` also takes the
+list's rows per page (`每页条数`) and page (`页码`): the paging control the application's
+page module names is worked, the page region is scrolled to it when it is off the screen,
+and the result is the page and rows per page the list then read. `fill_fields` fills or chooses several controls of the shown form, filter or line
 table by their labels in one step and may end by clicking a named button. After a page
 change, the steps of the same reply that name a path or a field still run; those that
 name an element by its number do not, since the numbers are the old page's. A scroll that

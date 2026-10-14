@@ -42,6 +42,7 @@ from web_operation_agent.execution.receipt import MeasuredChat
 from web_operation_agent.modeling.egress import AuditedChat
 from web_operation_agent.modeling.provider import ProviderError
 from web_operation_agent.panel_view import describe_step, step_facts
+from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
 
@@ -457,7 +458,8 @@ TOOLS = [
         "index": {"type": "integer"}, "text": {"type": "string"}}, ["index", "text"]),
     _tool("select", "在带序号的下拉框或单选组里选中一个选项，option 写选项显示的文字。", {
         "index": {"type": "integer"}, "option": {"type": "string"}}, ["index", "option"]),
-    _tool("fill_fields", "按字段名一次填或选多个字段：表单字段、筛选条件、明细行（“明细第N行·列名”）都可以。"
+    _tool("fill_fields", "按字段名一次填或选多个字段：表单字段、筛选条件、明细行（“明细第N行·列名”）都可以；"
+          "列表的每页条数和页码也可以，字段名写“每页条数”“页码”，值写数字。"
           "下拉和单选按选项文字选，文本、数字、日期直接填，日期范围写成“开始 ~ 结束”。逐个执行，返回每个字段的结果和最新观察。"
           "字段名用最新观察里“表单当前值”“明细行当前值”中出现的名字。", {
         "fields": {"type": "array", "items": {"type": "object", "properties": {
@@ -533,13 +535,14 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
    - 用 search_menu 找页面，goto 打开；同一个业务词常常在几个模块里都有页面，先看全部结果再选最贴合用户说法的那个，并在答复里说明用的是哪个模块的页面。
    - 筛选要在页面自己的筛选控件上操作，再点“搜索”，然后从“页面生效的查询”确认参数已生效。
+   - 改每页条数、翻页：用 fill_fields 的“每页条数”“页码”一步做完（分页在列表底部，看不到就先 scroll），它会报告列表读回的页码和条数。
    - 点了“搜索”筛选却没有生效（“共 N 条”没变，结果里还有不符合条件的行）时，不要停在这里。要看的是某条记录名下的关联记录（某客户的联系人、商机、回款这类）：进这条记录的详情页，切到对应的页签，那里显示的就是它名下的。
    - 页面元素行尾的标记说明这个控件怎么用：〔下拉〕〔单选〕用 select(index, option) 选，option 写选项显示的文字（select 不行时再点开它、从新观察里点选项）；〔日期〕用 input 填 2026-10-20，带时间的填 2026-10-20 09:00:00；日期范围是〔日期·开始〕和〔日期·结束〕两个框，先填开始再填结束，两个都要填，不要去点日历。
-   - 打开某条记录的详情：在列表里找到那一行再点它的名称或“详情”。这条记录没有详情页时，让它在列表里显示出来就算打开了；不要为了查看去点“编辑”，编辑表单只在用户要修改时才打开。
+   - 打开某条记录的详情：find_record 给出了这条记录的详情页时，直接 goto 那个地址；没有给出时，在列表里找到那一行再点它的名称或“详情”。这条记录没有详情页时，让它在列表里显示出来就算打开了；不要为了查看去点“编辑”，编辑表单只在用户要修改时才打开。
    - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。列候选时，每一条用来区分的信息（编号、手机、所属客户等）必须来自按这个名称筛选后的列表或接口结果，逐条对应；不要从没筛选的列表里凭位置去读。
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
-   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”），先进它的详情页，从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
+   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
    - 一次要填或选两个以上字段（表单、筛选条件、明细行）时，用 fill_fields 按字段名一次做完，不要一个个 input/select；筛选可以带 then_click="搜索"。它报告某个字段没做成时，再对那个字段单独用 input 或 select。
    - 填完后看返回的观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，把给用户的答复写在它的 answer 里。
@@ -682,6 +685,12 @@ def _page_lines(observation) -> tuple[list[str], list[str]]:
     for pair in panels.values():
         if len(pair) == 2:
             kinds[pair[0]], kinds[pair[1]] = "〔日期·开始〕", "〔日期·结束〕"
+    # The list's own paging, as the application's page module names it.
+    for e in observation.elements:
+        if e.attrs.get("page_control") == "page_size":
+            kinds[e.ref] = "〔每页条数〕"
+        elif e.attrs.get("page_control") == "pagination" and e.attrs.get("page_number"):
+            kinds[e.ref] = f"〔翻到第{e.attrs['page_number']}页〕"
     for i, _depth, number in marks:
         if i not in drop and kinds.get(f"e{number}"):
             lines[i] = lines[i] + " " + kinds[f"e{number}"]
@@ -818,6 +827,26 @@ def _of_kind(index, kind: str) -> tuple[str, ...]:
         if any(word in n for n in names if n) or any(len(n) >= 2 and n in word for n in names[:1]):
             found.append(entity.key)
     return tuple(found)
+
+
+#: Field names that mean the list's own paging rather than a field of the page.
+_PAGING = {"每页条数": "page_size", "每页": "page_size", "每页显示": "page_size", "页码": "page", "第几页": "page"}
+
+
+def _name_parts(name: str) -> tuple[str, ...]:
+    """Parts of a name a record of a similar name would share: its first and last two
+    characters. A code or a number is not taken apart, nor a name too short to have parts."""
+    word = re.sub(r"\s+", "", name)
+    if len(word) < 3 or re.search(r"[0-9A-Za-z]", word):
+        return ()
+    return tuple(dict.fromkeys(part for part in (word[:2], word[-2:]) if part != word))
+
+
+def _record_page(address: str, rid: str, list_path: str) -> bool:
+    """Whether an address the application gives for a record is a page of that record's
+    own: a path that names the record's number and is not the list it is in."""
+    return bool(address) and address.startswith("/") and address != list_path and bool(
+        re.search(rf"(?<![0-9]){re.escape(rid)}(?![0-9])", address))
 
 
 def page_text(observation, *, handoffs, marked: str = "") -> str:
@@ -1191,12 +1220,66 @@ class SlimTurnExecutor(GoalTurnExecutor):
         }.get(s.terminal_reason, "这项修改没有执行。")
         return turn["final"]
 
+    def _paging(self, s, control: str, label: str, value: str) -> str:
+        """The list's rows per page or its page, through the paging control the
+        application's page module names, confirmed by the list the page then reads."""
+        number = value.strip().rstrip("条页").strip()
+        if not number.isdigit() or int(number) < 1:
+            return f"{label}：值写一个数字"
+
+        def control_of(kind, page=""):
+            return next((e for e in s.obs.elements if e.attrs.get("page_control") == kind
+                         and (not page or e.attrs.get("page_number") == page)), None)
+        kind, page = ("page_size", "") if control == "page_size" else ("pagination", str(int(number)))
+        if control_of(kind, page) is None and control_of("page_size") is None and control_of("pagination") is None:
+            # The paging sits under the list: off the screen, it is not observed at all. The
+            # region it is in is the first one with more below it.
+            region = next((m.group(2) for line in s.obs.content.splitlines() if (m := _DEPTH.match(line))
+                           and (r := _SCROLL.search(line)) and re.search(r"bottom=[1-9]", r.group(1))), None)
+            command = {"direction": "down", "pages": MAX_SCROLL_PAGES}
+            if region is not None:
+                command["ref"] = "e" + _scroll_anchor(s.obs, region)
+            if not self._act(s, "scroll", command):
+                self._settled(s, waits=2)
+        if control == "page_size":
+            found = control_of("page_size")
+            if found is None:
+                return f"{label}：页面上没有每页条数的选择（先 scroll 到列表底部的分页）"
+            # It is no form's field: its options are listed only while it is open, and the
+            # one wanted is clicked on the page as it then is.
+            failed = self._act(s, "click", {"ref": found.ref})
+            if not failed:
+                self._settled(s, waits=2)
+                wanted = f"{int(number)}条/页"
+                option = next((e for e in s.obs.elements if e.role == "option"
+                               and re.sub(r"\s+", "", e.name) == wanted), None)
+                failed = (f"每页条数的选项里没有“{wanted}”" if option is None
+                          else self._act(s, "click", {"ref": option.ref}))
+        else:
+            found = control_of("pagination", page)
+            if found is None:
+                return f"{label}：页面上没有翻到第 {int(number)} 页的按钮（已经在这一页、页码超出，或先 scroll 到列表底部的分页）"
+            failed = self._act(s, "click", {"ref": found.ref})
+        if failed:
+            return f"{label}：{failed}"
+        self._settled(s)
+        read = s.obs.page_read or {}
+        got = read.get("page_size" if control == "page_size" else "page")
+        if str(got) == str(int(number)):
+            return f"{label}：已改为{'每页 ' + number + ' 条' if control == 'page_size' else '第 ' + number + ' 页'}（列表读回：第 {read.get('page')} 页，每页 {read.get('page_size')} 条，共 {read.get('total')} 条）"
+        return f"{label}：已操作，但列表读回的不是 {number}（{got if got is not None else '没有读回'}），看下面的页面再决定"
+
     def _fill_fields(self, s, fields, then_click: str, turn: dict) -> str:
         """Fill or choose several named fields one after another, each found afresh on the
         page as it then is, so that one model request does the work of several."""
         said = []
         for item in fields[:12]:
             label, value = str(item.get("label", "")).strip().rstrip(":：").strip(), str(item.get("value", ""))
+            if label in _PAGING:
+                said.append(self._paging(s, _PAGING[label], label, value))
+                if s.terminal_reason:
+                    return "操作没有完成。"
+                continue
             lines, _hints = _page_lines(s.obs)
             shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
             found = [e for e in s.obs.elements if e.ref[1:] in shown and label and label in (
@@ -1264,7 +1347,12 @@ class SlimTurnExecutor(GoalTurnExecutor):
         """Where the application has a record of this name, through the goal port's own
         "records found by name": every entity a page shows, read as the actor. With the
         person's word for the kind of record, only the entities whose name, other names or
-        page carry that word: a few reads instead of one or two for every entity."""
+        page carry that word: a few reads instead of one or two for every entity.
+
+        Several records an entity may mean are listed, each with its number, for the person
+        to choose from; a record the application gives an address of is told with it, so
+        that it is opened directly. Nothing found among the named entities is looked for
+        once more by parts of the name, and what was looked for is said."""
         if not name:
             return "请给出要找的名称。"
         try:
@@ -1272,36 +1360,55 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 context = s.approvals.context(s.step, "find_record")
                 index = self.goal_port.index(context=context)
                 among = _of_kind(index, kind)
-                hits = (self.goal_port.locate_reference(name, context=context, entities=among) if among
-                        else self.goal_port.locate_reference(name, context=context))
+                hits = (self.goal_port.records_named(name, context=context, entities=among) if among
+                        else self.goal_port.records_named(name, context=context))[:4]
+                near = []
+                if not hits and among:
+                    for part in _name_parts(name):
+                        near += self.goal_port.records_named(part, context=context, entities=among)
         except DataRefused as exc:
             return f"查找失败：{redacted(str(exc)[:160], self.knowledge.handoffs)}"
         labels = {e.key: e.label for e in index.entities}
-        if not hits and among:
-            return (f"在名称里有“{kind}”的模块（{'、'.join(labels.get(e, e) for e in among)}）里，没有找到名称是"
-                    f"（或以它开头的）“{name}”的唯一记录。可能不存在、名称不完整，或同一模块里有多条同名记录"
-                    "（这里查不出同名的）：用对应模块的列表接口按名称查一次，确认是没有，还是有几条。"
-                    "它也可能在别的模块里：那样就不带 kind 再查一次。")
-        if not hits:
-            return (f"没有在任何模块里找到名称是（或以它开头的）“{name}”的唯一记录。"
-                    "可能不存在、名称不完整，或同一模块里有多条同名记录（这里查不出同名的）："
-                    "用对应模块的列表接口按名称查一次，确认是没有，还是有几条。")
         pages = {}
         for page in index.pages:
             if page.entity:
                 pages.setdefault(page.entity, page.breadcrumb or page.label)
-        told, lists = [], []
-        for entity, shown in hits:
+        if not hits and among:
+            where = "、".join(labels.get(e, e) for e in among)
+            parts = "”“".join(_name_parts(name))
+            looked = f"按名称“{name}”" + (f"和它的一部分（“{parts}”）" if parts else "")
+            told = [f"在名称里有“{kind}”的模块（{where}）里，{looked}查列表，都没有名称是或包含“{name}”的记录。"]
+            if near:
+                names = sorted({display for _entity, records in near for _rid, display, _address in records})[:8]
+                told += ["按名称的一部分查到的记录，名称与用户说的不同，不是它：", fenced("、".join(names))]
+            told.append("用户说的就是这一类记录时，这就是结果：如实说明这些模块里没有它（cannot），不要再换名字查；"
+                        "用户没说清是哪一类，它也可能在别的模块里，那样就不带 kind 再查一次。")
+            return redacted("\n".join(told), self.knowledge.handoffs)
+        if not hits:
+            return (f"没有在任何模块里找到名称是（或以它开头的）“{name}”的记录。可能不存在或名称不完整："
+                    "用对应模块的列表接口按名称的一部分查一次，再下结论。")
+        told, lists, several = [], [], False
+        for entity, records in hits:
             page = pages.get(entity, "")
             path = self.knowledge.page_path(page) if page else ""
-            told.append(f"{labels.get(entity, entity)}（{entity}；页面：{page or '无'}{' ' + path if path else ''}）："
-                        f"{redacted(str(shown), self.knowledge.handoffs)}")
+            head = f"{labels.get(entity, entity)}（{entity}；页面：{page or '无'}{' ' + path if path else ''}）"
+            if len(records) == 1:
+                rid, display, address = records[0]
+                told.append(f"{head}：{display}" + (f"；这条记录的详情页 {address}" if _record_page(address, rid, path) else ""))
+            else:
+                several = True
+                told.append(f"{head}：有 {len(records)} 条可能是它（同名或名称相近）：")
+                told += [f"    {display}（编号 {rid}" + (f"；详情页 {address}" if _record_page(address, rid, path) else "") + "）"
+                         for rid, display, address in records]
             api = self.knowledge.list_api(entity)
             if api and api not in lists:
                 lists.append(api)
-        return "\n".join(["找到的记录（模块；页面：记录名称）：", fenced("\n".join(told))]
-                         + (["这些模块的列表接口：", *("    " + api.replace("\n", "\n    ") for api in lists)]
-                            if lists else []))
+        out = ["找到的记录（模块；页面：记录名称）：", fenced(redacted("\n".join(told), self.knowledge.handoffs))]
+        if several:
+            out.append("同一个模块里有几条可能是它：用户要的是其中一条时，不要自己挑，用 need_input 把它们（名称和编号）列给用户选。")
+        if lists:
+            out += ["这些模块的列表接口：", *("    " + api.replace("\n", "\n    ") for api in lists)]
+        return "\n".join(out)
 
     # -- the loop ----------------------------------------------------------------------
     def _run(self, s) -> str:

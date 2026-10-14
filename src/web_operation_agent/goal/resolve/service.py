@@ -71,6 +71,39 @@ class DataGoalPort:
         """The records a hard reference names, as (entity key, display name), looked for
         on every entity a page shows, or on those of `entities` a page shows; a number or a
         date names nothing here."""
+        def named(resolver, entity, found):
+            if not isinstance(found, tuple) or isinstance(found, Ambiguous) or not _begins(resolver, text, found):
+                return None
+            return entity, found[2]
+        return tuple(hit for hit in self._each_entity(text, context, entities, named) if hit is not None)[:3]
+
+    def records_named(self, text: str, *, context: OperationContext | None = None,
+                      entities: tuple[str, ...] = ()):
+        """What the entities a page shows (or those of `entities` a page shows) hold under a
+        name: (entity key, ((id, display, address), ...)) for each that holds one record it
+        names, or several that it may mean; the others are left out. `address` is the
+        application's address of the record, empty when it gives none. A number or a date
+        names nothing here."""
+        def named(resolver, entity, found):
+            if isinstance(found, Ambiguous):
+                shown = set(found)
+                refs = [r for r in resolver._find(entity, text, 8) if r.display in shown]
+            elif isinstance(found, tuple) and _begins(resolver, text, found):
+                refs = [found.ref]
+            else:
+                return None
+            return entity, tuple((r.id, r.display, self._address(entity, r.id)) for r in refs)
+        return tuple(hit for hit in self._each_entity(text, context, entities, named) if hit is not None)
+
+    def _address(self, entity: str, rid: str) -> str:
+        try:
+            return self.data.record_address(entity, rid)
+        except (DataRefused, AttributeError, KeyError, ValueError):
+            return ""
+
+    def _each_entity(self, text, context, entities, named):
+        """`named(resolver, entity, found)` for the record lookup on each entity, in index
+        order: every entity a page shows, or those of `entities` a page shows."""
         if not text.strip() or re.fullmatch(r"[\d.,/-]+", text.strip()):
             return ()
         index = self.index(context=context)
@@ -84,27 +117,16 @@ class DataGoalPort:
             if resolver.view(entity) is None:
                 return None
             try:
-                found = resolver._find_record(entity, text)
+                return named(resolver, entity, resolver._find_record(entity, text))
             except DataRefused:
                 # A missing parent/context on one list does not hide other entities.
                 return None
-            if not isinstance(found, tuple) or isinstance(found, Ambiguous):
-                return None
-            wanted = norm(text)
-            shown = norm(resolver._own_name(found[2]))
-            own = norm(found.personal)
-            if (shown == wanted or shown.startswith(wanted) or norm(found[2]).startswith(wanted)
-                    or own == wanted or own.startswith(wanted)):
-                return entity, found[2]
-            return None
 
         if self.reference_workers > 1 and len(entities) > 1:
             with ThreadPoolExecutor(max_workers=self.reference_workers) as pool:
                 futures = [pool.submit(copy_context().run, find, entity) for entity in entities]
-                hits = [future.result() for future in futures]  # Keep index order.
-        else:
-            hits = [find(entity) for entity in entities]
-        return tuple(hit for hit in hits if hit is not None)[:3]
+                return [future.result() for future in futures]  # Keep index order.
+        return [find(entity) for entity in entities]
 
     def locate_names(self, names: tuple[str, ...], *, entities: tuple[str, ...] = (),
                      context: OperationContext | None = None):
@@ -160,3 +182,12 @@ class DataGoalPort:
 
 
 __all__ = ["DataGoalPort", "GoalData"]
+
+
+def _begins(resolver, text: str, found) -> bool:
+    """Whether the one record found carries the name asked for, or begins with it."""
+    wanted = norm(text)
+    shown = norm(resolver._own_name(found[2]))
+    own = norm(found.personal)
+    return (shown == wanted or shown.startswith(wanted) or norm(found[2]).startswith(wanted)
+            or own == wanted or own.startswith(wanted))

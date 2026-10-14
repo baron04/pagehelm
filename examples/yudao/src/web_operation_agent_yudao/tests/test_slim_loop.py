@@ -1091,17 +1091,87 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.ran, ["goto", "fill_fields", "call_api"])
 
 
+class PagingTests(unittest.TestCase):
+    """The list's rows per page and its page, as fields of fill_fields."""
+
+    @staticmethod
+    def read(page=1, size=10, total=45):
+        return {"path": "/admin-api/orders/page", "query_digest": "0" * 64, "query_fields": {}, "revision": page,
+                "page": page, "page_size": size, "total": total, "rows": min(size, total)}
+
+    def paged(self, value, label="每页条数", then=None, controls=None):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge, self.sent = None, []
+        executor._act = lambda s, action, args, **kw: self.sent.append((action, args)) or ""
+
+        def settled(s, **kw):
+            if then is not None:
+                s.obs = PageObservation(1, 1, s.obs.url, "Orders", [], s.obs.elements, content=s.obs.content,
+                                        page_read=then)
+        executor._settled = settled
+        if controls is None:
+            controls = [element(3, "combobox", "", "input", page_control="page_size", page_size="10"),
+                        element(4, "listitem", "2", "li", page_control="pagination", page_number="2", page_size="10"),
+                        element(5, "option", "10条/页", "li"), element(6, "option", "20 条/页", "li")]
+        state, turn = State(), {"touched": [], "trace": []}
+        state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], controls,
+                                    content="[3]<input />\n[4]<li>2 />", page_read=self.read())
+        said = executor._fill_fields(state, [{"label": label, "value": value}], "", turn)
+        return said, state, turn
+
+    def test_rows_per_page_are_chosen_by_the_application_s_option_and_confirmed_by_the_list_read(self):
+        said, _state, turn = self.paged("20", then=self.read(size=20))
+        self.assertEqual(self.sent, [("click", {"ref": "e3"}), ("click", {"ref": "e6"})])
+        self.assertIn("每页条数：已改为每页 20 条（列表读回：第 1 页，每页 20 条，共 45 条）", said)
+        self.assertEqual(turn["touched"], [])        # a list's paging is not a value entered on the page
+
+    def test_a_page_is_turned_by_the_control_for_that_page(self):
+        said, _state, _turn = self.paged("2", label="页码", then=self.read(page=2))
+        self.assertEqual(self.sent, [("click", {"ref": "e4"})])
+        self.assertIn("页码：已改为第 2 页", said)
+
+    def test_what_the_list_did_not_read_back_is_said(self):
+        said, _state, _turn = self.paged("20条", then=self.read(size=10))
+        self.assertIn("已操作，但列表读回的不是 20（10）", said)
+
+    def test_a_page_with_no_control_for_it_is_not_guessed(self):
+        said, _state, _turn = self.paged("15")
+        self.assertIn("每页条数的选项里没有“15条/页”", said)
+        for label, value, missing in (("页码", "5", "没有翻到第 5 页的按钮"), ("每页条数", "二十", "值写一个数字")):
+            with self.subTest(label=label):
+                said, _state, _turn = self.paged(value, label=label)
+                self.assertIn(missing, said)
+                self.assertEqual(self.sent, [])
+        said, _state, _turn = self.paged("20", controls=[element(5, "button", "搜索", "button")])
+        self.assertIn("没有每页条数的选择", said)
+        # No paging on the screen at all: the page is scrolled down once to bring it into view.
+        self.assertEqual(self.sent, [("scroll", {"direction": "down", "pages": 3})])
+
+    def test_the_paging_controls_are_marked_on_the_page_the_model_reads(self):
+        observation = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(3, "combobox", "", "input", page_control="page_size", page_size="10"),
+            element(4, "listitem", "2", "li", page_control="pagination", page_number="2", page_size="10")],
+            content="[3]<input />\n[4]<li>2 />")
+        lines, _hints = _page_lines(observation)
+        self.assertEqual(lines, ["[3]<input /> 〔每页条数〕", "[4]<li>2 /> 〔翻到第2页〕"])
+
+
 class FindRecordTests(unittest.TestCase):
     class Port:
-        def __init__(self, hits=(), refuse=False):
-            self.hits, self.refuse, self.asked = hits, refuse, []
+        def __init__(self, hits=(), refuse=False, parts=None):
+            """`hits` are (entity, display) for one record each, or (entity, records) with
+            (id, display, address) records; `parts` what a part of the name finds."""
+            self.hits, self.refuse, self.asked, self.parts = hits, refuse, [], parts or {}
 
-        def locate_reference(self, text, *, context=None, entities=()):
+        def records_named(self, text, *, context=None, entities=()):
             self.asked.append(text)
-            self.among = entities
             if self.refuse:
                 raise DataRefused("the index is unavailable", read_failed=True)
-            return self.hits
+            if text in self.parts:
+                return self.parts[text]
+            self.among = entities
+            return tuple((entity, ((str(n), shown, ""),) if isinstance(shown, str) else shown)
+                         for n, (entity, shown) in enumerate(self.hits, 1))
 
         def index(self, *, context=None):
             return ApplicationIndex(
@@ -1150,8 +1220,39 @@ class FindRecordTests(unittest.TestCase):
 
     def test_nothing_found_among_the_named_entities_says_where_it_looked_and_how_to_look_further(self):
         told = self.find(self.Port(), "恒昌五金", "供应商")
-        self.assertIn("在名称里有“供应商”的模块（ERP 供应商）里，没有找到", told)
+        self.assertIn("在名称里有“供应商”的模块（ERP 供应商）里，按名称“恒昌五金”和它的一部分（“恒昌”“五金”）查列表，"
+                      "都没有名称是或包含“恒昌五金”的记录。", told)
+        self.assertIn("如实说明这些模块里没有它（cannot），不要再换名字查", told)
         self.assertIn("不带 kind 再查一次", told)
+
+    def test_records_a_part_of_the_name_finds_are_said_not_to_be_the_one_asked_for(self):
+        port = self.Port(parts={"周远": (), "远航": (("hrm/employee", (("8", "李远航", ""),)),)})
+        told = self.find(port, "周远航", "员工")
+        self.assertEqual(port.asked, ["周远航", "周远", "远航"])
+        self.assertIn("和它的一部分（“周远”“远航”）", told)
+        self.assertIn("名称与用户说的不同，不是它：\n" + BEGIN + "\n李远航\n" + END, told)
+
+    def test_a_code_is_not_looked_for_by_parts(self):
+        port = self.Port()
+        self.assertNotIn("一部分", self.find(port, "XSTH20260929000005", "销售退货单"))
+        self.assertEqual(port.asked, ["XSTH20260929000005"])
+
+    def test_several_records_of_one_entity_are_listed_with_their_numbers_for_the_person_to_choose(self):
+        port = self.Port(hits=(("hrm/employee", (("1", "李文博（ID=1）", "/hrm/employee/detail/1"),
+                                                  ("2", "李文博（ID=2）", "/hrm/employee/detail/2"))),))
+        told = self.find(port, "李文博", "员工")
+        self.assertIn("员工档案（hrm/employee；页面：无）：有 2 条可能是它（同名或名称相近）：\n"
+                      "    李文博（ID=1）（编号 1；详情页 /hrm/employee/detail/1）\n"
+                      "    李文博（ID=2）（编号 2；详情页 /hrm/employee/detail/2）", told)
+        self.assertIn("不要自己挑，用 need_input", told)
+
+    def test_a_record_s_own_page_is_told_when_the_application_gives_one(self):
+        for address, said in (("/hrm/employee/detail/6", True), ("/crm/customer", False), ("", False),
+                              ("/hrm/employee/detail/61", False)):
+            with self.subTest(address=address):
+                told = self.find(self.Port(hits=(("hrm/employee", (("6", "赵磊", address),)),)), "赵磊", "员工")
+                self.assertEqual("这条记录的详情页 /hrm/employee/detail/6" in told, said)
+                self.assertNotIn("need_input", told)
 
     def test_it_says_which_modules_hold_a_record_of_that_name_and_where(self):
         port = self.Port(hits=(("crm/customer", "晨岚机电"), ("erp/customer", "晨岚机电")))
