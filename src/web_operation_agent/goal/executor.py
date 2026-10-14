@@ -832,6 +832,10 @@ class GoalTurnExecutor:
         self.run_id_factory = run_id_factory
         self.ledger_factory = ledger_factory
         self.conversation_state = conversation_state or ConversationState()
+        #: The person's leave to work the page, answered once for the conversation: a
+        #: later turn goes ahead on it, a new conversation asks again. Writes are not
+        #: covered by it; each still asks on its own.
+        self.page_leave = False
 
     # -- binding ----------------------------------------------------------------------
     @observed_turn
@@ -839,6 +843,8 @@ class GoalTurnExecutor:
         turn_message = AgentTurnMessage.from_wire(message)
         dropped = (self.conversation_state.clear()
                    if self.channel.take_new_conversation() else -1)
+        if dropped >= 0:
+            self.page_leave = False
         if dropped >= 0 and self.declaration_cache is not None:
             self.declaration_cache.clear()
         if not self.application.descriptor.owns_url(turn_message.page_url):
@@ -905,12 +911,12 @@ class GoalTurnExecutor:
         cancelled = lambda: self.channel.message_cancelled(turn_message.message_id)  # noqa: E731
 
         def confirm_operation(plan: OperationPlan, *, context=None) -> ApprovalGrant:
-            """One card for the turn, as the ReAct turn asks: may it work the page."""
+            """One card for the conversation: may it work the page."""
             chinese = bool(_CJK.search(turn_message.text))
             effect = ("在页面上帮你完成这件事" if chinese
                       else "Work the page to do this for you")
-            targets = (("会打开页面、点击、填写和选择",) if chinese
-                       else ("Opens pages, clicks, fills and chooses",))
+            targets = (("会打开页面、点击、填写和选择；这次对话里不再询问",) if chinese
+                       else ("Opens pages, clicks, fills and chooses; not asked again in this conversation",))
             try:
                 return gate.decide_plan(plan, effect=effect, targets=targets,
                                         ttl_s=self.config.operation_approval_ttl_s,
@@ -944,6 +950,9 @@ class GoalTurnExecutor:
             cancelled=cancelled,
             approval_hold_s=self.config.approval_ttl_s,
             operation_hold_s=self.config.operation_approval_ttl_s)
+        approvals.operation_granted = self.page_leave
+        if self.page_leave and approvals.operation_confirmation is not None:
+            ledger.append("operation_leave_carried", message_id=turn_message.message_id)
         writes = WriteWatch(control=self.control, ledger=ledger, run_id=run_id,
                             write_guard_declared=bool(self.application.descriptor.page_write_guard))
         continued = self._continued(turn_message)
@@ -985,6 +994,9 @@ class GoalTurnExecutor:
                                  "the goal turn failed before it produced a terminal result",
                                  retryable=False, run_id=run_id) from exc
         finally:
+            # Leave answered in this turn carries to the next; leave withdrawn here (the
+            # task read anew) is asked again.
+            self.page_leave = approvals.operation_granted
             # Unused parallel readings are cancelled and joined before the terminal
             # receipt, so a failed first reading cannot leave a paid task running.
             state.model_stop.set()

@@ -430,7 +430,7 @@ class TheSessionAsksOnceBeforeWorkingThePage(unittest.TestCase):
             # approvals as writes may see it as one.
             self.assertEqual(result.business_control["approval_requested"], 0)
 
-    def test_the_next_turn_asks_again(self):
+    def test_a_turn_given_no_leave_asks_again(self):
         with tempfile.TemporaryDirectory() as tmp:
             person = _Person("approved", "approved")
             for turn in ("first", "second"):

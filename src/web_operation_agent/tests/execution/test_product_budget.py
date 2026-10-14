@@ -182,5 +182,40 @@ class ProductSharedBudgetTests(unittest.TestCase):
         self.assertEqual(result.agent.wall_seconds, 2)
 
 
+class ProductPageLeaveTests(unittest.TestCase):
+    def test_leave_to_work_the_page_is_asked_once_for_the_conversation(self):
+        from web_operation_agent.schemas import ElementRef
+        url = "https://ledger.example/invoices"
+        channel = _Channel(page_url=url)
+        channel.latest_observation_envelope.observation.elements.append(
+            ElementRef(ref="current-link", role="link", name="Invoices", tag="a", epoch=1,
+                       attrs={"href": "/invoices/invoice-1"}))
+        goto = {"tool_calls": [{"id": "navigate", "function": {
+            "name": "goto", "arguments": '{"url":"/invoices/invoice-1"}'}}]}
+        chat = Chat([planned(), goto, finish()] * 3)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audit.jsonl"
+            executor = AgentTurnExecutor(
+                channel=channel, chat=chat, control=ReadOnlyControl(),
+                application=bind_application(_InvoiceAdapter()),
+                run_id_factory=lambda m: "leave-" + m.message_id,
+                config=AgentTurnConfig(supported_scope="Read the page only.",
+                    ledger_path=path, step_budget=3, wall_budget_s=60,
+                    disabled_actions=POTENTIALLY_WRITING_ACTIONS - {"goto"},
+                    confirm_page_operations=True))
+            gone = []
+            with patch.object(turn, "RemoteBrowserClient", _RemoteBrowser):
+                for i, fresh in enumerate((False, False, True)):
+                    channel.new_conversation_pending = fresh
+                    executor.execute({**_message(url), "message_id": f"message-{i}"})
+                    gone.append("goto" in _RemoteBrowser.instances[-1].actions)
+            events = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(gone, [True, True, True])
+        # Asked in the first turn, gone ahead on in the second, asked again in a new conversation.
+        self.assertEqual([a.kind for a in channel.approvals], ["operate", "operate"])
+        self.assertEqual([e["message_id"] for e in events if e["event"] == "operation_leave_carried"],
+                         ["message-1"])
+
+
 if __name__ == "__main__":
     unittest.main()

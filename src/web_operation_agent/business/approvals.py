@@ -91,8 +91,8 @@ class ApprovalWatch:
             "mutation_indeterminate": 0,
         }
         self.operation_counts = {"requested": 0, "confirmed": 0, "not_confirmed": 0}
-        #: Whether the person has let the assistant work the page this turn. A watch lives
-        #: for one turn, so the leave ends with it: the next message asks again.
+        #: Whether the person has let the assistant work the page. A watch lives for one
+        #: turn; its owner may carry the leave in from an earlier turn of the conversation.
         self.operation_granted = False
         #: The operation the card was answered for, until the next dispatch settles it.
         self.answered_for: tuple[str, str] | None = None
@@ -305,7 +305,8 @@ class ApprovalWatch:
 
     def confirm_operation(self, step: int, obs: PageObservation, *, action: str,
                           url: str = "") -> tuple[str, str]:
-        """Ask once per turn before working the page; later operations go ahead on that leave.
+        """Ask before working the page unless leave is already held; later operations go
+        ahead on that leave.
 
         Opening the page already shown operates nothing and asks nothing.
         """
