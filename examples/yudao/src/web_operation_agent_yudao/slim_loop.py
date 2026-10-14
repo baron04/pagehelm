@@ -1375,7 +1375,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
         try:
             with s.receipt.stage("business"):
                 context = s.approvals.context(s.step, "find_record")
-                index = self.goal_port.index(context=context)
+                # The outline: a lookup needs the entities and their pages, not the line
+                # tables a session's index is still reading.
+                index = getattr(self.goal_port, "outline_index", self.goal_port.index)(context=context)
                 among = _of_kind(index, kind)
                 hits = (self.goal_port.records_named(name, context=context, entities=among) if among
                         else self.goal_port.records_named(name, context=context))[:4]

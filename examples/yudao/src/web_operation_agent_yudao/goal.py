@@ -104,7 +104,14 @@ class YudaoGoalData:
         self._ui = ui or UiSource.none()
         self._modules, self._zone_name, self._max_rows = tuple(modules), time_zone, max_rows
         self._lock = threading.Lock()
+        #: Held while one record's detail per entity is read for the line tables: the
+        #: reads that are most of compiling, made without holding `_lock`.
+        self._lines_lock = threading.Lock()
         self._schema: Schema | None = None
+        #: The schema without the line tables, and its index, until the schema is complete.
+        self._outline: Schema | None = None
+        self._outline_index: ApplicationIndex | None = None
+        self._outline_entities: dict = {}
         self._index: ApplicationIndex | None = None
         self._conventions: tuple = ()
         self._source = None
@@ -203,12 +210,36 @@ class YudaoGoalData:
         return tuple(out)
 
     def schema(self) -> Schema:
+        """Everything this adapter knows of the application for the actor, line tables
+        included. The line tables are what compiling mostly costs; they are read without
+        holding `_lock`, so that a lookup by name (`outline_view`) need not wait for them."""
+        outline = self.outline()
+        with self._lock:
+            if self._schema is not None:
+                return self._schema
+        with self._lines_lock:
+            with self._lock:
+                if self._schema is not None:
+                    return self._schema
+                generation, entities = self._schema_generation, dict(self._outline_entities)
+            schema, lines = self._with_lines(outline, entities)
+            with self._lock:
+                if self._outline is not outline or generation != getattr(self._client, "read_generation", 0):
+                    raise DataRefused("credentials changed while reading application metadata")
+                self._schema, self._lines = schema, lines
+                self._outline, self._outline_index = None, None
+                return schema
+
+    def outline(self) -> Schema:
+        """The schema without the line tables: what compiling reads except one record's
+        detail per entity. The complete schema once there is one."""
         with self._lock:
             generation = getattr(self._client, "read_generation", 0)
             if generation != self._schema_generation:
                 # A renewed credential can carry changed menus and permissions. Rebuild
                 # metadata as well as data, so old opaque entity IDs cannot survive it.
                 self._schema, self._index = None, None
+                self._outline, self._outline_index = None, None
                 self._entities.clear()
                 self._lines.clear()
                 self._read.clear()
@@ -216,13 +247,41 @@ class YudaoGoalData:
                 self._menu_entries, self._menu_complete = (), False
                 self._read_generation = generation
                 self._schema_generation = generation
-            if self._schema is None:
-                self._schema = self._compile()
+            if self._schema is not None:
+                return self._schema
+            if self._outline is None:
+                outline = self._compile()
                 if generation != getattr(self._client, "read_generation", 0):
-                    self._schema = None
                     self._menu_entries, self._menu_complete = (), False
                     raise DataRefused("credentials changed while reading application metadata")
-            return self._schema
+                self._outline = outline
+            return self._outline
+
+    def outline_view(self, *, context=None) -> tuple[ApplicationIndex, Schema]:
+        """An index and schema to look records up by name with, without waiting for the
+        line tables: the complete ones once there are, the outline's until then. A line
+        table is no page's entity, so a lookup by name never needs one."""
+        outline = self.outline()
+        with self._lock:
+            if self._schema is not None and outline is self._schema and self._index is not None:
+                return self._index, self._schema
+            if outline is self._schema:
+                schema = self._schema
+            else:
+                schema = outline
+                if self._outline_index is None or self._outline is not outline:
+                    self._outline_index = replace(index_from_schema(
+                        outline, breadcrumbs=self._breadcrumbs, aliases=self._aliases,
+                        conventions=self._conventions, actor=self._actor), complete=self._menu_complete)
+                return self._outline_index, schema
+        return self.index(context=context), schema
+
+    def _known(self) -> Schema:
+        """The complete schema when there is one, else the outline: for reading entities
+        that are not line tables, which both describe alike."""
+        with self._lock:
+            schema = self._schema
+        return schema if schema is not None else self.outline()
 
     def _compile(self) -> Schema:
         info = self._client.get("system/auth/get-permission-info")
@@ -311,7 +370,12 @@ class YudaoGoalData:
                 FieldSchema("name", "名称", "text", listed=True),
                 FieldSchema("id", "编号", "number", listed=True),), operations=frozenset({"read"}),
                 name_field="name")
-        self._lines = {}
+        self._outline_entities = entities
+        return Schema(entities=tuple(entities.values()), pages=tuple(pages))
+
+    def _with_lines(self, outline: Schema, entities: dict) -> tuple[Schema, dict]:
+        """The schema with the line tables, and those tables by their keys."""
+        lines = {}
         owners = list(entities)
         # One record's detail per entity is most of what compiling costs: two reads each,
         # for every entity whose page labels line columns. They do not depend on each
@@ -324,13 +388,13 @@ class YudaoGoalData:
             samples = [self._line_sample(key) for key in owners]
         for key, sample in zip(owners, samples):
             for line in self._discover_lines(key, entities[key], sample):
-                self._lines[line.key] = line
+                lines[line.key] = line
                 entities[line.key] = line.schema
                 owner = entities[key]
                 entities[key] = replace(owner, fields=owner.fields + (FieldSchema(
                     key=line.list_key, label=line.schema.label, kind="lines", relation=line.key,
                     on_form=True, inverse=_OWNER, columns=line.columns),))
-        return Schema(entities=tuple(entities.values()), pages=tuple(pages))
+        return Schema(entities=tuple(entities.values()), pages=outline.pages), lines
 
     def _line_sample(self, key: str) -> dict | None:
         """One record's detail of an entity whose page labels line columns, or None: the
@@ -828,7 +892,7 @@ class YudaoGoalData:
         spec = self._entities.get(entity)
         if spec is not None and "id" not in spec.props:
             raise DataRefused("this read-only table has no record form")
-        page = next((p.key for p in self.schema().pages if p.entity == entity), "")
+        page = next((p.key for p in self._known().pages if p.entity == entity), "")
         template = self._ui.records.get(page)
         return template.format(id=id) if template else page
 
@@ -948,7 +1012,10 @@ class YudaoGoalData:
         """Every record the account may read that the pushed-down parameters admit."""
         if entity in (_USERS, _DEPTS):
             return self._people(entity)
-        self.schema()
+        self._known()
+        if entity not in self._entities and entity not in self._lines:
+            # A line table is in the complete schema only.
+            self.schema()
         if entity in self._lines:
             return self._line_rows(self._lines[entity], where)
         spec = self._entities.get(entity)
@@ -1221,7 +1288,7 @@ class YudaoGoalData:
             return str(row.get("productName") or row.get("name") or row.get("id"))
         spec = self._entities.get(entity)
         if spec is not None and "id" not in spec.props:
-            schema = self.schema().entity(entity)
+            schema = self._known().entity(entity)
             shown = []
             for info in schema.fields:
                 value = row.get(spec.links.get(info.key) or info.key)
@@ -1233,7 +1300,7 @@ class YudaoGoalData:
                 return str(row[key])
         # Neither name nor number: the first values its list shows of its own (a
         # receivable plan: "期数 2 · 计划回款金额 21,650.00"), not of the records it names.
-        schema = self.schema().entity(entity) if spec is not None else None
+        schema = self._known().entity(entity) if spec is not None else None
         shown = []
         for info in (schema.fields if schema is not None else ()):
             if len(shown) == 2:
@@ -1246,7 +1313,7 @@ class YudaoGoalData:
 
     def _row(self, entity: str, row: dict, fields, *,
              people_names: dict[str, dict[str, str]] | None = None) -> Row:
-        schema = self.schema().entity(entity)
+        schema = self._known().entity(entity)
         spec = self._entities.get(entity)
         values, shown, units = {}, {}, {}
         for key in fields:

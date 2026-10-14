@@ -346,7 +346,10 @@ background when the actor's session opens instead, so that the turn finds it bui
 waits for the rest of the same build); the application then answers those reads once per
 session whether or not a turn ever needs the index, which is why it is off by default.
 With it, the actor's menu, which the first request of a session's first turn carries, is
-read ahead as well.
+read ahead as well. A lookup by name does not wait for those detail reads: they serve only
+the line tables (an order's items), which are no page's entity, so a lookup reads the
+entities and pages compiled before them, and the rest of the index follows when they are
+done.
 
 A turn ends on the model's own `finish`. One case is read a second time by a closing
 model request, which checks the person's words against the page and may send the turn back

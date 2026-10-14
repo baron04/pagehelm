@@ -684,6 +684,49 @@ class LineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 YudaoGoalData(_LinesClient(), DOCS, ui=ui, read_workers=bad)
 
+    def test_a_lookup_by_name_does_not_wait_for_the_line_tables(self):
+        import threading
+        ui = UiSource(tables={"crm/contract/components/ContractProductForm": {
+            "productName": "产品名称", "count": "数量", "productPrice": "价格（元）", "id": "操作"}})
+
+        class Held(_LinesClient):
+            """A record's detail, which only the line tables read, waits to be let go."""
+            def __init__(self):
+                super().__init__()
+                self.reading, self.go = threading.Event(), threading.Event()
+
+            def get(self, path, **params):
+                if path == "crm/contract/get" and not threading.current_thread().name.startswith("lookup"):
+                    self.reading.set()
+                    self.go.wait(5)
+                return super().get(path, **params)
+
+        client = Held()
+        data = YudaoGoalData(client, DOCS, ui=ui)
+        port = DataGoalPort(data)
+        compiled = []
+        building = threading.Thread(target=lambda: compiled.append(data.schema()), daemon=True)
+        building.start()
+        self.assertTrue(client.reading.wait(5))            # the line tables are being read
+        found = []
+        lookup = threading.Thread(name="lookup", daemon=True, target=lambda: found.append(
+            (port.records_named("云帆科技", entities=("crm/customer",)), port.outline_index())))
+        lookup.start()
+        lookup.join(3)
+        self.assertFalse(lookup.is_alive(), "the lookup waited for the line tables")
+        named, outline = found[0]
+        self.assertEqual(named, (("crm/customer", (("5", "云帆科技有限公司", "/crm/customer"),)),))
+        self.assertIsNone(outline.entity("crm/contract/products"))    # not there yet
+        self.assertEqual(compiled, [])
+        client.go.set()
+        building.join(5)
+        self.assertEqual(compiled[0].entity("crm/contract/products").lines_of, "crm/contract")
+        # Once complete, the outline view is the complete index and schema.
+        index, schema = data.outline_view()
+        self.assertIs(schema, data.schema())
+        self.assertIsNotNone(index.entity("crm/contract/products"))
+        self.assertIs(port.outline_index(), data.index())
+
     def test_a_detail_s_line_table_is_an_entity_of_its_own(self):
         lines = self.data.schema().entity("crm/contract/products")
         self.assertEqual(lines.lines_of, "crm/contract")

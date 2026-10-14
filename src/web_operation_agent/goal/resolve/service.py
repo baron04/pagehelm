@@ -93,7 +93,14 @@ class DataGoalPort:
             else:
                 return None
             return entity, tuple((r.id, r.display, self._address(entity, r.id)) for r in refs)
-        return tuple(hit for hit in self._each_entity(text, context, entities, named) if hit is not None)
+        return tuple(hit for hit in self._each_entity(text, context, entities, named, outline=True)
+                     if hit is not None)
+
+    def outline_index(self, *, context: OperationContext | None = None) -> ApplicationIndex:
+        """The index a lookup by name reads: the adapter's outline view, when it offers
+        one (its entities and pages before its slower parts are compiled), else the index."""
+        view = getattr(self.data, "outline_view", None)
+        return view(context=context)[0] if view is not None else self.index(context=context)
 
     def _address(self, entity: str, rid: str) -> str:
         try:
@@ -101,19 +108,26 @@ class DataGoalPort:
         except (DataRefused, AttributeError, KeyError, ValueError):
             return ""
 
-    def _each_entity(self, text, context, entities, named):
+    def _each_entity(self, text, context, entities, named, *, outline=False):
         """`named(resolver, entity, found)` for the record lookup on each entity, in index
-        order: every entity a page shows, or those of `entities` a page shows."""
+        order: every entity a page shows, or those of `entities` a page shows. With
+        `outline`, over the adapter's outline view when it offers one."""
         if not text.strip() or re.fullmatch(r"[\d.,/-]+", text.strip()):
             return ()
-        index = self.index(context=context)
+        view = getattr(self.data, "outline_view", None) if outline else None
+        if view is not None:
+            index, schema = view(context=context)
+            make = lambda: Resolver(self.data, index, schema, today=self._today)  # noqa: E731
+        else:
+            index = self.index(context=context)
+            make = lambda: self._resolver(index)  # noqa: E731
         shown = tuple(dict.fromkeys(p.entity for p in index.pages if p.entity))
         entities = tuple(e for e in shown if e in entities) if entities else shown
-        serial_resolver = self._resolver(index) if self.reference_workers == 1 else None
+        serial_resolver = make() if self.reference_workers == 1 else None
 
         def find(entity):
             # A resolver is mutable; never share one between reader threads.
-            resolver = serial_resolver if serial_resolver is not None else self._resolver(index)
+            resolver = serial_resolver if serial_resolver is not None else make()
             if resolver.view(entity) is None:
                 return None
             try:
