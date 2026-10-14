@@ -644,9 +644,21 @@ class LoopTests(unittest.TestCase):
         sent.pop()
         executor._tool(state, "input", {"index": 9, "text": "Delta"}, turn)   # typed into a dropdown
         self.assertEqual(sent[-1], ("select", {"ref": "e9", "value": "Delta", "option_label": "Delta"}))
+
+        def scrolled(s, action, args, **kw):
+            # A look after the scroll: a new epoch, and here stars on what came into view.
+            sent.append((action, args))
+            s.obs = observation(epoch=s.obs.epoch + 1, **moved.pop(0))
+            return ""
+        executor._act = scrolled
+        moved = [{"content": CONTENT.replace("\t[11]<button", "\t*[11]<button").replace("bottom=394", "bottom=0")},
+                 {"content": CONTENT.replace("bottom=394", "bottom=0")}]
         said, _changed = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
         self.assertEqual(sent[-1], ("scroll", {"direction": "down", "pages": 1, "ref": "e8"}))
-        self.assertIn("内容没有变化", said)    # the page it was shown is the page it had
+        self.assertEqual(said, "已滚动。")
+        said, _changed = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        self.assertEqual(state.obs.epoch, 3)
+        self.assertIn("内容没有变化", said)    # looked at again, and it showed what it had shown
         executor._act = lambda s, action, args, **kw: "没有成功：stale"
         executor._tool(state, "input", {"index": 9, "text": "Gamma"}, turn)
         self.assertEqual(len(turn["touched"]), 3)   # a step that failed put nothing there

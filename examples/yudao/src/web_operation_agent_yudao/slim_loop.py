@@ -983,9 +983,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
             command = {"direction": "down" if args.get("down", True) else "up", "pages": 1}
             if args.get("index") is not None:
                 command["ref"] = "e" + _scroll_anchor(s.obs, element.ref[1:])
-            before = s.obs.content_digest
+            before = _shown(s.obs)
             failed = self._act(s, "scroll", command)
-            if not failed and s.obs.content_digest == before:
+            if not failed and _shown(s.obs) == before:
                 return "滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。", True
             return failed or "已滚动。", True
         if name == "highlight":
