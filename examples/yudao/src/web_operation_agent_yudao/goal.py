@@ -896,6 +896,18 @@ class YudaoGoalData:
         template = self._ui.records.get(page)
         return template.format(id=id) if template else page
 
+    def code_names(self, list_path: str) -> dict[str, dict[str, str]]:
+        """The names of the coded values ("50" -> "销售出库") of the list this API path reads,
+        by field; empty for a path that is no entity's list."""
+        schema = self._known()
+        with self._lock:
+            key = next((k for k, spec in self._entities.items()
+                        if spec.list_path.strip("/") == list_path.strip("/")), "")
+        entity = schema.entity(key) if key else None
+        if entity is None:
+            return {}
+        return {f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}
+
     def query_scope(self, entity: str, parameters: dict, *, label: str, ttl_s: float = 60) -> Native:
         """Server-side query binding, not a model tool or proof of current page state.
 

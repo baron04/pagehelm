@@ -402,6 +402,12 @@ class YudaoGoalDataTests(unittest.TestCase):
         status = self.data.schema().entity("erp/supplier").field("status")
         self.assertEqual([c.label for c in status.choices], ["开启", "关闭"])
 
+    def test_the_names_of_a_list_s_coded_values_are_told_by_its_api_path(self):
+        names = self.data.code_names("crm/contract/page")
+        self.assertEqual(list(names["auditStatus"].values()), ["未提交", "审核通过"])
+        self.assertNotIn("totalPrice", names)
+        self.assertEqual(self.data.code_names("no/such/page"), {})
+
     def test_a_crm_list_is_read_under_every_scene_and_merged(self):
         rows = self.data.rows("crm/contract", all_of(), fields=("name",))
         self.assertEqual(sorted(r.display for r in rows), ["云帆企业版合同", "瑞达实施服务合同"])

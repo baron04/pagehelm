@@ -71,6 +71,8 @@ _PAGE_CHARS = 9_000
 _API_CHARS, _API_KEPT = 5_000, 12_000
 #: How many rows a read of chosen columns follows the pages for.
 _ALL_ROWS = 1_000
+#: The most kinds a chosen column's rows are counted and summed by.
+_GROUPS = 12
 _TIME_KEY = re.compile(r"(?:Time|Date)$", re.I)
 #: Numbers that name or classify a row; a sum or a highest value of them means nothing.
 _NOT_A_QUANTITY = re.compile(r"(?:^|[a-z])(?:Id|No|Status|State|Type|Sort|Level|Sex|Code|Enable|Flag)$"
@@ -121,8 +123,12 @@ def _amount(value) -> str:
 class ActorKnowledge:
     """The signed-in actor's menu pages and the application's read-only API, searchable."""
 
-    def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai"):
+    def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai",
+                 codes=None):
         self.client, self._docs, self.writing_gets = client, api_docs, frozenset(writing_gets)
+        #: `codes(list_path)`: the names of a list's coded values by field, when the
+        #: application names them ({"bizType": {"50": "销售出库"}}).
+        self._codes = codes
         self._zone = ZoneInfo(time_zone)
         self._menu = self._ops = self._by_path = self._schemas = None
         #: The host may load this ahead of the first turn, on another thread.
@@ -373,6 +379,21 @@ class ActorKnowledge:
                  and k not in blanked]
         if notes:
             out.append("字段说明: " + "; ".join(notes[:30]))
+        # A coded column (a type, a status) is read as numbers; what each one is called is
+        # what the page shows and what a question says ("出库", "已审核").
+        names, read = self._names(relative), (rows if rows is not None else [data])
+        coded = {}
+        for key in (fields or keys):
+            seen = dict.fromkeys(str(row.get(key)) for row in read
+                                 if isinstance(row, dict) and row.get(key) not in (None, ""))
+            pairs = [(code, names[key][code]) for code in seen if code in names.get(key, {})]
+            if pairs:
+                coded[key] = pairs
+        if coded:
+            out.append("代码列的取值和名称（应用的字典）:")
+            data_lines.add(len(out))
+            out.append("；".join(f"{key}: " + "、".join(f"{code}={label}" for code, label in pairs[:20])
+                                for key, pairs in coded.items()))
         if rows is None:
             shown = self._row(data) if isinstance(data, dict) else data
             if isinstance(data, dict):
@@ -398,6 +419,7 @@ class ActorKnowledge:
             if months:
                 out.append(f"{key} 按月的行数: " + "，".join(
                     f"{month} {count} 行" for month, count in sorted(months.items(), reverse=True)[:12]))
+        quantities = []
         for key in fields:
             values = [row.get(key) for row in rows if isinstance(row, dict)]
             if _TIME_KEY.search(key):
@@ -405,12 +427,38 @@ class ActorKnowledge:
             if not values or _NOT_A_QUANTITY.search(key) or not all(
                     isinstance(v, (int, float)) and not isinstance(v, bool) for v in values):
                 continue
+            quantities.append(key)
             top = max(values)
             highest = [r for r in rows if r.get(key) == top]
+            # A ledger records what goes out as negative and what comes in as positive.
+            plus, minus = [v for v in values if v > 0], [v for v in values if v < 0]
+            signs = (f"；其中正数 {len(plus)} 行合计 {_amount(sum(plus))}，负数 {len(minus)} 行合计 {_amount(sum(minus))}"
+                     if plus and minus else "")
             out.append(f"{key}（{len(values)} 行）: 合计 {_amount(sum(values))}，最大 {_amount(top)}，"
-                       f"最小 {_amount(min(values))}；最大的有 {len(highest)} 行:")
+                       f"最小 {_amount(min(values))}{signs}；最大的有 {len(highest)} 行:")
             data_lines.add(len(out))
             out.append("；".join(json.dumps(self._row(r, fields), ensure_ascii=False) for r in highest[:6]))
+        # Rows of a few kinds (a type, a status) counted and summed per kind: the program's
+        # work, not one more read per kind.
+        grouped = 0
+        for key in fields:
+            if key in quantities or _TIME_KEY.search(key) or grouped >= 2:
+                continue
+            groups: dict[str, list] = {}
+            for row in rows:
+                if isinstance(row, dict) and row.get(key) not in (None, "") and not isinstance(row.get(key), (dict, list)):
+                    groups.setdefault(str(row[key]), []).append(row)
+            # A column every row has its own value of (a name, a number) is no kind.
+            if not 2 <= len(groups) <= _GROUPS or len(groups) == len(rows):
+                continue
+            grouped += 1
+            label = dict(coded.get(key, ()))
+            out.append(f"按 {key} 分组（{len(groups)} 种）:")
+            data_lines.add(len(out))
+            out.append("；".join(
+                f"{value}" + (f"（{label[value]}）" if value in label else "") + f": {len(members)} 行"
+                + "".join(f"，{q} 合计 {_amount(sum(r.get(q) for r in members))}" for q in quantities)
+                for value, members in sorted(groups.items(), key=lambda item: -len(item[1]))))
         if data_lines:
             out.append("各行:")
         used, listed = sum(len(line) for line in out), 0
@@ -426,6 +474,14 @@ class ActorKnowledge:
                        + ("加筛选参数缩小范围。" if fields else
                           "要统计、比较或找最大最小：用 fields 只取要用的列，会读完所有页并算好合计、最大、最小。"))
         return self._told(out, data_lines)
+
+    def _names(self, path: str) -> dict:
+        if self._codes is None:
+            return {}
+        try:
+            return self._codes(path) or {}
+        except (DataRefused, LookupError, ValueError):
+            return {}
 
     def _told(self, out: list, data_lines: set) -> str:
         """A read as the model is told it: what the program says about it in the open, the
@@ -481,7 +537,7 @@ TOOLS = [
         "params": {"type": "object", "description": "查询参数"},
         "fields": {"type": "array", "items": {"type": "string"}, "description":
                    "只取这些列（列名是返回行里的键）。给了 fields，分页接口会从 pageNo 起读完所有页，"
-                   "并算好数值列的合计、最大、最小。统计、比较、找最大最小、按日期数个数时必须用。"}},
+                   "并算好数值列的合计、最大、最小，类型、状态这类列按取值分组算行数和合计。统计、比较、找最大最小、按日期数个数时必须用。"}},
         ["path"]),
     _tool("highlight", "把一个控件标出来交给用户自己点（例如表单的确定按钮）。不会点击它。", {
         "index": {"type": "integer"},
@@ -532,7 +588,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 
 你能做三类事，一句话里可能同时包含几类，每一类都要做完：
 1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
-   - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序会读完所有页，算好数值列的合计、最大、最小和日期列每个月的行数，直接用这些数，不要自己一页页翻、一行行加。
+   - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序会读完所有页，算好数值列的合计、最大、最小，日期列每个月的行数，以及类型、状态这类列每种取值的行数和合计（带上代码的名称），直接用这些数，不要自己一页页翻、一行行加，也不要按每种取值再读一次。
    - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。

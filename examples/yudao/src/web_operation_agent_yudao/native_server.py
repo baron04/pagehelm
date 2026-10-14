@@ -467,7 +467,8 @@ class YudaoHost:
                     goal_port=app.goal_port,
                     disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                     knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
-                                             time_zone=app.goal_data.time_zone()),
+                                             time_zone=app.goal_data.time_zone(),
+                                             codes=app.goal_data.code_names),
                     conventions=load_conventions(REFERENCE_CONVENTIONS),
                     time_zone=app.goal_data.time_zone(),
                     skill_knowledge=self.config.slim_skill_knowledge)

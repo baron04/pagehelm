@@ -203,6 +203,7 @@ DOCS = {"paths": {
         "responses": {"200": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/Result"}}}}}}},
     "/admin-api/wallet/get": {"get": {"summary": "获得钱包", "tags": ["管理后台 - 钱包"]}},
     "/admin-api/deals/page": {"get": {"summary": "获得商机分页", "tags": ["管理后台 - 商机"]}},
+    "/admin-api/ledger/page": {"get": {"summary": "获得库存明细分页", "tags": ["管理后台 - 库存明细"]}},
     "/admin-api/leads/page": {"get": {"summary": "获得线索分页", "tags": ["管理后台 - 线索"], "parameters": [
         {"name": "sceneType", "in": "query", "description": "场景类型"},
         {"name": "pageNo", "in": "query", "required": True, "description": "页码"}]}},
@@ -258,6 +259,9 @@ class Client:
         if path == "deals/page":
             size, page = params.get("pageSize", 2), params["pageNo"]
             return {"total": len(DEALS), "list": DEALS[(page - 1) * size:page * size]}
+        if path == "ledger/page":
+            size, page = params.get("pageSize", 2), params["pageNo"]
+            return {"total": len(LEDGER), "list": LEDGER[(page - 1) * size:page * size]}
         raise AssertionError(path)
 
 
@@ -267,6 +271,10 @@ DEALS = [{"id": n, "name": f"商机{n}", "ownerUserId": 7, "totalPrice": price, 
           "remark": "备注" * 30}
          for n, (price, made) in enumerate([(45000.0, OCTOBER), (18000.5, SEPTEMBER), (45000.0, OCTOBER),
                                             (32000.0, SEPTEMBER), (100.0, OCTOBER)], start=1)]
+
+LEDGER = [{"id": n, "bizType": kind, "count": count}
+          for n, (kind, count) in enumerate([(50, -4.0), (50, -9.0), (70, 200.0), (60, 1.0), (50, -3.0)], start=1)]
+LEDGER_NAMES = {"bizType": {"10": "其它入库", "50": "销售出库", "60": "销售退货入库", "70": "采购入库"}}
 
 
 class KnowledgeTests(unittest.TestCase):
@@ -393,6 +401,33 @@ class KnowledgeTests(unittest.TestCase):
             del DEALS[0]["status"], DEALS[1]["status"]
         self.assertNotIn("status（", text)
         self.assertIn("totalPrice（", text)
+
+    def test_rows_of_a_few_kinds_are_counted_and_summed_per_kind_under_their_names(self):
+        asked = []
+        know = ActorKnowledge(self.client, lambda: DOCS, codes=lambda path: asked.append(path) or LEDGER_NAMES)
+        text = know.call_api("ledger/page", {"pageNo": 1, "pageSize": 2}, ["bizType", "count"])
+        self.assertEqual(asked, ["ledger/page"])
+        self.assertIn("count（5 行）: 合计 185，最大 200，最小 -9；其中正数 2 行合计 201，负数 3 行合计 -16；", text)
+        self.assertIn("按 bizType 分组（3 种）:\n" + BEGIN + "\n50（销售出库）: 3 行，count 合计 -16；"
+                      "70（采购入库）: 1 行，count 合计 200；60（销售退货入库）: 1 行，count 合计 1\n" + END, text)
+        # Only the codes the rows hold are named.
+        self.assertIn("代码列的取值和名称（应用的字典）:\n" + BEGIN + "\nbizType: 50=销售出库、70=采购入库、60=销售退货入库\n" + END, text)
+        self.assertNotIn("其它入库", text)
+        self.assertNotIn("bizType（", text)
+
+    def test_a_read_of_one_page_names_its_codes_too_and_goes_without_names_it_cannot_read(self):
+        know = ActorKnowledge(self.client, lambda: DOCS, codes=lambda path: LEDGER_NAMES)
+        self.assertIn("bizType: 50=销售出库", know.call_api("ledger/page", {"pageNo": 1, "pageSize": 2}))
+        def refused(path):
+            raise DataRefused("not readable")
+        text = ActorKnowledge(self.client, lambda: DOCS, codes=refused).call_api(
+            "ledger/page", {"pageNo": 1, "pageSize": 5}, ["bizType", "count"])
+        self.assertNotIn("代码列", text)
+        self.assertIn("按 bizType 分组（3 种）:\n" + BEGIN + "\n50: 3 行，count 合计 -16；", text)
+
+    def test_a_column_every_row_has_its_own_value_of_is_not_grouped(self):
+        text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 5}, ["name", "totalPrice"])
+        self.assertNotIn("按 name 分组", text)
 
     def test_without_chosen_columns_only_the_page_asked_for_is_read(self):
         text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 2})
