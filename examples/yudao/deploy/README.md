@@ -312,7 +312,10 @@ whether either happened, and ends the turn only if it did. Otherwise, and after 
 step of the same reply that the program did not see through — one whose result has to be
 read first (an API read, a lookup, a click, a fill, a choice, a scroll), one it skipped or
 refused — neither an answer on the step nor a `finish` ends the turn; the result goes back
-to the model. A verified write may also be followed by `finish` in the same reply.
+to the model. A verified write may also be followed by `finish` in the same reply. The
+model is told to answer a question that asks for no page from what it read, without
+opening or filtering a page to show it; amounts and unit prices, whose unit the API does
+not state reliably, are still read on the page.
 
 After a step that opens, clicks, fills or chooses, the page is given time before the model
 reads it: nothing the page reads from the application is still on its way, and two looks
