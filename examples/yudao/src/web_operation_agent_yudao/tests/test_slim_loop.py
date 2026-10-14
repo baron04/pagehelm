@@ -601,9 +601,10 @@ class SettledTests(unittest.TestCase):
 
 
 class LoopTests(unittest.TestCase):
-    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=()):
+    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=()):
         """`page` is what each step on the page in turn changes of it; a step past the
-        end of it leaves the page as it was."""
+        end of it leaves the page as it was. `tabs` are (name, aria-selected) of the
+        page's tabs."""
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
         executor.channel = self.channel = Channel()
@@ -625,6 +626,11 @@ class LoopTests(unittest.TestCase):
             return pending.pop(0) if pending else []
         executor._verify = verify
         state = State(*replies)
+        if tabs:
+            extra = [element(20 + n, "tab", label, "div", **{"aria-selected": selected})
+                     for n, (label, selected) in enumerate(tabs)]
+            state.obs = PageObservation(1, 1, state.obs.url, "Orders", [], [*state.obs.elements, *extra],
+                                        content=state.obs.content)
         self.turn = turn = {"reads": [], "marked": "", "trace": [], "touched": list(touched),
                             "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0}
         return executor, state, executor._loop(state, asked, turn, verified=False)
@@ -700,6 +706,23 @@ class LoopTests(unittest.TestCase):
     def test_a_turn_ends_on_the_control_it_marked_when_that_step_carries_the_answer(self):
         _executor, state, text = self.loop(reply(call("highlight", index=10, answer="已填好")), tool=self.said)
         self.assertEqual((text, state.terminal_reason, len(state.chat.seen)), ("已填好", "", 1))
+
+    def test_an_answer_that_names_a_tab_the_page_does_not_show_does_not_end_the_turn(self):
+        def opened(s, name, args, turn):
+            turn["confirmed"] = True
+            return "已打开。", True
+        executor, state, text = self.loop(
+            reply(call("goto", path="/hrm/employee/detail/8", answer="已打开周明的档案，当前显示的是基本信息。")),
+            reply(call("finish", status="done", answer="已切到基本信息。")), tool=opened,
+            tabs=(("岗位信息", "true"), ("基本信息", "false")))
+        self.assertEqual((text, len(state.chat.seen)), ("已切到基本信息。", 2))
+        told = [m["content"] for m in executor._messages if m["role"] == "tool"]
+        self.assertIn("答复里说的“基本信息”页签现在没有选中", told[0])
+        # The tab shown may be named.
+        _executor, state, text = self.loop(
+            reply(call("goto", path="/hrm/employee/detail/8", answer="已打开周明的档案，当前在岗位信息页签。")),
+            tool=opened, tabs=(("岗位信息", "true"), ("基本信息", "false")))
+        self.assertEqual((text, len(state.chat.seen)), ("已打开周明的档案，当前在岗位信息页签。", 1))
 
     def test_an_answer_on_a_step_is_checked_as_any_claim_of_completion_is(self):
         _executor, state, text = self.loop(reply(call("highlight", index=10, answer="已填好 10 月 20 日")),

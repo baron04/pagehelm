@@ -830,6 +830,16 @@ def _of_kind(index, kind: str) -> tuple[str, ...]:
     return tuple(found)
 
 
+def _tabs_not_shown(observation, answer: str) -> list[str]:
+    """Tabs of the page an answer names that are not the one selected."""
+    names = []
+    for e in observation.elements:
+        name = (e.name or "").strip().splitlines()[0] if (e.name or "").strip() else ""
+        if e.role == "tab" and name and e.attrs.get("aria-selected") != "true" and name in answer:
+            names.append(name)
+    return names
+
+
 #: Field names that mean the list's own paging rather than a field of the page.
 _PAGING = {"每页条数": "page_size", "每页": "page_size", "每页显示": "page_size", "页码": "page", "第几页": "page"}
 
@@ -1614,8 +1624,14 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     # The turn ends on it only if nothing written earlier in the reply is
                     # still unread and nothing but a finish comes after it.
                     rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
-                    if confirmed and not (unseen or unwritten) and rest <= {"finish"}:
+                    hidden = _tabs_not_shown(s.obs, answer)
+                    if confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
                         finish = {"status": "done", "answer": answer}
+                    elif hidden:
+                        # It was written before the page was seen: the page shows another tab.
+                        unseen = unseen or name
+                        text += (f" 这一步带的 answer 没有用上：答复里说的“{hidden[0]}”页签现在没有选中，"
+                                 "先切到它，再结束。")
                     else:
                         text += " 这一步带的 answer 没有用上，本轮还没有结束。"
                 if not confirmed:
