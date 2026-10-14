@@ -617,6 +617,20 @@ class LoopTests(unittest.TestCase):
                   reply(call("finish", status="cannot", answer="做不到")), steps=8)
         self.assertEqual(self.ran, ["input", "input", "scroll", "scroll"])
 
+    def test_repeated_searches_with_fresh_list_reads_are_still_run(self):
+        reads = [{"page_read": {"path": "/admin-api/orders/page", "query_digest": "a" * 64,
+                                "query_fields": {}, "revision": revision, "page": 1,
+                                "page_size": 10, "total": 10, "rows": 10}}
+                 for revision in range(1, 7)]
+        executor, state, _text = self.loop(
+            *[reply(call("click", index=10)) for _ in reads],
+            reply(call("finish", status="done", answer="共 10 条")), steps=8, page=reads)
+        self.assertEqual(self.ran, ["click"] * 6)
+        self.assertEqual((state.obs.epoch, state.obs.page_read["revision"]), (7, 6))
+        self.assertEqual(self.turn["stalled"], 0)
+        self.assertFalse(any("没有带来进展" in m["content"] for m in executor._messages
+                             if m["role"] == "tool"))
+
     def test_a_turn_that_keeps_repeating_one_step_ends(self):
         _executor, state, text = self.loop(*[reply(call("click", index=10)) for _ in range(5)], steps=10)
         self.assertEqual(self.ran, ["click"])
