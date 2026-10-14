@@ -554,7 +554,8 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
 - 一次回复里可以连着调用几个工具，按顺序执行。页面变化之后，同一次回复里按序号的操作（click、input、select、highlight）不会执行，按路径或字段名的（goto、fill_fields、call_api）照常执行：能一次说清的就一次说完，例如 goto 之后接着 fill_fields 筛选。
 - 最后一步是 goto 打开页面或 highlight 标出按钮时，把给用户的答复写在这一步的 answer 里，不用再单独调用 finish：用户只要求打开某个页面、要回答的值已经读到而只差打开页面、表单已经填好只差标出提交按钮，都是这样；用户要打开的是某一条记录时，goto 到它所在的列表不算打开了它，不带 answer。程序确认页面打开了（按钮标出了）才结束本轮，没有成功就把结果交给你。answer 里不要写你还没看到的页面内容（条数、某一行的值）。其它工具（call_api、find_record、click、fill_fields、select、input、scroll）的结果必须先看到，再 finish。
-- 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。
+- 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。用户说了它是哪一类（员工、供应商、客户……），find_record 一定带上 kind。
+- find_record 带 kind 查过、说这些模块里没有的，就是没有：直接 cannot，说明查了哪些模块；不要再用 call_api、search_menu、goto 换名字或换模块去确认。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
 - 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。记录存在但不属于当前账号的可见范围，是没有权限，不要说成不存在。
 - 答复只写用户要的结果，以及页面或表单现在的状态。不要顺带转述记录的其它字段；没有逐字核对过的话不要写。
@@ -1386,6 +1387,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
             return redacted("\n".join(told), self.knowledge.handoffs)
         if not hits:
             return (f"没有在任何模块里找到名称是（或以它开头的）“{name}”的记录。可能不存在或名称不完整："
+                    "用户说了它是哪一类时，带上 kind 再查一次（会顺带按名称的一部分查）；没说时，"
                     "用对应模块的列表接口按名称的一部分查一次，再下结论。")
         told, lists, several = [], [], False
         for entity, records in hits:
