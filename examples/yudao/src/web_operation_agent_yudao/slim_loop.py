@@ -696,6 +696,18 @@ def _commits(element, elements) -> bool:
     return not (len(pair) == 2 and pair[0].ref == element.ref and not pair[1].attrs.get("value"))
 
 
+def _date_pair(element, elements):
+    """Two date inputs owned by one observed popup and the same live form. A native
+    range's label may name only its first input; it does not need to label both."""
+    panel = element.attrs.get("aria-controls")
+    if not panel or _control_kind(element) != "〔日期〕":
+        return []
+    pair = [e for e in elements if e.tag == "input" and _control_kind(e) == "〔日期〕"
+            and e.attrs.get("aria-controls") == panel
+            and all(e.attrs.get(key) == element.attrs.get(key) for key in ("form_scope", "form_instance"))]
+    return pair if len(pair) == 2 else []
+
+
 def _words(content: str) -> str:
     """The person's own words in a message that also carries what the program added."""
     return content.split("\n当前页面:")[0].split("\n上一轮用到的 Skill")[0].split("\n程序按字面先找到的")[0]
@@ -1101,16 +1113,31 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 said.append(f"{label}：屏幕上没有这个字段（先 scroll 让它出现，或核对字段名）")
                 continue
             kind = _control_kind(found[0])
-            if kind.startswith("〔日期") and len(found) == 2:
-                ends = [part.strip() for part in re.split(r"\s*(?:~|～|至|到)\s*", value) if part.strip()]
-                if len(ends) != 2:
+            anchor = found[0]
+            pair = _date_pair(anchor, s.obs.elements)
+            if kind == "〔日期〕" and (pair or re.search(r"[~～至到]", value)):
+                if not pair or any(e.ref[1:] not in shown for e in pair) or any(e not in pair for e in found):
+                    said.append(f"{label}：屏幕上没有唯一的日期范围两个框（先 scroll 让它们出现，或核对字段名）")
+                    continue
+                ends = [part.strip() for part in re.split(r"\s*(?:~|～|至|到)\s*", value)]
+                if len(ends) != 2 or not all(ends):
                     said.append(f"{label}：这是日期范围，值写成“开始 ~ 结束”")
                     continue
-                steps = list(zip(found, ends))
+                steps = list(zip(pair, ends))
             else:
                 steps = [(found[0], value)]
             failed = ""
-            for element, text in steps:
+            for at, (element, text) in enumerate(steps):
+                if pair:
+                    # Filling the start opens a calendar and can reindex the page.
+                    # Bind the end afresh to the same popup and form, never an old ref.
+                    current = _date_pair(anchor, s.obs.elements)
+                    lines, _hints = _page_lines(s.obs)
+                    visible = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
+                    if not current or any(e.ref[1:] not in visible for e in current):
+                        failed = "日期范围控件已变化，请根据最新观察重新填写"
+                        break
+                    element = current[at]
                 if kind in ("〔下拉〕", "〔单选〕") and text.strip():
                     failed = self._act(s, "select", {"ref": element.ref, "value": text, "option_label": text})
                 else:
