@@ -66,13 +66,16 @@ class DataGoalPort:
         return self._resolver(self.index(context=context)).candidates(
             entities=entities, known=known, dates=dates)
 
-    def locate_reference(self, text: str, *, context: OperationContext | None = None):
+    def locate_reference(self, text: str, *, context: OperationContext | None = None,
+                         entities: tuple[str, ...] = ()):
         """The records a hard reference names, as (entity key, display name), looked for
-        on every entity a page shows; a number or a date names nothing here."""
+        on every entity a page shows, or on those of `entities` a page shows; a number or a
+        date names nothing here."""
         if not text.strip() or re.fullmatch(r"[\d.,/-]+", text.strip()):
             return ()
         index = self.index(context=context)
-        entities = tuple(dict.fromkeys(p.entity for p in index.pages if p.entity))
+        shown = tuple(dict.fromkeys(p.entity for p in index.pages if p.entity))
+        entities = tuple(e for e in shown if e in entities) if entities else shown
         serial_resolver = self._resolver(index) if self.reference_workers == 1 else None
 
         def find(entity):

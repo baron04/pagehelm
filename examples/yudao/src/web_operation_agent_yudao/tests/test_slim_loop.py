@@ -1096,15 +1096,18 @@ class FindRecordTests(unittest.TestCase):
         def __init__(self, hits=(), refuse=False):
             self.hits, self.refuse, self.asked = hits, refuse, []
 
-        def locate_reference(self, text, *, context=None):
+        def locate_reference(self, text, *, context=None, entities=()):
             self.asked.append(text)
+            self.among = entities
             if self.refuse:
                 raise DataRefused("the index is unavailable", read_failed=True)
             return self.hits
 
         def index(self, *, context=None):
             return ApplicationIndex(
-                entities=(IndexEntity("crm/customer", "CRM 客户"), IndexEntity("erp/customer", "ERP 客户")),
+                entities=(IndexEntity("crm/customer", "CRM 客户"), IndexEntity("erp/customer", "ERP 客户"),
+                          IndexEntity("erp/sale-return", "销售退货"), IndexEntity("hrm/employee", "员工档案"),
+                          IndexEntity("erp/supplier", "ERP 供应商", ("供应商信息",))),
                 pages=(IndexPage("crm-customer", "客户管理", "CRM 系统 / 客户管理", entity="crm/customer"),
                        IndexPage("orders", "订单", "销售 / 订单", entity="orders")))
 
@@ -1122,10 +1125,33 @@ class FindRecordTests(unittest.TestCase):
                 import contextlib
                 return contextlib.nullcontext()
 
-    def find(self, port, name):
+    def find(self, port, name, kind=""):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         executor.goal_port, executor.knowledge = port, ActorKnowledge(Client(), lambda: DOCS)
-        return executor._find_record(self.Turn, name)
+        return executor._find_record(self.Turn, name, kind)
+
+    def test_the_kind_the_person_named_narrows_the_lookup_to_the_entities_it_names(self):
+        port = self.Port(hits=(("hrm/employee", "张伟"),))
+        self.assertIn("员工档案（hrm/employee；页面：无）：张伟", self.find(port, "张伟", "员工"))
+        self.assertEqual(port.among, ("hrm/employee",))
+        self.find(port, "宁波海川", "供应商")                     # by another name of the entity
+        self.assertEqual(port.among, ("erp/supplier",))
+        self.find(port, "XSTH20260929000005", "销售退货单")       # the word holds the entity's name
+        self.assertEqual(port.among, ("erp/sale-return",))
+        self.find(port, "晨岚机电", "客户")                       # every entity the word names
+        self.assertEqual(port.among, ("crm/customer", "erp/customer"))
+
+    def test_a_kind_that_names_no_entity_looks_everywhere(self):
+        port = self.Port(hits=(("crm/customer", "晨岚机电"),))
+        for kind in ("", "进销存客户"):
+            with self.subTest(kind=kind):
+                self.assertIn("晨岚机电", self.find(port, "晨岚机电", kind))
+                self.assertEqual(port.among, ())
+
+    def test_nothing_found_among_the_named_entities_says_where_it_looked_and_how_to_look_further(self):
+        told = self.find(self.Port(), "恒昌五金", "供应商")
+        self.assertIn("在名称里有“供应商”的模块（ERP 供应商）里，没有找到", told)
+        self.assertIn("不带 kind 再查一次", told)
 
     def test_it_says_which_modules_hold_a_record_of_that_name_and_where(self):
         port = self.Port(hits=(("crm/customer", "晨岚机电"), ("erp/customer", "晨岚机电")))

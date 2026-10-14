@@ -439,7 +439,10 @@ TOOLS = [
         "keyword": {"type": "string", "description": "业务词，如 采购入库、会员等级"}}, ["keyword"]),
     _tool("find_record", "按名称查这条记录在哪些模块里（客户、合同、商机、产品、订单……）。"
           "用户给了记录名却没说它是什么，或者你不确定它属于哪个模块时，先用它。", {
-        "name": {"type": "string", "description": "记录的名称或编号，照用户的原话"}}, ["name"]),
+        "name": {"type": "string", "description": "记录的名称或编号，照用户的原话"},
+        "kind": {"type": "string", "description":
+                 "用户说了这是哪一类记录（员工、供应商、销售退货单……）时，照用户的说法填这个词：只在名称里有这个词的模块中查，"
+                 "快得多。用户没说就不给"}}, ["name"]),
     _tool("goto", "打开一个页面路径（来自 search_menu 或页面里出现的详情路径）。", {
         "path": {"type": "string"},
         "answer": {"type": "string", "description":
@@ -796,6 +799,25 @@ def _shown(observation) -> str:
     return json.dumps(seen, sort_keys=True, ensure_ascii=False)
 
 
+def _of_kind(index, kind: str) -> tuple[str, ...]:
+    """The entities the person's word for a kind of record names: those whose name, one
+    of whose other names, or whose page's last breadcrumb holds the word, or whose own name
+    the word holds ("销售退货单" names 销售退货). None for no word, or one that names none."""
+    word = re.sub(r"\s+", "", kind).lower()
+    if not word:
+        return ()
+    pages = {}
+    for page in index.pages:
+        if page.entity:
+            pages.setdefault(page.entity, (page.breadcrumb or page.label).split("/")[-1])
+    found = []
+    for entity in index.entities:
+        names = [re.sub(r"\s+", "", n).lower() for n in (entity.label, *entity.aliases, pages.get(entity.key, ""))]
+        if any(word in n for n in names if n) or any(len(n) >= 2 and n in word for n in names[:1]):
+            found.append(entity.key)
+    return tuple(found)
+
+
 def page_text(observation, *, handoffs, marked: str = "") -> str:
     """The page as the loop's model reads it; what it may act on is marked [n]."""
     head = [f"当前页面: {urlsplit(observation.url).path}  {observation.title}"]
@@ -970,7 +992,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
             return know.search_api(str(args.get("keyword", ""))), False
         if name == "find_record":
             self._note(s, stage="search", what="record", term=args.get("name"), tool=name, arguments=said)
-            return self._find_record(s, str(args.get("name", "")).strip()), False
+            return self._find_record(s, str(args.get("name", "")).strip(), str(args.get("kind") or "").strip()), False
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
             params = args.get("params")
@@ -1236,23 +1258,32 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 said.append(failed or f"已点“{then_click}”")
         return "；".join(said) + "。"
 
-    def _find_record(self, s, name: str) -> str:
+    def _find_record(self, s, name: str, kind: str = "") -> str:
         """Where the application has a record of this name, through the goal port's own
-        "records found by name": every entity a page shows, read as the actor."""
+        "records found by name": every entity a page shows, read as the actor. With the
+        person's word for the kind of record, only the entities whose name, other names or
+        page carry that word: a few reads instead of one or two for every entity."""
         if not name:
             return "请给出要找的名称。"
         try:
             with s.receipt.stage("business"):
                 context = s.approvals.context(s.step, "find_record")
-                hits = self.goal_port.locate_reference(name, context=context)
                 index = self.goal_port.index(context=context)
+                among = _of_kind(index, kind)
+                hits = (self.goal_port.locate_reference(name, context=context, entities=among) if among
+                        else self.goal_port.locate_reference(name, context=context))
         except DataRefused as exc:
             return f"查找失败：{redacted(str(exc)[:160], self.knowledge.handoffs)}"
+        labels = {e.key: e.label for e in index.entities}
+        if not hits and among:
+            return (f"在名称里有“{kind}”的模块（{'、'.join(labels.get(e, e) for e in among)}）里，没有找到名称是"
+                    f"（或以它开头的）“{name}”的唯一记录。可能不存在、名称不完整，或同一模块里有多条同名记录"
+                    "（这里查不出同名的）：用对应模块的列表接口按名称查一次，确认是没有，还是有几条。"
+                    "它也可能在别的模块里：那样就不带 kind 再查一次。")
         if not hits:
             return (f"没有在任何模块里找到名称是（或以它开头的）“{name}”的唯一记录。"
                     "可能不存在、名称不完整，或同一模块里有多条同名记录（这里查不出同名的）："
                     "用对应模块的列表接口按名称查一次，确认是没有，还是有几条。")
-        labels = {e.key: e.label for e in index.entities}
         pages = {}
         for page in index.pages:
             if page.entity:

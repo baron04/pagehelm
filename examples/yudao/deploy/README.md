@@ -301,7 +301,10 @@ the turn.
 Round trips to the model are most of a turn's time, so fewer are asked for. The first
 request already carries the menu pages and paged lists whose own names the person's words
 contain, found by the program; `find_record` returns each entity's page and list with
-it. `fill_fields` fills or chooses several controls of the shown form, filter or line
+it. Given the person's word for the kind of record (员工, 供应商, 销售退货单), it looks only
+at the entities whose name, other names or page carry that word, a few reads instead of
+one or two for each of the application's entities; a word that names none looks
+everywhere, and nothing found among the named ones says where it looked. `fill_fields` fills or chooses several controls of the shown form, filter or line
 table by their labels in one step and may end by clicking a named button. After a page
 change, the steps of the same reply that name a path or a field still run; those that
 name an element by its number do not, since the numbers are the old page's. A scroll that

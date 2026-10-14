@@ -65,6 +65,28 @@ class ReferenceConcurrencyTests(unittest.TestCase):
         self.assertCountEqual(visited, keys)
         self.assertEqual(len({id(r) for r in readers}), 6)
 
+    def test_a_lookup_may_be_held_to_some_of_the_entities_a_page_shows(self):
+        keys = ('a', 'b', 'c')
+        index = ApplicationIndex(entities=tuple(IndexEntity(k, k) for k in keys + ('unpaged',)),
+                                 pages=tuple(IndexPage('/'+k, k, k, k) for k in keys))
+        port, visited = DataGoalPort(SimpleNamespace(index=lambda **kw: index)), []
+
+        class Reader:
+            def view(self, entity):
+                return object()
+
+            def _find_record(self, entity, text):
+                visited.append(entity)
+                return Found(Ref(entity, entity, 'ABC123 ' + entity))
+
+            def _own_name(self, display):
+                return display
+
+        with patch.object(port, '_resolver', side_effect=lambda _index: Reader()):
+            found = port.locate_reference('ABC123', entities=('c', 'unpaged', 'a'))
+        # Index order, and only entities a page shows.
+        self.assertEqual((found, visited), ((('a', 'ABC123 a'), ('c', 'ABC123 c')), ['a', 'c']))
+
     def test_worker_configuration_is_bounded_and_default_is_sequential(self):
         data = object()
         self.assertEqual(DataGoalPort(data).reference_workers, 1)
