@@ -18,6 +18,51 @@ function ready(facts: ReturnType<typeof createPageFacts>) {
 }
 
 describe('native Yudao record and read completion facts', () => {
+  it.each([
+    ['/infra/config', 'Config', '/admin-api/infra/config/page'],
+    ['/mall/trade/order', 'TradeOrder', '/admin-api/trade/order/page'],
+  ])('retains the applied creation date range through XHR on %s', async (route, component, path) => {
+    mountedPage(route, component)
+    class Request extends EventTarget {
+      responseType = 'json'; response = {code: 0, data: {list: [], total: 0}}; status = 200
+      open() {}
+      send() { this.dispatchEvent(new Event('loadend')) }
+    }
+    const view = {location: window.location, fetch: window.fetch, XMLHttpRequest: Request, crypto: window.crypto}
+    const facts = installPageFacts(view, document)
+    const call = (query: string) => {
+      const request = new Request()
+      // @ts-expect-error The fake receives browser arguments through the installed wrapper.
+      request.open('GET', path + query)
+      expect(facts.readPageQuery()).toBeUndefined()
+      request.send()
+    }
+    const query = '?pageNo=1&pageSize=10&createTime%5B0%5D=2026-10-01%2000%3A00%3A00'
+      + '&createTime%5B1%5D=2026-10-31%2023%3A59%3A59'
+    try {
+      call(query)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(facts.readPageQuery()).toEqual({path, parameters: {
+        createTimeStart: '2026-10-01 00:00:00', createTimeEnd: '2026-10-31 23:59:59'}})
+      expect(facts.readPageRead()?.query_fields).toHaveProperty('createTime[0]')
+      // A new request invalidates the old projection at send, including failures.
+      const failure = new Request(); failure.status = 403
+      // @ts-expect-error The fake receives browser arguments through the installed wrapper.
+      failure.open('GET', path + query)
+      failure.send()
+      expect(facts.readPageQuery()).toBeUndefined()
+      for (const invalid of [query + '&createTime%5B0%5D=2026-10-02%2000%3A00%3A00',
+        query.replace('2023%3A59%3A59', '2000%3A00%3A00'),
+        query.slice(0, query.indexOf('&createTime%5B1%5D=')), query + '&token=synthetic-private']) {
+        call(invalid)
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(facts.readPageQuery()).toBeUndefined()
+      }
+      call('?pageNo=1&pageSize=10')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(facts.readPageQuery()).toEqual({path, parameters: {}})
+    } finally { facts.dispose() }
+  })
   it('reports order filters only after the latest successful application read', async () => {
     mountedPage('/erp/sale/order', 'SaleOrder')
     const facts = createPageFacts()

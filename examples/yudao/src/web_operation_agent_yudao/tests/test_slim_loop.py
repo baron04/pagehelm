@@ -835,6 +835,125 @@ class LoopTests(unittest.TestCase):
         self.assertIn("已点“搜索”", said)
         self.assertEqual([label for label, _value in turn["touched"]], ["备注", "客户", "日期"])
 
+    def test_a_named_range_uses_its_unlabelled_end_from_the_fresh_observation(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge, sent = None, []
+        executor._settled = lambda s, **kw: None
+        state, turn = State(), {"touched": [], "trace": []}
+
+        def observed(start, end, value=""):
+            attrs = {"aria-haspopup": "dialog", "aria-controls": "range", "form_scope": "form:query",
+                     "form_instance": "query-instance"}
+            # Element Plus's label/for names only the start. The end is another live
+            # input in the same form and controls the same calendar, with no field_label.
+            return PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+                element(start, "combobox", "开始日期", "input", field_label="订单时间", value=value, **attrs),
+                element(end, "combobox", "结束日期", "input", **attrs),
+                element(9, "combobox", "另一个日期", "input", **{"aria-haspopup": "dialog", "aria-controls": "other"})],
+                content=f"[{start}]<input />\n[{end}]<input />\n[9]<input />")
+
+        state.obs = observed(3, 4)
+
+        def act(s, action, args, **kw):
+            sent.append((action, args))
+            if len(sent) == 1:
+                # Opening the calendar can change PageController's indices. Never
+                # address its end using the ref from before the start was filled.
+                s.obs = observed(5, 6, "2026-10-01")
+            return ""
+
+        executor._act = act
+        said, _changed = executor._tool(state, "fill_fields", {"fields": [
+            {"label": "订单时间", "value": "2026-10-01 ~ 2026-10-28"}]}, turn)
+        self.assertEqual(sent, [
+            ("fill", {"ref": "e3", "value": "2026-10-01", "commit": False}),
+            ("fill", {"ref": "e6", "value": "2026-10-28", "commit": True})])
+        self.assertIn("订单时间：已填", said)
+        self.assertEqual(turn["touched"], [("订单时间", "2026-10-01 ~ 2026-10-28")])
+
+    def test_a_range_requires_two_visible_inputs_of_one_popup_and_form(self):
+        attrs = {"aria-haspopup": "dialog", "aria-controls": "range", "form_scope": "form:query",
+                 "form_instance": "query-instance"}
+        start = element(3, "combobox", "", "input", field_label="日期", **attrs)
+        end = element(4, "combobox", "", "input", **attrs)
+        for changes, visible in [
+            ({"aria-controls": "other"}, True), ({"form_scope": "form:other"}, True),
+            ({"form_instance": "other-instance"}, True), ({}, False),
+        ]:
+            with self.subTest(changes=changes, visible=visible):
+                executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+                executor.knowledge, sent = None, []
+                executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
+                executor._settled = lambda s, **kw: None
+                state, turn = State(), {"touched": [], "trace": []}
+                other = element(4, "combobox", "", "input", **{**attrs, **changes})
+                state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [start, other],
+                                            content="[3]<input />" + ("\n[4]<input />" if visible else ""))
+                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+                self.assertIn("没有唯一的日期范围两个框", said)
+                self.assertEqual(sent, [])
+                self.assertEqual(turn["touched"], [])
+        # Three inputs claiming one popup, or two labelled ranges, must not pick one.
+        for others in [
+            [end, element(5, "combobox", "", "input", **attrs)],
+            [end, element(5, "combobox", "", "input", field_label="日期",
+                          **{**attrs, "aria-controls": "another-range"})],
+        ]:
+            with self.subTest(others=others):
+                state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [start, *others],
+                                            content="[3]<input />\n[4]<input />\n[5]<input />")
+                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+                self.assertIn("没有唯一的日期范围两个框", said)
+                self.assertEqual(sent, [])
+
+    def test_a_range_rejects_a_missing_endpoint_and_accepts_the_documented_separators(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge, sent = None, []
+        executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
+        executor._settled = lambda s, **kw: None
+        state = State()
+        attrs = {"aria-haspopup": "dialog", "aria-controls": "range"}
+        state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+            element(3, "combobox", "", "input", field_label="日期", **attrs),
+            element(4, "combobox", "", "input", **attrs)], content="[3]<input />\n[4]<input />")
+        for value in ["2026-10-01", "2026-10-01 ~", "~ 2026-10-28", "2026-10-01 ~ ~ 2026-10-28"]:
+            with self.subTest(value=value):
+                turn = {"touched": [], "trace": []}
+                said = executor._fill_fields(state, [{"label": "日期", "value": value}], "", turn)
+                self.assertIn("值写成“开始 ~ 结束”", said)
+                self.assertEqual(sent, [])
+        for separator in ["~", "～", "至", "到"]:
+            with self.subTest(separator=separator):
+                sent.clear()
+                said = executor._fill_fields(state, [{"label": "日期", "value": f"2026-10-01 {separator} 2026-10-28"}],
+                                             "", {"touched": [], "trace": []})
+                self.assertIn("日期：已填", said)
+                self.assertEqual([args["value"] for _, args in sent], ["2026-10-01", "2026-10-28"])
+
+    def test_a_range_stops_when_its_form_is_replaced_after_the_start(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge, sent = None, []
+        executor._settled = lambda s, **kw: None
+        state, turn = State(), {"touched": [], "trace": []}
+
+        def observed(instance):
+            attrs = {"aria-haspopup": "dialog", "aria-controls": "range", "form_instance": instance}
+            return PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [
+                element(3, "combobox", "", "input", field_label="日期", **attrs),
+                element(4, "combobox", "", "input", **attrs)], content="[3]<input />\n[4]<input />")
+
+        def act(s, action, args, **kw):
+            sent.append((action, args))
+            s.obs = observed("replacement")
+            return ""
+
+        executor._act = act
+        state.obs = observed("original")
+        said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+        self.assertIn("日期范围控件已变化", said)
+        self.assertEqual(sent, [("fill", {"ref": "e3", "value": "2026-10-01", "commit": False})])
+        self.assertEqual(turn["touched"], [])
+
     def test_the_check_is_told_which_controls_the_assistant_set_and_nothing_else_counts_as_changed(self):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "把地址清空"}]

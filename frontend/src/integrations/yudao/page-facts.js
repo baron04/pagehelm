@@ -32,6 +32,27 @@ function orderQuery(url) {
   return {path: url.pathname, parameters}
 }
 
+function creationRangeList(route, path) {
+  return route === '/infra/config' && path === '/admin-api/infra/config/page'
+    || route === '/mall/trade/order' && path === '/admin-api/trade/order/page'
+}
+
+function creationRangeQuery(url) {
+  const keys = {'createTime[0]': 'createTimeStart', 'createTime[1]': 'createTimeEnd'}
+  const patterns = {createTimeStart: /^\d{4}-\d{2}-\d{2} 00:00:00$/,
+    createTimeEnd: /^\d{4}-\d{2}-\d{2} 23:59:59$/}
+  const parameters = {}, pairs = Array.from(url.searchParams)
+  if (new Set(pairs.map(([key]) => key)).size !== pairs.length) return null
+  for (const [raw, value] of pairs) {
+    if (['pageNo', 'pageSize'].includes(raw)) continue
+    const key = keys[raw] || raw
+    if (!Object.hasOwn(patterns, key) || Object.hasOwn(parameters, key) || !patterns[key].test(value)) return null
+    parameters[key] = value
+  }
+  if (Object.keys(parameters).length === 1) return null
+  return {path: url.pathname, parameters}
+}
+
 // Retain a digest and paging numbers, never arbitrary query values.
 function listReadQuery(url, view) {
   const pairs = Array.from(url.searchParams)
@@ -137,15 +158,16 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (url.pathname.endsWith('/page')) appliedRead = null
     const ledger = route === '/fms/ledger/general' && url.pathname === '/admin-api/fms/ledger/general/list'
     const order = route === '/erp/sale/order' && url.pathname === '/admin-api/erp/sale-order/page'
+    const creation = creationRangeList(route, url.pathname)
     let query = null
-    if (ledger || order) {
+    if (ledger || order || creation) {
       appliedQuery = null
       // Application-owned scalar query observation for the first native report.
       // Retain only reviewed query fields, never headers, bodies or arbitrary URLs.
-      query = ledger ? ledgerQuery(url) : orderQuery(url)
+      query = ledger ? ledgerQuery(url) : order ? orderQuery(url) : creationRangeQuery(url)
     } else if (url.pathname.endsWith('/page') && route && route.indexOf('/detail/') < 0) {
       // Any other collection page's own list read: the tracked GET is the page's
-      // applied query. Scalar projection stays ledger/order-only; this general
+      // applied query. Scalar projection stays on reviewed lists; this general
       // capture feeds applied-query facets for target settlement on every list.
       appliedQuery = null
       query = {path: url.pathname, parameters: Object.fromEntries(url.searchParams)}
@@ -420,9 +442,10 @@ export function installPageFacts(view = window, doc = document) {
         const ids = target.searchParams.getAll('id'), id = ids.length === 1 ? ids[0] : ''
         const ledger = view.location.pathname === '/fms/ledger/general' && target.pathname === '/admin-api/fms/ledger/general/list'
         const order = view.location.pathname === '/erp/sale/order' && target.pathname === '/admin-api/erp/sale-order/page'
+        const creation = creationRangeList(view.location.pathname, target.pathname)
         // Retain only a bounded scalar projection; open alone starts no read.
-        const query = ledger ? ledgerQuery(target) : order ? orderQuery(target) : null
-        requests.set(this, {method, path: target.pathname, ledger, order, query, readQuery: listReadQuery(target, view),
+        const query = ledger ? ledgerQuery(target) : order ? orderQuery(target) : creation ? creationRangeQuery(target) : null
+        requests.set(this, {method, path: target.pathname, ledger, order, creation, query, readQuery: listReadQuery(target, view),
           id: /^[0-9]{1,20}$/.test(id) ? id : ''})
       }
     } catch { /* The original implementation owns invalid URL errors. */ }
@@ -434,11 +457,12 @@ export function installPageFacts(view = window, doc = document) {
     let target
     if (request) {
       target = new URL(request.path, view.location.href)
-      if (request.ledger || request.order) {
-        const keys = {orderTimeStart: 'orderTime[0]', orderTimeEnd: 'orderTime[1]'}
+      if (request.ledger || request.order || request.creation) {
+        const keys = {orderTimeStart: 'orderTime[0]', orderTimeEnd: 'orderTime[1]',
+          createTimeStart: 'createTime[0]', createTimeEnd: 'createTime[1]'}
         if (!request.query) target.searchParams.set('invalidQuery', '1')
         for (const [key, value] of Object.entries(request.query?.parameters || {})) {
-          target.searchParams.set(request.order && keys[key] || key, value)
+          target.searchParams.set(keys[key] || key, value)
         }
       } else if (request.id) target.searchParams.set('id', request.id)
     }
