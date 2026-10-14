@@ -257,9 +257,12 @@ An API read adds a bounded amount to the conversation and says how many rows it 
 out; earlier reads leave the conversation once they outgrow their share, because every
 request resends it and the run's input-token ceiling otherwise ends a turn that reads a
 long list. A read that names the columns it wants is followed to the last page and comes
-back with each numeric column's sum, highest and lowest and each date column's row count
-by month, so that counting and adding are not left to the model; instants are shown as
-the application's clock has them. A list the application divides by whose records they
+back with each numeric column's sum, highest and lowest (and, when it holds both, the
+sums of its positive and of its negative rows), each date column's row count by month, and
+for a chosen column of two to twelve kinds (a type, a status) each kind's row count and
+sums, so that counting and adding are not left to the model; instants are shown as the
+application's clock has them. A coded column's values come with the names the
+application's dictionary gives the codes the rows hold, as the list page renders them. A list the application divides by whose records they
 are (`sceneType`), read without naming a scope, is read as the adapter's data port reads
 it: the scopes together, once per record. When that reading finds nothing under a
 condition, one read without a scope tells whether such records exist outside the actor's
