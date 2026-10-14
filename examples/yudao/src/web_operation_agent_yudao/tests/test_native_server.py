@@ -365,10 +365,11 @@ class NativeHostTests(unittest.TestCase):
     def test_the_application_index_is_built_ahead_only_where_the_host_asks_for_it(self):
         import threading
         from types import SimpleNamespace
-        built, done = [], threading.Event()
+        built, read, done = [], [], threading.Event()
 
-        def warm(app):
+        def warm(app, knowledge):
             built.append(app)
+            read.append(knowledge)
             done.set()
         with patch.object(YudaoHost, "_warm_index", staticmethod(warm)):
             self.host().bootstrap("synthetic-a", "1", "plain")
@@ -378,15 +379,23 @@ class NativeHostTests(unittest.TestCase):
             host.bootstrap("synthetic-a", "1", "warm")
             self.assertTrue(done.wait(5))
             # The index built is the one this actor's turns will read.
-            self.assertTrue(built[0].goal_port is host._sessions[("1", "1")].session.runner.executor.goal_port)
+            executor = host._sessions[("1", "1")].session.runner.executor
+            self.assertTrue(built[0].goal_port is executor.goal_port)
+            # A goal turn searches no menu of its own: there is nothing more to read for it.
+            self.assertIsNone(read[0])
             host.bootstrap("synthetic-a", "1", "another page")     # the same session: not built again
             self.assertEqual(len(built), 1)
-        # A build that fails ahead of time is not an error of the session.
+        # What a slim turn searches is read first, then the index; one that fails ahead of
+        # time is not an error of the session and does not keep the other from being built.
         calls = []
-        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(index=lambda: calls.append("index"))))
-        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(
-            index=lambda: (_ for _ in ()).throw(OSError("the application is away")))))
-        self.assertEqual(calls, ["index"])
+        away = lambda: (_ for _ in ()).throw(OSError("the application is away"))  # noqa: E731
+        index = SimpleNamespace(goal_port=SimpleNamespace(index=lambda: calls.append("index")))
+        YudaoHost._warm_index(index)
+        YudaoHost._warm_index(index, SimpleNamespace(_load=lambda: calls.append("menu")))
+        YudaoHost._warm_index(index, SimpleNamespace(_load=away))
+        YudaoHost._warm_index(SimpleNamespace(goal_port=SimpleNamespace(index=away)),
+                              SimpleNamespace(_load=lambda: calls.append("menu")))
+        self.assertEqual(calls, ["index", "menu", "index", "index", "menu"])
         with self.assertRaises(ValueError):
             replace(self.config, warm_index=None)
         self.chat.return_value.complete.assert_not_called()
@@ -414,6 +423,20 @@ class NativeHostTests(unittest.TestCase):
         self.assertFalse(replace(self.config, slim_skill_knowledge=False).slim_skill_knowledge)
         with self.assertRaises(ValueError):
             replace(self.config, slim_skill_knowledge=None)
+        # Where the host reads ahead, a slim turn's own menu and API description are read too.
+        import threading
+        read, done = [], threading.Event()
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
+                patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
+                patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()), \
+                patch.object(YudaoHost, "_warm_index",
+                             staticmethod(lambda app, knowledge: (read.append(knowledge), done.set()))):
+            self.config = replace(self._fence(), executor_mode="slim", warm_index=True,
+                                  state_dir=Path(self.tmp.name) / "ahead")
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "slim-tab")
+            self.assertTrue(done.wait(5))
+            self.assertIs(read[0], host._sessions[("1", "1")].session.runner.executor.knowledge)
         self.chat.return_value.complete.assert_not_called()
 
     def test_inside_the_applications_window_only_reads_it_cannot_refuse_stay_fenced(self):

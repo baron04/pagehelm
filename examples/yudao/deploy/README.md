@@ -289,13 +289,14 @@ What the turn is doing between its page actions is published on the session's ex
 progress channel as `step` events, facts only: a search (`search_menu`, `search_api`,
 `find_record`) with what is looked for and the word, a read (`call_api`) and then how many
 rows of which list it returned, a Skill being loaded, a change being prepared (its values
-are on the approval card, never on the timeline), and the closing check. The sentences are
-written by the core's panel view (`describe_step`), which has a neutral `search` and
-`check` stage for this; the panel renders them as it renders any step. Page actions are not
-reported a second time: the channel already publishes each dispatched action. A page the
-assistant opens loads with the panel closed, as every page load does; the launcher shows
-that a turn is under way, and the timeline is there when the panel is opened. A panel that
-cannot be told does not fail the turn.
+are on the approval card, never on the timeline), and the closing check when one is made.
+The sentences are written by the core's panel view (`describe_step`), which has a neutral
+`search` and `check` stage for this; the panel renders them as it renders any step. Page
+actions are not reported a second time: the channel already publishes each dispatched
+action. Where a page the assistant opens has to be loaded as a document, it loads with the
+panel closed, as every page load does; the launcher shows that a turn is under way, and
+the timeline is there when the panel is opened. A panel that cannot be told does not fail
+the turn.
 
 Round trips to the model are most of a turn's time, so fewer are asked for. The first
 request already carries the menu pages and paged lists whose own names the person's words
@@ -306,6 +307,12 @@ change, the steps of the same reply that name a path or a field still run; those
 name an element by its number do not, since the numbers are the old page's. A scroll that
 names a region moves that region and says so when nothing moved.
 
+After a step that opens, clicks, fills or chooses, the page is given time before the model
+reads it: until the browser is at the page that was opened, nothing the page reads from
+the application is still on its way, and two looks 150 ms apart show the same content.
+Each look is a round trip to the browser, so a page that is already still costs one. A page
+that never looks the same twice is read as it is after the second.
+
 The first turn of a session that looks a record up by name, or prepares a write, needs the
 actor's application index, and building it reads one record's detail for every entity
 whose page labels line columns: a few hundred small reads. They go out four at a time, as
@@ -313,11 +320,19 @@ a lookup by name's own reads do. The host's `--warm-index` builds the index in t
 background when the actor's session opens instead, so that the turn finds it built (or
 waits for the rest of the same build); the application then answers those reads once per
 session whether or not a turn ever needs the index, which is why it is off by default.
+With it, the actor's menu, which the first request of a session's first turn carries, is
+read ahead as well.
 
-A closing model request checks the person's words against the page and may send the turn
-back once. It is told which controls the turn itself filled or chose; every other value a
-form holds was there when it opened and is not a change. Before its last two steps the
-turn is told to report what it has. Set `WOA_SLIM_DEBUG_DIR` only in development: it
+A turn ends on the model's own `finish`. One case is read a second time by a closing
+model request, which checks the person's words against the page and may send the turn back
+once: the turn typed or chose, on the page, a value that is not in the person's words of
+this conversation. A date written out in full, a name completed and a value the model made
+up look alike to the program, and the request is told which controls the turn itself
+filled or chose; every other value a form holds was there when it opened and is not a
+change. An answer, a page that was only opened, and a change the application read back
+are not read twice: an answer that counts the wrong rows or reads the wrong column is
+caught by nothing after the model. Before its last two steps the turn is told to report
+what it has. Set `WOA_SLIM_DEBUG_DIR` only in development: it
 writes what the model was shown.
 
 The model's conversation lasts one turn. A turn starts from the host's bounded

@@ -493,10 +493,74 @@ class State:
         return False
 
 
-class LoopTests(unittest.TestCase):
-    def loop(self, *replies, steps: int = 6, tool=None, problems=()):
+class SettledTests(unittest.TestCase):
+    """How long the page is given after a step, by what the looks at it show."""
+
+    def settle(self, first, *later, gone_after=None, **kw):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
-        executor.model_steps, executor.verify = steps, True
+        epochs = iter(range(1, 99))
+
+        def look(content, state="ready", url="https://synthetic.test/orders"):
+            # Every look has a new epoch, on itself and on each element, as every observation
+            # of a live page does; and what is new since the look before is starred once.
+            epoch = next(epochs)
+            starred = "\t*" if epoch % 2 else "\t"
+            return NS(content=content, render_state=state, url=url, to_json=lambda: {
+                "epoch": epoch, "url": url, "render_state": state,
+                "content": f"[1]<div />\n{starred}[2]<button>{content} />",
+                "elements": [{"ref": "e2", "role": "button", "name": content, "epoch": epoch}]})
+        coming, self.waited = [look(*item) for item in later], []
+        state = NS(obs=look(*first))
+
+        def dispatch(s, action, args, **_kw):
+            self.waited.append((action, args["ms"]))
+            if gone_after is not None and len(self.waited) > gone_after:
+                return None
+            s.obs = coming.pop(0)
+            return NS(ok=True)
+        executor._dispatch = dispatch
+        executor._settled(state, **kw)
+        return state.obs.content
+
+    def test_a_page_that_is_already_still_costs_one_short_look(self):
+        self.assertEqual(self.settle(("a",), ("a",)), "a")
+        self.assertEqual(self.waited, [("wait_for", 150)])
+
+    def test_a_page_that_changed_is_looked_at_until_two_looks_agree(self):
+        self.assertEqual(self.settle(("a",), ("b",), ("b",)), "b")
+        self.assertEqual(self.waited, [("wait_for", 150)] * 2)
+
+    def test_a_page_that_keeps_changing_is_taken_as_it_is(self):
+        self.assertEqual(self.settle(("a",), ("b",), ("c",), ("d",)), "c")
+        self.assertEqual(len(self.waited), 2)
+
+    def test_what_the_page_reads_is_waited_for_and_then_it_must_be_still(self):
+        self.assertEqual(self.settle(("a", "pending"), ("a", "pending"), ("b",), ("b",)), "b")
+        self.assertEqual(self.waited, [("wait_for", 400), ("wait_for", 400), ("wait_for", 150)])
+
+    def test_a_read_that_starts_late_is_waited_for_too(self):
+        self.assertEqual(self.settle(("a",), ("a", "pending"), ("b",), ("b",)), "b")
+        self.assertEqual(self.waited, [("wait_for", 150), ("wait_for", 400), ("wait_for", 150)])
+
+    def test_a_page_that_was_opened_is_waited_for_until_the_browser_is_there(self):
+        there, old = "https://synthetic.test/crm/customer", "https://synthetic.test/orders"
+        self.assertEqual(self.settle(("a", "ready", old), ("a", "ready", old), ("b", "ready", there),
+                                     ("b", "ready", there), path="/crm/customer"), "b")
+        self.assertEqual(self.waited, [("wait_for", 400), ("wait_for", 400), ("wait_for", 150)])
+
+    def test_waiting_for_what_the_page_reads_is_bounded(self):
+        self.settle(("a", "pending"), *[("a", "pending")] * 9, waits=2)
+        self.assertEqual(self.waited, [("wait_for", 400)] * 4)
+
+    def test_a_turn_that_ended_while_waiting_is_left_alone(self):
+        self.settle(("a",), ("b",), ("b",), gone_after=0)
+        self.assertEqual(len(self.waited), 1)
+
+
+class LoopTests(unittest.TestCase):
+    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=()):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
         executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
         self.ran, self.checked = [], []
@@ -508,15 +572,35 @@ class LoopTests(unittest.TestCase):
             return pending.pop(0) if pending else []
         executor._verify = verify
         state = State(*replies)
-        self.turn = turn = {"reads": [], "marked": "", "trace": [], "touched": [],
+        self.turn = turn = {"reads": [], "marked": "", "trace": [], "touched": list(touched),
                             "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0}
-        return executor, state, executor._loop(state, "q", turn, verified=False)
+        return executor, state, executor._loop(state, asked, turn, verified=False)
 
     def test_done_ends_the_turn_finished_with_the_model_s_answer(self):
         _executor, state, text = self.loop(reply(call("search_menu", keyword="订单")),
                                            reply(call("finish", status="done", answer="共 3 条")))
         self.assertEqual((text, state.terminal_reason), ("共 3 条", ""))
-        self.assertEqual((self.ran, self.checked), (["search_menu"], ["共 3 条"]))
+        # Nothing was typed or chosen on the page: the model's own word ends the turn.
+        self.assertEqual((self.ran, self.checked, self.channel.steps()), (["search_menu"], [], []))
+
+    def test_a_turn_that_entered_only_what_the_person_said_ends_without_a_second_reading(self):
+        _executor, state, text = self.loop(
+            reply(call("finish", status="done", answer="已筛出晨岚机电的订单")),
+            asked="只看晨岚机电、状态是 已 审核 的订单", touched=[("客户", "晨岚机电"), ("状态", "已审核"), ("备注", "")])
+        self.assertEqual((text, state.terminal_reason, self.checked), ("已筛出晨岚机电的订单", "", []))
+
+    def test_a_turn_that_entered_a_value_the_person_did_not_say_is_read_a_second_time(self):
+        _executor, state, text = self.loop(
+            reply(call("finish", status="done", answer="已填好 10 月 20 日")),
+            asked="交货日期填 10 月 20 日", touched=[("交货日期", "2026-10-20")])
+        self.assertEqual((text, state.terminal_reason), ("已填好 10 月 20 日", ""))
+        self.assertEqual((self.checked, self.channel.steps()), (["已填好 10 月 20 日"], ["正在核对结果"]))
+
+    def test_what_the_person_said_in_an_earlier_turn_counts_as_said(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor._earlier_words = ["客户是晨岚机电"]
+        turn = {"touched": [("客户", "晨岚机电"), ("数量", "24")]}
+        self.assertEqual(executor._unsaid("就它，数量你定", turn), ["数量←24"])
 
     def test_need_input_ends_as_a_question_the_conversation_can_hold(self):
         _executor, state, text = self.loop(reply(call("finish", status="need_input", answer="哪一条？" * 200)))
@@ -536,7 +620,7 @@ class LoopTests(unittest.TestCase):
         executor, state, text = self.loop(
             reply(call("finish", status="done", answer="已完成")),
             reply(call("finish", status="done", answer="已修正")),
-            problems=[["没有标出提交按钮"]])
+            problems=[["没有标出提交按钮"]], touched=[("交货日期", "2026-10-20")])
         self.assertEqual((text, state.terminal_reason), ("已修正", ""))
         self.assertEqual(self.checked, ["已完成"])
         sent_back = [m for m in executor._messages if m["role"] == "user" and m["content"].startswith("验收提出了疑点")]
@@ -856,7 +940,8 @@ class WriteTurnTests(unittest.TestCase):
         self.assertIn("crm_contact_update", loaded)
         result = next(m["content"] for m in executor._messages if m["role"] == "tool" and m["content"].startswith("已执行并核对"))
         self.assertIn("13800000001 → 13800000002", result)
-        self.assertEqual(self.checked, [self.turn["written"]])
+        # The application read the change back; nothing was typed on the page to read twice.
+        self.assertEqual(self.checked, [])
         self.assertEqual(len(self.turn["written"]), 1)
         events = [event["event"] for event in state.ledger.events]
         self.assertEqual([e for e in events if e.startswith(("business_", "skill_"))], [
@@ -864,7 +949,7 @@ class WriteTurnTests(unittest.TestCase):
             "skill_effect_bound", "business_mutation_proposed",
             "business_mutation_execution_started", "business_mutation_result"])
 
-    def test_searches_reads_and_the_closing_check_are_told_to_whoever_is_watching(self):
+    def test_searches_and_reads_are_told_to_whoever_is_watching(self):
         find = {"id": "call-find", "type": "function", "function": {
             "name": "find_record", "arguments": json.dumps({"name": "晨岚机电"}, ensure_ascii=False)}}
         with patch.object(SlimTurnExecutor, "goal_port", FindRecordTests.Port(hits=(("orders", "晨岚机电"),)),
@@ -875,7 +960,7 @@ class WriteTurnTests(unittest.TestCase):
                 reply(call("finish", status="done", answer="共 2 张")))
         self.assertEqual(self.channel.steps(), [
             "正在查找页面：订单", "正在查找数据来源：订单", "正在查找记录：晨岚机电",
-            "正在读取业务数据", "已读取 2 条：订单", "正在核对结果"])
+            "正在读取业务数据", "已读取 2 条：订单"])
         self.assertEqual({turn for _kind, _payload, turn in self.channel.published}, {"m-1"})
         nodes = [payload["step"] for _kind, payload, _turn in self.channel.published]
         self.assertEqual(nodes[0], {"stage": "search", "tool": "search_menu", "arguments": "keyword=订单"})
@@ -891,7 +976,7 @@ class WriteTurnTests(unittest.TestCase):
 
     def test_a_write_is_told_as_being_prepared_and_never_with_its_values(self):
         self.loop(self.LOAD(), self.UPDATE(), reply(call("finish", status="done", answer="已改")))
-        self.assertEqual(self.channel.steps(), ["正在选择操作方式", "正在准备这次更改", "正在核对结果"])
+        self.assertEqual(self.channel.steps(), ["正在选择操作方式", "正在准备这次更改"])
         told = json.dumps([payload for _kind, payload, _turn in self.channel.published], ensure_ascii=False)
         self.assertNotIn("13800000002", told)
         self.assertIn('"tool": "crm_contact_update"', told)
@@ -905,7 +990,8 @@ class WriteTurnTests(unittest.TestCase):
         executor, state = self.executor(), self.state(
             reply(call("search_menu", keyword="订单")), reply(call("finish", status="done", answer="好")))
         executor.channel = Channel(broken=True)
-        self.turn = {"reads": [], "marked": "", "trace": [], "touched": [],
+        # The search and the closing check (a value was entered that nobody said) both tell.
+        self.turn = {"reads": [], "marked": "", "trace": [], "touched": [("备注", "合成备注")],
                      "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0,
                      "writes": None, "written": [], "corrections": 0, "final": "", "skills": set()}
         text = executor._loop(state, self.ASKED, self.turn, verified=False)

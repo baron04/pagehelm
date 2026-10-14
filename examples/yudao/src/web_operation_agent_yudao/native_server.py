@@ -128,10 +128,11 @@ class YudaoHostConfig:
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
     #: what that text changes; the operations and every check on a write are the same.
     slim_skill_knowledge: bool = True
-    #: Build the actor's application index when their session opens, in the background,
-    #: rather than inside the first turn that needs it (a record looked up by name, a
-    #: write prepared). It costs the application a few hundred small reads per session,
-    #: whether or not a turn ever needs the index. Off by default.
+    #: Read the actor's menu and build their application index when their session opens,
+    #: in the background, rather than inside the first turn (the menu) and the first turn
+    #: that needs it (the index: a record looked up by name, a write prepared). It costs
+    #: the application a few hundred small reads per session, whether or not a turn ever
+    #: needs the index. Off by default.
     warm_index: bool = False
     #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
     native_action_effect_review: str = ""
@@ -536,20 +537,24 @@ class YudaoHost:
             sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
             principal=principal).start()
         if self.config.warm_index:
-            threading.Thread(target=self._warm_index, args=(app,), name="yudao-warm-index",
+            knowledge = getattr(getattr(session.runner, "executor", None), "knowledge", None)
+            threading.Thread(target=self._warm_index, args=(app, knowledge), name="yudao-warm-index",
                              daemon=True).start()
         return session
 
     @staticmethod
-    def _warm_index(app: YudaoApplication) -> None:
-        """Build the actor's application index ahead of the turn that will ask for it. The
-        data port compiles it under its own lock, so a turn that arrives meanwhile waits
-        for this build instead of starting another. A build that fails here is not kept:
-        the turn that needs the index builds it again and says what went wrong."""
-        try:
-            app.goal_port.index()
-        except Exception:  # noqa: BLE001 -- see the docstring
-            pass
+    def _warm_index(app: YudaoApplication, knowledge=None) -> None:
+        """Read ahead what the actor's turns will ask for: the menu and API description a
+        slim turn searches, which its first request needs, then the application index.
+        Each is built under its own lock, so a turn that arrives meanwhile waits for this
+        build instead of starting another. One that fails here is not kept: the turn that
+        needs it builds it again and says what went wrong."""
+        for build in (getattr(knowledge, "_load", None), app.goal_port.index):
+            try:
+                if build is not None:
+                    build()
+            except Exception:  # noqa: BLE001 -- see the docstring
+                pass
 
     def _browser_bootstrap(self, session) -> dict:
         now_ms = int(time.time() * 1000)
@@ -653,8 +658,8 @@ def main(argv=None) -> int:
                          "bounded page steps, inside the application's own read-only window")
     ap.add_argument("--executor", choices=("goal", "page-agent", "slim"), default="goal")
     ap.add_argument("--warm-index", action="store_true",
-                    help="build each actor's application index when their session opens, in the "
-                         "background; a few hundred small reads per session")
+                    help="read each actor's menu and build their application index when their "
+                         "session opens, in the background; a few hundred small reads per session")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")
