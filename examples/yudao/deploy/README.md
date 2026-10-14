@@ -305,19 +305,24 @@ it. `fill_fields` fills or chooses several controls of the shown form, filter or
 table by their labels in one step and may end by clicking a named button. After a page
 change, the steps of the same reply that name a path or a field still run; those that
 name an element by its number do not, since the numbers are the old page's. A scroll that
-names a region moves that region and says so when nothing moved. A turn may end in the
-reply of its last step when that step opened a page (`goto`) or marked a control
-(`highlight`): the program itself knows whether either happened. A `finish` written after
-one that did not, or after a step whose result has to be read first (an API read, a
-lookup, a click, a fill, a choice, a scroll), does not end the turn; the result goes back
-to the model. A `goto` that leaves the browser at another path is reported as not having
-succeeded.
+names a region moves that region and says so when nothing moved. A turn may end on its
+last step without another request when that step opened a page (`goto`) or marked a
+control (`highlight`) and carries the answer for the person: the program itself knows
+whether either happened, and ends the turn only if it did. Otherwise, and after any other
+step of the same reply that the program did not see through — one whose result has to be
+read first (an API read, a lookup, a click, a fill, a choice, a scroll), one it skipped or
+refused — neither an answer on the step nor a `finish` ends the turn; the result goes back
+to the model. A verified write may also be followed by `finish` in the same reply.
 
 After a step that opens, clicks, fills or chooses, the page is given time before the model
-reads it: until the browser is at the page that was opened, nothing the page reads from
-the application is still on its way, and two looks 150 ms apart show the same content.
-Each look is a round trip to the browser, so a page that is already still costs one. A page
-that never looks the same twice is read as it is after the second.
+reads it: nothing the page reads from the application is still on its way, and two looks
+150 ms apart show the same content; looks taken before a read started do not count. A page
+that was opened has arrived when the application reports that page as the one it rendered
+and ready, not when the address shows it. Each look is a round trip to the browser, so a
+page that is already still costs one. A page that never looks the same twice is read as it
+is after the second. A `goto` reports the page opened only when it arrived; one that left
+the browser at another path, a page that reports an error or a failed read, and a page
+whose rendering was not reported in time are each said as such, with the page.
 
 The first turn of a session that looks a record up by name, or prepares a write, needs the
 actor's application index, and building it reads one record's detail for every entity

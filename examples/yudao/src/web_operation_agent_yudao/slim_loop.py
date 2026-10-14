@@ -55,13 +55,9 @@ MODEL_STEPS = 24
 _PENDING_MS, _LOOK_MS = 400, 150
 #: Looks a page that keeps changing is given before it is taken as it is.
 _STILL_LOOKS = 2
-#: What the two steps a turn may end on in the same reply say when they did what was asked:
-#: the program itself knows the page was reached, or the control marked.
-_OPENED, _MARKED = "已打开。", "已标出："
-#: Steps whose result has to be read before a turn can end: what they return, or the page
-#: they leave, is what the answer would be about.
-_READ_BEFORE_ENDING = frozenset({"search_menu", "search_api", "find_record", "call_api", "observe",
-                                 "click", "input", "select", "fill_fields", "scroll"})
+#: The steps that may carry the turn's answer: when the program itself saw the page
+#: opened, or the control marked, nothing is left for the model to read before it ends.
+_ENDING_STEPS = ("goto", "highlight")
 #: Development only: a directory to which each turn's conversation is written as the model
 #: saw it. Unset in any deployment; what a page shows does not belong in a log.
 _DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
@@ -445,7 +441,10 @@ TOOLS = [
           "用户给了记录名却没说它是什么，或者你不确定它属于哪个模块时，先用它。", {
         "name": {"type": "string", "description": "记录的名称或编号，照用户的原话"}}, ["name"]),
     _tool("goto", "打开一个页面路径（来自 search_menu 或页面里出现的详情路径）。", {
-        "path": {"type": "string"}}, ["path"]),
+        "path": {"type": "string"},
+        "answer": {"type": "string", "description":
+                   "打开这个页面就全部完成时，给用户的答复：程序确认页面已打开后本轮随之结束。还要在页面上做别的事就不给"}},
+        ["path"]),
     _tool("observe", "重新观察当前页面。", {}, []),
     _tool("click", "点击当前观察里带序号的元素。", {
         "index": {"type": "integer"}}, ["index"]),
@@ -472,7 +471,10 @@ TOOLS = [
                    "并算好数值列的合计、最大、最小。统计、比较、找最大最小、按日期数个数时必须用。"}},
         ["path"]),
     _tool("highlight", "把一个控件标出来交给用户自己点（例如表单的确定按钮）。不会点击它。", {
-        "index": {"type": "integer"}}, ["index"]),
+        "index": {"type": "integer"},
+        "answer": {"type": "string", "description":
+                   "标出它就全部完成时（例如表单已经填好、核对过），给用户的答复：程序标出后本轮随之结束"}},
+        ["index"]),
     _tool("finish", "结束本轮。", {
         "status": {"type": "string", "enum": ["done", "need_input", "cannot"],
                    "description": "done=全部完成；need_input=需要用户补充或在多个候选中选择；cannot=做不到（记录不存在、无权限、应用不支持）"},
@@ -534,7 +536,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”），先进它的详情页，从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
    - 一次要填或选两个以上字段（表单、筛选条件、明细行）时，用 fill_fields 按字段名一次做完，不要一个个 input/select；筛选可以带 then_click="搜索"。它报告某个字段没做成时，再对那个字段单独用 input 或 select。
-   - 填完后看返回的观察，确认每个值都显示正确；然后在同一次回复里先用 highlight 标出表单的“确定/保存/提交”按钮、接着调用 finish。
+   - 填完后看返回的观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，把给用户的答复写在它的 answer 里。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：留空，在答复里提醒用户还有哪些必填项要自己补，然后照常以 done 结束。
    - 只有用户一个具体值都没给（比如只说“新增一家供应商”“帮我新增一个产品单位”）时，才用 need_input 问要填什么，不要自己编；这时可以先把表单打开，但不要 highlight 提交按钮，也不要以 done 结束。用户指明了关联对象（比如“给某客户新增联系人”“给某客户开一张订单”）就算给了值：打开表单并带上这个对象后以 done 结束，说明其余由用户补。
@@ -542,7 +544,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 通用规则：
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
 - 一次回复里可以连着调用几个工具，按顺序执行。页面变化之后，同一次回复里按序号的操作（click、input、select、highlight）不会执行，按路径或字段名的（goto、fill_fields、call_api）照常执行：能一次说清的就一次说完，例如 goto 之后接着 fill_fields 筛选。
-- finish 可以和最后一步写在同一次回复里，只限两种最后一步：goto 打开页面，或 highlight 标出按钮。这一步没有成功时程序不会结束本轮，会把结果交给你。用户只要求打开某个页面、或要回答的值已经读到而只差打开页面时，就这样一次说完；答复里不要写你还没看到的页面内容（条数、某一行的值）。其它工具（call_api、find_record、click、fill_fields、select、input、scroll）的结果必须先看到，再 finish。
+- 最后一步是 goto 打开页面或 highlight 标出按钮时，把给用户的答复写在这一步的 answer 里，不用再单独调用 finish：用户只要求打开某个页面、要回答的值已经读到而只差打开页面、表单已经填好只差标出提交按钮，都是这样。程序确认页面打开了（按钮标出了）才结束本轮，没有成功就把结果交给你。answer 里不要写你还没看到的页面内容（条数、某一行的值）。其它工具（call_api、find_record、click、fill_fields、select、input、scroll）的结果必须先看到，再 finish。
 - 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
 - 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。记录存在但不属于当前账号的可见范围，是没有权限，不要说成不存在。
@@ -876,25 +878,38 @@ class SlimTurnExecutor(GoalTurnExecutor):
         self._earlier_words: list[str] = []
 
     # -- the page, through the executor's own dispatch ------------------------------------
-    def _settled(self, s, *, path: str = "", waits: int = 8) -> None:
+    def _settled(self, s, *, path: str = "", waits: int = 8) -> str:
         """Let the page finish what the last step started before it is read again: it has
         arrived, nothing it reads is still on its way, and it looks the same twice in a
         row. Every look is a round trip of its own, so a page that is already still costs
         one short one. A page that never looks the same twice (a clock, a ticker) is
-        taken as it is after `_STILL_LOOKS` of them."""
+        taken as it is after `_STILL_LOOKS` of them.
+
+        With a `path` the page has arrived only when the application reports that path as
+        the page it rendered, not when the address shows it: a single-page application
+        changes the address first and mounts the page after. Says how it ended: "still",
+        "moving" (it never looked the same twice), "blocked" (the page reports an error or
+        a failed read), "waiting" (the waits ran out first) or "gone" (the turn ended)."""
         looks, last = 0, None
         for _ in range(waits + _STILL_LOOKS):
             obs = s.obs
-            ready = (not path or urlsplit(obs.url).path == path) and obs.render_state != "pending"
+            arrived = not path or (urlsplit(obs.url).path == path and obs.page_route == path)
+            if arrived and obs.render_state == "blocked":
+                return "blocked"
+            ready = arrived and obs.render_state != "pending" and (not path or obs.render_state == "ready")
             if ready:
                 shown = _shown(obs)
-                if shown == last or looks == _STILL_LOOKS:
-                    return
+                if shown == last:
+                    return "still"
+                if looks == _STILL_LOOKS:
+                    return "moving"
                 looks, last = looks + 1, shown
             else:
-                last = None
+                # What it shows from here on is what came of the step: its looks start over.
+                looks, last = 0, None
             if self._dispatch(s, "wait_for", {"ms": _LOOK_MS if ready else _PENDING_MS}) is None:
-                return
+                return "gone"
+        return "waiting"
 
     def _element(self, s, index):
         """The element the model named, if the page text it was last shown listed it."""
@@ -987,11 +1002,16 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                navigating=True)
             if failed:
                 return failed, True
-            self._settled(s, path=path)
+            settled = self._settled(s, path=path)
             there = urlsplit(s.obs.url).path
             if there != path:
                 return f"没有成功：浏览器现在在 {there}，没有到 {path}。", True
-            return _OPENED, True
+            if settled == "blocked":
+                return f"浏览器到了 {path}，但页面报告了错误或有数据没有读出来：看下面的页面再决定。", True
+            if settled not in ("still", "moving"):
+                return f"浏览器到了 {path}，但应用还没有报告这个页面已经显示出来：看下面的页面再决定。", True
+            turn["confirmed"] = True
+            return "已打开。", True
         if name in ("click", "input", "select", "highlight") or (name == "scroll" and args.get("index") is not None):
             element = self._element(s, args.get("index", -1))
             if element is None:
@@ -1037,7 +1057,8 @@ class SlimTurnExecutor(GoalTurnExecutor):
             turn["marked"] = element.name.splitlines()[0][:60] if element.name else "(控件)"
             s.ledger.append("page_handoff_ready", step=s.step, observation_epoch=s.obs.epoch,
                             submitted=False, persisted=False)
-            return _MARKED + turn["marked"], False
+            turn["confirmed"] = True
+            return "已标出：" + turn["marked"], False
         return f"没有这个工具：{name}", False
 
     # -- installed Skills and the writes they propose ---------------------------------
@@ -1114,6 +1135,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     + (f"（{details}）" if details else "")
                     + (f"；记录：{content['reference']}" if content.get("reference") else ""))
             turn["written"].append(done)
+            turn["confirmed"] = True
             return "已执行并核对（用户已批准，应用回读确认）：" + done
         if outcome.state == "repeated":
             return "这项写入本轮已经执行并核对过，不会重复执行。"
@@ -1396,7 +1418,8 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     continue
                 if name == "finish" and unseen:
                     # Written before that step's result could be read. Only a page the
-                    # program saw opened, or a control it saw marked, can be ended on unseen.
+                    # program saw opened, a control it saw marked or a write it verified
+                    # can be ended on unseen; a step it skipped or refused cannot.
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                                            f"没有结束：同一次回复里 {unseen} 的结果你还没有看到。先看它返回了什么，再决定怎么结束。"})
                     continue
@@ -1409,6 +1432,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                 numbered = name in ("click", "input", "select", "highlight") or (
                     name == "scroll" and args.get("index") is not None)
                 if finish is not None or (changed_page and numbered):
+                    unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                            "content": "未执行：页面已变化，请根据新的观察重新决定。"})
                     continue
@@ -1422,16 +1446,19 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     if turn["stalled"] > 3:
                         s.terminal_reason, s.detail = "agent_refused", "the same page step was repeated without effect"
                         return "同一步重复了几次都没有效果，本次没有完成。"
+                    unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
                                            "未执行：这一步在同样的页面状态下已经做过，没有带来进展。换一种做法"
                                            "（用 input 直接填值、用 select 选、先 scroll 找控件），或者如实说明做不到。"})
                     continue
                 if acts:
                     turn["done"].add(where)
+                turn.pop("confirmed", None)
                 try:
                     text, changed = self._tool(s, name, args, turn)
                 except (ValueError, TypeError) as exc:
                     text, changed = f"工具参数有误：{str(exc)[:160]}", False
+                confirmed = turn.pop("confirmed", False)
                 s.ledger.append("slim_tool", step=s.step, tool=name, changed=changed,
                                 ok=not text.startswith(("没有成功", "没有执行")))
                 turn["trace"].append(f"{name}{'[' + _control_name(target) + ']' if target is not None else ''}"
@@ -1439,8 +1466,16 @@ class SlimTurnExecutor(GoalTurnExecutor):
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
                 changed_page = changed_page or (changed and name != "observe")
                 unwritten = unwritten or text.startswith("没有执行")
-                if name in _READ_BEFORE_ENDING or (name == "goto" and text != _OPENED) or (
-                        name == "highlight" and not text.startswith(_MARKED)):
+                answer = str(args.get("answer") or "").strip() if name in _ENDING_STEPS else ""
+                if answer:
+                    # The turn ends on it only if nothing written earlier in the reply is
+                    # still unread and nothing but a finish comes after it.
+                    rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
+                    if confirmed and not (unseen or unwritten) and rest <= {"finish"}:
+                        finish = {"status": "done", "answer": answer}
+                    else:
+                        text += " 这一步带的 answer 没有用上，本轮还没有结束。"
+                if not confirmed:
                     unseen = unseen or name
                 entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text}
                 if name == "call_api":

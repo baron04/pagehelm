@@ -517,12 +517,14 @@ class SettledTests(unittest.TestCase):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         epochs = iter(range(1, 99))
 
-        def look(content, state="ready", url="https://synthetic.test/orders"):
+        def look(content, state="ready", url="https://synthetic.test/orders", route=None):
             # Every look has a new epoch, on itself and on each element, as every observation
-            # of a live page does; and what is new since the look before is starred once.
+            # of a live page does; and what is new since the look before is starred once. The
+            # application reports the page it rendered: by default the one at the address.
             epoch = next(epochs)
             starred = "\t*" if epoch % 2 else "\t"
-            return NS(content=content, render_state=state, url=url, to_json=lambda: {
+            route = url.split("synthetic.test", 1)[1] if route is None else route
+            return NS(content=content, render_state=state, url=url, page_route=route, to_json=lambda: {
                 "epoch": epoch, "url": url, "render_state": state,
                 "content": f"[1]<div />\n{starred}[2]<button>{content} />",
                 "elements": [{"ref": "e2", "role": "button", "name": content, "epoch": epoch}]})
@@ -536,12 +538,12 @@ class SettledTests(unittest.TestCase):
             s.obs = coming.pop(0)
             return NS(ok=True)
         executor._dispatch = dispatch
-        executor._settled(state, **kw)
+        self.outcome = executor._settled(state, **kw)
         return state.obs.content
 
     def test_a_page_that_is_already_still_costs_one_short_look(self):
         self.assertEqual(self.settle(("a",), ("a",)), "a")
-        self.assertEqual(self.waited, [("wait_for", 150)])
+        self.assertEqual((self.waited, self.outcome), ([("wait_for", 150)], "still"))
 
     def test_a_page_that_changed_is_looked_at_until_two_looks_agree(self):
         self.assertEqual(self.settle(("a",), ("b",), ("b",)), "b")
@@ -549,7 +551,7 @@ class SettledTests(unittest.TestCase):
 
     def test_a_page_that_keeps_changing_is_taken_as_it_is(self):
         self.assertEqual(self.settle(("a",), ("b",), ("c",), ("d",)), "c")
-        self.assertEqual(len(self.waited), 2)
+        self.assertEqual((len(self.waited), self.outcome), (2, "moving"))
 
     def test_what_the_page_reads_is_waited_for_and_then_it_must_be_still(self):
         self.assertEqual(self.settle(("a", "pending"), ("a", "pending"), ("b",), ("b",)), "b")
@@ -559,19 +561,43 @@ class SettledTests(unittest.TestCase):
         self.assertEqual(self.settle(("a",), ("a", "pending"), ("b",), ("b",)), "b")
         self.assertEqual(self.waited, [("wait_for", 150), ("wait_for", 400), ("wait_for", 150)])
 
+    def test_the_looks_before_a_late_read_do_not_count_for_what_it_brought(self):
+        self.assertEqual(self.settle(("a",), ("b",), ("c", "pending"), ("d",), ("e",), ("e",)), "e")
+        self.assertEqual(self.waited, [("wait_for", 150)] * 2 + [("wait_for", 400)] + [("wait_for", 150)] * 2)
+        self.assertEqual(self.outcome, "still")
+
     def test_a_page_that_was_opened_is_waited_for_until_the_browser_is_there(self):
         there, old = "https://synthetic.test/crm/customer", "https://synthetic.test/orders"
         self.assertEqual(self.settle(("a", "ready", old), ("a", "ready", old), ("b", "ready", there),
                                      ("b", "ready", there), path="/crm/customer"), "b")
         self.assertEqual(self.waited, [("wait_for", 400), ("wait_for", 400), ("wait_for", 150)])
 
+    def test_an_opened_page_has_arrived_when_the_application_rendered_it_not_when_the_address_changed(self):
+        there, old = "https://synthetic.test/crm/customer", "https://synthetic.test/orders"
+        self.assertEqual(self.settle(("a", "ready", there, "/orders"), ("a", "ready", there, ""),
+                                     ("b", "ready", there), ("b", "ready", there), path="/crm/customer"), "b")
+        self.assertEqual(self.waited, [("wait_for", 400), ("wait_for", 400), ("wait_for", 150)])
+        self.assertEqual(self.outcome, "still")
+
+    def test_an_opened_page_that_reports_an_error_is_not_waited_out(self):
+        there = "https://synthetic.test/crm/customer"
+        self.settle(("a", "blocked", there), ("a", "ready", there), path="/crm/customer")
+        self.assertEqual((self.waited, self.outcome), ([], "blocked"))
+
+    def test_a_page_whose_rendering_is_not_reported_is_not_taken_as_opened(self):
+        there = "https://synthetic.test/crm/customer"
+        for state, route in (("pending", None), ("unknown", None), ("ready", "/orders")):
+            with self.subTest(state=state, route=route):
+                self.settle(*[("a", state, there, route)] * 5, path="/crm/customer", waits=2)
+                self.assertEqual((self.waited, self.outcome), ([("wait_for", 400)] * 4, "waiting"))
+
     def test_waiting_for_what_the_page_reads_is_bounded(self):
         self.settle(("a", "pending"), *[("a", "pending")] * 9, waits=2)
-        self.assertEqual(self.waited, [("wait_for", 400)] * 4)
+        self.assertEqual((self.waited, self.outcome), ([("wait_for", 400)] * 4, "waiting"))
 
     def test_a_turn_that_ended_while_waiting_is_left_alone(self):
         self.settle(("a",), ("b",), ("b",), gone_after=0)
-        self.assertEqual(len(self.waited), 1)
+        self.assertEqual((len(self.waited), self.outcome), (1, "gone"))
 
 
 class LoopTests(unittest.TestCase):
@@ -655,24 +681,67 @@ class LoopTests(unittest.TestCase):
         self.assertIn("没有标出提交按钮", sent_back[0]["content"])
         self.assertIn("意见不对，就保持原来的结果", sent_back[0]["content"])   # a second reading, not a ruling
 
-    # What each fixed step says when it did what was asked, as the executor's own steps do.
+    # What each fixed step says when it did what was asked, as the executor's own steps do:
+    # the program saw the page opened, or the control marked.
     SAYS = {"goto": ("已打开。", True), "highlight": ("已标出：确 定", False), "click": ("已点击。", True),
             "call_api": ("total=3", False)}
 
     def said(self, s, name, args, turn):
         self.ran.append(name)
+        if name in ("goto", "highlight"):
+            turn["confirmed"] = True
         return self.SAYS.get(name, ("ok", False))
+
+    def test_a_turn_ends_on_the_page_it_opened_when_that_step_carries_the_answer(self):
+        _executor, state, text = self.loop(reply(call("goto", path="/orders", answer="已打开订单页")), tool=self.said)
+        self.assertEqual((text, state.terminal_reason, self.ran), ("已打开订单页", "", ["goto"]))
+        self.assertEqual(len(state.chat.seen), 1)          # one request, not two
+
+    def test_a_turn_ends_on_the_control_it_marked_when_that_step_carries_the_answer(self):
+        _executor, state, text = self.loop(reply(call("highlight", index=10, answer="已填好")), tool=self.said)
+        self.assertEqual((text, state.terminal_reason, len(state.chat.seen)), ("已填好", "", 1))
+
+    def test_an_answer_on_a_step_is_checked_as_any_claim_of_completion_is(self):
+        _executor, state, text = self.loop(reply(call("highlight", index=10, answer="已填好 10 月 20 日")),
+                                           tool=self.said, asked="交货日期填 10 月 20 日",
+                                           touched=[("交货日期", "2026-10-20")])
+        self.assertEqual((text, self.checked), ("已填好 10 月 20 日", ["已填好 10 月 20 日"]))
 
     def test_a_turn_may_end_in_the_reply_that_opened_the_page_it_was_asked_for(self):
         _executor, state, text = self.loop(
             reply(call("goto", path="/orders"), call("finish", status="done", answer="已打开订单页")), tool=self.said)
         self.assertEqual((text, state.terminal_reason, self.ran), ("已打开订单页", "", ["goto"]))
-        self.assertEqual(len(state.chat.seen), 1)          # one request, not two
+        self.assertEqual(len(state.chat.seen), 1)
 
-    def test_a_turn_may_end_in_the_reply_that_marked_the_submit_control(self):
-        _executor, state, text = self.loop(
-            reply(call("highlight", index=10), call("finish", status="done", answer="已填好")), tool=self.said)
-        self.assertEqual((text, state.terminal_reason, len(state.chat.seen)), ("已填好", "", 1))
+    def test_an_answer_on_a_step_the_program_did_not_see_done_does_not_end_the_turn(self):
+        unconfirmed = lambda s, name, args, turn: (  # noqa: E731
+            "浏览器到了 /orders，但应用还没有报告这个页面已经显示出来：看下面的页面再决定。", True)
+        executor, state, text = self.loop(reply(call("goto", path="/orders", answer="已打开订单页")),
+                                          reply(call("finish", status="done", answer="订单页已显示")), tool=unconfirmed)
+        self.assertEqual((text, len(state.chat.seen)), ("订单页已显示", 2))
+        told = [m["content"] for m in executor._messages if m["role"] == "tool"]
+        self.assertIn("answer 没有用上", told[0])
+
+    def test_an_answer_written_before_an_earlier_result_or_ahead_of_a_later_step_does_not_end_the_turn(self):
+        for calls in ((call("call_api", path="/admin-api/orders/page"), call("goto", path="/orders", answer="共 9 条")),
+                      (call("goto", path="/orders", answer="已筛好"), call("fill_fields", fields=[{"label": "客户",
+                                                                                                "value": "Acme"}]))):
+            with self.subTest(calls=[c["function"]["name"] for c in calls]):
+                _executor, state, text = self.loop(reply(*calls), reply(call("finish", status="done", answer="共 3 条")),
+                                                   tool=self.said)
+                self.assertEqual((text, len(state.chat.seen)), ("共 3 条", 2))
+
+    def test_a_finish_after_a_step_that_was_skipped_does_not_end_the_turn(self):
+        # The page changed under the highlight, so it never ran: the goto alone did not do
+        # what the answer says.
+        executor, state, text = self.loop(
+            reply(call("goto", path="/orders"), call("highlight", index=10),
+                  call("finish", status="done", answer="已打开订单页并标出提交按钮")),
+            reply(call("finish", status="done", answer="已打开订单页")), tool=self.said)
+        self.assertEqual((self.ran, text, len(state.chat.seen)), (["goto"], "已打开订单页", 2))
+        told = [m["content"] for m in executor._messages if m["role"] == "tool"]
+        self.assertTrue(told[1].startswith("未执行：页面已变化"))
+        self.assertIn("highlight", told[2])
 
     def test_a_finish_written_before_a_result_could_be_read_does_not_end_the_turn(self):
         for step in (call("call_api", path="/admin-api/orders/page"), call("click", index=10)):
@@ -692,15 +761,23 @@ class LoopTests(unittest.TestCase):
             reply(call("finish", status="cannot", answer="打不开")), tool=lost)
         self.assertEqual((text, state.terminal_reason), ("打不开", "agent_refused"))
 
-    def test_a_page_the_browser_did_not_reach_is_not_reported_as_opened(self):
+    def test_a_page_is_reported_opened_only_when_the_application_rendered_it(self):
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         executor.application, executor.knowledge = NS(descriptor=NS(origin="https://synthetic.test")), None
         executor._act = lambda s, action, args, **kw: ""
-        executor._settled = lambda s, **kw: None
-        state = State()                                    # the browser is at /orders
-        self.assertEqual(executor._tool(state, "goto", {"path": "/orders"}, {}), ("已打开。", True))
-        said, changed = executor._tool(state, "goto", {"path": "/crm/customer"}, {})
-        self.assertTrue(changed)
+        executor._dispatch = lambda s, action, args, **kw: NS(ok=True)   # each look sees the same page
+        for state_of_page, route, says, confirmed in (
+                ("ready", "/orders", "已打开。", True),
+                ("pending", "/orders", "还没有报告", False),
+                ("ready", "/old", "还没有报告", False),
+                ("blocked", "/orders", "报告了错误", False)):
+            with self.subTest(state=state_of_page, route=route):
+                state, turn = State(), {}                    # the browser is at /orders
+                state.obs = observation(render_state=state_of_page, page_route=route)
+                said, changed = executor._tool(state, "goto", {"path": "/orders"}, turn)
+                self.assertIn(says, said)
+                self.assertEqual((changed, turn.get("confirmed", False)), (True, confirmed))
+        said, _changed = executor._tool(State(), "goto", {"path": "/crm/customer"}, {})
         self.assertEqual(said, "没有成功：浏览器现在在 /orders，没有到 /crm/customer。")
 
     def test_the_turn_is_refused_when_its_model_steps_run_out(self):
