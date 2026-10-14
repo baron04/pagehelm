@@ -412,6 +412,11 @@ Normal detail/editor loading is reported as pending, including on an unchanged U
 The deployment copies the app-owned `page-facts.js` and `yudao-page-controller.js`
 from `frontend/src/integrations/yudao/` into `/woa/`; the early facts module must execute
 before the application entry, otherwise record arrival fails closed.
+`yudao-page-controller.js` clicks and types with the generic controller's events, to the
+same targets in the same order, but not its 0.4 s pause before each click: that pause moves
+a pointer only the controller's mask draws, and the runtime keeps the mask off. The pause
+after a click, in which the page reacts, is the generic one. Content-editable regions are
+typed into by the generic controller itself.
 They supersede the ordinary API regex and disable alternative app API and websocket
 ingress on this origin. A nonce probe checks both public routes before the host offers
 native tabs; a failed probe aborts startup. The ordinary deployment is unchanged unless
