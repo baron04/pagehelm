@@ -767,6 +767,9 @@ class _TurnState:
 class GoalTurnExecutor:
     """Execute one turn as a declared goal, without owning the channel lifecycle."""
 
+    decision_strategy = "goal"
+    verifies_finish = True
+
     def __init__(self, *, channel, config, chat, application: BoundApplication,
                  goal_port: GoalPort, control, run_id_factory,
                  ledger_factory=SessionLedger,
@@ -2825,17 +2828,17 @@ class GoalTurnExecutor:
             s.terminal_reason, s.detail = "control_plane_error", str(release)[:200]
         terminal = s.terminal_reason or "agent_finished"
         wall = round(time.time() - s.started_at, 3)
-        agent = RunResult(run_id=s.run_id, task_ref=s.run_id, arm="goal",
+        agent = RunResult(run_id=s.run_id, task_ref=s.run_id, arm=self.decision_strategy,
                           terminal_reason=terminal, steps_used=s.step, wall_seconds=wall,
                           agent_said=text[:self.config.max_user_answer_chars],
                           page_actions=s.page_actions,
                           operation_control=s.approvals.operation_result(),
                           success_claim=("not_claimed" if terminal != "agent_finished"
-                                         or s.write_intent
+                                         or s.write_intent or not self.verifies_finish
                                          else "verified"),
                           detail=s.detail,
                           clarification=s.clarification if terminal == "needs_clarification" else None)
-        s.ledger.append("run_finished", task_ref=s.run_id, arm="goal",
+        s.ledger.append("run_finished", task_ref=s.run_id, arm=self.decision_strategy,
                         terminal_reason=terminal, steps_used=s.step, wall_seconds=wall,
                         agent_said=text[:300], page_actions=s.page_actions,
                         operation_control=agent.operation_control or {})

@@ -77,11 +77,15 @@ class ActionIntent:
             if not isinstance(args["option_label"], str) or not args["option_label"].strip():
                 raise ActionAdmissionRefused("invalid_target")
             expected |= {"option_label"}
+        if action == "fill" and "commit" in args:
+            if type(args["commit"]) is not bool:
+                raise ActionAdmissionRefused("invalid_target")
+            expected |= {"commit"}
         if action == "click" and "expect_navigation" in args:
             if not isinstance(args["expect_navigation"], bool):
                 raise ActionAdmissionRefused("invalid_target")
             expected |= {"expect_navigation"}
-        if set(args) != expected or any(not isinstance(args[k], str) for k in expected - {"expect_navigation"}):
+        if set(args) != expected or any(not isinstance(args[k], str) for k in expected - {"expect_navigation", "commit"}):
             raise ActionAdmissionRefused("invalid_target")
         if observation.render_state != "ready":
             raise ActionAdmissionRefused("invalid_target")
@@ -141,6 +145,41 @@ class ApplicationActionPolicy(Protocol):
     def verify(self, permit: ActionPermit, intent: ActionIntent, receipt: ActionReceipt,
                *, observation: PageObservation, context: OperationContext,
                checkpoint: Callable[[], None]) -> bool: ...
+
+
+def verified_observation(intent, receipt, *, context, settlement=None, minimum_epoch=0):
+    """Receipt/actor/page binding shared by read actions and transient form steps."""
+    before, after = intent.observation, receipt.observation
+    echo = dict(receipt.args_echo)
+    echoed_epoch = echo.pop("epoch", None)
+    expected = intent.arguments
+    expected.pop("expect_navigation", None)
+    expected = _remote_args_echo(expected)
+    if (context.binding_digest != intent.operation_binding
+            or receipt.action != intent.action or echo != expected or not receipt.ok
+            or receipt.error_code
+            or ("ref" in expected and echoed_epoch != before.epoch)
+            or not receipt.write_guard_held or after is None
+            or after.epoch <= before.epoch
+            or receipt.url_before != before.url or receipt.url_after != after.url
+            or urlsplit(after.url)[:2] != urlsplit(before.url)[:2]):
+        raise ActionAdmissionRefused("unverified")
+    if settlement is not None:
+        fresh = settlement.observation
+        if (settlement.action not in {"observe", "wait_for"} or not settlement.ok
+                or settlement.error_code
+                or not settlement.write_guard_held or fresh is None
+                or fresh.epoch <= max(after.epoch, minimum_epoch)
+                or settlement.url_after != fresh.url
+                or urlsplit(settlement.url_before)[:2] != urlsplit(before.url)[:2]
+                or urlsplit(fresh.url)[:2] != urlsplit(before.url)[:2]):
+            raise ActionAdmissionRefused("unverified")
+        after = fresh
+    if after.render_state == "pending":
+        raise ActionResultPending()
+    if after.render_state != "ready":
+        raise ActionAdmissionRefused("unverified")
+    return after
 
 
 class ActionAdmission:
@@ -210,39 +249,13 @@ class ActionAdmission:
     def verify(self, intent, permit, receipt, *, context, checkpoint,
                settlement: ActionReceipt | None = None, minimum_epoch: int = 0):
         self._check(context, checkpoint)
-        before, after = intent.observation, receipt.observation
-        echo = dict(receipt.args_echo)
-        echoed_epoch = echo.pop("epoch", None)
-        expected = intent.arguments
-        expected.pop("expect_navigation", None)
-        expected = _remote_args_echo(expected)
         if (intent.operation_binding not in self._consumed
                 or permit.binding_digest != intent.binding_digest
-                or self._issued.get(intent.binding_digest) != permit
-                or context.binding_digest != intent.operation_binding
-                or receipt.action != intent.action or echo != expected or not receipt.ok
-                or receipt.error_code
-                or ("ref" in expected and echoed_epoch != before.epoch)
-                or not receipt.write_guard_held or after is None
-                or after.epoch <= before.epoch
-                or receipt.url_before != before.url or receipt.url_after != after.url
-                or urlsplit(after.url)[:2] != urlsplit(before.url)[:2]):
+                or self._issued.get(intent.binding_digest) != permit):
             raise ActionAdmissionRefused("unverified")
-        if settlement is not None:
-            fresh = settlement.observation
-            if (settlement.action not in {"observe", "wait_for"} or not settlement.ok
-                    or settlement.error_code
-                    or not settlement.write_guard_held or fresh is None
-                    or fresh.epoch <= max(after.epoch, minimum_epoch)
-                    or settlement.url_after != fresh.url
-                    or urlsplit(settlement.url_before)[:2] != urlsplit(before.url)[:2]
-                    or urlsplit(fresh.url)[:2] != urlsplit(before.url)[:2]):
-                raise ActionAdmissionRefused("unverified")
-            after = fresh
-        if after.render_state == "pending":
-            raise ActionResultPending()
-        if after.render_state != "ready":
-            raise ActionAdmissionRefused("unverified")
+        before = intent.observation
+        after = verified_observation(intent, receipt, context=context,
+                                     settlement=settlement, minimum_epoch=minimum_epoch)
         try:
             verified = self.policy.verify(permit, intent, ActionReceipt.from_json(receipt.to_json()),
                 observation=PageObservation.from_json(after.to_json()),

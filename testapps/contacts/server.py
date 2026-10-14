@@ -48,6 +48,7 @@ class NativeServerConfig:
     max_active_requests_per_actor: int = 2
     adversarial_form_fixture: bool = False
     require_task_contract: bool = False
+    model_loop: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_dir", Path(self.state_dir).expanduser())
@@ -73,6 +74,8 @@ class NativeServerConfig:
             raise ValueError("max_sessions_per_actor cannot exceed max_sessions")
         if not isinstance(self.adversarial_form_fixture, bool):
             raise ValueError("adversarial_form_fixture must be a boolean")
+        if not isinstance(self.model_loop, bool):
+            raise ValueError("model_loop must be a boolean")
         if not isinstance(self.require_task_contract, bool):
             raise ValueError("require_task_contract must be a boolean")
         if (isinstance(self.browser_idle_timeout_s, bool)
@@ -165,7 +168,18 @@ class NativeContactsHost:
                 run_dir, principal.actor_authority_digest)
 
             def runner_factory(channel):
-                executor = AgentTurnExecutor(
+                executor_type = AgentTurnExecutor
+                loop_options = {}
+                action_policy = None
+                if self.config.model_loop:
+                    from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
+                    from testapps.contacts.model_loop import ContactsModelGoalPort, contacts_profile
+                    from testapps.contacts.read_actions import ContactsReadActions
+                    executor_type = ModelDrivenTurnExecutor
+                    goal_port = ContactsModelGoalPort(adapter, drafts=True)
+                    action_policy = ContactsReadActions(adapter)
+                    loop_options = {"goal_port": goal_port, "profile": contacts_profile(adapter, goal_port, drafts=True), "verify": False}
+                executor = executor_type(
                     channel=channel,
                     config=AgentTurnConfig(
                         supported_scope=(
@@ -180,7 +194,7 @@ class NativeContactsHost:
                         step_budget=8,
                         wall_budget_s=90,
                         transport_timeout_s=30,
-                        disabled_actions=frozenset(
+                        disabled_actions=frozenset({"submit", "back"} if self.config.model_loop else
                             {"click", "fill", "select", "submit", "back"}),
                         scope_first_policy=True,
                         policy_block_limit=2,
@@ -189,7 +203,8 @@ class NativeContactsHost:
                         require_task_contract=self.config.require_task_contract,
                         require_identity=True,
                         allow_form_prefill=True,
-                        click_policy=bound.ports.forms,
+                        click_policy=None if self.config.model_loop else bound.ports.forms,
+                        action_policy=action_policy,
                         allow_business_mutations=self.config.allow_mutations,
                         deployment_profile="production",
                     ),
@@ -197,6 +212,7 @@ class NativeContactsHost:
                     application=bound,
                     control=ReadOnlyControl(),
                     run_id_factory=lambda _message: "native-" + uuid.uuid4().hex[:16],
+                    **loop_options,
                 )
                 return LiveConversationRunner(channel, executor=executor)
 
@@ -208,6 +224,7 @@ class NativeContactsHost:
                 runner_factory=runner_factory,
                 session_id="contacts-" + stable,
                 navigation_mode=bound.descriptor.navigation_mode,
+                page_write_guard="/api/page-window" if self.config.model_loop else "",
                 sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
                 principal=principal,
             ).start()
@@ -221,7 +238,8 @@ class NativeContactsHost:
                 session.grant,
                 page_controller_module=session.page_controller_module,
                 navigation_mode=session.navigation_mode,
-                sensitive_query_keys=session.sensitive_query_keys),
+                sensitive_query_keys=session.sensitive_query_keys,
+                page_write_guard=session.page_write_guard),
         }
 
     def _revoke_actor(self, actor: DemoActor) -> None:

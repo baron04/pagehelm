@@ -178,7 +178,7 @@ bytes. It refuses missing or changed attestations and source, excludes handler-b
 fields and conditions other than exact create/update mode gates attested by the verifier,
 and checks literal length limits in UTF-16 units before issuing
 a draft. `YudaoApplication(forms=..., page_write_guard=...)` permits explicit composition;
-the native host does not install a verifier or enable form actions by default. A verifier
+the explicit goal configuration installs these reviewed forms only when requested. The default slim configuration uses the release-reviewed live form handlers described below. A verifier
 must come from application-owned live entry verification, never model output or a browser
 claim. The optional customer-update prototype below has a complete scripted browser
 qualification; that does not establish real-model accuracy or general form coverage.
@@ -193,14 +193,13 @@ the draft. Reviewed project creation admits only the source-declared `tabs=parti
 `tabs=owner` and `tabs=all` collection queries, bound unchanged through handoff. This does
 not enable automatic navigation: the project-group GET can initialize persisted defaults
 and cannot be admitted as read-only merely because it is a GET.
-Source questions use one small retrieval declaration and one answer declaration, with
+With explicit `--executor goal` or `--executor page-agent`, source questions use one small retrieval declaration and one answer declaration, with
 at most one shared format repair. Answers include selected release-bound citations. Literal support checks establish attribution, not semantic correctness.
 Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.
 See the [recovery qualification](../../../evals/yudao/tool_loop/RECOVERY.zh-CN.md) for
-real-model results and remaining limits. Writes, form entry and clicks, including
-tab selection, are disabled in the native host by default.
+real-model results and remaining limits. Business writes remain disabled by default. Default slim requires its own release-reviewed page policy before any page operation is offered.
 
-The optional **native-tab prototype** starts with `--native-read-policy <private-policy.json>`
+The optional **native-tab prototype**, under explicit `--executor goal`, starts with `--native-read-policy <private-policy.json>`
 and `--native-guard-port 48093`, together with `--ui-source` and `--source-release`.
 The policy is a reviewed deployment configuration, never model context: it has exactly
 `schema_version: 1`, `release` matching `--source-release`, and `read_paths`, an array
@@ -227,13 +226,29 @@ update review and creation reviews compose in the same actor session; creation a
 does not enable updates. Duplicate references or changed source abort startup. Both
 require the verified native guard.
 
-The explicit `--executor slim` pilot (`slim_loop.py`) is a measured prototype hosted by
-this adapter. It subclasses the goal executor and replaces only what decides the next
-step: one conversation in which the model searches the actor's menu, searches and calls
-the application's read-only API as the actor, works the page with the Runtime's fixed
-actions and marks a submit control for the person. Startup refuses it without the method
-fence (`--native-read-policy` in `method-fence` mode) and the application's own window.
-It uses no form or filter review and declares no goal-port capability of its own.
+The native host defaults to `slim`. Its application profile (`slim_loop.py`) uses the
+core `ModelDrivenTurnExecutor` and the goal executor's identity, session, approval,
+budget and audit lifecycle. The model searches the actor's menu and read-only API,
+receives every typed tool result and fresh observation before deciding again, and
+uses fixed Runtime actions. Yudao owns the framework-specific procedures.
+
+Startup requires `--native-read-policy` in v2 `method-fence` mode, matching
+`--source-release`, enabled live forms, `--native-page-policy` and the application's
+own read-only window. The page policy separately lists exact route/template scopes,
+reviewed handler families and exact form-entry/line-add controls. It does not grant
+submit or other persistent actions. Missing policies, incompatible releases, or legacy
+form/create/filter policies with slim fail before model configuration or proxy startup.
+There is no automatic fallback. Explicit `--executor goal` and `--executor page-agent`
+retain their previous behavior. Slim does not expose source lookup; select an explicitly
+configured source-capable mode for source questions. UI/source access is optional for
+ordinary API reads; policies are deployment artifacts, not a runtime source requirement.
+
+The cloud example explicitly passes `--executor slim --warm-index` and both policy files.
+Its page review is [release-bound](cloud/native-policy/v2026.09-page-handlers.md);
+another release needs its own review. A minimal startup selects that release and both
+`--native-read-policy <fence.json>` and `--native-page-policy <pages.json>`. `warm_index`
+is false unless explicitly enabled.
+
 Without `--native-writes` it has no write path; with it, see the end of this section.
 What the model is shown leaves out the application's navigation menu and
 names the regions that scroll; only an element listed there may be acted on. A dropdown,
@@ -341,19 +356,15 @@ is after the second. A `goto` reports the page opened only when it arrived; one 
 the browser at another path, a page that reports an error or a failed read, and a page
 whose rendering was not reported in time are each said as such, with the page.
 
-The first turn of a session that looks a record up by name, or prepares a write, needs the
-actor's application index, and building it reads one record's detail for every entity
-whose page labels line columns: a few hundred small reads. They go out four at a time, as
-a lookup by name's own reads do. The host's `--warm-index` builds the index in the
-background when the actor's session opens instead, so that the turn finds it built (or
-waits for the rest of the same build); the application then answers those reads once per
-session whether or not a turn ever needs the index, which is why it is off by default.
-With it, the actor's menu, which the first request of a session's first turn carries, is
-read ahead as well. A lookup by name does not wait for those detail reads: they serve only
-the line tables (an order's items), which are no page's entity, so a lookup reads the
-entities and pages compiled before them, and the rest of the index follows when they are
-done. For a slim turn, which reads no line table, `--warm-index` builds only that first
-part; the detail reads wait for whatever first needs a line table.
+Slim's first menu/API search or name lookup may need actor metadata. `--warm-index`
+starts menu/API descriptions and the outline in the background when the session opens;
+it does not prefetch line-table details. The explicit goal mode builds a fuller index,
+including detail reads for line descriptions. Workload depends on installed modules.
+Warming stays off by default and is not evidence of cold-start latency. `main()` also
+warms process-level API documentation in the background independently of this flag.
+
+Ordinary slim completion has `success_claim="not_claimed"`. Application readback verifies
+the individual action or write, without certifying the complete model answer or request.
 
 A turn ends on the model's own `finish`. One case is read a second time by a closing
 model request, which checks the person's words against the page and may send the turn back

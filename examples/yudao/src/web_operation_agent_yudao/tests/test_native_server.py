@@ -24,7 +24,7 @@ class NativeHostTests(unittest.TestCase):
         self.addCleanup(lambda: [h.close() for h in self.hosts])
         self.config = YudaoHostConfig(
             api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
-            state_dir=Path(self.tmp.name), gateway_host="127.0.0.1", gateway_port=0)
+            state_dir=Path(self.tmp.name), gateway_host="127.0.0.1", gateway_port=0, executor_mode="goal")
         self.addCleanup(patch.stopall)
         self.documents = patch("web_operation_agent_yudao.native_server._api_docs", return_value={}).start()
         self.chat = patch("web_operation_agent_yudao.native_server.ChatModel").start()
@@ -125,7 +125,7 @@ class NativeHostTests(unittest.TestCase):
         self.assertEqual(host.server.session_count, 1)
         self.chat.return_value.complete.assert_not_called()
 
-    def test_production_uses_deterministic_goals_without_source_as_a_prerequisite(self):
+    def test_explicit_goal_uses_deterministic_goals_without_source_as_a_prerequisite(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
         executor = host._sessions[("1", "1")].session.runner.executor
@@ -404,6 +404,56 @@ class NativeHostTests(unittest.TestCase):
             replace(self.config, warm_index=None)
         self.chat.return_value.complete.assert_not_called()
 
+    def _page_policy(self):
+        path = Path(self.tmp.name) / "pages.json"
+        path.write_text(json.dumps({"schema_version": 1, "release": "synthetic-release", "review": "synthetic-handler-review",
+            "handlers": [{"kind": "navigation", "route": "/crm/customer", "evidence": "synthetic/menu", "sha256": "a" * 64, "controls": []}]}))
+        # _fence supplies the synthetic release used by the host fixture.
+        document = json.loads(path.read_text())
+        document["release"] = self._fence().source_release
+        path.write_text(json.dumps(document))
+        return path
+
+    def test_default_is_the_shared_model_loop_without_source_warming_or_writes(self):
+        from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
+        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+        from web_operation_agent_yudao.model_page_policy import ModelPageGoalPort
+        self.assertEqual("slim", YudaoHostConfig.executor_mode)
+        self.config = replace(self._fence(), executor_mode=YudaoHostConfig.executor_mode,
+                               native_page_policy=self._page_policy(), ui_source=None, source_root=None)
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
+                patch.object(YudaoHost, "_warm_index") as warm:
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "default")
+            executor = host._sessions[("1", "1")].session.runner.executor
+            self.assertIs(type(executor), SlimTurnExecutor)
+            self.assertIs(executor._loop.__func__, ModelDrivenTurnExecutor._loop)
+            self.assertIsInstance(executor.goal_port, ModelPageGoalPort)
+            self.assertNotIn("source", executor.goal_port.capabilities())
+            self.assertFalse(executor.config.allow_business_mutations)
+            self.assertIn("submit", executor.disabled_page_actions)
+            warm.assert_not_called()
+
+    def test_invalid_default_deployment_fails_before_state_source_proxy_or_model(self):
+        valid = replace(self._fence(), executor_mode="slim", native_page_policy=self._page_policy())
+        missing = Path(self.tmp.name) / "does-not-exist.json"
+        wrong = Path(self.tmp.name) / "wrong-pages.json"
+        doc = json.loads(valid.native_page_policy.read_text()); doc["release"] = "wrong"
+        wrong.write_text(json.dumps(doc))
+        variants = [dict(native_read_policy=None), dict(native_read_policy=missing),
+            dict(native_page_policy=None), dict(native_page_policy=missing), dict(native_page_policy=wrong),
+            dict(source_release="wrong"), dict(native_live_forms=False),
+            dict(native_form_policy=missing), dict(native_create_policies=(missing,)),
+            dict(native_create_class=missing), dict(native_filter_policies=(missing,))]
+        for number, changes in enumerate(variants):
+            with self.subTest(changes=changes), patch("web_operation_agent_yudao.native_server.UiSource.read") as source, \
+                    patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+                directory = Path(self.tmp.name) / f"invalid-{number}"
+                with self.assertRaises(ValueError):
+                    YudaoHost(replace(valid, state_dir=directory, **changes))
+                self.assertFalse(directory.exists())
+                source.assert_not_called(); proxy.assert_not_called(); self.chat.assert_not_called()
+
     def test_the_slim_turn_proposes_reviewed_writes_only_where_the_host_enables_them(self):
         from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
         from web_operation_agent_yudao.ui_source import UiSource
@@ -412,7 +462,7 @@ class NativeHostTests(unittest.TestCase):
                     patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
                     patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
                     patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
-                self.config = replace(self._fence(), executor_mode="slim", native_writes=enabled,
+                self.config = replace(self._fence(), executor_mode="slim", native_page_policy=self._page_policy(), native_writes=enabled,
                                       state_dir=Path(self.tmp.name) / str(enabled))
                 host = self.host()
                 host.bootstrap("synthetic-a", "1", "slim-tab")
@@ -435,7 +485,7 @@ class NativeHostTests(unittest.TestCase):
                 patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()), \
                 patch.object(YudaoHost, "_warm_index",
                              staticmethod(lambda app, knowledge: (read.append(knowledge), done.set()))):
-            self.config = replace(self._fence(), executor_mode="slim", warm_index=True,
+            self.config = replace(self._fence(), executor_mode="slim", native_page_policy=self._page_policy(), warm_index=True,
                                   state_dir=Path(self.tmp.name) / "ahead")
             host = self.host()
             host.bootstrap("synthetic-a", "1", "slim-tab")
@@ -576,6 +626,69 @@ class NativeHostTests(unittest.TestCase):
             with self.assertRaises(GuardRefused): self.host()
             proxy.return_value.start.return_value.close.assert_called_once()
             self.chat.assert_not_called()
+
+
+class NativeCliTests(unittest.TestCase):
+    def test_policy_diagnostic_precedes_model_and_network(self):
+        import contextlib
+        import io
+        from web_operation_agent_yudao import native_server as native
+        with tempfile.TemporaryDirectory() as directory, patch.dict(native.os.environ, {}, clear=True), \
+                patch.object(native, "YudaoHost") as host:
+            error = io.StringIO()
+            with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as failed:
+                native.main(["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
+                             "--state-dir", directory + "/not-created"])
+            self.assertEqual(2, failed.exception.code)
+            self.assertIn("--native-read-policy", error.getvalue())
+            self.assertIn("--executor goal", error.getvalue())
+            self.assertNotIn("API_KEY", error.getvalue())
+            self.assertFalse(Path(directory, "not-created").exists())
+            host.assert_not_called()
+
+    def test_real_main_defaults_explicit_modes_and_process_metadata_warmup(self):
+        from types import SimpleNamespace as NS
+        from unittest.mock import Mock
+        from web_operation_agent_yudao import native_server as native
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fence = root / "fence.json"
+            fence.write_text(json.dumps({"schema_version": 2, "release": "synthetic", "mode": "method-fence",
+                                         "writing_gets": [], "scan": {}}))
+            pages = root / "pages.json"
+            pages.write_text(json.dumps({"schema_version": 1, "release": "synthetic", "review": "synthetic",
+                "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
+                              "evidence": "synthetic", "sha256": "a"*64}]}))
+            for mode in (None, "slim", "goal", "page-agent"):
+                with self.subTest(mode=mode):
+                    host = Mock()
+                    host.server.base_url = "http://synthetic.invalid"
+                    def compose(config):
+                        host.config = config
+                        return host
+                    def thread(**kwargs):
+                        return NS(start=lambda: kwargs["target"]())
+                    args = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
+                            "--state-dir", directory, "--source-release", "synthetic", "--native-read-policy", str(fence)]
+                    if mode: args += ["--executor", mode]
+                    if mode in (None, "slim"): args += ["--native-page-policy", str(pages)]
+                    if mode == "slim": args += ["--warm-index"]
+                    with patch.dict(native.os.environ, {"AGENT_OPENAI_API_KEY": "synthetic-unused",
+                            "AGENT_OPENAI_MODEL": "scripted/no-model"}, clear=True), \
+                            patch.object(native, "YudaoHost", side_effect=compose), \
+                            patch("web_operation_agent.modeling.spend.price_for", return_value={}), \
+                            patch.object(native, "ThreadingHTTPServer") as http, \
+                            patch.object(native.threading, "Thread", side_effect=thread), \
+                            patch.object(native.threading, "Event") as event, patch.object(native.signal, "signal"):
+                        event.return_value.wait.side_effect = KeyboardInterrupt
+                        self.assertEqual(0, native.main(args))
+                    self.assertEqual(mode or "slim", host.config.executor_mode)
+                    self.assertEqual(mode == "slim", host.config.warm_index)
+                    self.assertFalse(host.config.native_writes)
+                    host.server.start.assert_called_once()
+                    host._warm_api_docs.assert_called_once()
+                    http.return_value.shutdown.assert_called_once()
+                    host.close.assert_called_once()
 
 
 if __name__ == "__main__":

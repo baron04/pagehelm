@@ -12,6 +12,9 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 
+from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
+from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult, ModelLoopProfile, LoopProcedure
+from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.business.approvals import ApprovalWatch
 from web_operation_agent.business.runtime import BusinessToolResult, BusinessToolRuntime
 from web_operation_agent.composition.business_operations import RegisteredOperations
@@ -26,7 +29,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
-from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor,
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _tabs_not_shown,
                                                  _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -191,9 +194,9 @@ class PageTextTests(unittest.TestCase):
     def test_only_an_element_the_page_text_listed_may_be_acted_on(self):
         class State:
             obs = observation()
-        self.assertIsNone(SlimTurnExecutor._element(None, State, 3))    # a menu entry
-        self.assertIsNone(SlimTurnExecutor._element(None, State, 99))   # nothing there
-        self.assertEqual(SlimTurnExecutor._element(None, State, 10).name, "Search")
+        self.assertIsNone(YudaoLoopProcedures._element(None, State, 3))    # a menu entry
+        self.assertIsNone(YudaoLoopProcedures._element(None, State, 99))   # nothing there
+        self.assertEqual(YudaoLoopProcedures._element(None, State, 10).name, "Search")
 
 
 DOCS = {"paths": {
@@ -222,6 +225,19 @@ DOCS = {"paths": {
     "Channel": {"properties": {"name": {"description": "渠道名称"}, "password": {"description": "密码"},
                                "apiSecret": {"description": "接口密钥"}, "maxTokens": {"description": "令牌上限"}}},
 }}}
+
+
+# Complete endpoint query metadata used by strict model-tool validation.
+for path, item in DOCS["paths"].items():
+    if "get" not in item:
+        continue
+    params = item["get"].setdefault("parameters", [])
+    names = {q["name"] for q in params}
+    wanted = {"pageNo", "pageSize"} if path.endswith("/page") else {"id"} if path.endswith("/get") else set()
+    if path.endswith("leads/page"):
+        wanted |= {"name"}
+    params.extend({"name": name, "in": "query", "schema": {"type": "string" if name == "name" else "integer"}}
+                  for name in sorted(wanted - names))
 
 
 class Client:
@@ -477,10 +493,12 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual([c for c in self.client.calls if c[0] != "system/auth/get-permission-info"], [])
 
     def test_the_application_s_refusal_is_told_to_the_model(self):
-        self.assertIn("客户不存在", self.know.call_api("orders/page", {"customerId": "0"}))
+        self.assertIn("客户不存在", self.know.call_api("orders/page", {"customerId": "0", "pageNo": 1}))
 
 
 def call(name: str, **args) -> dict:
+    if name == "call_api" and isinstance(args.get("params"), dict):
+        args["params"] = json.dumps(args["params"], ensure_ascii=False)
     return {"id": f"call-{name}-{len(args)}", "type": "function",
             "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}
 
@@ -539,6 +557,9 @@ class State:
         self.message = NS(text="q", message_id="m-1")
         self.step, self.run_id, self.obs = 0, "run-1", observation()
         self.chat, self.ledger, self.budget = Script(*replies), Ledger(), Budget()
+        self.measure, self.audit = lambda _: contextlib.nullcontext(), self.ledger.append
+        self.progress = lambda facts: None
+        self.page = NS(execute=lambda *a, **k: None)
 
     @staticmethod
     def cancelled():
@@ -549,7 +570,7 @@ class SettledTests(unittest.TestCase):
     """How long the page is given after a step, by what the looks at it show."""
 
     def settle(self, first, *later, gone_after=None, **kw):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         epochs = iter(range(1, 99))
 
         def look(content, state="ready", url="https://synthetic.test/orders", route=None):
@@ -572,7 +593,7 @@ class SettledTests(unittest.TestCase):
                 return None
             s.obs = coming.pop(0)
             return NS(ok=True)
-        executor._dispatch = dispatch
+        state.page = NS(execute=lambda action, args: dispatch(state, action, args))
         self.outcome = executor._settled(state, **kw)
         return state.obs.content
 
@@ -640,7 +661,7 @@ class LoopTests(unittest.TestCase):
         """`page` is what each step on the page in turn changes of it; a step past the
         end of it leaves the page as it was. `tabs` are (name, aria-selected) of the
         page's tabs."""
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
         executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
@@ -652,13 +673,49 @@ class LoopTests(unittest.TestCase):
             self.ran.append(name)
             if name in ("click", "input", "select", "scroll", "fill_fields"):
                 s.obs = observation(epoch=s.obs.epoch + 1, **(changes.pop(0) if changes else {}))
+            if name in ("click", "input", "select", "scroll", "fill_fields"):
+                executor._tool_receipts.append(ActionReceipt(1, "step", "observe", {}, True, observation=s.obs))
             return "ok", False
-        executor._tool = tool or ran
+        raw_tool = tool or ran
+        def typed(s, name, args, turn):
+            value = raw_tool(s, name, args, turn)
+            if isinstance(value, LoopToolResult):
+                return value
+            text, changed = value
+            if changed:
+                old = s.obs.to_json()
+                old["epoch"] += 1
+                for e in old["elements"]: e["epoch"] = old["epoch"]
+                s.obs = PageObservation.from_json(old)
+            if turn.pop("confirmed", False):
+                action = name
+                echo = {"url": "https://synthetic.test" + args["path"]} if name == "goto" else {"ref": "e" + str(args["index"])}
+                if name == "goto":
+                    s.obs.url, s.obs.page_route, s.obs.render_state = echo["url"], args["path"], "ready"
+                receipt = ActionReceipt(1, "proof", action, echo, True, observation=s.obs,
+                                        url_after=s.obs.url, write_guard_held=True)
+                executor._tool_receipts.append(receipt)
+                executor._verified_action_commands = {receipt.command_id}
+            return LoopToolResult(text, kind="page" if name in {"goto","highlight","click","input","select","scroll","fill_fields"} else "read")
+        executor._tool = typed
+        executor._tools = lambda _: TOOLS
+        executor._page = lambda s, turn: page_text(s.obs, handoffs=turn["handoffs"], marked=turn["marked"])
+        executor._completion_conflict = lambda obs, answer: _tabs_not_shown(obs, answer)
+        def observe(s, action, args, **kwargs):
+            old = s.obs.to_json()
+            old["epoch"] += 1
+            for e in old["elements"]: e["epoch"] = old["epoch"]
+            s.obs = PageObservation.from_json(old)
+            receipt = ActionReceipt(1, "look", "observe", {}, True, observation=s.obs)
+            executor._tool_receipts.append(receipt)
+            return receipt
+        executor._dispatch = observe
         pending, changes = list(problems), list(page)
 
         def verify(s, prompt, answer, turn):
             self.checked.append(answer)
-            return pending.pop(0) if pending else []
+            problems = pending.pop(0) if pending else []
+            return VerificationResult("disputed", tuple(problems)) if problems else VerificationResult("passed")
         executor._verify = verify
         state = State(*replies)
         if tabs:
@@ -691,7 +748,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual((self.checked, self.channel.steps()), (["已填好 10 月 20 日"], ["正在核对结果"]))
 
     def test_what_the_person_said_in_an_earlier_turn_counts_as_said(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor._earlier_words = ["客户是晨岚机电"]
         turn = {"touched": [("客户", "晨岚机电"), ("数量", "24")]}
         self.assertEqual(executor._unsaid("就它，数量你定", turn), ["数量←24"])
@@ -820,7 +877,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual((text, state.terminal_reason), ("打不开", "agent_refused"))
 
     def test_a_page_is_reported_opened_only_when_the_application_rendered_it(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.application, executor.knowledge = NS(descriptor=NS(origin="https://synthetic.test")), None
         executor._act = lambda s, action, args, **kw: ""
         executor._dispatch = lambda s, action, args, **kw: NS(ok=True)   # each look sees the same page
@@ -832,10 +889,13 @@ class LoopTests(unittest.TestCase):
             with self.subTest(state=state_of_page, route=route):
                 state, turn = State(), {}                    # the browser is at /orders
                 state.obs = observation(render_state=state_of_page, page_route=route)
-                said, changed = executor._tool(state, "goto", {"path": "/orders"}, turn)
+                state.page = NS(execute=lambda *args, **kw: NS(ok=True))
+                result = executor._tool(state, "goto", {"path": "/orders"}, turn)
+                said, changed = result.feedback, result.kind == "page"
                 self.assertIn(says, said)
-                self.assertEqual((changed, turn.get("confirmed", False)), (True, confirmed))
-        said, _changed = executor._tool(State(), "goto", {"path": "/crm/customer"}, {})
+                self.assertEqual((changed, result.state == "completed"), (True, confirmed))
+        result = executor._tool(State(), "goto", {"path": "/crm/customer"}, {})
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(said, "没有成功：浏览器现在在 /orders，没有到 /crm/customer。")
 
     def test_the_turn_is_refused_when_its_model_steps_run_out(self):
@@ -912,7 +972,7 @@ class LoopTests(unittest.TestCase):
         self.assertTrue(self.turn["trace"][0].startswith("input[Customer]("), self.turn["trace"])
 
     def test_what_the_assistant_put_into_a_control_is_kept_for_the_check(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
         executor._settled = lambda s, **kw: None
@@ -921,7 +981,7 @@ class LoopTests(unittest.TestCase):
         executor._tool(state, "select", {"index": 9, "option": "Beta"}, turn)
         self.assertEqual(turn["touched"], [("Customer", ""), ("Customer", "Beta")])
         self.assertEqual([action for action, _args in sent], ["fill", "select"])
-        self.assertIn("用 select(index, option)", executor._tool(state, "click", {"index": 9}, turn)[0])
+        self.assertIn("用 select(index, option)", executor._tool(state, "click", {"index": 9}, turn).feedback)
         sent.pop()
         executor._tool(state, "input", {"index": 9, "text": "Delta"}, turn)   # typed into a dropdown
         self.assertEqual(sent[-1], ("select", {"ref": "e9", "value": "Delta", "option_label": "Delta"}))
@@ -934,10 +994,12 @@ class LoopTests(unittest.TestCase):
         executor._act = scrolled
         moved = [{"content": CONTENT.replace("\t[11]<button", "\t*[11]<button").replace("bottom=394", "bottom=0")},
                  {"content": CONTENT.replace("bottom=394", "bottom=0")}]
-        said, _changed = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        result = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(sent[-1], ("scroll", {"direction": "down", "pages": 1, "ref": "e8"}))
         self.assertEqual(said, "已滚动。")
-        said, _changed = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        result = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(state.obs.epoch, 3)
         self.assertIn("内容没有变化", said)    # looked at again, and it showed what it had shown
         executor._act = lambda s, action, args, **kw: "没有成功：stale"
@@ -945,7 +1007,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(len(turn["touched"]), 3)   # a step that failed put nothing there
 
     def test_several_named_fields_are_set_in_one_step_each_found_on_the_page_as_it_then_is(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
         executor._settled = lambda s, **kw: None
@@ -957,10 +1019,11 @@ class LoopTests(unittest.TestCase):
             element(4, "combobox", "", "input", field_label="日期", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
             element(5, "button", "搜 索", "button")],
             content="[1]<input />\n[2]<input />\n[3]<input />\n[4]<input />\n[5]<button>搜 索 />")
-        said, changed = executor._tool(state, "fill_fields", {"fields": [
+        result = executor._tool(state, "fill_fields", {"fields": [
             {"label": "备注", "value": "加急"}, {"label": "客户", "value": "Acme"},
             {"label": "日期", "value": "2026-10-01 ~ 2026-10-31"}, {"label": "不存在", "value": "x"}],
             "then_click": "搜索"}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertTrue(changed)
         self.assertEqual([(a, args.get("ref"), args.get("value")) for a, args in sent], [
             ("fill", "e1", "加急"), ("select", "e2", "Acme"), ("fill", "e3", "2026-10-01"),
@@ -971,7 +1034,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual([label for label, _value in turn["touched"]], ["备注", "客户", "日期"])
 
     def test_a_named_range_uses_its_unlabelled_end_from_the_fresh_observation(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._settled = lambda s, **kw: None
         state, turn = State(), {"touched": [], "trace": []}
@@ -998,8 +1061,9 @@ class LoopTests(unittest.TestCase):
             return ""
 
         executor._act = act
-        said, _changed = executor._tool(state, "fill_fields", {"fields": [
+        result = executor._tool(state, "fill_fields", {"fields": [
             {"label": "订单时间", "value": "2026-10-01 ~ 2026-10-28"}]}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(sent, [
             ("fill", {"ref": "e3", "value": "2026-10-01", "commit": False}),
             ("fill", {"ref": "e6", "value": "2026-10-28", "commit": True})])
@@ -1016,7 +1080,7 @@ class LoopTests(unittest.TestCase):
             ({"form_instance": "other-instance"}, True), ({}, False),
         ]:
             with self.subTest(changes=changes, visible=visible):
-                executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+                executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
                 executor.knowledge, sent = None, []
                 executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
                 executor._settled = lambda s, **kw: None
@@ -1024,7 +1088,7 @@ class LoopTests(unittest.TestCase):
                 other = element(4, "combobox", "", "input", **{**attrs, **changes})
                 state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [start, other],
                                             content="[3]<input />" + ("\n[4]<input />" if visible else ""))
-                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn).feedback
                 self.assertIn("没有唯一的日期范围两个框", said)
                 self.assertEqual(sent, [])
                 self.assertEqual(turn["touched"], [])
@@ -1037,12 +1101,12 @@ class LoopTests(unittest.TestCase):
             with self.subTest(others=others):
                 state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [start, *others],
                                             content="[3]<input />\n[4]<input />\n[5]<input />")
-                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn).feedback
                 self.assertIn("没有唯一的日期范围两个框", said)
                 self.assertEqual(sent, [])
 
     def test_a_range_rejects_a_missing_endpoint_and_accepts_the_documented_separators(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
         executor._settled = lambda s, **kw: None
@@ -1054,19 +1118,19 @@ class LoopTests(unittest.TestCase):
         for value in ["2026-10-01", "2026-10-01 ~", "~ 2026-10-28", "2026-10-01 ~ ~ 2026-10-28"]:
             with self.subTest(value=value):
                 turn = {"touched": [], "trace": []}
-                said = executor._fill_fields(state, [{"label": "日期", "value": value}], "", turn)
+                said = executor._fill_fields(state, [{"label": "日期", "value": value}], "", turn).feedback
                 self.assertIn("值写成“开始 ~ 结束”", said)
                 self.assertEqual(sent, [])
         for separator in ["~", "～", "至", "到"]:
             with self.subTest(separator=separator):
                 sent.clear()
                 said = executor._fill_fields(state, [{"label": "日期", "value": f"2026-10-01 {separator} 2026-10-28"}],
-                                             "", {"touched": [], "trace": []})
+                                             "", {"touched": [], "trace": []}).feedback
                 self.assertIn("日期：已填", said)
                 self.assertEqual([args["value"] for _, args in sent], ["2026-10-01", "2026-10-28"])
 
     def test_a_range_stops_when_its_form_is_replaced_after_the_start(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._settled = lambda s, **kw: None
         state, turn = State(), {"touched": [], "trace": []}
@@ -1084,26 +1148,28 @@ class LoopTests(unittest.TestCase):
 
         executor._act = act
         state.obs = observed("original")
-        said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+        said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn).feedback
         self.assertIn("日期范围控件已变化", said)
         self.assertEqual(sent, [("fill", {"ref": "e3", "value": "2026-10-01", "commit": False})])
         self.assertEqual(turn["touched"], [])
 
     def test_the_check_is_told_which_controls_the_assistant_set_and_nothing_else_counts_as_changed(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "把地址清空"}]
         executor._earlier_words = []
+        executor.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
         state = State({"content": '{"ok": false, "problems": ["没有标出提交按钮"]}'})
         turn = {"reads": [], "marked": "", "trace": ["input[详细地址]({})"], "touched": [("详细地址", ""), ("电话", "010")],
                 "handoffs": SessionHandoffPolicy.extending(())}
-        self.assertEqual(executor._verify(state, "把地址清空", "已清空", turn), ["没有标出提交按钮"])
+        messages = executor.verification_messages("把地址清空", "已清空", turn, state.obs, ["把地址清空"])
+        state.chat.complete_cancellable(messages, None, state.run_id, cancelled=state.cancelled)
         asked = state.chat.seen[0][1]["content"]
         self.assertIn("助手本轮填写/选择过的控件（程序记录，按先后）：详细地址←(清空)；电话←010", asked)
         self.assertIn("助手填入的这些值没有原样出现在用户原话里：电话←010", asked)
         self.assertNotIn("form_changed", asked)
 
     def test_earlier_api_results_leave_the_conversation_once_they_outgrow_their_share(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor._messages = [{"role": "tool", "_api": True, "content": f"total={n}\n" + "行" * 5000}
                               for n in range(4)]
         executor._forget_old_observations()
@@ -1112,7 +1178,7 @@ class LoopTests(unittest.TestCase):
         self.assertTrue(executor._messages[0]["content"].startswith("total=0\n（更早的接口结果已省略"))
 
     def test_an_api_result_that_is_left_out_keeps_what_the_program_said_and_no_open_fence(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor._messages = [{"role": "tool", "_api": True, "content": content} for content in (
             "total=9\n" + BEGIN + "\n" + "行" * 13000 + "\n" + END, BEGIN + "\n" + "行" * 13000 + "\n" + END,
             "total=1\n" + BEGIN + "\n{}\n" + END)]
@@ -1158,7 +1224,7 @@ class PagingTests(unittest.TestCase):
                 "page": page, "page_size": size, "total": total, "rows": min(size, total)}
 
     def paged(self, value, label="每页条数", then=None, controls=None):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, self.sent = None, []
         executor._act = lambda s, action, args, **kw: self.sent.append((action, args)) or ""
 
@@ -1174,7 +1240,7 @@ class PagingTests(unittest.TestCase):
         state, turn = State(), {"touched": [], "trace": []}
         state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], controls,
                                     content="[3]<input />\n[4]<li>2 />", page_read=self.read())
-        said = executor._fill_fields(state, [{"label": label, "value": value}], "", turn)
+        said = executor._fill_fields(state, [{"label": label, "value": value}], "", turn).feedback
         return said, state, turn
 
     def test_rows_per_page_are_chosen_by_the_application_s_option_and_confirmed_by_the_list_read(self):
@@ -1247,6 +1313,9 @@ class FindRecordTests(unittest.TestCase):
             def context(step, tool):
                 return None
 
+        operation = None
+        measure = staticmethod(lambda name: contextlib.nullcontext())
+
         class receipt:
             @staticmethod
             def stage(name):
@@ -1254,7 +1323,7 @@ class FindRecordTests(unittest.TestCase):
                 return contextlib.nullcontext()
 
     def find(self, port, name, kind=""):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.goal_port, executor.knowledge = port, ActorKnowledge(Client(), lambda: DOCS)
         return executor._find_record(self.Turn, name, kind)
 
@@ -1375,7 +1444,7 @@ class WriteTurnTests(unittest.TestCase):
         tools, skills = native_tools(self.client, self.data), packaged_skills()
         runtime = BusinessToolRuntime.from_registry(tools, application_id="yudao", skill_registry=skills,
                                                     require_skill_for_writes=True)
-        self.application = NS(business_tools=runtime, ports=NS(
+        self.application = NS(descriptor=NS(application_id="yudao", origin="https://synthetic.test"), business_tools=runtime, ports=NS(
             operations=RegisteredOperations(tools, skills, self.data.invalidate_reads),
             routes=NS(session_handoff_query_keys=frozenset())))
         self.person = Person()
@@ -1398,7 +1467,7 @@ class WriteTurnTests(unittest.TestCase):
                   writes=NS(begin_control=lambda: None, start_observing=lambda: None))
 
     def executor(self, *, knowledge=True, asked=None):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor.application, executor.skill_knowledge = self.application, knowledge
         executor.knowledge = ActorKnowledge(Client(), lambda: DOCS)
         executor.model_steps, executor.verify, executor._carried_skills = 8, True, ()
@@ -1407,7 +1476,33 @@ class WriteTurnTests(unittest.TestCase):
         executor._messages = [{"role": "system", "content": "s"},
                               {"role": "user", "content": (asked or self.ASKED) + "\n当前页面: /crm/contact"}]
         self.checked = []
-        executor._verify = lambda s, prompt, answer, turn: self.checked.append(list(turn["written"])) or []
+        executor._verify = lambda s, prompt, answer, turn: self.checked.append(list(turn["written"])) or VerificationResult("passed")
+        executor.goal_port = getattr(ModelDrivenTurnExecutor, "goal_port", None) or FindRecordTests.Port()
+        owner = YudaoLoopProcedures(executor.knowledge, executor.goal_port, "https://synthetic.test")
+        class Procedure:
+            def __init__(self, name): self.name = name
+            def execute(self, args, *, context):
+                turn = {"reads": [], "trace": [], "touched": [], "marked": ""}
+                result = owner._tool(context, self.name, args, turn)
+                return replace(result, entered=tuple(turn["touched"]), trace=tuple(turn["trace"]),
+                               read_summary=turn["reads"][-1] if turn["reads"] else None, marked=turn["marked"])
+        procedures = tuple(LoopProcedure(json.dumps(schema), Procedure(schema["function"]["name"]),
+            "read" if schema["function"]["name"] in {"call_api", "find_record"} else
+            "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page", "yudao.read")
+            for schema in TOOLS[:-1])
+        executor.profile = NS(procedures=procedures, completion_conflict=lambda *_: (),
+            render_page=lambda obs, marked: page_text(obs, handoffs=SessionHandoffPolicy.extending(()), marked=marked),
+            instructions=system_text(user="u", date="2026-10-13", tz="Asia/Shanghai"),
+            prepare=lambda request, context: "", verification_messages=None)
+        executor.debug_dir = None
+        def fresh(s, action, args, **kwargs):
+            before = s.obs
+            s.obs = observation(epoch=before.epoch+1)
+            receipt = ActionReceipt(1, "look", action, args, True, observation=s.obs,
+                                    url_before=before.url, url_after=s.obs.url)
+            executor._tool_receipts.append(receipt)
+            return receipt
+        executor._dispatch = fresh
         return executor
 
     def loop(self, *replies, **kw):
@@ -1459,7 +1554,7 @@ class WriteTurnTests(unittest.TestCase):
     def test_searches_and_reads_are_told_to_whoever_is_watching(self):
         find = {"id": "call-find", "type": "function", "function": {
             "name": "find_record", "arguments": json.dumps({"name": "晨岚机电"}, ensure_ascii=False)}}
-        with patch.object(SlimTurnExecutor, "goal_port", FindRecordTests.Port(hits=(("orders", "晨岚机电"),)),
+        with patch.object(ModelDrivenTurnExecutor, "goal_port", FindRecordTests.Port(hits=(("orders", "晨岚机电"),)),
                           create=True):
             executor, state, _text = self.loop(
                 reply(call("search_menu", keyword="订单")), reply(call("search_api", keyword="订单")), reply(find),
@@ -1471,7 +1566,9 @@ class WriteTurnTests(unittest.TestCase):
         self.assertEqual({turn for _kind, _payload, turn in self.channel.published}, {"m-1"})
         nodes = [payload["step"] for _kind, payload, _turn in self.channel.published]
         self.assertEqual(nodes[0], {"stage": "search", "tool": "search_menu", "arguments": "keyword=订单"})
-        self.assertEqual(nodes[3], {"stage": "tool", "tool": "call_api", "arguments": "path=/admin-api/orders/page"})
+        self.assertEqual(nodes[3]["stage"], "tool")
+        self.assertEqual(nodes[3]["tool"], "call_api")
+        self.assertIn("path=/admin-api/orders/page", nodes[3]["arguments"])
         self.assertEqual(nodes[4], {"stage": "read_done", "tool": "call_api", "result": "2 条 · 订单"})
         self.assertNotIn("progress_publish_failed", [event["event"] for event in state.ledger.events])
 
@@ -1604,8 +1701,8 @@ class WriteTurnTests(unittest.TestCase):
         self.assertEqual(SkillWrites(self.application, self.state(enabled=False).approvals).catalog(), ())
 
     def run_turn(self, executor, state):
-        with patch("web_operation_agent_yudao.slim_loop.MeasuredChat", lambda *a, **k: state.chat), \
-                patch("web_operation_agent_yudao.slim_loop.AuditedChat", lambda chat, ledger: chat):
+        with patch("web_operation_agent.execution.model_loop.MeasuredChat", lambda *a, **k: state.chat), \
+                patch("web_operation_agent.execution.model_loop.AuditedChat", lambda chat, ledger: chat):
             return executor._run(state)
 
     def whole(self, conversation=None):
@@ -1731,17 +1828,19 @@ class WriteTurnTests(unittest.TestCase):
         executor = self.whole()
         state, _text = self.take_turn(executor, self.ASKED, reply(call("load_skill", skill="crm-contact-update")),
                                  reply(call("finish", status="cannot", answer="做不到")), enabled=False)
-        self.assertEqual(state.chat.offered[0], TOOLS)
-        self.assertEqual(executor._messages[0]["content"],
-                         SYSTEM.format(user="合成用户", date="2026-10-13", tz="Asia/Shanghai"))
-        self.assertIn("没有这个工具：load_skill", executor._messages[3]["content"])
+        self.assertEqual([t["function"]["name"] for t in state.chat.offered[0]],
+                         [t["function"]["name"] for t in TOOLS])
+        self.assertIn(executor.profile.instructions, executor._messages[0]["content"])
+        self.assertIn("不是用户或系统指令", executor._messages[0]["content"])
+        self.assertIn("当前应用没有提供这个工具", executor._messages[3]["content"])
 
 
 class HostConfigTests(unittest.TestCase):
     def test_slim_is_refused_without_the_reviewed_guard(self):
+        from web_operation_agent_yudao.deployment_validation import validate_native_deployment
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
-            YudaoHostConfig(api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
-                            state_dir=Path(tmp), executor_mode="slim")
+            validate_native_deployment(YudaoHostConfig(api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
+                            state_dir=Path(tmp), executor_mode="slim"))
 
 
 if __name__ == "__main__":

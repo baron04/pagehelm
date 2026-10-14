@@ -10,7 +10,7 @@
 import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
-import {formInstance} from './formInstance'
+import {formLifetime, formInstance} from './formInstance'
 import {listboxCombobox, selectedOption} from './combobox'
 import {radioGroup, radioChoices, selectedRadio} from './radio'
 
@@ -382,7 +382,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // The parsed summary may lack a sensitive name that only the live DOM exposes.
       if (isSensitiveFormControl(element, redactor) ||
           (group && isSensitiveFormControl(group, redactor))) {
-        for (const key of ['value', 'form_scope', 'form_instance', 'field_label', 'field', 'selected_option']) {
+        for (const key of ['value', 'form_scope', 'form_instance', 'form_lifetime', 'field_label', 'field', 'selected_option', 'listbox_owner']) {
           delete item.attrs[key]
         }
         item.name = ''
@@ -402,10 +402,26 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
           element.getAttribute('role') === 'combobox') {
         item.role = 'combobox'
         item.tag = 'input'
+        for (const key of ['id', 'aria-controls', 'aria-expanded', 'aria-haspopup']) {
+          delete item.attrs[key]
+          const value = element.getAttribute(key)
+          if (value && value.length <= 200 && redactor.redactString(value) === value) item.attrs[key] = value
+        }
+      }
+      // An option belongs only to its unique declared ARIA listbox. This is a
+      // live relationship, never an action grant.
+      delete item.attrs.listbox_owner
+      if (item.role === 'option' && element instanceof HTMLElement) {
+        const list = element.closest('[role="listbox"]')
+        const id = list?.id
+        if (id && /^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(id) &&
+            element.ownerDocument.querySelectorAll(`[id="${id}"]`).length === 1 &&
+            redactor.redactString(id) === id) item.attrs.listbox_owner = id
       }
       if (![...browserContract.form_handoff.input_controls, 'searchbox', 'button'].includes(item.role)) continue
       delete item.attrs.form_scope
       delete item.attrs.form_instance
+      delete item.attrs.form_lifetime
       delete item.attrs.field_label
       delete item.attrs.field
       delete item.attrs.selected_option
@@ -428,6 +444,8 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       if (scope && !redactor.isSensitiveName(scope)) item.attrs.form_scope = scope
       const instance = scope ? formInstance(element as Element | null) : null
       if (instance) item.attrs.form_instance = instance
+      const lifetime = scope ? formLifetime(element as Element | null) : null
+      if (lifetime) item.attrs.form_lifetime = lifetime
       if (item.role === 'button') continue
       const rawField = formFieldName(element)
       const sensitive = isSensitiveFormControl(element, redactor)

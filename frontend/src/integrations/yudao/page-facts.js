@@ -172,13 +172,13 @@ export function createPageFacts({view = window, doc = document} = {}) {
       appliedQuery = null
       query = {path: url.pathname, parameters: Object.fromEntries(url.searchParams)}
     }
-    const detail = /^\/crm\/(customer|contract|business)\/detail\/([0-9]+)$/.exec(route)
-    const isRecord = Boolean(detail && url.pathname === `/admin-api/crm/${detail[1]}/get`)
+    const detail = /^\/(crm\/(?:customer|contract|business|contact)|hrm\/employee)\/detail\/([0-9]+)$/.exec(route)
+    const isRecord = Boolean(detail && url.pathname === `/admin-api/${detail[1]}/get`)
     const ids = url.searchParams.getAll('id')
     const matchesRecord = !isRecord || ids.length === 1 && ids[0] === detail[2]
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]'))
-      .filter(visible)
-    const scoped = Boolean(detail && url.pathname.startsWith('/admin-api/crm/'))
+      .filter(e => visible(e) && !e.closest('[role="dialog"],dialog'))
+    const scoped = Boolean(detail && url.pathname.startsWith(`/admin-api/${detail[1].split('/')[0]}/`))
     const panel = scoped && selected.length === 1 ? selected[0].getAttribute('aria-controls') || '' : ''
     const readPanel = isRecord || !scoped ? '*' : panel
     const key = readPanel + '\n' + url.pathname
@@ -240,14 +240,14 @@ export function createPageFacts({view = window, doc = document} = {}) {
   function readPageBlocker() {
     current()
     if (disposed) return true
-    const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]')).filter(visible)
+    const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]')).filter(e => visible(e) && !e.closest('[role="dialog"],dialog'))
     const panel = selected[0]?.getAttribute('aria-controls') || ''
     const relevant = Array.from(reads.values()).filter(s => s.panel === '*' || !s.panel || s.panel === panel)
     if (relevant.some(s => s.failed || s.conflicts)) return true
     if (Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).some(visible)) return true
     if (relevant.some(s => s.pending)) return 'pending'
     const loading = Array.from(doc.querySelectorAll('.el-loading-mask,[aria-busy="true"]')).some(visible)
-    if (!/^\/crm\/(customer|contract|business)\/detail\/[0-9]+$/.test(route)) return loading ? 'pending' : false
+    if (!/^\/(?:crm\/(?:customer|contract|business|contact)|hrm\/employee)\/detail\/[0-9]+$/.test(route)) return loading ? 'pending' : false
     const titles = Array.from(doc.querySelectorAll('.text-xl.font-bold')).filter(visible)
     if (titles.length > 1 || record && titles.length === 1 && titles[0].textContent?.trim()
         && titles[0].textContent.trim() !== record.name) return true

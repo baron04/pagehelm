@@ -1,6 +1,6 @@
 """A model-driven turn for the native host: one conversation over a small fixed tool set.
 
-A measured prototype hosted by this adapter, not core architecture. The turn's binding,
+The shared model-driven core owns the decision loop. The turn's binding,
 its one leave to work the page, the write watch, the application's read-only window,
 receipts, budget and settlement are `GoalTurnExecutor`'s, unchanged; only what decides the
 next step differs. Here the model chooses it: it finds a page in the actor's own menu,
@@ -27,21 +27,19 @@ starts from those and reads the page and the data again.
 from __future__ import annotations
 
 from datetime import datetime
+from dataclasses import replace
+from types import SimpleNamespace
 import json
 import os
 import re
 import threading
-from pathlib import Path
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from web_operation_agent.goal.data import DataRefused
-from web_operation_agent.goal.executor import GoalTurnExecutor
-from web_operation_agent.goal.skill_writes import SkillWrites
-from web_operation_agent.execution.receipt import MeasuredChat
-from web_operation_agent.modeling.egress import AuditedChat
-from web_operation_agent.modeling.provider import ProviderError
-from web_operation_agent.panel_view import describe_step, step_facts
+from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, history_messages
+from web_operation_agent.execution.model_loop_contracts import (LoopToolResult, VerificationResult,
+                                                               ModelLoopProfile, LoopProcedure)
 from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
@@ -322,7 +320,8 @@ class ActorKnowledge:
             return f"没有这个只读接口：{path}。相近的接口：\n{near}"
         if path in self.writing_gets:
             return "这个接口读取时会写入数据，助手不允许调用。"
-        params = {str(k): v for k, v in (params or {}).items() if isinstance(k, str)}
+        self._validate_params(path, params)
+        params = dict(params)
         fields = tuple(str(f) for f in fields or () if isinstance(f, str) and f)[:12]
         published = {q.get("name") for q in self._by_path[path]["op"].get("parameters") or []
                      if q.get("in") == "query"}
@@ -475,6 +474,60 @@ class ActorKnowledge:
                           "要统计、比较或找最大最小：用 fields 只取要用的列，会读完所有页并算好合计、最大、最小。"))
         return self._told(out, data_lines)
 
+    def _validate_params(self, path, params):
+        """Validate only the query vocabulary the installed API publishes.
+
+        OpenAPI metadata is not write authority. The separate method fence still
+        excludes writing GETs, and reads remain bound to the current actor.
+        """
+        import math
+        if not isinstance(params, dict) or len(params) > 32:
+            raise ValueError("query parameters must be a bounded object")
+        published = {q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
+                     if isinstance(q, dict) and q.get("in") == "query"}
+        if set(params) - set(published):
+            raise ValueError("query parameter is not declared by this endpoint")
+        missing = {key for key, q in published.items() if q.get("required") is True} - set(params)
+        if missing:
+            raise ValueError("required query parameters are missing")
+        def check(value, schema):
+            kind = self._deref(schema).get("type")
+            if isinstance(value, list):
+                if kind not in {None, "array"} or not 1 <= len(value) <= 50:
+                    raise ValueError("invalid query array")
+                for item in value:
+                    if isinstance(item, (list, dict)):
+                        raise ValueError("nested query values are unavailable")
+                    check(item, schema.get("items", {}))
+                return
+            if (not isinstance(value, (str, int, float, bool))
+                    or isinstance(value, str) and (len(value) > 4000 or re.search(r"[\x00-\x1f\x7f]", value))
+                    or isinstance(value, float) and not math.isfinite(value)):
+                raise ValueError("invalid query scalar")
+            if kind == "integer" and not (type(value) is int or isinstance(value, str) and re.fullmatch(r"-?[0-9]{1,20}", value)):
+                raise ValueError("query requires an integer")
+            if kind == "number":
+                try:
+                    if isinstance(value, bool) or not math.isfinite(float(value)): raise ValueError()
+                except (ValueError, TypeError):
+                    raise ValueError("query requires a finite number") from None
+            if kind == "boolean" and not (type(value) is bool or value in {"true", "false"}):
+                raise ValueError("query requires a boolean")
+            if kind == "string" and not isinstance(value, str):
+                raise ValueError("query requires text")
+            if kind in {"object", "array"}:
+                raise ValueError("unsupported query value")
+            choices = schema.get("enum")
+            if choices and value not in choices and str(value) not in {str(v) for v in choices}:
+                raise ValueError("query choice is not declared")
+        for key, value in params.items():
+            check(value, published[key].get("schema", {}))
+            if key in {"pageNo", "pageSize"}:
+                if isinstance(value, bool) or not re.fullmatch(r"[1-9][0-9]{0,5}", str(value)):
+                    raise ValueError("paging requires a positive bounded integer")
+                if key == "pageSize" and int(value) > 1000:
+                    raise ValueError("query page size exceeds its bound")
+
     def _names(self, path: str) -> dict:
         if self._codes is None:
             return {}
@@ -494,7 +547,7 @@ class ActorKnowledge:
 def _tool(name, description, properties, required):
     return {"type": "function", "function": {
         "name": name, "description": description,
-        "parameters": {"type": "object", "properties": properties, "required": required}}}
+        "parameters": {"type": "object", "properties": properties, "required": required, "additionalProperties": False}}}
 
 
 TOOLS = [
@@ -525,7 +578,7 @@ TOOLS = [
           "下拉和单选按选项文字选，文本、数字、日期直接填，日期范围写成“开始 ~ 结束”。逐个执行，返回每个字段的结果和最新观察。"
           "字段名用最新观察里“表单当前值”“明细行当前值”中出现的名字。", {
         "fields": {"type": "array", "items": {"type": "object", "properties": {
-            "label": {"type": "string"}, "value": {"type": "string"}}, "required": ["label", "value"]}},
+            "label": {"type": "string"}, "value": {"type": "string"}}, "required": ["label", "value"], "additionalProperties": False}, "minItems": 1, "maxItems": 12},
         "then_click": {"type": "string", "description": "全部填完后要点的按钮的文字，例如“搜索”；不需要就不给"}},
         ["fields"]),
     _tool("scroll", "滚动页面；给出 index 时滚动那个元素所在的可滚动区域（例如弹窗）。", {
@@ -534,7 +587,7 @@ TOOLS = [
         "keyword": {"type": "string"}}, ["keyword"]),
     _tool("call_api", "以当前用户身份调用一个只读接口（GET）。分页接口必须带 pageNo 和 pageSize。", {
         "path": {"type": "string"},
-        "params": {"type": "object", "description": "查询参数"},
+        "params": {"type": "string", "maxLength": 8000, "description": "查询参数的 JSON 对象字符串，例如 {\"pageNo\":1,\"pageSize\":20}"},
         "fields": {"type": "array", "items": {"type": "string"}, "description":
                    "只取这些列（列名是返回行里的键）。给了 fields，分页接口会从 pageNo 起读完所有页，"
                    "并算好数值列的合计、最大、最小，类型、状态这类列按取值分组算行数和合计。统计、比较、找最大最小、按日期数个数时必须用。"}},
@@ -776,6 +829,26 @@ def _scroll_anchor(observation, number: str) -> str:
     return number
 
 
+
+def _list_scroll_region(observation):
+    """Prefer the scrolling ancestor of this list's live query controls over its menu."""
+    marks = [(len(m[1]), m[2], line) for line in observation.content.splitlines()
+             if (m := _DEPTH.match(line))]
+    query = {e.ref[1:] for e in observation.elements if e.attrs.get("page_control") == "query"}
+    candidates = []
+    for at, (depth, number, line) in enumerate(marks):
+        match = _SCROLL.search(line)
+        if match is None or not re.search(r"bottom=[1-9]", match[1]):
+            continue
+        children = set()
+        for deeper, child, _ in marks[at + 1:]:
+            if deeper <= depth:
+                break
+            children.add(child)
+        candidates.append((bool(children & query), depth, number))
+    return max(candidates)[2] if candidates else None
+
+
 def _control_kind(element) -> str:
     """A mark for a control that is not worked by typing or clicking it plainly."""
     if element.role == "combobox":
@@ -812,25 +885,6 @@ def _date_pair(element, elements):
 def _words(content: str) -> str:
     """The person's own words in a message that also carries what the program added."""
     return content.split("\n当前页面:")[0].split("\n上一轮用到的 Skill")[0].split("\n程序按字面先找到的")[0]
-
-
-def history_messages(context) -> list[dict]:
-    """Earlier turns of the conversation as the model reads them, from the bounded
-    conversation state: what the person said and the answer it got, with the writes that
-    turn verified. What a turn read or saw on the page is not kept."""
-    told = []
-    for turn in (context or {}).get("prior_turns") or ():
-        answer = str(turn["assistant"])
-        outcomes = (turn.get("prior_business_facts") or {}).get("outcomes")
-        written = ["{} — {}{}".format(
-            item.get("effect", ""), "、".join(str(t) for t in item.get("targets") or ()),
-            "，记录 " + str(item["receipt"]["reference"])
-            if isinstance(item.get("receipt"), dict) and item["receipt"].get("reference") else "")
-            for item in outcomes or () if isinstance(item, dict) and item.get("verified") is True]
-        if written:
-            answer += "\n（程序记录：这一轮已由用户批准、执行并回读核对的写入：" + "；".join(written) + "）"
-        told += [{"role": "user", "content": str(turn["user"])}, {"role": "assistant", "content": answer}]
-    return told
 
 
 def _control_name(element) -> str:
@@ -979,30 +1033,12 @@ def page_text(observation, *, handoffs, marked: str = "") -> str:
     return text
 
 
-class SlimTurnExecutor(GoalTurnExecutor):
-    """`GoalTurnExecutor` with its decision replaced by a model-driven tool loop."""
+class YudaoLoopProcedures:
+    """Application knowledge and bounded page procedures for the shared loop."""
 
-    def __init__(self, *, knowledge: ActorKnowledge, actor_name: str = "", today: str = "",
-                 time_zone: str = "Asia/Shanghai", verify: bool = True,
-                 model_steps: int = MODEL_STEPS, conventions=(), skill_knowledge: bool = True, **kw):
-        super().__init__(**kw)
-        self.knowledge, self.actor_name = knowledge, actor_name
-        #: Whether a loaded Skill's text reaches the model. Off only to measure what that
-        #: text changes: the operations, their schemas and every check stay the same.
-        self.skill_knowledge = bool(skill_knowledge)
-        #: The Skills the last turn of this conversation loaded or proposed through; the
-        #: next turn starts with them, so an answer to "which record?" need not load the
-        #: same Skill again. One the next turn does not use is dropped after it.
-        self._carried_skills: tuple[str, ...] = ()
-        #: What this organisation means by some words, from the deployment's reviewed file.
-        self.conventions = tuple(conventions)
-        self.today, self.time_zone = today, time_zone
-        self.verify, self.model_steps = bool(verify), int(model_steps)
-        #: The current turn's conversation as the model sees it, rebuilt at each turn from
-        #: the conversation state.
-        self._messages: list[dict] = []
-        #: What the person said in the earlier turns the conversation state still holds.
-        self._earlier_words: list[str] = []
+    def __init__(self, knowledge, goal_port, origin):
+        self.knowledge, self.goal_port = knowledge, goal_port
+        self.application = SimpleNamespace(descriptor=SimpleNamespace(origin=origin))
 
     # -- the page, through the executor's own dispatch ------------------------------------
     def _settled(self, s, *, path: str = "", waits: int = 8) -> str:
@@ -1034,7 +1070,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
             else:
                 # What it shows from here on is what came of the step: its looks start over.
                 looks, last = 0, None
-            if self._dispatch(s, "wait_for", {"ms": _LOOK_MS if ready else _PENDING_MS}) is None:
+            if s.page.execute("wait_for", {"ms": _LOOK_MS if ready else _PENDING_MS}) is None:
                 return "gone"
         return "waiting"
 
@@ -1048,257 +1084,117 @@ class SlimTurnExecutor(GoalTurnExecutor):
         return next((e for e in s.obs.elements if e.ref == f"e{number}"), None)
 
     def _act(self, s, action: str, args: dict, *, navigating: bool = False) -> str:
-        receipt = self._dispatch(s, action, args, navigating=navigating, admitted=True)
+        receipt = s.page.execute(action, args, navigating=navigating)
         if receipt is None:
-            return "未执行：本轮已结束。"
+            return "未执行：当前页面操作未获授权或本轮已结束。"
         if not receipt.ok:
             return f"没有成功：{receipt.error_code} {str(receipt.error_detail)[:160]}".strip()
+        if s.page.action_state() != "completed":
+            return "操作已发出，但应用未能确认结果，不会自动重发。"
         return ""
 
-    def _note(self, s, **facts) -> None:
-        """One thing the turn is doing, on the timeline of whoever is watching it. Facts
-        only: the sentence is the panel view's, and a step it has no sentence for says
-        nothing. A panel that cannot be told is not a failed turn."""
-        text = describe_step(facts)
-        if not text:
-            return
-        try:
-            self.channel.publish("progress", {"state": "step", "message": text, "step": step_facts(facts)},
-                                 turn_id=s.message.message_id)
-        except Exception as exc:  # noqa: BLE001 -- see the docstring
-            s.ledger.append("progress_publish_failed", error_type=type(exc).__name__)
+    @staticmethod
+    def _note(s, **facts):
+        s.progress(facts)
 
-    def _tool(self, s, name: str, args: dict, turn: dict) -> tuple[str, bool]:
+    def _tool(self, s, name: str, args: dict, turn: dict) -> LoopToolResult:
         know = self.knowledge
-        writes = turn.get("writes")
         said = {key: value for key, value in args.items() if isinstance(value, (str, int, float))
                 and not isinstance(value, bool)}
-        if writes is not None:
-            if name == "load_skill":
-                self._note(s, stage="tool", tool="load_skill", arguments=said)
-                return self._load_skill(s, writes, str(args.get("skill", "")).strip(), turn), False
-            if name == "read_skill_resource":
-                self._note(s, stage="tool", tool="load_skill", arguments=said)
-                return self._skill_resource(s, writes, args), False
-            if any(d.name == name for d in writes.definitions()):
-                # What it would change is on the approval card, not on the timeline.
-                self._note(s, stage="tool", tool=name, mutation=True)
-                return self._propose(s, writes, name, args, turn), False
-            owner = next((skill.name for skill, definitions in writes.catalog()
-                          if any(d.name == name for d in definitions)), "")
-            if owner:
-                return f"这个操作所属的 Skill 本轮还没有加载：先 load_skill(\"{owner}\")，再调用它。", False
         if name == "search_menu":
-            self._note(s, stage="search", what="page", term=args.get("keyword"), tool=name, arguments=said)
-            return know.search_menu(str(args.get("keyword", ""))), False
+            self._note(s, stage="search", what="page", term=args["keyword"], tool=name, arguments=said)
+            return LoopToolResult(know.search_menu(args["keyword"]))
         if name == "search_api":
-            self._note(s, stage="search", what="source", term=args.get("keyword"), tool=name, arguments=said)
-            return know.search_api(str(args.get("keyword", ""))), False
+            self._note(s, stage="search", what="source", term=args["keyword"], tool=name, arguments=said)
+            return LoopToolResult(know.search_api(args["keyword"]))
         if name == "find_record":
-            self._note(s, stage="search", what="record", term=args.get("name"), tool=name, arguments=said)
-            return self._find_record(s, str(args.get("name", "")).strip(), str(args.get("kind") or "").strip()), False
+            self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
+            return LoopToolResult(self._find_record(s, args["name"].strip(), args.get("kind", "").strip()),
+                                  kind="read")
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
-            params = args.get("params")
-            if isinstance(params, str):
-                try:
-                    params = json.loads(params)
-                except ValueError:
-                    params = {}
-            fields = args.get("fields")
-            with s.receipt.stage("business"):
-                text = know.call_api(str(args.get("path", "")), params if isinstance(params, dict) else {},
-                                     fields if isinstance(fields, list) else ())
+            params = json.loads(args.get("params", "{}"))
+            if not isinstance(params, dict):
+                raise ValueError("query parameters must be an object")
+            with s.measure("business"):
+                text = know.call_api(args["path"], params, args.get("fields", ()))
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
-            return text, False
+            return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused")
         if name == "fill_fields":
-            fields = args.get("fields")
-            if not (isinstance(fields, list) and fields and all(isinstance(f, dict) for f in fields)):
-                return "fields 要给出至少一个 {label, value}。", False
-            return self._fill_fields(s, fields, str(args.get("then_click") or ""), turn), True
+            return self._fill_fields(s, args["fields"], args.get("then_click", ""), turn)
         if name == "observe":
-            self._dispatch(s, "observe", {})
-            return "观察如下。", True
+            receipt = s.page.execute("observe", {})
+            return LoopToolResult("观察如下。", kind="page",
+                                  state="completed" if receipt is not None and receipt.ok else "unavailable")
         if name == "goto":
-            path = "/" + str(args.get("path", "")).lstrip("/")
+            path = "/" + args["path"].lstrip("/")
             if not re.fullmatch(r"/[A-Za-z0-9_\-/]{1,200}", path):
-                return "路径不合法。用 search_menu 查找。", False
-            failed = self._act(s, "goto", {"url": self.application.descriptor.origin + path},
-                               navigating=True)
+                return LoopToolResult("路径不合法。用 search_menu 查找。", kind="page", state="refused")
+            failed = self._act(s, "goto", {"url": self.application.descriptor.origin + path}, navigating=True)
             if failed:
-                return failed, True
+                return LoopToolResult(failed, kind="page", state="unverified")
             settled = self._settled(s, path=path)
             there = urlsplit(s.obs.url).path
             if there != path:
-                return f"没有成功：浏览器现在在 {there}，没有到 {path}。", True
+                return LoopToolResult(f"没有成功：浏览器现在在 {there}，没有到 {path}。", kind="page", state="unverified")
             if settled == "blocked":
-                return f"浏览器到了 {path}，但页面报告了错误或有数据没有读出来：看下面的页面再决定。", True
+                return LoopToolResult(f"浏览器到了 {path}，但页面报告了错误或有数据没有读出来：看下面的页面再决定。",
+                                      kind="page", state="unverified", dispatch="acknowledged")
             if settled not in ("still", "moving"):
-                return f"浏览器到了 {path}，但应用还没有报告这个页面已经显示出来：看下面的页面再决定。", True
-            turn["confirmed"] = True
-            return "已打开。", True
+                return LoopToolResult(f"浏览器到了 {path}，但应用还没有报告这个页面已经显示出来：看下面的页面再决定。",
+                                      kind="page", state="unverified", dispatch="acknowledged")
+            return LoopToolResult("已打开。", kind="page", dispatch="acknowledged")
         if name in ("click", "input", "select", "highlight") or (name == "scroll" and args.get("index") is not None):
             element = self._element(s, args.get("index", -1))
             if element is None:
-                return "没有这个序号的元素，请根据最新观察重新选择。", True
-        if name == "input" and _control_kind(element) == "〔下拉〕" and str(args.get("text", "")).strip():
-            # Typing into a dropdown and pressing Enter takes whichever option is lit at
-            # that moment. A value meant for a dropdown is chosen by its text instead.
-            name, args = "select", {**args, "option": str(args["text"])}
+                return LoopToolResult("没有这个序号的元素，请根据最新观察重新选择。", kind="page", state="refused")
+        if name == "input" and _control_kind(element) == "〔下拉〕" and args["text"].strip():
+            name, args = "select", {**args, "option": args["text"]}
         if name == "click":
             failed = self._act(s, "click", {"ref": element.ref})
             self._settled(s)
-            if not failed and _control_kind(element) == "〔下拉〕":
-                return ("已点开下拉。要选其中一项，用 select(index, option) 按选项文字选："
-                        "展开的列表只显示了一部分，在里面点容易点错。"), True
-            return failed or "已点击。", True
-        if name == "input":
-            failed = self._act(s, "fill", {"ref": element.ref, "value": str(args.get("text", "")),
-                                           "commit": _commits(element, s.obs.elements)})
+            text = ("已点开下拉。要选其中一项，用 select(index, option) 按选项文字选："
+                    "展开的列表只显示了一部分，在里面点容易点错。") if _control_kind(element) == "〔下拉〕" else "已点击。"
+        elif name in ("input", "select"):
+            value = args["text"] if name == "input" else args["option"]
+            command = {"ref": element.ref, "value": value}
+            if name == "input":
+                command["commit"] = _commits(element, s.obs.elements)
+            else:
+                command["option_label"] = value
+            failed = self._act(s, "fill" if name == "input" else "select", command)
             if not failed:
-                turn["touched"].append((_control_name(element), str(args.get("text", ""))))
+                turn["touched"].append((_control_name(element), value))
             self._settled(s, waits=2)
-            return failed or "已填入。", True
-        if name == "select":
-            option = str(args.get("option", ""))
-            failed = self._act(s, "select", {"ref": element.ref, "value": option, "option_label": option})
-            if not failed:
-                turn["touched"].append((_control_name(element), option))
-            self._settled(s, waits=2)
-            return failed or "已选中。", True
-        if name == "scroll":
-            command = {"direction": "down" if args.get("down", True) else "up", "pages": 1}
+            text = "已填入。" if name == "input" else "已选中。"
+        elif name == "scroll":
+            command = {"direction": "down" if args["down"] else "up", "pages": 1}
             if args.get("index") is not None:
                 command["ref"] = "e" + _scroll_anchor(s.obs, element.ref[1:])
             before = _shown(s.obs)
             failed = self._act(s, "scroll", command)
-            if not failed and _shown(s.obs) == before:
-                return "滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。", True
-            return failed or "已滚动。", True
-        if name == "highlight":
+            text = ("滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。"
+                    if _shown(s.obs) == before else "已滚动。")
+        elif name == "highlight":
             failed = self._act(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})
-            if failed:
-                return failed, False
-            turn["marked"] = element.name.splitlines()[0][:60] if element.name else "(控件)"
-            s.ledger.append("page_handoff_ready", step=s.step, observation_epoch=s.obs.epoch,
-                            submitted=False, persisted=False)
-            turn["confirmed"] = True
-            return "已标出：" + turn["marked"], False
-        return f"没有这个工具：{name}", False
+            if not failed:
+                turn["marked"] = element.name.splitlines()[0][:60] if element.name else "(控件)"
+                s.audit("page_handoff_ready", observation_epoch=s.obs.epoch,
+                                submitted=False, persisted=False)
+            text = "已标出：" + turn["marked"]
+        else:
+            return LoopToolResult("当前应用没有提供这个工具。", state="unavailable")
+        return LoopToolResult(failed or text, kind="page", state="unverified" if failed else "completed",
+                              dispatch="acknowledged" if not failed else "not_dispatched")
 
-    # -- installed Skills and the writes they propose ---------------------------------
-    @staticmethod
-    def _skill_id(writes, name: str) -> str:
-        return next((skill.skill_id for skill, _definitions in writes.catalog()
-                     if name in (skill.name, skill.skill_id)), "")
-
-    def _load_skill(self, s, writes, name: str, turn: dict) -> str:
-        try:
-            skill = writes.load(self._skill_id(writes, name), step=s.step)
-        except ValueError:
-            return "没有这个 Skill，或者它在当前部署、当前账号下没有可用的操作。名字取自“已安装的 Skill”清单。"
-        turn["skills"].add(skill.skill_id)
-        return self._skill_text(s, writes, skill)
-
-    def _skill_text(self, s, writes, skill) -> str:
-        """A loaded Skill as the model reads it: its instructions, the references that fit,
-        and the operations it now offers."""
-        told = [f"已加载 Skill：{skill.name}"]
-        if self.skill_knowledge:
-            body = skill.body.strip()
-            told.append(body[:_SKILL_CHARS] + ("\n……（说明较长，已截断）" if len(body) > _SKILL_CHARS else ""))
-            used, left = min(len(body), _SKILL_CHARS), []
-            for path in skill.text_resources:
-                text = skill.read_resource(path).strip()
-                if used + len(text) > _SKILL_CHARS:
-                    left.append(path)
-                    continue
-                writes.resource(skill.skill_id, path, step=s.step)
-                told.append(f"参考资料 {path}：\n{text}")
-                used += len(text)
-            if left:
-                told.append("没有随说明给出的参考资料（要用时 read_skill_resource）：" + "、".join(left))
-        told.append("现在可以调用的写入操作：" + "、".join(
-            d.name for d in writes.definitions() if d.name in skill.write_operations)
-            + "。参数见各自的工具说明；调用它就是向用户提出写入提案。")
-        return "\n\n".join(told)
-
-    def _skill_resource(self, s, writes, args: dict) -> str:
-        if not self.skill_knowledge:
-            return "这份资料不可用。"
-        try:
-            text = writes.resource(self._skill_id(writes, str(args.get("skill", "")).strip()),
-                                   str(args.get("path", "")), step=s.step)
-        except ValueError:
-            return "读不到：先 load_skill，路径取自加载结果里列出的参考资料。"
-        return text[:_SKILL_CHARS] + ("\n……（已截断）" if len(text) > _SKILL_CHARS else "")
-
-    def _said(self, prompt: str) -> list[str]:
-        """The person's own words in this conversation, oldest first: the earlier turns
-        the conversation state holds, then this turn's."""
-        return [*self._earlier_words, prompt]
-
-    def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> str:
-        """One proposed write, from its preparation to what the application read back.
-        Only a refusal before the person was asked returns for another attempt; anything
-        after that ends the turn, and nothing is dispatched twice."""
-        s.budget.check()
-        s.step += 1
-        turn["skills"].update(skill.skill_id for skill in writes.context.loaded
-                              if operation in skill.write_operations)
-        with s.receipt.stage("business"):
-            outcome = writes.propose(operation, inputs, step=s.step, texts=self._said(s.message.text))
-        if outcome.asked:
-            s.write_intent = True
-        if outcome.state == "completed":
-            proposal, content = outcome.proposal, outcome.result.content
-            s.mutation_outcomes.append({"position": len(s.mutation_outcomes), "effect": proposal.effect,
-                                        "targets": list(proposal.targets), "verified": True, "receipt": content})
-            details = "；".join(f"{d.label}：{d.text}"[:200] for d in proposal.details
-                              if d.kind in ("change", "body"))[:1500]
-            done = (f"{proposal.effect} — {'、'.join(proposal.targets)}"
-                    + (f"（{details}）" if details else "")
-                    + (f"；记录：{content['reference']}" if content.get("reference") else ""))
-            turn["written"].append(done)
-            turn["confirmed"] = True
-            return "已执行并核对（用户已批准，应用回读确认）：" + done
-        if outcome.state == "repeated":
-            return "这项写入本轮已经执行并核对过，不会重复执行。"
-        error = str(outcome.error)[:300] if outcome.error is not None else ""
-        if not outcome.asked and outcome.state in ("reference", "refused"):
-            turn["corrections"] += 1
-            if turn["corrections"] > _WRITE_CORRECTIONS:
-                s.terminal_reason, s.detail = "agent_refused", "write proposals kept failing preparation"
-                turn["final"] = "几次提案都没有通过应用的预检，这项修改没有执行。"
-                return turn["final"]
-            choices = getattr(outcome.error, "choices", ())
-            if outcome.state == "reference" and choices:
-                return ("没有执行（还没有请求用户批准）：按这个名称找不到唯一的记录。当前候选："
-                        + "；".join(choices) + "。用户的话已经能确定是哪一条，就用那一条的完整显示名重新提交；"
-                        "否则用 need_input 列出这些候选让用户选。")
-            return ("没有执行（还没有请求用户批准）：" + error + "。能按这个原因修正就修正后重新提交；"
-                    "缺的是用户没给的信息就用 need_input 问，办不到就用 cannot 如实说明。不要编造或改写用户的值。")
-        s.terminal_reason, s.detail = outcome.reason or "agent_refused", error[:200]
-        turn["final"] = {
-            "approval_denied": "你没有批准这项修改，没有执行。",
-            "approval_expired": "批准卡片已过期，这项修改没有执行。",
-            "user_cancelled": "操作已停止，这项修改没有执行。",
-            "permission_denied": "当前账号没有执行这项操作的权限，没有执行。",
-            "indeterminate_write": "这项修改已经发出，但结果没有得到确认：可能已经生效，也可能没有。"
-                                   "已停止后续操作，不会重发；请到应用里核对这条记录后再决定。",
-            "business_mutation_refused": "批准之后、执行之前，应用里的相关记录或选项发生了变化，这项修改没有执行。请重新发起。",
-            "business_mutation_blocked": "同一项修改还有一次结果未确认的记录，这次没有执行。请先核对上一次的结果。",
-        }.get(s.terminal_reason, "这项修改没有执行。")
-        return turn["final"]
-
-    def _paging(self, s, control: str, label: str, value: str) -> str:
+    def _paging(self, s, control: str, label: str, value: str) -> LoopToolResult:
         """The list's rows per page or its page, through the paging control the
         application's page module names, confirmed by the list the page then reads."""
         number = value.strip().rstrip("条页").strip()
         if not number.isdigit() or int(number) < 1:
-            return f"{label}：值写一个数字"
+            return LoopToolResult(f"{label}：值写一个数字", kind="page", state="unverified")
 
         def control_of(kind, page=""):
             return next((e for e in s.obs.elements if e.attrs.get("page_control") == kind
@@ -1307,8 +1203,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
         if control_of(kind, page) is None and control_of("page_size") is None and control_of("pagination") is None:
             # The paging sits under the list: off the screen, it is not observed at all. The
             # region it is in is the first one with more below it.
-            region = next((m.group(2) for line in s.obs.content.splitlines() if (m := _DEPTH.match(line))
-                           and (r := _SCROLL.search(line)) and re.search(r"bottom=[1-9]", r.group(1))), None)
+            region = _list_scroll_region(s.obs)
             command = {"direction": "down", "pages": MAX_SCROLL_PAGES}
             if region is not None:
                 command["ref"] = "e" + _scroll_anchor(s.obs, region)
@@ -1317,7 +1212,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
         if control == "page_size":
             found = control_of("page_size")
             if found is None:
-                return f"{label}：页面上没有每页条数的选择（先 scroll 到列表底部的分页）"
+                return LoopToolResult(f"{label}：页面上没有每页条数的选择（先 scroll 到列表底部的分页）", kind="page", state="unverified")
             # It is no form's field: its options are listed only while it is open, and the
             # one wanted is clicked on the page as it then is.
             failed = self._act(s, "click", {"ref": found.ref})
@@ -1331,33 +1226,35 @@ class SlimTurnExecutor(GoalTurnExecutor):
         else:
             found = control_of("pagination", page)
             if found is None:
-                return f"{label}：页面上没有翻到第 {int(number)} 页的按钮（已经在这一页、页码超出，或先 scroll 到列表底部的分页）"
+                return LoopToolResult(f"{label}：页面上没有翻到第 {int(number)} 页的按钮（已经在这一页、页码超出，或先 scroll 到列表底部的分页）", kind="page", state="unverified")
             failed = self._act(s, "click", {"ref": found.ref})
         if failed:
-            return f"{label}：{failed}"
+            return LoopToolResult(f"{label}：{failed}", kind="page", state="unverified")
         self._settled(s)
         read = s.obs.page_read or {}
         got = read.get("page_size" if control == "page_size" else "page")
         if str(got) == str(int(number)):
-            return f"{label}：已改为{'每页 ' + number + ' 条' if control == 'page_size' else '第 ' + number + ' 页'}（列表读回：第 {read.get('page')} 页，每页 {read.get('page_size')} 条，共 {read.get('total')} 条）"
-        return f"{label}：已操作，但列表读回的不是 {number}（{got if got is not None else '没有读回'}），看下面的页面再决定"
-
-    def _fill_fields(self, s, fields, then_click: str, turn: dict) -> str:
+            return LoopToolResult(f"{label}：已改为{'每页 ' + number + ' 条' if control == 'page_size' else '第 ' + number + ' 页'}（列表读回：第 {read.get('page')} 页，每页 {read.get('page_size')} 条，共 {read.get('total')} 条）", kind="page", state="completed")
+        return LoopToolResult(f"{label}：已操作，但列表读回的不是 {number}（{got if got is not None else '没有读回'}），看下面的页面再决定", kind="page", state="unverified")
+    def _fill_fields(self, s, fields, then_click: str, turn: dict) -> LoopToolResult:
         """Fill or choose several named fields one after another, each found afresh on the
         page as it then is, so that one model request does the work of several."""
-        said = []
+        said, incomplete = [], False
         for item in fields[:12]:
             label, value = str(item.get("label", "")).strip().rstrip(":：").strip(), str(item.get("value", ""))
             if label in _PAGING:
-                said.append(self._paging(s, _PAGING[label], label, value))
+                paging = self._paging(s, _PAGING[label], label, value)
+                said.append(paging.feedback)
+                incomplete = incomplete or paging.state != "completed"
                 if s.terminal_reason:
-                    return "操作没有完成。"
+                    return LoopToolResult("操作没有完成。", kind="page", state="unverified")
                 continue
             lines, _hints = _page_lines(s.obs)
             shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
             found = [e for e in s.obs.elements if e.ref[1:] in shown and label and label in (
                 str(e.attrs.get("field_label") or "").rstrip(":：").strip(), str(e.attrs.get("title") or ""))]
             if not found:
+                incomplete = True
                 said.append(f"{label}：屏幕上没有这个字段（先 scroll 让它出现，或核对字段名）")
                 continue
             kind = _control_kind(found[0])
@@ -1365,10 +1262,12 @@ class SlimTurnExecutor(GoalTurnExecutor):
             pair = _date_pair(anchor, s.obs.elements)
             if kind == "〔日期〕" and (pair or re.search(r"[~～至到]", value)):
                 if not pair or any(e.ref[1:] not in shown for e in pair) or any(e not in pair for e in found):
+                    incomplete = True
                     said.append(f"{label}：屏幕上没有唯一的日期范围两个框（先 scroll 让它们出现，或核对字段名）")
                     continue
                 ends = [part.strip() for part in re.split(r"\s*(?:~|～|至|到)\s*", value)]
                 if len(ends) != 2 or not all(ends):
+                    incomplete = True
                     said.append(f"{label}：这是日期范围，值写成“开始 ~ 结束”")
                     continue
                 steps = list(zip(pair, ends))
@@ -1395,8 +1294,9 @@ class SlimTurnExecutor(GoalTurnExecutor):
                     break
                 self._settled(s, waits=2)
             if s.terminal_reason:
-                return "操作没有完成。"
+                return LoopToolResult("操作没有完成。", kind="page", state="unverified")
             if failed:
+                incomplete = True
                 said.append(f"{label}：{failed}")
             else:
                 turn["touched"].append((label, value))
@@ -1409,12 +1309,15 @@ class SlimTurnExecutor(GoalTurnExecutor):
             button = next((e for e in s.obs.elements if e.ref[1:] in shown and e.tag == "button"
                            and re.sub(r"\s+", "", e.name) == wanted), None)
             if button is None:
+                incomplete = True
                 said.append(f"没有找到“{then_click}”按钮，没有点")
             else:
                 failed = self._act(s, "click", {"ref": button.ref})
                 self._settled(s)
+                incomplete = incomplete or bool(failed)
                 said.append(failed or f"已点“{then_click}”")
-        return "；".join(said) + "。"
+        return LoopToolResult("；".join(said) + "。", kind="page",
+                              state="unverified" if incomplete else "completed")
 
     def _find_record(self, s, name: str, kind: str = "") -> str:
         """Where the application has a record of this name, through the goal port's own
@@ -1429,8 +1332,8 @@ class SlimTurnExecutor(GoalTurnExecutor):
         if not name:
             return "请给出要找的名称。"
         try:
-            with s.receipt.stage("business"):
-                context = s.approvals.context(s.step, "find_record")
+            with s.measure("business"):
+                context = s.operation
                 # The outline: a lookup needs the entities and their pages, not the line
                 # tables a session's index is still reading.
                 index = getattr(self.goal_port, "outline_index", self.goal_port.index)(context=context)
@@ -1494,287 +1397,10 @@ class SlimTurnExecutor(GoalTurnExecutor):
             out += ["这些模块的列表接口：", *("    " + api.replace("\n", "\n    ") for api in lists)]
         return "\n".join(out)
 
-    # -- the loop ----------------------------------------------------------------------
-    def _run(self, s) -> str:
-        handoffs = SessionHandoffPolicy.extending(
-            self.application.ports.routes.session_handoff_query_keys)
-        self.knowledge.handoffs = handoffs
-        s.approvals.start_turn(int((s.started_at + self.config.wall_budget_s) * 1000))
-        try:
-            s.writes.begin_control()
-            s.writes.start_observing()
-        except Exception as exc:  # ControlPlaneError; typed by the control plane module
-            s.terminal_reason, s.detail = "control_plane_error", str(exc)[:200]
-            return "无法开始这次操作。"
-        s.ledger.append("observation", epoch=s.obs.epoch, url=s.obs.url,
-                        elements=len(s.obs.elements), digest=s.obs.content_digest)
-        s.chat = MeasuredChat(AuditedChat(self.chat, s.ledger), s.receipt,
-                              remaining_s=s.budget.remaining, budget=s.budget,
-                              stopped=s.model_stop.is_set)
-        try:
-            with s.receipt.stage("business"):
-                self.knowledge._load()
-        except DataRefused as exc:
-            s.terminal_reason, s.detail = "agent_refused", str(exc)[:200]
-            return "读取当前账号的菜单或接口说明失败，本次没有执行。"
-        writes, catalog = None, ()
-        if s.approvals.mutations_enabled and self.application.ports.operations is not None:
-            # Only an actor who is offered some operation is told about writes at all.
-            writes = SkillWrites(self.application, s.approvals)
-            catalog = writes.catalog()
-            writes = writes if catalog else None
-        # The turn starts from what the conversation state kept of the earlier ones, not
-        # from an earlier turn's requests to the model: bounded, and the same after the
-        # session was let go or the host restarted.
-        earlier = history_messages(self.conversation_state.model_context())
-        self._earlier_words = [m["content"] for m in earlier if m["role"] == "user"]
-        if not earlier:
-            self._carried_skills = ()
-        self._messages = [{"role": "system", "content": system_text(
-            user=self.actor_name or self.knowledge.user_name or "当前用户",
-            date=_today(self.today, self.time_zone), tz=self.time_zone,
-            conventions=self.conventions, catalog=catalog, knowledge=self.skill_knowledge)}, *earlier]
-        carried = []
-        for skill_id in self._carried_skills if writes is not None else ():
-            try:
-                carried.append(self._skill_text(s, writes, writes.load(skill_id, step=s.step)))
-            except ValueError:
-                pass
-        turn = {"reads": [], "marked": "", "trace": [], "touched": [], "handoffs": handoffs,
-                "shown": [], "done": set(), "stalled": 0,
-                "writes": writes, "written": [], "corrections": 0, "final": "", "skills": set()}
-        prompt = s.message.text
-        found = self.knowledge.suggest(prompt)
-        self._messages.append({"role": "user", "_observation": True, "content":
-                               prompt + ("\n" + found if found else "")
-                               + ("\n上一轮用到的 Skill（已加载，它的操作可以直接调用）:\n" + "\n\n".join(carried)
-                                  if carried else "")
-                               + "\n" + self._page(s, turn)})
-        try:
-            return self._loop(s, prompt, turn, verified=not self.verify)
-        finally:
-            self._carried_skills = tuple(sorted(turn["skills"]))
-            if _DEBUG_DIR:
-                Path(_DEBUG_DIR).mkdir(parents=True, exist_ok=True)
-                (Path(_DEBUG_DIR) / f"{s.run_id}.json").write_text(json.dumps(
-                    {"messages": self._messages, "trace": turn["trace"], "shown": turn["shown"],
-                     "elements": [[e.ref, e.role, e.name[:40], e.tag, dict(e.attrs)] for e in s.obs.elements]},
-                    ensure_ascii=False, indent=1))
-
-    def _page(self, s, turn: dict) -> str:
-        text = page_text(s.obs, handoffs=turn["handoffs"], marked=turn["marked"])
-        if _DEBUG_DIR:
-            turn["shown"].append(text)
-        return text
-
-    def _tools(self, turn: dict) -> list:
-        """The fixed tools, and in a turn that may write: Skill loading and one tool for
-        each operation the loaded Skills offer, with its installed input schema."""
-        writes = turn.get("writes")
-        if writes is None:
-            return TOOLS
-        operations = []
-        for definition in writes.definitions():
-            schema = definition.schema
-            schema["function"]["description"] = _OPERATION_NOTE + definition.description
-            operations.append(schema)
-        return TOOLS[:-1] + WRITE_TOOLS + operations + TOOLS[-1:]
-
-    def _forget_old_observations(self) -> None:
-        seen = kept = 0
-        for message in reversed(self._messages):
-            if message.get("_observation"):
-                seen += 1
-                if seen > 2:
-                    message["content"] = _words(message["content"]) + "\n（更早的页面观察已省略）"
-                    message["_observation"] = False
-            elif message.get("_api"):
-                kept += len(message["content"])
-                if kept > _API_KEPT:
-                    message["content"] = program_lines(message["content"]).split("\n")[0] \
-                        + "\n（更早的接口结果已省略；还要用就带 fields 重新读）"
-                    message["_api"] = False
-
-    def _loop(self, s, prompt: str, turn: dict, *, verified: bool) -> str:
-        nudges, taken = 0, 0
-        while taken < self.model_steps and not s.terminal_reason:
-            taken += 1
-            if taken == self.model_steps - 1 and taken > 1:
-                # What was found so far is worth more to the person than "ran out of steps".
-                self._messages.append({"role": "user", "content":
-                                       "只剩最后两步：现在就调用 finish。已经查到的值照实写出；用户要的都做到了用 done，"
-                                       "还有没做到的部分就用 cannot，说明哪些查到了、哪些没做到。"})
-            self._forget_old_observations()
-            wire = [{k: v for k, v in m.items() if not k.startswith("_")} for m in self._messages]
-            try:
-                message = s.chat.complete_cancellable(
-                    wire, self._tools(turn), s.run_id, cancelled=s.cancelled, max_tokens=1500,
-                    timeout_s=max(1.0, s.budget.remaining()))
-            except ProviderError as exc:
-                s.ledger.append("slim_model_failed", error_type=type(exc).__name__)
-                s.terminal_reason, s.detail = "agent_refused", "the model request failed"
-                return "模型请求失败，本次没有完成。"
-            calls = message.get("tool_calls") or []
-            keep = {"role": "assistant", "content": message.get("content") or ""}
-            if calls:
-                keep["tool_calls"] = calls
-            self._messages.append(keep)
-            if not calls:
-                nudges += 1
-                if nudges > 2:
-                    s.terminal_reason = "agent_refused"
-                    return (message.get("content") or "").strip() or "本次没有完成。"
-                self._messages.append({"role": "user", "content":
-                                       "请用工具继续；全部完成或确实做不到时调用 finish。"})
-                continue
-            finish, changed_page, unwritten, unseen = None, False, False, ""
-            for position, call in enumerate(calls):
-                name = (call.get("function") or {}).get("name") or ""
-                try:
-                    args = json.loads((call.get("function") or {}).get("arguments") or "{}")
-                except ValueError:
-                    args = {}
-                if not isinstance(args, dict):
-                    args = {}
-                if name == "finish" and unwritten:
-                    # Written before the proposal's refusal could be read: not an ending.
-                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
-                                           "没有结束：同一次回复里的写入提案没有执行。先按它返回的原因处理，再决定怎么结束。"})
-                    continue
-                if name == "finish" and unseen:
-                    # Written before that step's result could be read. Only a page the
-                    # program saw opened, a control it saw marked or a write it verified
-                    # can be ended on unseen; a step it skipped or refused cannot.
-                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
-                                           f"没有结束：同一次回复里 {unseen} 的结果你还没有看到。先看它返回了什么，再决定怎么结束。"})
-                    continue
-                if name == "finish":
-                    finish = args
-                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
-                    continue
-                # A step that names an element by its number was chosen on a page that is no
-                # longer there; one that names a path, a field or a record was not.
-                numbered = name in ("click", "input", "select", "highlight") or (
-                    name == "scroll" and args.get("index") is not None)
-                if finish is not None or (changed_page and numbered):
-                    unseen = unseen or name
-                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
-                                           "content": "未执行：页面已变化，请根据新的观察重新决定。"})
-                    continue
-                acts = name in ("click", "input", "select", "scroll", "fill_fields")
-                target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
-                          and isinstance(args.get("index"), int) else None)
-                where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), _shown(s.obs))
-                if acts and where in turn["done"]:
-                    # The same step from a page that shows the same: it led nowhere the first time.
-                    turn["stalled"] += 1
-                    if turn["stalled"] > 3:
-                        s.terminal_reason, s.detail = "agent_refused", "the same page step was repeated without effect"
-                        return "同一步重复了几次都没有效果，本次没有完成。"
-                    unseen = unseen or name
-                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
-                                           "未执行：这一步在同样的页面状态下已经做过，没有带来进展。换一种做法"
-                                           "（用 input 直接填值、用 select 选、先 scroll 找控件），或者如实说明做不到。"})
-                    continue
-                if acts:
-                    turn["done"].add(where)
-                turn.pop("confirmed", None)
-                try:
-                    text, changed = self._tool(s, name, args, turn)
-                except (ValueError, TypeError) as exc:
-                    text, changed = f"工具参数有误：{str(exc)[:160]}", False
-                confirmed = turn.pop("confirmed", False)
-                s.ledger.append("slim_tool", step=s.step, tool=name, changed=changed,
-                                ok=not text.startswith(("没有成功", "没有执行")))
-                turn["trace"].append(f"{name}{'[' + _control_name(target) + ']' if target is not None else ''}"
-                                     f"({json.dumps(args, ensure_ascii=False)[:120]})"
-                                     + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
-                changed_page = changed_page or (changed and name != "observe")
-                unwritten = unwritten or text.startswith("没有执行")
-                answer = str(args.get("answer") or "").strip() if name in _ENDING_STEPS else ""
-                if answer:
-                    # The turn ends on it only if nothing written earlier in the reply is
-                    # still unread and nothing but a finish comes after it.
-                    rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
-                    hidden = _tabs_not_shown(s.obs, answer)
-                    if confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
-                        finish = {"status": "done", "answer": answer}
-                    elif hidden:
-                        # It was written before the page was seen: the page shows another tab.
-                        unseen = unseen or name
-                        text += (f" 这一步带的 answer 没有用上：答复里说的“{hidden[0]}”页签现在没有选中，"
-                                 "先切到它，再结束。")
-                    else:
-                        text += " 这一步带的 answer 没有用上，本轮还没有结束。"
-                if not confirmed:
-                    unseen = unseen or name
-                entry = {"role": "tool", "tool_call_id": call.get("id"), "content": text}
-                if name == "call_api":
-                    entry["_api"] = True
-                if changed:
-                    entry["content"] = text + "\n" + self._page(s, turn)
-                    entry["_observation"] = True
-                self._messages.append(entry)
-                if s.terminal_reason:
-                    return turn.get("final") or "操作没有完成。"
-            if finish is None:
-                continue
-            status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
-            if status == "done" and not verified and self._unsaid(prompt, turn):
-                self._note(s, stage="check")
-                problems = self._verify(s, prompt, answer, turn)
-                if problems:
-                    s.ledger.append("slim_verify_sent_back", problems=len(problems))
-                    # A second reading, not a ruling: it has been wrong about a right
-                    # answer, and a model told "failed" gives the right answer up.
-                    self._messages.append({"role": "user", "_observation": True, "content":
-                                           "验收提出了疑点（只是复核意见，可能有错）：" + "；".join(problems)
-                                           + "。逐条对照你手里的证据：意见对，就修正；意见不对，就保持原来的结果，"
-                                           "不要为了迁就它去改答案、改页面或改表单。然后重新 finish；"
-                                           "确实做不到的，用 cannot 或 need_input 如实说明。\n"
-                                           + page_text(s.obs, handoffs=turn["handoffs"], marked=turn["marked"])})
-                    return self._loop(s, prompt, turn, verified=True)
-            if status == "need_input":
-                s.terminal_reason = "needs_clarification"
-                s.clarification = {"schema_version": 1, "clarification_id": f"{s.run_id}-ask"[:100],
-                                   "task_id": s.run_id[:100], "question": (answer or "请补充信息。")[:500],
-                                   "response_kind": "free_text", "choices": []}
-            elif status == "cannot":
-                s.terminal_reason = "agent_refused"
-            elif s.mutation_outcomes:
-                # Said outright, as the goal turn's Skill path says it: settlement names
-                # the verified writes ahead of the answer of any turn it is not told
-                # finished, which is for a turn that stopped part-way.
-                s.terminal_reason = "agent_finished"
-            return answer or "已完成。"
-        if not s.terminal_reason:
-            s.terminal_reason, s.detail = "agent_refused", "the turn's model steps were used up"
-        return "步骤用完，没有完成。"
-
-    @staticmethod
-    def _query_line(s) -> str:
-        obs = s.obs
-        parts = [urlsplit(obs.url).path]
-        if obs.page_query is not None:
-            parts.append(json.dumps(obs.page_query["parameters"], ensure_ascii=False)[:160])
-        if obs.page_read is not None:
-            parts.append(f"total={obs.page_read['total']}")
-        return " ".join(parts)
-
-    def _unsaid(self, prompt: str, turn: dict) -> list[str]:
-        """The values this turn typed or chose on the page that are not in the person's
-        own words, as `control←value`. This is what the closing check is asked about: a
-        date written out, a name completed, or a value the model made up look the same to
-        the program, and telling them apart takes a reading. A turn without one ends on
-        the model's own `finish`."""
-        said = re.sub(r"[\s,，。.：:]", "", " ".join(self._said(prompt)))
-        return [f"{label}←{value}" for label, value in turn["touched"]
-                if value and re.sub(r"[\s,，。.：:]", "", value) not in said]
-
-    def _verify(self, s, prompt: str, answer: str, turn: dict) -> list[str]:
-        obs = s.obs
-        history = self._said(prompt)
-        stray = self._unsaid(prompt, turn)
+    def verification_messages(self, prompt, answer, turn, obs, history):
+        said = re.sub(r"[\s,，。.：:]", "", " ".join(history))
+        stray = [f"{label}←{value}" for label, value in turn["touched"]
+                 if value and re.sub(r"[\s,，。.：:]", "", value) not in said]
         state = {"path": urlsplit(obs.url).path, "title": obs.title,
                  "selected": list(obs.selected_controls),
                  "list": ({k: obs.page_read[k] for k in ("page", "page_size", "rows", "total")}
@@ -1782,7 +1408,7 @@ class SlimTurnExecutor(GoalTurnExecutor):
                  "applied_query": obs.page_query, "form": _fields(obs),
                  "form_lines": {f"第{row}行": cells for row, cells in sorted(_lines(obs).items())},
                  "highlighted": turn["marked"], "messages": list(obs.messages[:4]),
-                 "page_text": page_text(obs, handoffs=turn["handoffs"])[-2500:]}
+                 "page_text": page_text(obs, handoffs=self.knowledge.handoffs)[-2500:]}
         content = ("用户本轮原话：" + prompt
                    + ("\n此前各轮原话：" + " / ".join(history[:-1]) if len(history) > 1 else "")
                    + "\n助手答复：" + answer
@@ -1796,23 +1422,84 @@ class SlimTurnExecutor(GoalTurnExecutor):
                       + "。逐个判断：是用户要求的另一种写法（如日期补全年份、名称补全全称）或应用自动联动（合计、天数、自动带出的关联）就不算问题；是助手自己编的值就算问题，要求恢复原值。"
                       if stray else "")
                    + "\n页面真实状态：" + json.dumps(state, ensure_ascii=False)[:7000])
-        try:
-            message = s.chat.complete_cancellable(
-                [{"role": "system", "content": VERIFY_SYSTEM if turn.get("writes") is None else
-                  VERIFY_SYSTEM.replace("\n只输出一个 JSON", VERIFY_WRITES + "\n只输出一个 JSON", 1)},
-                 {"role": "user", "content": content}],
-                None, s.run_id, cancelled=s.cancelled, max_tokens=600,
-                timeout_s=max(1.0, s.budget.remaining()))
-        except ProviderError:
-            return []
-        match = re.search(r"\{.*\}", message.get("content") or "", re.S)
-        try:
-            verdict = json.loads(match.group(0)) if match else {}
-        except ValueError:
-            verdict = {}
-        if verdict.get("ok") is False and verdict.get("problems"):
-            return [str(p)[:200] for p in verdict["problems"][:4]]
-        return []
+        return [{"role": "system", "content": VERIFY_SYSTEM if turn.get("writes") is None else
+                 VERIFY_SYSTEM.replace("\n只输出一个 JSON", VERIFY_WRITES + "\n只输出一个 JSON", 1)},
+                {"role": "user", "content": content}]
+
+    def prepare(self, prompt, context):
+        from .bound_data_reads import BoundDataReads
+        bound = BoundDataReads(self.goal_port.data, context.operation, context.page.checkpoint)
+        with self.knowledge.client.read_window(bound._check):
+            self.knowledge._load()
+            return self.knowledge.suggest(prompt)
+
+    def execute(self, name, arguments, context):
+        from .bound_data_reads import BoundDataReads
+        bound = BoundDataReads(self.goal_port.data, context.operation, context.page.checkpoint)
+        turn = {"reads": [], "marked": "", "trace": [], "touched": []}
+        with self.knowledge.client.read_window(bound._check):
+            result = self._tool(context, name, arguments, turn)
+        return replace(result, entered=tuple(turn["touched"]), trace=tuple(turn["trace"]),
+                       read_summary=turn["reads"][-1] if turn["reads"] else None, marked=turn["marked"])
+
+
+class _Procedure:
+    def __init__(self, owner, name):
+        self.owner, self.name = owner, name
+
+    def execute(self, arguments, *, context):
+        return self.owner.execute(self.name, arguments, context)
+
+
+def _requirements(name, arguments, observation, review=None):
+    if name == "highlight":
+        return frozenset({"handoffs"})
+    if name == "fill_fields":
+        return frozenset({"paging" if item["label"] in _PAGING else
+            "lines" if _LINE.match(item["label"]) else
+            "facets" if any(e.attrs.get("page_control") == "query" and
+                item["label"] in {e.attrs.get("field_label"), e.attrs.get("title")} for e in observation.elements)
+            else "fill" for item in arguments["fields"]})
+    if name in {"input", "select", "click"}:
+        element = next((e for e in observation.elements if e.ref == "e" + str(arguments["index"])), None)
+        if element:
+            if element.role == "tab": return frozenset({"sections"})
+            if element.attrs.get("page_control") == "query": return frozenset({"facets"})
+            if element.attrs.get("page_control") in {"page_size", "pagination"} or element.role == "option":
+                return frozenset({"paging"})
+            if _LINE.match(element.attrs.get("title", "")): return frozenset({"lines"})
+            if str(element.attrs.get("form_scope", "")).startswith("dialog"):
+                if review is not None and element.tag == "button" and review.permits(
+                        "lines", urlsplit(observation.url).path, element.name.strip()):
+                    return frozenset({"lines"})
+                return frozenset({"fill"})
+    return frozenset()
+
+
+class SlimTurnExecutor(ModelDrivenTurnExecutor):
+    """Yudao composition of the application-neutral model-driven executor."""
+
+    def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
+                 draft_steps=None, **kwargs):
+        application, goal_port = kwargs["application"], kwargs["goal_port"]
+        self.knowledge = knowledge
+        knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
+        self.procedures = owner = YudaoLoopProcedures(knowledge, goal_port, application.descriptor.origin)
+        procedures = tuple(LoopProcedure(json.dumps(schema, ensure_ascii=False),
+            _Procedure(owner, schema["function"]["name"]),
+            "read" if schema["function"]["name"] in {"call_api", "find_record"} else
+            "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page",
+            "yudao.read", frozenset({"handoffs"}) if schema["function"]["name"] == "highlight" else frozenset(),
+            lambda arguments, observation, name=schema["function"]["name"]:
+                _requirements(name, arguments, observation, getattr(goal_port, "review", None))) for schema in TOOLS if schema["function"]["name"] != "finish")
+        profile = ModelLoopProfile(
+            system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
+                        conventions=conventions), procedures,
+            lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
+            owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
+            owner.verification_messages, draft_steps)
+        super().__init__(profile=profile, debug_dir=_DEBUG_DIR, **kwargs)
+
 
 
 __all__ = ["ActorKnowledge", "SlimTurnExecutor", "conventions_text", "history_messages", "page_text",

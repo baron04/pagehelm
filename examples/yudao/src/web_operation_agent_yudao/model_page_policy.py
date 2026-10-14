@@ -1,0 +1,390 @@
+"""Release-reviewed handlers for model-driven native page operations.
+
+The method fence prevents HTTP writes. This separate application review names the
+routes and handler families whose navigation, query or transient-form effects the
+deployment has inspected. Neither a control label nor the fence grants a handler.
+"""
+from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
+import hashlib
+import json
+import re
+from urllib.parse import urlsplit
+
+from web_operation_agent.business.draft_steps import DraftStepPermit
+from web_operation_agent.execution.action_admission import (
+    ActionAdmissionRefused, ActionEffect, ActionPermit)
+from web_operation_agent.business.tools.contracts import form_control_unavailable
+from web_operation_agent.business.forms import ApplicationFormValue
+from web_operation_agent.business.errors import BusinessToolRequestError
+from .bound_data_reads import BoundDataReads
+from .read_actions import NativeReadActions
+
+
+HANDLERS = frozenset({"navigation", "tabs", "query", "paging", "form_entry", "fields", "lines"})
+
+
+@dataclass(frozen=True)
+class NativePageReview:
+    release: str
+    reference: str
+    # family, exact route/template, inspected source/effect reference and hash
+    scopes: tuple[tuple[str, str, str, str, tuple[str, ...]], ...]
+
+    @classmethod
+    def load(cls, document, release):
+        if (not isinstance(document, dict) or set(document) != {"schema_version", "release", "review", "handlers"}
+                or document["schema_version"] != 1 or not release or document["release"] != release
+                or not isinstance(document["review"], str) or not 0 < len(document["review"]) <= 200
+                or not isinstance(document["handlers"], list) or not 1 <= len(document["handlers"]) <= 2000):
+            raise ValueError("native page policy must match the deployment release and reviewed handlers")
+        scopes = []
+        for item in document["handlers"]:
+            if (not isinstance(item, dict) or set(item) != {"kind", "route", "evidence", "sha256", "controls"}
+                    or item["kind"] not in HANDLERS or not isinstance(item["route"], str)
+                    or not re.fullmatch(r"/[A-Za-z0-9_/{\}-]{1,200}", item["route"])
+                    or "{" in item["route"].replace("{id}", "")
+                    or "}" in item["route"].replace("{id}", "")
+                    or not isinstance(item["evidence"], str) or not 0 < len(item["evidence"]) <= 300
+                    or not isinstance(item["controls"], list) or len(item["controls"]) > 32
+                    or any(not isinstance(c, str) or not 0 < len(c) <= 100 for c in item["controls"])
+                    or len(set(item["controls"])) != len(item["controls"])
+                    or (item["kind"] in {"form_entry", "lines"}) != bool(item["controls"])
+                    or not isinstance(item["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])):
+                raise ValueError("native page policy contains an unknown or unbound handler")
+            scope = (*tuple(item[k] for k in ("kind", "route", "evidence", "sha256")), tuple(item["controls"]))
+            if any(s[:2] == scope[:2] for s in scopes):
+                raise ValueError("native page policy handler scopes must be unique")
+            scopes.append(scope)
+        return cls(release, document["review"], tuple(scopes))
+
+    def permits(self, kind, path, control=None):
+        return any(family == kind and re.fullmatch(re.escape(route).replace(r"\{id\}", r"[1-9][0-9]*"), path)
+                   and (control is None or control in controls)
+                   for family, route, _, _, controls in self.scopes)
+
+    @property
+    def digest(self):
+        return hashlib.sha256(json.dumps([self.release, self.reference, self.scopes]).encode()).hexdigest()
+
+    @property
+    def capabilities(self):
+        installed = {kind for kind, *_ in self.scopes}
+        return frozenset({"handoffs"} | {name for kind, name in (
+            ("tabs", "sections"), ("query", "facets"), ("paging", "paging"),
+            ("fields", "fill"), ("lines", "lines")) if kind in installed})
+
+
+class ModelPageGoalPort:
+    """Expose only capabilities the installed model profile implements."""
+    def __init__(self, goal_port, review):
+        self._goal_port, self.review = goal_port, review
+
+    def __getattr__(self, name): return getattr(self._goal_port, name)
+
+    def capabilities(self):
+        # Source remains explicitly available through goal; this profile has no
+        # source lookup tool, so it must not advertise that optional delivery.
+        return (self._goal_port.capabilities() - {"source", "facets", "paging", "sections", "fill", "lines"}) \
+            | self.review.capabilities
+
+
+class NativeModelReadActions(NativeReadActions):
+    actions = frozenset({"goto", "click", "fill", "select"})
+
+    def __init__(self, origin, data, record_routes, goal_port, review):
+        super().__init__(origin, data, record_routes, review=review.reference)
+        self.actions = type(self).actions
+        self.goal_port, self.page_review, self._queries, self._drafts = goal_port, review, {}, {}
+        self._query_turn = None
+
+    def _index(self, context, checkpoint):
+        self._actor(context, checkpoint)
+        return self.goal_port.outline_index(context=context)
+
+    def admit(self, intent, *, context, checkpoint):
+        before, args = intent.observation, intent.arguments
+        path = self._path(before.url)
+        if intent.action == "goto":
+            if not self.page_review.permits("navigation", self._path(args["url"])):
+                raise ActionAdmissionRefused("unreviewed")
+            return super().admit(intent, context=context, checkpoint=checkpoint)
+        element = next(e for e in before.elements if e.ref == args["ref"])
+        category = "tabs" if element.role == "tab" else "navigation"
+        if element.attrs.get("page_control") in {"query", "pagination", "page_size"} or element.role == "option":
+            return self._query(intent, element, context, checkpoint)
+        if not self.page_review.permits(category, path):
+            raise ActionAdmissionRefused("unreviewed")
+        return super().admit(intent, context=context, checkpoint=checkpoint)
+
+    def _query(self, intent, element, context, checkpoint):
+        self._actor(context, checkpoint)
+        turn = (context.principal.binding_digest, context.session_id, context.turn_id)
+        if turn != self._query_turn:
+            self._query_turn = turn
+            self._queries.clear()
+            self._drafts.clear()
+        before, attrs, args = intent.observation, element.attrs, intent.arguments
+        path = self._path(before.url)
+        family = "query" if attrs.get("page_control") == "query" else "paging"
+        if (not self.page_review.permits(family, path) or before.page_route != path
+                or str(attrs.get("form_scope", "")).startswith("dialog") or form_control_unavailable(attrs)
+                or before.page_read is None):
+            raise ActionAdmissionRefused("unreviewed")
+        expected = {"route": path, "family": family, "read": before.page_read,
+                    "generation": self.data._client.read_generation}
+        if intent.action in {"fill", "select"}:
+            if (attrs.get("page_control") != "query" or not attrs.get("query_field")
+                    or not attrs.get("form_scope") or not attrs.get("form_instance")
+                    or len(args["value"]) > 4000):
+                raise ActionAdmissionRefused("invalid_target")
+            from .slim_loop import _date_pair, _commits
+            pair = _date_pair(element, before.elements)
+            field = attrs["query_field"]
+            if pair:
+                if args.get("commit", True) != _commits(element, before.elements):
+                    raise ActionAdmissionRefused("invalid_target")
+                expected["pair_position"] = pair.index(element)
+                field += "[" + str(pair.index(element)) + "]"
+            value = args["value"]
+            if intent.action == "select":
+                from web_operation_agent.goal.ports import PagePlan
+                from web_operation_agent.goal.spec import Filter
+                label, choice = attrs.get("field_label", ""), args.get("option_label", "")
+                filters = getattr(self.goal_port, "page_filters", None)
+                if not label or not choice or filters is None:
+                    raise ActionAdmissionRefused("unreviewed")
+                try:
+                    bound = BoundDataReads(self.data, context, checkpoint)
+                    with self.data._client.read_window(bound._check):
+                        draft = filters.prepare(PagePlan(path, label, expected_path=path,
+                            conditions=(Filter(label, (choice,)),)), before, context=context)
+                    if (len(draft.fields) != 1 or draft.scope != attrs["form_scope"]
+                            or draft.instance != attrs["form_instance"] or draft.fields[0].option_label != choice):
+                        raise ActionAdmissionRefused("invalid_target")
+                    value = draft.fields[0].value
+                except BusinessToolRequestError as exc:
+                    raise ActionAdmissionRefused("unreviewed") from exc
+            values = [value]
+            if pair:
+                values.append(value + (" 00:00:00" if pair.index(element) == 0 else " 23:59:59"))
+            expected["digests"] = tuple(hashlib.sha256(json.dumps([v], ensure_ascii=False,
+                separators=(",", ":")).encode()).hexdigest() for v in values)
+            expected.update(value=args["value"], field=attrs["query_field"], key=field, scope=attrs["form_scope"],
+                            instance=attrs["form_instance"], commit=args.get("commit", True),
+                            option=args.get("option_label", ""))
+        elif intent.action == "click":
+            if family == "query":
+                if element.tag != "button" or element.name.strip() not in {"搜索", "查询"}:
+                    raise ActionAdmissionRefused("unreviewed")
+                if not attrs.get("form_instance"):
+                    raise ActionAdmissionRefused("invalid_target")
+                expected["fields"] = {**before.page_read["query_fields"],
+                    **self._drafts.get((path, attrs["form_instance"]), {})}
+            elif attrs.get("page_control") == "pagination":
+                if not attrs.get("page_number", "").isdigit():
+                    raise ActionAdmissionRefused("invalid_target")
+                expected["page"] = int(attrs["page_number"])
+                expected["fields"] = before.page_read["query_fields"]
+            elif attrs.get("page_control") == "page_size":
+                expected["open_paging"] = True
+            elif element.role == "option":
+                number = re.fullmatch(r"\s*([1-9][0-9]*)\s*条/页\s*", element.name)
+                # The option must be owned by the exact reviewed paging popup.
+                owners = [e for e in before.elements if e.attrs.get("page_control") == "page_size"
+                          and e.attrs.get("aria-controls") and e.attrs["aria-controls"] == attrs.get("listbox_owner")]
+                if number is None or len(owners) != 1:
+                    raise ActionAdmissionRefused("unreviewed")
+                expected["page_size"] = int(number[1])
+                expected["fields"] = before.page_read["query_fields"]
+            else:
+                raise ActionAdmissionRefused("unreviewed")
+        else:
+            raise ActionAdmissionRefused("unreviewed")
+        digest = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+        self._queries[intent.binding_digest] = expected
+        return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY, self.page_review.reference, digest)
+
+    def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
+        expected = self._queries.get(intent.binding_digest)
+        if expected is None:
+            return super().verify(permit, intent, receipt, observation=observation, context=context, checkpoint=checkpoint)
+        self._actor(context, checkpoint)
+        if (observation.page_route != expected["route"] or observation.url != intent.observation.url
+                or self.data._client.read_generation != expected["generation"]):
+            return False
+        if "field" in expected:
+            controls = [e for e in observation.elements if e.attrs.get("query_field") == expected["field"]
+                        and e.attrs.get("form_scope") == expected["scope"]
+                        and e.attrs.get("form_instance") == expected["instance"]]
+            if "pair_position" in expected:
+                from .slim_loop import _date_pair
+                starts = [e for e in controls if e.attrs.get("field_label")]
+                pair = _date_pair(starts[0], observation.elements) if len(starts) == 1 else []
+                controls = [pair[expected["pair_position"]]] if pair else []
+            if len(controls) != 1:
+                return False
+            shown = controls[0].attrs.get("selected_option") if expected["option"] else controls[0].attrs.get("value", "")
+            if shown != (expected["option"] or expected["value"]):
+                return False
+            self._drafts.setdefault((expected["route"], expected["instance"]), {})[expected["key"]] = expected["digests"]
+            return True
+        if expected.get("open_paging"):
+            return any(e.role == "option" for e in observation.elements)
+        read = observation.page_read
+        return (read is not None and read["path"] == expected["read"]["path"]
+                and read["revision"] > expected["read"]["revision"]
+                and read["page"] == expected.get("page", 1)
+                and set(read["query_fields"]) == set(expected.get("fields", expected["read"]["query_fields"]))
+                and all(read["query_fields"][key] in (values if isinstance(values, tuple) else (values,))
+                    for key, values in expected.get("fields", expected["read"]["query_fields"]).items())
+                and ("page_size" not in expected or read["page_size"] == expected["page_size"]))
+
+
+class NativeDraftSteps:
+    application_id = "yudao"
+    required_scope = "yudao.read"
+    actions = frozenset({"click", "fill", "select"})
+
+    def __init__(self, data, forms, review):
+        self.data, self.forms, self.review, self._prepared = data, forms, review, {}
+        self._turn = None
+
+    @staticmethod
+    def _target(intent):
+        return next(e for e in intent.observation.elements if e.ref == intent.arguments["ref"])
+
+    def handles(self, intent):
+        if intent.action not in self.actions:
+            return False
+        element = self._target(intent)
+        scope = str(element.attrs.get("form_scope", ""))
+        return scope.startswith("dialog") or (intent.action == "click" and element.tag == "button"
+            and self.review.permits("form_entry", urlsplit(intent.observation.url).path, element.name.strip()))
+
+    @staticmethod
+    def _lines(observation, scope):
+        return frozenset(int(m[1]) for e in observation.elements
+                         if e.attrs.get("form_scope") == scope
+                         and (m := re.fullmatch(r"明细第([1-9][0-9]*)行·.+", e.attrs.get("title", ""))))
+
+    def prepare_step(self, intent, *, context, checkpoint):
+        bound = BoundDataReads(self.data, context, checkpoint)
+        turn = (context.principal.binding_digest, context.session_id, context.turn_id)
+        if self._turn != turn:
+            self._turn = turn
+            self._prepared.clear()
+        before, element, args = intent.observation, self._target(intent), intent.arguments
+        route = urlsplit(before.url).path
+        if before.page_route != route or form_control_unavailable(element.attrs):
+            raise ActionAdmissionRefused("invalid_target")
+        attrs = element.attrs
+        scope, instance = attrs.get("form_scope", ""), attrs.get("form_instance", "")
+        label = attrs.get("field_label") or attrs.get("title", "")
+        mark = self.forms._evidence.mark()
+        prepared = {"route": route, "generation": self.data._client.read_generation, "scope": scope,
+                    "instance": instance, "label": label, "mark": mark, "ref": element.ref,
+                    "lifetime": attrs.get("form_lifetime", "")}
+        values = ()
+        if intent.action in {"fill", "select"}:
+            line = re.fullmatch(r"明细第([1-9][0-9]*)行·(.+)", attrs.get("title", ""))
+            from .slim_loop import _date_pair, _commits
+            pair = _date_pair(element, before.elements)
+            if pair:
+                label = pair[0].attrs.get("field_label", label)
+            if line:
+                label = attrs["title"]
+            prepared["label"] = label
+            family = "lines" if line else "fields"
+            if (not self.review.permits(family, route) or not scope.startswith("dialog")
+                    or not instance or not label or len(args["value"]) > 4000):
+                raise ActionAdmissionRefused("unreviewed")
+            if pair:
+                if args.get("commit", True) != _commits(element, before.elements):
+                    raise ActionAdmissionRefused("invalid_target")
+                prepared["pair_position"] = pair.index(element)
+                prepared["pair_label"] = pair[0].attrs.get("field_label", label)
+            elif line:
+                prepared["line"] = line[1]
+            else:
+                # Scalar entry uses the existing application-owned form preparation.
+                # Composite dates/lines use only this optional single-step contract.
+                try:
+                    with self.data._client.read_window(bound._check):
+                        _, requested = self.forms.adopt_open(before, ((label, args["value"]),), context=context)
+                        form = self.forms.describe_form(before, context=context)
+                        fields = [f for f in form.fields if f.reference == requested[0][0]] if form else []
+                        if len(fields) != 1:
+                            raise ActionAdmissionRefused("unreviewed")
+                        draft = self.forms.prepare_form(form, (ApplicationFormValue(
+                            fields[0], args["value"], element.role),), context=context)
+                        if draft.persistence != "transient_until_submit" or draft.fields[0].value != args["value"]:
+                            raise ActionAdmissionRefused("unsafe_effect")
+                except BusinessToolRequestError as exc:
+                    raise ActionAdmissionRefused("unreviewed") from exc
+            step = "enter_value"
+            values = ((label, args["value"]),)
+            prepared.update(value=args["value"], option=args.get("option_label", ""))
+        elif scope.startswith("dialog"):
+            if not instance:
+                raise ActionAdmissionRefused("invalid_target")
+            if element.tag == "button" and self.review.permits("lines", route, element.name.strip()):
+                step = "add_line"
+                if not prepared["lifetime"]:
+                    raise ActionAdmissionRefused("invalid_target")
+                prepared["lines"] = sorted(self._lines(before, scope))
+            elif element.role in {"combobox", "select"} and self.review.permits("fields", route):
+                step = "open_choice"
+            else:
+                raise ActionAdmissionRefused("unsafe_effect")
+        else:
+            if element.tag != "button" or not self.review.permits("form_entry", route, element.name.strip()):
+                raise ActionAdmissionRefused("unreviewed")
+            step, scope, instance = "open_entry", "entry", "document-" + str(before.epoch)
+        prepared["step"] = step
+        digest = hashlib.sha256(json.dumps(prepared, sort_keys=True).encode()).hexdigest()
+        self._prepared[intent.binding_digest] = prepared
+        bound._check()
+        return DraftStepPermit(intent.binding_digest, self.review.reference, digest,
+                               route + ":" + scope, instance, step, values)
+
+    def verify_step(self, permit, intent, receipt, *, observation, context, checkpoint):
+        BoundDataReads(self.data, context, checkpoint)
+        expected = self._prepared.get(intent.binding_digest)
+        if (expected is None or self.data._client.read_generation != expected["generation"]
+                or self.forms._evidence.since(expected["mark"]) or observation.url != intent.observation.url
+                or observation.page_route != expected["route"]):
+            return False
+        if expected["step"] == "open_entry":
+            forms = {(e.attrs.get("form_scope"), e.attrs.get("form_instance")) for e in observation.elements
+                     if str(e.attrs.get("form_scope", "")).startswith("dialog") and e.attrs.get("form_instance")}
+            return len(forms) == 1
+        controls = [e for e in observation.elements if e.attrs.get("form_scope") == expected["scope"]
+                    and e.attrs.get("form_instance") == expected["instance"]]
+        if not controls and expected["step"] != "add_line":
+            return False
+        if expected["step"] == "add_line":
+            controls = [e for e in observation.elements if e.attrs.get("form_scope") == expected["scope"]
+                        and e.attrs.get("form_lifetime") == expected["lifetime"]]
+            lines = self._lines(replace(observation, elements=controls), expected["scope"])
+            return bool(controls) and set(expected["lines"]) < lines and len(lines) == len(expected["lines"]) + 1
+        if expected["step"] == "open_choice":
+            return any(e.attrs.get("aria-expanded") == "true" for e in controls
+                       if e.attrs.get("field_label") == expected["label"])
+        if "pair_position" in expected:
+            from .slim_loop import _date_pair
+            starts = [e for e in controls if e.attrs.get("field_label") == expected["pair_label"]]
+            pair = _date_pair(starts[0], controls) if len(starts) == 1 else None
+            matches = [pair[expected["pair_position"]]] if pair else []
+        else:
+            matches = [e for e in controls if (e.attrs.get("field_label") or e.attrs.get("title")) == expected["label"]]
+        if len(matches) != 1:
+            return False
+        shown = matches[0].attrs.get("selected_option") if expected["option"] else matches[0].attrs.get("value", "")
+        if not expected["option"] and matches[0].role == "spinbutton":
+            try:
+                actual, requested = Decimal(shown), Decimal(expected["value"])
+                return actual.is_finite() and requested.is_finite() and actual == requested
+            except (InvalidOperation, ValueError):
+                return False
+        return shown == (expected["option"] or expected["value"])

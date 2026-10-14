@@ -18,7 +18,9 @@ The runtime and the session traffic go through the core's gateway; nginx publish
 gateway and this bootstrap endpoint on the site's own origin.
 
     python -m web_operation_agent_yudao.native_server --api-base http://server:48080 \\
-        --public-origin https://yudao.rscl.cc --state-dir /var/lib/woa-yudao
+        --public-origin https://yudao.rscl.cc --state-dir /var/lib/woa-yudao \\
+        --source-release v2026.09 --native-read-policy /opt/native-policy/fence.json \\
+        --native-page-policy /opt/native-policy/pages.json
 """
 from __future__ import annotations
 
@@ -113,6 +115,7 @@ class YudaoHostConfig:
     model: str | None = None
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
+    native_page_policy: Path | None = None
     native_form_policy: Path | None = None
     native_create_policies: tuple[Path, ...] = ()
     #: One deployment-level creation class file naming many entries; reviewed once per
@@ -124,15 +127,13 @@ class YudaoHostConfig:
     #: Only reviewed server-side typed mutations; browser submission stays disabled.
     native_writes: bool = False
     #: Which executor decides a turn's steps; never selected by browser messages or fallback.
-    executor_mode: str = "goal"
+    executor_mode: str = "slim"
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
     #: what that text changes; the operations and every check on a write are the same.
     slim_skill_knowledge: bool = True
-    #: Read the actor's menu and build their application index when their session opens,
-    #: in the background, rather than inside the first turn (the menu) and the first turn
-    #: that needs it (the index: a record looked up by name, a write prepared). It costs
-    #: the application a few hundred small reads per session, whether or not a turn ever
-    #: needs the index. Off by default.
+    #: Warm actor metadata in the background at session start. Slim reads menu/API
+    #: descriptions and the outline; goal builds its fuller index. No line-table
+    #: prefetch for slim. Workload depends on the application's installed modules.
     warm_index: bool = False
     #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
     native_action_effect_review: str = ""
@@ -175,8 +176,8 @@ class YudaoHostConfig:
             raise ValueError("native navigation requires a reviewed native read policy and write guard")
         if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent", "slim"}:
             raise ValueError("executor_mode must be goal, page-agent or slim")
-        if self.executor_mode in {"page-agent", "slim"} and self.native_read_policy is None:
-            raise ValueError("page-agent and slim require a reviewed native read policy and write guard")
+        if self.executor_mode == "page-agent" and self.native_read_policy is None:
+            raise ValueError("page-agent requires a reviewed native read policy and write guard")
 
 
 @dataclass
@@ -190,6 +191,9 @@ class _Active:
 
 class YudaoHost:
     def __init__(self, config: YudaoHostConfig):
+        from .deployment_validation import validate_native_deployment
+        validated = validate_native_deployment(config)
+        self.page_review = validated.page_review
         self.config = config
         config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._api_documents = None
@@ -225,28 +229,9 @@ class YudaoHost:
             from .guard_identity import GuardIdentity
             from .guard_proxy import NativeGuardProxy
             from .page_guard import NativePageGuard
-            policy = json.loads(config.native_read_policy.read_text())
-            fenced = isinstance(policy, dict) and policy.get("schema_version") == 2
-            if fenced:
-                # The method fence: every plain GET but the release scan's writing handlers.
-                if (set(policy) != {"schema_version", "release", "mode", "writing_gets", "scan"}
-                        or policy["mode"] != "method-fence" or not config.source_release
-                        or policy["release"] != config.source_release
-                        or not isinstance(policy["writing_gets"], list)
-                        or config.native_filter_policies or config.native_action_effect_review):
-                    raise ValueError("the method fence policy must match the deployment release")
-            elif (not isinstance(policy, dict) or set(policy) != {"schema_version", "release", "read_paths"}
-                    or policy["schema_version"] != 1 or not config.source_release
-                    or policy["release"] != config.source_release or not self.ui or not self.ui.records
-                    or not isinstance(policy["read_paths"], list)):
-                raise ValueError("native read policy must match the deployment and its UI routes")
-            self.live_forms = (config.native_live_forms and fenced
-                               and config.executor_mode in {"goal", "slim"}
-                               and config.native_form_policy is None and not config.native_create_policies)
-            if config.executor_mode == "slim" and not self.live_forms:
-                # The slim loop works a page with the runtime's own actions; it runs only
-                # inside the window in which the application itself refuses its writes.
-                raise ValueError("slim requires the method fence and the application's own window")
+            policy = validated.policy
+            fenced = policy["schema_version"] == 2
+            self.live_forms = validated.live_forms
             self._fenced = self._fenced_gets(policy) if fenced else frozenset()
             if config.native_filter_policies:
                 from .repository import repository_tree
@@ -462,9 +447,15 @@ class YudaoHost:
                 # native writes it may also propose a loaded Skill's typed operations.
                 from web_operation_agent.goal.conventions import load_conventions
                 from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
+                from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
+                model_goal = ModelPageGoalPort(app.goal_port, self.page_review)
+                action_policy = NativeModelReadActions(app.origin, app.goal_data,
+                    self.ui.records if self.ui is not None else {}, model_goal, self.page_review)
+                draft_steps = NativeDraftSteps(app.goal_data, app.ports.forms, self.page_review)
+                turn_config = replace(turn_config, action_policy=action_policy, click_policy=None)
                 executor = SlimTurnExecutor(
                     **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
-                    goal_port=app.goal_port,
+                    goal_port=model_goal, draft_steps=draft_steps,
                     disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                     knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                              time_zone=app.goal_data.time_zone(),
@@ -649,6 +640,8 @@ def main(argv=None) -> int:
     ap.add_argument("--gateway-port", type=int, default=48091)
     ap.add_argument("--bootstrap-port", type=int, default=48092)
     ap.add_argument("--native-read-policy", type=Path)
+    ap.add_argument("--native-page-policy", type=Path,
+                    help="release-reviewed model page handlers; required for slim")
     ap.add_argument("--native-form-policy", type=Path)
     ap.add_argument("--native-create-policy", type=Path, action="append", default=[])
     ap.add_argument("--native-create-class", type=Path,
@@ -663,10 +656,10 @@ def main(argv=None) -> int:
     ap.add_argument("--native-live-forms", action=argparse.BooleanOptionalAction, default=True,
                     help="under a method-fence read policy: fill the form a page shows and take "
                          "bounded page steps, inside the application's own read-only window")
-    ap.add_argument("--executor", choices=("goal", "page-agent", "slim"), default="goal")
+    ap.add_argument("--executor", choices=("goal", "page-agent", "slim"), default=YudaoHostConfig.executor_mode)
     ap.add_argument("--warm-index", action="store_true",
-                    help="read each actor's menu and build their application index when their "
-                         "session opens, in the background; a few hundred small reads per session")
+                    help="warm actor metadata at session start: menu/API descriptions and outline "
+                         "for slim, the full index for goal; off by default")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")
@@ -679,6 +672,28 @@ def main(argv=None) -> int:
     if any(len(item) != 2 for item in commits):
         ap.error("--source-commit requires REPOSITORY=FULL_COMMIT")
     env = {k: os.environ[k] for k in _MODEL_ENV_KEYS if os.environ.get(k)}
+    try:
+        config = YudaoHostConfig(
+            api_base=a.api_base, public_origin=a.public_origin,
+            public_agent_url=a.public_agent_url or a.public_origin.rstrip("/") + "/woa-agent",
+            state_dir=a.state_dir, ui_source=a.ui_source, source_root=a.source_root,
+            source_release=a.source_release, source_commits=commits, gateway_port=a.gateway_port,
+            bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
+            native_read_policy=a.native_read_policy, native_page_policy=a.native_page_policy, native_guard_port=a.native_guard_port,
+            native_navigation=a.native_navigation,
+            auto_read_catalog=a.auto_read_catalog,
+            native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
+            native_create_class=a.native_create_class,
+            native_filter_policies=tuple(a.native_filter_policy),
+            executor_mode=a.executor, native_action_effect_review=a.native_action_effect_review,
+            native_writes=a.native_writes, warm_index=a.warm_index,
+            native_live_forms=a.native_live_forms,
+            max_sessions=a.max_sessions,
+            daily_allowance_cny=a.daily_allowance_cny)
+        from .deployment_validation import validate_native_deployment
+        validate_native_deployment(config)
+    except ValueError as exc:
+        ap.error(str(exc))
     if "AGENT_OPENAI_API_KEY" not in env:
         raise SystemExit("AGENT_OPENAI_API_KEY is not set")
     # A model without a registered price cannot open a session: say so at start, once,
@@ -688,23 +703,7 @@ def main(argv=None) -> int:
         price_for(a.model or env.get("AGENT_OPENAI_MODEL", ""))
     except UnpricedModel as exc:
         raise SystemExit(str(exc)) from exc
-    host = YudaoHost(YudaoHostConfig(
-        api_base=a.api_base, public_origin=a.public_origin,
-        public_agent_url=a.public_agent_url or a.public_origin.rstrip("/") + "/woa-agent",
-        state_dir=a.state_dir, ui_source=a.ui_source, source_root=a.source_root,
-        source_release=a.source_release, source_commits=commits, gateway_port=a.gateway_port,
-        bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
-        native_read_policy=a.native_read_policy, native_guard_port=a.native_guard_port,
-        native_navigation=a.native_navigation,
-        auto_read_catalog=a.auto_read_catalog,
-        native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
-        native_create_class=a.native_create_class,
-        native_filter_policies=tuple(a.native_filter_policy),
-        executor_mode=a.executor, native_action_effect_review=a.native_action_effect_review,
-        native_writes=a.native_writes, warm_index=a.warm_index,
-        native_live_forms=a.native_live_forms,
-        max_sessions=a.max_sessions,
-        daily_allowance_cny=a.daily_allowance_cny))
+    host = YudaoHost(config)
     host.server.start()
     # Read the API documentation once in the background, so the first person to ask after
     # a start waits for a document already on its way instead of starting the slow read.
