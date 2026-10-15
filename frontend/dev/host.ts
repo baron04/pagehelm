@@ -24,12 +24,13 @@ let turn = 1
  * steps, its confirmation and its answer into whatever came after it.
  */
 let live = 0
+let generation = 0
 
 /** Start a new user turn. Deriving it from the entry count guessed wrong. */
 function nextTurn(): number {
   turn += 1
-  live = turn
-  return turn
+  live = ++generation
+  return live
 }
 
 function entry(kind: TimelineEntry['kind'], text: string,
@@ -60,7 +61,7 @@ const ANSWER = `已扫完全部 12 条，命中 3 条。
 export type Scenario =
   | 'read' | 'write' | 'operate' | 'refused' | 'indeterminate'
   | 'reconnecting' | 'offline' | 'disconnect' | 'undelivered'
-  | 'many' | 'older' | 'longtext' | 'clear'
+  | 'many' | 'older' | 'longtext' | 'clear' | 'effects'
 
 export interface DevHost extends PanelHost {
   /** Drive a scripted turn from the dev page, the way a real session would. */
@@ -154,6 +155,35 @@ export function createDevHost(): DevHost {
       tone: 'success', panel_state: 'success', authored: 'model',
     }))
     commit({connection: {...state.connection, busy: false, state: 'success'}})
+  }
+
+  /** The visual review follows the product's own click-to-start boundary. */
+  function previewEffects(): void {
+    const mine = nextTurn()
+    push(entry('goal', '预览屏幕特效（合成演示）'))
+    commit({connection: {...state.connection, state: 'awaiting_confirmation', busy: true},
+      activityPoint: null})
+    ask({schema_version: 1, approval_id: `effects-${mine}`, kind: 'operate',
+      effect: '预览 15 秒屏幕辉光和助手光标', targets: ['仅演示视觉效果，不执行页面操作'],
+      expires_at: Date.now() + 120_000, principal_digest: '', turn_id: `turn-${turn}`,
+      operation_id: `effects-preview-${mine}`})
+  }
+
+  async function playEffects(): Promise<void> {
+    const mine = live
+    push(entry('progress', '正在预览屏幕特效'))
+    commit({pendingApproval: null})
+    commit({connection: {...state.connection, state: 'acting', busy: true}, activityPoint: null})
+    for (let index = 0; index < 5; index++) {
+      const target = document.querySelector(`tbody tr:nth-child(${index + 1}) td:first-child`)
+      const rect = target?.getBoundingClientRect()
+      if (rect) commit({activityPoint: {x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2, at: Date.now()}})
+      await wait(3000)
+      if (mine !== live) return
+    }
+    push(entry('result', '特效预览结束。', {panel_state: 'success', authored: 'server'}))
+    commit({connection: {...state.connection, state: 'success', busy: false}, activityPoint: null})
   }
 
   async function runWrite(goal: string): Promise<void> {
@@ -324,12 +354,15 @@ export function createDevHost(): DevHost {
       }, 700)
     },
     decide(_approvalId, decision) {
-      void (state.pendingApproval?.kind === 'operate' ? settleOperate(decision)
+      void (state.pendingApproval?.operation_id.startsWith('effects-preview-')
+        && decision === 'approved' ? playEffects()
+        : state.pendingApproval?.kind === 'operate' ? settleOperate(decision)
         : settleWrite(decision))
     },
     newConversation() {
       // The real host clears the panel's view and tells the server; the server's own event
       // log keeps what happened. Nothing here is the record, so clearing is the whole job.
+      live = 0
       sequence = 0
       turn = 1
       commit({entries: [], pendingApproval: null, notice: null, optimistic: null,
@@ -350,7 +383,7 @@ export function createDevHost(): DevHost {
       // The composer cannot start a turn over one in flight; a scenario button can, so it
       // ends that turn first, the way a replacing message does, rather than letting two
       // scripts write into one conversation.
-      if (['read', 'write', 'operate'].includes(name)
+      if (['read', 'write', 'operate', 'effects'].includes(name)
           && (state.connection.busy || state.pendingApproval)) {
         live = 0
         push(entry('result', '已中断上一项操作。', {
@@ -362,6 +395,7 @@ export function createDevHost(): DevHost {
       }
       switch (name) {
         case 'clear':
+          live = 0
           sequence = 0
           turn = 1
           commit({entries: [], pendingApproval: null, notice: null, optimistic: null,
@@ -370,6 +404,9 @@ export function createDevHost(): DevHost {
           return
         case 'read':
           void runRead('列出所有待开票的销售订单，带金额')
+          return
+        case 'effects':
+          void previewEffects()
           return
         case 'write':
           void runWrite('把 Acme Corporation 的报价单 S00002 确认成销售订单')

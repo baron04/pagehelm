@@ -215,8 +215,15 @@ export class Harness {
   async settle(): Promise<void> {
     // An animation cut short -- a tooltip fading in on a control the click just replaced --
     // rejects its `finished`; it leaves nothing behind to measure, so it is not waited on.
-    await this.page.evaluate(() => Promise.all(document.querySelector('#woa-assistant')!
-      .shadowRoot!.getAnimations().map(animation => animation.finished.catch(() => null))))
+    // An ambient one never finishes at all: the new conversation's halo breathes forever,
+    // and waiting for it hangs the run. This waits on an entrance, and those end.
+    await this.page.evaluate(() => Promise.all(
+      document.querySelector('#woa-assistant')!.shadowRoot!.getAnimations()
+        .filter(animation => {
+          const iterations = (animation.effect as KeyframeEffect | null)?.getTiming().iterations
+          return iterations !== Infinity
+        })
+        .map(animation => animation.finished.catch(() => null))))
   }
 
   /** Publish a confirmation the way the session does, after the panel is up. */

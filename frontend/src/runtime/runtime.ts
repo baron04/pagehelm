@@ -40,6 +40,7 @@ import {clearStored, loadSession, writeStored, type SessionState} from './storag
 import {SessionClient, sseBatches} from './transport'
 import {closeWriteGuard, openWriteGuard, releaseWriteGuard} from './writeGuard'
 import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
+import {activityPoint} from './activityPoint'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
   type JsonObject, type ObservationEnvelope, type RuntimeConfig} from './types'
 
@@ -563,8 +564,7 @@ export class EmbeddedWebRuntime {
     // A completed cancellation belongs to the preceding message. Reset both flags at the
     // new-message boundary as well as at the terminal event, so a delayed projection
     // cannot leave the new stop control disabled.
-    this.panelHost?.setConnection({busy: true, stopping: false})
-    this._panelState('observing')
+    this.panelHost?.setConnection({busy: true, stopping: false, state: 'observing'})
     // Echo the message now; the server's own `message_accepted` event replaces it.
     this.panelHost?.setOptimistic({turnId: messageId, text: goal, failed: false})
     try {
@@ -1202,6 +1202,21 @@ export class EmbeddedWebRuntime {
   }
 
   _execute(command: ActionCommand): Promise<unknown> {
+    const showTarget = () => {
+      if (!this.panelHost) return
+      try {
+        const ref = command.action === 'click' ? command.args?.ref : undefined
+        this.panelHost.setActivityPoint(ref === undefined ? null
+          : activityPoint(this.page.element(ref) as Element | null))
+      } catch { /* A visual hint must never change a command's outcome. */ }
+    }
+    showTarget()
+    // Keep synchronous validation failures synchronous. PageController can scroll the
+    // target into view during execution, so refresh geometry when its promise settles.
+    return this._executePageCommand(command).finally(showTarget)
+  }
+
+  private _executePageCommand(command: ActionCommand): Promise<unknown> {
     if (command.action === 'highlight') {
       this._clearHighlight()
       this.highlightHandle = this.page.highlight(command.args?.ref)

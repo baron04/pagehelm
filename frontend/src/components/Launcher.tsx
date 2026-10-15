@@ -18,10 +18,8 @@ export function launcherStateFor(state: PanelState, pendingApproval: boolean): L
 
 /**
  * The launcher is the only thing on screen while the panel is collapsed, so it carries the
- * state the header deliberately no longer shows. It is the assistant's face, the same one a
- * new conversation opens on, and the face never changes -- one that keeps changing stops
- * being one -- so the state lives on the ring around it: the accent at rest, an arc turning
- * while it works, amber when it waits on the person, dashed once the session has ended.
+ * state the header deliberately no longer shows. A ring appears while it works, turns
+ * amber when it waits on the person, and is dashed once the session has ended.
  */
 export function Launcher({state, unread, labels, onOpen, autoFocus, onKeyDown}: {
   state: LauncherState
@@ -60,10 +58,6 @@ export function Launcher({state, unread, labels, onOpen, autoFocus, onKeyDown}: 
         </svg>
       </span>
       <span className="woa-launcher__disc"><img src={avatar} alt="" /></span>
-      {/* Drawn, not a person: over the host page the face says it is an assistant. */}
-      <span className="woa-ai-tag" aria-hidden="true">
-        <span className="woa-ai-tag__text">{labels.aiTag}</span>
-      </span>
       {unread > 0 && (
         <span className="woa-launcher__nub" data-await={state === 'awaiting' ? 'true' : undefined}>
           {unread > 9 ? '9+' : unread}

@@ -217,7 +217,12 @@ export class PanelHost implements PanelHostContract {
 
   // -- fed by the Runtime ----------------------------------------------------------
   setConnection(patch: Partial<ConnectionState>): void {
-    this.commit({connection: {...this.state.connection, ...patch}})
+    this.commit({connection: {...this.state.connection, ...patch},
+      ...(patch.busy === false ? {activityPoint: null} : {})})
+  }
+
+  setActivityPoint(point: PanelSnapshot['activityPoint']): void {
+    this.commit({activityPoint: point ?? null})
   }
 
   /** Merge one projected page. Identity is the server's event id, so this is idempotent. */
@@ -291,12 +296,12 @@ export class PanelHost implements PanelHostContract {
   rest(): void {
     this.commit({
       connection: {...this.state.connection, state: 'ready', busy: false, stopping: false},
-      notice: null, pendingApproval: null, closed: false,
+      notice: null, pendingApproval: null, closed: false, activityPoint: null,
     })
   }
 
   setPendingApproval(request: ApprovalRequest | null | undefined): void {
-    this.commit({pendingApproval: request ?? null})
+    this.commit({pendingApproval: request ?? null, ...(request ? {activityPoint: null} : {})})
   }
 
   /**
@@ -314,10 +319,16 @@ export class PanelHost implements PanelHostContract {
     this.oldest = ''
     this.revision += 1
     this.byId.clear()
-    this.commit({entries: [], hasOlder: false, loadingOlder: false, historyError: false, optimistic: null})
+    this.commit({entries: [], hasOlder: false, loadingOlder: false, historyError: false,
+      optimistic: null, activityPoint: null})
   }
 
-  setOptimistic(optimistic: Optimistic | null): void { this.commit({optimistic}) }
+  setOptimistic(optimistic: Optimistic | null): void {
+    // A new local submission supersedes the preceding turn's terminal presentation
+    // before bootstrap/network work starts. It does not change permission or busy state.
+    this.commit({optimistic, ...(optimistic && !optimistic.failed && !this.state.closed
+      ? {connection: {...this.state.connection, state: 'observing' as const}} : {})})
+  }
 
   failOptimistic(): void {
     if (!this.state.optimistic) return
@@ -351,7 +362,7 @@ export class PanelHost implements PanelHostContract {
   retrySubmit(): void {
     const pending = this.state.optimistic
     if (!pending) return
-    this.commit({optimistic: {...pending, failed: false}})
+    this.setOptimistic({...pending, failed: false})
     this.verbs.submit(pending.text)
   }
 

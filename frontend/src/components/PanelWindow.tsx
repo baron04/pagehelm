@@ -12,11 +12,12 @@ import presentation from '../presentation.json'
 import avatar from '../assets/assistant-avatar.webp'
 import {ApprovalCard} from './ApprovalCard'
 import {Composer} from './Composer'
-import {EmptyState} from './EmptyState'
+import {ExamplePrompts, WelcomeHeading} from './EmptyState'
 import {iconProps} from './icon'
 import {InlineError} from './InlineError'
 import {Launcher, launcherStateFor} from './Launcher'
 import {Thread} from './Thread'
+import {ScreenEffects, effectPhase, type EffectConfirmation} from './ScreenEffects'
 
 const HANDLES: Handle[] = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se']
 const DRAWER_HANDLES: Handle[] = ['w']
@@ -44,6 +45,7 @@ export function PanelWindow({host, allowedOrigins}: {
   const [picked, setPicked] = useState(0)
   const [seen, setSeen] = useState(loadSeen)
   const [deciding, setDeciding] = useState(false)
+  const [effectConfirmation, setEffectConfirmation] = useState<EffectConfirmation | null>(null)
   const [panelFailure, setPanelFailure] = useState<HostNotice | null>(null)
   const {mode, fullScreen, geometry, docked, drawer, dragging, onPointerDown, toggleMode} =
     useWindowGeometry(open)
@@ -70,9 +72,15 @@ export function PanelWindow({host, allowedOrigins}: {
       setPanelFailure({code: 'unexpected', retryable: false})
     }
   }, [])
-  const newConversation = useCallback(() => call(() => host.newConversation()), [call, host])
+  const newConversation = useCallback(() => {
+    setEffectConfirmation(null)
+    call(() => host.newConversation())
+  }, [call, host])
   const loadOlder = useCallback(() => call(() => host.loadOlder()), [call, host])
-  const retrySubmit = useCallback(() => call(() => host.retrySubmit()), [call, host])
+  const retrySubmit = useCallback(() => {
+    setEffectConfirmation(null)
+    call(() => host.retrySubmit())
+  }, [call, host])
   const cancel = useCallback(() => call(() => host.cancel()), [call, host])
   const reload = useCallback(() => call(() => host.reload()), [call, host])
   const setOpen = useCallback((value: boolean) => {
@@ -82,6 +90,10 @@ export function PanelWindow({host, allowedOrigins}: {
   }, [host])
 
   const pending = snapshot.pendingApproval
+  const effectStatus = effectPhase(snapshot, effectConfirmation)
+  useEffect(() => {
+    if (effectStatus === 'off') setEffectConfirmation(null)
+  }, [effectStatus, effectConfirmation])
   // A card past its deadline is gone at once, with nothing said about it: the server ends
   // the turn as a stop at the same moment, and until that lands the person can type again.
   const [approvalLive, setApprovalLive] = useState(true)
@@ -104,6 +116,8 @@ export function PanelWindow({host, allowedOrigins}: {
   // thing on screen that needs an answer.
   const state = blocking ? 'awaiting_confirmation' : snapshot.connection.state
   const closed = CLOSED_STATES.has(snapshot.connection.state) || snapshot.closed
+  const welcome = snapshot.entries.length === 0 && !snapshot.optimistic && !pending && !closed
+    && !['connecting', 'reconnecting', 'error'].includes(snapshot.connection.state)
 
   // A confirmation is a question that blocks a write. Leaving it behind a collapsed
   // launcher is how an operator ends up holding a half-finished turn without knowing it.
@@ -127,13 +141,19 @@ export function PanelWindow({host, allowedOrigins}: {
   const decide = useCallback((decision: 'approved' | 'denied') => {
     if (!pending) return
     setDeciding(true)
-    call(() => host.decide(pending.approval_id, decision))
+    setEffectConfirmation(decision === 'approved'
+      ? {turnId: pending.turn_id, approvalId: pending.approval_id} : null)
+    call(() => {
+      try { host.decide(pending.approval_id, decision) }
+      catch (error) { setEffectConfirmation(null); throw error }
+    })
     window.clearTimeout(decidingTimer.current)
     decidingTimer.current = window.setTimeout(() => setDeciding(false), DECIDE_SETTLE_MS)
   }, [call, host, pending])
   useEffect(() => () => window.clearTimeout(decidingTimer.current), [])
 
   const submit = useCallback((text: string) => {
+    setEffectConfirmation(null)
     setDraft('')
     call(() => host.submit(text))
   }, [call, host])
@@ -186,6 +206,8 @@ export function PanelWindow({host, allowedOrigins}: {
 
   if (!open) {
     return (
+      <>
+      <ScreenEffects snapshot={snapshot} confirmation={effectConfirmation} />
       <Launcher
         state={launcherStateFor(snapshot.connection.state, pending !== null)}
         unread={pending ? Math.max(1, unread) : unread}
@@ -198,12 +220,16 @@ export function PanelWindow({host, allowedOrigins}: {
         }}
         onOpen={() => setOpen(true)}
       />
+      </>
     )
   }
 
   return (
+    <>
+    <ScreenEffects snapshot={snapshot} confirmation={effectConfirmation} />
     <section className="woa-window" data-dragging={dragging ?? undefined}
              data-state={state} data-tone={toneOf(state)}
+             data-welcome={welcome ? 'true' : undefined}
              aria-label={labels.assistant} onKeyDown={onWindowKey}
              data-mode={fullScreen ? 'full' : mode}
              data-docked={mode === 'float' && docked && !fullScreen ? 'true' : undefined}
@@ -220,11 +246,13 @@ export function PanelWindow({host, allowedOrigins}: {
               onPointerDown={onPointerDown(handle)} aria-hidden="true" />
       ))}
 
-      <header className="woa-titlebar" onPointerDown={onPointerDown('move')}>
-        {/* The assistant's face, always here: the one logo the panel has. */}
-        <span className="woa-brand">
+      <header className="woa-titlebar" data-welcome={welcome ? 'true' : undefined}
+              onPointerDown={onPointerDown('move')}>
+        {/* The assistant's face and name belong to a conversation. A new conversation opens
+            on the face in its own greeting instead, so the bar carries only its controls. */}
+        {!welcome && <span className="woa-brand">
           <img className="woa-brand__face" src={avatar} alt="" aria-hidden="true" />
-          <span className="woa-brand__word">{labels.product}</span></span>
+          <span className="woa-brand__word">{labels.product}</span></span>}
         <button type="button" className="woa-icon-button" aria-label={labels.newChat}
                 data-tip={labels.newChat} onClick={newConversation}>
           <Plus {...iconProps(16, TITLE_INK)} />
@@ -245,31 +273,35 @@ export function PanelWindow({host, allowedOrigins}: {
         </button>
       </header>
 
-      <Thread snapshot={snapshot} labels={labels} limits={limits}
-              allowedOrigins={allowedOrigins}
-              onLoadOlder={loadOlder} onRetry={retrySubmit}
-              footer={pending && approvalLive && (
-                <ApprovalCard approval={pending} labels={labels} limits={limits}
-                              visibility={visibility} busy={deciding}
-                              onDecide={decide} onRefused={() => undefined} />
-              )}>
-        <EmptyState labels={labels} examples={host.examples ?? []}
-                    onPick={text => { setDraft(text); setPicked(count => count + 1) }} />
-      </Thread>
+      <div className={welcome ? 'woa-body woa-empty' : 'woa-body'}>
+        {welcome && <WelcomeHeading labels={labels} />}
+        <Thread snapshot={snapshot} labels={labels} limits={limits}
+                allowedOrigins={allowedOrigins}
+                onLoadOlder={loadOlder} onRetry={retrySubmit}
+                footer={pending && approvalLive && (
+                  <ApprovalCard approval={pending} labels={labels} limits={limits}
+                                visibility={visibility} busy={deciding}
+                                onDecide={decide} onRefused={() => undefined} />
+                )} />
 
-      {(snapshot.notice ?? panelFailure) && (
-        <InlineError notice={(snapshot.notice ?? panelFailure)!} configuration={host.configuration}
-                     labels={labels} limits={limits} onRetry={reload}
-                     offline={!snapshot.connection.online} />
-      )}
+        {(snapshot.notice ?? panelFailure) && (
+          <InlineError notice={(snapshot.notice ?? panelFailure)!} configuration={host.configuration}
+                       labels={labels} limits={limits} onRetry={reload}
+                       offline={!snapshot.connection.online} />
+        )}
 
-      <Composer labels={labels} limits={limits}
-                busy={snapshot.connection.busy} canReplace={canReplace}
-                stopping={snapshot.connection.stopping}
-                disabled={closed || (blocking && !canReplace)} ended={closed}
-                history={askedBefore}
-                placeholder={placeholder} draft={draft} focusRequest={picked} onDraft={setDraft}
-                onSubmit={submit} onCancel={cancel} />
+        <Composer labels={labels} limits={limits} welcome={welcome}
+                  busy={snapshot.connection.busy} canReplace={canReplace}
+                  stopping={snapshot.connection.stopping}
+                  disabled={closed || (blocking && !canReplace)} ended={closed}
+                  history={askedBefore}
+                  placeholder={placeholder} draft={draft} focusRequest={picked} onDraft={setDraft}
+                  onSubmit={submit} onCancel={cancel} />
+        {welcome && <ExamplePrompts labels={labels} examples={host.examples ?? []}
+                      onPick={text => { setDraft(text); setPicked(count => count + 1) }} />}
+        {welcome && <p className="woa-composer__disclaimer">{labels.aiDisclaimer}</p>}
+      </div>
     </section>
+    </>
   )
 }

@@ -1,6 +1,8 @@
 import {defineConfig} from 'vite'
 import react from '@vitejs/plugin-react'
 import {fileURLToPath} from 'node:url'
+import {readFileSync} from 'node:fs'
+import {aiMotionAntialiasFix} from './ai-motion.vite.ts'
 
 const contract = fileURLToPath(new URL('../src/web_operation_agent/web_runtime', import.meta.url))
 
@@ -34,7 +36,10 @@ export default defineConfig({
       formats: ['es'],
       fileName: () => 'assistant.js',
     },
-    rolldownOptions: {output: {inlineDynamicImports: true}},
+    rolldownOptions: {output: {
+      inlineDynamicImports: true,
+      banner: `/*! ai-motion 0.4.8\n${readFileSync(new URL('./src/visuals/ai-motion/LICENSE', import.meta.url), 'utf8')}*/`,
+    }},
   },
-  plugins: [react()],
+  plugins: [react(), aiMotionAntialiasFix()],
 })

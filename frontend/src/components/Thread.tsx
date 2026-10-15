@@ -359,17 +359,23 @@ export function Thread(props: ThreadProps): React.JSX.Element {
   const turns = useMemo(() => group(snapshot.entries, snapshot.connection.busy),
                         [snapshot.entries, snapshot.connection.busy])
   const previousEntries = useRef(snapshot.entries)
-  const anchor = useRef<{node: HTMLElement; offset: number; height: number; top: number} | null>(null)
+  const anchor = useRef<{node: HTMLElement; offset: number; height: number} | null>(null)
+  const anchorRelease = useRef<number | undefined>(undefined)
 
   const restoreAnchor = useCallback(() => {
     const root = scroller.current
     const saved = anchor.current
     if (!root || !saved) return
+    // Restoring history emits a scroll event; it must not make the earlier wheel gesture
+    // change whether the thread follows new messages.
+    gesture.current = 0
     if (saved.node.isConnected) {
       root.scrollTop += saved.node.getBoundingClientRect().top
         - root.getBoundingClientRect().top - saved.offset
     } else {
-      root.scrollTop = saved.top + root.scrollHeight - saved.height
+      // React may replace the anchored node while prepending. Keep the scroll position
+      // the reader reached meanwhile, not the earlier near-top position at request start.
+      root.scrollTop += root.scrollHeight - saved.height
     }
   }, [])
 
@@ -381,20 +387,35 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     const node = Array.from(root.querySelectorAll<HTMLElement>('[data-entry-id]')).find(visible)
       ?? Array.from(root.querySelectorAll<HTMLElement>('[data-turn-id]')).find(visible)
     anchor.current = node ? {node, offset: node.getBoundingClientRect().top - top,
-      height: root.scrollHeight, top: root.scrollTop} : null
+      height: root.scrollHeight} : null
   }, [])
+
+  const scheduleAnchorRelease = useCallback(() => {
+    window.clearTimeout(anchorRelease.current)
+    anchorRelease.current = window.setTimeout(() => {
+      restoreAnchor()
+      anchor.current = null
+    }, 500)
+  }, [restoreAnchor])
+  useEffect(() => () => window.clearTimeout(anchorRelease.current), [])
 
   const loadOlder = useCallback(() => {
     if (!scroller.current || snapshot.loadingOlder || !snapshot.hasOlder) return
+    window.clearTimeout(anchorRelease.current)
     follow.current = false
     captureAnchor()
     onLoadOlder()
   }, [snapshot.loadingOlder, snapshot.hasOlder, onLoadOlder, captureAnchor])
 
   useLayoutEffect(() => {
-    restoreAnchor()
-    if (!snapshot.loadingOlder) anchor.current = null
-  }, [snapshot.entries, snapshot.loadingOlder, restoreAnchor])
+    // The loading flag can flip while the user's wheel is still moving toward the top.
+    // Restoring at that point jumps back to the first near-top position where the request
+    // began. Only added entries change the geometry that needs restoring.
+    if (previousEntries.current !== snapshot.entries) restoreAnchor()
+    // The new list can reflow again after this commit. ResizeObserver keeps the same
+    // visible node steady until the layout has been quiet for half a second.
+    if (!snapshot.loadingOlder && anchor.current) scheduleAnchorRelease()
+  }, [snapshot.entries, snapshot.loadingOlder, restoreAnchor, scheduleAnchorRelease])
   // Prose already on screen when the panel opened is history, not something arriving now;
   // replaying a typewriter over it on every reconnect would be theatre.
   const settledAtMount = useRef<Set<string> | null>(null)
@@ -422,9 +443,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     const onScroll = guarded('thread scroll', () => {
       const distance = root.scrollHeight - root.scrollTop - root.clientHeight
       const near = distance <= NEAR_BOTTOM
-      // The person can keep scrolling while the request is in flight. Anchor the
-      // position they are reading now, rather than pulling them back to where it began.
-      if (anchor.current && Date.now() - gesture.current < GESTURE_WINDOW_MS) captureAnchor()
+      // The person can keep scrolling while the request is in flight. Capture the actual
+      // resting position, even when a slow history response outlives the gesture window.
+      // The anchor retires after the newly prepended list has finished reflowing.
+      if (anchor.current) captureAnchor()
       if (near) {
         follow.current = true
         setUnseen(0)
@@ -455,7 +477,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     if (!node || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(guarded('thread resize', () => {
       // A new conversation's greeting is read from the top; there is no newest line to keep.
-      if (anchor.current) restoreAnchor()
+      if (anchor.current) {
+        restoreAnchor()
+        if (!snapshot.loadingOlder) scheduleAnchorRelease()
+      }
       else if (follow.current && !node.hasAttribute('data-empty')) pin()
       else {
         const root = scroller.current
@@ -467,7 +492,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     }))
     observer.observe(node)
     return () => observer.disconnect()
-  }, [pin, restoreAnchor])
+  }, [pin, restoreAnchor, scheduleAnchorRelease, snapshot.loadingOlder])
 
   // Submitting is an explicit request to watch what happens next.
   const optimisticTurnId = snapshot.optimistic?.turnId

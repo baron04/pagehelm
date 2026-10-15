@@ -21,6 +21,7 @@
     "test:browser": "playwright test"
   },
   "dependencies": {
+    "ai-motion": "0.4.8",
     "lucide-react": "0.475.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"

@@ -12,7 +12,7 @@ optional test applications or their dependency trees as product dependencies.
 resolves every distribution's runtime closure and both npm lockfiles into
 [`requirements.lock`](requirements.lock) (exact versions with sha256 hashes,
 installable with `--require-hashes`) and [`sbom.json`](sbom.json) (CycloneDX 1.5,
-521 components). `--check` runs offline in `scripts/qualify.sh` and fails when the
+512 components). `--check` runs offline in `scripts/qualify.sh` and fails when the
 lock, the SBOM, the npm lockfiles, the pinned browser asset and this document stop
 agreeing. Anything whose bytes reach a user must be named here by name; build-only
 tooling is inventoried in the SBOM and covered by the blanket paragraph below.
@@ -105,18 +105,23 @@ bytes it contains are a redistribution, and these are the components inside them
 | --- | ---: | --- | --- | --- |
 | [React](https://github.com/facebook/react) | 19.3.0 | MIT | npm | The panel's rendering runtime; `react-dom` and its `scheduler` are compiled in with it |
 | [react-dom](https://github.com/facebook/react) | 19.3.0 | MIT | npm | DOM renderer for the panel's Shadow DOM root |
+| [ai-motion](https://github.com/gaomeng1900/ai-motion) | 0.4.8 | MIT | npm | Original WebGL2 moving viewport glow, also used by PageAgent; bundled with its full MIT notice |
 | [lucide-react](https://github.com/lucide-icons/lucide) | 0.475.0 | ISC | npm | The icons the panel draws |
 
-The bundle also carries three pictures, inlined as data URLs, of one drawn helper in a blue
-suit: `frontend/src/assets/assistant-avatar.webp`, her face on the launcher and in the title
-bar, cropped close from the half-length picture, and `frontend/src/assets/assistant-hero.webp`, her half-length figure on a new
-conversation, with `frontend/src/assets/assistant-hero-dark.webp`, the same figure cut out of
-its pale disc for the dark theme. They are not third-party material. They come from the repository owner's own
-design file for the panel (2026-09-26), made with OpenAI's image generation, as the owner's
-earlier picture for the same place was; under OpenAI's Terms of Use the output is assigned
-to the person who generated it. They were resized for the panel and converted to WebP. They
-are generated drawings, not photographs of anyone. A replacement must come with the same
-record: who made it, with what, when, and on what terms.
+The `ai-motion` renderer uses the upstream moving gradient and theme tuning. Its
+opaque border is disabled. One build-time numerical guard prevents a zero-width
+antialiasing division; see [the modification notice](frontend/src/visuals/ai-motion/NOTICE.md).
+The full [upstream MIT license](frontend/src/visuals/ai-motion/LICENSE) is prepended
+to the shipped assistant bundle.
+
+The bundle also carries one picture, inlined as a data URL: `frontend/src/assets/assistant-avatar.webp`,
+the assistant's portrait, worn at three places -- the launcher, the title bar, and beside the
+greeting a new conversation opens on. It is not third-party material. It is a portrait the
+repository owner supplied for the panel, made with OpenAI's image generation, as the owner's
+earlier picture for the same place was; under OpenAI's Terms of Use the output is assigned to
+the person who generated it. It was resized for the panel and converted to WebP. It is a
+generated drawing, not a photograph of anyone. A replacement must come with the same record:
+who made it, with what, when, and on what terms.
 
 Each of these emits its own `@license` banner into the bundle, so the notices travel
 with the bytes; esbuild-style banner stripping must not be enabled for this build.

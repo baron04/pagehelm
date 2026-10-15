@@ -68,6 +68,81 @@ button:disabled { cursor: not-allowed; }
   border-radius: var(--woa-radius-control);
 }
 
+/* The light is fixed to the viewport, outside the window's clipping and drawer layout.
+   All descendants stay inert: no hit target, focus, scroll, native cursor or event changes. */
+.woa-screen-effects {
+  position: fixed; inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity var(--woa-motion-effect-exit) ease;
+}
+.woa-screen-effects *, .woa-screen-effects::before, .woa-screen-effects::after {
+  pointer-events: none;
+}
+.woa-screen-effects__glow {
+  position: absolute; inset: 0;
+  opacity: var(--woa-effect-opacity);
+}
+.woa-screen-effects__renderer { position: absolute; inset: 0; }
+.woa-screen-effects__canvas { display: block; width: 100%; height: 100%; opacity: 0; }
+.woa-screen-effects__canvas[data-ready] { opacity: 1; }
+.woa-screen-effects__renderer:has([data-ready]) + .woa-screen-effects__fallback { display: none; }
+.woa-screen-effects__fallback {
+  position: absolute; inset: 0;
+  animation: woa-ambient-breathe var(--woa-motion-ambient) ease-in-out infinite;
+  mask-image:
+    linear-gradient(90deg, var(--woa-effect-mask-solid), var(--woa-effect-mask-soft) 24px,
+      transparent var(--woa-effect-depth), transparent calc(100% - var(--woa-effect-depth)),
+      var(--woa-effect-mask-soft) calc(100% - 24px), var(--woa-effect-mask-solid)),
+    linear-gradient(180deg, var(--woa-effect-mask-solid), var(--woa-effect-mask-soft) 24px,
+      transparent var(--woa-effect-depth), transparent calc(100% - var(--woa-effect-depth)),
+      var(--woa-effect-mask-soft) calc(100% - 24px), var(--woa-effect-mask-solid));
+}
+/* CSS approximation only when ai-motion cannot render. The inward mask stays fixed. */
+.woa-screen-effects__light {
+  position: absolute; inset: -100vmax;
+  background: conic-gradient(from -100deg, var(--woa-glow-blue), var(--woa-glow-violet),
+    var(--woa-glow-coral), var(--woa-glow-gold), var(--woa-glow-blue));
+  filter: blur(var(--woa-effect-blur));
+  animation: woa-ambient-flow var(--woa-motion-color) linear infinite;
+}
+.woa-screen-effects__light--alternate {
+  background: conic-gradient(from -100deg, var(--woa-glow-violet), var(--woa-glow-blue),
+    var(--woa-glow-coral), var(--woa-glow-gold), var(--woa-glow-violet));
+  animation: woa-ambient-flow var(--woa-motion-color) linear infinite reverse,
+             woa-ambient-color var(--woa-motion-ambient) ease-in-out infinite;
+}
+@keyframes woa-ambient-breathe {
+  0%, 100% { opacity: calc(var(--woa-effect-opacity) * 0.78); }
+  50% { opacity: var(--woa-effect-opacity); }
+}
+@keyframes woa-ambient-color { 0%, 100% { opacity: 0; } 50% { opacity: 0.8; } }
+@keyframes woa-ambient-flow { to { transform: rotate(360deg); } }
+.woa-agent-cursor {
+  position: absolute;
+  left: var(--woa-effect-cursor-inset); top: var(--woa-effect-cursor-inset);
+  width: var(--woa-effect-cursor-size); height: var(--woa-effect-cursor-size);
+  filter: drop-shadow(0 2px 3px rgba(16, 18, 23, 0.22));
+  transition: left var(--woa-motion-cursor) var(--woa-motion-easing),
+              top var(--woa-motion-cursor) var(--woa-motion-easing),
+              opacity var(--woa-motion-cursor) ease;
+}
+.woa-agent-cursor__pointer {
+  position: absolute; left: 0; top: 0;
+}
+.woa-screen-effects[data-phase='waiting'] { opacity: 0.28; }
+.woa-screen-effects:not([data-phase='active']) .woa-screen-effects__fallback,
+.woa-screen-effects:not([data-phase='active']) .woa-screen-effects__light {
+  animation: none; opacity: 1;
+}
+.woa-screen-effects[data-phase='waiting'] .woa-screen-effects__light--alternate { opacity: 0; }
+.woa-screen-effects[data-phase='off'] { opacity: 0; }
+.woa-screen-effects:not([data-phase='active']) .woa-agent-cursor { opacity: 0; }
+@media (forced-colors: active) { .woa-screen-effects { display: none; } }
+
 /* ─────────────────────────────────────────────── launcher */
 .woa-launcher {
   /* Placed and sized from presentation.json. */
@@ -83,59 +158,44 @@ button:disabled { cursor: not-allowed; }
   from { opacity: 0; transform: scale(0.8); }
 }
 
-/* The assistant's face, lifted off whatever page it floats over by a shadow. Its edge is
-   white in both themes, like the ribbon's: the panel's own surface would be a black ring on
-   a light page in the dark theme, and no edge at all left the host page showing through
-   the gap under the ring. */
+/* The portrait is the identity; a quiet edge and shallow shadow lift it off the page. */
 .woa-launcher__disc {
   position: absolute; inset: 0;
   border-radius: 50%;
   overflow: hidden;
   background: var(--woa-accent-soft);
-  box-shadow: 0 0 0 1.5px var(--woa-tile-ink),
-    0 2px 4px rgba(16, 18, 23, 0.16), 0 8px 20px rgba(16, 18, 23, 0.18);
+  box-shadow: var(--woa-shadow-launcher);
 }
-.woa-launcher__disc img { display: block; width: 100%; height: 100%; object-fit: cover; }
-
-/* "AI" on the launcher's face: over a host page, a drawn helper is still not a person to talk
-   to. A flat ribbon centred under the face, in the accent turning to violet, lifted off it by
-   a white edge; the upper right stays the count of unseen answers. The type is set at the
-   smallest size on the scale and scaled down as a whole, so a browser that will not render
-   type below 12px draws the same ribbon. */
-.woa-ai-tag {
-  position: absolute; left: 50%; bottom: -6px;
-  padding: 1px 8px;
-  border-radius: var(--woa-radius-pill);
-  background: linear-gradient(135deg, var(--woa-accent), var(--woa-tile-operate));
-  color: var(--woa-tile-ink);
-  font-size: var(--woa-font-size-micro); font-weight: 700; letter-spacing: 0.08em;
-  line-height: var(--woa-line-height-tight);
-  box-shadow: 0 0 0 1.5px var(--woa-tile-ink);
-  transform: translateX(-50%) scale(0.8);
-  transform-origin: 50% 100%;
+.woa-launcher__disc img {
+  display: block; width: 100%; height: 100%; object-fit: cover;
+  /* This portrait already fills its square. Preserve the headband and side earcups
+     inside the circular mask instead of enlarging the face a second time. */
+}
+/* The idle launcher echoes the welcome portrait's fine ring. It sits outside the image,
+   preserving every pixel of the headband, and gives way to the state ring while working. */
+.woa-launcher[data-state='idle']::before {
+  content: '';
+  position: absolute; inset: -2px;
+  border-radius: 50%;
+  padding: 2px;
+  background: linear-gradient(135deg, var(--woa-face-ring), var(--woa-face-ring-mid),
+    var(--woa-face-ring-end));
+  -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  mask-composite: exclude;
   pointer-events: none;
-  user-select: none;
 }
-/* Capitals sit above the middle of their line box, and a padding moves them only by whole
-   pixels: the text is nudged by half of one, which a transform can do. */
-.woa-ai-tag__text { display: block; transform: translateY(-0.5px); }
+
 /* Working, the disc breathes -- slowly, so it reads as busy rather than as calling out. */
 .woa-launcher[data-state='working'] .woa-launcher__disc {
-  animation: woa-breathe 2.4s ease-in-out infinite;
+  animation: woa-launcher-breathe 4s ease-in-out infinite;
 }
-@keyframes woa-breathe { 50% { transform: scale(1.05); } }
+@keyframes woa-launcher-breathe { 50% { transform: scale(1.04); } }
 .woa-launcher[data-state='closed'] .woa-launcher__disc { opacity: 0.6; }
 
 .woa-launcher__ring { position: absolute; inset: -3px; pointer-events: none; }
-/* At rest the ring is the thin accent ring the new conversation's face wears. */
-.woa-launcher[data-state='idle'] .woa-launcher__ring {
-  border-radius: 50%;
-  padding: 1.5px;
-  background: linear-gradient(135deg, var(--woa-accent), var(--woa-accent-sky));
-  -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-}
+.woa-launcher[data-state='idle'] .woa-launcher__ring { display: none; }
 .woa-launcher__ring svg { width: 100%; height: 100%; display: block; }
 
 .woa-launcher__nub {
@@ -167,6 +227,13 @@ button:disabled { cursor: not-allowed; }
      disc unfolding rather than an unrelated box arriving. */
   transform-origin: bottom right;
   animation: woa-window-in var(--woa-motion-base) var(--woa-motion-easing);
+}
+.woa-window[data-welcome] {
+  background:
+    radial-gradient(120% 60% at 0% 0%, var(--woa-canvas-glow) 0%, transparent 60%),
+    radial-gradient(100% 50% at 100% 25%, var(--woa-canvas-glow-alt) 0%, transparent 55%),
+    var(--woa-canvas-bg);
+  border-radius: var(--woa-radius-welcome);
 }
 @keyframes woa-window-in {
   from { opacity: 0; transform: translateY(10px) scale(0.97); }
@@ -280,6 +347,10 @@ button:disabled { cursor: not-allowed; }
   background: var(--woa-bg);
 }
 .woa-window[data-dragging='move'] .woa-titlebar { cursor: grabbing; }
+/* A new conversation has no face or name in the bar, so its controls sit at the right edge
+   on their own -- where the brand's `margin-right: auto` would otherwise put them. */
+.woa-titlebar[data-welcome] { justify-content: flex-end; }
+.woa-titlebar[data-welcome] { background: transparent; height: 56px; padding-right: 24px; }
 
 .woa-brand { display: flex; align-items: center; margin-right: auto; }
 .woa-brand__face {
@@ -632,15 +703,12 @@ button:disabled { cursor: not-allowed; }
   border-radius: 50%;
   background: currentColor;
 }
-/* Waiting on the person: the same place a spinner would be, breathing rather than turning.
-   Reduced motion leaves it solid. */
+/* Waiting on the person stays solid, without a competing animation. */
 .woa-pulse {
   inline-size: 8px; block-size: 8px;
   border-radius: 50%;
   background: var(--woa-warning);
-  animation: woa-breathe 1.6s ease-in-out infinite;
 }
-@keyframes woa-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .woa-step__line {
   display: flex; align-items: center; gap: 8px;
   inline-size: 100%;
@@ -1152,117 +1220,245 @@ button.woa-step__line:focus-visible {
   user-select: none;
 }
 
-/* ─────────────────────────────────────────────── empty state */
-/* A new conversation: who is here, the question and one sentence of what it can be asked,
-   beside the assistant's picture; then a way in for each kind of request. The picture sits
-   behind the words at the top right and never takes a pointer. It measures the panel, not
-   the page, so a narrow window narrows the picture before it crowds the words. */
+/* ─────────────────────────────────────────────── new conversation */
+.woa-body {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+}
+.woa-window { container-type: inline-size; }
+/* One scroll surface at the start. Once there is a turn, the transcript takes over
+   scrolling and this same composer sits at its foot without losing the input node. */
 .woa-empty {
-  container-type: inline-size;
-  padding: 0 4px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--woa-line-strong) transparent;
+  padding: 0 24px 14px;
 }
-.woa-empty__hero { position: relative; min-height: 196px; }
-.woa-empty__art {
-  position: absolute; top: 0; right: -8px;
-  width: min(46cqw, 190px); height: auto;
-  pointer-events: none; user-select: none;
+.woa-empty > .woa-thread-shell { display: none; }
+/* The design's composition: the invitation and its ways in are centred in the room above
+   the writing surface, and the writing surface sits at the foot -- where it stays once the
+   conversation begins. `order` arranges them, so the composer keeps its place in the DOM
+   (and with it the input node, draft and caret); only where it is drawn changes. */
+.woa-empty::before, .woa-empty::after { content: ''; flex: 1 0 0; }
+.woa-empty::before { order: 0; }
+.woa-empty::after { order: 3; }
+.woa-empty > :not(.woa-thread-shell) { width: 100%; max-width: 520px; margin-inline: auto; }
+.woa-empty__hero { order: 1; }
+.woa-examples { order: 2; }
+.woa-empty .woa-composer { order: 4; }
+.woa-empty > .woa-composer__disclaimer { order: 5; }
+
+/* The assistant introduces itself: its face on a soft halo, one line beside it. */
+.woa-empty__hero { flex: none; padding: 0 2px 24px; }
+.woa-empty__hello {
+  display: flex; align-items: center; gap: 14px;
+  margin-bottom: 12px;
 }
-/* The picture as drawn, on its own pale disc: a round fade dissolves the square it comes on
-   into the panel, so only the figure and her disc are seen. */
-.woa-empty__art[data-for='light'] {
-  display: var(--woa-art-light);
-  -webkit-mask-image: radial-gradient(closest-side circle at 52% 50%, black 84%, transparent 100%);
-  mask-image: radial-gradient(closest-side circle at 52% 50%, black 84%, transparent 100%);
+.woa-empty__face {
+  position: relative; flex: none;
+  display: grid; place-items: center;
+  width: 48px; height: 48px;
 }
-/* On a dark panel a pale disc is a lamp. The figure alone stands on a glow of the accent
-   instead, and fades out towards her waist. */
-.woa-empty__art[data-for='dark'] {
-  display: var(--woa-art-dark);
-  -webkit-mask-image: linear-gradient(to bottom, black 62%, transparent 90%);
-  mask-image: linear-gradient(to bottom, black 62%, transparent 90%);
-}
-.woa-empty__hero::before {
+/* A blurred breath of the accent behind the face, four seconds to a cycle. */
+.woa-empty__face::before {
   content: '';
-  position: absolute; top: 0; right: -8px;
-  width: min(46cqw, 190px); aspect-ratio: 1;
-  background: radial-gradient(circle at 52% 50%, var(--woa-art-glow), transparent 64%);
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  background: var(--woa-face-halo);
+  filter: blur(var(--woa-effect-blur));
+  animation: woa-face-halo var(--woa-motion-ambient) ease-in-out infinite;
+}
+.woa-empty__face img {
+  position: relative;
+  display: block;
+  width: 48px; height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  /* In the mock the gradient frame has a second, solid inset between it and the portrait. */
+  border: 2px solid var(--woa-face-gap);
+}
+/* The ring: a gradient that a plain border cannot carry, so a masked ring wraps the face. */
+.woa-empty__face::after {
+  content: '';
+  position: absolute; inset: -2px;
+  border-radius: 50%;
+  padding: 2px;
+  background: linear-gradient(135deg, var(--woa-face-ring), var(--woa-face-ring-mid),
+    var(--woa-face-ring-end));
+  -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
+  mask-composite: exclude;
   pointer-events: none;
 }
-.woa-empty__copy { position: relative; padding-top: 60px; max-width: 60cqw; }
+@keyframes woa-face-halo {
+  0%, 100% { transform: scale(1); opacity: 0.75; }
+  50% { transform: scale(1.12); opacity: 0.35; }
+}
+/* The first line is spoken, so it is a bubble rather than a caption. */
 .woa-empty__intro {
   margin: 0;
-  color: var(--woa-accent);
-  font-size: var(--woa-font-size-title); font-weight: 600; line-height: var(--woa-line-height);
+  align-self: center;
+  padding: 6px 14px;
+  border-radius: var(--woa-radius-field) var(--woa-radius-field) var(--woa-radius-inline)
+                 var(--woa-radius-field);
+  background: var(--woa-welcome-bubble);
+  border: 1px solid var(--woa-welcome-bubble-border);
+  box-shadow: var(--woa-shadow-1);
+  color: var(--woa-ink-muted);
+  font-size: var(--woa-font-size-small); font-weight: 500;
+  line-height: var(--woa-line-height);
 }
 .woa-empty h3 {
-  margin: 4px 0 0;
-  font-size: var(--woa-font-size-hero); font-weight: 700; letter-spacing: -0.01em;
+  margin: 0;
+  font-family: var(--woa-font-stack-display);
+  font-size: var(--woa-font-size-hero); font-weight: 700;
+  letter-spacing: -0.025em;
   line-height: var(--woa-line-height-heading);
-  white-space: nowrap;
+  background: var(--woa-welcome-title);
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 .woa-empty__detail {
-  margin: 10px 0 0;
-  color: var(--woa-ink-muted);
-  font-size: var(--woa-font-size-small); line-height: var(--woa-line-height);
-  /* If it wraps, break at the sentence's commas, not inside a phrase: CJK text otherwise
-     breaks between any two characters. */
-  word-break: keep-all;
-}
-@container (max-width: 330px) {
-  .woa-empty h3 { font-size: var(--woa-font-size-display); }
+  margin: 6px 0 0;
+  color: var(--woa-welcome-detail);
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height-prose);
+  text-wrap: pretty;
 }
 
-/* The ways in: two to a row where they fit, one where they would not. Each is a picked
-   example, so it reads as one -- a coloured tile for the kind, its name, and the example in
-   quotes -- and it answers the pointer with its edge and shadow, not by moving. */
+/* The writing surface is the largest object here: a floating card, not a hairline box. */
+.woa-empty .woa-composer {
+  width: calc(100% + 8px);
+  max-width: 528px;
+  margin-inline: -4px;
+  padding: 0;
+  background: transparent;
+}
+.woa-empty .woa-field {
+  gap: 12px;
+  padding: 14px 14px 14px 16px;
+  border-radius: var(--woa-radius-composer);
+  background: var(--woa-welcome-input);
+  border: 1px solid var(--woa-field-edge);
+  box-shadow: var(--woa-welcome-input-shadow);
+  transition: box-shadow var(--woa-motion-base) var(--woa-motion-easing);
+}
+.woa-empty .woa-field[data-focus] {
+  border-color: var(--woa-accent);
+  box-shadow: var(--woa-welcome-input-focus-shadow);
+}
+.woa-empty .woa-field textarea { width: 100%; }
+.woa-empty .woa-send {
+  width: 36px; height: 36px;
+  border-radius: var(--woa-radius-field);
+}
+.woa-empty .woa-send:not([data-stop]) { color: var(--woa-welcome-send-ink); }
+/* The send disc is the one accent gradient in the panel; stopping is the plain disc, so the
+   two affordances are told apart at a glance as well as by their glyph. */
+.woa-empty .woa-send:not([data-stop]):not([data-off]) {
+  background: linear-gradient(135deg, var(--woa-welcome-send-start), var(--woa-welcome-send-end));
+  box-shadow: var(--woa-shadow-1);
+}
+.woa-empty .woa-send:not([data-stop]):not([data-off]):hover {
+  background: linear-gradient(135deg, var(--woa-welcome-send-hover-start), var(--woa-welcome-send-hover-end));
+}
+.woa-empty .woa-send[data-stop] { background: var(--woa-accent); color: var(--woa-accent-ink); }
+.woa-empty .woa-send[data-off] {
+  background: linear-gradient(135deg, var(--woa-welcome-send-start), var(--woa-welcome-send-end));
+  color: var(--woa-welcome-send-ink);
+  box-shadow: var(--woa-shadow-1);
+}
+
+/* The ways in: four equal cards, each a category and one concrete request. */
 .woa-examples {
-  list-style: none; margin: 8px 0 0; padding: 0;
+  flex: none;
+  list-style: none; margin: 0; padding: 0;
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
 }
-@container (max-width: 250px) {
-  .woa-examples { grid-template-columns: minmax(0, 1fr); }
-}
+.woa-examples li:only-child { grid-column: 1 / -1; }
 .woa-example {
+  position: relative;
   width: 100%; height: 100%;
-  display: grid; grid-template-columns: 30px minmax(0, 1fr) 14px;
-  grid-template-rows: auto 1fr;
-  column-gap: 8px; row-gap: 10px; align-items: center;
-  padding: 14px 12px;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+  min-height: 100px;
+  padding: 14px;
   text-align: left;
-  border-radius: var(--woa-radius-window);
-  background: var(--woa-bg);
-  box-shadow: inset 0 0 0 1px var(--woa-line), var(--woa-shadow-1);
-  transition: box-shadow var(--woa-motion-fast) var(--woa-motion-easing);
+  border-radius: var(--woa-radius-tile);
+  background: var(--woa-welcome-card);
+  border: 1px solid var(--woa-welcome-card-border);
+  box-shadow: var(--woa-welcome-card-shadow);
+  backdrop-filter: blur(16px);
+  transition: box-shadow var(--woa-motion-base) var(--woa-motion-easing),
+              transform var(--woa-motion-base) var(--woa-motion-easing);
 }
-.woa-example:hover { box-shadow: inset 0 0 0 1px var(--woa-line-strong), var(--woa-shadow-2); }
-.woa-example__tile {
-  width: 30px; height: 30px;
-  display: grid; place-items: center;
-  border-radius: var(--woa-radius-control);
-  color: var(--woa-tile-ink);
-  background: var(--woa-tile-more);
+.woa-example:hover {
+  background: var(--woa-welcome-card-hover);
+  border-color: var(--woa-welcome-card-hover-border);
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: var(--woa-welcome-card-hover-shadow);
 }
-.woa-example[data-kind='query'] .woa-example__tile { background: var(--woa-tile-query); }
-.woa-example[data-kind='find'] .woa-example__tile { background: var(--woa-tile-find); }
-.woa-example[data-kind='operate'] .woa-example__tile { background: var(--woa-tile-operate); }
-.woa-example__title {
-  min-width: 0;
-  color: var(--woa-ink);
-  font-size: var(--woa-font-size); font-weight: 600; line-height: var(--woa-line-height);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.woa-example__chevron { color: var(--woa-ink-faint); }
-.woa-example__text {
-  grid-column: 1 / -1; align-self: start;
+/* The kind: a tinted pill, the glyph and the name on the request's own colour. */
+.woa-example__badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  width: fit-content;
+  padding: 2px 10px;
+  border-radius: var(--woa-radius-pill);
+  background: var(--woa-surface-muted);
   color: var(--woa-ink-muted);
-  font-size: var(--woa-font-size-meta); line-height: var(--woa-line-height);
+}
+.woa-example__title {
+  font-size: var(--woa-font-size-micro); font-weight: 600;
+  line-height: var(--woa-line-height);
+}
+.woa-example__text {
+  color: var(--woa-ink);
+  font-size: var(--woa-font-size-small); font-weight: 600;
+  line-height: var(--woa-line-height-heading);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  transition: color var(--woa-motion-fast) var(--woa-motion-easing);
 }
 .woa-example__halt { font-feature-settings: 'halt'; }
-/* A narrow panel keeps two to a row by giving each a little less: a smaller tile and name. */
-@container (max-width: 330px) {
-  .woa-example { grid-template-columns: 26px minmax(0, 1fr) 12px; column-gap: 6px; padding: 12px 10px; }
-  .woa-example__tile { width: 26px; height: 26px; }
-  .woa-example__title { font-size: var(--woa-font-size-small); }
+
+/* Each card wears its own colour, and hover raises it into the request's words. */
+.woa-example[data-kind='query'] .woa-example__badge {
+  background: var(--woa-kind-query-soft); color: var(--woa-kind-query);
+}
+.woa-example[data-kind='find'] .woa-example__badge {
+  background: var(--woa-kind-find-soft); color: var(--woa-kind-find);
+}
+.woa-example[data-kind='operate'] .woa-example__badge {
+  background: var(--woa-kind-operate-soft); color: var(--woa-kind-operate);
+}
+.woa-example[data-kind='more'] .woa-example__badge {
+  background: var(--woa-warning-soft); color: var(--woa-warning);
+}
+.woa-example[data-kind='query']:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-kind-query);
+}
+.woa-example[data-kind='find']:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-kind-find);
+}
+.woa-example[data-kind='operate']:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-kind-operate);
+}
+.woa-example[data-kind='more']:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-warning);
+}
+.woa-empty > .woa-composer__disclaimer {
+  flex: none;
+  margin-top: 10px;
+  font-size: var(--woa-font-size-micro);
+}
+@container (max-width: 360px) {
+  .woa-empty { padding: 24px 16px 20px; }
+  .woa-empty__hero { padding-bottom: 20px; }
+  .woa-empty__hello { gap: 10px; }
+  .woa-empty__face, .woa-empty__face img { width: 40px; height: 40px; }
+  .woa-empty h3 { font-size: var(--woa-font-size-display); }
+  .woa-example { padding: 12px; min-height: 92px; }
 }
 
 /* A panel that vanished read as one that never loaded. It says which it is. */
@@ -1295,6 +1491,21 @@ button.woa-step__line:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* Forced colours drop the gradient ring and the halo; the face still needs its edge. */
+@media (forced-colors: active) {
+  .woa-launcher[data-state='idle']::before {
+    background: none; padding: 0; border: 2px solid CanvasText;
+    -webkit-mask: none; mask: none;
+  }
+  .woa-empty__face::before { display: none; }
+  .woa-empty__face::after {
+    background: none; padding: 0;
+    border: 2px solid CanvasText;
+  }
+  .woa-empty__face img { border-color: Canvas; }
+  .woa-empty h3 { background: none; -webkit-text-fill-color: CanvasText; }
 }
 
 .woa-history {

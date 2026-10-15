@@ -40,6 +40,8 @@ export interface PanelExample {
 }
 
 export interface PanelSnapshot {
+  /** Browser-only viewport point of a dispatched page action; never sent to the server. */
+  activityPoint?: {x: number; y: number; at: number} | null
   connection: ConnectionState
   entries: TimelineEntry[]
   pendingApproval: ApprovalRequest | null

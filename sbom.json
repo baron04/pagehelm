@@ -8650,6 +8650,41 @@
       "hashes": [
         {
           "alg": "npm-integrity",
+          "content": "sha512-9nQVjf8lrYQWSW0sZdb9bES4x8Ei1w9C0S62po2KvRbMjslmjm0WMeszyW771SEauDnu4YGWqurLZ/gCkCTosQ=="
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "ai-motion",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "package-lock"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "frontend"
+        },
+        {
+          "name": "woa:direct",
+          "value": "true"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:npm/ai-motion@0.4.8",
+      "type": "library",
+      "version": "0.4.8"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "npm-integrity",
           "content": "sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw=="
         }
       ],

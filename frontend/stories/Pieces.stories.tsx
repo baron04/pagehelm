@@ -1,8 +1,9 @@
 /** The parts, on their own, where a whole window would hide the detail under review. */
 import type {Meta, StoryObj} from '@storybook/react'
+import {useState} from 'react'
 import {ApprovalCard} from '../src/components/ApprovalCard'
 import {Composer} from '../src/components/Composer'
-import {EmptyState} from '../src/components/EmptyState'
+import {ExamplePrompts, WelcomeHeading} from '../src/components/EmptyState'
 import {InlineError} from '../src/components/InlineError'
 import {Launcher} from '../src/components/Launcher'
 import {APPROVAL, configuration, labels, limits} from './fixtures'
@@ -51,12 +52,23 @@ export const ConfirmationNarrow = {
       onDecide={() => undefined} onRefused={() => undefined} />, 320),
 }
 
-export const Default = {
-  render: () => frame(
-    <div style={{padding: '0 13px'}}>
-      <EmptyState labels={labels} examples={SAMPLE_EXAMPLES} onPick={() => undefined} />
-    </div>),
+function WelcomePreview(): React.JSX.Element {
+  const [draft, setDraft] = useState('')
+  const [picked, setPicked] = useState(0)
+  return frame(
+    <div className="woa-body woa-empty">
+      <WelcomeHeading labels={labels} />
+      <Composer labels={labels} limits={limits} welcome busy={false} canReplace={false}
+                ended={false} history={[]} stopping={false} disabled={false}
+                placeholder={labels.placeholder} draft={draft} onDraft={setDraft}
+                focusRequest={picked} onSubmit={() => undefined} onCancel={() => undefined} />
+      <ExamplePrompts labels={labels} examples={SAMPLE_EXAMPLES}
+                      onPick={text => { setDraft(text); setPicked(count => count + 1) }} />
+      <p className="woa-composer__disclaimer">{labels.aiDisclaimer}</p>
+    </div>, 420)
 }
+
+export const Default = {render: () => <WelcomePreview />}
 
 export const ComposerIdle = {
   render: () => frame(

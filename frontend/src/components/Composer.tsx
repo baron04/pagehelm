@@ -4,6 +4,7 @@ import type {Labels, PanelLimits} from '../contract/panel'
 import {iconProps} from './icon'
 
 export interface ComposerProps {
+  welcome?: boolean
   labels: Labels
   limits: PanelLimits
   busy: boolean
@@ -45,7 +46,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     // line of placeholder -- permanently, for anyone who asks for non-overlay scrollbars.
     node.style.overflowY = Number.isFinite(ceiling) && needed > ceiling ? 'auto' : 'hidden'
     // Disabling the field lowers its ceiling, so it is measured again when that changes.
-  }, [draft, disabled])
+  }, [draft, disabled, props.welcome])
 
   // Deliberately keyed on `disabled` alone: the panel remounts the composer every time it
   // opens, so "it mounted usable" is the moment to take focus, and "a lock lifted" is the
@@ -145,7 +146,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
       {atLimit && <p className="woa-composer__limit">
         {labels.composerAtLimit} · {limits.composer_max_chars}
       </p>}
-      <p className="woa-composer__disclaimer">{labels.aiDisclaimer}</p>
+      {!props.welcome && <p className="woa-composer__disclaimer">{labels.aiDisclaimer}</p>}
     </form>
   )
 }
