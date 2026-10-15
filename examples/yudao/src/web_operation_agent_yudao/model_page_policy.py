@@ -99,9 +99,8 @@ class NativeModelReadActions(NativeReadActions):
         self.goal_port, self.page_review, self._queries, self._drafts = goal_port, review, {}, {}
         self._query_turn = None
 
-    def _index(self, context, checkpoint):
-        self._actor(context, checkpoint)
-        return self.goal_port.outline_index(context=context)
+    def _index(self, context, bound):
+        return bound._invoke(self.goal_port.outline_index, context=context)
 
     def admit(self, intent, *, context, checkpoint):
         before, args = intent.observation, intent.arguments

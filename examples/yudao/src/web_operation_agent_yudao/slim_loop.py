@@ -677,12 +677,12 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 筛选要在页面自己的筛选控件上操作，再点“搜索”，然后从“页面生效的查询”确认参数已生效。
    - 改每页条数、翻页：用 fill_fields 的“每页条数”“页码”一步做完（分页在列表底部，看不到就先 scroll），它会报告列表读回的页码和条数。
    - 点了“搜索”筛选却没有生效（“共 N 条”没变，结果里还有不符合条件的行）时，不要停在这里。要看的是某条记录名下的关联记录（某客户的联系人、商机、回款这类）：进这条记录的详情页，切到对应的页签，那里显示的就是它名下的。
-   - 页面元素行尾的标记说明这个控件怎么用：〔下拉〕〔单选〕用 select(index, option) 选，option 写选项显示的文字（select 不行时再点开它、从新观察里点选项）；〔日期〕用 input 填 2026-10-20，带时间的填 2026-10-20 09:00:00；日期范围是〔日期·开始〕和〔日期·结束〕两个框，先填开始再填结束，两个都要填，不要去点日历。
+   - 页面元素行尾的标记说明这个控件怎么用：〔下拉〕〔单选〕用 select(index, option) 选，option 写选项显示的文字（不能直接点击下拉选项；未找到时点开下拉框或在它所属的列表内滚动，再对原下拉框 select，也可用 fill_fields 按字段名选择）；〔日期〕用 input 填 2026-10-20，带时间的填 2026-10-20 09:00:00；日期范围是〔日期·开始〕和〔日期·结束〕两个框，先填开始再填结束，两个都要填，不要去点日历。
    - 打开某条记录的详情：find_record 给出了这条记录的详情页时，直接 goto 那个地址；没有给出时，在列表里找到那一行再点它的名称或“详情”。这条记录没有详情页时，让它在列表里显示出来就算打开了；不要为了查看去点“编辑”，编辑表单只在用户要修改时才打开。
    - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。列候选时，每一条用来区分的信息（编号、手机、所属客户等）必须来自按这个名称筛选后的列表或接口结果，逐条对应；不要从没筛选的列表里凭位置去读。
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
-   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；详情页上没有“编辑”入口，说明当前账号对这条记录没有修改权限，用 cannot 如实说明，不要再回列表点那一行的“编辑”。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
+   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
    - 一次要填或选两个以上字段（表单、筛选条件、明细行）时，用 fill_fields 按字段名一次做完，不要一个个 input/select；筛选可以带 then_click="搜索"。它报告某个字段没做成时，再对那个字段单独用 input 或 select。
    - 填完后看返回的观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，把给用户的答复写在它的 answer 里。
@@ -804,9 +804,17 @@ def _page_lines(observation) -> tuple[list[str], list[str]]:
                     and element.name.strip() and not any(element.attrs.get(k) for k in (
                         "field_label", "title", "href", "aria-controls"))
                     and any(parent.role in {"button", "link"} and parent.tag in {"button", "a"}
-                        and parent.name.strip() == element.name.strip() for _, parent in parents)):
+                        and parent.name.strip() == element.name.strip() for _, _, parent in parents)):
+                # The runtime can hydrate a button's name without rewriting content.
+                # Move that current label to its actionable parent before dropping it.
+                parent_line, parent = next((line, parent) for _, line, parent in reversed(parents)
+                    if parent.role in {"button", "link"} and parent.tag in {"button", "a"}
+                    and parent.name.strip() == element.name.strip())
+                label = re.sub(r"\s+", " ", parent.name).strip()
+                if label not in lines[parent_line].split(">", 1)[-1]:
+                    lines[parent_line] += " " + label
                 drop.add(i)
-            parents.append((depth, element))
+            parents.append((depth, i, element))
     for position, (i, depth, _number_) in enumerate(marks):
         if i in drop:
             continue
@@ -1094,6 +1102,17 @@ class YudaoLoopProcedures:
         "moving" (it never looked the same twice), "blocked" (the page reports an error or
         a failed read), "waiting" (the waits ran out first) or "gone" (the turn ended)."""
         looks, last = 0, None
+        history = s.page.action_observations()
+        # Verification may already have waited for the same action. Reuse those
+        # actual looks only while its last snapshot is still the current page.
+        if history and history[-1].to_json() == s.obs.to_json():
+            for obs in history[:-1]:
+                arrived = not path or (urlsplit(obs.url).path == path and obs.page_route == path)
+                if arrived and obs.render_state == "ready":
+                    shown = _shown(obs)
+                    looks, last = (looks + 1 if shown != last else looks), shown
+                else:
+                    looks, last = 0, None
         for _ in range(waits + _STILL_LOOKS):
             obs = s.obs
             arrived = not path or (urlsplit(obs.url).path == path and obs.page_route == path)
@@ -1110,7 +1129,7 @@ class YudaoLoopProcedures:
             else:
                 # What it shows from here on is what came of the step: its looks start over.
                 looks, last = 0, None
-            if s.page.execute("wait_for", {"ms": _LOOK_MS if ready else _PENDING_MS}) is None:
+            if s.page.execute("wait_for", {"ms": _LOOK_MS if ready else _PENDING_MS}).state != "completed":
                 return "gone"
         return "waiting"
 
@@ -1123,23 +1142,27 @@ class YudaoLoopProcedures:
             return None
         return next((e for e in s.obs.elements if e.ref == f"e{number}"), None)
 
-    def _act(self, s, action: str, args: dict, *, navigating: bool = False) -> str:
+    def _act(self, s, action: str, args: dict, *, navigating: bool = False) -> LoopToolResult | None:
         if action == "select":
             element = next((e for e in s.obs.elements if e.ref == args.get("ref")), None)
             if element is not None and element.role == "radiogroup":
                 from .live_forms import observed_radio_choices
                 choices = [c for c in observed_radio_choices(element) if c.label == args.get("option_label")]
                 if len(choices) != 1:
-                    return "未执行：当前单选组没有唯一可用的选项，请根据最新观察核对。"
+                    return LoopToolResult("未执行：当前单选组没有唯一可用的选项，请根据最新观察核对。",
+                                          kind="page", state="refused", error_code="invalid_target")
                 args = {**args, "value": choices[0].value}
-        receipt = s.page.execute(action, args, navigating=navigating)
-        if receipt is None:
-            return "未执行：当前页面操作未获授权或本轮已结束。"
-        if not receipt.ok:
-            return f"没有成功：{receipt.error_code} {str(receipt.error_detail)[:160]}".strip()
-        if s.page.action_state() != "completed":
-            return "操作已发出，但应用未能确认结果，不会自动重发。"
-        return ""
+        outcome = s.page.execute(action, args, navigating=navigating)
+        if outcome.state == "completed":
+            return None
+        reasons = {"unreviewed": "应用尚未审核这个动作的效果；不要重复点击同一控件，也不要据此判断账号无权限。",
+                   "stale_binding": "页面已变化，请根据最新观察重新选择。",
+                   "permission_denied": "当前账号没有执行这项操作的权限。",
+                   "expired": "本次动作授权已过期。"}
+        feedback = ("未执行：" if outcome.dispatch == "not_dispatched" else
+                    "操作已发出但结果未确认，不会自动重发：") + reasons.get(outcome.error_code, "请根据错误码和最新观察决定下一步。")
+        return LoopToolResult(feedback, kind="page", state=outcome.state,
+                              dispatch=outcome.dispatch, error_code=outcome.error_code)
 
     def _select(self, s, element, value):
         """Inspect a transient form's owned live choices before issuing selection.
@@ -1153,7 +1176,8 @@ class YudaoLoopProcedures:
                 and attrs.get("selected_option") != value):
             owner = attrs.get("aria-controls", "")
             if not owner or not attrs.get("form_instance"):
-                return "尚未选择：下拉框缺少当前表单或选项归属，请重新观察。"
+                return LoopToolResult("尚未选择：下拉框缺少当前表单或选项归属，请重新观察。",
+                                      kind="page", state="refused", error_code="invalid_target")
             if attrs.get("aria-expanded") != "true":
                 failed = self._act(s, "click", {"ref": element.ref})
                 if failed:
@@ -1163,17 +1187,30 @@ class YudaoLoopProcedures:
                 and all(e.attrs.get(k) == attrs.get(k) for k in (
                     "form_scope", "form_instance", "field_label", "title", "aria-controls"))]
             if len(current) != 1 or current[0].attrs.get("aria-expanded") != "true":
-                return "尚未选择：展开后下拉框已变化，请根据最新观察重新选择。"
+                return LoopToolResult("尚未选择：展开后下拉框已变化，请根据最新观察重新选择。",
+                                      kind="page", state="refused", error_code="stale_binding")
             element = current[0]
             options = [e for e in s.obs.elements if e.role == "option"
                        and e.attrs.get("listbox_owner") == owner]
             matches = [e for e in options if re.sub(r"\s+", " ", e.name).strip() == value]
+            if not matches and options:
+                # Viewport absence is not absence from this owned list. The fixed
+                # Runtime select searches it with bounded scrolling, binds the same
+                # form/field/listbox throughout, and chooses only an exact label.
+                result = self._act(s, "select", {"ref": element.ref, "value": value, "option_label": value})
+                if result is not None:
+                    labels = [re.sub(r"\s+", " ", e.name).strip()[:200] for e in options
+                              if e.attrs.get("aria-disabled") != "true" and not form_control_unavailable(e.attrs)]
+                    return replace(result, feedback=result.feedback + "\n此前可见的选项如下；保留原文空格，不会自动替换名称。\n"
+                                   + fenced(redacted("\n".join(labels[:12]), self.knowledge.handoffs)))
+                return None
             if (len(matches) != 1 or matches[0].attrs.get("aria-disabled") == "true"
                     or form_control_unavailable(matches[0].attrs)):
                 labels = [re.sub(r"\s+", " ", e.name).strip()[:200] for e in options
                           if e.attrs.get("aria-disabled") != "true" and not form_control_unavailable(e.attrs)]
-                return ("尚未选择：当前可见选项没有唯一的精确标签。核对或滚动后按页面原文重新 select，保留空格；不会自动替换名称。\n"
-                        + fenced(redacted("\n".join(labels[:12]), self.knowledge.handoffs)))
+                return LoopToolResult("尚未选择：当前可见选项没有唯一的精确标签。核对或在此下拉框内滚动后，仍对该下拉框重新 select，保留空格；不要直接点击选项，也不会自动替换名称。\n"
+                        + fenced(redacted("\n".join(labels[:12]), self.knowledge.handoffs)),
+                        kind="page", state="refused", error_code="option_unavailable")
         return self._act(s, "select", {"ref": element.ref, "value": value, "option_label": value})
 
     @staticmethod
@@ -1216,16 +1253,16 @@ class YudaoLoopProcedures:
         if name == "fill_fields":
             return self._fill_fields(s, args["fields"], args.get("then_click", ""), turn)
         if name == "observe":
-            receipt = s.page.execute("observe", {})
+            outcome = s.page.execute("observe", {})
             return LoopToolResult("观察如下。", kind="page",
-                                  state="completed" if receipt is not None and receipt.ok else "unavailable")
+                                  state=outcome.state, dispatch=outcome.dispatch, error_code=outcome.error_code)
         if name == "goto":
             path = "/" + args["path"].lstrip("/")
             if not re.fullmatch(r"/[A-Za-z0-9_\-/]{1,200}", path):
                 return LoopToolResult("路径不合法。用 search_menu 查找。", kind="page", state="refused")
             failed = self._act(s, "goto", {"url": self.application.descriptor.origin + path}, navigating=True)
             if failed:
-                return LoopToolResult(failed, kind="page", state="unverified")
+                return failed
             settled = self._settled(s, path=path)
             there = urlsplit(s.obs.url).path
             if there != path:
@@ -1245,7 +1282,8 @@ class YudaoLoopProcedures:
             name, args = "select", {**args, "option": args["text"]}
         if name == "click":
             failed = self._act(s, "click", {"ref": element.ref})
-            self._settled(s)
+            if not failed:
+                self._settled(s)
             text = ("已点开下拉。要选其中一项，用 select(index, option) 按选项文字选："
                     "展开的列表只显示了一部分，在里面点容易点错。") if _control_kind(element) == "〔下拉〕" else "已点击。"
         elif name in ("input", "select"):
@@ -1259,7 +1297,8 @@ class YudaoLoopProcedures:
                       else self._select(s, element, value))
             if not failed:
                 turn["touched"].append((_control_name(element), value))
-            self._settled(s, waits=2)
+            if not failed:
+                self._settled(s, waits=2)
             text = "已填入。" if name == "input" else "已选中。"
         elif name == "scroll":
             command = {"direction": "down" if args["down"] else "up", "pages": 1}
@@ -1278,8 +1317,7 @@ class YudaoLoopProcedures:
             text = "已标出：" + turn["marked"]
         else:
             return LoopToolResult("当前应用没有提供这个工具。", state="unavailable")
-        return LoopToolResult(failed or text, kind="page", state="unverified" if failed else "completed",
-                              dispatch="acknowledged" if not failed else "not_dispatched")
+        return failed or LoopToolResult(text, kind="page", dispatch="acknowledged")
 
     def _paging(self, s, control: str, label: str, value: str) -> LoopToolResult:
         """The list's rows per page or its page, through the paging control the
@@ -1313,7 +1351,8 @@ class YudaoLoopProcedures:
                 wanted = f"{int(number)}条/页"
                 option = next((e for e in s.obs.elements if e.role == "option"
                                and re.sub(r"\s+", "", e.name) == wanted), None)
-                failed = (f"每页条数的选项里没有“{wanted}”" if option is None
+                failed = (LoopToolResult(f"每页条数的选项里没有“{wanted}”", kind="page",
+                                        state="refused", error_code="option_unavailable") if option is None
                           else self._act(s, "click", {"ref": option.ref}))
         else:
             found = control_of("pagination", page)
@@ -1321,7 +1360,7 @@ class YudaoLoopProcedures:
                 return LoopToolResult(f"{label}：页面上没有翻到第 {int(number)} 页的按钮（已经在这一页、页码超出，或先 scroll 到列表底部的分页）", kind="page", state="unverified")
             failed = self._act(s, "click", {"ref": found.ref})
         if failed:
-            return LoopToolResult(f"{label}：{failed}", kind="page", state="unverified")
+            return replace(failed, feedback=f"{label}：{failed.feedback}")
         self._settled(s)
         read = s.obs.page_read or {}
         got = read.get("page_size" if control == "page_size" else "page")
@@ -1331,13 +1370,15 @@ class YudaoLoopProcedures:
     def _fill_fields(self, s, fields, then_click: str, turn: dict) -> LoopToolResult:
         """Fill or choose several named fields one after another, each found afresh on the
         page as it then is, so that one model request does the work of several."""
-        said, incomplete = [], False
+        said, incomplete, failure = [], False, None
         for item in fields[:12]:
             label, value = str(item.get("label", "")).strip().rstrip(":：").strip(), str(item.get("value", ""))
             if label in _PAGING:
                 paging = self._paging(s, _PAGING[label], label, value)
                 said.append(paging.feedback)
                 incomplete = incomplete or paging.state != "completed"
+                if paging.state != "completed":
+                    failure = failure or paging
                 if s.terminal_reason:
                     return LoopToolResult("操作没有完成。", kind="page", state="unverified")
                 continue
@@ -1374,7 +1415,8 @@ class YudaoLoopProcedures:
                     lines, _hints = _page_lines(s.obs)
                     visible = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
                     if not current or any(e.ref[1:] not in visible for e in current):
-                        failed = "日期范围控件已变化，请根据最新观察重新填写"
+                        failed = LoopToolResult("日期范围控件已变化，请根据最新观察重新填写",
+                                                kind="page", state="refused", error_code="stale_binding")
                         break
                     element = current[at]
                 if kind in ("〔下拉〕", "〔单选〕") and text.strip():
@@ -1389,7 +1431,8 @@ class YudaoLoopProcedures:
                 return LoopToolResult("操作没有完成。", kind="page", state="unverified")
             if failed:
                 incomplete = True
-                said.append(f"{label}：{failed}")
+                failure = failure or failed
+                said.append(f"{label}：{failed.feedback}")
             else:
                 turn["touched"].append((label, value))
                 turn["trace"].append(f"fill_fields[{label}]({json.dumps(value, ensure_ascii=False)[:60]})")
@@ -1405,11 +1448,14 @@ class YudaoLoopProcedures:
                 said.append(f"没有找到“{then_click}”按钮，没有点")
             else:
                 failed = self._act(s, "click", {"ref": button.ref})
-                self._settled(s)
+                if not failed:
+                    self._settled(s)
                 incomplete = incomplete or bool(failed)
-                said.append(failed or f"已点“{then_click}”")
-        return LoopToolResult("；".join(said) + "。", kind="page",
-                              state="unverified" if incomplete else "completed")
+                failure = failure or failed
+                said.append(failed.feedback if failed else f"已点“{then_click}”")
+        text = "；".join(said) + "。"
+        return (replace(failure, feedback=text) if failure else
+                LoopToolResult(text, kind="page", state="unverified" if incomplete else "completed"))
 
     def _find_record(self, s, name: str, kind: str = "") -> str:
         """Where the application has a record of this name, through the goal port's own
@@ -1529,10 +1575,15 @@ class YudaoLoopProcedures:
 
     def execute(self, name, arguments, context):
         from .bound_data_reads import BoundDataReads
-        bound = BoundDataReads(self.goal_port.data, context.operation, context.page.checkpoint)
         turn = {"reads": [], "marked": "", "trace": [], "touched": []}
-        with self.knowledge.client.read_window(bound._check):
+        context.page.checkpoint()
+        if name in {"search_menu", "search_api", "find_record", "call_api"}:
+            bound = BoundDataReads(self.goal_port.data, context.operation, context.page.checkpoint)
+            with self.knowledge.client.read_window(bound._check):
+                result = self._tool(context, name, arguments, turn)
+        else:
             result = self._tool(context, name, arguments, turn)
+        context.page.checkpoint()
         return replace(result, entered=tuple(turn["touched"]), trace=tuple(turn["trace"]),
                        read_summary=turn["reads"][-1] if turn["reads"] else None, marked=turn["marked"])
 

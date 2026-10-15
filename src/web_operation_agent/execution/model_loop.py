@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from ..modeling.provider import ProviderError
 from ..schemas import ActionReceipt, PageObservation
-from .model_loop_contracts import LoopToolResult, VerificationResult
+from .model_loop_contracts import LoopToolResult, VerificationResult, PageActionOutcome
 from .action_admission import (ADMITTED_ACTIONS, ActionAdmission,
                                ActionIntent, ActionPermit, ActionAdmissionRefused, ActionResultPending)
 from ..business.draft_steps import DraftStepAdmission
@@ -77,18 +77,21 @@ WRITE_TOOLS = [{"type": "function", "function": {"name": name, "description": de
 
 class _ProcedurePage:
     # A capability object deliberately has no channel, browser or approval API.
-    __slots__ = ("__observe", "__execute", "__checkpoint", "__stopped", "__action_state")
+    __slots__ = ("__observe", "__execute", "__checkpoint", "__stopped", "__outcome")
 
-    def __init__(self, observe, execute, checkpoint, stopped, action_state):
+    def __init__(self, observe, execute, checkpoint, stopped):
         self.__observe, self.__execute = observe, execute
-        self.__checkpoint, self.__stopped, self.__action_state = checkpoint, stopped, action_state
+        self.__checkpoint, self.__stopped = checkpoint, stopped
+        self.__outcome = None
 
     def observation(self): return self.__observe()
     def execute(self, action, arguments, *, navigating=False):
-        return self.__execute(action, dict(arguments), navigating=navigating)
+        self.__outcome = self.__execute(action, dict(arguments), navigating=navigating)
+        return self.__outcome
     def checkpoint(self): return self.__checkpoint()
     def stopped(self): return self.__stopped()
-    def action_state(self): return self.__action_state()
+    def action_observations(self):
+        return self.__outcome.observations if self.__outcome is not None else ()
 
 
 class ModelDrivenTurnExecutor(GoalTurnExecutor):
@@ -120,10 +123,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         def execute(action, arguments, *, navigating=False):
             if not page_actions or action not in {"observe", "wait_for", "scroll", "highlight", "goto", "click", "fill", "select"}:
                 raise BusinessToolRequestError("this procedure cannot dispatch that page action")
-            return self._dispatch(s, action, arguments, navigating=navigating)
+            self._dispatch(s, action, arguments, navigating=navigating)
+            return self._page_action_outcome
         page = _ProcedurePage(lambda: PageObservation.from_json(s.obs.to_json()), execute,
-                              checkpoint, lambda: bool(s.terminal_reason),
-                              lambda: self._last_action_state)
+                              checkpoint, lambda: bool(s.terminal_reason))
         return PageProcedureContext(context, page, lambda facts: self._note(s, **facts),
                                     s.ledger.append, s.receipt.stage)
 
@@ -341,7 +344,15 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     def _dispatch(self, s, action, args, **kwargs):
         if kwargs.pop("admitted", False):
             raise ValueError("model procedures cannot grant their own action admission")
-        self._last_action_state = "refused"
+        def finish(receipt=None, *, state="refused", code="", observations=()):
+            dispatch = ("acknowledged" if receipt is not None else
+                        "uncertain" if state == "unverified" else "not_dispatched")
+            self._page_action_outcome = PageActionOutcome(state, dispatch, code,
+                json.dumps(receipt.to_json(), ensure_ascii=False) if receipt is not None else "",
+                tuple(json.dumps(obs.to_json(), ensure_ascii=False) for obs in observations))
+            return receipt
+        if s.terminal_reason:
+            return finish(code=s.terminal_reason)
         admitted = None
         if action in ADMITTED_ACTIONS:
             target = self._action_target(s.obs, args)
@@ -349,7 +360,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             draft_steps = self.profile.draft_steps
             if policy is None and draft_steps is None:
                 s.ledger.append("model_action_refused", tool=action, error_code="unreviewed", target=target)
-                return None
+                return finish(code="unreviewed")
             if getattr(self, "_admission_turn", None) != s.run_id:
                 self._admission_turn = s.run_id
                 self._admission = (ActionAdmission(policy, self.application.descriptor.application_id)
@@ -369,13 +380,13 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                                               url=str(args.get("url") or ""))
             if reason:
                 s.terminal_reason, s.detail = reason, detail
-                return None
+                return finish(code=reason)
             checkpoint()
             latest = self.channel.latest_observation_envelope
             if latest is not None and latest.observation.content_digest != before.content_digest:
                 s.obs = latest.observation
                 s.ledger.append("model_action_refused", tool=action, error_code="stale_binding", target=target)
-                return None
+                return finish(code="stale_binding")
             context = s.approvals.context(s.step + 1, action,
                                          hold_ms=s.approvals.operation_hold_ms)
             try:
@@ -396,18 +407,23 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     target=target)
             except ActionAdmissionRefused as exc:
                 s.ledger.append("model_action_refused", tool=action, error_code=exc.code, target=target)
-                return None
+                return finish(code=exc.code)
         command = dict(args)
         if admitted is not None and "ref" in command:
             command["epoch"] = admitted[1].observation.epoch
         with s.receipt.stage("action_dispatch"):
             receipt = super()._dispatch(s, action, command, admitted=admitted is not None and action == "click",
                                        **kwargs)
+        state, code, observations = "unavailable", s.terminal_reason or "action_unavailable", []
         if receipt is not None:
             if not hasattr(self, "_tool_receipts"):
                 self._tool_receipts = []
             self._tool_receipts.append(receipt)
-            self._last_action_state = "completed" if receipt.ok else "unverified"
+            state, code = ("completed", "") if receipt.ok else ("unverified", receipt.error_code or "runtime_error")
+            observations.append(s.obs)
+        elif s.terminal_reason == "transport_error":
+            state = "unverified"
+            self._uncertain_page_dispatch = True
         if admitted is not None and receipt is not None:
             admission, intent, permit, context, checkpoint = admitted
             settlement = None
@@ -429,13 +445,14 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         settlement = self._dispatch(s, "wait_for", {"ms": 150})
                         if settlement is None:
                             raise ActionAdmissionRefused("unverified")
+                        observations.append(s.obs)
             except ActionAdmissionRefused as exc:
-                self._last_action_state = "unverified"
+                state, code = "unverified", exc.code
                 s.ledger.append("model_action_unverified", tool=action, error_code=exc.code,
                                 command_id=receipt.command_id, repeated=False, target=target)
                 if isinstance(admission, DraftStepAdmission):
                     s.terminal_reason, s.detail = "agent_refused", "acknowledged draft step could not be verified"
-        return receipt
+        return finish(receipt, state=state, code=code, observations=observations)
 
     def _invoke_tool(self, s, name, args, turn):
         schema = next((item["function"]["parameters"] for item in self._tools(turn)
@@ -489,6 +506,26 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     @staticmethod
     def _target_name(element):
         return (element.name.splitlines() or [element.attrs.get("field_label") or element.role])[0][:80]
+
+    @staticmethod
+    def _refusal_target(observation, name, arguments):
+        """A no-progress key, never an authorization or a cached refusal.
+
+        Re-admit every attempt. Count repeated rejections only for one uniquely
+        identifiable live control; unrelated list refreshes are not its recovery.
+        """
+        if name not in {"click", "input", "select"}:
+            return None
+        ref = "e" + str(arguments.get("index"))
+        target = next((e for e in observation.elements if e.ref == ref), None)
+        if target is None or not target.name.strip():
+            return None
+        identity = lambda e: (e.role, e.tag, e.name, e.attrs)
+        if sum(identity(e) == identity(target) for e in observation.elements) != 1:
+            return None
+        return json.dumps([name, observation.url, observation.page_route, observation.record_route,
+            identity(target), {k: v for k, v in arguments.items() if k != "index"}],
+            sort_keys=True, ensure_ascii=False)
 
     def _forget_old_observations(self) -> None:
         seen = kept = 0
@@ -621,14 +658,16 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 if acts:
                     turn["done"].add(where)
                 self._tool_receipts = []
+                self._uncertain_page_dispatch = False
                 before = self._page_fingerprint(s.obs)
                 before_epoch = s.obs.epoch
+                refusal_target = self._refusal_target(s.obs, name, args)
                 try:
                     result = self._invoke_tool(s, name, args, turn)
                 except (PrincipalError, BusinessToolPermissionError, BusinessToolAuthenticationError):
                     s.terminal_reason = "permission_denied"
                     result = LoopToolResult("当前账号的身份或权限已失效。", state="refused",
-                                            terminal_reason="permission_denied")
+                                            error_code="permission_denied", terminal_reason="permission_denied")
                 except DataRefused as exc:
                     if exc.permission_denied:
                         result = LoopToolResult("当前账号没有读取这项数据的权限。", kind="read", state="refused",
@@ -649,8 +688,20 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     # partially completed procedure; application prose cannot reset it.
                     dispatched = any(r.action not in {"observe", "wait_for"}
                                      for r in self._tool_receipts)
-                    result = replace(result, dispatch="acknowledged" if dispatched else "not_dispatched")
+                    result = replace(result, dispatch="acknowledged" if dispatched else
+                                     "uncertain" if self._uncertain_page_dispatch else "not_dispatched")
+                if refusal_target is not None:
+                    rejections = turn.setdefault("rejections", {})
+                    if result.state == "refused" and result.error_code == "unreviewed" and result.dispatch == "not_dispatched":
+                        rejections[refusal_target] = rejections.get(refusal_target, 0) + 1
+                        if rejections[refusal_target] >= 3:
+                            s.terminal_reason, s.detail = "agent_refused", "the same uniquely bound control remains unreviewed"
+                            turn["final"] = "应用仍未审核这个控件的操作效果，重复尝试没有解决。本次没有完成，请手动处理剩余操作。"
+                    elif result.state == "completed":
+                        rejections.pop(refusal_target, None)
                 text = result.feedback
+                if result.error_code:
+                    text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
                 confirmed = result.state == "completed" and self._completion_proved(s, name, args)
                 if result.terminal_reason:
                     s.terminal_reason = s.terminal_reason or result.terminal_reason

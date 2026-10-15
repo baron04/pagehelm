@@ -63,6 +63,7 @@ class QueryTests(unittest.TestCase):
         document["handlers"].append({"kind":"navigation", "route":"/crm/customer/detail/{id}",
             "evidence":"reviewed-source.vue", "sha256":"b"*64, "controls":[]})
         self.policy.page_review = NativePageReview.load(document, "synthetic-v1")
+        data.outline_view(context=self.context)  # exclude the catalog's own first permission read
         from unittest.mock import patch
         with patch.object(data, "schema", side_effect=AssertionError("line tables not needed")), \
                 patch.object(self.client, "_request", side_effect=self.request) as requests:
@@ -71,6 +72,8 @@ class QueryTests(unittest.TestCase):
         detail = [c for c in requests.call_args_list if c.args[1]=="crm/customer/get"]
         self.assertEqual(2, len(detail))
         self.assertTrue(all(str(c.kwargs["params"]["id"])=="5" for c in detail))
+        assertions = [c for c in requests.call_args_list if c.args[1]=="system/auth/get-permission-info"]
+        self.assertEqual(2, len(assertions))  # fresh actor assertion before and after dispatch
 
     def transact(self, before, after, action, args):
         intent, permit = self.runtime.prepare(action, args, before, context=self.context, checkpoint=lambda: None)

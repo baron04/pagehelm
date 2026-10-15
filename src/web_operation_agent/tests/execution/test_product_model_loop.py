@@ -126,12 +126,16 @@ class DispatchDiagnosticsTests(unittest.TestCase):
             state.obs = after
             return receipt
         with patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch) as browser:
-            result = executor._dispatch(state, "click", {"ref":"e1"})
+            executor._dispatch(state, "click", {"ref":"e1"})
+            result = executor._page_action_outcome
         return result, state.receipt.report(NS(), "run"), events, browser.call_count
 
     def test_action_phases_measure_approval_admission_dispatch_and_verification(self):
         result, report, events, dispatched = self.dispatch()
-        self.assertIsNotNone(result)
+        self.assertEqual(("completed", "acknowledged", ""),
+                         (result.state, result.dispatch, result.error_code))
+        result.receipt.observation.title = "changed by consumer"
+        self.assertNotEqual("changed by consumer", result.receipt.observation.title)
         self.assertEqual(1, dispatched)
         for name, seconds in (("action_approval", .5), ("action_admission", .25),
                               ("action_dispatch", .75), ("action_verification", .125)):
@@ -145,7 +149,9 @@ class DispatchDiagnosticsTests(unittest.TestCase):
 
     def test_refusal_retains_structural_target_and_closes_timing_without_dispatch(self):
         result, report, events, dispatched = self.dispatch(refused=True)
-        self.assertIsNone(result)
+        self.assertEqual(("refused", "not_dispatched", "unreviewed"),
+                         (result.state, result.dispatch, result.error_code))
+        self.assertIsNone(result.receipt)
         self.assertEqual(0, dispatched)
         self.assertNotIn("action_dispatch", report["stages"])
         self.assertEqual(.25, report["stages"]["action_admission"]["occupied_seconds"])
@@ -155,6 +161,36 @@ class DispatchDiagnosticsTests(unittest.TestCase):
 
 
 class ModelLoopTests(unittest.TestCase):
+    def test_unrelated_searches_do_not_restart_unreviewed_control_recovery(self):
+        attempted = []
+        def tool(fixture, name, arguments):
+            attempted.append(name)
+            if name == "click":
+                return LoopToolResult("handler unreviewed", kind="page", state="refused", error_code="unreviewed")
+            fixture.state.obs.content = "new list read " + str(len(attempted))
+            return LoopToolResult("list refreshed", kind="read")
+        fixture = LoopFixture([reply(call("click", index=1)), reply(call("search_records")),
+            reply(call("click", index=1)), reply(call("search_records")), reply(call("click", index=1))], tool)
+        self.assertIn("重复尝试", fixture.run())
+        self.assertEqual("agent_refused", fixture.state.terminal_reason)
+        self.assertEqual(3, attempted.count("click"))
+        self.assertTrue(any("error_code=unreviewed" in m["content"] for m in fixture._messages
+                            if m["role"] == "tool"))
+
+    def test_re_admission_can_succeed_after_a_new_observation(self):
+        attempted = []
+        def tool(fixture, name, arguments):
+            attempted.append(name)
+            if name == "click" and attempted.count("click") == 1:
+                return LoopToolResult("handler unreviewed", kind="page", state="refused", error_code="unreviewed")
+            fixture.state.obs.content = "new read " + str(len(attempted))
+            return LoopToolResult("ok", kind="read")
+        fixture = LoopFixture([reply(call("click", index=1)), reply(call("search_records")),
+            reply(call("click", index=1)), reply(call("finish", status="done", answer="recovered"))], tool)
+        self.assertEqual("recovered", fixture.run())
+        self.assertEqual(2, attempted.count("click"))
+        self.assertFalse(fixture.turn["rejections"])
+
     def test_typed_read_denial_stops_without_correction_or_later_dispatch(self):
         def denied(*_):
             raise DataRefused("untrusted denial text", permission_denied=True)

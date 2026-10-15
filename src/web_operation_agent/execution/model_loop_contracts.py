@@ -11,14 +11,47 @@ from ..state.identity import OperationContext
 from ..business.draft_steps import ApplicationDraftStepPort
 
 
+@dataclass(frozen=True, slots=True)
+class PageActionOutcome:
+    """A captured dispatch result; later observations cannot overwrite its diagnosis."""
+
+    state: Literal["completed", "refused", "unavailable", "unverified"]
+    dispatch: Literal["not_dispatched", "acknowledged", "uncertain"]
+    error_code: str = ""
+    receipt_json: str = ""
+    observations_json: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if (self.state not in {"completed", "refused", "unavailable", "unverified"}
+                or self.dispatch not in {"not_dispatched", "acknowledged", "uncertain"}
+                or not isinstance(self.error_code, str) or len(self.error_code) > 100
+                or not isinstance(self.observations_json, tuple) or len(self.observations_json) > 4):
+            raise ValueError("invalid page action outcome")
+        receipt = self.receipt
+        if ((receipt is not None) != (self.dispatch == "acknowledged")
+                or self.state == "completed" and (receipt is None or not receipt.ok)
+                or self.state == "refused" and self.dispatch != "not_dispatched"):
+            raise ValueError("inconsistent page action outcome")
+        for observation in self.observations_json:
+            PageObservation.from_json(json.loads(observation))
+
+    @property
+    def receipt(self) -> ActionReceipt | None:
+        return ActionReceipt.from_json(json.loads(self.receipt_json)) if self.receipt_json else None
+
+    @property
+    def observations(self) -> tuple[PageObservation, ...]:
+        return tuple(PageObservation.from_json(json.loads(item)) for item in self.observations_json)
+
+
 class ProcedurePage(Protocol):
     """The only browser capability an application procedure receives."""
 
     def observation(self) -> PageObservation: ...
-    def execute(self, action: str, arguments: dict, *, navigating: bool = False) -> ActionReceipt | None: ...
+    def execute(self, action: str, arguments: dict, *, navigating: bool = False) -> PageActionOutcome: ...
     def checkpoint(self) -> None: ...
     def stopped(self) -> bool: ...
-    def action_state(self) -> str: ...
+    def action_observations(self) -> tuple[PageObservation, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)

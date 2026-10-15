@@ -39,7 +39,7 @@ class ContactsProcedure:
                 + "\nEND_UNTRUSTED_APPLICATION_DATA"
             return LoopToolResult(text, kind="read", read_summary=(self.name, text[:1500]))
         if self.name == "goto":
-            receipt = context.page.execute("goto", {"url": self.adapter.descriptor.origin + arguments["path"]},
+            outcome = context.page.execute("goto", {"url": self.adapter.descriptor.origin + arguments["path"]},
                                            navigating=True)
         elif self.name in {"input", "click"}:
             element = next((e for e in context.obs.elements if e.ref == "e" + str(arguments["index"])), None)
@@ -48,16 +48,16 @@ class ContactsProcedure:
             command = {"ref": element.ref}
             if self.name == "input":
                 command.update(value=arguments["text"], commit=True)
-            receipt = context.page.execute("fill" if self.name == "input" else "click", command)
+            outcome = context.page.execute("fill" if self.name == "input" else "click", command)
         elif self.name == "highlight":
-            receipt = context.page.execute("highlight", {"ref": "e" + str(arguments["index"]),
+            outcome = context.page.execute("highlight", {"ref": "e" + str(arguments["index"]),
                                                          "epoch": context.obs.epoch})
         else:
             return LoopToolResult("This application does not offer that capability.", state="unavailable")
-        if receipt is None:
-            return LoopToolResult("The page action was refused.", kind="page", state="refused")
-        return LoopToolResult("Page action completed." if receipt.ok else "Page action unverified.",
-                              kind="page", state=context.page.action_state(), dispatch="acknowledged")
+        return LoopToolResult("Page action completed." if outcome.state == "completed" else
+                              "Page action failed; check the error code and current observation.",
+                              kind="page", state=outcome.state, dispatch=outcome.dispatch,
+                              error_code=outcome.error_code)
 
 
 def contacts_profile(adapter, goal_port, *, drafts=False):

@@ -13,7 +13,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
-from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult, ModelLoopProfile, LoopProcedure
+from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult, ModelLoopProfile, LoopProcedure, PageActionOutcome
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.business.approvals import ApprovalWatch
 from web_operation_agent.business.runtime import BusinessToolResult, BusinessToolRuntime
@@ -76,6 +76,19 @@ def observation(epoch: int = 1, customer: str = "Acme", **kw) -> PageObservation
 
 
 class PageTextTests(unittest.TestCase):
+    def test_hydrated_button_names_survive_removing_the_only_text_child(self):
+        for name in ("新增", "展开", "password=hidden"):
+            obs = observation()
+            obs.elements = [element(1, "button", name, "button"), element(2, "span", name, "span")]
+            obs.content = f"[1]<button type=button>\n\t[2]<span>{name} />"
+            text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()))
+            self.assertNotIn("[2]", text)
+            self.assertIn("[1]<button type=button>", text)
+            if name.startswith("password"):
+                self.assertNotIn("hidden", text)
+            else:
+                self.assertIn("[1]<button type=button> " + name, text)
+
     def test_the_navigation_menu_and_the_runtime_preamble_are_left_out(self):
         lines, _hints = _page_lines(observation())
         text = "\n".join(lines)
@@ -610,7 +623,7 @@ class State:
         self.chat, self.ledger, self.budget = Script(*replies), Ledger(), Budget()
         self.measure, self.audit = lambda _: contextlib.nullcontext(), self.ledger.append
         self.progress = lambda facts: None
-        self.page = NS(execute=lambda *a, **k: None)
+        self.page = NS(action_observations=lambda: (), execute=lambda *a, **k: PageActionOutcome("unavailable", "not_dispatched", "turn_stopped"))
 
     @staticmethod
     def cancelled():
@@ -638,9 +651,17 @@ class DraftChoiceTests(unittest.TestCase):
             return ""
         self.procedures._act = act
 
-    def test_unknown_spelling_returns_owned_labels_without_dispatching_selection(self):
-        text = self.procedures._select(self.state, self.control, "PLC控制器P5")
-        self.assertEqual(["click"], [a for a, _ in self.sent])
+    def test_offscreen_label_uses_owned_runtime_search_and_returns_choices_on_explicit_failure(self):
+        act = self.procedures._act
+        def unavailable(s, action, args, **kw):
+            act(s, action, args, **kw)
+            if action == "select":
+                return LoopToolResult("没有唯一的精确标签", kind="page", state="unverified",
+                                      dispatch="acknowledged", error_code="option_unavailable")
+        self.procedures._act = unavailable
+        text = self.procedures._select(self.state, self.control, "PLC控制器P5").feedback
+        self.assertEqual(["click", "select"], [a for a, _ in self.sent])
+        self.assertEqual("PLC控制器P5", self.sent[-1][1]["option_label"])
         self.assertIn("没有唯一的精确标签", text)
         self.assertIn(BEGIN + "\nPLC 控制器 P5\n" + END, text)
 
@@ -663,14 +684,33 @@ class DraftChoiceTests(unittest.TestCase):
 
     def test_replaced_form_after_opening_never_receives_selection(self):
         self.changed[0] = replace(self.changed[0], attrs={**self.changed[0].attrs, "form_instance":"replaced"})
-        self.assertIn("已变化", self.procedures._select(self.state, self.control, "PLC 控制器 P5"))
+        self.assertIn("已变化", self.procedures._select(self.state, self.control, "PLC 控制器 P5").feedback)
         self.assertEqual(["click"], [a for a, _ in self.sent])
+
+
+class ActionFeedbackTests(unittest.TestCase):
+    def test_refusal_reaches_agent_without_a_settlement_or_false_permission_claim(self):
+        procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        procedures.knowledge = None
+        for code, dispatch, state in (("unreviewed", "not_dispatched", "refused"),
+                                      ("stale_binding", "not_dispatched", "refused"),
+                                      ("unverified", "uncertain", "unverified")):
+            with self.subTest(code=code):
+                sent = []
+                outcome = PageActionOutcome(state, dispatch, code)
+                context = NS(obs=observation(), page=NS(execute=lambda action, args, **kw:
+                             sent.append(action) or outcome))
+                result = procedures._tool(context, "click", {"index": 10}, {"marked": ""})
+                self.assertEqual(["click"], sent)
+                self.assertEqual((state, dispatch, code), (result.state, result.dispatch, result.error_code))
+                if code == "unreviewed":
+                    self.assertIn("尚未审核", result.feedback)
 
 
 class SettledTests(unittest.TestCase):
     """How long the page is given after a step, by what the looks at it show."""
 
-    def settle(self, first, *later, gone_after=None, **kw):
+    def settle(self, first, *later, gone_after=None, prior=(), **kw):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         epochs = iter(range(1, 99))
 
@@ -687,19 +727,28 @@ class SettledTests(unittest.TestCase):
                 "elements": [{"ref": "e2", "role": "button", "name": content, "epoch": epoch}]})
         coming, self.waited = [look(*item) for item in later], []
         state = NS(obs=look(*first))
+        history = (*[look(*item) for item in prior], state.obs) if prior else ()
 
         def dispatch(s, action, args, **_kw):
             self.waited.append((action, args["ms"]))
             if gone_after is not None and len(self.waited) > gone_after:
-                return None
+                return PageActionOutcome("unavailable", "not_dispatched", "turn_stopped")
             s.obs = coming.pop(0)
-            return NS(ok=True)
-        state.page = NS(execute=lambda action, args: dispatch(state, action, args))
+            return NS(state="completed")
+        state.page = NS(action_observations=lambda: history, execute=lambda action, args: dispatch(state, action, args))
         self.outcome = executor._settled(state, **kw)
         return state.obs.content
 
     def test_a_page_that_is_already_still_costs_one_short_look(self):
         self.assertEqual(self.settle(("a",), ("a",)), "a")
+        self.assertEqual((self.waited, self.outcome), ([("wait_for", 150)], "still"))
+
+    def test_verification_settlement_is_reused_without_another_wait(self):
+        self.assertEqual(self.settle(("a",), prior=(("a", "pending"), ("a",))), "a")
+        self.assertEqual((self.waited, self.outcome), ([], "still"))
+
+    def test_pending_verification_does_not_count_as_a_stable_look(self):
+        self.assertEqual(self.settle(("a",), ("a",), prior=(("a", "pending"),)), "a")
         self.assertEqual((self.waited, self.outcome), ([("wait_for", 150)], "still"))
 
     def test_a_page_that_changed_is_looked_at_until_two_looks_agree(self):
@@ -990,7 +1039,7 @@ class LoopTests(unittest.TestCase):
             with self.subTest(state=state_of_page, route=route):
                 state, turn = State(), {}                    # the browser is at /orders
                 state.obs = observation(render_state=state_of_page, page_route=route)
-                state.page = NS(execute=lambda *args, **kw: NS(ok=True))
+                state.page = NS(action_observations=lambda: (), execute=lambda *args, **kw: NS(state="completed"))
                 result = executor._tool(state, "goto", {"path": "/orders"}, turn)
                 said, changed = result.feedback, result.kind == "page"
                 self.assertIn(says, said)
@@ -1103,7 +1152,7 @@ class LoopTests(unittest.TestCase):
         said, changed = result.feedback, result.kind == "page"
         self.assertEqual(state.obs.epoch, 3)
         self.assertIn("内容没有变化", said)    # looked at again, and it showed what it had shown
-        executor._act = lambda s, action, args, **kw: "没有成功：stale"
+        executor._act = lambda s, action, args, **kw: LoopToolResult("没有成功：stale", kind="page", state="refused", error_code="stale_binding")
         executor._tool(state, "input", {"index": 9, "text": "Gamma"}, turn)
         self.assertEqual(len(turn["touched"]), 3)   # a step that failed put nothing there
 
