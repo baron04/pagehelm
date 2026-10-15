@@ -1,4 +1,4 @@
-import {afterAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createHash} from 'node:crypto'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
 import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage} from '../src/integrations/yudao/page-facts.js'
@@ -56,10 +56,11 @@ describe('native Yudao record and read completion facts', () => {
       + '&createTime%5B1%5D=2026-10-31%2023%3A59%3A59'
     try {
       call(query)
-      await new Promise(resolve => setTimeout(resolve, 0))
-      expect(facts.readPageQuery()).toEqual({path, parameters: {
-        createTimeStart: '2026-10-01 00:00:00', createTimeEnd: '2026-10-31 23:59:59'}})
-      expect(facts.readPageRead()?.query_fields).toHaveProperty('createTime[0]')
+      await vi.waitFor(() => {
+        expect(facts.readPageQuery()).toEqual({path, parameters: {
+          createTimeStart: '2026-10-01 00:00:00', createTimeEnd: '2026-10-31 23:59:59'}})
+        expect(facts.readPageRead()?.query_fields).toHaveProperty('createTime[0]')
+      })
       // A new request invalidates the old projection at send, including failures.
       const failure = new Request(); failure.status = 403
       // @ts-expect-error The fake receives browser arguments through the installed wrapper.
@@ -70,12 +71,11 @@ describe('native Yudao record and read completion facts', () => {
         query.replace('2023%3A59%3A59', '2000%3A00%3A00'),
         query.slice(0, query.indexOf('&createTime%5B1%5D=')), query + '&token=synthetic-private']) {
         call(invalid)
-        await new Promise(resolve => setTimeout(resolve, 0))
+        await vi.waitFor(() => expect(facts.readPageRead()).toBeDefined())
         expect(facts.readPageQuery()).toBeUndefined()
       }
       call('?pageNo=1&pageSize=10')
-      await new Promise(resolve => setTimeout(resolve, 0))
-      expect(facts.readPageQuery()).toEqual({path, parameters: {}})
+      await vi.waitFor(() => expect(facts.readPageQuery()).toEqual({path, parameters: {}}))
     } finally { facts.dispose() }
   })
   it('reports order filters only after the latest successful application read', async () => {

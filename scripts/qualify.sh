@@ -197,7 +197,10 @@ build_and_check_wheel() {
   # Without -u PYTHONPATH pip finds the checkout's own metadata on the path, reports the
   # requirement as already satisfied, and installs nothing -- so the import below would prove
   # only that the checkout is importable, which is the opposite of what this gate is for.
-  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps "${core_wheel}" \
+  # The adapter import reaches core's declared runtime dependencies. Install those in
+  # the isolated environment so this probe tests the packaged distributions rather
+  # than failing because the smoke venv itself is missing PyYAML/jsonschema.
+  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install "${core_wheel}" \
     | grep -v "^\[notice\]" || return 1
   env -u PYTHONPATH "${smoke_venv}/bin/python" -c \
     "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('web_operation_agent') else 1)" \

@@ -454,7 +454,7 @@ class BatchWorld(unittest.TestCase):
                 checkpoint({"product_started": True, "turn": turn})
             body = {"model": "qwen3.8-flash", "temperature": 0.0,
                     "max_tokens": 4096 if number in world.oversized_output_on else 2048,
-                    "thinking_budget": 1024, "parallel_tool_calls": False,
+                    **protocol.PROVIDER["request_parameters"]["model_options"],
                     "messages": [{"role": "user", "content": runner_input.messages[0]}]}
             request = urllib.request.Request(
                 world.gateway.base_url + "/chat/completions", data=json.dumps(body).encode(),

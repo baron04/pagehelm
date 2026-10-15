@@ -6,15 +6,15 @@ the one the fix asks the model to take. The visible answer is produced by the pr
 renderer and judged by the evaluator's own extractor with the evaluator's own required and
 forbidden facts.
 
-This file exists because the previous round checked the pieces -- a sentence against the
-extractor, a reimplemented capability search -- and declared four defects fixed that the next
-paid batch showed were not: the search always matched a form handoff, the refusal sentence
-lacked the order reference the evaluator requires, the count was refused over a read whose
-count was exact, and a question about confirmed orders was taken for a request to confirm
-one. None of those can hide from a run through the real session.
+This file covers the earlier P7.4b defects through the current package Skills and turn
+contract. Package descriptions do not supply lexical write triggers: a capability search
+that misses an installed write is inconclusive, and execution requires the loaded Skill
+plus explicit tool intent. The tests also retain the business-rule refusal, exact count,
+and confirmed-order read paths.
 
-What this cannot show is that the model will choose the scripted path. It shows that when it
-does, the product carries it to an answer the evaluator accepts.
+What this cannot show is that the model will choose the scripted path. It checks the
+current product result and evaluator verdict when that path is chosen. An inconclusive
+capability search intentionally gives a conservative answer instead of a false gap claim.
 """
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def _orders(rows):
 
 
 class CapabilityGapThroughTheRealSession(unittest.TestCase):
-    """d25 and d21: a change no capability performs ends on the capability search."""
+    """A missing lexical match cannot assert a capability gap in a write-enabled host."""
 
     def _declines(self, *, prompt: str, writer: bool):
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,18 +132,26 @@ class CapabilityGapThroughTheRealSession(unittest.TestCase):
                        script=[("check_capability", {}), GAP_FINISH]).run()
             self.assertIn("check_capability", run.chat.offered[0],
                           "the check must be offered before any read")
-            [check] = run.events("capability_check")
-            self.assertEqual(check["matches"], [])
-            [gap] = run.events("capability_gap")
-            self.assertEqual((gap["mutation_proposals"], gap["dispatches"]), (0, 0))
+            if writer:
+                self.assertEqual(run.events("capability_check"), [])
+                self.assertEqual(len(run.events("capability_check_inconclusive")), 1)
+                self.assertEqual(run.events("capability_gap"), [])
+            else:
+                [check] = run.events("capability_check")
+                self.assertEqual(check["matches"], [])
+                [gap] = run.events("capability_gap")
+                self.assertEqual((gap["mutation_proposals"], gap["dispatches"]), (0, 0))
+            self.assertEqual(run.events("business_mutation_proposed"), [])
+            self.assertEqual(run.events("business_mutation_execution_started"), [])
             self.assertEqual(run.result.terminal_reason, "agent_refused")
             self.assertEqual(run.browser.actions, [], "a declined change touches no page")
             return run.answer
 
     def test_d25_a_writer_asking_to_delete_a_customer(self):
         answer = self._declines(prompt="删除客户 Corvane Studio PR6。", writer=True)
-        self.assertEqual(_judge(answer, [ex.Marker("unsupported_refusal")]).status, "PASS",
-                         answer)
+        self.assertIn("不足以可靠回答", answer)
+        self.assertNotEqual(_judge(answer, [ex.Marker("unsupported_refusal")]).status, "PASS",
+                            "an inconclusive search must not claim the operation is absent")
 
     def test_d21_a_reader_asking_to_create_a_customer(self):
         answer = self._declines(prompt="创建客户 Ivydell Works PR6，邮箱 ivy@e.test。",
@@ -153,17 +161,21 @@ class CapabilityGapThroughTheRealSession(unittest.TestCase):
                     _judge(answer, [ex.Marker("unsupported_refusal")]).status}
         self.assertIn("PASS", verdicts, answer)
 
-    def test_a_writer_asking_to_create_is_sent_to_the_capability_it_has(self):
+    def test_a_writer_can_propose_the_installed_create_only_with_skill_and_execute_intent(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = _Run(Path(tmp), prompt="创建客户 Ivydell Works PR6，邮箱 ivy@e.test。",
                        writer=True, tables={"res.partner": []},
-                       script=[("check_capability", {}), GAP_FINISH,
-                               ("finish", {"outcome": "unable"})]).run()
-            [check] = run.events("capability_check")
-            self.assertEqual(check["matches"], ["create_customer"])
-            refused = run.events("answer_contract_refused")
-            self.assertTrue(refused and "can perform it" in refused[0]["detail"], refused)
-            self.assertEqual(run.events("capability_gap"), [])
+                       script=[("load_skill", {"skill_id": "odoo.customer-maintenance"}),
+                               ("create_customer", {"name": "Ivydell Works PR6",
+                                                    "email": "ivy@e.test", "intent": "execute",
+                                                    "supporting_skill": "odoo.customer-maintenance"})]).run()
+            self.assertNotIn("create_customer", run.chat.offered[0])
+            self.assertIn("create_customer", run.chat.offered[1])
+            self.assertEqual(len(run.events("business_mutation_proposed")), 1)
+            self.assertEqual(len(run.events("business_mutation_denied")), 1)
+            self.assertEqual(run.events("business_mutation_execution_started"), [])
+            self.assertEqual(run.result.terminal_reason, "approval_denied")
+            self.assertEqual(run.browser.actions, [])
 
 
 class BusinessRefusalThroughTheRealSession(unittest.TestCase):
@@ -174,8 +186,10 @@ class BusinessRefusalThroughTheRealSession(unittest.TestCase):
             run = _Run(Path(tmp), prompt="为销售订单 S22400 创建客户发票。", writer=True,
                        tables={"sale.order": _orders(
                            [(14, "S22400", 19, 120.0, "USD", "invoiced")])},
-                       script=[("load_skill", {"skill_id": "odoo.sales.sale-orders-invoice"}),
-                               ("invoice_sale_order", {"reference": "S22400"})]).run()
+                       script=[("load_skill", {"skill_id": "odoo.order-billing"}),
+                               ("invoice_sale_order", {"reference": "S22400",
+                                                       "intent": "execute",
+                                                       "supporting_skill": "odoo.order-billing"})]).run()
             verdict = _judge(run.answer, [ex.Marker("nothing_to_invoice_refusal"),
                                           ex.Reference("S22400")])
             self.assertEqual(verdict.status, "PASS", (run.answer, verdict))
@@ -193,7 +207,7 @@ class CountThroughTheRealSession(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = _Run(Path(tmp), prompt="当前一共有多少个客户？", writer=True,
                        tables={"res.partner": _customers(customers)},
-                       script=[("load_skill", {"skill_id": "odoo.sales.customers-query"}),
+                       script=[("load_skill", {"skill_id": "odoo.customer-maintenance"}),
                                ("query_customers", {"answer_goals": [
                                    {"target_read_tool": "query_customers",
                                     "measures": ["count"]}]}),
@@ -225,19 +239,22 @@ class ConfirmedOrdersAreNotARequestToConfirm(unittest.TestCase):
                         "res.partner": _customers([("Corvane Supply PR6", "cs@e.test")])},
                     script=script)
 
-    def test_the_state_is_not_read_as_a_request_but_the_imperative_still_is(self):
+    def test_package_skills_do_not_infer_write_intent_from_order_wording(self):
         with tempfile.TemporaryDirectory() as tmp:
             read = self._run(Path(tmp), "客户 Corvane Supply PR6 的已确认销售订单合计金额是多少？", [])
             self.assertFalse(read.session._explicit_mutation_intent)
         with tempfile.TemporaryDirectory() as tmp:
             write = self._run(Path(tmp), "确认订单 S20002。", [])
-            self.assertTrue(write.session._explicit_mutation_intent)
+            self.assertFalse(write.session._explicit_mutation_intent)
+            self.assertIn("odoo.sales-processing", write.session._task_business_skill_ids)
+            # With package Skills, the write is offered only after loading its Skill;
+            # the tool call must then declare execute intent and still needs approval.
 
     def test_d10_the_breakdown_by_currency(self):
         usd, eur = Decimal("150.50"), Decimal("230.25")
         with tempfile.TemporaryDirectory() as tmp:
             run = self._run(Path(tmp), "客户 Corvane Supply PR6 的已确认销售订单合计金额是多少？", [
-                ("load_skill", {"skill_id": "odoo.sales.sale-orders-query"}),
+                ("load_skill", {"skill_id": "odoo.sales-processing"}),
                 ("query_sale_orders", {"customer_id": 19, "answer_goals": [
                     {"target_read_tool": "query_sale_orders", "measures": ["sum"]}]}),
                 ("compute", {"operation": "filter", "dataset_ref": "call2-query#1",
@@ -306,7 +323,7 @@ class CountAnswerRepairThroughTheRealSession(unittest.TestCase):
         rows[10]["date_order"], rows[11]["date_order"] = ("2026-02-28 09:00:00",
                                                           "2026-04-01 09:00:00")
         chat = _RepairingChat(
-            [("load_skill", {"skill_id": "odoo.sales.sale-orders-query"}),
+            [("load_skill", {"skill_id": "odoo.sales-processing"}),
              ("query_sale_orders", {"date_from": "2026-03-01", "date_until": "2026-04-01",
                                     "limit": 50, "answer_goals": [
                                         {"target_read_tool": "query_sale_orders",
@@ -364,11 +381,11 @@ class WithdrawnRequestThroughTheRealSession(unittest.TestCase):
     def test_it_is_refused_once_the_turn_has_acted(self):
         with tempfile.TemporaryDirectory() as tmp:
             run = self._reply(Path(tmp), [
-                ("load_skill", {"skill_id": "odoo.sales.customers-query"}),
+                ("load_skill", {"skill_id": "odoo.customer-maintenance"}),
                 ("query_customers", {"name_contains": "Juniper Printing PR6"}),
                 ("goto", {"url": "/odoo/customers"}),
                 ("withdraw_request", {})])
-            self.assertEqual(run.browser.actions, ["goto"])
+            self.assertEqual(run.browser.actions, ["observe", "goto"])
             self.assertEqual(len(run.events("request_withdrawal_refused")), 1)
             self.assertEqual(run.events("request_withdrawn"), [])
 
