@@ -22,7 +22,7 @@ class ContactsModelGoalPort:
         return getattr(self._port, name)
 
     def capabilities(self):
-        return frozenset({"handoffs"} | ({"fill", "lines"} if self.drafts else set())
+        return frozenset({"sections", "handoffs"} | ({"fill", "lines"} if self.drafts else set())
                          | ({"facets"} if self.filters else set()))
 
 
@@ -115,6 +115,9 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
         (tool("goto", "Open a reviewed page route.", {"path": {"type": "string", "maxLength": 200},
               "open": {"type": "string", "maxLength": 200},
               "answer": {"type": "string", "maxLength": 2000}}, ("path",)), "page", frozenset()),
+        (tool("click", "Click a reviewed section or local line control. Give answer only for a final section selection.",
+              {"index": {"type": "integer", "minimum": 0}, "answer": {"type": "string", "maxLength": 2000}},
+              ("index",)), "page", frozenset()),
         (tool("highlight", "Mark a visible control without clicking it.",
               {"index": {"type": "integer", "minimum": 0}, "answer": {"type": "string", "maxLength": 2000}},
               ("index",)), "page", frozenset({"handoffs"})))
@@ -128,9 +131,7 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
                   ("fields",)), "page", frozenset()),
             (tool("input", "Enter one reviewed local field and commit it.",
                   {"index": {"type": "integer", "minimum": 0}, "text": {"type": "string", "maxLength": 4000}},
-                  ("index", "text")), "page", frozenset({"fill"})),
-            (tool("click", "Add one local line; never save.",
-                  {"index": {"type": "integer", "minimum": 0}}, ("index",)), "page", frozenset({"lines"})))
+                  ("index", "text")), "page", frozenset({"fill"})))
     for schema, _, _ in schemas:
         if schema["function"]["name"] == "fill_fields":
             properties = schema["function"]["parameters"]["properties"]
@@ -146,9 +147,14 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
             frozenset({"lines"}) if arguments.get("add_lines") else frozenset()) | (
             frozenset({"handoffs"}) if arguments.get("then_highlight") else frozenset())
 
+    def click_requirements(arguments, observation):
+        target = next((e for e in observation.elements if e.ref == "e" + str(arguments["index"])), None)
+        return frozenset({"sections" if target is not None and target.role == "tab" else "lines"})
+
     procedures = tuple(LoopProcedure(json.dumps(schema),
         ContactsProcedure(adapter, goal_port, schema["function"]["name"]), kind, "contacts:read", required,
-        requirements if schema["function"]["name"] == "fill_fields" else None)
+        requirements if schema["function"]["name"] == "fill_fields" else
+        click_requirements if schema["function"]["name"] == "click" else None)
         for schema, kind, required in schemas)
 
     def prepare(request, context):

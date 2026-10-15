@@ -560,7 +560,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         found = turn.pop("prepared_knowledge", "")
         return replace(result, feedback=found + "\n" + result.feedback) if found else result
 
-    def _completion_proved(self, s, name, args, result=None):
+    def _completion_proved(self, s, name, args, result=None, *, target=None):
         # Only receipts produced by this executor's dispatch may justify ending on
         # an unread result. Adapter feedback and model prose never provide proof.
         receipts = getattr(self, "_tool_receipts", ())
@@ -575,7 +575,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             return (receipt.action == "click" and receipt.write_guard_held
                     and receipt.command_id in getattr(self, "_verified_action_commands", ())
                     and admission is not None and admission.query_verified(s.obs, command_id=receipt.command_id))
-        action = {"goto": "goto", "highlight": "highlight"}.get(name)
+        action = {"goto": "goto", "highlight": "highlight", "click": "click"}.get(name)
         receipt = next((r for r in receipts if r.action == action), None)
         if receipt is None or not receipt.ok or receipt.error_code or receipt.observation is None:
             return False
@@ -591,6 +591,21 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         if name == "highlight":
             return (receipt.args_echo.get("ref") == "e" + str(args["index"])
                     and receipt.observation.epoch <= s.obs.epoch)
+        if name == "click" and target is not None and target.role == "tab":
+            # A selected section can end on its actual, application-verified click.
+            # Bind the original numbered target to a stable live tab identity;
+            # a generic button, a same-name replacement or adapter prose cannot do so.
+            identity = {key: target.attrs[key] for key in ("id", "aria-controls") if target.attrs.get(key)}
+            selected = [e for e in s.obs.elements if e.role == "tab" and e.name == target.name
+                        and all(e.attrs.get(k) == v for k, v in identity.items())]
+            return (bool(identity) and len(selected) == 1
+                    and selected[0].attrs.get("aria-selected") == "true"
+                    and receipt.args_echo.get("ref") == target.ref
+                    and receipt.args_echo.get("epoch") == target.epoch
+                    and receipt.command_id in getattr(self, "_verified_action_commands", ())
+                    and receipt.write_guard_held and s.obs.render_state == "ready"
+                    and receipt.url_before == receipt.url_after == s.obs.url
+                    and receipt.observation.page_route == s.obs.page_route)
         return False
 
     @staticmethod
@@ -813,7 +828,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 text = result.feedback
                 if result.error_code:
                     text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
-                confirmed = result.state == "completed" and self._completion_proved(s, name, args, result)
+                confirmed = result.state == "completed" and self._completion_proved(s, name, args, result, target=target)
                 if result.terminal_reason:
                     s.terminal_reason = s.terminal_reason or result.terminal_reason
                 receipts = tuple(self._tool_receipts)
@@ -853,7 +868,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
                 changed_page = changed_page or (changed and name != "observe")
                 unwritten = unwritten or (result.kind == "write" and result.state != "completed")
-                answer = str(args.get("answer") or "").strip() if (name in ("goto", "highlight")
+                answer = str(args.get("answer") or "").strip() if (name in ("goto", "highlight", "click")
                             or result.completion_command) else ""
                 if answer:
                     # The turn ends on it only if nothing written earlier in the reply is

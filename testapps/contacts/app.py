@@ -334,8 +334,8 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
           <section class="record" data-page-route="/contacts/workflows/${{desk}}"
             data-workflow-desk="${{desk}}" data-active-tab="overview">
           <div class="eyebrow">Read-only workspace</div><h1>${{desk === 'partner' ? 'Partner' : 'Supplier'}} desk</h1>
-          <nav role="tablist"><button type="button" role="tab" aria-selected="true" data-workflow-tab="overview">Overview</button>
-          <button type="button" role="tab" aria-selected="false" data-workflow-tab="terms">Terms</button></nav>
+          <nav role="tablist"><button id="workflow-overview" type="button" role="tab" aria-selected="true" data-workflow-tab="overview">Overview</button>
+          <button id="workflow-terms" type="button" role="tab" aria-selected="false" data-workflow-tab="terms">Terms</button></nav>
           <p data-workflow-content>Overview</p></section>`;
         for (const tab of app.querySelectorAll('[data-workflow-tab]'))
           tab.addEventListener('click', () => {{

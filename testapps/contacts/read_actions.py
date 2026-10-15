@@ -51,6 +51,14 @@ class ContactsReadActions:
             raise ActionAdmissionRefused("invalid_target")
         if self.filters and before.page_route == "/contacts/filter" and intent.action != "goto":
             return self._query(intent)
+        if (intent.action == "click" and before.page_route in {
+                "/contacts/workflows/partner", "/contacts/workflows/supplier"}):
+            target = next(e for e in before.elements if e.ref == intent.arguments["ref"])
+            if target.role == "tab" and target.tag == "button" and target.attrs.get("id") in {
+                    "workflow-overview", "workflow-terms"}:
+                return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY,
+                                    "contacts-workflow-tabs-v1", target.attrs["id"])
+            raise ActionAdmissionRefused("unreviewed")
         if intent.action == "goto":
             destination = self._path(urljoin(before.url, intent.arguments["url"]))
         else:
@@ -61,15 +69,22 @@ class ContactsReadActions:
                     or not element.attrs.get("href")):
                 raise ActionAdmissionRefused("unreviewed")
             destination = self._path(urljoin(before.url, element.attrs["href"]))
-        # These are page routes, not a per-button name list. The adversarial view
-        # and workflows with unqualified handlers deliberately have no grant.
-        if destination not in {"/contacts", "/contacts/help", "/contacts/new"} | ({"/contacts/filter"} if self.filters else set()):
+        # The application owns these navigation and synchronous tab handlers.
+        # The adversarial view and its effectful handlers have no grant.
+        if destination not in {"/contacts", "/contacts/help", "/contacts/new",
+                "/contacts/workflows/partner", "/contacts/workflows/supplier"} | ({"/contacts/filter"} if self.filters else set()):
             raise ActionAdmissionRefused("unreviewed")
         return ActionPermit(intent.binding_digest, ActionEffect.NAVIGATION, self.review, destination)
 
     def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
         self._actor(context, checkpoint)
         after = observation
+        if permit.review == "contacts-workflow-tabs-v1":
+            target = next(e for e in intent.observation.elements if e.ref == intent.arguments["ref"])
+            selected = [e for e in after.elements if e.role == "tab" and e.name == target.name
+                        and e.attrs.get("id") == permit.postcondition]
+            return (after.url == intent.observation.url and after.page_route == intent.observation.page_route
+                    and len(selected) == 1 and selected[0].attrs.get("aria-selected") == "true")
         if intent.binding_digest in self._queries:
             value, instance, revision = self._queries.pop(intent.binding_digest)
             fields = [e for e in after.elements if e.attrs.get("query_field") == "name_contains"

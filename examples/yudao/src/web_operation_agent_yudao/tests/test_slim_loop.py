@@ -1442,6 +1442,23 @@ class PagingTests(unittest.TestCase):
         lines, _hints = _page_lines(observation)
         self.assertEqual(lines, ["[3]<input /> 〔每页条数〕", "[4]<li>2 /> 〔翻到第2页〕"])
 
+    def test_combined_paging_keeps_all_requested_values_and_the_actual_last_command(self):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        state = NS(obs=NS(page_read={"page": 1, "page_size": 10}), terminal_reason="")
+        def paging(s, control, label, value):
+            s.obs.page_read["page_size" if control == "page_size" else "page"] = int(value)
+            if control == "page_size":
+                s.obs.page_read["page"] = 1
+            return LoopToolResult("Read verified", kind="page", completion_command=control)
+        executor._paging = paging
+        size, number = {"label": "每页条数", "value": "20"}, {"label": "页码", "value": "2"}
+        result = executor._fill_fields(state, [size, number], "", {})
+        self.assertEqual(("completed", "page"), (result.state, result.completion_command))
+        result = executor._fill_fields(state, [size, {**number, "label": "页码："}], "", {})
+        self.assertEqual(("completed", "page"), (result.state, result.completion_command))
+        result = executor._fill_fields(state, [number, size], "", {})
+        self.assertEqual(("unverified", ""), (result.state, result.completion_command))
+
 
 class FindRecordTests(unittest.TestCase):
     class Port:
@@ -1602,8 +1619,8 @@ class FindRecordTests(unittest.TestCase):
         port = self.Port(hits=(("crm/customer", "晨岚机电"), ("erp/customer", "晨岚机电")))
         told = self.find(port, "晨岚机电").splitlines()
         self.assertEqual(told, ["找到的记录（模块；页面：记录名称）：", BEGIN,
-                                "CRM 客户（crm/customer；页面：CRM 系统 / 客户管理）：晨岚机电",
-                                "ERP 客户（erp/customer；页面：无）：晨岚机电", END])
+                                "CRM 客户（crm/customer；页面：CRM 系统 / 客户管理）：晨岚机电（编号 1）",
+                                "ERP 客户（erp/customer；页面：无）：晨岚机电（编号 2）", END])
         self.assertEqual(port.asked, ["晨岚机电"])
 
     def test_it_gives_the_page_s_path_and_the_list_to_read_when_the_application_has_them(self):
@@ -1620,8 +1637,20 @@ class FindRecordTests(unittest.TestCase):
 
     def test_nothing_found_is_said_without_claiming_absence(self):
         told = self.find(self.Port(), "松原设备")
-        self.assertIn("没有在任何模块里找到", told)
-        self.assertIn("可能不存在", told)
+        self.assertIn("索引已涵盖的模块里", told)
+        self.assertIn("这不是全部应用模块的不存在证明", told)
+        self.assertIn("不要缩短名称反复做全局查找", told)
+        self.assertIn("接口候选，不是记录事实", told)
+
+    def test_unique_record_exposes_its_read_identifier_without_repeating_the_list(self):
+        told = self.find(self.Port(hits=(("erp/supplier", (("82", "合成供应商", ""),)),)), "合成供应商", "供应商")
+        self.assertIn("合成供应商（编号 82）", told)
+
+    def test_global_miss_offers_published_metadata_for_modules_outside_the_index(self):
+        executor = YudaoLoopProcedures(ActorKnowledge(Client(), lambda: DOCS), self.Port(), "https://synthetic.test")
+        told = executor._find_record(self.Turn, "未命中订单")
+        self.assertIn("/admin-api/orders/page", told)
+        self.assertNotIn("没有在任何模块里找到", told)
 
     def test_a_refused_read_is_told_and_an_empty_name_is_not_looked_up(self):
         with self.assertRaises(DataRefused):

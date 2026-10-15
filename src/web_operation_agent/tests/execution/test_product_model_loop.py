@@ -332,6 +332,30 @@ class ModelLoopTests(unittest.TestCase):
         self.assertEqual("opened", fixture.run())
         self.assertEqual(1, len(fixture.state.chat.seen))
 
+    def test_selected_tab_completion_requires_exact_guarded_verified_target(self):
+        for mode in ("valid", "ordinary_button", "unselected", "replaced", "wrong_ref", "unverified", "unguarded"):
+            with self.subTest(mode=mode):
+                tab = ElementRef("e1", "button" if mode == "ordinary_button" else "tab", "Details", "button", 1,
+                                 {"id": "details-tab", "aria-controls": "details-panel", "aria-selected": "false"})
+                def handler(fixture, name, arguments):
+                    after = page(2)
+                    after.elements = [replace(tab, ref="e8", epoch=2, attrs={**tab.attrs,
+                        "id": "replacement" if mode == "replaced" else "details-tab",
+                        "aria-selected": "false" if mode == "unselected" else "true"})]
+                    fixture.state.obs = after
+                    receipt = ActionReceipt(1, "tab-command", "click",
+                        {"ref": "e2" if mode == "wrong_ref" else "e1", "epoch": 1}, True,
+                        observation=after, url_before=after.url, url_after=after.url,
+                        write_guard_held=mode != "unguarded")
+                    fixture._tool_receipts.append(receipt)
+                    fixture._verified_action_commands = set() if mode == "unverified" else {receipt.command_id}
+                    return LoopToolResult("Selected", kind="page", dispatch="acknowledged")
+                fixture = LoopFixture([reply(call("click", index=1, answer="Details selected")),
+                    reply(call("finish", status="cannot", answer="not verified"))], handler)
+                fixture.state.obs.elements = [tab]
+                self.assertEqual("Details selected" if mode == "valid" else "not verified", fixture.run())
+                self.assertEqual(1 if mode == "valid" else 2, len(fixture.state.chat.seen))
+
     def test_changed_page_rejects_later_element_number_in_same_reply(self):
         def handler(fixture, name, arguments):
             fixture._dispatch(fixture.state, "observe", {})

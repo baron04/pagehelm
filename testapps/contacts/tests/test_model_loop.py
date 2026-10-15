@@ -136,6 +136,47 @@ if __name__ == "__main__":
     unittest.main()
 
 class ModelBrowserTests(unittest.TestCase):
+    def test_selected_section_finishes_on_its_verified_click_in_plain_html(self):
+        import json
+        from playwright.sync_api import sync_playwright
+        from testapps.contacts.server import NativeContactsHost, NativeServerConfig
+        from testapps.contacts.tests.test_native_server import _CONNECTED, _SUBMIT, _allow_operation
+        for blocked in (False, True):
+            with self.subTest(blocked=blocked):
+                class PickSection(_Chat):
+                    def complete(self, messages, *args, **kwargs):
+                        if len(self.messages) == 1:
+                            content = messages[-1]['content']
+                            observed = json.loads(content[content.index('{"url":'):])
+                            target = next(e for e in observed['controls'] if e['attrs'].get('id') == 'workflow-terms')
+                            self.script[0] = ('click', {'index': int(target['index'][1:]), 'answer': 'Terms selected.'})
+                        return super().complete(messages, *args, **kwargs)
+                chat = PickSection([('goto', {'path': '/contacts/workflows/partner'}),
+                    ('click', {}), ('finish', {'status': 'cannot', 'answer': 'Selection could not be verified.'})])
+                with tempfile.TemporaryDirectory() as directory, patch('testapps.contacts.server._chat', return_value=(chat, None)), \
+                        NativeContactsHost(NativeServerConfig(Path(directory), port=0, model_loop=True)) as host, \
+                        sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    try:
+                        page = browser.new_page(viewport={'width': 1440, 'height': 1000})
+                        if blocked:
+                            page.add_init_script("document.addEventListener('click', e => { if(e.target.id === 'workflow-terms') e.stopImmediatePropagation(); }, true)")
+                        page.goto(host.origin + '/demo/login/ada-lovelace')
+                        page.goto(host.origin + '/contacts/help')
+                        page.evaluate(_CONNECTED)
+                        session = next(iter(host._sessions.values()))[0]
+                        page.evaluate(_SUBMIT, 'Open the partner desk Terms section.')
+                        _allow_operation(page)
+                        outcome = session.runner.next_outcome(timeout_s=35)
+                        self.assertIsNotNone(outcome)
+                        self.assertFalse(outcome.error, outcome.error)
+                        self.assertEqual('agent_refused' if blocked else 'agent_finished', outcome.result.terminal_reason)
+                        self.assertEqual(3 if blocked else 2, len(chat.messages))
+                        self.assertEqual('false' if blocked else 'true', page.locator('#workflow-terms').get_attribute('aria-selected'))
+                        self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
+                    finally:
+                        browser.close()
+
     def test_combined_lines_and_filter_finish_only_after_verified_application_effects(self):
         from playwright.sync_api import sync_playwright
         from testapps.contacts.server import NativeContactsHost, NativeServerConfig
