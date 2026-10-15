@@ -242,6 +242,34 @@ class ActorKnowledge:
         op = self._by_path.get(f"/admin-api/{entity.strip('/')}/page")
         return self._api_line(op) if op else ""
 
+    def outside_actor_scope(self, entity: str, name: str) -> bool:
+        """Distinguish a scoped miss from a record this actor cannot open.
+
+        As in call_api's scoped-empty check, the application's ordinary list may
+        disclose a name without granting access to its detail. Never use this to
+        navigate, read that detail, or choose a different record.
+        """
+        path = self.list_path(entity)
+        if not path or path in self.writing_gets:
+            return False
+        published = {p["name"]: p for p in self._by_path[path]["op"].get("parameters", ())
+                     if isinstance(p, dict) and p.get("in") == "query" and isinstance(p.get("name"), str)}
+        params = {"name": name, "pageNo": 1, "pageSize": 5}
+        # This entity names ordinary CRM customers; the customer-pool list is a
+        # separate application view. Keep the endpoint's required pool selector.
+        if entity == "crm/customer" and "pool" in published:
+            params["pool"] = False
+        if (not {"sceneType", *params} <= published.keys()
+                or any(p.get("required") is True and key not in params for key, p in published.items())):
+            return False
+        self._validate_params(path, params)
+        data = self._read(path[len("/admin-api/"):], **params)
+        wanted = name.strip().casefold()
+        return bool(wanted and isinstance(data, dict) and any(
+            isinstance(row, dict) and isinstance(row.get("name"), str)
+            and row["name"].strip().casefold().startswith(wanted)
+            for row in data.get("list") or ()))
+
     def suggest(self, sentence: str) -> str:
         """Pages and lists whose own names the person's words contain, found without a
         model request. A first step usually asks for exactly these."""
@@ -1553,6 +1581,13 @@ class YudaoLoopProcedures:
                 hits = (self.goal_port.records_named(name, context=context, entities=among) if among
                         else self.goal_port.records_named(name, context=context))[:4]
                 near, lists = [], []
+                if not hits:
+                    # records_named reads the actor's mine/participant/subordinate
+                    # scopes. An empty union cannot establish global absence.
+                    for entity in among or tuple(dict.fromkeys(p.entity for p in index.pages if p.entity)):
+                        if self.knowledge.outside_actor_scope(entity, name):
+                            raise DataRefused("记录存在，但不在当前账号可打开的范围内。",
+                                              reason="当前账号没有打开这条记录的权限。", permission_denied=True)
                 if not hits and among:
                     for part in _name_parts(name):
                         near += self.goal_port.records_named(part, context=context, entities=among)

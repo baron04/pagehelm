@@ -1533,6 +1533,54 @@ class FindRecordTests(unittest.TestCase):
         self.assertNotIn("一部分", self.find(port, "XSTH20260929000005", "销售退货单"))
         self.assertEqual(port.asked, ["XSTH20260929000005"])
 
+    def test_a_scoped_miss_checks_application_visibility_before_claiming_absence(self):
+        from copy import deepcopy
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/crm/customer/page"] = {"get": {
+            "summary": "客户分页", "parameters": [
+                {"name": name, "in": "query", "schema": {"type": kind}}
+                for name, kind in (("name", "string"), ("sceneType", "integer"),
+                                   ("pageNo", "integer"), ("pageSize", "integer"))]}}
+        docs["paths"]["/admin-api/crm/customer/page"]["get"]["parameters"].append(
+            {"name": "pool", "in": "query", "required": True, "schema": {"type": "boolean"}})
+        client = Client()
+        original = client.get
+        rows = [{"id": 7, "name": "合成范围客户"}]
+        def get(path, **params):
+            if path == "crm/customer/page":
+                client.calls.append((path, params))
+                return {"total": len(rows), "list": rows}
+            return original(path, **params)
+        client.get = get
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        executor.goal_port = self.Port()
+        executor.knowledge = ActorKnowledge(client, lambda: docs)
+        with self.assertRaises(DataRefused) as caught:
+            executor._find_record(self.Turn, "合成范围客户", "客户")
+        self.assertTrue(caught.exception.permission_denied)
+        self.assertNotIn("不存在", str(caught.exception))
+        self.assertEqual([p for path, p in client.calls if path == "crm/customer/page"],
+                         [{"pool": False, "name": "合成范围客户", "pageNo": 1, "pageSize": 5}])
+        self.assertFalse(any(path.endswith("/get") for path, _ in client.calls))
+
+        rows[:] = [{"id": 9, "name": "另一个客户"}]
+        self.assertFalse(executor.knowledge.outside_actor_scope("crm/customer", "合成范围客户"))
+        client.get = lambda *a, **kw: (_ for _ in ()).throw(DataRefused("offline", read_failed=True))
+        with self.assertRaises(DataRefused) as failed:
+            executor.knowledge.outside_actor_scope("crm/customer", "合成范围客户")
+        self.assertTrue(failed.exception.read_failed)
+
+    def test_scope_probe_skips_unpublished_or_parent_bound_queries(self):
+        from copy import deepcopy
+        docs = deepcopy(DOCS)
+        op = docs["paths"]["/admin-api/leads/page"]["get"]
+        op["parameters"].append({"name": "parentId", "in": "query", "required": True})
+        client = Client()
+        knowledge = ActorKnowledge(client, lambda: docs)
+        self.assertFalse(knowledge.outside_actor_scope("leads", "合成名称"))
+        self.assertFalse(knowledge.outside_actor_scope("orders", "合成名称"))
+        self.assertFalse(any(path in {"leads/page", "orders/page"} for path, _ in client.calls))
+
     def test_several_records_of_one_entity_are_listed_with_their_numbers_for_the_person_to_choose(self):
         port = self.Port(hits=(("hrm/employee", (("1", "李文博（ID=1）", "/hrm/employee/detail/1"),
                                                   ("2", "李文博（ID=2）", "/hrm/employee/detail/2"))),))
