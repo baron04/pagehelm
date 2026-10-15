@@ -466,11 +466,13 @@ export class Page {
           if (element.getAttribute('aria-expanded') === 'true') {
             const controls = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)]
               .map(m => Number(m[1])).filter(i => this.lookup(this.controller.selectorMap, i) === element)
-            if (controls.length !== 1 || !current()) {
-              throw new Error('execution_failed: combobox has no unique fresh close reference')
+            // An open popup may remove its input from the controller's viewport
+            // indexes. Dismiss only with a unique fresh ref; no selection was
+            // made, so the unchanged-draft proof below does not require closing.
+            if (controls.length === 1 && current()) {
+              await this.controller.clickElement(controls[0]!)
+              await sleep(50)
             }
-            await this.controller.clickElement(controls[0]!)
-            await sleep(50)
           }
           const afterDraft = draft()
           const bound = current() && ownedListbox(element) === list

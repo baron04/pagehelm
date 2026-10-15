@@ -88,6 +88,17 @@ describe('adapter-issued single-choice combobox drafts', () => {
       expect(s.option.getAttribute('aria-selected')).toBe('false')
     } finally {s.form.remove()}
   })
+  it('proves no selection even when the open popup leaves no current ref for dismissal', async () => {
+    const s = setup()
+    try {
+      s.api.getBrowserState = vi.fn(async () => ({url:location.href, title:'', content:'[2]<li role=option>Alex />'}))
+      await expect(s.page.select('e1','Missing','Missing')).rejects.toMatchObject({
+        code:'option_unavailable', no_effect:true, candidate_labels:['Alex'],
+      })
+      expect(s.api.clickElement).toHaveBeenCalledTimes(1)
+      expect(s.input.getAttribute('aria-expanded')).toBe('true')
+    } finally {s.form.remove()}
+  })
   it('ignores the assistant panel during selection indexing and restores its hit targets', async () => {
     const s = setup()
     const panel = document.body.appendChild(document.createElement('div'))
