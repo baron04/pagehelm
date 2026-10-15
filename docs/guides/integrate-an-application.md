@@ -81,5 +81,4 @@ Odoo 参考翻译不设全局启用开关，但默认仅开放三个标准模块
 
 每个 Adapter 都应运行可复用的 contract assertion，并增加有效路由、身份不匹配、读取完整性、mutation 拒绝、确认、后置条件失败和凭据脱敏测试。`scripts/qualify.sh --require-browser` 会运行产品套件、隔离 wheel 检查、Minimal 内嵌 Runtime 演练和真实 Chromium 中的规范浏览器协议。真实应用门若显示 `BLOCKED`，表示没有执行，不能算通过。
 
-`examples/` 下有两个参考接入：Odoo 保留作参考、不再维护，其独立可安装 distribution 完整实现 Adapter v2 合同；芋道是默认演示与测试应用，带可重置的本地部署。两者都说明核心中没有应用分支。`testapps/` 下的小型 Contacts 应用只用于内部浏览器与协议测试，
-不是第二套接入模板。
+`examples/` 下有两个参考接入：Odoo 保留作参考、不再维护，其独立可安装 distribution 完整实现 Adapter v2 合同；芋道是默认演示与测试应用，带可重置的本地部署。两者都说明核心中没有应用分支。`testapps/` 下的小型 Contacts 应用只用于内部浏览器与协议测试，不是第二套接入模板。
