@@ -858,7 +858,7 @@ class LoopTests(unittest.TestCase):
                 receipt = ActionReceipt(1, "proof", action, echo, True, observation=s.obs,
                                         url_after=s.obs.url, write_guard_held=True)
                 executor._tool_receipts.append(receipt)
-                executor._verified_action_commands = {receipt.command_id}
+                executor._verified_action_commands = {receipt.command_id: json.dumps(s.obs.to_json())}
             return LoopToolResult(text, kind="page" if name in {"goto","highlight","click","input","select","scroll","fill_fields"} else "read")
         executor._tool = typed
         executor._tools = lambda _: TOOLS

@@ -78,7 +78,7 @@ class LoopFixture(ModelDrivenTurnExecutor):
         receipt = ActionReceipt(1, "command", action, arguments, True,
             observation=after, url_before=before.url, url_after=after.url, write_guard_held=True)
         self._tool_receipts.append(receipt)
-        self._verified_action_commands = {receipt.command_id}
+        self._verified_action_commands = {receipt.command_id: json.dumps(after.to_json())}
         if channel is not None:
             channel.latest_observation_envelope = NS(observation=after)
         return receipt
@@ -333,28 +333,35 @@ class ModelLoopTests(unittest.TestCase):
         self.assertEqual(1, len(fixture.state.chat.seen))
 
     def test_selected_tab_completion_requires_exact_guarded_verified_target(self):
-        for mode in ("valid", "ordinary_button", "unselected", "replaced", "wrong_ref", "unverified", "unguarded"):
+        for mode in ("valid", "settled_pending", "ordinary_button", "unselected", "replaced", "wrong_ref",
+                     "unverified", "unguarded", "later_route"):
             with self.subTest(mode=mode):
                 tab = ElementRef("e1", "button" if mode == "ordinary_button" else "tab", "Details", "button", 1,
                                  {"id": "details-tab", "aria-controls": "details-panel", "aria-selected": "false"})
                 def handler(fixture, name, arguments):
-                    after = page(2)
-                    after.elements = [replace(tab, ref="e8", epoch=2, attrs={**tab.attrs,
+                    after = page(3)
+                    after.elements = [replace(tab, ref="e8", epoch=3, attrs={**tab.attrs,
                         "id": "replacement" if mode == "replaced" else "details-tab",
                         "aria-selected": "false" if mode == "unselected" else "true"})]
                     fixture.state.obs = after
+                    initial = replace(after, epoch=2, elements=[replace(e, epoch=2) for e in after.elements],
+                                      page_route="", render_state="pending") if mode == "settled_pending" else after
                     receipt = ActionReceipt(1, "tab-command", "click",
                         {"ref": "e2" if mode == "wrong_ref" else "e1", "epoch": 1}, True,
-                        observation=after, url_before=after.url, url_after=after.url,
+                        observation=initial, url_before=after.url, url_after=after.url,
                         write_guard_held=mode != "unguarded")
                     fixture._tool_receipts.append(receipt)
-                    fixture._verified_action_commands = set() if mode == "unverified" else {receipt.command_id}
+                    fixture._verified_action_commands = ({} if mode == "unverified" else
+                        {receipt.command_id: json.dumps(after.to_json())})
+                    if mode == "later_route":
+                        fixture.state.obs = replace(after, url="https://synthetic.test/other", page_route="/other")
                     return LoopToolResult("Selected", kind="page", dispatch="acknowledged")
                 fixture = LoopFixture([reply(call("click", index=1, answer="Details selected")),
                     reply(call("finish", status="cannot", answer="not verified"))], handler)
                 fixture.state.obs.elements = [tab]
-                self.assertEqual("Details selected" if mode == "valid" else "not verified", fixture.run())
-                self.assertEqual(1 if mode == "valid" else 2, len(fixture.state.chat.seen))
+                valid = mode in {"valid", "settled_pending"}
+                self.assertEqual("Details selected" if valid else "not verified", fixture.run())
+                self.assertEqual(1 if valid else 2, len(fixture.state.chat.seen))
 
     def test_changed_page_rejects_later_element_number_in_same_reply(self):
         def handler(fixture, name, arguments):

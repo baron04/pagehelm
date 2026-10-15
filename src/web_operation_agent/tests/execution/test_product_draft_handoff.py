@@ -73,7 +73,7 @@ class DraftHandoffTests(unittest.TestCase):
         admission = ActionAdmission.__new__(ActionAdmission)
         admission._verified_query = (obs.url, obs.page_route, "null", admission._query_choices(obs))
         admission._verified_query_command = "query"
-        executor._admission, executor._verified_action_commands = admission, {"query", "other"}
+        executor._admission, executor._verified_action_commands = admission, dict.fromkeys(("query", "other"))
         receipt = ActionReceipt(1, "query", "click", {}, True, observation=obs,
                                 url_after=obs.url, write_guard_held=True)
         executor._tool_receipts = [receipt]

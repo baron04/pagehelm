@@ -425,7 +425,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                    if policy is not None else None)
                 self._draft_admission = (DraftStepAdmission(draft_steps, self.application.descriptor.application_id)
                                          if draft_steps is not None else None)
-                self._verified_action_commands = set()
+                self._verified_action_commands = {}
             def checkpoint():
                 if s.cancelled():
                     from ..transport.browser import TurnCancelled
@@ -503,7 +503,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             command_id=receipt.command_id, binding_digest=intent.binding_digest,
                             observation_epoch=s.obs.epoch, submitted=False, persisted=False,
                             effect=permit.effect.value if isinstance(permit, ActionPermit) else "transient_draft")
-                        self._verified_action_commands.add(receipt.command_id)
+                        # The effect may settle after its dispatch receipt. Keep the
+                        # snapshot actually accepted by the application, by value.
+                        self._verified_action_commands[receipt.command_id] = json.dumps(s.obs.to_json())
                         break
                     except ActionResultPending:
                         if attempt == 3:
@@ -596,6 +598,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             # Bind the original numbered target to a stable live tab identity;
             # a generic button, a same-name replacement or adapter prose cannot do so.
             identity = {key: target.attrs[key] for key in ("id", "aria-controls") if target.attrs.get(key)}
+            proof = getattr(self, "_verified_action_commands", {}).get(receipt.command_id)
+            if proof is None:
+                return False
+            verified = PageObservation.from_json(json.loads(proof))
             selected = [e for e in s.obs.elements if e.role == "tab" and e.name == target.name
                         and all(e.attrs.get(k) == v for k, v in identity.items())]
             return (bool(identity) and len(selected) == 1
@@ -605,7 +611,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     and receipt.command_id in getattr(self, "_verified_action_commands", ())
                     and receipt.write_guard_held and s.obs.render_state == "ready"
                     and receipt.url_before == receipt.url_after == s.obs.url
-                    and receipt.observation.page_route == s.obs.page_route)
+                    and verified.url == s.obs.url and verified.page_route == s.obs.page_route
+                    and verified.record_route == s.obs.record_route
+                    and target.epoch < verified.epoch <= s.obs.epoch)
         return False
 
     @staticmethod
