@@ -38,7 +38,7 @@
       "the failures another attempt cannot fix, so none is made on its own."
     ],
     "causes": {
-      "401": "登录状态已变化，请重新登录后再使用助手",
+      "401": "登录已过期或失效，请重新登录后再使用助手",
       "403": "当前账号未获授权使用助手",
       "404": "助手服务未就绪",
       "409": "助手正忙",

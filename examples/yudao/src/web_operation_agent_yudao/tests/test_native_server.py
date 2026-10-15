@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 from web_operation_agent.schemas import ClientHello
 from web_operation_agent.state.identity import PrincipalError
+from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent_yudao.application import SESSION_HANDOFF_KEYS, YudaoIdentityPort
+from web_operation_agent_yudao.client import YudaoClient, YudaoReadRefused
 from web_operation_agent_yudao.native_server import BootstrapRefused, YudaoHost, YudaoHostConfig
 
 
@@ -34,6 +36,7 @@ class NativeHostTests(unittest.TestCase):
         self.chat.return_value.egress_policy = ProviderEgressPolicy(
             session_handoff_keys=SESSION_HANDOFF_KEYS)
         self.chat.return_value.complete.side_effect = AssertionError("models are forbidden in this test")
+        self.real_page_identity = YudaoIdentityPort.page_identity
 
         def actor(token):
             if token not in ("synthetic-a", "synthetic-a-new", "synthetic-b"):
@@ -234,6 +237,56 @@ class NativeHostTests(unittest.TestCase):
                 host.bootstrap(token, tenant, instance)
         self.assertEqual(host.server.session_count, 0)
         self.chat.assert_not_called()
+
+    def test_expired_token_during_identity_binding_is_a_bootstrap_401(self):
+        host = self.host()
+        for code, expected in ((401, (401, "sign_in_required")),
+                               (403, (403, "access_denied"))):
+            with self.subTest(code=code), patch.object(
+                    YudaoIdentityPort, "bind",
+                    side_effect=YudaoReadRefused("synthetic refusal", code=code)):
+                with self.assertRaises(BootstrapRefused) as refused:
+                    host.bootstrap("synthetic-a", "1", "tab")
+                self.assertEqual((refused.exception.status, refused.exception.code), expected)
+        self.assertEqual(host.server.session_count, 0)
+        with patch.object(YudaoIdentityPort, "bind",
+                          side_effect=YudaoReadRefused("synthetic outage", code=503)):
+            with self.assertRaises(YudaoReadRefused):
+                host.bootstrap("synthetic-a", "1", "tab")
+        self.assertEqual(host.server.session_count, 0)
+
+    def test_expired_token_during_existing_session_renewal_is_a_bootstrap_401(self):
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "tab")
+        active = host._sessions[("1", "1")]
+        with patch.object(YudaoIdentityPort, "bind",
+                          side_effect=YudaoReadRefused("synthetic expired", code=401)):
+            with self.assertRaises(BootstrapRefused) as refused:
+                host.bootstrap("synthetic-a-new", "1", "tab")
+        self.assertEqual((refused.exception.status, refused.exception.code),
+                         (401, "sign_in_required"))
+        self.assertIs(host._sessions[("1", "1")], active)
+        self.assertEqual(host.server.session_count, 1)
+
+    def test_page_identity_preserves_application_auth_and_availability_results(self):
+        client = YudaoClient.for_token("http://yudao.invalid", "server-token", "1")
+        port = YudaoIdentityPort("http://yudao.invalid", client)
+        def response(_, method, path, **kwargs):
+            self.assertEqual((method, path, kwargs["token"]),
+                             ("GET", "system/auth/get-permission-info", "browser-token"))
+            return 0, {"code": 0, "data": {"user": {"id": 9, "deptId": 2}}}
+        with patch.object(YudaoClient, "_request", response):
+            self.assertEqual(self.real_page_identity(port, "browser-token").actor_id, "9")
+        for code, error in ((401, PrincipalError), (403, YudaoReadRefused),
+                            (503, YudaoReadRefused)):
+            with self.subTest(code=code), patch.object(
+                    YudaoClient, "_request", return_value=(code, {"code": code})):
+                with self.assertRaises(error):
+                    self.real_page_identity(port, "browser-token")
+        with patch.object(YudaoClient, "_request",
+                          side_effect=DataRefused("synthetic outage", read_failed=True)):
+            with self.assertRaises(DataRefused):
+                self.real_page_identity(port, "browser-token")
 
     def _fence(self, **changes):
         policy = Path(self.tmp.name) / f"native-fence-{len(list(Path(self.tmp.name).glob('native-fence-*')))}.json"

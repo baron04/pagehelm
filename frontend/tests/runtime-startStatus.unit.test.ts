@@ -12,6 +12,8 @@ function actions(): PanelActions {
 
 describe('failureSentence says the cause, then what happens next, then the status', () => {
   it('tells a refusal the person cannot retry away from an outage that retries itself', () => {
+    expect(failureSentence({status: 401, retrying: false}))
+      .toBe('登录已过期或失效，请重新登录后再使用助手（401）。')
     expect(failureSentence({status: 403, retrying: false}))
       .toBe('当前账号未获授权使用助手（403）。')
     expect(failureSentence({status: 503, retrying: true}))

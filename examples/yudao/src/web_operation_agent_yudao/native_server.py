@@ -52,7 +52,7 @@ from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.state.store import SQLiteSessionStore
 
 from .application import YudaoApplication
-from .client import YudaoClient
+from .client import YudaoClient, YudaoReadRefused
 from .conventions import REFERENCE_CONVENTIONS
 from .repository import repository_source
 from .turn import yudao_turn_config
@@ -267,37 +267,43 @@ class YudaoHost:
         app = self._application(client)
         try:
             page = app.identity.page_identity(token)
+            key = (tenant, page.actor_id)
+            with self._lock:
+                active = self._sessions.get(key)
+                if active is not None:
+                    try:
+                        active.session.channel.validate_live()
+                    except Exception:  # noqa: BLE001 -- a session that ended is replaced
+                        active.session.close("bootstrap_replaced")
+                        self._sessions.pop(key, None)
+                    else:
+                        # The same person, the page's newer token: the session goes on reading
+                        # as them.
+                        active.client.renew(token)
+                        principal = app.ports.identity.bind(
+                            page, delegation_id=active.delegation_id,
+                            lifetime_s=self.config.principal_lifetime_s)
+                        try:
+                            active.session.renew_principal(principal)
+                        except Exception as exc:  # noqa: BLE001 -- mid-turn: renewed when it is done
+                            if not str(getattr(exc, "code", "")).startswith("session_busy_"):
+                                raise
+                        return self._browser_bootstrap(active.session)
+                principal = app.ports.identity.bind(
+                    page, delegation_id="yudao-" + uuid.uuid4().hex,
+                    lifetime_s=self.config.principal_lifetime_s)
+                session = self._open(app, principal, key)
+                self._sessions[key] = _Active(session=session, client=client,
+                                              delegation_id=principal.delegation_id)
+                return self._browser_bootstrap(session)
         except PrincipalError as exc:
             raise BootstrapRefused(401, "sign_in_required") from exc
-        key = (tenant, page.actor_id)
-        with self._lock:
-            active = self._sessions.get(key)
-            if active is not None:
-                try:
-                    active.session.channel.validate_live()
-                except Exception:  # noqa: BLE001 -- a session that ended is replaced
-                    active.session.close("bootstrap_replaced")
-                    self._sessions.pop(key, None)
-                else:
-                    # The same person, the page's newer token: the session goes on reading
-                    # as them.
-                    active.client.renew(token)
-                    principal = app.ports.identity.bind(
-                        page, delegation_id=active.delegation_id,
-                        lifetime_s=self.config.principal_lifetime_s)
-                    try:
-                        active.session.renew_principal(principal)
-                    except Exception as exc:  # noqa: BLE001 -- mid-turn: renewed when it is done
-                        if not str(getattr(exc, "code", "")).startswith("session_busy_"):
-                            raise
-                    return self._browser_bootstrap(active.session)
-            principal = app.ports.identity.bind(
-                page, delegation_id="yudao-" + uuid.uuid4().hex,
-                lifetime_s=self.config.principal_lifetime_s)
-            session = self._open(app, principal, key)
-            self._sessions[key] = _Active(session=session, client=client,
-                                          delegation_id=principal.delegation_id)
-            return self._browser_bootstrap(session)
+        except YudaoReadRefused as exc:
+            if exc.code == 401:
+                raise BootstrapRefused(401, "sign_in_required") from exc
+            if exc.code == 403:
+                raise BootstrapRefused(403, "access_denied") from exc
+            raise
 
     def _application(self, client: YudaoClient) -> YudaoApplication:
         from .guard_proxy import GUARD_PATH

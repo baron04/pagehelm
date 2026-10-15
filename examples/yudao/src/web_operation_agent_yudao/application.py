@@ -6,13 +6,10 @@ may combine generic reads, repository evidence and fresh page observations in on
 """
 from __future__ import annotations
 
-import json
 import time
 from datetime import date
 from pathlib import Path
 from typing import Callable
-import urllib.error
-import urllib.request
 
 from web_operation_agent.business.runtime import BusinessToolRuntime
 from web_operation_agent.business.tools.contracts import ToolOperation
@@ -29,7 +26,7 @@ from web_operation_agent.state.identity import (PRINCIPAL_CONTEXT_VERSION, Ident
                                                 PrincipalContext, PrincipalError,
                                                 bind_matching_identity)
 
-from .client import YudaoAccount, YudaoClient
+from .client import YudaoAccount, YudaoClient, YudaoReadRefused
 from .conventions import REFERENCE_CONVENTIONS
 from .goal import YudaoGoalData
 from .generic_reads import YudaoReadTools
@@ -70,17 +67,16 @@ class YudaoIdentityPort:
 
     def page_identity(self, access_token: str) -> IdentityAssertion:
         """What the browser is, asked of yudao with the browser's own access token."""
-        request = urllib.request.Request(
-            f"{self._base_url}/admin-api/system/auth/get-permission-info",
-            headers={"tenant-id": str(self._client.tenant), "Authorization": f"Bearer {access_token}"})
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                payload = json.load(response)
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            raise PrincipalError("yudao's identity endpoint is unavailable") from exc
-        if payload.get("code") != 0 or not isinstance((payload.get("data") or {}).get("user"), dict):
+            data = YudaoClient.for_token(self._base_url, access_token, self._client.tenant,
+                                         timeout_s=10).get("system/auth/get-permission-info")
+        except YudaoReadRefused as exc:
+            if exc.code != 401:
+                raise
+            raise PrincipalError("the browser's session is not signed in to yudao") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("user"), dict):
             raise PrincipalError("the browser's session is not signed in to yudao")
-        return self._assertion(payload["data"]["user"], "page_session")
+        return self._assertion(data["user"], "page_session")
 
     def bind(self, page_identity: IdentityAssertion, *, delegation_id: str,
              lifetime_s: int = 300, now_ms: int | None = None) -> PrincipalContext:
