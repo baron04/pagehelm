@@ -48,8 +48,12 @@ MAX_FACET_CANDIDATES = int(_BROWSER_CONTRACT["observation"]["max_facet_candidate
 MAX_OBSERVATION_CONTENT_CHARS = int(
     _BROWSER_CONTRACT["observation"]["max_content_chars"])
 MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
+MAX_CHOICE_CANDIDATES = int(_BROWSER_CONTRACT["choice_failure"]["max_candidates"])
+MAX_CHOICE_CANDIDATE_CHARS = int(_BROWSER_CONTRACT["choice_failure"]["max_label_chars"])
 SCOPED_FORM_HANDOFF_CAPABILITY = _BROWSER_CONTRACT["form_handoff"]["scoped_capability"]
 MAX_FORM_LABEL_CHARS = int(_BROWSER_CONTRACT["form_handoff"]["max_label_chars"])
+MAX_FORM_CHOICE_OPTIONS = int(_BROWSER_CONTRACT["form_handoff"]["max_choice_options"])
+MAX_FORM_CHOICE_VALUE_CHARS = int(_BROWSER_CONTRACT["form_handoff"]["max_choice_value_chars"])
 FORM_INPUT_CONTROLS = frozenset(_BROWSER_CONTRACT["form_handoff"]["input_controls"])
 if min(MAX_OBSERVATION_ELEMENTS, MAX_OBSERVATION_CONTENT_CHARS, MAX_SCROLL_PAGES,
        MAX_PAGE_FACETS, MAX_FACET_CANDIDATES, MAX_PAGE_ROUTE_CHARS) < 1:
@@ -388,6 +392,11 @@ class ActionReceipt:
     #: without it, an action that lost its result has to be settled as uncertain.
     write_guard_held: bool = False
     observation: PageObservation | None = None
+    #: Bounded, application-data labels observed in an owned choice list when a
+    #: requested option was unavailable. They are hints for the same model only;
+    #: they never authorize a substitute selection.
+    candidate_labels: tuple[str, ...] = ()
+    no_effect: bool = False
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ActionReceipt")
@@ -409,6 +418,14 @@ class ActionReceipt:
         _non_negative_int(self.elapsed_ms, "elapsed_ms")
         _bool(self.relogin, "relogin")
         _bool(self.write_guard_held, "write_guard_held")
+        _bool(self.no_effect, "no_effect")
+        _require(not self.no_effect or (self.action == "select" and not self.ok
+                                      and self.error_code == "option_unavailable"),
+                 "no_effect requires an unavailable selection")
+        _require(isinstance(self.candidate_labels, tuple)
+                 and len(self.candidate_labels) <= MAX_CHOICE_CANDIDATES
+                 and all(isinstance(v, str) and 0 < len(v) <= MAX_CHOICE_CANDIDATE_CHARS for v in self.candidate_labels),
+                 "candidate_labels must be a bounded tuple of strings")
         _require(self.observation is None or isinstance(self.observation, PageObservation),
                  "observation must be a PageObservation or null")
         self.observation = copy.deepcopy(self.observation)
@@ -421,6 +438,8 @@ class ActionReceipt:
                 "navigated": self.navigated, "epoch_before": self.epoch_before,
                 "epoch_after": self.epoch_after, "elapsed_ms": self.elapsed_ms,
                 "relogin": self.relogin, "write_guard_held": self.write_guard_held,
+                **({"candidate_labels": list(self.candidate_labels)} if self.candidate_labels else {}),
+                **({"no_effect": True} if self.no_effect else {}),
                 "observation": self.observation.to_json() if self.observation else None}
 
     @staticmethod
@@ -428,10 +447,11 @@ class ActionReceipt:
         allowed = {"schema_version", "command_id", "action", "args_echo", "ok",
                    "error_code", "error_detail", "url_before", "url_after", "navigated",
                    "epoch_before", "epoch_after", "elapsed_ms", "relogin",
-                   "write_guard_held", "observation"}
+                   "write_guard_held", "candidate_labels", "no_effect", "observation"}
         required = {"schema_version", "command_id", "action", "args_echo", "ok"}
         d = _strict_object(d, "ActionReceipt", allowed=allowed, required=required)
         obs = d.get("observation")
+        _require(isinstance(d.get("candidate_labels", []), list), "candidate_labels must be a list")
         return ActionReceipt(schema_version=d["schema_version"], command_id=d["command_id"],
                              action=d["action"], args_echo=d.get("args_echo", {}),
                              ok=d["ok"], error_code=d.get("error_code", ""),
@@ -443,6 +463,8 @@ class ActionReceipt:
                              elapsed_ms=d.get("elapsed_ms", 0),
                              relogin=d.get("relogin", False),
                              write_guard_held=d.get("write_guard_held", False),
+                             candidate_labels=tuple(d.get("candidate_labels", ())),
+                             no_effect=d.get("no_effect", False),
                              observation=PageObservation.from_json(obs)
                              if obs is not None else None)
 

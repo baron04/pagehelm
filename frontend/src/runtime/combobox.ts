@@ -1,6 +1,15 @@
 /** Fixed single-choice ARIA operation. The application supplies the reviewed label. */
 import type {ElementLike} from './pageModel'
 
+/** Only the fixed selection tool can issue this mechanism fact. */
+export class ChoiceUnavailable extends Error {
+  readonly code = 'option_unavailable'
+  constructor(readonly candidate_labels: string[], readonly no_effect: boolean, reason = '') {
+    super('option_unavailable: the owned list does not offer this exact option' +
+      (no_effect ? '' : '; no-effect proof unavailable: ' + reason))
+  }
+}
+
 export function listboxCombobox(element: ElementLike | null | undefined): element is HTMLInputElement {
   return typeof HTMLInputElement !== 'undefined' && element instanceof HTMLInputElement && element.getAttribute('role') === 'combobox' &&
     element.getAttribute('aria-haspopup') === 'listbox' && !element.disabled &&

@@ -19,7 +19,7 @@ import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance, localChoiceRemoval} from './formInstance'
-import {listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
+import {ChoiceUnavailable, listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
 import {suspendPanelHitTargets} from './panelObservation'
@@ -108,14 +108,16 @@ export type ElementNavigationReader = (element: ElementLike | null | undefined) 
 export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {
   ref?: string; field: string; control: string; value: string
-  binding?: string; label?: string; scope?: string
+  binding?: string; label?: string; scope?: string; instance?: string
   option_label?: string
 }
 export interface FormSubmitTarget {ref: string; label: string; scope: string}
 
 export function formFieldMatches(element: ElementRef, binding: FormHandoffField): boolean {
   return element.role === binding.control && (!binding.scope ||
-    element.attrs.form_scope === binding.scope) && (binding.binding === 'label'
+    element.attrs.form_scope === binding.scope) && (binding.binding === 'ref'
+      ? element.ref === binding.ref && element.attrs.form_instance === binding.instance
+      : binding.binding === 'label'
       ? !element.attrs.field && element.attrs.field_label === binding.label
       : element.attrs.field === binding.field)
 }
@@ -388,7 +390,7 @@ export class Page {
       this.rememberEntered(group)
       return {success: true}
     }
-    const state = await this.browserState()
+    const state = await this.read()
     const indexes = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
       .filter(i => this.lookup(this.controller.selectorMap, i) === matches[0])
     if (indexes.length !== 1 || !current() || !radioEnabled(matches[0]!)) {
@@ -419,6 +421,17 @@ export class Page {
     if (!list || !scope || !instance || !current()) {
       throw new Error('bad_arguments: combobox has no unique current form listbox')
     }
+    // Keep values browser-local. Equality of this complete local draft, together
+    // with the fact no option was clicked, is stronger than an unchanged label.
+    const draft = () => [...document.querySelectorAll('input,textarea,select,[role="radiogroup"],[role="textbox"],[contenteditable="true"]')]
+      .filter(node => formControlScope(node) === scope && formInstance(node) === instance)
+      .map(node => ({node, state: JSON.stringify([
+        (node as HTMLInputElement).value ?? '', (node as HTMLInputElement).checked ?? false,
+        node.matches('[contenteditable="true"],[role="textbox"]') ? node.textContent : null,
+        node.getAttribute('aria-checked'), node.getAttribute('aria-selected'),
+        node instanceof HTMLInputElement && listboxCombobox(node) ? selectedOption(node) : null,
+      ])}))
+    const beforeDraft = draft()
     if (selectedOption(element) === label) {
       this.rememberEntered(element)
       return {success: true}
@@ -430,8 +443,10 @@ export class Page {
     // What the last scroll was asked for over what it moved: PageController scales the
     // distance it is given, by a factor that is its own.
     let gain = 1
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const state = await this.browserState()
+    // Eight moves may make the option visible only after the last move. Inspect
+    // that result once more; the final inspection may choose, but never scrolls.
+    for (let attempt = 0; attempt <= 8; attempt++) {
+      const state = await this.read()
       if (!current() || ownedListbox(element) !== list) {
         throw new Error('execution_failed: combobox changed before selection')
       }
@@ -439,10 +454,32 @@ export class Page {
         const matches = [...list.querySelectorAll('[role="option"]')].filter(option =>
           option.closest('[role="listbox"]') === list && optionText(option) === label)
         if (matches.length === 0) {
-          // The list is open and does not offer this choice. Nothing was chosen; the
-          // list is closed again so that the rest of the form is not left under it.
-          if (element.getAttribute('aria-expanded') === 'true') await this.controller.clickElement(index)
-          throw new Error('option_unavailable: the list does not offer this option')
+          const candidate_labels = [...list.querySelectorAll('[role="option"]')]
+            .filter(option => option.closest('[role="listbox"]') === list &&
+              option.getAttribute('aria-disabled') !== 'true' && !option.hasAttribute('disabled'))
+            .map(option => optionText(option).trim())
+            .filter(label => label.length > 0)
+            .slice(0, browserContract.choice_failure.max_candidates)
+            .map(label => label.slice(0, browserContract.choice_failure.max_label_chars))
+          // Try the current control to dismiss the list. Some widgets only open on
+          // input clicks: an open popup alone is not a changed draft or selection.
+          if (element.getAttribute('aria-expanded') === 'true') {
+            const controls = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)]
+              .map(m => Number(m[1])).filter(i => this.lookup(this.controller.selectorMap, i) === element)
+            // An open popup may remove its input from the controller's viewport
+            // indexes. Dismiss only with a unique fresh ref; no selection was
+            // made, so the unchanged-draft proof below does not require closing.
+            if (controls.length === 1 && current()) {
+              await this.controller.clickElement(controls[0]!)
+              await sleep(50)
+            }
+          }
+          const afterDraft = draft()
+          const bound = current() && ownedListbox(element) === list
+          const unchanged = beforeDraft.length === afterDraft.length &&
+            beforeDraft.every((item, i) => item.node === afterDraft[i]!.node && item.state === afterDraft[i]!.state)
+          throw new ChoiceUnavailable(candidate_labels, bound && unchanged,
+            !bound ? 'the form binding changed' : 'local field values changed')
         }
         if (matches.length !== 1 || !visibleElement(matches[0]!) ||
             matches[0]!.getAttribute('aria-disabled') === 'true' ||
@@ -453,6 +490,7 @@ export class Page {
         const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
         const indexes = indexed.filter(i => this.lookup(this.controller.selectorMap, i) === option)
         if (indexes.length === 0) {
+          if (attempt === 8) break
           // Reuse PageController's scoped scroll. Anchor it to an indexed option in
           // this owned menu; never scroll an unrelated popup or choose an old index.
           const anchors = indexed.filter(i => {
@@ -522,8 +560,9 @@ export class Page {
       const binding = item as FormHandoffField
       if ((binding.ref !== undefined && typeof binding.ref !== 'string') || typeof binding.field !== 'string' ||
           typeof binding.value !== 'string' ||
-          !['field', 'label'].includes(binding.binding || 'field') ||
+          !['field', 'label', 'ref'].includes(binding.binding || 'field') ||
           (binding.binding === 'label' && (!binding.label || !binding.scope)) ||
+          (binding.binding === 'ref' && (!binding.ref || !binding.scope || !binding.instance)) ||
           !browserContract.form_handoff.input_controls.includes(binding.control) ||
           seen.has(binding.field)) return false
       seen.add(binding.field)
@@ -543,6 +582,8 @@ export class Page {
       if (isSensitiveFormControl(live, this.redactor)) return false
       if (binding.binding === 'label') {
         if (formFieldName(live) || formControlLabel(live) !== binding.label) return false
+      } else if (binding.binding === 'ref') {
+        if (!(live instanceof Element) || formInstance(live) !== binding.instance) return false
       } else if (formFieldName(live) !== binding.field) return false
       const tag = String(live.tagName || '').toLowerCase()
       const declared = live.getAttribute?.('role')
@@ -701,7 +742,7 @@ export class Page {
         const element = this.element(item.ref)
         if (!(element instanceof HTMLElement) || !element.isConnected) continue
         const fact = this.readElementPageControl?.(element) as
-          {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown} | undefined
+          {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown; queryValue?: unknown} | undefined
         if (fact?.kind === 'pagination' && Number.isSafeInteger(fact.page) &&
             Number(fact.page) > 0 && Number.isSafeInteger(fact.pageSize) && Number(fact.pageSize) > 0) {
           item.attrs.page_control = 'pagination'
@@ -715,7 +756,12 @@ export class Page {
           item.attrs.page_control = 'query'
           if (typeof fact.field === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(fact.field) &&
               fact.field.length <= browserContract.observation.max_query_key_chars &&
-              !this.redactor.isSensitiveName(fact.field)) item.attrs.query_field = fact.field
+              !this.redactor.isSensitiveName(fact.field)) {
+            item.attrs.query_field = fact.field
+            if (typeof fact.queryValue === 'string' && /^(?:[0-9]{1,20}|true|false)$/.test(fact.queryValue) &&
+                this.redactor.redactString(fact.queryValue) === fact.queryValue &&
+                !isSensitiveFormControl(element, this.redactor)) item.attrs.query_value = fact.queryValue
+          }
         }
       } catch { /* An unavailable application fact grants no control. */ }
     }

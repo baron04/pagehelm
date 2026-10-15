@@ -18,6 +18,28 @@ function controller(): PageControllerApi {
 }
 
 describe('adapter-issued single-choice combobox drafts', () => {
+  it('verifies an unnamed line only by its exact current ref, live form instance and value', () => {
+    const form = document.createElement('form')
+    form.id = 'unnamed-line'
+    form.innerHTML = '<input type="number" value="2">'
+    document.body.append(form)
+    try {
+      let input = form.querySelector('input')!
+      const page = new Page(controller(), () => input, createRedactor())
+      const instance = formInstance(input)!
+      const observed = [{ref:'e1', role:'spinbutton', name:'', tag:'input', epoch:1,
+        attrs:{title:'Line 1 · Quantity', form_scope:'form:unnamed-line', form_instance:instance}}]
+      const binding = {ref:'e1', field:'Line 1 · Quantity', control:'spinbutton', value:'2',
+        scope:'form:unnamed-line', binding:'ref', instance}
+      expect(page.verifyFormFields([binding],observed)).toBe(true)
+      for (const bad of [{...binding,ref:'e2'}, {...binding,instance:'expired'}, {...binding,ref:undefined},
+        {...binding,value:'3'}, {...binding,scope:'form:other'}])
+        expect(page.verifyFormFields([bad],observed)).toBe(false)
+      input.replaceWith(input.cloneNode() as HTMLInputElement)
+      input = form.querySelector('input')!
+      expect(page.verifyFormFields([binding],observed)).toBe(false)
+    } finally {form.remove()}
+  })
   function setup(extra = '', interrupt: () => boolean = () => false) {
     const form = document.createElement('form')
     form.id = 'choice-form'
@@ -29,9 +51,9 @@ describe('adapter-issued single-choice combobox drafts', () => {
     for (const node of [input, list, ...list.querySelectorAll('li')])
       node.getBoundingClientRect = () => ({width: 100, height: 20} as DOMRect)
     const api = controller()
-    api.getBrowserState = vi.fn(async () => ({url:location.href, title:'', content:'[2]<li role=option>Alex />'}))
+    api.getBrowserState = vi.fn(async () => ({url:location.href, title:'', content:'[1]<input />\n[2]<li role=option>Alex />'}))
     api.clickElement = vi.fn(async index => {
-      if (index === 1) {list.hidden = false; input.setAttribute('aria-expanded','true')}
+      if (index === 1) {list.hidden = !list.hidden; input.setAttribute('aria-expanded',String(!list.hidden))}
       else {option.setAttribute('aria-selected','true'); list.hidden = true; input.setAttribute('aria-expanded','false')}
       return {success:true}
     })
@@ -66,6 +88,40 @@ describe('adapter-issued single-choice combobox drafts', () => {
       expect(s.option.getAttribute('aria-selected')).toBe('false')
     } finally {s.form.remove()}
   })
+  it('proves no selection even when the open popup leaves no current ref for dismissal', async () => {
+    const s = setup()
+    try {
+      s.api.getBrowserState = vi.fn(async () => ({url:location.href, title:'', content:'[2]<li role=option>Alex />'}))
+      await expect(s.page.select('e1','Missing','Missing')).rejects.toMatchObject({
+        code:'option_unavailable', no_effect:true, candidate_labels:['Alex'],
+      })
+      expect(s.api.clickElement).toHaveBeenCalledTimes(1)
+      expect(s.input.getAttribute('aria-expanded')).toBe('true')
+    } finally {s.form.remove()}
+  })
+  it('ignores the assistant panel during selection indexing and restores its hit targets', async () => {
+    const s = setup()
+    const panel = document.body.appendChild(document.createElement('div'))
+    panel.style.pointerEvents = 'auto'
+    const events = new EventTarget()
+    s.api.addEventListener = events.addEventListener.bind(events)
+    s.api.removeEventListener = events.removeEventListener.bind(events)
+    s.api.getBrowserState = vi.fn(async () => {
+      events.dispatchEvent(new Event('beforeUpdate'))
+      const content = panel.style.pointerEvents === 'none' ? '[2]<li role=option>Alex />' : ''
+      events.dispatchEvent(new Event('afterUpdate'))
+      return {url:location.href,title:'',content}
+    })
+    const page = new Page(s.api, (_, index) => index === 1 ? s.input : s.option, createRedactor(),
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, panel)
+    try {
+      await page.select('e1','17','Alex')
+      expect(s.api.clickElement).toHaveBeenLastCalledWith(2)
+      expect(s.api.scroll).not.toHaveBeenCalled()
+      expect(panel.style.pointerEvents).toBe('auto')
+    } finally {s.form.remove(); panel.remove()}
+  })
   it('refuses duplicate, disabled or multi-select options without choosing anything', async () => {
     for (const mode of ['duplicate','disabled','multiple']) {
       const s = setup(mode === 'duplicate' ? '<li role="option">Alex</li>' : '')
@@ -76,6 +132,56 @@ describe('adapter-issued single-choice combobox drafts', () => {
         expect(s.api.clickElement).not.toHaveBeenCalledWith(2)
       } finally {s.form.remove()}
     }
+  })
+  it('closes an unavailable choice by its fresh control reference after reindexing', async () => {
+    const s = setup()
+    let fresh = false
+    const page = new Page(s.api, (_, index) => fresh ? index === 3 ? s.input : s.option : s.input,
+      createRedactor())
+    try {
+      s.api.getBrowserState = vi.fn(async () => {
+        fresh = true
+        return {url:location.href,title:'',content:'[1]<li role=option>Alex />\n[3]<input />'}
+      })
+      s.api.clickElement = vi.fn(async index => {
+        if (!fresh && index === 1) {s.list.hidden = false; s.input.setAttribute('aria-expanded','true')}
+        else if (fresh && index === 3) {s.list.hidden = true; s.input.setAttribute('aria-expanded','false')}
+        else s.option.setAttribute('aria-selected','true')
+        return {success:true}
+      })
+      await expect(page.select('e1','99','Nobody')).rejects.toMatchObject({
+        code: 'option_unavailable', candidate_labels: ['Alex'], no_effect: true})
+      expect(vi.mocked(s.api.clickElement).mock.calls).toEqual([[1],[3]])
+      expect(s.option.getAttribute('aria-selected')).toBe('false')
+    } finally {s.form.remove()}
+  })
+  it('proves unchanged values even when the widget does not toggle its popup closed', async () => {
+    const s = setup()
+    s.api.clickElement = vi.fn(async () => {
+      s.list.hidden = false
+      s.input.setAttribute('aria-expanded', 'true')
+      return {success: true}
+    })
+    try {
+      await expect(s.page.select('e1', '99', 'Nobody')).rejects.toMatchObject({
+        code: 'option_unavailable', candidate_labels: ['Alex'], no_effect: true})
+      expect(s.option.getAttribute('aria-selected')).toBe('false')
+    } finally {s.form.remove()}
+  })
+  it('does not claim no effect when opening the list changed another local field', async () => {
+    const s = setup()
+    const other = document.createElement('input')
+    s.form.append(other)
+    s.api.clickElement = vi.fn(async () => {
+      other.value = 'changed'
+      s.list.hidden = !s.list.hidden
+      s.input.setAttribute('aria-expanded', String(!s.list.hidden))
+      return {success: true}
+    })
+    try {
+      await expect(s.page.select('e1', '99', 'Nobody')).rejects.toMatchObject({
+        code: 'option_unavailable', no_effect: false})
+    } finally {s.form.remove()}
   })
   it('stops when the user intervenes between opening and choosing', async () => {
     let interrupted = false
@@ -121,6 +227,21 @@ describe('adapter-issued single-choice combobox drafts', () => {
       expect(vi.mocked(s.api.scroll).mock.calls.length).toBeLessThanOrEqual(3)
       expect(s.api.scroll).toHaveBeenCalledWith(expect.objectContaining({index:3, down:true}))
       expect(s.api.clickElement).toHaveBeenNthCalledWith(2,2)
+    } finally {s.form.remove()}
+  })
+  it('observes the result of the last permitted scroll before declaring the option unavailable', async () => {
+    const s = setup('<li role="option">Bob</li>')
+    const other = s.list.lastElementChild!
+    let moves = 0
+    const page = new Page(s.api, (_, index) => index === 1 ? s.input : index === 2 ? s.option : other,
+      createRedactor())
+    try {
+      s.api.getBrowserState = vi.fn(async () => ({url:location.href,title:'',
+        content:moves === 8 ? '[2]<li role=option>Alex />' : '[3]<li role=option>Bob />'}))
+      s.api.scroll = vi.fn(async () => {moves++; return {success:true}})
+      await page.select('e1','17','Alex')
+      expect(s.api.scroll).toHaveBeenCalledTimes(8)
+      expect(s.api.clickElement).toHaveBeenLastCalledWith(2)
     } finally {s.form.remove()}
   })
 })
@@ -219,6 +340,11 @@ describe('Page.describe bounds an observation before it crosses the browser boun
         content: '[1]<input />'}, 1).observation.elements[0]?.attrs
       expect(read({kind: 'query'})).toMatchObject({page_control: 'query'})
       expect(read({kind: 'query', field: 'searchTerm'})).toMatchObject({query_field: 'searchTerm'})
+      expect(read({kind: 'query', field: 'productId', queryValue: '7'})).toMatchObject({query_value: '7'})
+      for (const queryValue of ['private-text', '-1', '1'.repeat(100), {}, 7]) {
+        expect(read({kind: 'query', field: 'productId', queryValue})?.query_value).toBeUndefined()
+      }
+      expect(read({kind: 'query', field: 'password', queryValue: '7'})?.query_value).toBeUndefined()
       for (const field of ['password', 'accessToken', '../outside', 'x'.repeat(500), 1]) {
         expect(read({kind: 'query', field})?.query_field).toBeUndefined()
       }

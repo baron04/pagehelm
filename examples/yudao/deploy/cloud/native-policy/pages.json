@@ -1,0 +1,752 @@
+{
+  "schema_version": 1,
+  "release": "v2026.09",
+  "review": "v2026.09-explicit-submit-page-handlers-1",
+  "handlers": [
+    {
+      "kind": "navigation",
+      "route": "/system/post",
+      "evidence": "v2026.09-page-handlers.md#system-post",
+      "sha256": "f46ede0c41be7a6595a5e3ed386b670f090f7efd11701179c43daedfc5a132f3",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/system/post",
+      "evidence": "v2026.09-page-handlers.md#system-post",
+      "sha256": "f46ede0c41be7a6595a5e3ed386b670f090f7efd11701179c43daedfc5a132f3",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/system/post",
+      "evidence": "v2026.09-page-handlers.md#system-post",
+      "sha256": "f46ede0c41be7a6595a5e3ed386b670f090f7efd11701179c43daedfc5a132f3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/post",
+      "evidence": "v2026.09-page-handlers.md#system-post",
+      "sha256": "f46ede0c41be7a6595a5e3ed386b670f090f7efd11701179c43daedfc5a132f3",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/post",
+      "evidence": "v2026.09-page-handlers.md#system-post",
+      "sha256": "f46ede0c41be7a6595a5e3ed386b670f090f7efd11701179c43daedfc5a132f3",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/system/dict",
+      "evidence": "v2026.09-page-handlers.md#system-dict",
+      "sha256": "6872c7c1a28bbd910a91af96d3dc8d3fccd4dbd6bc4d01e089eb08f923d8175f",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/system/dict",
+      "evidence": "v2026.09-page-handlers.md#system-dict",
+      "sha256": "6872c7c1a28bbd910a91af96d3dc8d3fccd4dbd6bc4d01e089eb08f923d8175f",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/system/dict",
+      "evidence": "v2026.09-page-handlers.md#system-dict",
+      "sha256": "6872c7c1a28bbd910a91af96d3dc8d3fccd4dbd6bc4d01e089eb08f923d8175f",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/infra/config",
+      "evidence": "v2026.09-page-handlers.md#infra-config",
+      "sha256": "85888c409f2ee4c74fed8f4fcd144759c16769b41887118280c76e18a0a7b356",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/infra/config",
+      "evidence": "v2026.09-page-handlers.md#infra-config",
+      "sha256": "85888c409f2ee4c74fed8f4fcd144759c16769b41887118280c76e18a0a7b356",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/infra/config",
+      "evidence": "v2026.09-page-handlers.md#infra-config",
+      "sha256": "85888c409f2ee4c74fed8f4fcd144759c16769b41887118280c76e18a0a7b356",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/sale/customer",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-customer",
+      "sha256": "a09eecbd2ed876d5393523ee4979241bb75623720a95e6a09cfe3ecfaca672a8",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/sale/customer",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-customer",
+      "sha256": "a09eecbd2ed876d5393523ee4979241bb75623720a95e6a09cfe3ecfaca672a8",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/sale/customer",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-customer",
+      "sha256": "a09eecbd2ed876d5393523ee4979241bb75623720a95e6a09cfe3ecfaca672a8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/sale/customer",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-customer",
+      "sha256": "a09eecbd2ed876d5393523ee4979241bb75623720a95e6a09cfe3ecfaca672a8",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/sale/customer",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-customer",
+      "sha256": "a09eecbd2ed876d5393523ee4979241bb75623720a95e6a09cfe3ecfaca672a8",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/product/unit",
+      "evidence": "v2026.09-page-handlers.md#erp-product-unit",
+      "sha256": "af3ea7e71d4578598300d47da76b83934770a6b466a24bdfcfad56f6d3396192",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/product/unit",
+      "evidence": "v2026.09-page-handlers.md#erp-product-unit",
+      "sha256": "af3ea7e71d4578598300d47da76b83934770a6b466a24bdfcfad56f6d3396192",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/product/unit",
+      "evidence": "v2026.09-page-handlers.md#erp-product-unit",
+      "sha256": "af3ea7e71d4578598300d47da76b83934770a6b466a24bdfcfad56f6d3396192",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/product/unit",
+      "evidence": "v2026.09-page-handlers.md#erp-product-unit",
+      "sha256": "af3ea7e71d4578598300d47da76b83934770a6b466a24bdfcfad56f6d3396192",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/product/unit",
+      "evidence": "v2026.09-page-handlers.md#erp-product-unit",
+      "sha256": "af3ea7e71d4578598300d47da76b83934770a6b466a24bdfcfad56f6d3396192",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/sale/out",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-out",
+      "sha256": "076ad4c11d09873208f3c6d863e702e49e65d8542c1e3b1afc12620211f88bb1",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/sale/out",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-out",
+      "sha256": "076ad4c11d09873208f3c6d863e702e49e65d8542c1e3b1afc12620211f88bb1",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/sale/out",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-out",
+      "sha256": "076ad4c11d09873208f3c6d863e702e49e65d8542c1e3b1afc12620211f88bb1",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/sale/return",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-return",
+      "sha256": "8e8eafa6de47dee5bcdedd42b51e990d0af17a50d44b623a19e831e343a89518",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/sale/return",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-return",
+      "sha256": "8e8eafa6de47dee5bcdedd42b51e990d0af17a50d44b623a19e831e343a89518",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/sale/return",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-return",
+      "sha256": "8e8eafa6de47dee5bcdedd42b51e990d0af17a50d44b623a19e831e343a89518",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/purchase/supplier",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-supplier",
+      "sha256": "2f1f7b6c26ac1e441781e5e330b9694dfcec9f563d59a85b2bc7b38645cf29ad",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/finance/account",
+      "evidence": "v2026.09-page-handlers.md#erp-finance-account",
+      "sha256": "9122d6cd22e376ad7216b50098e22b82029981274b977796fb60186f0ff7012c",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/pay/app",
+      "evidence": "v2026.09-page-handlers.md#pay-app",
+      "sha256": "b58277ec91b14c5bc0bfd0f22f2debe46f1cd5f6e7640bcf72a28456561e3eb8",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/pay/order",
+      "evidence": "v2026.09-page-handlers.md#pay-order",
+      "sha256": "eb37ddb2196a85f871196228c4712d3d8da5df1894ec51f0213cbc649106c99b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/pay/order",
+      "evidence": "v2026.09-page-handlers.md#pay-order",
+      "sha256": "eb37ddb2196a85f871196228c4712d3d8da5df1894ec51f0213cbc649106c99b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/pay/order",
+      "evidence": "v2026.09-page-handlers.md#pay-order",
+      "sha256": "eb37ddb2196a85f871196228c4712d3d8da5df1894ec51f0213cbc649106c99b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/pay/refund",
+      "evidence": "v2026.09-page-handlers.md#pay-refund",
+      "sha256": "4fe94584c7ddbcfcf48f94f37145bf286e646253cc9d8bd64d4cb52cc3fa1a20",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/pay/wallet/wallet-recharge-package",
+      "evidence": "v2026.09-page-handlers.md#pay-wallet-rechargePackage",
+      "sha256": "5c62a482a81cb39f9542cbfdbd675f4bfd41b2405d2da9927d1dec75f90a87ee",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/pay/wallet/wallet-recharge-package",
+      "evidence": "v2026.09-page-handlers.md#pay-wallet-rechargePackage",
+      "sha256": "5c62a482a81cb39f9542cbfdbd675f4bfd41b2405d2da9927d1dec75f90a87ee",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/pay/wallet/wallet-recharge-package",
+      "evidence": "v2026.09-page-handlers.md#pay-wallet-rechargePackage",
+      "sha256": "5c62a482a81cb39f9542cbfdbd675f4bfd41b2405d2da9927d1dec75f90a87ee",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/member/signin/config",
+      "evidence": "v2026.09-page-handlers.md#member-signin-config",
+      "sha256": "dc762ff1df426344fc23faff620493d1232e03c79d8652778eeaaafaa5f9f016",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/member/signin/config",
+      "evidence": "v2026.09-page-handlers.md#member-signin-config",
+      "sha256": "dc762ff1df426344fc23faff620493d1232e03c79d8652778eeaaafaa5f9f016",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/member/signin/config",
+      "evidence": "v2026.09-page-handlers.md#member-signin-config",
+      "sha256": "dc762ff1df426344fc23faff620493d1232e03c79d8652778eeaaafaa5f9f016",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/mall/product/property",
+      "evidence": "v2026.09-page-handlers.md#mall-product-property",
+      "sha256": "630ed263b44654dc51bb36370af25a29c74d82bc05f973e6a3be4ecd17db7769",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/product/property",
+      "evidence": "v2026.09-page-handlers.md#mall-product-property",
+      "sha256": "630ed263b44654dc51bb36370af25a29c74d82bc05f973e6a3be4ecd17db7769",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/product/property",
+      "evidence": "v2026.09-page-handlers.md#mall-product-property",
+      "sha256": "630ed263b44654dc51bb36370af25a29c74d82bc05f973e6a3be4ecd17db7769",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/mall/trade/delivery/express/express",
+      "evidence": "v2026.09-page-handlers.md#mall-trade-delivery-express",
+      "sha256": "ffb082f7a3a7330bd5859ed5b2332f14f9be6e104bc7fa7be1b136e4cb54ad06",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/trade/delivery/express/express",
+      "evidence": "v2026.09-page-handlers.md#mall-trade-delivery-express",
+      "sha256": "ffb082f7a3a7330bd5859ed5b2332f14f9be6e104bc7fa7be1b136e4cb54ad06",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/trade/delivery/express/express",
+      "evidence": "v2026.09-page-handlers.md#mall-trade-delivery-express",
+      "sha256": "ffb082f7a3a7330bd5859ed5b2332f14f9be6e104bc7fa7be1b136e4cb54ad06",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/oa/meetingroom/room",
+      "evidence": "v2026.09-page-handlers.md#oa-meetingroom-room",
+      "sha256": "80765ac935ce2ec60a4d6a82c6ca941f66860aaada05f90e6dd8e2b2541aa5ca",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/meetingroom/room",
+      "evidence": "v2026.09-page-handlers.md#oa-meetingroom-room",
+      "sha256": "80765ac935ce2ec60a4d6a82c6ca941f66860aaada05f90e6dd8e2b2541aa5ca",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/meetingroom/room",
+      "evidence": "v2026.09-page-handlers.md#oa-meetingroom-room",
+      "sha256": "80765ac935ce2ec60a4d6a82c6ca941f66860aaada05f90e6dd8e2b2541aa5ca",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/bpm/manager/user-group",
+      "evidence": "v2026.09-page-handlers.md#bpm-group",
+      "sha256": "57e8bae6f8f274db80dc5ca8587559ce101152546dd1b597af4a8bc5f488364f",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/bpm/manager/user-group",
+      "evidence": "v2026.09-page-handlers.md#bpm-group",
+      "sha256": "57e8bae6f8f274db80dc5ca8587559ce101152546dd1b597af4a8bc5f488364f",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/bpm/manager/user-group",
+      "evidence": "v2026.09-page-handlers.md#bpm-group",
+      "sha256": "57e8bae6f8f274db80dc5ca8587559ce101152546dd1b597af4a8bc5f488364f",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/employee/list",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee",
+      "sha256": "d38a9e358c48e2af1bdd23d0b26c773bfb769bb2f770aa5a5b7a55af431077f1",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/employee/list",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee",
+      "sha256": "d38a9e358c48e2af1bdd23d0b26c773bfb769bb2f770aa5a5b7a55af431077f1",
+      "controls": [
+        "展开",
+        "收起"
+      ]
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/employee/list",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee",
+      "sha256": "d38a9e358c48e2af1bdd23d0b26c773bfb769bb2f770aa5a5b7a55af431077f1",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/employee/list",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee",
+      "sha256": "d38a9e358c48e2af1bdd23d0b26c773bfb769bb2f770aa5a5b7a55af431077f1",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/employee/list",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee",
+      "sha256": "d38a9e358c48e2af1bdd23d0b26c773bfb769bb2f770aa5a5b7a55af431077f1",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/employee/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee-detail",
+      "sha256": "af5ab6561edc9cbabb885a2ee42971c44a7bc5d756d16ac004995c0d6380a2bb",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/employee/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee-detail",
+      "sha256": "af5ab6561edc9cbabb885a2ee42971c44a7bc5d756d16ac004995c0d6380a2bb",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/employee/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee-detail",
+      "sha256": "af5ab6561edc9cbabb885a2ee42971c44a7bc5d756d16ac004995c0d6380a2bb",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/employee/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#hrm-employee-detail",
+      "sha256": "af5ab6561edc9cbabb885a2ee42971c44a7bc5d756d16ac004995c0d6380a2bb",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/recruit/settings/channel",
+      "evidence": "v2026.09-page-handlers.md#hrm-recruit-channel",
+      "sha256": "cd19f3a9f09196f3ffdb51b8b6f0a3b8dbd620c7aa931d6f6047b8ab4fd5f9df",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/customer",
+      "evidence": "v2026.09-page-handlers.md#crm-customer",
+      "sha256": "1f1496450d0603ef4fd65942fea79ba5f61eec2ee90349de7fd11862c8e12137",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/customer",
+      "evidence": "v2026.09-page-handlers.md#crm-customer",
+      "sha256": "1f1496450d0603ef4fd65942fea79ba5f61eec2ee90349de7fd11862c8e12137",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/customer",
+      "evidence": "v2026.09-page-handlers.md#crm-customer",
+      "sha256": "1f1496450d0603ef4fd65942fea79ba5f61eec2ee90349de7fd11862c8e12137",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/customer",
+      "evidence": "v2026.09-page-handlers.md#crm-customer",
+      "sha256": "1f1496450d0603ef4fd65942fea79ba5f61eec2ee90349de7fd11862c8e12137",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/customer/pool",
+      "evidence": "v2026.09-page-handlers.md#crm-customer-pool",
+      "sha256": "046de07eaa66d71862b06c19fedb05486a2d92f9de9affbdc5d5e1ada19846e9",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/customer/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-customer-detail",
+      "sha256": "9d0017e57e37fb7f95d42c4d4095f17e9e1c1fac64389015629f46197f7b4134",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/customer/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-customer-detail",
+      "sha256": "9d0017e57e37fb7f95d42c4d4095f17e9e1c1fac64389015629f46197f7b4134",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/customer/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-customer-detail",
+      "sha256": "9d0017e57e37fb7f95d42c4d4095f17e9e1c1fac64389015629f46197f7b4134",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/customer/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-customer-detail",
+      "sha256": "9d0017e57e37fb7f95d42c4d4095f17e9e1c1fac64389015629f46197f7b4134",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/contact",
+      "evidence": "v2026.09-page-handlers.md#crm-contact",
+      "sha256": "e551286c4027432443497b976a11142c915abaf612776e2cfa8c143e3876f52e",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/contact",
+      "evidence": "v2026.09-page-handlers.md#crm-contact",
+      "sha256": "e551286c4027432443497b976a11142c915abaf612776e2cfa8c143e3876f52e",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/contact",
+      "evidence": "v2026.09-page-handlers.md#crm-contact",
+      "sha256": "e551286c4027432443497b976a11142c915abaf612776e2cfa8c143e3876f52e",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/contact",
+      "evidence": "v2026.09-page-handlers.md#crm-contact",
+      "sha256": "e551286c4027432443497b976a11142c915abaf612776e2cfa8c143e3876f52e",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/contact/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-contact-detail",
+      "sha256": "7a9ab236519d3d8b5987661d789162d2caad8cd90f8a4f665ca496077e997ca0",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/contact/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-contact-detail",
+      "sha256": "7a9ab236519d3d8b5987661d789162d2caad8cd90f8a4f665ca496077e997ca0",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/contact/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-contact-detail",
+      "sha256": "7a9ab236519d3d8b5987661d789162d2caad8cd90f8a4f665ca496077e997ca0",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/contact/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-contact-detail",
+      "sha256": "7a9ab236519d3d8b5987661d789162d2caad8cd90f8a4f665ca496077e997ca0",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/business/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-business-detail",
+      "sha256": "66dc55af6c37c615365a1f2e1dd6db9f567407473dc7bcc7c7c8c75e3034505b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/business/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-business-detail",
+      "sha256": "66dc55af6c37c615365a1f2e1dd6db9f567407473dc7bcc7c7c8c75e3034505b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/business/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-business-detail",
+      "sha256": "66dc55af6c37c615365a1f2e1dd6db9f567407473dc7bcc7c7c8c75e3034505b",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/business/detail/{id}",
+      "evidence": "v2026.09-page-handlers.md#crm-business-detail",
+      "sha256": "66dc55af6c37c615365a1f2e1dd6db9f567407473dc7bcc7c7c8c75e3034505b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/sale/order",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-order",
+      "sha256": "abfcb5538804cdb932d34e5d413e0a146f9b6352a7bf633b6b2ffd58cfe27bba",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/sale/order",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-order",
+      "sha256": "abfcb5538804cdb932d34e5d413e0a146f9b6352a7bf633b6b2ffd58cfe27bba",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/sale/order",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-order",
+      "sha256": "abfcb5538804cdb932d34e5d413e0a146f9b6352a7bf633b6b2ffd58cfe27bba",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/erp/sale/order",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-order",
+      "sha256": "abfcb5538804cdb932d34e5d413e0a146f9b6352a7bf633b6b2ffd58cfe27bba",
+      "controls": [
+        "+ 添加销售产品"
+      ]
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/purchase/order",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-order",
+      "sha256": "399fa766d4a9521d60a3f4e77bced4871706badfbfd834fca22ffdb8e09b74a7",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/purchase/order",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-order",
+      "sha256": "399fa766d4a9521d60a3f4e77bced4871706badfbfd834fca22ffdb8e09b74a7",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/purchase/order",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-order",
+      "sha256": "399fa766d4a9521d60a3f4e77bced4871706badfbfd834fca22ffdb8e09b74a7",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/erp/purchase/order",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-order",
+      "sha256": "399fa766d4a9521d60a3f4e77bced4871706badfbfd834fca22ffdb8e09b74a7",
+      "controls": [
+        "+ 添加采购产品"
+      ]
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/stock/in",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-in",
+      "sha256": "46eba2f623d75a73dbda562572d4a8702a40e54197436197b782abbbca896e4d",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/stock/in",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-in",
+      "sha256": "46eba2f623d75a73dbda562572d4a8702a40e54197436197b782abbbca896e4d",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/stock/in",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-in",
+      "sha256": "46eba2f623d75a73dbda562572d4a8702a40e54197436197b782abbbca896e4d",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/stock/in",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-in",
+      "sha256": "46eba2f623d75a73dbda562572d4a8702a40e54197436197b782abbbca896e4d",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/erp/stock/in",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-in",
+      "sha256": "46eba2f623d75a73dbda562572d4a8702a40e54197436197b782abbbca896e4d",
+      "controls": [
+        "+ 添加入库产品"
+      ]
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/business",
+      "evidence": "v2026.09-page-handlers.md#crm-business",
+      "sha256": "211e7bbff748510d65728652aaed39bb916cb12331513de31ffe9fb8beda4624",
+      "controls": []
+    }
+  ]
+}

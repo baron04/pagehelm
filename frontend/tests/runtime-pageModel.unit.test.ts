@@ -21,6 +21,7 @@ describe('observable form labels and scopes', () => {
       elements[0]!.attrs.selected_option = 'invented'
       hydrateFormFacts(elements, {}, () => input, redactor)
       expect(elements[0]!.attrs.selected_option).toBe('Waiting')
+      expect(elements[0]!.attrs['aria-controls']).toBe('choice-options')
       form.querySelectorAll('li')[1]!.setAttribute('aria-selected', 'true')
       hydrateFormFacts(elements, {}, () => input, redactor)
       expect(elements[0]!.attrs.selected_option).toBeUndefined()
@@ -29,6 +30,21 @@ describe('observable form labels and scopes', () => {
       hydrateFormFacts(elements, {}, () => input, redactor)
       expect(elements[0]!.attrs.selected_option).toBeUndefined()
     } finally { form.remove() }
+  })
+  it('projects only the unique ARIA listbox owning an option', () => {
+    const list = document.createElement('ul')
+    list.id = 'paging-options'; list.setAttribute('role', 'listbox')
+    list.innerHTML = '<li role="option">20</li>'
+    document.body.append(list)
+    try {
+      const elements = elementsFrom('[0]<li role=option>20 />', 1, redactor)
+      hydrateFormFacts(elements, {}, () => list.firstElementChild!, redactor)
+      expect(elements[0]!.attrs.listbox_owner).toBe('paging-options')
+      const duplicate = list.cloneNode() as HTMLElement; document.body.append(duplicate)
+      hydrateFormFacts(elements, {}, () => list.firstElementChild!, redactor)
+      expect(elements[0]!.attrs.listbox_owner).toBeUndefined()
+      duplicate.remove()
+    } finally { list.remove() }
   })
   it('binds an idless native search form to one DOM lifetime without inventing an id', () => {
     const form = document.createElement('form')

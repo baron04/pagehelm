@@ -39,6 +39,9 @@ describe('adapter-issued radio choice', () => {
     try {
       expect(s.observed.filter(e => e.role === 'radiogroup')).toHaveLength(1)
       expect(s.observed[0]?.attrs.field_label).toBe('Visibility')
+      expect(JSON.parse(s.observed[0]!.attrs.radio_options!)).toEqual(aria
+        ? [{label:'Private',value:'Private'}, {label:'Public',value:'Public'}]
+        : [{label:'Private',value:'false'}, {label:'Public',value:'true'}])
       await s.page.select('e1', 'true', 'Public')
       expect(s.api.clickElement).toHaveBeenCalledExactlyOnceWith(2)
       expect(s.page.verifyFormFields(s.fields, s.observed)).toBe(true)
@@ -46,6 +49,18 @@ describe('adapter-issued radio choice', () => {
       else s.options[1]!.setAttribute('aria-checked', 'false')
       expect(s.page.verifyFormFields(s.fields, s.observed)).toBe(false)
     } finally { s.form.remove() }
+  })
+  it('omits label/value facts for ambiguous or sensitive options', () => {
+    for (const mode of ['duplicate', 'sensitive']) {
+      const s = setup()
+      try {
+        if (mode === 'duplicate') s.group.firstElementChild!.firstChild!.textContent = 'Public'
+        else (s.options[0] as HTMLInputElement).value = 'token=synthetic-secret'
+        const observed = hydrateFormFacts([{ref:'e1',role:'radio',name:'',tag:'input',epoch:1,attrs:{}}],
+          {}, () => s.options[0], createRedactor())
+        expect(observed[0]!.attrs.radio_options).toBeUndefined()
+      } finally {s.form.remove()}
+    }
   })
   it.each(['duplicate', 'disabled', 'wrong-group', 'sensitive'])('refuses %s without an option click', async mode => {
     const s = setup()

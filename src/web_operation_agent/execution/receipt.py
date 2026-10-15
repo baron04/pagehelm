@@ -16,7 +16,8 @@ from ..modeling.spend import BudgetExhausted
 from .events import current_events
 
 STAGES = frozenset({"scope", "interpret", "vote", "reconcile", "repair", "source",
-                    "business", "ui", "wait", "model"})
+                    "business", "ui", "wait", "model", "action_approval",
+                    "action_admission", "action_dispatch", "action_verification"})
 _ACCOUNTING = ("model_calls", "usage_unavailable_calls", "known_input_tokens",
                "known_output_tokens", "known_cached_tokens", "known_reasoning_tokens",
                "known_cost_cny", "total_cost_cny")

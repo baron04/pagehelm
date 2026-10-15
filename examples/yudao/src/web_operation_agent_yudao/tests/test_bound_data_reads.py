@@ -9,7 +9,7 @@ from web_operation_agent.business.errors import BusinessToolIdentityError
 from web_operation_agent.goal.read_tools import DataReadTools
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.transport.browser import TurnCancelled
-from web_operation_agent_yudao.bound_data_reads import BoundDataReads
+from web_operation_agent_yudao.bound_data_reads import BoundDataReads, turn_actor_reads
 from web_operation_agent_yudao.client import YudaoClient
 from web_operation_agent_yudao.goal import YudaoGoalData
 from .test_goal import _Client, DOCS
@@ -77,6 +77,67 @@ class BoundDataReadTests(unittest.TestCase):
         self.assertEqual(1, sum(path == "crm/contract/page" for path, _ in self.fixture.calls))
         # A cancelled context cannot leak into the next independent client read.
         self.assertIn("user", self.client.get("system/auth/get-permission-info"))
+
+    def test_turn_reuses_only_identity_match_and_next_turn_asserts_again(self):
+        with turn_actor_reads(self.client):
+            first = BoundDataReads(self.data, self.context, lambda: None)
+            second = BoundDataReads(self.data, self.context, lambda: None)
+            self.assertEqual(first._generation, second._generation)
+        assertions = lambda: sum(p == "system/auth/get-permission-info" for p, _ in self.fixture.calls)
+        self.assertEqual(assertions(), 1)
+        with turn_actor_reads(self.client):
+            BoundDataReads(self.data, self.context, lambda: None)
+        self.assertEqual(assertions(), 2)
+        # Ordinary callers outside the slim turn retain independent assertions.
+        BoundDataReads(self.data, self.context, lambda: None)
+        self.assertEqual(assertions(), 3)
+
+    def test_cached_match_keeps_cancellation_and_credential_checks(self):
+        with turn_actor_reads(self.client):
+            BoundDataReads(self.data, self.context, lambda: None)
+            def stopped():
+                raise TurnCancelled("stopped")
+            with self.assertRaises(TurnCancelled):
+                BoundDataReads(self.data, self.context, stopped)
+            self.client.renew("synthetic-replacement")
+            with self.assertRaises(BusinessToolIdentityError):
+                BoundDataReads(self.data, self.context, lambda: None)
+
+    def test_scope_never_crosses_principal_session_or_turn(self):
+        from dataclasses import replace
+        with turn_actor_reads(self.client):
+            BoundDataReads(self.data, self.context, lambda: None)
+            for context in (replace(self.context, session_id="other"),
+                            replace(self.context, turn_id="other"),
+                            replace(self.context, principal=replace(self.context.principal, actor_id="2"))):
+                with self.subTest(context=context), self.assertRaises(BusinessToolIdentityError):
+                    BoundDataReads(self.data, context, lambda: None)
+
+    def test_cached_match_cannot_hide_expiry_or_live_permission_refusal(self):
+        from web_operation_agent.state.identity import PrincipalError
+        from web_operation_agent.business.errors import BusinessToolPermissionError
+        with turn_actor_reads(self.client):
+            bound = BoundDataReads(self.data, self.context, lambda: None)
+            with patch("web_operation_agent.state.identity.time.time", return_value=self.context.expires_at/1000+1):
+                with self.assertRaises(PrincipalError):
+                    BoundDataReads(self.data, self.context, lambda: None)
+            def denied(*args, **kwargs):
+                from web_operation_agent_yudao.client import YudaoReadRefused
+                raise YudaoReadRefused("synthetic denied", code=403)
+            with self.assertRaises(BusinessToolPermissionError):
+                bound._invoke(denied)
+
+    def test_failed_or_thread_local_assertions_are_not_reused(self):
+        from concurrent.futures import ThreadPoolExecutor
+        self.user = {"id": 2, "deptId": 10}
+        with turn_actor_reads(self.client):
+            with self.assertRaises(BusinessToolIdentityError):
+                BoundDataReads(self.data, self.context, lambda: None)
+            self.user = {"id": 1, "deptId": 10}
+            BoundDataReads(self.data, self.context, lambda: None)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(BoundDataReads, self.data, self.context, lambda: None).result()
+        self.assertEqual(sum(p == "system/auth/get-permission-info" for p, _ in self.fixture.calls), 3)
 
 
 if __name__ == "__main__":

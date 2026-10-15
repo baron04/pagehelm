@@ -1,8 +1,22 @@
 import {describe, it, expect} from 'vitest'
-import {formInstance} from '../src/runtime/formInstance'
+import {formInstance, formLifetime} from '../src/runtime/formInstance'
 import {actionElementFingerprint} from '../src/runtime/pageModel'
 
 describe('current form instance is a DOM lifetime fact', () => {
+  it('keeps root lifetime across additive lines and revokes it on root replacement or reopen', () => {
+    const form = document.createElement('form'); form.innerHTML = '<input>'
+    document.body.append(form)
+    try {
+      const input = form.querySelector('input')!, instance = formInstance(input), lifetime = formLifetime(input)
+      form.append(document.createElement('input'))
+      expect(formInstance(input)).not.toBe(instance)
+      expect(formLifetime(input)).toBe(lifetime)
+      form.hidden = true; form.hidden = false
+      expect(formLifetime(input)).not.toBe(lifetime)
+      const second = formLifetime(input); form.remove(); document.body.append(form)
+      expect(formLifetime(input)).not.toBe(second)
+    } finally { form.remove() }
+  })
   it('shares one token for fields and footer while values change', () => {
     const form = document.createElement('form')
     form.innerHTML = '<input name="name"><button>Save</button>'

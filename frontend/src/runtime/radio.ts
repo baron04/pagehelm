@@ -1,5 +1,6 @@
 /** A bounded, DOM-owned single-choice group; no application selectors or plans. */
 import type {ElementLike} from './pageModel'
+import browserContract from '@contract/browser_contract.json'
 
 export function radioGroup(element: ElementLike | null | undefined): HTMLElement | null {
   if (typeof HTMLElement === 'undefined' || !(element instanceof HTMLElement)) return null
@@ -16,7 +17,7 @@ export function radioChoices(group: HTMLElement): HTMLElement[] {
     .filter(e => e.closest('[role="radiogroup"]') === group)
     // A wrapper with role=radio around a native input is one option, not two.
     .filter(e => e instanceof HTMLInputElement || !e.querySelector('input[type="radio"]'))
-  if (!candidates.length || candidates.length > 50) return []
+  if (!candidates.length || candidates.length > browserContract.form_handoff.max_choice_options) return []
   const native = candidates.filter((e): e is HTMLInputElement => e instanceof HTMLInputElement)
   if (native.length && (native.length !== candidates.length ||
       new Set(native.map(e => e.name)).size !== 1 || new Set(native.map(e => e.form)).size !== 1)) return []

@@ -63,6 +63,18 @@ export function readPageRoute() {
   return pages.length === 1 ? pages[0].getAttribute('data-page-route') || undefined : undefined
 }
 
+export function readPageRead() {
+  const encoded = document.querySelector('#contact-filter')?.dataset.pageRead
+  return encoded ? JSON.parse(encoded) : undefined
+}
+
+export function readElementPageControl(element) {
+  if (location.pathname !== '/contacts/filter' || !element.closest('#contact-filter')) return undefined
+  if (element.id === 'contact-filter-name') return {kind: 'query', field: 'name_contains'}
+  if (element.tagName === 'BUTTON' && element.textContent === 'Search contacts') return {kind: 'query'}
+  return undefined
+}
+
 // The record the app has rendered, once it has: its own route while it shows a record.
 export function readPageRecordRoute() {
   const view = document.querySelector('main#app')?.getAttribute('data-active-view')

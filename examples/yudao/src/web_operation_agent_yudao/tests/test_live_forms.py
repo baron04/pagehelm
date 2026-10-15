@@ -1,13 +1,15 @@
 """No models or accounts: a form the page shows is bound by its labels, under the fence."""
 from dataclasses import replace
 import time
+import json
 import unittest
 
 from web_operation_agent.business.errors import BusinessToolRequestError
+from web_operation_agent.business.forms import ApplicationFormValue
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent_yudao.live_forms import (FenceEvidence, FenceReachPolicy, LiveFormPort,
-                                                  LiveRequest, field_key)
+                                                  LiveRequest, field_key, observed_radio_choices)
 from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
 
 ACTOR, OWNER = "a" * 64, "c" * 64
@@ -68,6 +70,21 @@ class LiveFormTests(unittest.TestCase):
         entry, reference = self.open(self.request(("手机", "13800000000")))
         self.assertEqual(entry.control.ref, "q2")
         self.assertTrue(reference.endswith("#" + DIALOG["form_instance"]))
+
+    def test_live_radio_label_binds_to_its_exact_native_value(self):
+        radio = control('f9', 'radiogroup', '状态', 3, '状态', value='关闭',
+            radio_options=json.dumps([{'label':'开启','value':'0'}, {'label':'关闭','value':'1'}]))
+        before = replace(self.form, elements=[*self.form.elements, radio])
+        reference, _ = self.port.adopt_open(before, (('状态','0'),), context=self.context)
+        form = self.port.describe_form(before, context=self.context)
+        field = next(f for f in form.fields if f.label == '状态')
+        draft = self.port.prepare_form(form, (ApplicationFormValue(field,'0','radiogroup'),), context=self.context)
+        self.assertEqual('0', draft.fields[0].value)
+        self.assertEqual('开启', draft.fields[0].option_label)
+        for options in ([{'label':'开启','value':'0'}, {'label':'开启','value':'1'}],
+                        [{'label':'开启','value':'0'}, {'label':'关闭','value':'0'}]):
+            self.assertEqual((), observed_radio_choices(replace(radio, attrs={
+                **radio.attrs, 'radio_options':json.dumps(options)})))
 
     def test_two_matching_openers_or_an_open_dialog_are_refused(self):
         request = self.request(("手机", "1"))

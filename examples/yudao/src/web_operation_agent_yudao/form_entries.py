@@ -10,7 +10,7 @@ import re
 from urllib.parse import urlsplit
 
 from web_operation_agent.business.errors import (BusinessToolRequestError,
-    BusinessToolPermissionError, BusinessToolIdentityError, BusinessToolUnavailableError)
+    BusinessToolPermissionError, BusinessToolIdentityError, BusinessToolUnavailableError, BusinessToolContractError)
 from web_operation_agent.business.forms import ApplicationFormEntry
 from web_operation_agent.business.form_entries import FormEntryCandidate
 from web_operation_agent.goal.data import DataRefused
@@ -18,6 +18,7 @@ from web_operation_agent.planning.sourcetree import AccessDenied
 from web_operation_agent.business.tools.contracts import form_control_unavailable, matches_form_control
 from .forms import NativeFormState, YudaoFormPort, source_field_controls
 from .source_forms import SourceFormReader
+from .record_access import customer_can_edit
 from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS
 
 REVIEWED_FILES = (
@@ -95,21 +96,17 @@ class NativeCustomerEntryVerifier:
             if (not isinstance(user, dict) or str(user.get("id")) != context.principal.actor_id
                     or str(self.client.tenant) != context.principal.tenant_id):
                 raise BusinessToolIdentityError("the editor actor changed")
-            permissions = identity.get("permissions") or []
             team = self.client.get("crm/permission/list", bizType=2, bizId=record)
             customer = self.client.get("crm/customer/get", id=record)
         except DataRefused:
             raise BusinessToolPermissionError("the application refused the editor read") from None
         except (OSError, TimeoutError):
             raise BusinessToolUnavailableError("the editor authority could not be verified") from None
-        if (not isinstance(customer, dict) or str(customer.get("id")) != record
-                or not isinstance(team, list) or not isinstance(permissions, list)
-                or any(not isinstance(permission, str) for permission in permissions)
-                or not {"crm:customer:update", "*:*:*"}.intersection(permissions)
-                or not any(isinstance(row, dict) and str(row.get("userId")) == context.principal.actor_id
-                           and type(row.get("bizType")) is int and row["bizType"] == 2
-                           and str(row.get("bizId")) == record
-                           and type(row.get("level")) is int and row["level"] in (1, 3) for row in team)):
+        try:
+            can_edit = customer_can_edit(identity, team, record, context.principal.actor_id)
+        except BusinessToolContractError:
+            raise BusinessToolPermissionError("the editor authority could not be verified") from None
+        if not isinstance(customer, dict) or str(customer.get("id")) != record or not can_edit:
             raise BusinessToolPermissionError("this actor cannot edit this customer")
 
     def plan_entry(self, reference, observation, *, context):

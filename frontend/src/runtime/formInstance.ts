@@ -2,7 +2,7 @@
 type RemovalWindow = {anchor: Element; protected: Set<Element>}
 type Entry = {token: string; controls: Set<Element>; removal?: RemovalWindow}
 const documents = new WeakMap<Document, {
-  roots: Map<Element, Entry>, observer: MutationObserver, invalidate: (records: MutationRecord[]) => void,
+  roots: Map<Element, Entry>, lifetimes: Map<Element, string>, observer: MutationObserver, invalidate: (records: MutationRecord[]) => void,
 }>()
 
 const formRoot = (element: Element | null | undefined) =>
@@ -15,6 +15,7 @@ export function formInstance(element: Element | null | undefined): string | null
   let state = documents.get(document)
   if (!state) {
     const roots = new Map<Element, Entry>()
+    const lifetimes = new Map<Element, string>()
     const controls = 'input,textarea,select,button,form,dialog,[role="dialog"],[role="textbox"],[role="combobox"],[contenteditable="true"]'
     const currentControls = (node: Node): Element[] => node instanceof Element
       ? [...(node.matches(controls) ? [node] : []), ...node.querySelectorAll(controls)] : []
@@ -25,6 +26,11 @@ export function formInstance(element: Element | null | undefined): string | null
       return ids.some(id => owner.ownerDocument.getElementById(id)?.contains(target))
     }
     const invalidate = (records: MutationRecord[]) => {
+      for (const owner of lifetimes.keys()) {
+        if (!owner.isConnected || records.some(record => record.type === 'attributes'
+            ? record.target === owner || (record.target instanceof Element && record.target.contains(owner))
+            : Array.from(record.removedNodes).some(node => node === owner || node.contains(owner)))) lifetimes.delete(owner)
+      }
       for (const [owner, entry] of roots) {
         if (!owner.isConnected || records.some(record => record.type === 'attributes'
           ? record.target === owner || (record.target instanceof Element && record.target.contains(owner))
@@ -51,7 +57,7 @@ export function formInstance(element: Element | null | undefined): string | null
     const observer = new MutationObserver(invalidate)
     observer.observe(document.documentElement, {subtree: true, childList: true,
       attributes: true, attributeFilter: ['hidden', 'inert', 'open', 'aria-hidden', 'aria-label', 'aria-labelledby', 'aria-describedby', 'class', 'style']})
-    state = {roots, observer, invalidate}
+    state = {roots, lifetimes, observer, invalidate}
     documents.set(document, state)
   }
   state.invalidate(state.observer.takeRecords())
@@ -78,4 +84,16 @@ export function localChoiceRemoval(anchor: Element, protectedControls: Iterable<
     state.invalidate(state.observer.takeRecords())
     if (entry.removal === removal) delete entry.removal
   }
+}
+
+/** Stable root continuity across reviewed additive draft steps; no action authority. */
+export function formLifetime(element: Element | null | undefined): string | null {
+  const root = formRoot(element)
+  if (!root?.isConnected || !formInstance(element)) return null
+  const state = documents.get(root.ownerDocument)!
+  if (!state.lifetimes.has(root)) {
+    if (state.lifetimes.size >= 128) return null
+    state.lifetimes.set(root, crypto.randomUUID())
+  }
+  return state.lifetimes.get(root)!
 }

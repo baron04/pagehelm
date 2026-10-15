@@ -12,6 +12,9 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 
+from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
+from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult, ModelLoopProfile, LoopProcedure, PageActionOutcome
+from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.business.approvals import ApprovalWatch
 from web_operation_agent.business.runtime import BusinessToolResult, BusinessToolRuntime
 from web_operation_agent.composition.business_operations import RegisteredOperations
@@ -26,7 +29,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
-from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor,
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _tabs_not_shown,
                                                  _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -73,6 +76,19 @@ def observation(epoch: int = 1, customer: str = "Acme", **kw) -> PageObservation
 
 
 class PageTextTests(unittest.TestCase):
+    def test_hydrated_button_names_survive_removing_the_only_text_child(self):
+        for name in ("新增", "展开", "password=hidden"):
+            obs = observation()
+            obs.elements = [element(1, "button", name, "button"), element(2, "span", name, "span")]
+            obs.content = f"[1]<button type=button>\n\t[2]<span>{name} />"
+            text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()))
+            self.assertNotIn("[2]", text)
+            self.assertIn("[1]<button type=button>", text)
+            if name.startswith("password"):
+                self.assertNotIn("hidden", text)
+            else:
+                self.assertIn("[1]<button type=button> " + name, text)
+
     def test_the_navigation_menu_and_the_runtime_preamble_are_left_out(self):
         lines, _hints = _page_lines(observation())
         text = "\n".join(lines)
@@ -86,6 +102,19 @@ class PageTextTests(unittest.TestCase):
         lines, _hints = _page_lines(observation())
         self.assertFalse(any(line.strip().startswith("[8]") for line in lines))
         self.assertTrue(any(line.strip().startswith("[11]") for line in lines))
+
+    def test_duplicate_label_span_is_not_offered_as_a_control_but_independent_controls_remain(self):
+        obs = observation()
+        obs.elements = [element(1, "button", "编辑", "button"), element(2, "span", "编辑", "span"),
+                        element(3, "button", "编辑", "button"), element(4, "span", "编辑", "span")]
+        obs.content = "[1]<button>编辑\n\t[2]<span>编辑 />\n\t[3]<button>编辑 />\n[4]<span>编辑 />"
+        text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()))
+        self.assertNotIn("[2]", text)
+        for number in (1, 3, 4):
+            self.assertIn(f"[{number}]", text)
+        procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        self.assertIsNone(procedures._element(NS(obs=obs), 2))
+        self.assertEqual("e1", procedures._element(NS(obs=obs), 1).ref)
 
     def test_a_region_with_more_below_is_named_with_the_way_to_see_it(self):
         _lines, hints = _page_lines(observation())
@@ -191,9 +220,9 @@ class PageTextTests(unittest.TestCase):
     def test_only_an_element_the_page_text_listed_may_be_acted_on(self):
         class State:
             obs = observation()
-        self.assertIsNone(SlimTurnExecutor._element(None, State, 3))    # a menu entry
-        self.assertIsNone(SlimTurnExecutor._element(None, State, 99))   # nothing there
-        self.assertEqual(SlimTurnExecutor._element(None, State, 10).name, "Search")
+        self.assertIsNone(YudaoLoopProcedures._element(None, State, 3))    # a menu entry
+        self.assertIsNone(YudaoLoopProcedures._element(None, State, 99))   # nothing there
+        self.assertEqual(YudaoLoopProcedures._element(None, State, 10).name, "Search")
 
 
 DOCS = {"paths": {
@@ -222,6 +251,19 @@ DOCS = {"paths": {
     "Channel": {"properties": {"name": {"description": "渠道名称"}, "password": {"description": "密码"},
                                "apiSecret": {"description": "接口密钥"}, "maxTokens": {"description": "令牌上限"}}},
 }}}
+
+
+# Complete endpoint query metadata used by strict model-tool validation.
+for path, item in DOCS["paths"].items():
+    if "get" not in item:
+        continue
+    params = item["get"].setdefault("parameters", [])
+    names = {q["name"] for q in params}
+    wanted = {"pageNo", "pageSize"} if path.endswith("/page") else {"id"} if path.endswith("/get") else set()
+    if path.endswith("leads/page"):
+        wanted |= {"name"}
+    params.extend({"name": name, "in": "query", "schema": {"type": "string" if name == "name" else "integer"}}
+                  for name in sorted(wanted - names))
 
 
 class Client:
@@ -302,6 +344,34 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("export", found)
         self.assertNotIn("create", found)
 
+    def test_parameter_correction_names_required_fields_and_never_supplied_values(self):
+        from copy import deepcopy
+        from web_operation_agent_yudao.slim_loop import QueryParametersError
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/orders/page"]["get"]["parameters"].append(
+            {"name": "pool", "in": "query", "required": True, "schema": {"type": "boolean"}})
+        know = ActorKnowledge(self.client, docs)
+        with self.assertRaisesRegex(QueryParametersError, "missing: pool"):
+            know.call_api("orders/page", {"pageNo": 1})
+        for values in ({"pageNo": 1, "pool": "private-input"},
+                       {"pageNo": 1, "pool": False, "private-key": "private-input"}):
+            with self.assertRaises(QueryParametersError) as caught:
+                know.call_api("orders/page", values)
+            self.assertNotIn("private-input", str(caught.exception))
+            self.assertNotIn("private-key", str(caught.exception))
+        self.assertFalse(any(path == "orders/page" for path, _ in self.client.calls))
+
+    def test_typed_permission_and_operational_refusals_reach_the_shared_loop(self):
+        from unittest.mock import patch
+        for flags in ({"permission_denied": True}, {"read_failed": True}):
+            with self.subTest(flags=flags):
+                self.know._load()
+                error = DataRefused("private application text", **flags)
+                with patch.object(self.client, "get", side_effect=error):
+                    with self.assertRaises(DataRefused) as caught:
+                        self.know.call_api("orders/page", {"pageNo": 1})
+                self.assertIs(error, caught.exception)
+
     def test_a_read_returns_its_total_its_rows_and_what_the_fields_mean(self):
         text = self.know.call_api("/admin-api/orders/page", {"pageNo": 1})
         self.assertEqual(text.splitlines(), [
@@ -323,6 +393,14 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn('{"id": 5, "name": "商机5", "totalPrice": 100.0}', text)
         self.assertNotIn("remark", text)
         self.assertNotIn("ownerUserId（", text)   # an identifier is not a quantity
+
+    def test_projection_names_returned_but_unshown_columns_without_their_values(self):
+        text = self.know.call_api("orders/page", {"pageNo": 1}, ["no"])
+        self.assertIn("本次只展示 fields 指定的列", text)
+        self.assertIn("price（金额，单位：分）", text)
+        self.assertIn('"no": "S1"', text)
+        self.assertNotIn('"price":', text)
+        self.assertNotIn("1000", text)
 
     def test_a_list_divided_by_whose_records_they_are_is_read_as_everything_the_actor_sees(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
@@ -383,6 +461,20 @@ class KnowledgeTests(unittest.TestCase):
             DEFAULT_PROVIDER_EGRESS_POLICY.inspect([{"role": "tool", "content": raw}], None)
         told = self.know.call_api("channels/page", {"pageNo": 1})
         DEFAULT_PROVIDER_EGRESS_POLICY.inspect([{"role": "tool", "content": told}], None)
+
+    def test_optional_list_preview_honours_endpoint_parameters(self):
+        from copy import deepcopy
+        docs = deepcopy(DOCS)
+        op = docs["paths"]["/admin-api/orders/page"]["get"]
+        op["parameters"] = [{"name":"pageNo", "in":"query", "schema":{"type":"integer"}}]
+        know = ActorKnowledge(self.client, docs)
+        self.assertIn("total=2", know.list_preview("orders"))
+        self.assertEqual(self.client.calls[-1], ("orders/page", {"pageNo":1}))
+        op["parameters"].append({"name":"employeeId", "in":"query", "required":True,
+                                 "schema":{"type":"integer"}})
+        calls = len(self.client.calls)
+        self.assertEqual(know.list_preview("orders"), "")
+        self.assertEqual(len(self.client.calls), calls)
 
     def test_a_refusal_s_own_words_are_blanked(self):
         self.assertEqual(self.know.call_api("/admin-api/orders/page", {"pageNo": 1, "customerId": "9"}),
@@ -477,10 +569,12 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual([c for c in self.client.calls if c[0] != "system/auth/get-permission-info"], [])
 
     def test_the_application_s_refusal_is_told_to_the_model(self):
-        self.assertIn("客户不存在", self.know.call_api("orders/page", {"customerId": "0"}))
+        self.assertIn("客户不存在", self.know.call_api("orders/page", {"customerId": "0", "pageNo": 1}))
 
 
 def call(name: str, **args) -> dict:
+    if name == "call_api" and isinstance(args.get("params"), dict):
+        args["params"] = json.dumps(args["params"], ensure_ascii=False)
     return {"id": f"call-{name}-{len(args)}", "type": "function",
             "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}
 
@@ -519,6 +613,8 @@ class Budget:
 class Channel:
     """What a turn published for whoever is watching it."""
 
+    latest_observation_envelope = None
+
     def __init__(self, broken=False):
         self.broken, self.published = broken, []
 
@@ -539,17 +635,96 @@ class State:
         self.message = NS(text="q", message_id="m-1")
         self.step, self.run_id, self.obs = 0, "run-1", observation()
         self.chat, self.ledger, self.budget = Script(*replies), Ledger(), Budget()
+        self.measure, self.audit = lambda _: contextlib.nullcontext(), self.ledger.append
+        self.progress = lambda facts: None
+        self.page = NS(action_observations=lambda: (), execute=lambda *a, **k: PageActionOutcome("unavailable", "not_dispatched", "turn_stopped"))
 
     @staticmethod
     def cancelled():
         return False
 
 
+class DraftChoiceTests(unittest.TestCase):
+    def setUp(self):
+        self.procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        self.procedures.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
+        self.procedures._settled = lambda *a, **kw: None
+        self.attrs = {"form_scope":"dialog:create", "form_instance":"live", "field_label":"产品",
+                      "aria-haspopup":"listbox", "aria-controls":"owned", "aria-expanded":"false"}
+        self.control = element(1, "combobox", "产品", "input", **self.attrs)
+        self.state = NS(obs=observation())
+        self.state.obs.elements = [self.control]
+        self.sent = []
+        self.changed = [replace(self.control, ref="e7", epoch=2,
+                                attrs={**self.attrs, "aria-expanded":"true"}),
+                        replace(element(8, "option", "PLC 控制器 P5", "li", listbox_owner="owned"), epoch=2)]
+        def act(s, action, args, **kw):
+            self.sent.append((action, args))
+            if action == "click":
+                s.obs = replace(s.obs, epoch=2, elements=self.changed)
+            return ""
+        self.procedures._act = act
+
+    def test_offscreen_label_uses_owned_runtime_search_and_returns_choices_on_explicit_failure(self):
+        act = self.procedures._act
+        def unavailable(s, action, args, **kw):
+            act(s, action, args, **kw)
+            if action == "select":
+                return LoopToolResult("没有唯一的精确标签", kind="page", state="unverified",
+                                      dispatch="acknowledged", error_code="option_unavailable")
+        self.procedures._act = unavailable
+        text = self.procedures._select(self.state, self.control, "PLC控制器P5").feedback
+        self.assertEqual(["select"], [a for a, _ in self.sent])
+        self.assertEqual("PLC控制器P5", self.sent[-1][1]["option_label"])
+        self.assertIn("没有唯一的精确标签", text)
+
+    def test_exact_label_uses_one_runtime_selection_without_server_preopening(self):
+        self.assertEqual("", self.procedures._select(self.state, self.control, "PLC 控制器 P5"))
+        self.assertEqual([("select", {"ref":"e1", "value":"PLC 控制器 P5",
+                                     "option_label":"PLC 控制器 P5"})], self.sent)
+
+    def test_prior_viewport_options_do_not_replace_runtime_owned_selection(self):
+        option = self.changed[1]
+        for options in ([replace(option, attrs={"listbox_owner":"foreign"})],
+                        [replace(option, attrs={**option.attrs, "aria-disabled":"true"})],
+                        [option, replace(option, ref="e9")],
+                        [option, replace(option, ref="e9", attrs={**option.attrs, "aria-disabled":"true"})]):
+            with self.subTest(options=options):
+                self.sent.clear()
+                self.changed = [self.changed[0], *options]
+                self.procedures._select(self.state, self.control, "PLC 控制器 P5")
+                self.assertEqual(["select"], [a for a, _ in self.sent])
+
+    def test_missing_form_or_list_ownership_never_receives_selection(self):
+        control = replace(self.control, attrs={**self.attrs, "form_instance":""})
+        self.assertEqual("invalid_target", self.procedures._select(self.state, control, "PLC 控制器 P5").error_code)
+        self.assertEqual([], self.sent)
+
+
+class ActionFeedbackTests(unittest.TestCase):
+    def test_refusal_reaches_agent_without_a_settlement_or_false_permission_claim(self):
+        procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        procedures.knowledge = None
+        for code, dispatch, state in (("unreviewed", "not_dispatched", "refused"),
+                                      ("stale_binding", "not_dispatched", "refused"),
+                                      ("unverified", "uncertain", "unverified")):
+            with self.subTest(code=code):
+                sent = []
+                outcome = PageActionOutcome(state, dispatch, code)
+                context = NS(obs=observation(), page=NS(execute=lambda action, args, **kw:
+                             sent.append(action) or outcome))
+                result = procedures._tool(context, "click", {"index": 10}, {"marked": ""})
+                self.assertEqual(["click"], sent)
+                self.assertEqual((state, dispatch, code), (result.state, result.dispatch, result.error_code))
+                if code == "unreviewed":
+                    self.assertIn("尚未审核", result.feedback)
+
+
 class SettledTests(unittest.TestCase):
     """How long the page is given after a step, by what the looks at it show."""
 
-    def settle(self, first, *later, gone_after=None, **kw):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+    def settle(self, first, *later, gone_after=None, prior=(), **kw):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         epochs = iter(range(1, 99))
 
         def look(content, state="ready", url="https://synthetic.test/orders", route=None):
@@ -565,19 +740,28 @@ class SettledTests(unittest.TestCase):
                 "elements": [{"ref": "e2", "role": "button", "name": content, "epoch": epoch}]})
         coming, self.waited = [look(*item) for item in later], []
         state = NS(obs=look(*first))
+        history = (*[look(*item) for item in prior], state.obs) if prior else ()
 
         def dispatch(s, action, args, **_kw):
             self.waited.append((action, args["ms"]))
             if gone_after is not None and len(self.waited) > gone_after:
-                return None
+                return PageActionOutcome("unavailable", "not_dispatched", "turn_stopped")
             s.obs = coming.pop(0)
-            return NS(ok=True)
-        executor._dispatch = dispatch
+            return NS(state="completed")
+        state.page = NS(action_observations=lambda: history, execute=lambda action, args: dispatch(state, action, args))
         self.outcome = executor._settled(state, **kw)
         return state.obs.content
 
     def test_a_page_that_is_already_still_costs_one_short_look(self):
         self.assertEqual(self.settle(("a",), ("a",)), "a")
+        self.assertEqual((self.waited, self.outcome), ([("wait_for", 150)], "still"))
+
+    def test_verification_settlement_is_reused_without_another_wait(self):
+        self.assertEqual(self.settle(("a",), prior=(("a", "pending"), ("a",))), "a")
+        self.assertEqual((self.waited, self.outcome), ([], "still"))
+
+    def test_pending_verification_does_not_count_as_a_stable_look(self):
+        self.assertEqual(self.settle(("a",), ("a",), prior=(("a", "pending"),)), "a")
         self.assertEqual((self.waited, self.outcome), ([("wait_for", 150)], "still"))
 
     def test_a_page_that_changed_is_looked_at_until_two_looks_agree(self):
@@ -640,7 +824,7 @@ class LoopTests(unittest.TestCase):
         """`page` is what each step on the page in turn changes of it; a step past the
         end of it leaves the page as it was. `tabs` are (name, aria-selected) of the
         page's tabs."""
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
         executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
@@ -652,13 +836,49 @@ class LoopTests(unittest.TestCase):
             self.ran.append(name)
             if name in ("click", "input", "select", "scroll", "fill_fields"):
                 s.obs = observation(epoch=s.obs.epoch + 1, **(changes.pop(0) if changes else {}))
+            if name in ("click", "input", "select", "scroll", "fill_fields"):
+                executor._tool_receipts.append(ActionReceipt(1, "step", "observe", {}, True, observation=s.obs))
             return "ok", False
-        executor._tool = tool or ran
+        raw_tool = tool or ran
+        def typed(s, name, args, turn):
+            value = raw_tool(s, name, args, turn)
+            if isinstance(value, LoopToolResult):
+                return value
+            text, changed = value
+            if changed:
+                old = s.obs.to_json()
+                old["epoch"] += 1
+                for e in old["elements"]: e["epoch"] = old["epoch"]
+                s.obs = PageObservation.from_json(old)
+            if turn.pop("confirmed", False):
+                action = name
+                echo = {"url": "https://synthetic.test" + args["path"]} if name == "goto" else {"ref": "e" + str(args["index"])}
+                if name == "goto":
+                    s.obs.url, s.obs.page_route, s.obs.render_state = echo["url"], args["path"], "ready"
+                receipt = ActionReceipt(1, "proof", action, echo, True, observation=s.obs,
+                                        url_after=s.obs.url, write_guard_held=True)
+                executor._tool_receipts.append(receipt)
+                executor._verified_action_commands = {receipt.command_id: json.dumps(s.obs.to_json())}
+            return LoopToolResult(text, kind="page" if name in {"goto","highlight","click","input","select","scroll","fill_fields"} else "read")
+        executor._tool = typed
+        executor._tools = lambda _: TOOLS
+        executor._page = lambda s, turn: page_text(s.obs, handoffs=turn["handoffs"], marked=turn["marked"])
+        executor._completion_conflict = lambda obs, answer: _tabs_not_shown(obs, answer)
+        def observe(s, action, args, **kwargs):
+            old = s.obs.to_json()
+            old["epoch"] += 1
+            for e in old["elements"]: e["epoch"] = old["epoch"]
+            s.obs = PageObservation.from_json(old)
+            receipt = ActionReceipt(1, "look", "observe", {}, True, observation=s.obs)
+            executor._tool_receipts.append(receipt)
+            return receipt
+        executor._dispatch = observe
         pending, changes = list(problems), list(page)
 
         def verify(s, prompt, answer, turn):
             self.checked.append(answer)
-            return pending.pop(0) if pending else []
+            problems = pending.pop(0) if pending else []
+            return VerificationResult("disputed", tuple(problems)) if problems else VerificationResult("passed")
         executor._verify = verify
         state = State(*replies)
         if tabs:
@@ -691,7 +911,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual((self.checked, self.channel.steps()), (["已填好 10 月 20 日"], ["正在核对结果"]))
 
     def test_what_the_person_said_in_an_earlier_turn_counts_as_said(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor._earlier_words = ["客户是晨岚机电"]
         turn = {"touched": [("客户", "晨岚机电"), ("数量", "24")]}
         self.assertEqual(executor._unsaid("就它，数量你定", turn), ["数量←24"])
@@ -820,7 +1040,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual((text, state.terminal_reason), ("打不开", "agent_refused"))
 
     def test_a_page_is_reported_opened_only_when_the_application_rendered_it(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.application, executor.knowledge = NS(descriptor=NS(origin="https://synthetic.test")), None
         executor._act = lambda s, action, args, **kw: ""
         executor._dispatch = lambda s, action, args, **kw: NS(ok=True)   # each look sees the same page
@@ -832,10 +1052,13 @@ class LoopTests(unittest.TestCase):
             with self.subTest(state=state_of_page, route=route):
                 state, turn = State(), {}                    # the browser is at /orders
                 state.obs = observation(render_state=state_of_page, page_route=route)
-                said, changed = executor._tool(state, "goto", {"path": "/orders"}, turn)
+                state.page = NS(action_observations=lambda: (), execute=lambda *args, **kw: NS(state="completed"))
+                result = executor._tool(state, "goto", {"path": "/orders"}, turn)
+                said, changed = result.feedback, result.kind == "page"
                 self.assertIn(says, said)
-                self.assertEqual((changed, turn.get("confirmed", False)), (True, confirmed))
-        said, _changed = executor._tool(State(), "goto", {"path": "/crm/customer"}, {})
+                self.assertEqual((changed, result.state == "completed"), (True, confirmed))
+        result = executor._tool(State(), "goto", {"path": "/crm/customer"}, {})
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(said, "没有成功：浏览器现在在 /orders，没有到 /crm/customer。")
 
     def test_the_turn_is_refused_when_its_model_steps_run_out(self):
@@ -912,7 +1135,7 @@ class LoopTests(unittest.TestCase):
         self.assertTrue(self.turn["trace"][0].startswith("input[Customer]("), self.turn["trace"])
 
     def test_what_the_assistant_put_into_a_control_is_kept_for_the_check(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
         executor._settled = lambda s, **kw: None
@@ -921,7 +1144,7 @@ class LoopTests(unittest.TestCase):
         executor._tool(state, "select", {"index": 9, "option": "Beta"}, turn)
         self.assertEqual(turn["touched"], [("Customer", ""), ("Customer", "Beta")])
         self.assertEqual([action for action, _args in sent], ["fill", "select"])
-        self.assertIn("用 select(index, option)", executor._tool(state, "click", {"index": 9}, turn)[0])
+        self.assertIn("用 select(index, option)", executor._tool(state, "click", {"index": 9}, turn).feedback)
         sent.pop()
         executor._tool(state, "input", {"index": 9, "text": "Delta"}, turn)   # typed into a dropdown
         self.assertEqual(sent[-1], ("select", {"ref": "e9", "value": "Delta", "option_label": "Delta"}))
@@ -934,18 +1157,20 @@ class LoopTests(unittest.TestCase):
         executor._act = scrolled
         moved = [{"content": CONTENT.replace("\t[11]<button", "\t*[11]<button").replace("bottom=394", "bottom=0")},
                  {"content": CONTENT.replace("bottom=394", "bottom=0")}]
-        said, _changed = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        result = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(sent[-1], ("scroll", {"direction": "down", "pages": 1, "ref": "e8"}))
         self.assertEqual(said, "已滚动。")
-        said, _changed = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        result = executor._tool(state, "scroll", {"index": 7, "down": True}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(state.obs.epoch, 3)
         self.assertIn("内容没有变化", said)    # looked at again, and it showed what it had shown
-        executor._act = lambda s, action, args, **kw: "没有成功：stale"
+        executor._act = lambda s, action, args, **kw: LoopToolResult("没有成功：stale", kind="page", state="refused", error_code="stale_binding")
         executor._tool(state, "input", {"index": 9, "text": "Gamma"}, turn)
         self.assertEqual(len(turn["touched"]), 3)   # a step that failed put nothing there
 
     def test_several_named_fields_are_set_in_one_step_each_found_on_the_page_as_it_then_is(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
         executor._settled = lambda s, **kw: None
@@ -957,21 +1182,22 @@ class LoopTests(unittest.TestCase):
             element(4, "combobox", "", "input", field_label="日期", **{"aria-haspopup": "dialog", "aria-controls": "p"}),
             element(5, "button", "搜 索", "button")],
             content="[1]<input />\n[2]<input />\n[3]<input />\n[4]<input />\n[5]<button>搜 索 />")
-        said, changed = executor._tool(state, "fill_fields", {"fields": [
+        result = executor._tool(state, "fill_fields", {"fields": [
             {"label": "备注", "value": "加急"}, {"label": "客户", "value": "Acme"},
             {"label": "日期", "value": "2026-10-01 ~ 2026-10-31"}, {"label": "不存在", "value": "x"}],
             "then_click": "搜索"}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertTrue(changed)
         self.assertEqual([(a, args.get("ref"), args.get("value")) for a, args in sent], [
             ("fill", "e1", "加急"), ("select", "e2", "Acme"), ("fill", "e3", "2026-10-01"),
-            ("fill", "e4", "2026-10-31"), ("click", "e5", None)])
+            ("fill", "e4", "2026-10-31")])
         self.assertFalse(sent[2][1]["commit"])     # the first box of a range waits for the second
         self.assertIn("不存在：屏幕上没有这个字段", said)
-        self.assertIn("已点“搜索”", said)
+        self.assertNotIn("已点“搜索”", said)  # a partial filter must never apply or complete
         self.assertEqual([label for label, _value in turn["touched"]], ["备注", "客户", "日期"])
 
     def test_a_named_range_uses_its_unlabelled_end_from_the_fresh_observation(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._settled = lambda s, **kw: None
         state, turn = State(), {"touched": [], "trace": []}
@@ -998,8 +1224,9 @@ class LoopTests(unittest.TestCase):
             return ""
 
         executor._act = act
-        said, _changed = executor._tool(state, "fill_fields", {"fields": [
+        result = executor._tool(state, "fill_fields", {"fields": [
             {"label": "订单时间", "value": "2026-10-01 ~ 2026-10-28"}]}, turn)
+        said, changed = result.feedback, result.kind == "page"
         self.assertEqual(sent, [
             ("fill", {"ref": "e3", "value": "2026-10-01", "commit": False}),
             ("fill", {"ref": "e6", "value": "2026-10-28", "commit": True})])
@@ -1016,7 +1243,7 @@ class LoopTests(unittest.TestCase):
             ({"form_instance": "other-instance"}, True), ({}, False),
         ]:
             with self.subTest(changes=changes, visible=visible):
-                executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+                executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
                 executor.knowledge, sent = None, []
                 executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
                 executor._settled = lambda s, **kw: None
@@ -1024,7 +1251,7 @@ class LoopTests(unittest.TestCase):
                 other = element(4, "combobox", "", "input", **{**attrs, **changes})
                 state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [start, other],
                                             content="[3]<input />" + ("\n[4]<input />" if visible else ""))
-                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn).feedback
                 self.assertIn("没有唯一的日期范围两个框", said)
                 self.assertEqual(sent, [])
                 self.assertEqual(turn["touched"], [])
@@ -1037,12 +1264,12 @@ class LoopTests(unittest.TestCase):
             with self.subTest(others=others):
                 state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], [start, *others],
                                             content="[3]<input />\n[4]<input />\n[5]<input />")
-                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+                said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn).feedback
                 self.assertIn("没有唯一的日期范围两个框", said)
                 self.assertEqual(sent, [])
 
     def test_a_range_rejects_a_missing_endpoint_and_accepts_the_documented_separators(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._act = lambda s, action, args, **kw: sent.append((action, args)) or ""
         executor._settled = lambda s, **kw: None
@@ -1054,19 +1281,19 @@ class LoopTests(unittest.TestCase):
         for value in ["2026-10-01", "2026-10-01 ~", "~ 2026-10-28", "2026-10-01 ~ ~ 2026-10-28"]:
             with self.subTest(value=value):
                 turn = {"touched": [], "trace": []}
-                said = executor._fill_fields(state, [{"label": "日期", "value": value}], "", turn)
+                said = executor._fill_fields(state, [{"label": "日期", "value": value}], "", turn).feedback
                 self.assertIn("值写成“开始 ~ 结束”", said)
                 self.assertEqual(sent, [])
         for separator in ["~", "～", "至", "到"]:
             with self.subTest(separator=separator):
                 sent.clear()
                 said = executor._fill_fields(state, [{"label": "日期", "value": f"2026-10-01 {separator} 2026-10-28"}],
-                                             "", {"touched": [], "trace": []})
+                                             "", {"touched": [], "trace": []}).feedback
                 self.assertIn("日期：已填", said)
                 self.assertEqual([args["value"] for _, args in sent], ["2026-10-01", "2026-10-28"])
 
     def test_a_range_stops_when_its_form_is_replaced_after_the_start(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, sent = None, []
         executor._settled = lambda s, **kw: None
         state, turn = State(), {"touched": [], "trace": []}
@@ -1084,26 +1311,28 @@ class LoopTests(unittest.TestCase):
 
         executor._act = act
         state.obs = observed("original")
-        said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn)
+        said = executor._fill_fields(state, [{"label": "日期", "value": "2026-10-01 ~ 2026-10-28"}], "", turn).feedback
         self.assertIn("日期范围控件已变化", said)
         self.assertEqual(sent, [("fill", {"ref": "e3", "value": "2026-10-01", "commit": False})])
         self.assertEqual(turn["touched"], [])
 
     def test_the_check_is_told_which_controls_the_assistant_set_and_nothing_else_counts_as_changed(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "把地址清空"}]
         executor._earlier_words = []
+        executor.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
         state = State({"content": '{"ok": false, "problems": ["没有标出提交按钮"]}'})
         turn = {"reads": [], "marked": "", "trace": ["input[详细地址]({})"], "touched": [("详细地址", ""), ("电话", "010")],
                 "handoffs": SessionHandoffPolicy.extending(())}
-        self.assertEqual(executor._verify(state, "把地址清空", "已清空", turn), ["没有标出提交按钮"])
+        messages = executor.verification_messages("把地址清空", "已清空", turn, state.obs, ["把地址清空"])
+        state.chat.complete_cancellable(messages, None, state.run_id, cancelled=state.cancelled)
         asked = state.chat.seen[0][1]["content"]
         self.assertIn("助手本轮填写/选择过的控件（程序记录，按先后）：详细地址←(清空)；电话←010", asked)
         self.assertIn("助手填入的这些值没有原样出现在用户原话里：电话←010", asked)
         self.assertNotIn("form_changed", asked)
 
     def test_earlier_api_results_leave_the_conversation_once_they_outgrow_their_share(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor._messages = [{"role": "tool", "_api": True, "content": f"total={n}\n" + "行" * 5000}
                               for n in range(4)]
         executor._forget_old_observations()
@@ -1112,7 +1341,7 @@ class LoopTests(unittest.TestCase):
         self.assertTrue(executor._messages[0]["content"].startswith("total=0\n（更早的接口结果已省略"))
 
     def test_an_api_result_that_is_left_out_keeps_what_the_program_said_and_no_open_fence(self):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor._messages = [{"role": "tool", "_api": True, "content": content} for content in (
             "total=9\n" + BEGIN + "\n" + "行" * 13000 + "\n" + END, BEGIN + "\n" + "行" * 13000 + "\n" + END,
             "total=1\n" + BEGIN + "\n{}\n" + END)]
@@ -1158,7 +1387,7 @@ class PagingTests(unittest.TestCase):
                 "page": page, "page_size": size, "total": total, "rows": min(size, total)}
 
     def paged(self, value, label="每页条数", then=None, controls=None):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge, self.sent = None, []
         executor._act = lambda s, action, args, **kw: self.sent.append((action, args)) or ""
 
@@ -1174,7 +1403,7 @@ class PagingTests(unittest.TestCase):
         state, turn = State(), {"touched": [], "trace": []}
         state.obs = PageObservation(1, 1, "https://synthetic.test/orders", "Orders", [], controls,
                                     content="[3]<input />\n[4]<li>2 />", page_read=self.read())
-        said = executor._fill_fields(state, [{"label": label, "value": value}], "", turn)
+        said = executor._fill_fields(state, [{"label": label, "value": value}], "", turn).feedback
         return said, state, turn
 
     def test_rows_per_page_are_chosen_by_the_application_s_option_and_confirmed_by_the_list_read(self):
@@ -1213,6 +1442,23 @@ class PagingTests(unittest.TestCase):
         lines, _hints = _page_lines(observation)
         self.assertEqual(lines, ["[3]<input /> 〔每页条数〕", "[4]<li>2 /> 〔翻到第2页〕"])
 
+    def test_combined_paging_keeps_all_requested_values_and_the_actual_last_command(self):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        state = NS(obs=NS(page_read={"page": 1, "page_size": 10}), terminal_reason="")
+        def paging(s, control, label, value):
+            s.obs.page_read["page_size" if control == "page_size" else "page"] = int(value)
+            if control == "page_size":
+                s.obs.page_read["page"] = 1
+            return LoopToolResult("Read verified", kind="page", completion_command=control)
+        executor._paging = paging
+        size, number = {"label": "每页条数", "value": "20"}, {"label": "页码", "value": "2"}
+        result = executor._fill_fields(state, [size, number], "", {})
+        self.assertEqual(("completed", "page"), (result.state, result.completion_command))
+        result = executor._fill_fields(state, [size, {**number, "label": "页码："}], "", {})
+        self.assertEqual(("completed", "page"), (result.state, result.completion_command))
+        result = executor._fill_fields(state, [number, size], "", {})
+        self.assertEqual(("unverified", ""), (result.state, result.completion_command))
+
 
 class FindRecordTests(unittest.TestCase):
     class Port:
@@ -1247,6 +1493,9 @@ class FindRecordTests(unittest.TestCase):
             def context(step, tool):
                 return None
 
+        operation = None
+        measure = staticmethod(lambda name: contextlib.nullcontext())
+
         class receipt:
             @staticmethod
             def stage(name):
@@ -1254,7 +1503,7 @@ class FindRecordTests(unittest.TestCase):
                 return contextlib.nullcontext()
 
     def find(self, port, name, kind=""):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.goal_port, executor.knowledge = port, ActorKnowledge(Client(), lambda: DOCS)
         return executor._find_record(self.Turn, name, kind)
 
@@ -1301,6 +1550,54 @@ class FindRecordTests(unittest.TestCase):
         self.assertNotIn("一部分", self.find(port, "XSTH20260929000005", "销售退货单"))
         self.assertEqual(port.asked, ["XSTH20260929000005"])
 
+    def test_a_scoped_miss_checks_application_visibility_before_claiming_absence(self):
+        from copy import deepcopy
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/crm/customer/page"] = {"get": {
+            "summary": "客户分页", "parameters": [
+                {"name": name, "in": "query", "schema": {"type": kind}}
+                for name, kind in (("name", "string"), ("sceneType", "integer"),
+                                   ("pageNo", "integer"), ("pageSize", "integer"))]}}
+        docs["paths"]["/admin-api/crm/customer/page"]["get"]["parameters"].append(
+            {"name": "pool", "in": "query", "required": True, "schema": {"type": "boolean"}})
+        client = Client()
+        original = client.get
+        rows = [{"id": 7, "name": "合成范围客户"}]
+        def get(path, **params):
+            if path == "crm/customer/page":
+                client.calls.append((path, params))
+                return {"total": len(rows), "list": rows}
+            return original(path, **params)
+        client.get = get
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        executor.goal_port = self.Port()
+        executor.knowledge = ActorKnowledge(client, lambda: docs)
+        with self.assertRaises(DataRefused) as caught:
+            executor._find_record(self.Turn, "合成范围客户", "客户")
+        self.assertTrue(caught.exception.permission_denied)
+        self.assertNotIn("不存在", str(caught.exception))
+        self.assertEqual([p for path, p in client.calls if path == "crm/customer/page"],
+                         [{"pool": False, "name": "合成范围客户", "pageNo": 1, "pageSize": 5}])
+        self.assertFalse(any(path.endswith("/get") for path, _ in client.calls))
+
+        rows[:] = [{"id": 9, "name": "另一个客户"}]
+        self.assertFalse(executor.knowledge.outside_actor_scope("crm/customer", "合成范围客户"))
+        client.get = lambda *a, **kw: (_ for _ in ()).throw(DataRefused("offline", read_failed=True))
+        with self.assertRaises(DataRefused) as failed:
+            executor.knowledge.outside_actor_scope("crm/customer", "合成范围客户")
+        self.assertTrue(failed.exception.read_failed)
+
+    def test_scope_probe_skips_unpublished_or_parent_bound_queries(self):
+        from copy import deepcopy
+        docs = deepcopy(DOCS)
+        op = docs["paths"]["/admin-api/leads/page"]["get"]
+        op["parameters"].append({"name": "parentId", "in": "query", "required": True})
+        client = Client()
+        knowledge = ActorKnowledge(client, lambda: docs)
+        self.assertFalse(knowledge.outside_actor_scope("leads", "合成名称"))
+        self.assertFalse(knowledge.outside_actor_scope("orders", "合成名称"))
+        self.assertFalse(any(path in {"leads/page", "orders/page"} for path, _ in client.calls))
+
     def test_several_records_of_one_entity_are_listed_with_their_numbers_for_the_person_to_choose(self):
         port = self.Port(hits=(("hrm/employee", (("1", "李文博（ID=1）", "/hrm/employee/detail/1"),
                                                   ("2", "李文博（ID=2）", "/hrm/employee/detail/2"))),))
@@ -1322,8 +1619,8 @@ class FindRecordTests(unittest.TestCase):
         port = self.Port(hits=(("crm/customer", "晨岚机电"), ("erp/customer", "晨岚机电")))
         told = self.find(port, "晨岚机电").splitlines()
         self.assertEqual(told, ["找到的记录（模块；页面：记录名称）：", BEGIN,
-                                "CRM 客户（crm/customer；页面：CRM 系统 / 客户管理）：晨岚机电",
-                                "ERP 客户（erp/customer；页面：无）：晨岚机电", END])
+                                "CRM 客户（crm/customer；页面：CRM 系统 / 客户管理）：晨岚机电（编号 1）",
+                                "ERP 客户（erp/customer；页面：无）：晨岚机电（编号 2）", END])
         self.assertEqual(port.asked, ["晨岚机电"])
 
     def test_it_gives_the_page_s_path_and_the_list_to_read_when_the_application_has_them(self):
@@ -1340,11 +1637,24 @@ class FindRecordTests(unittest.TestCase):
 
     def test_nothing_found_is_said_without_claiming_absence(self):
         told = self.find(self.Port(), "松原设备")
-        self.assertIn("没有在任何模块里找到", told)
-        self.assertIn("可能不存在", told)
+        self.assertIn("索引已涵盖的模块里", told)
+        self.assertIn("这不是全部应用模块的不存在证明", told)
+        self.assertIn("不要缩短名称反复做全局查找", told)
+        self.assertIn("接口候选，不是记录事实", told)
+
+    def test_unique_record_exposes_its_read_identifier_without_repeating_the_list(self):
+        told = self.find(self.Port(hits=(("erp/supplier", (("82", "合成供应商", ""),)),)), "合成供应商", "供应商")
+        self.assertIn("合成供应商（编号 82）", told)
+
+    def test_global_miss_offers_published_metadata_for_modules_outside_the_index(self):
+        executor = YudaoLoopProcedures(ActorKnowledge(Client(), lambda: DOCS), self.Port(), "https://synthetic.test")
+        told = executor._find_record(self.Turn, "未命中订单")
+        self.assertIn("/admin-api/orders/page", told)
+        self.assertNotIn("没有在任何模块里找到", told)
 
     def test_a_refused_read_is_told_and_an_empty_name_is_not_looked_up(self):
-        self.assertIn("查找失败", self.find(self.Port(refuse=True), "晨岚机电"))
+        with self.assertRaises(DataRefused):
+            self.find(self.Port(refuse=True), "晨岚机电")
         port = self.Port()
         self.assertIn("请给出", self.find(port, ""))
         self.assertEqual(port.asked, [])
@@ -1375,7 +1685,7 @@ class WriteTurnTests(unittest.TestCase):
         tools, skills = native_tools(self.client, self.data), packaged_skills()
         runtime = BusinessToolRuntime.from_registry(tools, application_id="yudao", skill_registry=skills,
                                                     require_skill_for_writes=True)
-        self.application = NS(business_tools=runtime, ports=NS(
+        self.application = NS(descriptor=NS(application_id="yudao", origin="https://synthetic.test"), business_tools=runtime, ports=NS(
             operations=RegisteredOperations(tools, skills, self.data.invalidate_reads),
             routes=NS(session_handoff_query_keys=frozenset())))
         self.person = Person()
@@ -1398,7 +1708,7 @@ class WriteTurnTests(unittest.TestCase):
                   writes=NS(begin_control=lambda: None, start_observing=lambda: None))
 
     def executor(self, *, knowledge=True, asked=None):
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
         executor.application, executor.skill_knowledge = self.application, knowledge
         executor.knowledge = ActorKnowledge(Client(), lambda: DOCS)
         executor.model_steps, executor.verify, executor._carried_skills = 8, True, ()
@@ -1407,7 +1717,33 @@ class WriteTurnTests(unittest.TestCase):
         executor._messages = [{"role": "system", "content": "s"},
                               {"role": "user", "content": (asked or self.ASKED) + "\n当前页面: /crm/contact"}]
         self.checked = []
-        executor._verify = lambda s, prompt, answer, turn: self.checked.append(list(turn["written"])) or []
+        executor._verify = lambda s, prompt, answer, turn: self.checked.append(list(turn["written"])) or VerificationResult("passed")
+        executor.goal_port = getattr(ModelDrivenTurnExecutor, "goal_port", None) or FindRecordTests.Port()
+        owner = YudaoLoopProcedures(executor.knowledge, executor.goal_port, "https://synthetic.test")
+        class Procedure:
+            def __init__(self, name): self.name = name
+            def execute(self, args, *, context):
+                turn = {"reads": [], "trace": [], "touched": [], "marked": ""}
+                result = owner._tool(context, self.name, args, turn)
+                return replace(result, entered=tuple(turn["touched"]), trace=tuple(turn["trace"]),
+                               read_summary=turn["reads"][-1] if turn["reads"] else None, marked=turn["marked"])
+        procedures = tuple(LoopProcedure(json.dumps(schema), Procedure(schema["function"]["name"]),
+            "read" if schema["function"]["name"] in {"call_api", "find_record"} else
+            "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page", "yudao.read")
+            for schema in TOOLS[:-1])
+        executor.profile = NS(procedures=procedures, completion_conflict=lambda *_: (),
+            render_page=lambda obs, marked: page_text(obs, handoffs=SessionHandoffPolicy.extending(()), marked=marked),
+            instructions=system_text(user="u", date="2026-10-13", tz="Asia/Shanghai"),
+            prepare=lambda request, context: "", verification_messages=None)
+        executor.debug_dir = None
+        def fresh(s, action, args, **kwargs):
+            before = s.obs
+            s.obs = observation(epoch=before.epoch+1)
+            receipt = ActionReceipt(1, "look", action, args, True, observation=s.obs,
+                                    url_before=before.url, url_after=s.obs.url)
+            executor._tool_receipts.append(receipt)
+            return receipt
+        executor._dispatch = fresh
         return executor
 
     def loop(self, *replies, **kw):
@@ -1459,7 +1795,7 @@ class WriteTurnTests(unittest.TestCase):
     def test_searches_and_reads_are_told_to_whoever_is_watching(self):
         find = {"id": "call-find", "type": "function", "function": {
             "name": "find_record", "arguments": json.dumps({"name": "晨岚机电"}, ensure_ascii=False)}}
-        with patch.object(SlimTurnExecutor, "goal_port", FindRecordTests.Port(hits=(("orders", "晨岚机电"),)),
+        with patch.object(ModelDrivenTurnExecutor, "goal_port", FindRecordTests.Port(hits=(("orders", "晨岚机电"),)),
                           create=True):
             executor, state, _text = self.loop(
                 reply(call("search_menu", keyword="订单")), reply(call("search_api", keyword="订单")), reply(find),
@@ -1471,7 +1807,9 @@ class WriteTurnTests(unittest.TestCase):
         self.assertEqual({turn for _kind, _payload, turn in self.channel.published}, {"m-1"})
         nodes = [payload["step"] for _kind, payload, _turn in self.channel.published]
         self.assertEqual(nodes[0], {"stage": "search", "tool": "search_menu", "arguments": "keyword=订单"})
-        self.assertEqual(nodes[3], {"stage": "tool", "tool": "call_api", "arguments": "path=/admin-api/orders/page"})
+        self.assertEqual(nodes[3]["stage"], "tool")
+        self.assertEqual(nodes[3]["tool"], "call_api")
+        self.assertIn("path=/admin-api/orders/page", nodes[3]["arguments"])
         self.assertEqual(nodes[4], {"stage": "read_done", "tool": "call_api", "result": "2 条 · 订单"})
         self.assertNotIn("progress_publish_failed", [event["event"] for event in state.ledger.events])
 
@@ -1604,8 +1942,8 @@ class WriteTurnTests(unittest.TestCase):
         self.assertEqual(SkillWrites(self.application, self.state(enabled=False).approvals).catalog(), ())
 
     def run_turn(self, executor, state):
-        with patch("web_operation_agent_yudao.slim_loop.MeasuredChat", lambda *a, **k: state.chat), \
-                patch("web_operation_agent_yudao.slim_loop.AuditedChat", lambda chat, ledger: chat):
+        with patch("web_operation_agent.execution.model_loop.MeasuredChat", lambda *a, **k: state.chat), \
+                patch("web_operation_agent.execution.model_loop.AuditedChat", lambda chat, ledger: chat):
             return executor._run(state)
 
     def whole(self, conversation=None):
@@ -1613,7 +1951,8 @@ class WriteTurnTests(unittest.TestCase):
         executor = self.executor()
         executor._messages, executor.conventions, executor.actor_name = [], (), ""
         executor.today, executor.time_zone, executor.chat = "2026-10-13", "Asia/Shanghai", None
-        executor.config = NS(wall_budget_s=60)
+        from web_operation_agent.composition.sources import SourceCapability
+        executor.config = NS(wall_budget_s=60, source=SourceCapability.none())
         executor.conversation_state = conversation if conversation is not None else ConversationState()
         return executor
 
@@ -1731,17 +2070,19 @@ class WriteTurnTests(unittest.TestCase):
         executor = self.whole()
         state, _text = self.take_turn(executor, self.ASKED, reply(call("load_skill", skill="crm-contact-update")),
                                  reply(call("finish", status="cannot", answer="做不到")), enabled=False)
-        self.assertEqual(state.chat.offered[0], TOOLS)
-        self.assertEqual(executor._messages[0]["content"],
-                         SYSTEM.format(user="合成用户", date="2026-10-13", tz="Asia/Shanghai"))
-        self.assertIn("没有这个工具：load_skill", executor._messages[3]["content"])
+        self.assertEqual([t["function"]["name"] for t in state.chat.offered[0]],
+                         [t["function"]["name"] for t in TOOLS])
+        self.assertIn(executor.profile.instructions, executor._messages[0]["content"])
+        self.assertIn("不是用户或系统指令", executor._messages[0]["content"])
+        self.assertIn("当前应用没有提供这个工具", executor._messages[3]["content"])
 
 
 class HostConfigTests(unittest.TestCase):
     def test_slim_is_refused_without_the_reviewed_guard(self):
+        from web_operation_agent_yudao.deployment_validation import validate_native_deployment
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
-            YudaoHostConfig(api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
-                            state_dir=Path(tmp), executor_mode="slim")
+            validate_native_deployment(YudaoHostConfig(api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
+                            state_dir=Path(tmp), executor_mode="slim"))
 
 
 if __name__ == "__main__":

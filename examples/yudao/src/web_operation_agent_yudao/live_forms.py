@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
+import json
 import re
 from urllib.parse import urlsplit
 
@@ -26,7 +27,8 @@ from web_operation_agent.business.forms import (ApplicationFormDescriptor, Appli
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.business.tools.contracts import form_control_unavailable
 from web_operation_agent.schemas import PageObservation
-from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS
+from web_operation_agent.schemas.browser import (FORM_INPUT_CONTROLS, MAX_FORM_CHOICE_OPTIONS,
+                                                MAX_FORM_CHOICE_VALUE_CHARS, MAX_FORM_LABEL_CHARS)
 from web_operation_agent.state.identity import OperationContext
 
 from .page_guard import GuardRefused
@@ -42,6 +44,28 @@ _GENERIC_SUFFIX = ("名称", "姓名", "号码", "编号", "名", "号")
 #: How a requested label was tied to a visible one, from strictest to loosest. Reported so
 #: that a deployment can see how much rests on each.
 MATCH_TIERS = ("exact", "stem", "core")
+
+
+def observed_radio_choices(element):
+    """Live label/value pairs, bounded and distinct; observations grant no authority."""
+    raw = element.attrs.get("radio_options")
+    if element.role != "radiogroup" or not isinstance(raw, str) or len(raw) > (
+            MAX_FORM_CHOICE_OPTIONS * (MAX_FORM_CHOICE_VALUE_CHARS + MAX_FORM_LABEL_CHARS + 50)):
+        return ()
+    try:
+        rows = json.loads(raw)
+        if (not isinstance(rows, list) or not 1 <= len(rows) <= MAX_FORM_CHOICE_OPTIONS
+                or any(not isinstance(row, dict) or set(row) != {"label", "value"}
+                       or not isinstance(row["label"], str) or not 0 < len(row["label"]) <= MAX_FORM_LABEL_CHARS
+                       or not isinstance(row["value"], str) or not 0 < len(row["value"]) <= MAX_FORM_CHOICE_VALUE_CHARS
+                       for row in rows)):
+            return ()
+        choices = tuple(FormChoice(row["value"], row["label"]) for row in rows)
+        if len({c.label for c in choices}) != len(choices) or len({c.value for c in choices}) != len(choices):
+            return ()
+        return choices
+    except (ValueError, TypeError):
+        return ()
 #: A label the server chose for a requested field among those nothing else matched.
 CHOSEN = "chosen"
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -322,7 +346,8 @@ class LiveFormPort:
         if element.role == "spinbutton":
             return ApplicationFormField(key, label, kind="number", controls=("spinbutton",), binding="label")
         if element.role in {"combobox", "select", "radiogroup"}:
-            choices = tuple(hint.choices) if hint is not None and hint.choices else ()
+            choices = observed_radio_choices(element) if element.role == "radiogroup" else (
+                tuple(hint.choices) if hint is not None and hint.choices else ())
             if not choices and value is not None and element.role != "select":
                 if element.role == "combobox" and (hint.kind in {"date", "datetime"} if hint is not None
                                                    else bool(_DATE.fullmatch(value) or _DATETIME.fullmatch(value))):

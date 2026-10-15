@@ -34,6 +34,7 @@ import {DEFAULT_CONFIGURATION} from '../contract/panel'
 import {backoffAfter, classifyTransportError, type PanelHost, type TransportVerdict} from './panelHost'
 import {createRedactor, type Redactor} from './redaction'
 import * as results from './results'
+import {ChoiceUnavailable} from './combobox'
 import {renderState, type PendingView} from './renderState'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
 import {SessionClient, sseBatches} from './transport'
@@ -1070,7 +1071,7 @@ export class EmbeddedWebRuntime {
   /** Run the command, and wait for the navigation it was expected to cause. */
   private async _dispatch(action: ActionEnvelope, executing: ActionEnvelope,
                           navigation: NavigationExpectation,
-  ): Promise<{ok: boolean; code: string; detail: string}> {
+  ): Promise<{ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean}> {
     // Claiming is a network round trip. Neither the action deadline nor the application's
     // confirmed window may have lapsed while it was pending; reject before page dispatch.
     if (Date.now() >= action.deadline) {
@@ -1132,6 +1133,11 @@ export class EmbeddedWebRuntime {
         detail: ok ? '' : results.safeErrorDetail(result?.message || '', action.command, this.redactor),
       }
     } catch (error) {
+      if (error instanceof ChoiceUnavailable) {
+        return {ok: false, code: error.code, detail: error.message,
+          no_effect: error.no_effect,
+          candidate_labels: error.candidate_labels}
+      }
       const detail = results.safeErrorDetail(
         String((error as Error)?.message || error), action.command, this.redactor)
       const code = ['origin_refused', 'bad_arguments', 'navigation_timeout', 'option_unavailable']
@@ -1144,7 +1150,7 @@ export class EmbeddedWebRuntime {
 
   /** Observe what the action left behind and report it. */
   private async _settle(executing: ActionEnvelope, before: ObservationEnvelope,
-                        outcome: {ok: boolean; code: string; detail: string}): Promise<void> {
+                        outcome: {ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean}): Promise<void> {
     const observation = await this.observe(executing.action_id)
     if (executing.command.action === 'highlight' && outcome.ok &&
         (!this.highlightHandle?.active() ||
@@ -1189,6 +1195,8 @@ export class EmbeddedWebRuntime {
       elapsedMs: Date.now() - Number(executing.started_at || 0),
       urlBefore: this.currentObservation?.observation.url || '',
       writeGuardHeld: this.writeGuardUntil > Date.now(),
+      ...(outcome.candidate_labels ? {candidateLabels: outcome.candidate_labels} : {}),
+      ...(outcome.no_effect ? {noEffect: true} : {}),
     }, this.redactor)
     await this._deliver(results.completed(executing, receipt, observation))
   }

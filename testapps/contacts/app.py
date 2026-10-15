@@ -21,6 +21,7 @@ import json
 import re
 import socket
 import threading
+import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -177,6 +178,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     let contacts = {contacts};
     const canWrite = {str(bool(can_write)).lower()};
     const app = document.querySelector('#app');
+    let filterRevision = 0;
     async function refresh() {{
       try {{
         const response = await fetch('/api/contacts', {{cache: 'no-store'}});
@@ -187,6 +189,32 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     }}
     function render() {{
       app.removeAttribute('data-active-view');
+      if (location.pathname === '/contacts/filter') {{
+        app.innerHTML = `<section data-page-route="/contacts/filter"><h1>Filter contacts</h1>
+          <form id="contact-filter"><label>Name contains<input id="contact-filter-name"></label>
+          <button type="button">Search contacts</button></form><div id="contact-filter-results"></div></section>`;
+        const form = app.querySelector('#contact-filter');
+        const apply = async () => {{
+          const value = form.querySelector('input').value;
+          const response = await fetch('/api/contacts', {{cache: 'no-store'}});
+          if (!response.ok || !form.isConnected) return;
+          const payload = await response.json();
+          const rows = payload.contacts.filter(item => item.name.toLowerCase().includes(value.toLowerCase()));
+          const digest = async text => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
+            new TextEncoder().encode(text))), byte => byte.toString(16).padStart(2, '0')).join('');
+          const fieldDigest = await digest(JSON.stringify([value]));
+          const queryDigest = await digest(JSON.stringify({{name_contains: value}}));
+          if (!form.isConnected) return;
+          app.querySelector('#contact-filter-results').textContent = rows.map(item => item.name).join(' · ');
+          form.dataset.pageRead = JSON.stringify({{path: '/api/contacts', query_digest: queryDigest,
+            query_fields: {{name_contains: fieldDigest}}, revision: ++filterRevision,
+            page: 1, page_size: 100, total: rows.length, rows: rows.length}});
+        }};
+        form.addEventListener('submit', event => event.preventDefault());
+        form.querySelector('button').addEventListener('click', apply);
+        void apply();
+        return;
+      }}
       if (location.pathname === '/contacts/help') {{
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
           <section class="record" data-page-route="/contacts/help"><div class="eyebrow">Workspace help</div><h1>Help</h1>
@@ -244,6 +272,10 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
             <div id="contact-email-preferences"><label>Email preferences<input id="contact-draft-email-preferences"></label></div>
             <label>Daily limit<input id="contact-draft-limit" type="number"></label>
             <label>Follow-up date<input id="contact-draft-date" type="date"></label>
+            <label>Period start<input id="contact-period-start" type="date"></label>
+            <label>Period end<input id="contact-period-end" type="date"></label>
+            <fieldset id="contact-draft-lines"><legend>Local lines</legend></fieldset>
+            <button id="contact-add-line" type="button">Add local line</button>
             <label>Priority<input id="contact-draft-priority" role="combobox" readonly
               aria-haspopup="listbox" aria-controls="contact-priorities" aria-expanded="false"></label>
             <ul id="contact-priorities" role="listbox" hidden>
@@ -257,10 +289,24 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
           radio.addEventListener('change', () => {{
             if (radio.checked && radio.value === 'phone') app.querySelector('#contact-email-preferences')?.remove();
           }});
+        const start = app.querySelector('#contact-period-start');
+        const end = app.querySelector('#contact-period-end');
+        for (const input of [start, end]) input.addEventListener('change', () => {{
+          // Plain HTML two-field commit, deliberately unlike Element Plus.
+          if (start.value && end.value) app.querySelector('#contact-create').dataset.period = start.value + '/' + end.value;
+        }});
+        app.querySelector('#contact-add-line').addEventListener('click', () => {{
+          const lines = app.querySelector('#contact-draft-lines');
+          const number = lines.querySelectorAll('input').length + 1;
+          const label = document.createElement('label'); label.textContent = 'Local line ' + number;
+          const input = document.createElement('input'); input.id = 'contact-line-' + number;
+          label.append(input); lines.append(label);
+        }});
         const priority = app.querySelector('#contact-draft-priority');
         const choices = app.querySelector('#contact-priorities');
         priority.addEventListener('click', () => {{
-          choices.hidden = false; priority.setAttribute('aria-expanded', 'true');
+          choices.hidden = !choices.hidden;
+          priority.setAttribute('aria-expanded', String(!choices.hidden));
         }});
         for (const option of choices.querySelectorAll('[role=option]')) option.addEventListener('click', () => {{
           for (const peer of choices.querySelectorAll('[role=option]'))
@@ -288,8 +334,8 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
           <section class="record" data-page-route="/contacts/workflows/${{desk}}"
             data-workflow-desk="${{desk}}" data-active-tab="overview">
           <div class="eyebrow">Read-only workspace</div><h1>${{desk === 'partner' ? 'Partner' : 'Supplier'}} desk</h1>
-          <nav role="tablist"><button type="button" role="tab" aria-selected="true" data-workflow-tab="overview">Overview</button>
-          <button type="button" role="tab" aria-selected="false" data-workflow-tab="terms">Terms</button></nav>
+          <nav role="tablist"><button id="workflow-overview" type="button" role="tab" aria-selected="true" data-workflow-tab="overview">Overview</button>
+          <button id="workflow-terms" type="button" role="tab" aria-selected="false" data-workflow-tab="terms">Terms</button></nav>
           <p data-workflow-content>Overview</p></section>`;
         for (const tab of app.querySelectorAll('[data-workflow-tab]'))
           tab.addEventListener('click', () => {{
@@ -448,6 +494,7 @@ class MinimalContactsApplication:
         if write_fault != "hold_before_commit":
             self.release_post.set()
         self._lock = threading.Lock()
+        self._page_windows: dict[str, float] = {}
         self._assistant_bootstrap: Callable[[DemoActor, str], dict] | None = None
         self._assistant_revoke: Callable[[DemoActor], None] | None = None
         self._assistant_script: str | None = None
@@ -543,6 +590,30 @@ class MinimalContactsApplication:
 
             def do_POST(self):
                 path = urllib.parse.urlsplit(self.path).path
+                if path in {"/api/page-window/begin", "/api/page-window/end"}:
+                    resolved = self._actor()
+                    if (resolved is None or resolved[1] != "page_session"
+                            or self.headers.get("Origin") != owner.origin):
+                        self._reply(403, _json_bytes({"error": "window_actor_refused"}), "application/json")
+                        return
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if not 0 < length <= 100:
+                        self._reply(400, _json_bytes({"error": "invalid_window"}), "application/json")
+                        return
+                    self.rfile.read(length)
+                    active = path.endswith("/begin")
+                    expires = time.time() + 120 if active else 0
+                    with owner._lock:
+                        owner._page_windows[resolved[0].session] = expires
+                    self._reply(200, _json_bytes({"active": active, "expires_at": expires}), "application/json")
+                    return
+                resolved = self._actor()
+                if resolved is not None and resolved[1] == "page_session":
+                    with owner._lock:
+                        guarded = owner._page_windows.get(resolved[0].session, 0) > time.time()
+                    if guarded and path.startswith("/api/"):
+                        self._reply(409, _json_bytes({"error": "read_only_window"}), "application/json")
+                        return
                 if path == "/woa/bootstrap":
                     resolved = self._actor()
                     if (owner._assistant_bootstrap is None or resolved is None

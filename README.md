@@ -11,7 +11,7 @@ The repository carries two reference integrations under [`examples/`](examples/)
 - Goal-directed turns: the model declares the request against the application's index; the server resolves it deterministically (records, field values, counts and sums, pages, tabs, filters) and renders the reply from resolved values. Ambiguous records are asked about; a turn completes only when every declared part settles.
 - Form prefill with hand-over: enters the person's values, checks what each field then shows, highlights submit, never submits. Opt-in per application.
 - Optional compiled source rules with cited answers, plus organisation-reviewed word conventions.
-- A step-wise ReAct executor, and the experimental `--executor slim` turn that drives a small fixed tool set under the same protocol.
+- An application-neutral model-driven loop; Yudao uses only `slim`, with index warming enabled by default. The core also retains the goal-directed and step-wise executors for other integrations.
 - Application-owned Skills (Markdown knowledge and workflows) plus registered typed tools; knowledge and Skills never grant authority.
 - Writes are disabled by default. When enabled, each write binds a complete visible approval, dispatches at most once, and is verified through the application; uncertain writes are never retried automatically.
 - The React assistant panel is a view over server state, supports multi-page sessions, and can persist conversation state and mutation journals in optional SQLite stores.
@@ -149,7 +149,7 @@ See the [Odoo integration guide](examples/odoo/README.md) for identity, routes, 
 - Yudao's native date-range filter has specific input-visibility and calendar constraints, and a day outside the displayed or enabled calendar is refused (details in [runtime behavior](docs/reference/runtime-behavior.md)).
 - A reached page state is checked against what the Agent declared (path, selected controls, active filters or groups). This does not prove that all asynchronous loading has finished, and a requirement the declaration omitted can remain unmet.
 - A model-selected query is not proven to cover the user's intent; an empty read is returned to the Agent rather than ending the turn as "not found".
-- Free-text list search is answered from a scoped read rather than typed into the page's search box. A creation handoff only highlights the entry control; it does not prefill or submit.
+- In the goal-directed path, free-text list search uses a scoped read rather than the page's search box, and a creation-entry handoff only highlights the control. Reviewed form-prefill paths can enter values and hand over without submitting.
 - Evaluation results so far come from small samples of one reference deployment, several authored by the implementers; they do not establish general accuracy. See the [Odoo evaluation details](evals/odoo/README.md) and the [Yudao comparison results](evals/yudao/tool_loop/RESULTS.zh-CN.md).
 
 ## License

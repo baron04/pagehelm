@@ -178,7 +178,7 @@ bytes. It refuses missing or changed attestations and source, excludes handler-b
 fields and conditions other than exact create/update mode gates attested by the verifier,
 and checks literal length limits in UTF-16 units before issuing
 a draft. `YudaoApplication(forms=..., page_write_guard=...)` permits explicit composition;
-the native host does not install a verifier or enable form actions by default. A verifier
+the explicit goal configuration installs these reviewed forms only when requested. The default slim configuration uses the release-reviewed live form handlers described below. A verifier
 must come from application-owned live entry verification, never model output or a browser
 claim. The optional customer-update prototype below has a complete scripted browser
 qualification; that does not establish real-model accuracy or general form coverage.
@@ -193,47 +193,38 @@ the draft. Reviewed project creation admits only the source-declared `tabs=parti
 `tabs=owner` and `tabs=all` collection queries, bound unchanged through handoff. This does
 not enable automatic navigation: the project-group GET can initialize persisted defaults
 and cannot be admitted as read-only merely because it is a GET.
-Source questions use one small retrieval declaration and one answer declaration, with
-at most one shared format repair. Answers include selected release-bound citations. Literal support checks establish attribution, not semantic correctness.
-Source-only and mixed source/data turns are covered by Yudao and Contacts synthetic tests.
-See the [recovery qualification](../../../evals/yudao/tool_loop/RECOVERY.zh-CN.md) for
-real-model results and remaining limits. Writes, form entry and clicks, including
-tab selection, are disabled in the native host by default.
+The native host uses one model-driven loop for application and optional source tools.
+Allowlisted search, bounded original-line reads and optional Git history feed the same
+Agent; source conclusions reference current-turn evidence and literal support. These
+checks establish attribution, not semantic correctness. Source-only turns need neither
+browser observations nor business metadata. An application tool first needs a fresh
+binding to the submitting page. Login verification and guard ingress remain required.
+The adapter's separately composable prototype ports above do not select another host executor.
 
-The optional **native-tab prototype** starts with `--native-read-policy <private-policy.json>`
-and `--native-guard-port 48093`, together with `--ui-source` and `--source-release`.
-The policy is a reviewed deployment configuration, never model context: it has exactly
-`schema_version: 1`, `release` matching `--source-release`, and `read_paths`, an array
-of exact `/admin-api/...` GET paths whose handlers have been checked for persistence
-and asynchronous effects. This repository does not supply a production read allowlist.
-Do not derive that authority from a GET verb or an OpenAPI schema alone.
+The native host uses only `slim`. Its application profile (`slim_loop.py`) uses the
+core `ModelDrivenTurnExecutor` and the goal executor's identity, session, approval,
+budget and audit lifecycle. The model searches the actor's menu and read-only API,
+receives every typed tool result and fresh observation before deciding again, and
+uses fixed Runtime actions. Yudao owns the framework-specific procedures.
 
-The optional customer-editor prototype additionally accepts `--native-form-policy
-<private-review.json>` and requires the guard configuration, `--source-root`, `--ui-source`
-and matching `--source-release`. The review has exactly `schema_version: 1`, `release`,
-and `hashes`, mapping these relative source paths to their reviewed full-file SHA-256:
+Startup requires `--native-read-policy` in v2 `method-fence` mode, matching
+`--source-release`, enabled live forms, `--native-page-policy` and the application's
+own read-only window. The page policy separately lists exact route/template scopes,
+reviewed handler families and exact form-entry/line-add controls. It does not grant
+submit or other persistent actions. Missing policies, incompatible releases, or legacy
+form/create/filter policies with slim fail before model configuration or proxy startup.
+There is no automatic fallback. Old `goal`/`page-agent` configurations and legacy
+form/create/filter/action-review switches are rejected with migration diagnostics.
+Ordinary API and page operation do not require a source checkout; policies remain
+release-reviewed deployment artifacts.
 
-- `ui/src/views/crm/customer/detail/index.vue`
-- `ui/src/views/crm/customer/CustomerForm.vue`
-- `ui/src/components/Dialog/src/Dialog.vue`
-- `ui/src/views/crm/permission/components/PermissionList.vue`
+The cloud example supplies both policy files. Actor metadata warms by default;
+`--no-warm-index` disables it for an explicitly cold session.
+Its page review is [release-bound](cloud/native-policy/v2026.09-page-handlers.md);
+another release needs its own review. A minimal startup selects that release and both
+`--native-read-policy <fence.json>` and `--native-page-policy <pages.json>`. `warm_index`
+is true by default.
 
-Those bytes must have been reviewed for the exact update opener and transient editor
-behavior; generating hashes alone establishes neither. No production policy is supplied.
-The host can additionally load repeatable `--native-create-policy <private-review.json>`
-files. Each uses the existing reviewed creation contract (`schema_version`, `release`,
-`reference`, `hashes`); only installed, byte-matching entry reviews are offered. An
-update review and creation reviews compose in the same actor session; creation alone
-does not enable updates. Duplicate references or changed source abort startup. Both
-require the verified native guard.
-
-The explicit `--executor slim` pilot (`slim_loop.py`) is a measured prototype hosted by
-this adapter. It subclasses the goal executor and replaces only what decides the next
-step: one conversation in which the model searches the actor's menu, searches and calls
-the application's read-only API as the actor, works the page with the Runtime's fixed
-actions and marks a submit control for the person. Startup refuses it without the method
-fence (`--native-read-policy` in `method-fence` mode) and the application's own window.
-It uses no form or filter review and declares no goal-port capability of its own.
 Without `--native-writes` it has no write path; with it, see the end of this section.
 What the model is shown leaves out the application's navigation menu and
 names the regions that scroll; only an element listed there may be acted on. A dropdown,
@@ -341,19 +332,14 @@ is after the second. A `goto` reports the page opened only when it arrived; one 
 the browser at another path, a page that reports an error or a failed read, and a page
 whose rendering was not reported in time are each said as such, with the page.
 
-The first turn of a session that looks a record up by name, or prepares a write, needs the
-actor's application index, and building it reads one record's detail for every entity
-whose page labels line columns: a few hundred small reads. They go out four at a time, as
-a lookup by name's own reads do. The host's `--warm-index` builds the index in the
-background when the actor's session opens instead, so that the turn finds it built (or
-waits for the rest of the same build); the application then answers those reads once per
-session whether or not a turn ever needs the index, which is why it is off by default.
-With it, the actor's menu, which the first request of a session's first turn carries, is
-read ahead as well. A lookup by name does not wait for those detail reads: they serve only
-the line tables (an order's items), which are no page's entity, so a lookup reads the
-entities and pages compiled before them, and the rest of the index follows when they are
-done. For a slim turn, which reads no line table, `--warm-index` builds only that first
-part; the detail reads wait for whatever first needs a line table.
+Slim's first menu/API search or name lookup may need actor metadata. The default `--warm-index`
+starts menu/API descriptions and the outline in the background when the session opens;
+it does not prefetch line-table details. Workload depends on installed modules.
+Warming is not evidence of cold-start latency; use `--no-warm-index` for cold measurement. `main()` also
+warms process-level API documentation in the background independently of this flag.
+
+Ordinary slim completion has `success_claim="not_claimed"`. Application readback verifies
+the individual action or write, without certifying the complete model answer or request.
 
 A turn ends on the model's own `finish`. One case is read a second time by a closing
 model request, which checks the person's words against the page and may send the turn back
@@ -397,36 +383,6 @@ does not use is dropped after it. The closing check is
 given the turn's verified writes. An account that is offered no operation is told
 nothing about writes, and its turn is the read-only one.
 
-The explicit `--executor page-agent` pilot uses the same configured optional source
-lookup and reviewed forms as the goal composition. Its same server Agent discovers
-current reviewed entries with `find_form_entries`, opens one opaque candidate with
-`open_form_entry` under the ordinary visible page approval, and feeds the actual
-receipt and fresh observation back before describing or preparing fields. A pending
-render retains that acknowledged receipt; it does not repeat the opener. Prefill checks
-the values and highlights submission for the person. Declared accompanying questions
-may continue using only read tools after handoff, preserving the form receipt in the
-answer. Arbitrary buttons, unreviewed fields, form submission and page filters remain
-unavailable. Source lookup supplies evidence, never action authority. This is a measured
-prototype, not a claim of general native-form coverage or model accuracy.
-
-The pilot also offers the neutral `inspect_data` / `resolve_data` tools over the existing
-deterministic data resolver. Metadata is bounded and reports omissions; facts retain
-exact record and field identities, native values, units and query completeness. The
-same Agent receives results without a nested planning model. Each operation checks
-the delegated actor, tenant and workspace against the application's identity endpoint;
-every API subrequest checks the shared cancellation/deadline and fixed credential
-generation. Renewal during a read rejects that operation. Data results grant no page,
-form or write authority. These engineering contracts do not establish model accuracy
-or widen reviewed native actions; the default executor remains `goal`.
-
-Host startup and authenticated session creation load API documents only when a business
-tool needs the schema. An unavailable document endpoint remains a typed read failure,
-not an empty catalog. The page-agent pilot also acquires browser context on demand:
-static repository answers can finish without page transport, while page operations
-require a fresh binding to the submitting page. Login verification and native-guard
-ingress qualification remain prerequisites; an unavailable identity service cannot
-create an authenticated session.
-
 Git history is optional and requires actual local repositories matching the deployed
 source bytes. Repeat `--source-commit ui=<full-commit>` and
 `--source-commit server=<full-commit>` for separate repositories below `--source-root`,
@@ -435,17 +391,6 @@ retains its own repository and deployment commit; two repositories do not acquir
 fictional shared commit. Missing Git objects, allowlisted source drift, or a repository
 outside the source boundary refuse this explicit configuration. History queries retain
 the source allowlist, and a diff target must belong to the selected repository.
-
-The server checks the acting API identity, `crm:customer:update` (or the application's
-wildcard), the exact customer's read and its actor-scoped owner/write membership. It
-issues only the unique enabled Edit button on that verified detail route, consumes its
-successful guarded receipt and binds the fresh dialog instance. Permission, source,
-record or instance changes invalidate the draft. Customer scalar fields use the existing
-form port; unsupported fields, creation and complex controls are refused. The Goal stage
-never presses Confirm or invokes update APIs. Its isolated scripted browser qualification
-opened the editor through the assistant, consumed a visible page approval, filled two
-fields and highlighted Confirm, with zero business write requests and unchanged CRM
-tables. This prototype is not enabled by default and is not a real-model accuracy result.
 
 Route **all browser admin API traffic** and `/woa/page-guard/` through that proxy before
 starting the host with the option. The optional nginx locations are in

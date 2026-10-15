@@ -40,8 +40,8 @@ class NativeReadActions:
         context.require_live(application_id=self.application_id, required_scope=self.required_scope)
         return BoundDataReads(self.data, context, checkpoint)
 
-    def _index(self, context, checkpoint):
-        return self._actor(context, checkpoint).index(context=context)
+    def _index(self, context, bound):
+        return bound.index(context=context)
 
     def _form_read(self, checkpoint, call):
         client = self.data._client
@@ -64,9 +64,10 @@ class NativeReadActions:
             raise ActionAdmissionRefused("invalid_target")
         return parsed.path
 
-    def _record_target(self, target, index, context, checkpoint):
-        bound = self._actor(context, checkpoint)
-        schema = bound.schema()
+    def _record_target(self, target, index, context, bound):
+        # Page/entity/record routes are in the outline. Compiling embedded line
+        # tables reads unrelated details and is not needed to qualify navigation.
+        _, schema = bound.outline_view(context=context)
         pages = {p.key:p for p in index.pages if p.entity
                  and (page := schema.page(p.key)) is not None and page.opens_records}
         matches = []
@@ -109,7 +110,8 @@ class NativeReadActions:
                 self._form_permits.clear(); self._form_turn = turn
             self._form_permits[permit.binding_digest] = self.data._client.read_generation
             return permit
-        index = self._index(context, checkpoint)
+        bound = self._actor(context, checkpoint)
+        index = self._index(context, bound)
         path = self._path(before.url)
         if before.page_route != path:
             raise ActionAdmissionRefused("invalid_target")
@@ -122,7 +124,7 @@ class NativeReadActions:
             if target in pages:
                 expectation = ["page", target]
             else:
-                expectation = self._record_target(target, index, context, checkpoint)
+                expectation = self._record_target(target, index, context, bound)
         else:
             element = next(e for e in before.elements if e.ref == intent.arguments["ref"])
             attrs = element.attrs
@@ -154,7 +156,7 @@ class NativeReadActions:
             elif element.role == "link" and attrs.get("href"):
                 from urllib.parse import urljoin
                 target = self._path(urljoin(before.url, attrs["href"]))
-                expectation = self._record_target(target, index, context, checkpoint)
+                expectation = self._record_target(target, index, context, bound)
         if expectation is None:
             raise ActionAdmissionRefused("unreviewed")
         encoded = json.dumps([self.data._client.read_generation, expectation], separators=(",", ":"))
@@ -169,7 +171,8 @@ class NativeReadActions:
                 return False
             return self._form_read(checkpoint, lambda check: self.form_open_actions.verify(
                 permit, intent, receipt, observation=observation, context=context, checkpoint=check))
-        index = self._index(context, checkpoint)
+        bound = self._actor(context, checkpoint)
+        index = self._index(context, bound)
         if permit.binding_digest in self._list_permits:
             if self._list_permits[permit.binding_digest] != self.data._client.read_generation:
                 return False
@@ -191,7 +194,7 @@ class NativeReadActions:
             return path == expected[1] and path in {p.key for p in index.pages}
         if expected[0] == "record":
             return (path == expected[1] and after.record_route == path
-                and self._record_target(path, index, context, checkpoint) == expected)
+                and self._record_target(path, index, context, bound) == expected)
         if after.url != before.url or after.record_route != before.record_route:
             return False
         if expected[0] == "branch":

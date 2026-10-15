@@ -18,6 +18,21 @@ function ready(facts: ReturnType<typeof createPageFacts>) {
 }
 
 describe('native Yudao record and read completion facts', () => {
+  it.each(['hrm/employee', 'crm/contact'])('binds %s detail reads and excludes editor tabs', (entity) => {
+    window.history.replaceState({}, '', `/${entity}/detail/6`)
+    const facts = createPageFacts()
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+    facts.begin(`/admin-api/${entity}/get?id=6`)!(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageRecordRoute()).toBe(`/${entity}/detail/6`)
+    const editor = document.createElement('div')
+    editor.setAttribute('role', 'dialog')
+    editor.innerHTML = '<div role="tab" aria-selected="true">Editor fields</div>'
+    document.body.append(editor)
+    editor.firstElementChild!.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    expect(facts.readPageRecordRoute()).toBe(`/${entity}/detail/6`)
+    facts.begin(`/admin-api/${entity}/get?id=7`)!(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
+    expect(facts.readPageRecordRoute()).toBeUndefined()
+  })
   it.each([
     ['/infra/config', 'Config', '/admin-api/infra/config/page'],
     ['/mall/trade/order', 'TradeOrder', '/admin-api/trade/order/page'],
@@ -471,6 +486,13 @@ describe('native Yudao mounted navigation identity', () => {
       subTree:{type:'form',el:form,children:[{component:item}]},vnode:{ctx:state.instance},parent:state.instance}
     state.instance.subTree.children=[{component} as unknown as NativeVNode]
     expect(nativeControlElement(label)).toBe(input)
+    Object.assign(component.props.model, {status: 7})
+    const select=form.querySelector('.el-select__wrapper')!
+    select.classList.add('el-select')
+    input.setAttribute('aria-controls','synthetic-options')
+    expect(readElementPageControl(input)).toEqual({kind:'query',field:'status',queryValue:'7'})
+    Object.assign(component.props.model, {status: 'private-text'})
+    expect(readElementPageControl(input)).toEqual({kind:'query',field:'status'})
     input.disabled=true
     expect(nativeControlElement(label)).toBe(label)
     input.disabled=false

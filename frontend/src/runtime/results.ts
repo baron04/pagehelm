@@ -7,6 +7,7 @@
  * write out separately. They share it now.
  */
 import type {Redactor} from './redaction'
+import browserContract from '@contract/browser_contract.json'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope,
   type ActionReceipt, type ActionResultEnvelope, type ObservationEnvelope} from './types'
 
@@ -72,6 +73,9 @@ export interface ReceiptFacts {
   urlBefore: string
   /** The application's read-only window covered this whole action. */
   writeGuardHeld?: boolean
+  /** Bounded labels from the owned list, for a recoverable no-effect refusal. */
+  candidateLabels?: string[]
+  noEffect?: boolean
 }
 
 export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: Redactor): ActionReceipt {
@@ -91,6 +95,11 @@ export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: R
     elapsed_ms: Math.max(0, Math.round(facts.elapsedMs || 0)),
     relogin: false,
     write_guard_held: facts.writeGuardHeld === true,
+    ...(facts.candidateLabels?.length ? {candidate_labels: facts.candidateLabels
+      .slice(0, browserContract.choice_failure.max_candidates)
+      .map(label => redactor.redactString(label).slice(0, browserContract.choice_failure.max_label_chars))
+      .filter(Boolean)} : {}),
+    ...(facts.noEffect === true ? {no_effect: true} : {}),
     observation: facts.observation.observation,
   }
 }
