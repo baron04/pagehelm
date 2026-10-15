@@ -1,7 +1,30 @@
 """Bind the readonly data resolver to an exact Yudao delegated credential generation."""
 from web_operation_agent.business.errors import (BusinessToolAuthenticationError,
     BusinessToolContractError, BusinessToolIdentityError, BusinessToolPermissionError, BusinessToolUnavailableError)
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from .client import YudaoReadRefused
+
+
+_TURN_ACTOR = ContextVar("yudao_turn_actor", default=None)
+
+
+@contextmanager
+def turn_actor_reads(client):
+    """Reuse identity matching, never permissions, within one synchronous slim turn.
+
+    The delegated token names one actor. Renewing it invalidates the whole turn;
+    every native GET still authenticates and authorizes at the application.
+    Context-local state cannot cross another thread or survive this scope.
+    """
+    state = {"client": client, "generation": client.read_generation, "binding": None}
+    marker = _TURN_ACTOR.set(state)
+    try:
+        yield
+    finally:
+        state.clear()
+        _TURN_ACTOR.reset(marker)
 
 
 class BoundDataReads:
@@ -9,6 +32,16 @@ class BoundDataReads:
         self._data, self._context, self._checkpoint = data, context, checkpoint
         self._client = data._client
         self._generation = self._client.read_generation
+        self._check()
+        scope = _TURN_ACTOR.get()
+        binding = context.principal.binding_digest, context.session_id, context.turn_id
+        if scope is not None:
+            if (scope.get("client") is not self._client
+                    or scope["generation"] != self._generation
+                    or scope["binding"] not in (None, binding)):
+                raise BusinessToolIdentityError("the delegated read binding changed within this turn")
+            if scope["binding"] == binding:
+                return
         info = self._invoke(self._client.get, "system/auth/get-permission-info")
         if not isinstance(info, dict):
             raise BusinessToolContractError("the application returned an invalid actor assertion")
@@ -19,9 +52,12 @@ class BoundDataReads:
                 or str(self._client.tenant) != principal.tenant_id):
             raise BusinessToolIdentityError("the application data actor differs from the delegated principal")
         self._check()
+        if scope is not None:
+            scope["binding"] = binding
 
     def _check(self):
         self._checkpoint()
+        self._context.require_live(application_id="yudao", required_scope="yudao.read")
         if self._client.read_generation != self._generation:
             raise BusinessToolIdentityError("the application credential changed during the data read")
 

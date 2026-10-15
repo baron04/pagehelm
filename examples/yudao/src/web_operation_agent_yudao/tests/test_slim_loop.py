@@ -462,6 +462,20 @@ class KnowledgeTests(unittest.TestCase):
         told = self.know.call_api("channels/page", {"pageNo": 1})
         DEFAULT_PROVIDER_EGRESS_POLICY.inspect([{"role": "tool", "content": told}], None)
 
+    def test_optional_list_preview_honours_endpoint_parameters(self):
+        from copy import deepcopy
+        docs = deepcopy(DOCS)
+        op = docs["paths"]["/admin-api/orders/page"]["get"]
+        op["parameters"] = [{"name":"pageNo", "in":"query", "schema":{"type":"integer"}}]
+        know = ActorKnowledge(self.client, docs)
+        self.assertIn("total=2", know.list_preview("orders"))
+        self.assertEqual(self.client.calls[-1], ("orders/page", {"pageNo":1}))
+        op["parameters"].append({"name":"employeeId", "in":"query", "required":True,
+                                 "schema":{"type":"integer"}})
+        calls = len(self.client.calls)
+        self.assertEqual(know.list_preview("orders"), "")
+        self.assertEqual(len(self.client.calls), calls)
+
     def test_a_refusal_s_own_words_are_blanked(self):
         self.assertEqual(self.know.call_api("/admin-api/orders/page", {"pageNo": 1, "customerId": "9"}),
                          "接口拒绝：orders/page: 400 password=[redacted]")

@@ -227,6 +227,18 @@ class ActorKnowledge:
         path = f"/admin-api/{entity.strip('/')}/page"
         return path if path in self._by_path else ""
 
+    def list_preview(self, entity: str) -> str:
+        """Optional name context uses only the endpoint's own query contract."""
+        path = self.list_path(entity)
+        if not path:
+            return ""
+        published = {p["name"]: p for p in self._by_path[path]["op"].get("parameters", ())
+                     if isinstance(p, dict) and p.get("in") == "query" and isinstance(p.get("name"), str)}
+        params = {key: value for key, value in (("pageNo", 1), ("pageSize", 20)) if key in published}
+        if any(p.get("required") is True and key not in params for key, p in published.items()):
+            return ""
+        return self.call_api(path, params)
+
     def list_api(self, entity: str) -> str:
         """The paged list an entity key names, when the application publishes one."""
         self._load()
@@ -682,7 +694,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。列候选时，每一条用来区分的信息（编号、手机、所属客户等）必须来自按这个名称筛选后的列表或接口结果，逐条对应；不要从没筛选的列表里凭位置去读。
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
-   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
+   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。工具返回应用实时权限时直接依据该权限事实；明确无编辑权限时如实说明，不能滚动或更换入口重试。除此之外只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
    - 一次要填或选两个以上字段（表单、筛选条件、明细行）时，用 fill_fields 按字段名一次做完，不要一个个 input/select；筛选可以带 then_click="搜索"。它报告某个字段没做成时，再对那个字段单独用 input 或 select。
    - 填完后看返回的观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，把给用户的答复写在它的 answer 里。
@@ -1133,6 +1145,32 @@ class YudaoLoopProcedures:
                 return "gone"
         return "waiting"
 
+    def _record_access(self, s, path):
+        # The application's exact permission rows, never missing DOM controls,
+        # establish this read-only fact. Form and write admission remain separate.
+        match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
+        if match is None:
+            return ""
+        from .bound_data_reads import BoundDataReads
+        from .record_access import customer_can_edit
+        from web_operation_agent.business.errors import BusinessToolContractError, BusinessToolUnavailableError
+        bound = BoundDataReads(self.goal_port.data, s.operation, s.page.checkpoint)
+        identity = bound._invoke(self.knowledge.client.get, "system/auth/get-permission-info")
+        user = identity.get("user") if isinstance(identity, dict) else None
+        principal = s.operation.principal
+        if (not isinstance(user, dict) or str(user.get("id")) != principal.actor_id
+                or str(user.get("deptId") or "none") != principal.workspace_id):
+            from web_operation_agent.business.errors import BusinessToolIdentityError
+            raise BusinessToolIdentityError("the customer permission actor changed")
+        team = bound._invoke(self.knowledge.client.get, "crm/permission/list", bizType=2, bizId=match[1])
+        try:
+            can_edit = customer_can_edit(identity, team, match[1], principal.actor_id)
+        except BusinessToolContractError:
+            raise BusinessToolUnavailableError("the application edit permission could not be verified") from None
+        if can_edit:
+            return "\n应用实时权限：当前账号有此客户的编辑资格；页面动作仍须单独审核，写入仍须新的批准。"
+        return "\n应用实时权限：当前账号没有此客户的编辑权限，不能修改；这是权限限制，不是记录不存在。无需滚动或更换入口重试。"
+
     def _element(self, s, index):
         """The element the model named, if the page text it was last shown listed it."""
         number = str(int(index))
@@ -1273,7 +1311,8 @@ class YudaoLoopProcedures:
             if settled not in ("still", "moving"):
                 return LoopToolResult(f"浏览器到了 {path}，但应用还没有报告这个页面已经显示出来：看下面的页面再决定。",
                                       kind="page", state="unverified", dispatch="acknowledged")
-            return LoopToolResult("已打开。", kind="page", dispatch="acknowledged")
+            access = self._record_access(s, path)
+            return LoopToolResult("已打开。" + access, kind="page", dispatch="acknowledged")
         if name in ("click", "input", "select", "highlight") or (name == "scroll" and args.get("index") is not None):
             element = self._element(s, args.get("index", -1))
             if element is None:
@@ -1485,9 +1524,9 @@ class YudaoLoopProcedures:
                     # What the model went on to read to see the names a list does hold: the
                     # first page of each, for the few entities a kind names.
                     for entity in among[:3]:
-                        path = self.knowledge.list_path(entity)
-                        if path:
-                            lists.append((entity, self.knowledge.call_api(path, {"pageNo": 1, "pageSize": 20})))
+                        preview = self.knowledge.list_preview(entity)
+                        if preview:
+                            lists.append((entity, preview))
         except DataRefused as exc:
             if exc.permission_denied or exc.read_failed:
                 raise
@@ -1623,6 +1662,11 @@ def _requirements(name, arguments, observation, review=None):
 
 class SlimTurnExecutor(ModelDrivenTurnExecutor):
     """Yudao composition of the application-neutral model-driven executor."""
+
+    def _run(self, state):
+        from .bound_data_reads import turn_actor_reads
+        with turn_actor_reads(self.knowledge.client):
+            return super()._run(state)
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
                  draft_steps=None, **kwargs):
