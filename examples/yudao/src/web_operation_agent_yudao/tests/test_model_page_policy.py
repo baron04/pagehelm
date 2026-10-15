@@ -55,6 +55,23 @@ class QueryTests(unittest.TestCase):
             {"page_control": "query", "query_field": "name", "form_scope": "form:query", "form_instance": "live",
              "field_label": "名称", "value": value})
 
+    def test_record_navigation_reads_exact_detail_without_compiling_line_tables(self):
+        self.policy.record_routes = {"/crm/customer":"/crm/customer/detail/{id}"}
+        data = self.policy.data
+        self.policy.goal_port = NS(outline_index=lambda **kw: data.outline_view(context=kw["context"])[0])
+        document = review_document()
+        document["handlers"].append({"kind":"navigation", "route":"/crm/customer/detail/{id}",
+            "evidence":"reviewed-source.vue", "sha256":"b"*64, "controls":[]})
+        self.policy.page_review = NativePageReview.load(document, "synthetic-v1")
+        from unittest.mock import patch
+        with patch.object(data, "schema", side_effect=AssertionError("line tables not needed")), \
+                patch.object(self.client, "_request", side_effect=self.request) as requests:
+            self.transact(self.page(), self.page(2, path="/crm/customer/detail/5"),
+                          "goto", {"url":"https://fixture.test/crm/customer/detail/5"})
+        detail = [c for c in requests.call_args_list if c.args[1]=="crm/customer/get"]
+        self.assertEqual(2, len(detail))
+        self.assertTrue(all(str(c.kwargs["params"]["id"])=="5" for c in detail))
+
     def transact(self, before, after, action, args):
         intent, permit = self.runtime.prepare(action, args, before, context=self.context, checkpoint=lambda: None)
         self.runtime.consume(intent, permit, before, context=self.context, checkpoint=lambda: None)
@@ -188,3 +205,29 @@ class QueryTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ActionAdmissionRefused):
                         admission.verify(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
+
+    def test_opening_a_line_choice_binds_its_title_form_and_owned_listbox(self):
+        attrs = {"form_scope":"dialog:editor", "form_instance":"live", "title":"明细第1行·产品名称",
+                 "aria-controls":"products-1", "aria-expanded":"false"}
+        field = ElementRef("e1", "combobox", "产品名称", "input", 1, attrs)
+        before = self.page(path="/crm/customer", elements=(field,))
+        forms = NS(_evidence=NS(mark=lambda:0, since=lambda mark:()))
+        admission = DraftStepAdmission(NativeDraftSteps(self.policy.data, forms, self.policy.page_review), "yudao")
+        intent, permit = admission.prepare("click", {"ref":"e1"}, before,
+            context=self.context, checkpoint=lambda:None)
+        admission.consume(intent, permit, before, context=self.context, checkpoint=lambda:None)
+        opened = replace(field, ref="e7", epoch=2, attrs={**attrs,"aria-expanded":"true"})
+        for elements, valid in (([opened], True),
+                ([replace(opened, attrs={**opened.attrs,"aria-controls":"another"})], False),
+                ([replace(opened, attrs={**opened.attrs,"form_instance":"replaced"})], False),
+                ([replace(opened, attrs={**opened.attrs,"title":"明细第2行·产品名称"})], False),
+                ([opened, replace(opened, ref="e8")], False)):
+            with self.subTest(elements=elements):
+                after = replace(before, epoch=2, elements=elements)
+                receipt = ActionReceipt(1,"draft","click",{"ref":"e1","epoch":1},True,
+                    observation=after,url_before=before.url,url_after=after.url,write_guard_held=True)
+                if valid:
+                    admission.verify(intent,permit,receipt,context=self.context,checkpoint=lambda:None)
+                else:
+                    with self.assertRaises(ActionAdmissionRefused):
+                        admission.verify(intent,permit,receipt,context=self.context,checkpoint=lambda:None)

@@ -325,16 +325,30 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             return VerificationResult("disputed", tuple(p[:200] for p in verdict["problems"][:4]))
         return VerificationResult("unavailable")
 
+    @staticmethod
+    def _action_target(observation, arguments):
+        """Bound structural diagnostics, without labels, field values or URLs."""
+        target = {"observation_epoch": observation.epoch,
+                  "observation_digest": observation.content_digest}
+        element = next((e for e in observation.elements if e.ref == arguments.get("ref")), None)
+        if element is not None:
+            target.update(ref=element.ref,
+                tag=element.tag if re.fullmatch(r"[a-z][a-z0-9-]{0,39}", element.tag) else "other",
+                role=element.role if re.fullmatch(r"[a-z][a-z0-9-]{0,39}", element.role) else "other",
+                name_digest=hashlib.sha256(element.name.encode()).hexdigest())
+        return target
+
     def _dispatch(self, s, action, args, **kwargs):
         if kwargs.pop("admitted", False):
             raise ValueError("model procedures cannot grant their own action admission")
         self._last_action_state = "refused"
         admitted = None
         if action in ADMITTED_ACTIONS:
+            target = self._action_target(s.obs, args)
             policy = self.config.action_policy
             draft_steps = self.profile.draft_steps
             if policy is None and draft_steps is None:
-                s.ledger.append("model_action_refused", tool=action, error_code="unreviewed")
+                s.ledger.append("model_action_refused", tool=action, error_code="unreviewed", target=target)
                 return None
             if getattr(self, "_admission_turn", None) != s.run_id:
                 self._admission_turn = s.run_id
@@ -350,8 +364,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 s.budget.check()
             checkpoint()
             before = s.obs
-            reason, detail = s.approvals.confirm_operation(s.step + 1, before, action=action,
-                                                          url=str(args.get("url") or ""))
+            with s.receipt.stage("action_approval"):
+                reason, detail = s.approvals.confirm_operation(s.step + 1, before, action=action,
+                                                              url=str(args.get("url") or ""))
             if reason:
                 s.terminal_reason, s.detail = reason, detail
                 return None
@@ -359,32 +374,35 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             latest = self.channel.latest_observation_envelope
             if latest is not None and latest.observation.content_digest != before.content_digest:
                 s.obs = latest.observation
-                s.ledger.append("model_action_refused", tool=action, error_code="stale_binding")
+                s.ledger.append("model_action_refused", tool=action, error_code="stale_binding", target=target)
                 return None
             context = s.approvals.context(s.step + 1, action,
                                          hold_ms=s.approvals.operation_hold_ms)
             try:
-                offered = ActionIntent.create(action, args, s.obs, context)
-                admission = (self._draft_admission if draft_steps is not None and draft_steps.handles(offered)
-                             else self._admission)
-                if admission is None:
-                    raise ActionAdmissionRefused("unreviewed")
-                intent, permit = admission.prepare(action, args, s.obs,
-                    context=context, checkpoint=checkpoint)
-                admission.consume(intent, permit, s.obs, context=context, checkpoint=checkpoint)
+                with s.receipt.stage("action_admission"):
+                    offered = ActionIntent.create(action, args, s.obs, context)
+                    admission = (self._draft_admission if draft_steps is not None and draft_steps.handles(offered)
+                                 else self._admission)
+                    if admission is None:
+                        raise ActionAdmissionRefused("unreviewed")
+                    intent, permit = admission.prepare(action, args, s.obs,
+                        context=context, checkpoint=checkpoint)
+                    admission.consume(intent, permit, s.obs, context=context, checkpoint=checkpoint)
                 admitted = (admission, intent, permit, context, checkpoint)
                 s.ledger.append("action_effect_consumed", tool=action,
                     binding_digest=intent.binding_digest,
                     effect=permit.effect.value if isinstance(permit, ActionPermit) else "transient_draft",
-                    review_digest=hashlib.sha256(permit.review.encode()).hexdigest(), dispatched=False)
+                    review_digest=hashlib.sha256(permit.review.encode()).hexdigest(), dispatched=False,
+                    target=target)
             except ActionAdmissionRefused as exc:
-                s.ledger.append("model_action_refused", tool=action, error_code=exc.code)
+                s.ledger.append("model_action_refused", tool=action, error_code=exc.code, target=target)
                 return None
         command = dict(args)
         if admitted is not None and "ref" in command:
             command["epoch"] = admitted[1].observation.epoch
-        receipt = super()._dispatch(s, action, command, admitted=admitted is not None and action == "click",
-                                   **kwargs)
+        with s.receipt.stage("action_dispatch"):
+            receipt = super()._dispatch(s, action, command, admitted=admitted is not None and action == "click",
+                                       **kwargs)
         if receipt is not None:
             if not hasattr(self, "_tool_receipts"):
                 self._tool_receipts = []
@@ -396,8 +414,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             try:
                 for attempt in range(4):
                     try:
-                        admission.verify(intent, permit, receipt, context=context,
-                            checkpoint=checkpoint, settlement=settlement)
+                        with s.receipt.stage("action_verification"):
+                            admission.verify(intent, permit, receipt, context=context,
+                                checkpoint=checkpoint, settlement=settlement)
                         s.ledger.append("action_effect_verified", tool=action,
                             command_id=receipt.command_id, binding_digest=intent.binding_digest,
                             observation_epoch=s.obs.epoch, submitted=False, persisted=False,
@@ -413,7 +432,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             except ActionAdmissionRefused as exc:
                 self._last_action_state = "unverified"
                 s.ledger.append("model_action_unverified", tool=action, error_code=exc.code,
-                                command_id=receipt.command_id, repeated=False)
+                                command_id=receipt.command_id, repeated=False, target=target)
                 if isinstance(admission, DraftStepAdmission):
                     s.terminal_reason, s.detail = "agent_refused", "acknowledged draft step could not be verified"
         return receipt

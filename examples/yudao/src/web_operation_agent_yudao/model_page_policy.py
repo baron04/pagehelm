@@ -359,6 +359,9 @@ class NativeDraftSteps:
                     raise ActionAdmissionRefused("invalid_target")
                 prepared["lines"] = sorted(self._lines(before, scope))
             elif element.role in {"combobox", "select"} and self.review.permits("fields", route):
+                if not label or not attrs.get("aria-controls"):
+                    raise ActionAdmissionRefused("invalid_target")
+                prepared.update(role=element.role, tag=element.tag, owner=attrs["aria-controls"])
                 step = "open_choice"
             else:
                 raise ActionAdmissionRefused("unsafe_effect")
@@ -394,8 +397,11 @@ class NativeDraftSteps:
             lines = self._lines(replace(observation, elements=controls), expected["scope"])
             return bool(controls) and set(expected["lines"]) < lines and len(lines) == len(expected["lines"]) + 1
         if expected["step"] == "open_choice":
-            return any(e.attrs.get("aria-expanded") == "true" for e in controls
-                       if e.attrs.get("field_label") == expected["label"])
+            matches = [e for e in controls if (e.attrs.get("field_label") or e.attrs.get("title")) == expected["label"]]
+            return (len(matches) == 1 and matches[0].role == expected["role"] and matches[0].tag == expected["tag"]
+                    and matches[0].attrs.get("aria-controls") == expected["owner"]
+                    and matches[0].attrs.get("aria-expanded") == "true"
+                    and not form_control_unavailable(matches[0].attrs))
         if "pair_position" in expected:
             from .slim_loop import _date_pair
             starts = [e for e in controls if e.attrs.get("field_label") == expected["pair_label"]]

@@ -90,6 +90,19 @@ class PageTextTests(unittest.TestCase):
         self.assertFalse(any(line.strip().startswith("[8]") for line in lines))
         self.assertTrue(any(line.strip().startswith("[11]") for line in lines))
 
+    def test_duplicate_label_span_is_not_offered_as_a_control_but_independent_controls_remain(self):
+        obs = observation()
+        obs.elements = [element(1, "button", "编辑", "button"), element(2, "span", "编辑", "span"),
+                        element(3, "button", "编辑", "button"), element(4, "span", "编辑", "span")]
+        obs.content = "[1]<button>编辑\n\t[2]<span>编辑 />\n\t[3]<button>编辑 />\n[4]<span>编辑 />"
+        text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()))
+        self.assertNotIn("[2]", text)
+        for number in (1, 3, 4):
+            self.assertIn(f"[{number}]", text)
+        procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        self.assertIsNone(procedures._element(NS(obs=obs), 2))
+        self.assertEqual("e1", procedures._element(NS(obs=obs), 1).ref)
+
     def test_a_region_with_more_below_is_named_with_the_way_to_see_it(self):
         _lines, hints = _page_lines(observation())
         self.assertEqual(len(hints), 1)
@@ -368,6 +381,14 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("remark", text)
         self.assertNotIn("ownerUserId（", text)   # an identifier is not a quantity
 
+    def test_projection_names_returned_but_unshown_columns_without_their_values(self):
+        text = self.know.call_api("orders/page", {"pageNo": 1}, ["no"])
+        self.assertIn("本次只展示 fields 指定的列", text)
+        self.assertIn("price（金额，单位：分）", text)
+        self.assertIn('"no": "S1"', text)
+        self.assertNotIn('"price":', text)
+        self.assertNotIn("1000", text)
+
     def test_a_list_divided_by_whose_records_they_are_is_read_as_everything_the_actor_sees(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
         self.assertEqual([c[1]["sceneType"] for c in self.client.calls if c[0] == "leads/page"], [1, 2, 3])
@@ -565,6 +586,8 @@ class Budget:
 class Channel:
     """What a turn published for whoever is watching it."""
 
+    latest_observation_envelope = None
+
     def __init__(self, broken=False):
         self.broken, self.published = broken, []
 
@@ -592,6 +615,56 @@ class State:
     @staticmethod
     def cancelled():
         return False
+
+
+class DraftChoiceTests(unittest.TestCase):
+    def setUp(self):
+        self.procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        self.procedures.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
+        self.procedures._settled = lambda *a, **kw: None
+        self.attrs = {"form_scope":"dialog:create", "form_instance":"live", "field_label":"产品",
+                      "aria-haspopup":"listbox", "aria-controls":"owned", "aria-expanded":"false"}
+        self.control = element(1, "combobox", "产品", "input", **self.attrs)
+        self.state = NS(obs=observation())
+        self.state.obs.elements = [self.control]
+        self.sent = []
+        self.changed = [replace(self.control, ref="e7", epoch=2,
+                                attrs={**self.attrs, "aria-expanded":"true"}),
+                        replace(element(8, "option", "PLC 控制器 P5", "li", listbox_owner="owned"), epoch=2)]
+        def act(s, action, args, **kw):
+            self.sent.append((action, args))
+            if action == "click":
+                s.obs = replace(s.obs, epoch=2, elements=self.changed)
+            return ""
+        self.procedures._act = act
+
+    def test_unknown_spelling_returns_owned_labels_without_dispatching_selection(self):
+        text = self.procedures._select(self.state, self.control, "PLC控制器P5")
+        self.assertEqual(["click"], [a for a, _ in self.sent])
+        self.assertIn("没有唯一的精确标签", text)
+        self.assertIn(BEGIN + "\nPLC 控制器 P5\n" + END, text)
+
+    def test_exact_label_selects_the_fresh_reference_after_opening(self):
+        self.assertEqual("", self.procedures._select(self.state, self.control, "PLC 控制器 P5"))
+        self.assertEqual([("click", {"ref":"e1"}), ("select", {"ref":"e7", "value":"PLC 控制器 P5",
+                                                       "option_label":"PLC 控制器 P5"})], self.sent)
+
+    def test_foreign_disabled_or_duplicate_choices_cannot_authorize_selection(self):
+        option = self.changed[1]
+        for options in ([replace(option, attrs={"listbox_owner":"foreign"})],
+                        [replace(option, attrs={**option.attrs, "aria-disabled":"true"})],
+                        [option, replace(option, ref="e9")],
+                        [option, replace(option, ref="e9", attrs={**option.attrs, "aria-disabled":"true"})]):
+            with self.subTest(options=options):
+                self.sent.clear()
+                self.changed = [self.changed[0], *options]
+                self.procedures._select(self.state, self.control, "PLC 控制器 P5")
+                self.assertEqual(["click"], [a for a, _ in self.sent])
+
+    def test_replaced_form_after_opening_never_receives_selection(self):
+        self.changed[0] = replace(self.changed[0], attrs={**self.changed[0].attrs, "form_instance":"replaced"})
+        self.assertIn("已变化", self.procedures._select(self.state, self.control, "PLC 控制器 P5"))
+        self.assertEqual(["click"], [a for a, _ in self.sent])
 
 
 class SettledTests(unittest.TestCase):

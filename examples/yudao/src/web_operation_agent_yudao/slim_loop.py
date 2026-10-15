@@ -41,6 +41,7 @@ from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, hi
 from web_operation_agent.execution.model_loop_contracts import (LoopToolResult, VerificationResult,
                                                                ModelLoopProfile, LoopProcedure)
 from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
+from web_operation_agent.business.tools.contracts import form_control_unavailable
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
 
@@ -382,6 +383,15 @@ class ActorKnowledge:
         # credential assignment where the request leaves for the provider.
         blanked = {k for row in (rows if rows is not None else [data]) if isinstance(row, dict)
                    for k, v in row.items() if v == REDACTED}
+        if fields:
+            other = [key for key in dict.fromkeys(k for row in (rows if rows is not None else [data])
+                     if isinstance(row, dict) for k in row) if key in props
+                     and key not in ("id", *fields) and key not in blanked]
+            if other:
+                out.append("本次只展示 fields 指定的列；下面是已返回但未展示的列，需要时带 fields 重读，不能据此说接口没有这些字段：")
+                data_lines.add(len(out))
+                out.append("; ".join(key + ("（" + str(self._deref(props[key]).get("description") or "")[:40] + "）"
+                    if key in props and self._deref(props[key]).get("description") else "") for key in other[:12]))
         notes = [f"{k}={(self._deref(props[k]).get('description') or '')[:40]}"
                  for k in (fields or keys) if k in props and self._deref(props[k]).get("description")
                  and k not in blanked]
@@ -782,6 +792,21 @@ def _page_lines(observation) -> tuple[list[str], list[str]]:
     drop: set[int] = {i for i, _depth, number in marks
                       if f"e{number}" in blank and _SCROLL.search(lines[i]) is None
                       and lines[i].rstrip().endswith("/>")}
+    # Some controls expose their own label again as an indexed child span. Only
+    # the enclosing button/link is an action target; retain independent controls.
+    elements, parents = {e.ref: e for e in observation.elements}, []
+    for i, depth, number in marks:
+        while parents and parents[-1][0] >= depth:
+            parents.pop()
+        element = elements.get("e" + number)
+        if element is not None:
+            if (element.tag in {"span", "i"} and element.role in {"span", "i", "generic"}
+                    and element.name.strip() and not any(element.attrs.get(k) for k in (
+                        "field_label", "title", "href", "aria-controls"))
+                    and any(parent.role in {"button", "link"} and parent.tag in {"button", "a"}
+                        and parent.name.strip() == element.name.strip() for _, parent in parents)):
+                drop.add(i)
+            parents.append((depth, element))
     for position, (i, depth, _number_) in enumerate(marks):
         if i in drop:
             continue
@@ -1116,6 +1141,41 @@ class YudaoLoopProcedures:
             return "操作已发出，但应用未能确认结果，不会自动重发。"
         return ""
 
+    def _select(self, s, element, value):
+        """Inspect a transient form's owned live choices before issuing selection.
+
+        An unknown label yields current choices to the same Agent, without an
+        acknowledged failed selection or an automatic name substitution.
+        """
+        attrs = element.attrs
+        if (element.role == "combobox" and attrs.get("aria-haspopup") == "listbox"
+                and str(attrs.get("form_scope", "")).startswith("dialog")
+                and attrs.get("selected_option") != value):
+            owner = attrs.get("aria-controls", "")
+            if not owner or not attrs.get("form_instance"):
+                return "尚未选择：下拉框缺少当前表单或选项归属，请重新观察。"
+            if attrs.get("aria-expanded") != "true":
+                failed = self._act(s, "click", {"ref": element.ref})
+                if failed:
+                    return failed
+                self._settled(s, waits=2)
+            current = [e for e in s.obs.elements if e.role == element.role and e.tag == element.tag
+                and all(e.attrs.get(k) == attrs.get(k) for k in (
+                    "form_scope", "form_instance", "field_label", "title", "aria-controls"))]
+            if len(current) != 1 or current[0].attrs.get("aria-expanded") != "true":
+                return "尚未选择：展开后下拉框已变化，请根据最新观察重新选择。"
+            element = current[0]
+            options = [e for e in s.obs.elements if e.role == "option"
+                       and e.attrs.get("listbox_owner") == owner]
+            matches = [e for e in options if re.sub(r"\s+", " ", e.name).strip() == value]
+            if (len(matches) != 1 or matches[0].attrs.get("aria-disabled") == "true"
+                    or form_control_unavailable(matches[0].attrs)):
+                labels = [re.sub(r"\s+", " ", e.name).strip()[:200] for e in options
+                          if e.attrs.get("aria-disabled") != "true" and not form_control_unavailable(e.attrs)]
+                return ("尚未选择：当前可见选项没有唯一的精确标签。核对或滚动后按页面原文重新 select，保留空格；不会自动替换名称。\n"
+                        + fenced(redacted("\n".join(labels[:12]), self.knowledge.handoffs)))
+        return self._act(s, "select", {"ref": element.ref, "value": value, "option_label": value})
+
     @staticmethod
     def _note(s, **facts):
         s.progress(facts)
@@ -1195,7 +1255,8 @@ class YudaoLoopProcedures:
                 command["commit"] = _commits(element, s.obs.elements)
             else:
                 command["option_label"] = value
-            failed = self._act(s, "fill" if name == "input" else "select", command)
+            failed = (self._act(s, "fill", command) if name == "input"
+                      else self._select(s, element, value))
             if not failed:
                 turn["touched"].append((_control_name(element), value))
             self._settled(s, waits=2)
@@ -1317,7 +1378,7 @@ class YudaoLoopProcedures:
                         break
                     element = current[at]
                 if kind in ("〔下拉〕", "〔单选〕") and text.strip():
-                    failed = self._act(s, "select", {"ref": element.ref, "value": text, "option_label": text})
+                    failed = self._select(s, element, text)
                 else:
                     failed = self._act(s, "fill", {"ref": element.ref, "value": text,
                                                    "commit": _commits(element, s.obs.elements)})

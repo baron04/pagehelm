@@ -66,7 +66,9 @@ class NativeReadActions:
 
     def _record_target(self, target, index, context, checkpoint):
         bound = self._actor(context, checkpoint)
-        schema = bound.schema()
+        # Page/entity/record routes are in the outline. Compiling embedded line
+        # tables reads unrelated details and is not needed to qualify navigation.
+        _, schema = bound.outline_view(context=context)
         pages = {p.key:p for p in index.pages if p.entity
                  and (page := schema.page(p.key)) is not None and page.opens_records}
         matches = []

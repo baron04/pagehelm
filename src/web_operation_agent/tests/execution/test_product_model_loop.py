@@ -3,11 +3,16 @@ from dataclasses import replace
 import json
 from types import SimpleNamespace as NS
 import unittest
+from unittest.mock import patch
 
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
 from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.goal.data import DataRefused
+from web_operation_agent.goal.executor import GoalTurnExecutor
+from web_operation_agent.execution.receipt import TurnReceipt
+from web_operation_agent.execution.action_admission import ActionPermit, ActionEffect, ActionAdmissionRefused
+from web_operation_agent.tests.goal.test_data_read_tools import context
 
 
 def page(epoch=1, *, content="List", route="/list"):
@@ -80,6 +85,73 @@ class LoopFixture(ModelDrivenTurnExecutor):
 
     def run(self, prompt="q"):
         return self._loop(self.state, prompt, self.turn, verified=False)
+
+
+class DispatchDiagnosticsTests(unittest.TestCase):
+    def dispatch(self, *, refused=False):
+        clock, events = [0.0], []
+        def advance(seconds):
+            clock[0] += seconds
+        class Policy:
+            application_id, required_scope, actions = "sample", "records:read", frozenset({"click"})
+            def admit(self, intent, **kwargs):
+                advance(.25)
+                if refused:
+                    raise ActionAdmissionRefused("unreviewed")
+                return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY, "synthetic-review", "selected")
+            def verify(self, *args, **kwargs):
+                advance(.125)
+                return True
+        operation = context()
+        def confirm(*args, **kwargs):
+            advance(.5)
+            return "", ""
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
+        executor.config = NS(action_policy=Policy())
+        executor.profile = NS(draft_steps=None)
+        executor.application = NS(descriptor=NS(application_id="sample"))
+        executor.channel = NS(latest_observation_envelope=None)
+        before = page()
+        before.elements[0] = replace(before.elements[0], name="password=private-label",
+                                     attrs={"value":"private-field-value"})
+        state = NS(obs=before, terminal_reason="", detail="", step=0, run_id="run",
+            cancelled=lambda:False, budget=NS(check=lambda:None), receipt=TurnReceipt(clock=lambda:clock[0]),
+            approvals=NS(confirm_operation=confirm, context=lambda *a, **kw:operation, operation_hold_ms=1000),
+            ledger=NS(append=lambda event, **facts:events.append((event, facts))))
+        after = page(2)
+        receipt = ActionReceipt(1, "command", "click", {"ref":"e1", "epoch":1}, True,
+            observation=after, url_before=before.url, url_after=after.url, write_guard_held=True)
+        def dispatch(*args, **kwargs):
+            advance(.75)
+            state.obs = after
+            return receipt
+        with patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch) as browser:
+            result = executor._dispatch(state, "click", {"ref":"e1"})
+        return result, state.receipt.report(NS(), "run"), events, browser.call_count
+
+    def test_action_phases_measure_approval_admission_dispatch_and_verification(self):
+        result, report, events, dispatched = self.dispatch()
+        self.assertIsNotNone(result)
+        self.assertEqual(1, dispatched)
+        for name, seconds in (("action_approval", .5), ("action_admission", .25),
+                              ("action_dispatch", .75), ("action_verification", .125)):
+            self.assertEqual(seconds, report["stages"][name]["occupied_seconds"])
+        target = next(facts["target"] for event, facts in events if event=="action_effect_consumed")
+        self.assertEqual(("e1", "button", "button", 1),
+                         (target["ref"], target["tag"], target["role"], target["observation_epoch"]))
+        self.assertEqual(64, len(target["name_digest"]))
+        for private in ("private-label", "private-field-value", "password"):
+            self.assertNotIn(private, str(events)+str(report))
+
+    def test_refusal_retains_structural_target_and_closes_timing_without_dispatch(self):
+        result, report, events, dispatched = self.dispatch(refused=True)
+        self.assertIsNone(result)
+        self.assertEqual(0, dispatched)
+        self.assertNotIn("action_dispatch", report["stages"])
+        self.assertEqual(.25, report["stages"]["action_admission"]["occupied_seconds"])
+        refusal = next(facts for event, facts in events if event=="model_action_refused")
+        self.assertEqual("unreviewed", refusal["error_code"])
+        self.assertEqual("button", refusal["target"]["tag"])
 
 
 class ModelLoopTests(unittest.TestCase):
