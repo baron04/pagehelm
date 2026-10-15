@@ -842,6 +842,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 receipts = tuple(self._tool_receipts)
                 has_observation = any(r.observation is not None for r in receipts)
                 has_page_action = any(r.action not in {"observe", "wait_for"} for r in receipts)
+                if has_page_action:
+                    turn.pop("handoff", None)
+                handoff = next((r for r in receipts if r.action == "handoff_form"
+                                and r.command_id == result.completion_command), None)
+                if confirmed and handoff is not None and result.marked:
+                    turn["handoff"] = (self._page_fingerprint(s.obs), result.marked)
                 if has_observation:
                     # Page actions and explicit observe both carry the runtime's fresh
                     # observation. It is safe to reuse that receipt for a later read in
@@ -944,7 +950,13 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 # the verified writes ahead of the answer of any turn it is not told
                 # finished, which is for a turn that stopped part-way.
                 s.terminal_reason = "agent_finished"
-            return answer or "已完成。"
+            answer = answer or "已完成。"
+            handoff = turn.get("handoff")
+            if status == "done" and handoff and handoff[0] == self._page_fingerprint(s.obs):
+                # The explicit handoff belongs to the server's verified outcome,
+                # not to whether the model remembered to mention manual submission.
+                answer += f"\n\n请检查表单，确认无误后自行点击已标出的「{handoff[1]}」提交；助手未提交。"
+            return answer
         if not s.terminal_reason:
             s.terminal_reason, s.detail = "agent_refused", "the turn's model steps were used up"
         return "步骤用完，没有完成。"

@@ -161,6 +161,32 @@ class DispatchDiagnosticsTests(unittest.TestCase):
 
 
 class ModelLoopTests(unittest.TestCase):
+    def test_manual_handoff_copy_requires_a_current_verified_runtime_handoff(self):
+        for mode in ("combined", "separate_finish", "refused", "invented", "changed", "need_input"):
+            with self.subTest(mode=mode):
+                def tool(fixture, name, arguments):
+                    if name == "later_read":
+                        fixture.state.obs = page(4, route="/other")
+                        return LoopToolResult("other page", kind="read")
+                    fixture._dispatch(fixture.state, "handoff_form", {})
+                    return LoopToolResult("ready", kind="page", marked="Save",
+                        completion_command="invented" if mode == "invented" else "command",
+                        state="unverified" if mode == "refused" else "completed")
+                combined = mode == "combined"
+                replies = [reply(call("prepare_draft", **({"answer": "Fields ready."} if combined else {})))]
+                if mode == "changed":
+                    replies.append(reply(call("later_read")))
+                if not combined:
+                    replies.append(reply(call("finish", status="need_input" if mode == "need_input" else "done",
+                                              answer="Fields ready.")))
+                fixture = LoopFixture(replies, tool)
+                answer = fixture.run()
+                self.assertTrue(answer.startswith("Fields ready."))
+                valid = mode in {"combined", "separate_finish"}
+                self.assertEqual(valid, "请检查表单" in answer)
+                self.assertEqual(valid, "「Save」提交；助手未提交。" in answer)
+                self.assertEqual(len(replies), len(fixture.state.chat.seen))
+
     def test_unrelated_searches_do_not_restart_unreviewed_control_recovery(self):
         attempted = []
         def tool(fixture, name, arguments):

@@ -36,7 +36,7 @@ The repository has one public reference implementation: [Odoo 18](examples/odoo/
 - The panel opens as a floating window on the launcher's corner, or as a full-height drawer at the right edge; a title-bar button switches between them. On a viewport at least 900px wide the drawer narrows the host page; elements the application positions against the viewport (dialogs, notifications) are not narrowed and can sit partly under the drawer. The chosen mode, placement and width are kept in the browser's local storage.
 - Optional SQLite stores provide session ownership, progress outbox, bounded conversation context, mutation journals, backups, and explicit operator settlement.
 
-In the model-driven loop, a tab click may finish on the settled observation accepted by the application's verifier, even when the initial receipt was still loading. Source tools explain explicitly requested implementation questions; current business values and configuration require application reads rather than source defaults. Tool selection still depends on the model.
+In the model-driven loop, a tab click may finish on the settled observation accepted by the application's verifier, even when the initial receipt was still loading. After a verified form handoff, the server explicitly asks the person to review the form and submit it manually, even if the model omits that reminder. Source tools explain explicitly requested implementation questions; current business values and configuration require application reads rather than source defaults. Tool selection still depends on the model.
 
 These are implemented-path claims, not a general success-rate claim. The repository has no public benchmark large enough to establish superiority over another browser agent.
 

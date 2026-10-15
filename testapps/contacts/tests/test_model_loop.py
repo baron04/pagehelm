@@ -243,7 +243,7 @@ class ModelBrowserTests(unittest.TestCase):
                     {"label": "Period start", "value": "2026-10-20"},
                     {"label": "Period end", "value": "2026-10-22"}])
                 steps.append(("fill_fields", {"fields": fields, "then_highlight": "Save contact",
-                                              "answer": "Ready; review and save."}))
+                                              "answer": "Fields ready."}))
                 chat = _Chat(steps)
                 with tempfile.TemporaryDirectory() as directory, patch("testapps.contacts.server._chat", return_value=(chat, None)), \
                         NativeContactsHost(NativeServerConfig(Path(directory), port=0, model_loop=True)) as host, \
@@ -274,7 +274,9 @@ class ModelBrowserTests(unittest.TestCase):
                             self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
                             continue
                         self.assertEqual("agent_finished", outcome.result.terminal_reason, (outcome.result.user_answer, logs))
-                        self.assertIn("Ready; review and save.", outcome.result.user_answer)
+                        self.assertIn("Fields ready.", outcome.result.user_answer)
+                        self.assertIn("请检查表单", outcome.result.user_answer)
+                        self.assertIn("「Save contact」提交；助手未提交。", outcome.result.user_answer)
                         self.assertEqual(3 if recovery else 2, len(chat.messages))
                         if recovery:
                             self.assertIn("option_unavailable", str(chat.messages[-1]))
