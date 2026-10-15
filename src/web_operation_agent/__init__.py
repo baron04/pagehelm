@@ -2,7 +2,7 @@
 
 The server owns planning, optional knowledge providers, policy, approvals, and audit state.
 The browser observes the current page and executes a fixed set of generic tools. See
-``docs/architecture/system-design.md`` for the current component and trust boundaries.
+``docs/concepts/overview.md`` for the current component and trust boundaries.
 """
 import sys
 

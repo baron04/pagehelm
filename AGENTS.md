@@ -4,7 +4,7 @@ These instructions apply to the entire repository.
 
 ## Start with the public contract
 
-Read `README.md`, then inspect the modules and tests that define the behavior you intend to change. Treat code and passing tests as the source of truth when prose has drifted. Keep the English and Chinese READMEs aligned when public behavior, setup, or limitations change.
+Read `README.md`, then the matching page under `docs/` (`concepts/` for why, `guides/` for how, `reference/` for current behavior), then the modules and tests. Code and passing tests are the source of truth when prose has drifted. Keep the two READMEs aligned; `docs/` is Chinese only. A behavior change updates the matching `docs/` page, not the README.
 
 ## Preserve the architecture boundary
 
@@ -47,7 +47,7 @@ Read `README.md`, then inspect the modules and tests that define the behavior yo
 - Preserve typed errors and terminal states across layers; do not recover behavior by matching exception text.
 - Avoid application names, fixture paths, evaluator logic, and local absolute paths in reusable package code.
 - Avoid compatibility shims unless an existing public call site still needs them and the removal plan is clear.
-- Keep generated files, raw experiment output, and disposable investigation notes out of Git. Delete obsolete material; place only useful private engineering notes in an ignored workspace.
+- Keep generated files, raw experiment output, and disposable investigation notes out of Git.
 - Document verified behavior and limitations. Label hypotheses as hypotheses, and do not turn a small fixture result into a general reliability claim.
 
 ## Test the behavior that changed
@@ -76,7 +76,7 @@ Before committing:
 - inspect `git status` and the complete diff;
 - keep unrelated user or collaborator changes intact;
 - exclude caches, build output, credentials, local paths, and large generated artifacts;
-- update tests and both public READMEs when behavior changes;
+- update tests and the matching `docs/` page when behavior changes; touch the READMEs only for overview-level changes;
 - report the exact checks run, including skips or environment limitations.
 
 Do not rewrite published history, push, publish a release, create a remote repository, or submit an upstream change unless the repository owner has explicitly requested that action.

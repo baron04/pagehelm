@@ -10,17 +10,9 @@ Application Adapter 把一个第一方 Web 应用接入通用服务端 Agent。A
 
 `BusinessToolRuntime` 通过固定 JSON schema 暴露当前应用数据。凭据和任意 HTTP 构造应保留在应用 executor 内。Skill 说明何时及如何调用工具，但不能证明当前记录存在。返回的每条路由必须原样出现在结果内容中，并在 Agent 使用前通过 Adapter 路由端口校验。
 
-需要广覆盖读取时，实现可选、应用无关的 `EntityReadPort`，再与 `EntityReadTools` 组合。
-Agent-facing 工具面固定为 `discover_entities`、`describe_entity` 和
-`query_entity_records`。Adapter 把自己的 ORM model、REST collection、OpenAPI resource、
-GraphQL type 或其它元数据翻译成 `EntityCatalog`、`EntityDescriptor`、`EntityField` 与
-`EntityQueryPage`。原生资源名只作为 Adapter 内部引用；核心签发绑定 actor/catalog 的不透明
-实体和字段 ID。目录或字段描述发生漂移时旧 ID 自动失效。通用过滤只允许有界 AND、固定
-操作符、服务端固定排序、页大小和 offset，不能退化为任意 method、URL、SQL、domain 或请求体。
+需要广覆盖读取时，实现可选、应用无关的 `EntityReadPort`，再与 `EntityReadTools` 组合。Agent-facing 工具面固定为 `discover_entities`、`describe_entity` 和`query_entity_records`。Adapter 把自己的 ORM model、REST collection、OpenAPI resource、GraphQL type 或其它元数据翻译成 `EntityCatalog`、`EntityDescriptor`、`EntityField` 与`EntityQueryPage`。原生资源名只作为 Adapter 内部引用；核心签发绑定 actor/catalog 的不透明实体和字段 ID。目录或字段描述发生漂移时旧 ID 自动失效。通用过滤只允许有界 AND、固定操作符、服务端固定排序、页大小和 offset，不能退化为任意 method、URL、SQL、domain 或请求体。
 
-Adapter 启用该工具面时必须运行 `assert_entity_read_contract`，并补充自己的鉴权和翻译测试。
-仓库目前对 Odoo ORM/RPC 翻译与结构不同的合成 Contacts REST/list 翻译运行同一黑盒断言；
-只有一个 Adapter 通过不能证明 Agent 能力通用。
+Adapter 启用该工具面时必须运行 `assert_entity_read_contract`，并补充自己的鉴权和翻译测试。仓库目前对 Odoo ORM/RPC 翻译与结构不同的合成 Contacts REST/list 翻译运行同一黑盒断言；只有一个 Adapter 通过不能证明 Agent 能力通用。
 
 读工具的 `QueryEvidence` 决定回答能对返回的行说什么。`matched_count` 填范围内符合条件的记录数；只有应用确实数全了，才设 `count_exact=True`，这样一个只返回 20 行、共 72 条的列表会写"共 72 条，下面列出其中 20 条"。按名称搜索时，`looked_for` 填搜索的文字，`exact_matches` 填名称完全一致的条数，应用无法判断时留 `None`。只有完全一致的匹配才能让回答说"已存在该名称的记录"。
 
@@ -69,27 +61,17 @@ Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生�
 
 ## 临时表单交接
 
-表单预填是可选能力，不是通用的浏览器权限。专用 typed tool 仍可为特定流程返回
-`FormDraft`。作为无 Skill 兜底时，由 Adapter 实现 `ApplicationFormPort`：`describe_form`
-返回当前路由下同 actor 的可写字段元数据，`prepare_form` 校验选定值并返回准确草稿。用
-`AgentTurnConfig.allow_form_prefill=True` 启用。
+表单预填是可选能力，不是通用的浏览器权限。专用 typed tool 仍可为特定流程返回`FormDraft`。作为无 Skill 兜底时，由 Adapter 实现 `ApplicationFormPort`：`describe_form`返回当前路由下同 actor 的可写字段元数据，`prepare_form` 校验选定值并返回准确草稿。用`AgentTurnConfig.allow_form_prefill=True` 启用。
 
-通用 `describe_form` 只取 Adapter 描述与最新视口观察的交集；只存在于元数据、只存在于
-DOM、重复出现以及凭据形态的字段都会消失。它返回短期不透明 form/field ID，而不是原生字段名
-或 selector。`prepare_form` 会重新读取两侧事实，拒绝过期 ID、不符合可移植字段类型或声明
-choice 的值，并拒绝增加字段、改变路由或持久化合同的草稿。只有服务端保存这份准确草稿时，
-无参数 `prefill_form` 才会出现。表单 scope 在读取 Adapter 元数据之前检查；缺少 scope 的 actor
+通用 `describe_form` 只取 Adapter 描述与最新视口观察的交集；只存在于元数据、只存在于DOM、重复出现以及凭据形态的字段都会消失。它返回短期不透明 form/field ID，而不是原生字段名或 selector。`prepare_form` 会重新读取两侧事实，拒绝过期 ID、不符合可移植字段类型或声明choice 的值，并拒绝增加字段、改变路由或持久化合同的草稿。只有服务端保存这份准确草稿时，无参数 `prefill_form` 才会出现。表单 scope 在读取 Adapter 元数据之前检查；缺少 scope 的 actor
 拿不到通用表单工具。
 
 服务端只消费一次草稿，从最新的页面观察中唯一地解析每个字段，填写或选择 Adapter 签发的值，在点击或提交之前停下。Adapter 由此断言：编辑这些字段本身不会保存任何东西。会写入的 onchange、边编辑边保存的表单、凭据字段、上传，以及任何编辑后可能持久化或触发外部效果的控件，都不能签发草稿，应走常规的确认写入路径。应用在离开页面时保存的表单（Odoo 18 就是这样）之所以可以用，只是因为助手离开任何页面之前都会先问，预填完成的回答也会告诉用户离开时内容可能被保存或丢弃。要在部署的应用上验证这一断言，包括运行结束后用 API 或数据库确认没有创建记录。
 
-源码检索可以在准备表单前解释字段、校验规则或流程，但不能创建 form ID、field ID、
-selector、scope、取值或写权限；当前页面与当前应用元数据才是执行依据。接入通用表单时，要在
-该 Adapter 上运行共享的 `assert_current_form_contract`，还要通过真实浏览器门；只有 Adapter
+源码检索可以在准备表单前解释字段、校验规则或流程，但不能创建 form ID、field ID、selector、scope、取值或写权限；当前页面与当前应用元数据才是执行依据。接入通用表单时，要在该 Adapter 上运行共享的 `assert_current_form_contract`，还要通过真实浏览器门；只有 Adapter
 单元测试不能证明端到端表单准确率。
 
-Odoo 参考翻译不设全局启用开关，但默认仅开放三个标准模块浏览器资格案例覆盖的精确字段。
-`fields_get` 本身不能证明自定义 `onchange` 没有持久化或外部副作用；未知页面或字段在单独
+Odoo 参考翻译不设全局启用开关，但默认仅开放三个标准模块浏览器资格案例覆盖的精确字段。`fields_get` 本身不能证明自定义 `onchange` 没有持久化或外部副作用；未知页面或字段在单独
 资格验证前不签发预填草稿。
 应用离页保存的编辑草稿须先确认准确效果与目标，再预填。
 
@@ -99,6 +81,5 @@ Odoo 参考翻译不设全局启用开关，但默认仅开放三个标准模块
 
 每个 Adapter 都应运行可复用的 contract assertion，并增加有效路由、身份不匹配、读取完整性、mutation 拒绝、确认、后置条件失败和凭据脱敏测试。`scripts/qualify.sh --require-browser` 会运行产品套件、隔离 wheel 检查、Minimal 内嵌 Runtime 演练和真实 Chromium 中的规范浏览器协议。真实应用门若显示 `BLOCKED`，表示没有执行，不能算通过。
 
-Odoo 是唯一公开参考实现。它的独立可安装 distribution 完整实现 Adapter v2 合同，
-Agent 核心中没有应用分支。`testapps/` 下的小型 Contacts 应用只用于内部浏览器与协议测试，
+`examples/` 下有两个参考接入：Odoo 保留作参考、不再维护，其独立可安装 distribution 完整实现 Adapter v2 合同；芋道是默认演示与测试应用，带可重置的本地部署。两者都说明核心中没有应用分支。`testapps/` 下的小型 Contacts 应用只用于内部浏览器与协议测试，
 不是第二套接入模板。
