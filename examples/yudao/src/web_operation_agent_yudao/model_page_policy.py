@@ -84,8 +84,8 @@ class ModelPageGoalPort:
     def __getattr__(self, name): return getattr(self._goal_port, name)
 
     def capabilities(self):
-        # Source remains explicitly available through goal; this profile has no
-        # source lookup tool, so it must not advertise that optional delivery.
+        # Page procedures expose only their reviewed delivery capabilities.
+        # Deployment source tools are supplied independently by the common loop.
         return (self._goal_port.capabilities() - {"source", "facets", "paging", "sections", "fill", "lines"}) \
             | self.review.capabilities
 

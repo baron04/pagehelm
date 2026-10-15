@@ -43,8 +43,6 @@ from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductCapacityError,
                                                   LiveProductServer)
-from web_operation_agent.goal.executor import GoalTurnExecutor
-from web_operation_agent.execution.product import AgentTurnExecutor
 from web_operation_agent.composition.sources import SourceCapability
 from web_operation_agent.modeling.client import ChatModel, SpendMeter
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
@@ -116,46 +114,33 @@ class YudaoHostConfig:
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
     native_page_policy: Path | None = None
+    #: Retained solely for explicit migration errors, never used to construct a route.
     native_form_policy: Path | None = None
     native_create_policies: tuple[Path, ...] = ()
-    #: One deployment-level creation class file naming many entries; reviewed once per
-    #: release, hashed per admitted component. Off by default.
     native_create_class: Path | None = None
     native_filter_policies: tuple[Path, ...] = ()
     native_guard_port: int = 48093
     native_navigation: bool = False
     #: Only reviewed server-side typed mutations; browser submission stays disabled.
     native_writes: bool = False
-    #: Which executor decides a turn's steps; never selected by browser messages or fallback.
+    #: Sole native decision route. Retained to reject old configurations explicitly.
     executor_mode: str = "slim"
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
     #: what that text changes; the operations and every check on a write are the same.
     slim_skill_knowledge: bool = True
-    #: Warm actor metadata in the background at session start. Slim reads menu/API
-    #: descriptions and the outline; goal builds its fuller index. No line-table
-    #: prefetch for slim. Workload depends on the application's installed modules.
-    warm_index: bool = False
-    #: Reviewed menu/detail/tab handler effects; absent means this pilot stays disabled.
+    #: Warm actor menu/API descriptions and outline at session start; no line-table prefetch.
+    warm_index: bool = True
+    #: Removed switches retained solely to reject existing deployment configurations.
     native_action_effect_review: str = ""
-    #: Extend the reviewed read fence with every list endpoint compiled from the UI
-    #: source (read_catalog.py). Off by default: the deployment reviews this generator
-    #: once per release, and the union is still validated by NativePageGuard's exact
-    #: path rules. A hand-written policy remains authoritative for what it lists.
     auto_read_catalog: bool = False
-    #: Under the method fence: fill the form a page shows by its own labels, and take
-    #: bounded page steps to reach a form or a record that has no address. Both run only
-    #: inside a window in which the application itself refuses its writes
-    #: (`/admin-api/woa/page-guard`); a window it does not confirm is not opened. On for a
-    #: goal deployment whose read policy is the method fence, unless turned off here.
+    #: The application's own read-only window is mandatory.
     native_live_forms: bool = True
-    #: Page steps one turn may take to reach such a form or record.
+    #: Removed goal-route budget; non-default values get a migration error.
     page_reach_steps: int = 8
 
     def __post_init__(self):
         if not isinstance(self.native_writes, bool):
             raise ValueError("native writes must be explicitly enabled")
-        if self.native_writes and self.executor_mode not in {"goal", "slim"}:
-            raise ValueError("native writes run only through the goal or slim executor")
         if not isinstance(self.slim_skill_knowledge, bool):
             raise ValueError("slim_skill_knowledge is on or off")
         if not isinstance(self.warm_index, bool):
@@ -164,20 +149,16 @@ class YudaoHostConfig:
                 or len(self.native_action_effect_review) > 200
                 or self.native_action_effect_review and not self.native_action_effect_review.strip()):
             raise ValueError("native action effects need a bounded deployment review")
-        if self.native_action_effect_review and (self.executor_mode != "page-agent"
-                or not self.native_navigation or self.native_read_policy is None or self.ui_source is None):
-            raise ValueError("native action effects require page-agent, navigation, UI routes and a reviewed guard")
-        if self.native_filter_policies and self.native_read_policy is None:
-            raise ValueError("native page filters require a reviewed read guard")
-        if (not isinstance(self.native_live_forms, bool) or isinstance(self.page_reach_steps, bool)
-                or not isinstance(self.page_reach_steps, int) or not 0 <= self.page_reach_steps <= 16):
-            raise ValueError("live forms are on or off, with at most 16 page steps a turn")
-        if not isinstance(self.native_navigation, bool) or self.native_navigation and self.native_read_policy is None:
-            raise ValueError("native navigation requires a reviewed native read policy and write guard")
-        if not isinstance(self.executor_mode, str) or self.executor_mode not in {"goal", "page-agent", "slim"}:
-            raise ValueError("executor_mode must be goal, page-agent or slim")
-        if self.executor_mode == "page-agent" and self.native_read_policy is None:
-            raise ValueError("page-agent requires a reviewed native read policy and write guard")
+        if self.executor_mode != "slim":
+            raise ValueError("the native host has one executor: slim; goal/page-agent configurations must migrate")
+        if (self.native_form_policy is not None or self.native_create_policies
+                or self.native_create_class is not None or self.native_filter_policies
+                or self.native_action_effect_review or self.native_navigation or self.auto_read_catalog):
+            raise ValueError("legacy native policies and navigation/catalog switches are removed; use --native-page-policy")
+        if not isinstance(self.native_live_forms, bool):
+            raise ValueError("native live forms must be enabled")
+        if type(self.page_reach_steps) is not int or self.page_reach_steps != 8:
+            raise ValueError("page_reach_steps belongs to the removed goal route")
 
 
 @dataclass
@@ -204,62 +185,17 @@ class YudaoHost:
         self.native_proxy = None
         self.live_forms = False
         self._fenced = frozenset()
-        self.form_review = None
-        self.form_tree = None
-        self.create_reviews = ()
-        self.filter_reviews = ()
-        if (config.native_form_policy is not None or config.native_create_policies
-                or config.native_create_class is not None):
-            if config.native_read_policy is None or config.source_root is None:
-                raise ValueError("native forms require the verified guard and reviewed raw source")
-            from .repository import repository_tree
-            from .form_entries import NativeFormReview, NativeCreateReview
-            self.form_tree = repository_tree(config.source_root, config.source_release)
-            if config.native_form_policy is not None:
-                self.form_review = NativeFormReview.load(json.loads(config.native_form_policy.read_text()), self.form_tree)
-            self.create_reviews = tuple(NativeCreateReview.load(json.loads(path.read_text()), self.form_tree)
-                                        for path in config.native_create_policies)
-            if config.native_create_class is not None:
-                self.create_reviews += NativeCreateReview.load_class_catalog(
-                    json.loads(config.native_create_class.read_text()), self.form_tree)
-            references = [review.reference for review in self.create_reviews]
-            if len(references) != len(set(references)):
-                raise ValueError("native create policies must have unique entry references")
         if config.native_read_policy is not None:
             from .guard_identity import GuardIdentity
             from .guard_proxy import NativeGuardProxy
             from .page_guard import NativePageGuard
             policy = validated.policy
-            fenced = policy["schema_version"] == 2
             self.live_forms = validated.live_forms
-            self._fenced = self._fenced_gets(policy) if fenced else frozenset()
-            if config.native_filter_policies:
-                from .repository import repository_tree
-                from .page_filters import NativePageFilterReview
-                if config.source_root is None:
-                    raise ValueError("native page filters require reviewed raw source")
-                self.form_tree = self.form_tree or repository_tree(config.source_root, config.source_release)
-                self.filter_reviews = tuple(NativePageFilterReview.load(json.loads(path.read_text()),
-                    self.form_tree, policy["read_paths"]) for path in config.native_filter_policies)
-                if len({r.route for r in self.filter_reviews}) != len(self.filter_reviews):
-                    raise ValueError("native page filter routes must be unique")
-            read_paths = [] if fenced else list(policy["read_paths"])
-            if config.auto_read_catalog:
-                from .read_catalog import generated_read_paths
-                generated = generated_read_paths(self.ui)
-                unknown = [p for p in generated if p not in read_paths]
-                (config.state_dir / "auto-read-catalog.json").write_text(json.dumps({
-                    "release": config.source_release, "manual": len(read_paths),
-                    "generated": len(generated), "added": unknown}, ensure_ascii=False,
-                    indent=2) + "\n", encoding="utf-8")
-                read_paths += unknown
+            self._fenced = self._fenced_gets(policy)
             self.native_proxy = NativeGuardProxy(
                 upstream=config.api_base, origin=config.public_origin,
-                guard=(NativePageGuard(frozenset(), writing_gets=self._fenced_gets(policy),
-                                       journal=config.state_dir / "native-guard.sqlite3")
-                       if fenced else
-                       NativePageGuard(frozenset(read_paths),
-                                       journal=config.state_dir / "native-guard.sqlite3")),
+                guard=NativePageGuard(frozenset(), writing_gets=self._fenced_gets(policy),
+                                      journal=config.state_dir / "native-guard.sqlite3"),
                 resolve_actor=GuardIdentity(config.api_base), host=config.bootstrap_host,
                 port=config.native_guard_port, application_window=self.live_forms).start()
             try:
@@ -367,14 +303,6 @@ class YudaoHost:
         from .guard_proxy import GUARD_PATH
         from web_operation_agent.business.mutation import SQLiteMutationJournal
         forms = None
-        if self.form_review is not None or self.create_reviews:
-            from .form_entries import (NativeCustomerEntryVerifier, NativeCreateEntryVerifier,
-                                       NativeEntryVerifiers, NativeEntryFormPort)
-            verifiers = ([NativeCustomerEntryVerifier(self.form_tree, self.form_review, client)]
-                         if self.form_review is not None else [])
-            verifiers.extend(NativeCreateEntryVerifier(self.form_tree, review, client)
-                             for review in self.create_reviews)
-            forms = NativeEntryFormPort(NativeEntryVerifiers(*verifiers))
         if self.live_forms:
             from .live_forms import FenceEvidence, LiveFormPort
             proxy = self.native_proxy
@@ -384,18 +312,12 @@ class YudaoHost:
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
                                 native_tabs=self.native_proxy is not None,
-                                native_navigation=self.config.native_navigation,
+                                native_navigation=False,
                                 forms=forms,
                                 page_write_guard=GUARD_PATH if self.native_proxy is not None else "",
                                 native_writes=self.config.native_writes,
                                 mutation_journal=SQLiteMutationJournal(self.config.state_dir / "mutations.sqlite3")
                                     if self.config.native_writes else None)
-        if self.filter_reviews:
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            from .page_filters import NativePageFilters
-            app.goal_port.page_filters = NativePageFilters(app.goal_data, self.form_tree,
-                self.filter_reviews, datetime.now(ZoneInfo(app.goal_data.time_zone())).date())
         return app
 
     def _open(self, app: YudaoApplication, principal, key):
@@ -431,93 +353,35 @@ class YudaoHost:
                 app.goal_port.page_reader = page_reader
             turn_config = yudao_turn_config(run_dir, timeout_s=self.config.turn_timeout_s,
                                            source=self.source, click_policy=app.native_tab_policy,
-                                           form_prefill=(self.form_review is not None or bool(self.create_reviews)
-                                                         or self.live_forms),
-                                           page_filtering=bool(self.filter_reviews),
-                                           deterministic_reads=self.config.executor_mode == "page-agent",
+                                           form_prefill=self.live_forms,
+                                           page_filtering=False,
                                            native_writes=self.config.native_writes)
             common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
                     self.config.state_dir / "conversation-state.sqlite3", session_id))
-            if self.config.executor_mode == "slim":
-                # A measured prototype: the goal turn's protocol with a model-driven loop
-                # deciding its steps (slim_loop.py). Every page command still runs under
-                # the turn's leave, the write watch and the application's own window; with
-                # native writes it may also propose a loaded Skill's typed operations.
-                from web_operation_agent.goal.conventions import load_conventions
-                from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
-                from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
-                model_goal = ModelPageGoalPort(app.goal_port, self.page_review)
-                action_policy = NativeModelReadActions(app.origin, app.goal_data,
-                    self.ui.records if self.ui is not None else {}, model_goal, self.page_review)
-                draft_steps = NativeDraftSteps(app.goal_data, app.ports.forms, self.page_review)
-                turn_config = replace(turn_config, action_policy=action_policy, click_policy=None)
-                executor = SlimTurnExecutor(
-                    **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
-                    goal_port=model_goal, draft_steps=draft_steps,
-                    disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
-                    knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
-                                             time_zone=app.goal_data.time_zone(),
-                                             codes=app.goal_data.code_names),
-                    conventions=load_conventions(REFERENCE_CONVENTIONS),
-                    time_zone=app.goal_data.time_zone(),
-                    skill_knowledge=self.config.slim_skill_knowledge)
-            elif self.config.executor_mode == "page-agent":
-                # The same Agent receives optional source evidence and reviewed form
-                # entries. Source grants no actions; form review grants no submission.
-                turn_config = replace(turn_config, require_page_route=True, require_task_contract=True,
-                    defer_page_context=True,
-                    data_reads=app.data_reads,
-                    allow_application_entry=False, allow_page_facets=False,
-                    disabled_actions=turn_config.disabled_actions | {"fill", "select", "submit", "back", "apply_facet"},
-                    click_policy=app.native_tab_policy,
-                    supported_scope=turn_config.supported_scope + " "
-                        "Open pages from the current actor's catalog or exact record references, "
-                        "then select enabled native record tabs from the fresh page. Runtime results "
-                        "must verify every requested page state. Missing candidates are not proof "
-                        "of absence; ask for clarification when ambiguous. If reviewed forms are "
-                        "configured, find_form_entries discovers current openers; open_form_entry "
-                        "uses one exact reviewed receipt, then describe/prepare/prefill and hand "
-                        "over with submission left to the user. Arbitrary fill/select/click, "
-                        "mutations and page filtering remain disabled.")
-                if self.config.native_action_effect_review:
-                    from .read_actions import NativeReadActions
-                    from .list_actions import NativeListActions
-                    policy = NativeReadActions(app.origin, app.goal_data, self.ui.records,
-                        review=self.config.native_action_effect_review, form_entries=app.ports.forms,
-                        list_actions=NativeListActions(self.form_tree, self.filter_reviews,
-                            page_filters=app.goal_port.page_filters)
-                            if self.filter_reviews else None)
-                    scope = ("Open actor-catalog pages and exact actor-readable record details; "
-                        "select native record tabs and verify fresh rendered state after each step. "
-                        "Missing candidates are not proof of absence; clarify ambiguous targets. ")
-                    if self.form_review is not None or self.create_reviews:
-                        scope += ("For reviewed forms use find_form_entries, open_form_entry, "
-                            "describe_form, prepare_form and prefill_form, then hand over the "
-                            "highlighted submit control for manual submission. ")
-                    if self.filter_reviews:
-                        scope += ("Reviewed list query inputs, query buttons and pagination are "
-                            "available only where the deployment qualifies their effects. ")
-                    turn_config = replace(turn_config, click_policy=None, action_policy=policy,
-                        supported_scope=yudao_turn_config(run_dir,
-                            timeout_s=self.config.turn_timeout_s, source=self.source,
-                            deterministic_reads=True).supported_scope + " " + scope +
-                            "Other controls, arbitrary field entry and record mutations are unavailable.")
-                executor = AgentTurnExecutor(**common, config=turn_config)
-            else:
-                reach = {}
-                if self.live_forms and self.config.page_reach_steps:
-                    from .live_forms import FenceReachPolicy
-                    # Each page step, and the one question that ties requested fields to
-                    # the form's own labels, is a model request of the same turn.
-                    turn_config = replace(turn_config, step_budget=turn_config.step_budget
-                                          + self.config.page_reach_steps + 1)
-                    reach = dict(page_reach_steps=self.config.page_reach_steps,
-                                 page_reach_policy=FenceReachPolicy())
-                executor = GoalTurnExecutor(**common, config=turn_config,
-                    disabled_page_actions=turn_config.disabled_actions, repository_answers=True,
-                    goal_port=app.goal_port, **reach)
+            # A measured prototype: the goal turn's protocol with a model-driven loop
+            # deciding its steps (slim_loop.py). Every page command still runs under
+            # the turn's leave, the write watch and the application's own window; with
+            # native writes it may also propose a loaded Skill's typed operations.
+            from web_operation_agent.goal.conventions import load_conventions
+            from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
+            from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
+            model_goal = ModelPageGoalPort(app.goal_port, self.page_review)
+            action_policy = NativeModelReadActions(app.origin, app.goal_data,
+                self.ui.records if self.ui is not None else {}, model_goal, self.page_review)
+            draft_steps = NativeDraftSteps(app.goal_data, app.ports.forms, self.page_review)
+            turn_config = replace(turn_config, action_policy=action_policy, click_policy=None)
+            executor = SlimTurnExecutor(
+                **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
+                goal_port=model_goal, draft_steps=draft_steps,
+                disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
+                knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
+                                         time_zone=app.goal_data.time_zone(),
+                                         codes=app.goal_data.code_names),
+                conventions=load_conventions(REFERENCE_CONVENTIONS),
+                time_zone=app.goal_data.time_zone(),
+                skill_knowledge=self.config.slim_skill_knowledge)
             return LiveConversationRunner(channel, executor=executor)
 
         session = self.server.create_session(
@@ -535,18 +399,9 @@ class YudaoHost:
         return session
 
     @staticmethod
-    def _warm_index(app: YudaoApplication, knowledge=None) -> None:
-        """Read ahead what the actor's turns will ask for. For a goal turn, the application
-        index. For a slim turn, the menu and API description it searches, which its first
-        request needs, then the outline of the index its lookups by name read: a slim turn
-        reads no line table, so the detail reads that find them (most of what an index
-        costs) are left for whatever turn first needs them, rather than sent while the
-        person's own first lookups are. Each is built under its own lock, so a turn that
-        arrives meanwhile waits for this build instead of starting another. One that fails
-        here is not kept: the turn that needs it builds it again and says what went wrong."""
-        index = app.goal_port.index
-        if knowledge is not None:
-            index = getattr(app.goal_port, "outline_index", index)
+    def _warm_index(app: YudaoApplication, knowledge) -> None:
+        """Warm the actor's menu/API descriptions and outline, without line-table reads."""
+        index = app.goal_port.outline_index
         for build in (getattr(knowledge, "_load", None), index):
             try:
                 if build is not None:
@@ -642,24 +497,23 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-page-policy", type=Path,
                     help="release-reviewed model page handlers; required for slim")
-    ap.add_argument("--native-form-policy", type=Path)
-    ap.add_argument("--native-create-policy", type=Path, action="append", default=[])
+    ap.add_argument("--native-form-policy", type=Path, help=argparse.SUPPRESS)
+    ap.add_argument("--native-create-policy", type=Path, action="append", default=[], help=argparse.SUPPRESS)
     ap.add_argument("--native-create-class", type=Path,
-                    help="one deployment-level creation class file naming many reviewed entries")
-    ap.add_argument("--native-filter-policy", type=Path, action="append", default=[])
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--native-filter-policy", type=Path, action="append", default=[], help=argparse.SUPPRESS)
     ap.add_argument("--native-guard-port", type=int, default=48093)
-    ap.add_argument("--native-navigation", action="store_true")
-    ap.add_argument("--native-action-effect-review", default="")
+    ap.add_argument("--native-navigation", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--native-action-effect-review", default="", help=argparse.SUPPRESS)
     ap.add_argument("--auto-read-catalog", action="store_true",
-                    help="extend the reviewed read fence with list endpoints compiled "
-                         "from the UI source (release-bound, mutation-shaped excluded)")
+                    help=argparse.SUPPRESS)
     ap.add_argument("--native-live-forms", action=argparse.BooleanOptionalAction, default=True,
                     help="under a method-fence read policy: fill the form a page shows and take "
                          "bounded page steps, inside the application's own read-only window")
-    ap.add_argument("--executor", choices=("goal", "page-agent", "slim"), default=YudaoHostConfig.executor_mode)
-    ap.add_argument("--warm-index", action="store_true",
-                    help="warm actor metadata at session start: menu/API descriptions and outline "
-                         "for slim, the full index for goal; off by default")
+    ap.add_argument("--executor", choices=("slim",), default=YudaoHostConfig.executor_mode,
+                    help="the native host has one route; goal/page-agent are removed")
+    ap.add_argument("--warm-index", action=argparse.BooleanOptionalAction, default=True,
+                    help="warm actor menu/API descriptions and outline at session start; on by default")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")

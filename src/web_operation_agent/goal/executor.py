@@ -700,7 +700,7 @@ class _TurnState:
     browser: RemoteBrowserClient
     writes: WriteWatch
     approvals: ApprovalWatch
-    obs: PageObservation
+    obs: PageObservation | None
     started_at: float
     receipt: TurnReceipt = field(default_factory=TurnReceipt)
     budget: TurnBudget | None = None
@@ -769,6 +769,10 @@ class GoalTurnExecutor:
 
     decision_strategy = "goal"
     verifies_finish = True
+
+    @property
+    def permits_offline_start(self):
+        return False
 
     def __init__(self, *, channel, config, chat, application: BoundApplication,
                  goal_port: GoalPort, control, run_id_factory,
@@ -868,11 +872,11 @@ class GoalTurnExecutor:
                 "the session identity is invalid, expired, or belongs to another application",
                 retryable=False) from exc
         entry = self.channel.latest_observation_envelope
-        if entry is None:
+        if entry is None and not self.permits_offline_start:
             raise AgentTurnError(AgentTurnErrorCode.OBSERVATION_UNAVAILABLE,
                                  "the browser has not supplied a page observation",
                                  retryable=True)
-        if turn_message.page_url != entry.observation.url:
+        if entry is not None and turn_message.page_url != entry.observation.url:
             raise AgentTurnError(AgentTurnErrorCode.STALE_MESSAGE,
                                  "the task was submitted from a page other than the latest observation",
                                  retryable=True)
@@ -896,16 +900,18 @@ class GoalTurnExecutor:
         browser = RemoteBrowserClient(self.channel, timeout_s=self.config.transport_timeout_s,
                                       turn_id=turn_message.message_id)
         try:
-            browser.start()
+            if entry is not None:
+                browser.start()
         except TransportError as exc:
             ledger.append("turn_start_failed", error_type=type(exc).__name__)
             raise AgentTurnError(AgentTurnErrorCode.RUNTIME_UNAVAILABLE,
                                  "the browser runtime was unavailable for this turn",
                                  retryable=True, run_id=run_id) from exc
-        current = self.channel.latest_observation_envelope
-        if (current is None or current.observation_id != entry.observation_id
+        current = self.channel.latest_observation_envelope if entry is not None else None
+        if (entry is not None and (
+                current is None or current.observation_id != entry.observation_id
                 or current.page_epoch != entry.page_epoch
-                or current.observation.content_digest != entry.observation.content_digest):
+                or current.observation.content_digest != entry.observation.content_digest)):
             ledger.append("turn_binding_rejected", message_id=turn_message.message_id)
             raise AgentTurnError(AgentTurnErrorCode.STALE_MESSAGE,
                                  "the page changed while the turn was being bound",
@@ -966,7 +972,7 @@ class GoalTurnExecutor:
             turn_message, chosen = replace(turn_message, text=text), (name,)
         state = _TurnState(message=turn_message, run_id=run_id, ledger=ledger,
                            browser=browser, writes=writes, approvals=approvals,
-                           obs=current.observation, started_at=started_at,
+                           obs=current.observation if current is not None else None, started_at=started_at,
                            chinese=bool(_CJK.search(turn_message.text)),
                            cancelled=cancelled, chosen=chosen)
         state.receipt.started -= max(0.0, time.time() - started_at)
@@ -2853,8 +2859,8 @@ class GoalTurnExecutor:
                 max_chars=self.config.max_user_answer_chars))
         execution = AgentTurnExecution(
             schema_version=1, run_id=s.run_id, session_id=self.channel.session_id,
-            message=s.message, entry_observation_id=current.observation_id,
-            entry_observation_digest=current.observation.content_digest,
+            message=s.message, entry_observation_id=current.observation_id if current is not None else None,
+            entry_observation_digest=current.observation.content_digest if current is not None else None,
             status=status, terminal_reason=terminal, user_answer=user_answer, agent=agent,
             business_result=(BusinessToolResult(
                 {"outcomes": s.mutation_outcomes}, {"verified_outcomes": len(s.mutation_outcomes)})

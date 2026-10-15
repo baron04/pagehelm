@@ -37,6 +37,7 @@ DISTRIBUTIONS = {
             "web_operation_agent/execution/action_admission.py",
             "web_operation_agent/execution/model_loop.py",
             "web_operation_agent/execution/model_loop_contracts.py",
+            "web_operation_agent/execution/model_sources.py",
             "web_operation_agent/business/draft_steps.py",
             "web_operation_agent/execution/admitted_actions.py",
             "web_operation_agent/planning/repository_source.py",

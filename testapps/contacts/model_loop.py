@@ -94,5 +94,5 @@ def contacts_profile(adapter, goal_port, *, drafts=False):
     return ModelLoopProfile("Answer from current REST reads. Clarify ambiguous names; never choose one silently. "
         "This application offers reviewed navigation and visible-control handoff. " +
         ("It offers two local date fields and temporary note lines for manual saving. " if drafts else "") +
-        "It does not offer list filters, pagination or source lookup.",
+        "It does not offer list filters or pagination. Source tools depend on deployment configuration.",
         procedures, render, prepare, draft_steps=ContactsDraftSteps(adapter) if drafts else None)

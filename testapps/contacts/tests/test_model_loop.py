@@ -18,18 +18,19 @@ from web_operation_agent.tests.support.business import _Chat
 
 
 class ContactsModelLoopTests(unittest.TestCase):
-    def execute(self, app, actor_id, replies):
+    def execute(self, app, actor_id, replies, *, source=None, observation=True):
         actor = ACTORS_BY_ID[actor_id]
         adapter = MinimalContactsAdapter(app.origin, api_token=actor.token)
         identity = adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}")
         principal = adapter.identity.bind(identity, delegation_id="model-loop-test")
         port = ContactsGoalPort(adapter)
-        channel = _Channel(page_url=app.origin + "/contacts", principal=principal)
-        chat = _Chat(replies)
+        channel = _Channel(page_url=app.origin + "/contacts", principal=principal, observation=observation)
+        chat = replies if isinstance(replies, _Chat) else _Chat(replies)
         with tempfile.TemporaryDirectory() as tmp:
             executor = ModelDrivenTurnExecutor(channel=channel,
                 config=AgentTurnConfig(supported_scope="Read actor-visible contacts.",
-                    require_identity=True, ledger_path=Path(tmp) / "audit.jsonl"),
+                    require_identity=True, ledger_path=Path(tmp) / "audit.jsonl",
+                    **({"source": source} if source is not None else {})),
                 chat=chat, application=bind_application(adapter), goal_port=port,
                 profile=contacts_profile(adapter, port), control=ReadOnlyControl(),
                 run_id_factory=lambda _: "contacts-model-run")
@@ -37,6 +38,66 @@ class ContactsModelLoopTests(unittest.TestCase):
                 result = executor.execute({"message_id": "contact-model-turn", "text": "Grace Hopper email?",
                                            "page_url": app.origin + "/contacts"})
         return result, chat, executor
+
+    def test_source_only_uses_same_loop_without_browser_or_business_reads(self):
+        from web_operation_agent.tests.execution.test_repository_source_turn import RepositorySourceTurns
+        with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
+            source = RepositorySourceTurns()._source(Path(tmp), "src/policy.py", "batch_limit = 125\n")
+            with patch.object(_RemoteBrowser, "start", side_effect=AssertionError("no browser")), \
+                    patch("testapps.contacts.model_loop.ContactsProcedure.execute",
+                          side_effect=AssertionError("no business reads")):
+                result, chat, executor = self.execute(app, "ada-lovelace", [
+                    ("lookup_source", {"query": "batch_limit"}),
+                    ("finish", {"status": "done", "answer": "invented answer ignored", "source_conclusions": [
+                        {"kind": "source_excerpt", "evidence_ref": "source#1",
+                         "statement": "The batch limit is 125.", "support": "batch_limit = 125"}]})],
+                    source=source, observation=False)
+            self.assertEqual("agent_finished", result.terminal_reason)
+            self.assertEqual("The batch limit is 125.", result.user_answer)
+            self.assertIsNone(result.entry_observation_id)
+            self.assertIsNone(executor.channel.latest_observation_envelope)
+            self.assertIn("source#1", str(chat.messages[1]))
+            self.assertEqual("not_claimed", result.agent.success_claim)
+            self.assertEqual(0, app.write_requests)
+
+    def test_source_without_page_cannot_start_business_tools(self):
+        from web_operation_agent.tests.execution.test_repository_source_turn import RepositorySourceTurns
+        with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
+            source = RepositorySourceTurns()._source(Path(tmp), "src/policy.py", "batch_limit = 125\n")
+            with patch("testapps.contacts.model_loop.ContactsProcedure.execute") as business:
+                result, chat, _ = self.execute(app, "ada-lovelace", [
+                    ("list_contacts", {}),
+                    ("finish", {"status": "cannot", "answer": "No browser observation."})],
+                    source=source, observation=False)
+            business.assert_not_called()
+            self.assertIn("observation_unavailable", str(chat.messages[1]))
+            self.assertEqual("agent_refused", result.terminal_reason)
+
+    def test_source_then_real_rest_read_binds_page_in_the_same_conversation(self):
+        from web_operation_agent.tests.execution.test_repository_source_turn import RepositorySourceTurns
+        with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
+            source = RepositorySourceTurns()._source(Path(tmp), "src/policy.py", "batch_limit = 125\n")
+            class ArrivingPage(_Chat):
+                def complete(self, *args, **kwargs):
+                    if len(self.messages) == 1:
+                        channel = _RemoteBrowser.instances[-1].channel
+                        channel.latest_observation_envelope = channel.envelope(1, app.origin + "/contacts")
+                    return super().complete(*args, **kwargs)
+            chat = ArrivingPage([
+                ("lookup_source", {"query": "batch_limit"}),
+                ("list_contacts", {"name_contains": "Grace Hopper"}),
+                ("finish", {"status": "done", "answer": "grace@example.test", "source_conclusions": [
+                    {"kind": "source_excerpt", "evidence_ref": "source#1",
+                     "statement": "The batch limit is 125.", "support": "batch_limit = 125"}]})])
+            result, chat, executor = self.execute(app, "ada-lovelace", chat, source=source, observation=False)
+            self.assertEqual("agent_finished", result.terminal_reason)
+            self.assertIn("grace@example.test", result.user_answer)
+            self.assertIn("The batch limit is 125.", result.user_answer)
+            self.assertIn("grace@example.test", str(chat.messages[2]))
+            self.assertTrue(_RemoteBrowser.instances[-1].started)
+            self.assertIsNone(result.entry_observation_id)
+            self.assertEqual(ModelDrivenTurnExecutor, type(executor))
+            self.assertEqual(0, app.write_requests)
 
     def test_actor_scoped_real_reads_reach_the_next_model_decision(self):
         with MinimalContactsApplication() as app:

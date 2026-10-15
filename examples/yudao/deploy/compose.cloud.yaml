@@ -43,7 +43,6 @@ services:
     command: ["--api-base", "http://server:48080", "--public-origin", "https://${YUDAO_DOMAIN}",
               "--state-dir", "/var/lib/woa-yudao", "--ui-source", "/opt/source/ui",
               "--source-root", "/opt/source", "--source-release", "${YUDAO_RELEASE:-v2026.09}",
-              "--executor", "slim", "--warm-index",
               "--native-read-policy", "/opt/native-policy/fence.json",
               "--native-page-policy", "/opt/native-policy/pages.json"]
     volumes:

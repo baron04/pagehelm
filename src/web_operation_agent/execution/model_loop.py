@@ -33,6 +33,8 @@ from .model_loop_contracts import LoopToolResult, VerificationResult, PageAction
 from .action_admission import (ADMITTED_ACTIONS, ActionAdmission,
                                ActionIntent, ActionPermit, ActionAdmissionRefused, ActionResultPending)
 from ..business.draft_steps import DraftStepAdmission
+from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTRUCTIONS, source_finish_tool
+from ..transport.browser import TransportError
 
 
 def history_messages(context) -> list[dict]:
@@ -101,6 +103,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     verifies_finish = False
     api_history_chars = 12000
 
+    @property
+    def permits_offline_start(self):
+        return self.config.source.runtime_source
+
     def __init__(self, *, profile: ModelLoopProfile, model_steps=24, verify=True,
                  skill_knowledge=True, debug_dir=None, **kwargs):
         super().__init__(**kwargs)
@@ -140,13 +146,14 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             return "无法开始这次操作。"
         s.chat = MeasuredChat(AuditedChat(self.chat, s.ledger), s.receipt,
             remaining_s=s.budget.remaining, budget=s.budget, stopped=s.model_stop.is_set)
-        s.ledger.append("observation", epoch=s.obs.epoch, url=s.obs.url,
-                        elements=len(s.obs.elements), digest=s.obs.content_digest)
+        if s.obs is not None:
+            s.ledger.append("observation", epoch=s.obs.epoch, url=s.obs.url,
+                            elements=len(s.obs.elements), digest=s.obs.content_digest)
         try:
             context = self._procedure_context(s, "prepare", page_actions=False)
             with s.receipt.stage("business"):
                 context.page.checkpoint()
-                found = self.profile.prepare(s.message.text, context)
+                found = self.profile.prepare(s.message.text, context) if s.obs is not None else ""
                 context.page.checkpoint()
         except (DataRefused, BusinessToolRequestError):
             s.terminal_reason = "agent_refused"
@@ -161,6 +168,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         if not earlier:
             self._carried_skills = ()
         instructions = TRUST_RULES + "\n应用知识与操作说明：\n" + self.profile.instructions
+        sources = (TurnSources(self.config.source, SessionHandoffPolicy.extending(
+            self.application.ports.routes.session_handoff_query_keys), s.ledger)
+            if self.config.source.runtime_source else None)
+        if sources is not None:
+            instructions += SOURCE_INSTRUCTIONS
         if catalog:
             instructions += "\n只有已安装的 Skill 可提出写入；先加载对应 Skill 再提出它的 typed 操作。" + \
                 "参数照用户原话，缺少信息先询问；每项写入有独立批准，拒绝或结果未知不能重发。\n已安装的 Skill：\n" + \
@@ -174,7 +186,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 pass
         turn = {"reads": [], "marked": "", "trace": [], "touched": [], "shown": [],
                 "done": set(), "stalled": 0, "writes": writes, "written": [], "corrections": 0,
-                "final": "", "skills": set(), "observation_cache": None}
+                "final": "", "skills": set(), "observation_cache": None,
+                "sources": sources, "prepared": s.obs is not None, "runtime_used": False}
         prompt = s.message.text
         self._messages.append({"role": "user", "_user_text": prompt, "_observation": True,
             "content": prompt + ("\n" + found if found else "")
@@ -201,6 +214,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 s.ledger.append("progress_publish_failed", error_type=type(exc).__name__)
 
     def _page(self, s, turn):
+        if s.obs is None:
+            return "浏览器尚未提供观察。页面和业务状态未知；源码工具可独立使用。"
         text = self.profile.render_page(PageObservation.from_json(s.obs.to_json()), turn["marked"])[:12000]
         if self.debug_dir:
             turn["shown"].append(text)
@@ -209,6 +224,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     @staticmethod
     def _page_reference(s):
         """Reference a page already delivered in this response without copying it."""
+        if s.obs is None:
+            return "浏览器尚未提供观察；页面和业务状态未知。"
         return ("当前页面观察与本次响应上一条完整观察相同（"
                 f"epoch={s.obs.epoch}，digest={s.obs.content_digest}）。")
 
@@ -254,7 +271,42 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 schema = definition.schema
                 schema["function"]["description"] = _OPERATION_NOTE + definition.description
                 tools.append(schema)
-        return [*tools, FINISH_TOOL]
+        return [*tools, *(SOURCE_TOOLS if turn.get("sources") is not None else ()), self._finish_tool(turn)]
+
+    @staticmethod
+    def _finish_tool(turn):
+        return source_finish_tool(FINISH_TOOL) if turn.get("sources") is not None else FINISH_TOOL
+
+    def _bind_page(self, s, turn):
+        if s.obs is None:
+            entry = self.channel.latest_observation_envelope
+            if entry is None:
+                return LoopToolResult("浏览器尚未提供观察，无法使用业务或页面工具。", state="unavailable",
+                                      error_code="observation_unavailable")
+            if entry.observation.url != s.message.page_url:
+                return LoopToolResult("页面地址与本轮请求不符。", state="refused", error_code="stale_binding")
+            try:
+                s.browser.start()
+            except TransportError:
+                return LoopToolResult("浏览器连接不可用。", state="unavailable", error_code="runtime_unavailable")
+            latest = self.channel.latest_observation_envelope
+            if (latest is None or latest.observation_id != entry.observation_id
+                    or latest.page_epoch != entry.page_epoch
+                    or latest.observation.content_digest != entry.observation.content_digest):
+                return LoopToolResult("绑定时页面已变化。", state="refused", error_code="stale_binding")
+            s.obs = latest.observation
+            s.ledger.append("model_loop_page_bound", observation_id=latest.observation_id,
+                            epoch=s.obs.epoch, digest=s.obs.content_digest)
+        if not turn.get("prepared", True):
+            context = self._procedure_context(s, "prepare", page_actions=False)
+            context.page.checkpoint()
+            with s.receipt.stage("business"):
+                found = self.profile.prepare(s.message.text, context)
+            context.page.checkpoint()
+            turn["prepared"] = True
+            if found:
+                turn["prepared_knowledge"] = found
+        return None
 
     def _tool(self, s, name, args, turn):
         writes = turn.get("writes")
@@ -296,6 +348,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
 
     @staticmethod
     def _element(s, index):
+        if s.obs is None:
+            return None
         return next((e for e in s.obs.elements if e.ref == "e" + str(index)), None)
 
     def _completion_conflict(self, observation, answer):
@@ -303,7 +357,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
 
     @staticmethod
     def _query_line(s):
-        return urlsplit(s.obs.url).path
+        return urlsplit(s.obs.url).path if s.obs is not None else ""
 
     def _verify(self, s, prompt, answer, turn):
         if self.profile.verification_messages is None:
@@ -472,7 +526,27 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             # This validator reports installed schema paths and bounds, never supplied
             # values or unexpected keys. Give the Agent the exact structural correction.
             return LoopToolResult("工具参数有误：" + str(exc), state="refused", error_code="invalid_arguments")
-        return self._tool(s, name, args, turn)
+        if name in SOURCE_NAMES and turn.get("sources") is not None:
+            context = s.approvals.context(s.step, name)
+            context.require_live(application_id=self.application.descriptor.application_id)
+            s.budget.check()
+            with s.receipt.stage("source"):
+                result = turn["sources"].execute(name, args)
+            s.budget.check()
+            context.require_live(application_id=self.application.descriptor.application_id)
+            return result
+        offline = s.obs is None
+        unavailable = self._bind_page(s, turn)
+        if unavailable is not None:
+            return unavailable
+        if offline and (name in {"click", "input", "select", "highlight"}
+                        or name == "scroll" and args.get("index") is not None):
+            return LoopToolResult("已绑定真实页面；请先读取返回的观察，再选择控件编号。", state="refused",
+                                  error_code="stale_binding")
+        turn["runtime_used"] = True
+        result = self._tool(s, name, args, turn)
+        found = turn.pop("prepared_knowledge", "")
+        return replace(result, feedback=found + "\n" + result.feedback) if found else result
 
     def _completion_proved(self, s, name, args):
         # Only receipts produced by this executor's dispatch may justify ending on
@@ -496,6 +570,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
 
     @staticmethod
     def _page_fingerprint(observation):
+        if observation is None:
+            return "no-page-observation"
         value = observation.to_json()
         value.pop("epoch", None)
         for element in value.get("elements", ()):
@@ -514,7 +590,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         Re-admit every attempt. Count repeated rejections only for one uniquely
         identifiable live control; unrelated list refreshes are not its recovery.
         """
-        if name not in {"click", "input", "select"}:
+        if observation is None or name not in {"click", "input", "select"}:
             return None
         ref = "e" + str(arguments.get("index"))
         target = next((e for e in observation.elements if e.ref == ref), None)
@@ -623,10 +699,20 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     continue
                 if name == "finish":
                     try:
-                        validate_input(FINISH_TOOL["function"]["parameters"], args)
+                        validate_input(self._finish_tool(turn)["function"]["parameters"], args)
+                        if turn.get("sources") is not None:
+                            args = {**args, "answer": turn["sources"].finish(args,
+                                runtime_used=turn["runtime_used"], user_text=prompt,
+                                max_chars=self.config.max_user_answer_chars)}
                     except BusinessToolRequestError:
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                                "content": "没有结束：结束参数不符合工具定义。"})
+                        continue
+                    except (ValueError, KeyError):
+                        self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                            "content": "没有结束：source_conclusions 必须引用本轮同类型证据，support 必须是原文，"
+                                       "statement 不得包含代码、路径或哈希。请核对工具结果。"
+                                       " error_code=source_conclusion_refused"})
                         continue
                     finish = args
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
@@ -660,7 +746,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 self._tool_receipts = []
                 self._uncertain_page_dispatch = False
                 before = self._page_fingerprint(s.obs)
-                before_epoch = s.obs.epoch
+                before_epoch = s.obs.epoch if s.obs is not None else None
                 refusal_target = self._refusal_target(s.obs, name, args)
                 try:
                     result = self._invoke_tool(s, name, args, turn)
@@ -721,7 +807,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 # API and Skill reads have no browser receipt; obtain the current page
                 # before returning their result to the same decision conversation. A
                 # consecutive read in this response may reuse the already fresh page.
-                if not has_observation and not s.terminal_reason:
+                if not has_observation and not s.terminal_reason and s.obs is not None:
                     can_reuse = (result.kind in {"metadata", "read"}
                                  and read_observation_available and not has_page_action)
                     if not can_reuse:
@@ -731,7 +817,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             s.detail = "fresh page observation unavailable"
                         else:
                             read_observation_available = True
-                changed = before_epoch != s.obs.epoch
+                changed = before_epoch != (s.obs.epoch if s.obs is not None else None)
                 s.ledger.append("model_loop_result", tool=name, kind=result.kind,
                                 state=result.state, dispatch=result.dispatch,
                                 error_code=result.error_code, terminal_reason=result.terminal_reason)

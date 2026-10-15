@@ -1861,7 +1861,8 @@ class WriteTurnTests(unittest.TestCase):
         executor = self.executor()
         executor._messages, executor.conventions, executor.actor_name = [], (), ""
         executor.today, executor.time_zone, executor.chat = "2026-10-13", "Asia/Shanghai", None
-        executor.config = NS(wall_budget_s=60)
+        from web_operation_agent.composition.sources import SourceCapability
+        executor.config = NS(wall_budget_s=60, source=SourceCapability.none())
         executor.conversation_state = conversation if conversation is not None else ConversationState()
         return executor
 
