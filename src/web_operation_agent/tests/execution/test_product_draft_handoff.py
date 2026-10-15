@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace as NS
 import unittest
 
-from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft
+from web_operation_agent.execution.draft_handoff import add_draft_lines, field_identity, handoff_draft
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
 from web_operation_agent.execution.model_loop_contracts import LoopToolResult, PageActionOutcome
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
@@ -65,3 +65,52 @@ class DraftHandoffTests(unittest.TestCase):
         self.assertFalse(executor._completion_proved(state, "any_application_procedure", {}, result))
         executor._tool_receipts = [replace(receipt, observation=page(2, first="Synthetic"))]
         self.assertFalse(executor._completion_proved(state, "any_application_procedure", {}, result))
+
+    def test_query_completion_requires_the_exact_application_verified_click(self):
+        from web_operation_agent.execution.action_admission import ActionAdmission
+        obs = page(3)
+        executor, state = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor), NS(obs=obs)
+        admission = ActionAdmission.__new__(ActionAdmission)
+        admission._verified_query = (obs.url, obs.page_route, "null", admission._query_choices(obs))
+        admission._verified_query_command = "query"
+        executor._admission, executor._verified_action_commands = admission, {"query", "other"}
+        receipt = ActionReceipt(1, "query", "click", {}, True, observation=obs,
+                                url_after=obs.url, write_guard_held=True)
+        executor._tool_receipts = [receipt]
+        result = LoopToolResult("filtered", completion_command="query")
+        self.assertTrue(executor._completion_proved(state, "fill_fields", {}, result))
+        for changed in (replace(receipt, command_id="other"), replace(receipt, write_guard_held=False),
+                        replace(receipt, ok=False)):
+            executor._tool_receipts = [changed]
+            self.assertFalse(executor._completion_proved(state, "fill_fields", {},
+                replace(result, completion_command=changed.command_id)))
+        executor._tool_receipts = [receipt]
+        state.obs = replace(obs, page_route="/different")
+        self.assertFalse(executor._completion_proved(state, "fill_fields", {}, result))
+
+    def test_addition_allows_new_instance_but_refuses_old_value_or_lifetime_changes(self):
+        for change in ("none", "old_value", "lifetime", "no_growth", "refused"):
+            with self.subTest(change=change):
+                before = page()
+                before.elements = [replace(e, attrs={**e.attrs, "form_lifetime": "form-root"}) for e in before.elements]
+                before.elements[-1] = replace(before.elements[-1], name="Add line")
+                context = NS(obs=before)
+                calls = []
+                def execute(action, args):
+                    calls.append((action, args))
+                    if change == "refused":
+                        return PageActionOutcome("refused", "not_dispatched", "unreviewed")
+                    attrs = {"form_scope": "form:entry", "form_instance": "grown", "form_lifetime": "form-root"}
+                    fields = [replace(e, epoch=2, attrs={**e.attrs, **attrs}) for e in before.elements]
+                    if change != "no_growth":
+                        fields.append(ElementRef("e4", "textbox", "Line", "input", 2,
+                                                 {**attrs, "field_label": "Local line 1", "value": ""}))
+                    if change == "old_value": fields[1].attrs["value"] = "lost previous draft"
+                    if change == "lifetime": fields[0].attrs["form_lifetime"] = "replacement"
+                    context.obs = replace(before, epoch=2, elements=fields)
+                    receipt = ActionReceipt(1, "addition", action, args, True, observation=context.obs)
+                    return PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(receipt.to_json()))
+                context.page = NS(checkpoint=lambda: None, execute=execute)
+                result = add_draft_lines(context, "Add line", 1)
+                self.assertEqual(1, len(calls))
+                self.assertEqual(change == "none", result is None)

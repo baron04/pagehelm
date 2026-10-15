@@ -178,6 +178,7 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     let contacts = {contacts};
     const canWrite = {str(bool(can_write)).lower()};
     const app = document.querySelector('#app');
+    let filterRevision = 0;
     async function refresh() {{
       try {{
         const response = await fetch('/api/contacts', {{cache: 'no-store'}});
@@ -188,6 +189,32 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
     }}
     function render() {{
       app.removeAttribute('data-active-view');
+      if (location.pathname === '/contacts/filter') {{
+        app.innerHTML = `<section data-page-route="/contacts/filter"><h1>Filter contacts</h1>
+          <form id="contact-filter"><label>Name contains<input id="contact-filter-name"></label>
+          <button type="button">Search contacts</button></form><div id="contact-filter-results"></div></section>`;
+        const form = app.querySelector('#contact-filter');
+        const apply = async () => {{
+          const value = form.querySelector('input').value;
+          const response = await fetch('/api/contacts', {{cache: 'no-store'}});
+          if (!response.ok || !form.isConnected) return;
+          const payload = await response.json();
+          const rows = payload.contacts.filter(item => item.name.toLowerCase().includes(value.toLowerCase()));
+          const digest = async text => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
+            new TextEncoder().encode(text))), byte => byte.toString(16).padStart(2, '0')).join('');
+          const fieldDigest = await digest(JSON.stringify([value]));
+          const queryDigest = await digest(JSON.stringify({{name_contains: value}}));
+          if (!form.isConnected) return;
+          app.querySelector('#contact-filter-results').textContent = rows.map(item => item.name).join(' · ');
+          form.dataset.pageRead = JSON.stringify({{path: '/api/contacts', query_digest: queryDigest,
+            query_fields: {{name_contains: fieldDigest}}, revision: ++filterRevision,
+            page: 1, page_size: 100, total: rows.length, rows: rows.length}});
+        }};
+        form.addEventListener('submit', event => event.preventDefault());
+        form.querySelector('button').addEventListener('click', apply);
+        void apply();
+        return;
+      }}
       if (location.pathname === '/contacts/help') {{
         app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
           <section class="record" data-page-route="/contacts/help"><div class="eyebrow">Workspace help</div><h1>Help</h1>

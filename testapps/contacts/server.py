@@ -176,9 +176,9 @@ class NativeContactsHost:
                     from testapps.contacts.model_loop import ContactsModelGoalPort, contacts_profile
                     from testapps.contacts.read_actions import ContactsReadActions
                     executor_type = ModelDrivenTurnExecutor
-                    goal_port = ContactsModelGoalPort(adapter, drafts=True)
-                    action_policy = ContactsReadActions(adapter)
-                    loop_options = {"goal_port": goal_port, "profile": contacts_profile(adapter, goal_port, drafts=True), "verify": False}
+                    goal_port = ContactsModelGoalPort(adapter, drafts=True, filters=True)
+                    action_policy = ContactsReadActions(adapter, filters=True)
+                    loop_options = {"goal_port": goal_port, "profile": contacts_profile(adapter, goal_port, drafts=True, filters=True), "verify": False}
                 executor = executor_type(
                     channel=channel,
                     config=AgentTurnConfig(

@@ -1190,10 +1190,10 @@ class LoopTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual([(a, args.get("ref"), args.get("value")) for a, args in sent], [
             ("fill", "e1", "加急"), ("select", "e2", "Acme"), ("fill", "e3", "2026-10-01"),
-            ("fill", "e4", "2026-10-31"), ("click", "e5", None)])
+            ("fill", "e4", "2026-10-31")])
         self.assertFalse(sent[2][1]["commit"])     # the first box of a range waits for the second
         self.assertIn("不存在：屏幕上没有这个字段", said)
-        self.assertIn("已点“搜索”", said)
+        self.assertNotIn("已点“搜索”", said)  # a partial filter must never apply or complete
         self.assertEqual([label for label, _value in turn["touched"]], ["备注", "客户", "日期"])
 
     def test_a_named_range_uses_its_unlabelled_end_from_the_fresh_observation(self):

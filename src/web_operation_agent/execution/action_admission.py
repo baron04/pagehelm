@@ -199,10 +199,11 @@ class ActionAdmission:
         self._issued: dict[str, ActionPermit] = {}
         self._consumed: set[str] = set()
         self._verified_query = None
+        self._verified_query_command = ""
 
-    def query_verified(self, observation: PageObservation) -> bool:
+    def query_verified(self, observation: PageObservation, *, command_id: str | None = None) -> bool:
         """A read snapshot counts only after this turn's guarded application check."""
-        return self._verified_query is not None and self._verified_query == (
+        return (command_id is None or command_id == self._verified_query_command) and self._verified_query is not None and self._verified_query == (
             observation.url, observation.page_route, _encoded(observation.page_read),
             self._query_choices(observation))
 
@@ -211,8 +212,8 @@ class ActionAdmission:
         # Bind visible choices to the verified read. A later user edit or editor
         # replacement cannot inherit that proof even while its last GET is unchanged.
         return _encoded(sorted((e.attrs.get("query_field", ""), e.attrs.get("form_scope", ""),
-            e.attrs.get("form_instance", ""), e.attrs.get("selected_option", ""))
-            for e in observation.elements if e.role == "combobox"
+            e.attrs.get("form_instance", ""), e.attrs.get("selected_option", ""), e.attrs.get("value", ""))
+            for e in observation.elements if e.role in {"textbox", "combobox", "select", "spinbutton"}
             and e.attrs.get("page_control") == "query"))
 
     def _check(self, context, checkpoint):
@@ -272,3 +273,4 @@ class ActionAdmission:
                 and after.page_read["revision"] > before.page_read["revision"]):
             self._verified_query = (after.url, after.page_route, _encoded(after.page_read),
                                     self._query_choices(after))
+            self._verified_query_command = receipt.command_id

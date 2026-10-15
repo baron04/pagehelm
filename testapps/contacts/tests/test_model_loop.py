@@ -136,6 +136,57 @@ if __name__ == "__main__":
     unittest.main()
 
 class ModelBrowserTests(unittest.TestCase):
+    def test_combined_lines_and_filter_finish_only_after_verified_application_effects(self):
+        from playwright.sync_api import sync_playwright
+        from testapps.contacts.server import NativeContactsHost, NativeServerConfig
+        from testapps.contacts.tests.test_native_server import _CONNECTED, _SUBMIT, _allow_operation
+        for mode in ("lines", "changed_line_draft", "unreviewed_add", "filter", "partial_filter"):
+            with self.subTest(mode=mode):
+                is_filter = "filter" in mode
+                args = ({"fields": [{"label": "Name contains", "value": "Grace"}],
+                         "then_click": "Search contacts", "answer": "Contact filter applied."} if is_filter else
+                        {"add_lines": {"button": "Add local line", "count": 2},
+                         "fields": [{"label": "Period start", "value": "2026-10-20"},
+                                    {"label": "Local line 1", "value": "First synthetic note"},
+                                    {"label": "Local line 2", "value": "Second synthetic note"}],
+                         "then_highlight": "Save contact", "answer": "Local lines ready for manual saving."})
+                if mode == "partial_filter": args["fields"].append({"label": "Missing", "value": "x"})
+                if mode == "unreviewed_add": args["add_lines"]["button"] = "Save contact"
+                chat = _Chat([("goto", {"path": "/contacts/filter" if is_filter else "/contacts/new"}),
+                              ("fill_fields", args),
+                              ("finish", {"status": "cannot", "answer": "The phase could not be verified."})])
+                with tempfile.TemporaryDirectory() as directory, patch("testapps.contacts.server._chat", return_value=(chat, None)), \
+                        NativeContactsHost(NativeServerConfig(Path(directory), port=0, model_loop=True)) as host, \
+                        sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    try:
+                        page = browser.new_page(viewport={"width": 1440, "height": 1500})
+                        if mode == "changed_line_draft":
+                            page.add_init_script("document.addEventListener('click', event => { if (event.target.id === 'contact-add-line') document.querySelector('input[name=name]').value = 'Unexpected mutation'; }, true)")
+                        page.goto(host.origin + "/demo/login/ada-lovelace")
+                        page.goto(host.origin + "/contacts/help")
+                        page.evaluate(_CONNECTED)
+                        session = next(iter(host._sessions.values()))[0]
+                        page.evaluate(_SUBMIT, "Apply the requested local phase without saving any record.")
+                        _allow_operation(page)
+                        outcome = session.runner.next_outcome(timeout_s=35)
+                        self.assertIsNotNone(outcome)
+                        self.assertFalse(outcome.error, outcome.error)
+                        success = mode in {"lines", "filter"}
+                        self.assertEqual("agent_finished" if success else "agent_refused", outcome.result.terminal_reason,
+                                         outcome.result.user_answer)
+                        self.assertEqual(2 if success else 3, len(chat.messages))
+                        if mode == "lines":
+                            self.assertEqual("Second synthetic note", page.get_by_label("Local line 2", exact=True).input_value())
+                            self.assertTrue(page.get_by_role("button", name="Save contact").evaluate("e => !!e.style.outline"))
+                        if mode == "filter":
+                            self.assertEqual("Grace Hopper", page.locator('#contact-filter-results').inner_text())
+                        if mode == "partial_filter":
+                            self.assertIn("Ada Lovelace", page.locator('#contact-filter-results').inner_text())
+                        self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
+                    finally:
+                        browser.close()
+
     def test_combined_form_phase_and_owned_choice_recovery_use_the_same_executor(self):
         from playwright.sync_api import sync_playwright
         from testapps.contacts.server import NativeContactsHost, NativeServerConfig

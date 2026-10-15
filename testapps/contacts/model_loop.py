@@ -14,15 +14,16 @@ def tool(name, description, properties, required=()):
 
 class ContactsModelGoalPort:
     """Capabilities implemented by this profile, independently of the goal planner."""
-    def __init__(self, adapter, *, drafts=False):
+    def __init__(self, adapter, *, drafts=False, filters=False):
         from .goal import ContactsGoalPort
-        self._port, self.drafts = ContactsGoalPort(adapter), drafts
+        self._port, self.drafts, self.filters = ContactsGoalPort(adapter), drafts, filters
 
     def __getattr__(self, name):
         return getattr(self._port, name)
 
     def capabilities(self):
-        return frozenset({"handoffs"} | ({"fill", "lines"} if self.drafts else set()))
+        return frozenset({"handoffs"} | ({"fill", "lines"} if self.drafts else set())
+                         | ({"facets"} if self.filters else set()))
 
 
 class ContactsProcedure:
@@ -49,7 +50,15 @@ class ContactsProcedure:
                                           error_code="invalid_target")
                 outcome = context.page.execute("click", {"ref": controls[0].ref})
         elif self.name == "fill_fields":
-            from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft
+            from web_operation_agent.execution.draft_handoff import add_draft_lines, field_identity, handoff_draft
+            if arguments.get("then_click") and arguments.get("then_highlight"):
+                return LoopToolResult("Choose query completion or form handoff.", kind="page", state="refused",
+                                      error_code="invalid_arguments")
+            if arguments.get("add_lines"):
+                addition = arguments["add_lines"]
+                failed = add_draft_lines(context, addition["button"], addition["count"])
+                if failed:
+                    return failed
             before, expected = context.obs, []
             for field in arguments["fields"]:
                 matches = [e for e in context.obs.elements if e.attrs.get("field_label") == field["label"]]
@@ -66,6 +75,16 @@ class ContactsProcedure:
                         redact_sensitive_assignments(json.dumps(labels)) + "\nEND_UNTRUSTED_APPLICATION_DATA",
                         kind="page", state=outcome.state, dispatch=outcome.dispatch, error_code=outcome.error_code)
                 expected.append((field_identity(control), field["value"]))
+            if arguments.get("then_click"):
+                matches = [e for e in context.obs.elements if e.tag == "button"
+                           and e.name == arguments["then_click"]]
+                if len(matches) != 1:
+                    return LoopToolResult("No unique query control.", kind="page", state="refused",
+                                          error_code="invalid_target")
+                outcome = context.page.execute("click", {"ref": matches[0].ref})
+                return LoopToolResult("Query action verified.", kind="page", state=outcome.state,
+                    dispatch=outcome.dispatch, error_code=outcome.error_code,
+                    completion_command=outcome.receipt.command_id if outcome.state == "completed" else "")
             if arguments.get("then_highlight"):
                 return handoff_draft(context, before, expected, arguments["then_highlight"])
             return LoopToolResult("Fields verified.", kind="page", entered=tuple(
@@ -89,7 +108,7 @@ class ContactsProcedure:
                               error_code=outcome.error_code)
 
 
-def contacts_profile(adapter, goal_port, *, drafts=False):
+def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
     schemas = (
         (tool("list_contacts", "Read actor-visible contacts from the REST collection.",
               {"name_contains": {"type": "string", "maxLength": 120}}), "read", frozenset()),
@@ -99,21 +118,37 @@ def contacts_profile(adapter, goal_port, *, drafts=False):
         (tool("highlight", "Mark a visible control without clicking it.",
               {"index": {"type": "integer", "minimum": 0}, "answer": {"type": "string", "maxLength": 2000}},
               ("index",)), "page", frozenset({"handoffs"})))
-    if drafts:
+    if drafts or filters:
         schemas += (
             (tool("fill_fields", "Enter named local fields; optionally verify the whole form and highlight Save, never submit.",
                   {"fields": {"type": "array", "minItems": 1, "maxItems": 12, "items": {
                       "type": "object", "properties": {"label": {"type": "string"}, "value": {"type": "string"}},
                       "required": ["label", "value"], "additionalProperties": False}},
                    "then_highlight": {"type": "string"}, "answer": {"type": "string", "maxLength": 2000}},
-                  ("fields",)), "page", frozenset({"fill"})),
+                  ("fields",)), "page", frozenset()),
             (tool("input", "Enter one reviewed local field and commit it.",
                   {"index": {"type": "integer", "minimum": 0}, "text": {"type": "string", "maxLength": 4000}},
                   ("index", "text")), "page", frozenset({"fill"})),
             (tool("click", "Add one local line; never save.",
                   {"index": {"type": "integer", "minimum": 0}}, ("index",)), "page", frozenset({"lines"})))
+    for schema, _, _ in schemas:
+        if schema["function"]["name"] == "fill_fields":
+            properties = schema["function"]["parameters"]["properties"]
+            properties["then_click"] = {"type": "string"}
+            properties["add_lines"] = {"type": "object", "properties": {
+                "button": {"type": "string", "maxLength": 200},
+                "count": {"type": "integer", "minimum": 1, "maximum": 4}},
+                "required": ["button", "count"], "additionalProperties": False}
+
+    def requirements(arguments, observation):
+        query = observation.page_route == "/contacts/filter"
+        return frozenset({"facets" if query else "fill"}) | (
+            frozenset({"lines"}) if arguments.get("add_lines") else frozenset()) | (
+            frozenset({"handoffs"}) if arguments.get("then_highlight") else frozenset())
+
     procedures = tuple(LoopProcedure(json.dumps(schema),
-        ContactsProcedure(adapter, goal_port, schema["function"]["name"]), kind, "contacts:read", required)
+        ContactsProcedure(adapter, goal_port, schema["function"]["name"]), kind, "contacts:read", required,
+        requirements if schema["function"]["name"] == "fill_fields" else None)
         for schema, kind, required in schemas)
 
     def prepare(request, context):
@@ -131,6 +166,8 @@ def contacts_profile(adapter, goal_port, *, drafts=False):
         "This application offers reviewed navigation and visible-control handoff. " +
         ("It offers two local date fields, priority, and temporary note lines for manual saving. "
          "Use goto(open=\"New contact\") to open the form, then fill_fields with then_highlight=\"Save contact\" "
-         "and answer to finish after verified handoff. " if drafts else "") +
-        "It does not offer list filters or pagination. Source tools depend on deployment configuration.",
+         "and answer to finish after verified handoff. Use add_lines(button, count) within fill_fields to create local lines first. " if drafts else "") +
+        ("On /contacts/filter fill Name contains and use then_click=\"Search contacts\" with answer to finish after a verified query. "
+         if filters else "It does not offer list filters. ") +
+        "It does not offer pagination. Source tools depend on deployment configuration.",
         procedures, render, prepare, draft_steps=ContactsDraftSteps(adapter) if drafts else None)

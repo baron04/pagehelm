@@ -37,6 +37,49 @@ def value_matches(element, value):
     return shown == value
 
 
+def add_draft_lines(context, button, count):
+    """Execute bounded, application-reviewed additions, preserving the old draft.
+
+    The application proves the line effect. Lifetime binds additions to one live
+    form while its instance (the control set) is allowed to grow.
+    """
+    def refused():
+        return LoopToolResult("明细建行未通过核验，尚未填写或交接。", kind="page",
+                              state="unverified", error_code="stale_binding")
+    for _ in range(count):
+        context.page.checkpoint()
+        before = context.obs
+        buttons = [e for e in before.elements if e.tag == "button" and e.role == "button"
+                   and e.name.strip() == button.strip() and e.attrs.get("form_scope")
+                   and e.attrs.get("form_lifetime")]
+        if len(buttons) != 1:
+            return refused()
+        target = buttons[0]
+        scope, lifetime = target.attrs["form_scope"], target.attrs["form_lifetime"]
+        def snapshot(obs):
+            fields = [e for e in draft_fields(obs) if e.attrs["form_scope"] == scope]
+            if any(e.attrs.get("form_lifetime") != lifetime for e in fields):
+                return None
+            # Instance changes on addition; semantic identities and values must not.
+            pairs = [(field_identity(e)[:1] + field_identity(e)[2:], field_value(e)) for e in fields]
+            return dict(pairs) if len(dict(pairs)) == len(pairs) else None
+        old = snapshot(before)
+        if old is None:
+            return refused()
+        outcome = context.page.execute("click", {"ref": target.ref})
+        if outcome.state != "completed":
+            return LoopToolResult("明细建行未完成，请核对当前观察。", kind="page", state=outcome.state,
+                                  dispatch=outcome.dispatch, error_code=outcome.error_code)
+        after, current = context.obs, snapshot(context.obs)
+        anchors = [e for e in after.elements if e.attrs.get("form_scope") == scope
+                   and e.attrs.get("form_lifetime") == lifetime]
+        if (old is None or current is None or not anchors or before.url != after.url
+                or before.page_route != after.page_route or not old.keys() < current.keys()
+                or any(current[key] != value for key, value in old.items())):
+            return refused()
+    return None
+
+
 def handoff_draft(context, before, expected, submit_label):
     """Expected pairs carry actual control identities, never model-given refs.
 
@@ -79,7 +122,8 @@ def handoff_draft(context, before, expected, submit_label):
         a = element.attrs
         field = a.get("field", "")
         label = a.get("field_label", "")
-        if not field and not label:
+        title = a.get("title", "")
+        if not field and not label and not title:
             return refused()
         native, option = value, None
         if element.role == "radiogroup":
@@ -93,9 +137,10 @@ def handoff_draft(context, before, expected, submit_label):
             native, option = matches[0]["value"], value
         elif a.get("selected_option") is not None:
             option = value
-        fields.append({"ref": element.ref, "field": field or label, "control": element.role,
+        fields.append({"ref": element.ref, "field": field or label or title, "control": element.role,
                        "value": native, "scope": scope,
-                       **({"binding": "label", "label": label} if not field else {}),
+                       **({"binding": "label", "label": label} if not field and label else
+                          {"binding": "ref", "instance": instance} if not field else {}),
                        **({"option_label": option} if option is not None else {})})
     outcome = context.page.handoff(fields, {"ref": buttons[0].ref, "label": buttons[0].name, "scope": scope})
     if outcome.state != "completed" or outcome.receipt is None:

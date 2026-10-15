@@ -566,10 +566,15 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         receipts = getattr(self, "_tool_receipts", ())
         if result is not None and result.completion_command:
             receipt = next((r for r in receipts if r.command_id == result.completion_command), None)
-            return (receipt is not None and receipt.action == "handoff_form" and receipt.ok
-                    and not receipt.error_code and receipt.observation is not None
-                    and receipt.observation.epoch == s.obs.epoch
-                    and receipt.url_after == s.obs.url and s.obs.render_state == "ready")
+            if (receipt is None or not receipt.ok or receipt.error_code or receipt.observation is None
+                    or receipt.url_after != s.obs.url or s.obs.render_state != "ready"):
+                return False
+            if receipt.action == "handoff_form":
+                return receipt.observation.epoch == s.obs.epoch
+            admission = getattr(self, "_admission", None)
+            return (receipt.action == "click" and receipt.write_guard_held
+                    and receipt.command_id in getattr(self, "_verified_action_commands", ())
+                    and admission is not None and admission.query_verified(s.obs, command_id=receipt.command_id))
         action = {"goto": "goto", "highlight": "highlight"}.get(name)
         receipt = next((r for r in receipts if r.action == action), None)
         if receipt is None or not receipt.ok or receipt.error_code or receipt.observation is None:

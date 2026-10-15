@@ -5,6 +5,8 @@ forms. Adversarial widgets and effects are excluded; a read-only HTTP window alo
 does not qualify them. This prototype is not installed in the default demo.
 """
 from urllib.parse import urljoin, urlsplit
+import hashlib
+import json
 
 from web_operation_agent.execution.action_admission import (
     ActionEffect, ActionPermit, ActionAdmissionRefused)
@@ -15,10 +17,11 @@ from .adapter import APPLICATION_ID
 class ContactsReadActions:
     application_id = APPLICATION_ID
     required_scope = "contacts:read"
-    actions = frozenset({"goto", "click"})
+    actions = frozenset({"goto", "click", "fill"})
 
-    def __init__(self, adapter):
+    def __init__(self, adapter, *, filters=False):
         self.adapter = adapter
+        self.filters, self._queries = filters, {}
         self.review = "contacts-explicit-save-navigation-v1"
 
     def _actor(self, context, checkpoint):
@@ -46,6 +49,8 @@ class ContactsReadActions:
         before = intent.observation
         if before.page_route != self._path(before.url):
             raise ActionAdmissionRefused("invalid_target")
+        if self.filters and before.page_route == "/contacts/filter" and intent.action != "goto":
+            return self._query(intent)
         if intent.action == "goto":
             destination = self._path(urljoin(before.url, intent.arguments["url"]))
         else:
@@ -58,11 +63,50 @@ class ContactsReadActions:
             destination = self._path(urljoin(before.url, element.attrs["href"]))
         # These are page routes, not a per-button name list. The adversarial view
         # and workflows with unqualified handlers deliberately have no grant.
-        if destination not in {"/contacts", "/contacts/help", "/contacts/new"}:
+        if destination not in {"/contacts", "/contacts/help", "/contacts/new"} | ({"/contacts/filter"} if self.filters else set()):
             raise ActionAdmissionRefused("unreviewed")
         return ActionPermit(intent.binding_digest, ActionEffect.NAVIGATION, self.review, destination)
 
     def verify(self, permit, intent, receipt, *, observation, context, checkpoint):
         self._actor(context, checkpoint)
         after = observation
+        if intent.binding_digest in self._queries:
+            value, instance, revision = self._queries.pop(intent.binding_digest)
+            fields = [e for e in after.elements if e.attrs.get("query_field") == "name_contains"
+                      and e.attrs.get("form_scope") == "form:contact-filter"
+                      and e.attrs.get("form_instance") == instance]
+            if (after.url != intent.observation.url or after.page_route != "/contacts/filter"
+                    or len(fields) != 1 or fields[0].attrs.get("value", "") != value):
+                return False
+            if intent.action == "fill":
+                return after.page_read == intent.observation.page_read
+            read = after.page_read
+            if read is None or read["revision"] <= revision:
+                # The HTTP collection and browser digest can settle asynchronously.
+                self._queries[intent.binding_digest] = (value, instance, revision)
+                from web_operation_agent.execution.action_admission import ActionResultPending
+                raise ActionResultPending()
+            digest = hashlib.sha256(json.dumps([value], separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+            return (read["path"] == "/api/contacts" and read["query_fields"] == {"name_contains": digest}
+                    and read["page"] == 1)
         return self._path(after.url) == permit.postcondition and after.page_route == permit.postcondition
+
+    def _query(self, intent):
+        before, args = intent.observation, intent.arguments
+        target = next(e for e in before.elements if e.ref == args["ref"])
+        fields = [e for e in before.elements if e.attrs.get("query_field") == "name_contains"
+                  and e.attrs.get("form_scope") == "form:contact-filter"]
+        if len(fields) != 1 or before.page_read is None:
+            raise ActionAdmissionRefused("unreviewed")
+        field = fields[0]
+        if (target.attrs.get("form_scope") != "form:contact-filter" or not field.attrs.get("form_instance")
+                or target.attrs.get("form_instance") != field.attrs["form_instance"]):
+            raise ActionAdmissionRefused("stale_binding")
+        if intent.action == "fill" and target == field and args.get("commit", True) is True:
+            value = args["value"]
+        elif intent.action == "click" and target.tag == "button" and target.name == "Search contacts":
+            value = field.attrs.get("value", "")
+        else:
+            raise ActionAdmissionRefused("unreviewed")
+        self._queries[intent.binding_digest] = (value, field.attrs["form_instance"], before.page_read["revision"])
+        return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY, "contacts-name-filter-v1", intent.binding_digest)

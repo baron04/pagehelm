@@ -18,6 +18,28 @@ function controller(): PageControllerApi {
 }
 
 describe('adapter-issued single-choice combobox drafts', () => {
+  it('verifies an unnamed line only by its exact current ref, live form instance and value', () => {
+    const form = document.createElement('form')
+    form.id = 'unnamed-line'
+    form.innerHTML = '<input type="number" value="2">'
+    document.body.append(form)
+    try {
+      let input = form.querySelector('input')!
+      const page = new Page(controller(), () => input, createRedactor())
+      const instance = formInstance(input)!
+      const observed = [{ref:'e1', role:'spinbutton', name:'', tag:'input', epoch:1,
+        attrs:{title:'Line 1 · Quantity', form_scope:'form:unnamed-line', form_instance:instance}}]
+      const binding = {ref:'e1', field:'Line 1 · Quantity', control:'spinbutton', value:'2',
+        scope:'form:unnamed-line', binding:'ref', instance}
+      expect(page.verifyFormFields([binding],observed)).toBe(true)
+      for (const bad of [{...binding,ref:'e2'}, {...binding,instance:'expired'}, {...binding,ref:undefined},
+        {...binding,value:'3'}, {...binding,scope:'form:other'}])
+        expect(page.verifyFormFields([bad],observed)).toBe(false)
+      input.replaceWith(input.cloneNode() as HTMLInputElement)
+      input = form.querySelector('input')!
+      expect(page.verifyFormFields([binding],observed)).toBe(false)
+    } finally {form.remove()}
+  })
   function setup(extra = '', interrupt: () => boolean = () => false) {
     const form = document.createElement('form')
     form.id = 'choice-form'

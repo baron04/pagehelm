@@ -108,14 +108,16 @@ export type ElementNavigationReader = (element: ElementLike | null | undefined) 
 export interface PageHighlight { clear(): void; active(): boolean }
 export interface FormHandoffField {
   ref?: string; field: string; control: string; value: string
-  binding?: string; label?: string; scope?: string
+  binding?: string; label?: string; scope?: string; instance?: string
   option_label?: string
 }
 export interface FormSubmitTarget {ref: string; label: string; scope: string}
 
 export function formFieldMatches(element: ElementRef, binding: FormHandoffField): boolean {
   return element.role === binding.control && (!binding.scope ||
-    element.attrs.form_scope === binding.scope) && (binding.binding === 'label'
+    element.attrs.form_scope === binding.scope) && (binding.binding === 'ref'
+      ? element.ref === binding.ref && element.attrs.form_instance === binding.instance
+      : binding.binding === 'label'
       ? !element.attrs.field && element.attrs.field_label === binding.label
       : element.attrs.field === binding.field)
 }
@@ -556,8 +558,9 @@ export class Page {
       const binding = item as FormHandoffField
       if ((binding.ref !== undefined && typeof binding.ref !== 'string') || typeof binding.field !== 'string' ||
           typeof binding.value !== 'string' ||
-          !['field', 'label'].includes(binding.binding || 'field') ||
+          !['field', 'label', 'ref'].includes(binding.binding || 'field') ||
           (binding.binding === 'label' && (!binding.label || !binding.scope)) ||
+          (binding.binding === 'ref' && (!binding.ref || !binding.scope || !binding.instance)) ||
           !browserContract.form_handoff.input_controls.includes(binding.control) ||
           seen.has(binding.field)) return false
       seen.add(binding.field)
@@ -577,6 +580,8 @@ export class Page {
       if (isSensitiveFormControl(live, this.redactor)) return false
       if (binding.binding === 'label') {
         if (formFieldName(live) || formControlLabel(live) !== binding.label) return false
+      } else if (binding.binding === 'ref') {
+        if (!(live instanceof Element) || formInstance(live) !== binding.instance) return false
       } else if (formFieldName(live) !== binding.field) return false
       const tag = String(live.tagName || '').toLowerCase()
       const declared = live.getAttribute?.('role')

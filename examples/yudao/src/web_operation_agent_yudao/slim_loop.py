@@ -614,9 +614,14 @@ TOOLS = [
           "字段名用最新观察里“表单当前值”“明细行当前值”中出现的名字。", {
         "fields": {"type": "array", "items": {"type": "object", "properties": {
             "label": {"type": "string"}, "value": {"type": "string"}}, "required": ["label", "value"], "additionalProperties": False}, "minItems": 1, "maxItems": 12},
+        "add_lines": {"type": "object", "properties": {
+            "button": {"type": "string", "maxLength": 200},
+            "count": {"type": "integer", "minimum": 1, "maximum": 4}},
+            "required": ["button", "count"], "additionalProperties": False,
+            "description": "填写前用审核过的添加按钮新建指定数量的明细行；count 是要新增的行数"},
         "then_click": {"type": "string", "description": "全部填完后要点的按钮的文字，例如“搜索”；不需要就不给"},
         "then_highlight": {"type": "string", "description": "全部填完后要标出的审核提交按钮文字；不会点击"},
-        "answer": {"type": "string", "description": "表单字段核验并标出按钮后给用户的答复；只在 then_highlight 一并完成时填写"}},
+        "answer": {"type": "string", "description": "表单交接或 then_click 筛选核验通过后给用户的答复；不写未读过的结果条数"}},
         ["fields"]),
     _tool("scroll", "滚动页面；给出 index 时滚动那个元素所在的可滚动区域（例如弹窗）。", {
         "down": {"type": "boolean"}, "index": {"type": "integer"}}, ["down"]),
@@ -686,7 +691,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以页面上显示的数字为准。
 2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
    - 用 search_menu 找页面，goto 打开；同一个业务词常常在几个模块里都有页面，先看全部结果再选最贴合用户说法的那个，并在答复里说明用的是哪个模块的页面。
-   - 筛选要在页面自己的筛选控件上操作，再点“搜索”，然后从“页面生效的查询”确认参数已生效。
+   - 筛选用 fill_fields(fields, then_click="搜索", answer="已按所给条件筛选") 一步完成；程序从应用读回的查询确认参数已生效才结束。要回答结果条数或记录内容时先不带 answer，读返回的观察再回答。
    - 改每页条数、翻页：用 fill_fields 的“每页条数”“页码”一步做完（分页在列表底部，看不到就先 scroll），它会报告列表读回的页码和条数。
    - 点了“搜索”筛选却没有生效（“共 N 条”没变，结果里还有不符合条件的行）时，不要停在这里。要看的是某条记录名下的关联记录（某客户的联系人、商机、回款这类）：进这条记录的详情页，切到对应的页签，那里显示的就是它名下的。
    - 页面元素行尾的标记说明这个控件怎么用：〔下拉〕〔单选〕用 select(index, option) 选，option 写选项显示的文字（不能直接点击下拉选项；未找到时点开下拉框或在它所属的列表内滚动，再对原下拉框 select，也可用 fill_fields 按字段名选择）；〔日期〕用 input 填 2026-10-20，带时间的填 2026-10-20 09:00:00；日期范围是〔日期·开始〕和〔日期·结束〕两个框，先填开始再填结束，两个都要填，不要去点日历。
@@ -695,9 +700,9 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
    - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。工具返回应用实时权限时直接依据该权限事实；明确无编辑权限时如实说明，不能滚动或更换入口重试。除此之外只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
-   - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
+   - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；需要新行时，在 fill_fields 带 add_lines={{"button":"观察中的添加按钮原文","count":要新增的行数}}，程序先逐行建行核验，再按字段名填写。只填用户给的列，单价、税率这些没提到的列不要动。
    - search_menu 已给出审核表单入口时，用 goto(path, open="入口文字") 一步打开页面和表单；当前页面上有唯一入口时也可直接 click。进入表单后先看返回的观察。
-   - 填表用 fill_fields 按字段名一次做完，不要一个个 input/select。已看到提交按钮时，同时带 then_highlight="按钮原文" 和 answer：程序逐个核验字段，再回读整张表单并标出按钮，通过才直接结束，无须再 highlight/finish。字段或交接没做成时先读反馈，再修正剩余部分。筛选仍用 then_click="搜索" 并检查结果后结束。
+   - 填表用 fill_fields 按字段名一次做完，不要一个个 input/select。已看到提交按钮时，同时带 then_highlight="按钮原文" 和 answer：程序逐个核验字段，再回读整张表单并标出按钮，通过才直接结束，无须再 highlight/finish。字段或交接没做成时先读反馈，再修正剩余部分。筛选带 then_click="搜索" 和 answer，程序核验全部字段和生效查询后直接结束。
    - 下拉不存在会返回它自己的选项；从反馈中选精确文字纠正，保留空格，不替换成相近记录。只读核验了没有改变表单的拒绝可继续，未确认的已发出动作不能重试。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：留空，在答复里提醒用户还有哪些必填项要自己补，然后照常以 done 结束。
@@ -706,7 +711,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 通用规则：
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
 - 一次回复里可以连着调用几个工具，按顺序执行。页面变化之后，同一次回复里按序号的操作（click、input、select、highlight）不会执行，按路径或字段名的（goto、fill_fields、call_api）照常执行：能一次说清的就一次说完，例如 goto 之后接着 fill_fields 筛选。
-- 最后一步是 goto 打开页面、highlight 标出按钮，或 fill_fields 同时带 then_highlight 完成表单交接时，把给用户的答复写在这一步的 answer 里，不用再单独调用 finish。程序确认通过才结束，没有成功就把结果交给你。goto 带 open 时要先读表单观察，不带 answer；用户要打开的是某一条记录时，到列表还不算打开它。answer 里不要写你还没看到的页面内容（条数、某一行的值）。其它工具结果必须先看到，再 finish。
+- 最后一步是 goto 打开页面、highlight 标出按钮，或 fill_fields 同时带 then_highlight 完成表单交接、then_click 完成已核验筛选时，把给用户的答复写在这一步的 answer 里，不用再单独调用 finish。程序确认通过才结束，没有成功就把结果交给你。goto 带 open 时要先读表单观察，不带 answer；用户要打开的是某一条记录时，到列表还不算打开它。answer 里不要写你还没看到的页面内容（条数、某一行的值）。其它工具结果必须先看到，再 finish。
 - 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。用户说了它是哪一类（员工、供应商、客户……），find_record 一定带上 kind。
 - find_record 带 kind 查过、说这些模块里没有的，就是没有：直接 cannot，说明查了哪些模块；不要再用 call_api、search_menu、goto 换名字或换模块去确认。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
@@ -1181,7 +1186,7 @@ class YudaoLoopProcedures:
             return None
         return next((e for e in s.obs.elements if e.ref == f"e{number}"), None)
 
-    def _act(self, s, action: str, args: dict, *, navigating: bool = False) -> LoopToolResult | None:
+    def _act(self, s, action: str, args: dict, *, navigating: bool = False, complete_query=False) -> LoopToolResult | None:
         if action == "select":
             element = next((e for e in s.obs.elements if e.ref == args.get("ref")), None)
             if element is not None and element.role == "radiogroup":
@@ -1193,6 +1198,9 @@ class YudaoLoopProcedures:
                 args = {**args, "value": choices[0].value}
         outcome = s.page.execute(action, args, navigating=navigating)
         if outcome.state == "completed":
+            if complete_query:
+                return LoopToolResult("查询动作已核验。", kind="page", dispatch=outcome.dispatch,
+                                      completion_command=outcome.receipt.command_id)
             return None
         reasons = {"unreviewed": "应用尚未审核这个动作的效果；不要重复点击同一控件，也不要据此判断账号无权限。",
                    "stale_binding": "页面已变化，请根据最新观察重新选择。",
@@ -1271,7 +1279,8 @@ class YudaoLoopProcedures:
             return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused")
         if name == "fill_fields":
             return self._fill_fields(s, args["fields"], args.get("then_click", ""),
-                                     turn, then_highlight=args.get("then_highlight", ""))
+                                     turn, then_highlight=args.get("then_highlight", ""),
+                                     add_lines=args.get("add_lines"))
         if name == "observe":
             outcome = s.page.execute("observe", {})
             return LoopToolResult("观察如下。", kind="page",
@@ -1406,10 +1415,17 @@ class YudaoLoopProcedures:
         if str(got) == str(int(number)):
             return LoopToolResult(f"{label}：已改为{'每页 ' + number + ' 条' if control == 'page_size' else '第 ' + number + ' 页'}（列表读回：第 {read.get('page')} 页，每页 {read.get('page_size')} 条，共 {read.get('total')} 条）", kind="page", state="completed")
         return LoopToolResult(f"{label}：已操作，但列表读回的不是 {number}（{got if got is not None else '没有读回'}），看下面的页面再决定", kind="page", state="unverified")
-    def _fill_fields(self, s, fields, then_click: str, turn: dict, *, then_highlight="") -> LoopToolResult:
+    def _fill_fields(self, s, fields, then_click: str, turn: dict, *, then_highlight="", add_lines=None) -> LoopToolResult:
         """Fill or choose several named fields one after another, each found afresh on the
         page as it then is, so that one model request does the work of several."""
-        from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft
+        from web_operation_agent.execution.draft_handoff import add_draft_lines, field_identity, handoff_draft
+        if then_click and then_highlight:
+            return LoopToolResult("筛选和表单交接不能同时执行。", kind="page", state="refused",
+                                  error_code="invalid_arguments")
+        if add_lines:
+            failed = add_draft_lines(s, add_lines["button"], add_lines["count"])
+            if failed:
+                return failed
         before, expected = s.obs, []
         said, incomplete, failure = [], False, None
         for item in fields[:12]:
@@ -1484,23 +1500,26 @@ class YudaoLoopProcedures:
                 turn["trace"].append(f"fill_fields[{label}]({json.dumps(value, ensure_ascii=False)[:60]})")
                 said.append(f"{label}：已{'选' if kind in ('〔下拉〕', '〔单选〕') else '填'}")
         wanted = re.sub(r"\s+", "", then_click or "")
-        if wanted:
+        if wanted and not incomplete and not failure:
             lines, _hints = _page_lines(s.obs)
             shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
-            button = next((e for e in s.obs.elements if e.ref[1:] in shown and e.tag == "button"
-                           and re.sub(r"\s+", "", e.name) == wanted), None)
-            if button is None:
+            buttons = [e for e in s.obs.elements if e.ref[1:] in shown and e.tag == "button"
+                       and re.sub(r"\s+", "", e.name) == wanted]
+            if len(buttons) != 1:
                 incomplete = True
                 said.append(f"没有找到“{then_click}”按钮，没有点")
             else:
-                failed = self._act(s, "click", {"ref": button.ref})
-                if not failed:
-                    self._settled(s)
+                result = self._act(s, "click", {"ref": buttons[0].ref}, complete_query=True)
+                if result.completion_command:
+                    return replace(result, feedback="；".join(said) + "；" + result.feedback)
+                failed = result
                 incomplete = incomplete or bool(failed)
                 failure = failure or failed
                 said.append(failed.feedback if failed else f"已点“{then_click}”")
         text = "；".join(said) + "。"
         if then_highlight and not then_click and not incomplete and not failure:
+            from .draft_readback import product_price_readback
+            expected = product_price_readback(s, before, expected, self.goal_port.data)
             result = handoff_draft(s, before, expected, then_highlight)
             if result.marked:
                 turn["marked"] = result.marked
@@ -1658,7 +1677,9 @@ def _requirements(name, arguments, observation, review=None):
             "facets" if any(e.attrs.get("page_control") == "query" and
                 item["label"] in {e.attrs.get("field_label"), e.attrs.get("title")} for e in observation.elements)
             else "fill" for item in arguments["fields"]}) | (frozenset({"handoffs"})
-                if arguments.get("then_highlight") else frozenset())
+                if arguments.get("then_highlight") else frozenset()) | (frozenset({"lines"})
+                if arguments.get("add_lines") else frozenset()) | (frozenset({"facets"})
+                if arguments.get("then_click") else frozenset())
     if name in {"input", "select", "click"}:
         element = next((e for e in observation.elements if e.ref == "e" + str(arguments["index"])), None)
         if element:

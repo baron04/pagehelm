@@ -169,3 +169,5 @@ business key, a lost response after commit, and failed readback after acknowledg
 `TheApplicationsOwnAuthorityInARealBrowser` signs in as the read-only user and as a user whose
 workspace shares names with another, and checks the model context, audit ledger, replay,
 page and panel for anything from the other workspace.
+
+The opt-in model-loop host also qualifies combined local-line creation, named filling and manual handoff, and an actor-bound name filter at `/contacts/filter`. Each line action is separately admitted and verified. The plain HTML filter reads the current REST collection, applies its own name condition and reports a fresh digest and revision; only that verified click can complete a combined filter phase. Scripted Chromium checks include changed old values, an unreviewed addition and partial filters, with no record submission. These are contract checks, not model success-rate measurements.
