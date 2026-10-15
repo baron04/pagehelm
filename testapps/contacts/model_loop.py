@@ -41,6 +41,35 @@ class ContactsProcedure:
         if self.name == "goto":
             outcome = context.page.execute("goto", {"url": self.adapter.descriptor.origin + arguments["path"]},
                                            navigating=True)
+            if outcome.state == "completed" and arguments.get("open"):
+                controls = [e for e in context.obs.elements if e.role == "link"
+                            and e.name == arguments["open"] and e.attrs.get("href") == "/contacts/new"]
+                if len(controls) != 1:
+                    return LoopToolResult("No unique reviewed form entry.", kind="page", state="refused",
+                                          error_code="invalid_target")
+                outcome = context.page.execute("click", {"ref": controls[0].ref})
+        elif self.name == "fill_fields":
+            from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft
+            before, expected = context.obs, []
+            for field in arguments["fields"]:
+                matches = [e for e in context.obs.elements if e.attrs.get("field_label") == field["label"]]
+                if len(matches) != 1:
+                    return LoopToolResult("No unique current field.", kind="page", state="refused",
+                                          error_code="invalid_target")
+                control = matches[0]
+                action = "select" if control.attrs.get("aria-haspopup") == "listbox" else "fill"
+                outcome = context.page.execute(action, {"ref": control.ref, "value": field["value"],
+                    **({"option_label": field["value"]} if action == "select" else {"commit": True})})
+                if outcome.state != "completed":
+                    labels = outcome.receipt.candidate_labels if outcome.receipt else ()
+                    return LoopToolResult("Field entry refused.\nBEGIN_UNTRUSTED_APPLICATION_DATA\n" +
+                        redact_sensitive_assignments(json.dumps(labels)) + "\nEND_UNTRUSTED_APPLICATION_DATA",
+                        kind="page", state=outcome.state, dispatch=outcome.dispatch, error_code=outcome.error_code)
+                expected.append((field_identity(control), field["value"]))
+            if arguments.get("then_highlight"):
+                return handoff_draft(context, before, expected, arguments["then_highlight"])
+            return LoopToolResult("Fields verified.", kind="page", entered=tuple(
+                (f["label"], f["value"]) for f in arguments["fields"]))
         elif self.name in {"input", "click"}:
             element = next((e for e in context.obs.elements if e.ref == "e" + str(arguments["index"])), None)
             if element is None:
@@ -65,12 +94,19 @@ def contacts_profile(adapter, goal_port, *, drafts=False):
         (tool("list_contacts", "Read actor-visible contacts from the REST collection.",
               {"name_contains": {"type": "string", "maxLength": 120}}), "read", frozenset()),
         (tool("goto", "Open a reviewed page route.", {"path": {"type": "string", "maxLength": 200},
+              "open": {"type": "string", "maxLength": 200},
               "answer": {"type": "string", "maxLength": 2000}}, ("path",)), "page", frozenset()),
         (tool("highlight", "Mark a visible control without clicking it.",
               {"index": {"type": "integer", "minimum": 0}, "answer": {"type": "string", "maxLength": 2000}},
               ("index",)), "page", frozenset({"handoffs"})))
     if drafts:
         schemas += (
+            (tool("fill_fields", "Enter named local fields; optionally verify the whole form and highlight Save, never submit.",
+                  {"fields": {"type": "array", "minItems": 1, "maxItems": 12, "items": {
+                      "type": "object", "properties": {"label": {"type": "string"}, "value": {"type": "string"}},
+                      "required": ["label", "value"], "additionalProperties": False}},
+                   "then_highlight": {"type": "string"}, "answer": {"type": "string", "maxLength": 2000}},
+                  ("fields",)), "page", frozenset({"fill"})),
             (tool("input", "Enter one reviewed local field and commit it.",
                   {"index": {"type": "integer", "minimum": 0}, "text": {"type": "string", "maxLength": 4000}},
                   ("index", "text")), "page", frozenset({"fill"})),
@@ -93,6 +129,8 @@ def contacts_profile(adapter, goal_port, *, drafts=False):
     from .draft_steps import ContactsDraftSteps
     return ModelLoopProfile("Answer from current REST reads. Clarify ambiguous names; never choose one silently. "
         "This application offers reviewed navigation and visible-control handoff. " +
-        ("It offers two local date fields and temporary note lines for manual saving. " if drafts else "") +
+        ("It offers two local date fields, priority, and temporary note lines for manual saving. "
+         "Use goto(open=\"New contact\") to open the form, then fill_fields with then_highlight=\"Save contact\" "
+         "and answer to finish after verified handoff. " if drafts else "") +
         "It does not offer list filters or pagination. Source tools depend on deployment configuration.",
         procedures, render, prepare, draft_steps=ContactsDraftSteps(adapter) if drafts else None)

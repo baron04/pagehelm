@@ -30,7 +30,9 @@ class PageActionOutcome:
         receipt = self.receipt
         if ((receipt is not None) != (self.dispatch == "acknowledged")
                 or self.state == "completed" and (receipt is None or not receipt.ok)
-                or self.state == "refused" and self.dispatch != "not_dispatched"):
+                or self.state == "refused" and self.dispatch == "uncertain"
+                or self.state == "refused" and self.dispatch == "acknowledged" and
+                    (receipt is None or not receipt.no_effect or receipt.error_code != "option_unavailable")):
             raise ValueError("inconsistent page action outcome")
         for observation in self.observations_json:
             PageObservation.from_json(json.loads(observation))
@@ -52,6 +54,7 @@ class ProcedurePage(Protocol):
     def checkpoint(self) -> None: ...
     def stopped(self) -> bool: ...
     def action_observations(self) -> tuple[PageObservation, ...]: ...
+    def handoff(self, fields: list[dict], submit: dict) -> PageActionOutcome: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +141,7 @@ class LoopToolResult:
     trace: tuple[str, ...] = ()
     read_summary: tuple[str, str] | None = None
     marked: str = ""
+    completion_command: str = ""
 
     def __post_init__(self):
         if (not isinstance(self.feedback, str) or len(self.feedback) > 32000
@@ -154,7 +158,8 @@ class LoopToolResult:
                        or any(not isinstance(v, str) or len(v) > 4000 for v in pair) for pair in self.entered)
                 or not isinstance(self.trace, tuple) or len(self.trace) > 40
                 or any(not isinstance(v, str) or len(v) > 4000 for v in self.trace)
-                or not isinstance(self.marked, str) or len(self.marked) > 200):
+                or not isinstance(self.marked, str) or len(self.marked) > 200
+                or not isinstance(self.completion_command, str) or len(self.completion_command) > 200):
             raise ValueError("invalid model-loop result")
 
 

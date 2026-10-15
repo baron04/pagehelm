@@ -674,17 +674,16 @@ class DraftChoiceTests(unittest.TestCase):
                                       dispatch="acknowledged", error_code="option_unavailable")
         self.procedures._act = unavailable
         text = self.procedures._select(self.state, self.control, "PLC控制器P5").feedback
-        self.assertEqual(["click", "select"], [a for a, _ in self.sent])
+        self.assertEqual(["select"], [a for a, _ in self.sent])
         self.assertEqual("PLC控制器P5", self.sent[-1][1]["option_label"])
         self.assertIn("没有唯一的精确标签", text)
-        self.assertIn(BEGIN + "\nPLC 控制器 P5\n" + END, text)
 
-    def test_exact_label_selects_the_fresh_reference_after_opening(self):
+    def test_exact_label_uses_one_runtime_selection_without_server_preopening(self):
         self.assertEqual("", self.procedures._select(self.state, self.control, "PLC 控制器 P5"))
-        self.assertEqual([("click", {"ref":"e1"}), ("select", {"ref":"e7", "value":"PLC 控制器 P5",
-                                                       "option_label":"PLC 控制器 P5"})], self.sent)
+        self.assertEqual([("select", {"ref":"e1", "value":"PLC 控制器 P5",
+                                     "option_label":"PLC 控制器 P5"})], self.sent)
 
-    def test_foreign_disabled_or_duplicate_choices_cannot_authorize_selection(self):
+    def test_prior_viewport_options_do_not_replace_runtime_owned_selection(self):
         option = self.changed[1]
         for options in ([replace(option, attrs={"listbox_owner":"foreign"})],
                         [replace(option, attrs={**option.attrs, "aria-disabled":"true"})],
@@ -694,12 +693,12 @@ class DraftChoiceTests(unittest.TestCase):
                 self.sent.clear()
                 self.changed = [self.changed[0], *options]
                 self.procedures._select(self.state, self.control, "PLC 控制器 P5")
-                self.assertEqual(["click"], [a for a, _ in self.sent])
+                self.assertEqual(["select"], [a for a, _ in self.sent])
 
-    def test_replaced_form_after_opening_never_receives_selection(self):
-        self.changed[0] = replace(self.changed[0], attrs={**self.changed[0].attrs, "form_instance":"replaced"})
-        self.assertIn("已变化", self.procedures._select(self.state, self.control, "PLC 控制器 P5").feedback)
-        self.assertEqual(["click"], [a for a, _ in self.sent])
+    def test_missing_form_or_list_ownership_never_receives_selection(self):
+        control = replace(self.control, attrs={**self.attrs, "form_instance":""})
+        self.assertEqual("invalid_target", self.procedures._select(self.state, control, "PLC 控制器 P5").error_code)
+        self.assertEqual([], self.sent)
 
 
 class ActionFeedbackTests(unittest.TestCase):

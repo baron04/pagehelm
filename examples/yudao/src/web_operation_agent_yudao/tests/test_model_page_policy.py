@@ -209,6 +209,32 @@ class QueryTests(unittest.TestCase):
                     with self.assertRaises(ActionAdmissionRefused):
                         admission.verify(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
 
+    def test_no_effect_choice_requires_unchanged_entire_bound_form_and_write_evidence(self):
+        attrs = {"form_scope":"dialog:editor", "form_instance":"live", "title":"明细第1行·产品名称",
+                 "aria-controls":"products-1", "aria-haspopup":"listbox", "aria-expanded":"false"}
+        choice = ElementRef("e1", "combobox", "产品名称", "input", 1, attrs)
+        other = ElementRef("e2", "textbox", "备注", "input", 1,
+                           {"form_scope":"dialog:editor", "form_instance":"live", "field_label":"备注", "value":"untouched"})
+        before = self.page(path="/crm/customer", elements=(choice, other))
+        evidence = NS(mark=lambda:0, since=lambda mark:())
+        admission = DraftStepAdmission(NativeDraftSteps(self.policy.data, NS(_evidence=evidence), self.policy.page_review), "yudao")
+        args = {"ref":"e1", "value":"Missing", "option_label":"Missing"}
+        intent, permit = admission.prepare("select", args, before, context=self.context, checkpoint=lambda:None)
+        admission.consume(intent, permit, before, context=self.context, checkpoint=lambda:None)
+        after = replace(before, epoch=2, elements=[replace(choice, epoch=2), replace(other, epoch=2)])
+        receipt = ActionReceipt(1, "choice", "select", _remote_args_echo({**args, "epoch":1}), False,
+            error_code="option_unavailable", no_effect=True, candidate_labels=("Exact option",),
+            observation=after, url_before=before.url, url_after=after.url, write_guard_held=True)
+        admission.verify_no_effect(intent, permit, receipt, context=self.context, checkpoint=lambda:None)
+        for changed in (replace(after, elements=[replace(choice, epoch=2), replace(other, epoch=2,
+                           attrs={**other.attrs,"value":"changed"})]),
+                        replace(after, elements=[replace(choice, epoch=2, attrs={**attrs,"form_instance":"replaced"}), replace(other, epoch=2)])):
+            with self.assertRaises(ActionAdmissionRefused):
+                admission.verify_no_effect(intent, permit, replace(receipt, observation=changed), context=self.context, checkpoint=lambda:None)
+        evidence.since = lambda mark: ("write",)
+        with self.assertRaises(ActionAdmissionRefused):
+            admission.verify_no_effect(intent, permit, receipt, context=self.context, checkpoint=lambda:None)
+
     def test_opening_a_line_choice_binds_its_title_form_and_owned_listbox(self):
         attrs = {"form_scope":"dialog:editor", "form_instance":"live", "title":"明细第1行·产品名称",
                  "aria-controls":"products-1", "aria-expanded":"false"}

@@ -419,3 +419,20 @@ class NativeDraftSteps:
             except (InvalidOperation, ValueError):
                 return False
         return shown == (expected["option"] or expected["value"])
+
+    def verify_no_effect(self, permit, intent, receipt, *, observation, context, checkpoint):
+        BoundDataReads(self.data, context, checkpoint)
+        expected = self._prepared.get(intent.binding_digest)
+        if (expected is None or permit.step != "enter_value" or intent.action != "select"
+                or not receipt.no_effect or self.data._client.read_generation != expected["generation"]
+                or self.forms._evidence.since(expected["mark"])
+                or observation.url != intent.observation.url
+                or observation.page_route != expected["route"]):
+            return False
+        from web_operation_agent.execution.draft_handoff import draft_fields, field_identity, field_value
+        def state(obs):
+            fields = [e for e in draft_fields(obs) if e.attrs.get("form_scope") == expected["scope"]]
+            return sorted((field_identity(e), field_value(e), e.tag,
+                           e.attrs.get("aria-controls", ""), form_control_unavailable(e.attrs)) for e in fields)
+        before, after = state(intent.observation), state(observation)
+        return bool(before) and before == after

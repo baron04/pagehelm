@@ -94,6 +94,8 @@ class _ProcedurePage:
     def stopped(self): return self.__stopped()
     def action_observations(self):
         return self.__outcome.observations if self.__outcome is not None else ()
+    def handoff(self, fields, submit):
+        return self.execute("handoff_form", {"fields": fields, "submit": submit})
 
 
 class ModelDrivenTurnExecutor(GoalTurnExecutor):
@@ -127,8 +129,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             s.budget.check()
             context.require_live(application_id=self.application.descriptor.application_id)
         def execute(action, arguments, *, navigating=False):
-            if not page_actions or action not in {"observe", "wait_for", "scroll", "highlight", "goto", "click", "fill", "select"}:
+            if not page_actions or action not in {"observe", "wait_for", "scroll", "highlight", "goto", "click", "fill", "select", "handoff_form"}:
                 raise BusinessToolRequestError("this procedure cannot dispatch that page action")
+            if action == "handoff_form" and self.profile.draft_steps is None:
+                raise BusinessToolRequestError("form handoff requires an installed draft port")
             self._dispatch(s, action, arguments, navigating=navigating)
             return self._page_action_outcome
         page = _ProcedurePage(lambda: PageObservation.from_json(s.obs.to_json()), execute,
@@ -482,6 +486,14 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             admission, intent, permit, context, checkpoint = admitted
             settlement = None
             try:
+                if isinstance(admission, DraftStepAdmission) and receipt.error_code == "option_unavailable":
+                    with s.receipt.stage("action_verification"):
+                        admission.verify_no_effect(intent, permit, receipt, context=context, checkpoint=checkpoint)
+                    state, code = "refused", "option_unavailable"
+                    s.ledger.append("action_effect_no_effect", tool=action,
+                        command_id=receipt.command_id, binding_digest=intent.binding_digest,
+                        observation_epoch=s.obs.epoch, submitted=False, persisted=False)
+                    return finish(receipt, state=state, code=code, observations=observations)
                 for attempt in range(4):
                     try:
                         with s.receipt.stage("action_verification"):
@@ -548,15 +560,23 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         found = turn.pop("prepared_knowledge", "")
         return replace(result, feedback=found + "\n" + result.feedback) if found else result
 
-    def _completion_proved(self, s, name, args):
+    def _completion_proved(self, s, name, args, result=None):
         # Only receipts produced by this executor's dispatch may justify ending on
         # an unread result. Adapter feedback and model prose never provide proof.
         receipts = getattr(self, "_tool_receipts", ())
+        if result is not None and result.completion_command:
+            receipt = next((r for r in receipts if r.command_id == result.completion_command), None)
+            return (receipt is not None and receipt.action == "handoff_form" and receipt.ok
+                    and not receipt.error_code and receipt.observation is not None
+                    and receipt.observation.epoch == s.obs.epoch
+                    and receipt.url_after == s.obs.url and s.obs.render_state == "ready")
         action = {"goto": "goto", "highlight": "highlight"}.get(name)
         receipt = next((r for r in receipts if r.action == action), None)
         if receipt is None or not receipt.ok or receipt.error_code or receipt.observation is None:
             return False
         if name == "goto":
+            if args.get("open"):
+                return False  # entering a form still has a fresh result for the model to read
             target = "/" + str(args["path"]).lstrip("/")
             return (receipt.command_id in getattr(self, "_verified_action_commands", ())
                     and receipt.args_echo.get("url") == receipt.url_after
@@ -788,7 +808,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 text = result.feedback
                 if result.error_code:
                     text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
-                confirmed = result.state == "completed" and self._completion_proved(s, name, args)
+                confirmed = result.state == "completed" and self._completion_proved(s, name, args, result)
                 if result.terminal_reason:
                     s.terminal_reason = s.terminal_reason or result.terminal_reason
                 receipts = tuple(self._tool_receipts)
@@ -828,7 +848,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
                 changed_page = changed_page or (changed and name != "observe")
                 unwritten = unwritten or (result.kind == "write" and result.state != "completed")
-                answer = str(args.get("answer") or "").strip() if name in ("goto", "highlight") else ""
+                answer = str(args.get("answer") or "").strip() if (name in ("goto", "highlight")
+                            or result.completion_command) else ""
                 if answer:
                     # The turn ends on it only if nothing written earlier in the reply is
                     # still unread and nothing but a finish comes after it.

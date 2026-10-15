@@ -19,7 +19,7 @@ import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance, localChoiceRemoval} from './formInstance'
-import {listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
+import {ChoiceUnavailable, listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
 import {suspendPanelHitTargets} from './panelObservation'
@@ -419,6 +419,17 @@ export class Page {
     if (!list || !scope || !instance || !current()) {
       throw new Error('bad_arguments: combobox has no unique current form listbox')
     }
+    // Keep values browser-local. Equality of this complete local draft, together
+    // with the fact no option was clicked, is stronger than an unchanged label.
+    const draft = () => [...document.querySelectorAll('input,textarea,select,[role="radiogroup"],[role="textbox"],[contenteditable="true"]')]
+      .filter(node => formControlScope(node) === scope && formInstance(node) === instance)
+      .map(node => ({node, state: JSON.stringify([
+        (node as HTMLInputElement).value ?? '', (node as HTMLInputElement).checked ?? false,
+        node.matches('[contenteditable="true"],[role="textbox"]') ? node.textContent : null,
+        node.getAttribute('aria-checked'), node.getAttribute('aria-selected'),
+        node instanceof HTMLInputElement && listboxCombobox(node) ? selectedOption(node) : null,
+      ])}))
+    const beforeDraft = draft()
     if (selectedOption(element) === label) {
       this.rememberEntered(element)
       return {success: true}
@@ -441,8 +452,15 @@ export class Page {
         const matches = [...list.querySelectorAll('[role="option"]')].filter(option =>
           option.closest('[role="listbox"]') === list && optionText(option) === label)
         if (matches.length === 0) {
-          // The list is open and does not offer this choice. Nothing was chosen; the
-          // list is closed again so that the rest of the form is not left under it.
+          const candidate_labels = [...list.querySelectorAll('[role="option"]')]
+            .filter(option => option.closest('[role="listbox"]') === list &&
+              option.getAttribute('aria-disabled') !== 'true' && !option.hasAttribute('disabled'))
+            .map(option => optionText(option).trim())
+            .filter(label => label.length > 0)
+            .slice(0, browserContract.choice_failure.max_candidates)
+            .map(label => label.slice(0, browserContract.choice_failure.max_label_chars))
+          // Try the current control to dismiss the list. Some widgets only open on
+          // input clicks: an open popup alone is not a changed draft or selection.
           if (element.getAttribute('aria-expanded') === 'true') {
             const controls = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)]
               .map(m => Number(m[1])).filter(i => this.lookup(this.controller.selectorMap, i) === element)
@@ -450,8 +468,14 @@ export class Page {
               throw new Error('execution_failed: combobox has no unique fresh close reference')
             }
             await this.controller.clickElement(controls[0]!)
+            await sleep(50)
           }
-          throw new Error('option_unavailable: the list does not offer this option')
+          const afterDraft = draft()
+          const bound = current() && ownedListbox(element) === list
+          const unchanged = beforeDraft.length === afterDraft.length &&
+            beforeDraft.every((item, i) => item.node === afterDraft[i]!.node && item.state === afterDraft[i]!.state)
+          throw new ChoiceUnavailable(candidate_labels, bound && unchanged,
+            !bound ? 'the form binding changed' : 'local field values changed')
         }
         if (matches.length !== 1 || !visibleElement(matches[0]!) ||
             matches[0]!.getAttribute('aria-disabled') === 'true' ||

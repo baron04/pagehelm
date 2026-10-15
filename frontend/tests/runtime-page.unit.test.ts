@@ -31,7 +31,7 @@ describe('adapter-issued single-choice combobox drafts', () => {
     const api = controller()
     api.getBrowserState = vi.fn(async () => ({url:location.href, title:'', content:'[1]<input />\n[2]<li role=option>Alex />'}))
     api.clickElement = vi.fn(async index => {
-      if (index === 1) {list.hidden = false; input.setAttribute('aria-expanded','true')}
+      if (index === 1) {list.hidden = !list.hidden; input.setAttribute('aria-expanded',String(!list.hidden))}
       else {option.setAttribute('aria-selected','true'); list.hidden = true; input.setAttribute('aria-expanded','false')}
       return {success:true}
     })
@@ -116,9 +116,38 @@ describe('adapter-issued single-choice combobox drafts', () => {
         else s.option.setAttribute('aria-selected','true')
         return {success:true}
       })
-      await expect(page.select('e1','99','Nobody')).rejects.toThrow(/^option_unavailable:/)
+      await expect(page.select('e1','99','Nobody')).rejects.toMatchObject({
+        code: 'option_unavailable', candidate_labels: ['Alex'], no_effect: true})
       expect(vi.mocked(s.api.clickElement).mock.calls).toEqual([[1],[3]])
       expect(s.option.getAttribute('aria-selected')).toBe('false')
+    } finally {s.form.remove()}
+  })
+  it('proves unchanged values even when the widget does not toggle its popup closed', async () => {
+    const s = setup()
+    s.api.clickElement = vi.fn(async () => {
+      s.list.hidden = false
+      s.input.setAttribute('aria-expanded', 'true')
+      return {success: true}
+    })
+    try {
+      await expect(s.page.select('e1', '99', 'Nobody')).rejects.toMatchObject({
+        code: 'option_unavailable', candidate_labels: ['Alex'], no_effect: true})
+      expect(s.option.getAttribute('aria-selected')).toBe('false')
+    } finally {s.form.remove()}
+  })
+  it('does not claim no effect when opening the list changed another local field', async () => {
+    const s = setup()
+    const other = document.createElement('input')
+    s.form.append(other)
+    s.api.clickElement = vi.fn(async () => {
+      other.value = 'changed'
+      s.list.hidden = !s.list.hidden
+      s.input.setAttribute('aria-expanded', String(!s.list.hidden))
+      return {success: true}
+    })
+    try {
+      await expect(s.page.select('e1', '99', 'Nobody')).rejects.toMatchObject({
+        code: 'option_unavailable', no_effect: false})
     } finally {s.form.remove()}
   })
   it('stops when the user intervenes between opening and choosing', async () => {

@@ -136,6 +136,65 @@ if __name__ == "__main__":
     unittest.main()
 
 class ModelBrowserTests(unittest.TestCase):
+    def test_combined_form_phase_and_owned_choice_recovery_use_the_same_executor(self):
+        from playwright.sync_api import sync_playwright
+        from testapps.contacts.server import NativeContactsHost, NativeServerConfig
+        from testapps.contacts.tests.test_native_server import _CONNECTED, _SUBMIT, _allow_operation
+        for mode in ("ordinary", "recovery", "changed_draft"):
+            recovery = mode != "ordinary"
+            with self.subTest(mode=mode):
+                steps = [("goto", {"path": "/contacts", "open": "New contact"})]
+                if recovery:
+                    steps.append(("fill_fields", {"fields": [{"label": "Priority", "value": "Missing priority"}],
+                                                  "then_highlight": "Save contact", "answer": "Must not finish."}))
+                fields = ([{"label": "Priority", "value": "Urgent"}] if recovery else [
+                    {"label": "Period start", "value": "2026-10-20"},
+                    {"label": "Period end", "value": "2026-10-22"}])
+                steps.append(("fill_fields", {"fields": fields, "then_highlight": "Save contact",
+                                              "answer": "Ready; review and save."}))
+                chat = _Chat(steps)
+                with tempfile.TemporaryDirectory() as directory, patch("testapps.contacts.server._chat", return_value=(chat, None)), \
+                        NativeContactsHost(NativeServerConfig(Path(directory), port=0, model_loop=True)) as host, \
+                        sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=True)
+                    try:
+                        page = browser.new_page(viewport={"width": 1280, "height": 1100})
+                        if mode == "changed_draft":
+                            page.add_init_script("document.addEventListener('click', event => { if (event.target.id === 'contact-draft-priority') document.querySelector('input[name=name]').value = 'Unexpected local change'; }, true)")
+                        page.goto(host.origin + "/demo/login/ada-lovelace")
+                        page.goto(host.origin + "/contacts/help")
+                        page.evaluate(_CONNECTED)
+                        session = next(iter(host._sessions.values()))[0]
+                        page.evaluate(_SUBMIT, "Prepare the local fields and leave saving to me.")
+                        try:
+                            _allow_operation(page, timeout_ms=5_000)
+                        except Exception:
+                            logs = [f.read_text()[-5000:] for f in Path(directory).rglob("audit.jsonl")]
+                            self.fail(f"No operation card; model calls={len(chat.messages)}; logs={logs}; page={page.locator('body').inner_text()[-3000:]}")
+                        outcome = session.runner.next_outcome(timeout_s=30)
+                        self.assertIsNotNone(outcome)
+                        self.assertFalse(outcome.error, outcome.error)
+                        logs = [f.read_text()[-6500:] for f in Path(directory).rglob("audit.jsonl")]
+                        if mode == "changed_draft":
+                            self.assertEqual("agent_refused", outcome.result.terminal_reason)
+                            self.assertEqual(2, len(chat.messages))
+                            self.assertFalse(page.get_by_role("button", name="Save contact").evaluate("e => !!e.style.outline"))
+                            self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
+                            continue
+                        self.assertEqual("agent_finished", outcome.result.terminal_reason, (outcome.result.user_answer, logs))
+                        self.assertIn("Ready; review and save.", outcome.result.user_answer)
+                        self.assertEqual(3 if recovery else 2, len(chat.messages))
+                        if recovery:
+                            self.assertIn("option_unavailable", str(chat.messages[-1]))
+                            self.assertIn("Urgent", str(chat.messages[-1]))
+                            self.assertEqual("Urgent", page.get_by_label("Priority", exact=True).input_value())
+                        else:
+                            self.assertEqual("2026-10-20/2026-10-22", page.locator('#contact-create').get_attribute('data-period'))
+                        self.assertTrue(page.get_by_role("button", name="Save contact").evaluate("e => !!e.style.outline"))
+                        self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
+                    finally:
+                        browser.close()
+
     def test_plain_html_two_dates_and_local_line_use_guarded_common_draft_port(self):
         import json
         from playwright.sync_api import sync_playwright

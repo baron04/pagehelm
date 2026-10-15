@@ -55,9 +55,6 @@ MODEL_STEPS = 24
 _PENDING_MS, _LOOK_MS = 400, 150
 #: Looks a page that keeps changing is given before it is taken as it is.
 _STILL_LOOKS = 2
-#: The steps that may carry the turn's answer: when the program itself saw the page
-#: opened, or the control marked, nothing is left for the model to read before it ends.
-_ENDING_STEPS = ("goto", "highlight")
 #: Development only: a directory to which each turn's conversation is written as the model
 #: saw it. Unset in any deployment; what a page shows does not belong in a log.
 _DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
@@ -598,6 +595,7 @@ TOOLS = [
                  "快得多。用户没说就不给"}}, ["name"]),
     _tool("goto", "打开一个页面路径（来自 search_menu 或页面里出现的详情路径）。", {
         "path": {"type": "string"},
+        "open": {"type": "string", "description": "打开后要进入的唯一审核表单入口按钮文字，例如“新建”或“编辑”"},
         "answer": {"type": "string", "description":
                    "打开这个页面就是用户要的最终状态时，给用户的答复：程序确认页面已打开后本轮随之结束。"
                    "用户要的是某一条记录（他的档案、某个客户的详情）时，打开它所在的列表还不算，要在列表里找到它、点进去之后再结束，"
@@ -616,7 +614,9 @@ TOOLS = [
           "字段名用最新观察里“表单当前值”“明细行当前值”中出现的名字。", {
         "fields": {"type": "array", "items": {"type": "object", "properties": {
             "label": {"type": "string"}, "value": {"type": "string"}}, "required": ["label", "value"], "additionalProperties": False}, "minItems": 1, "maxItems": 12},
-        "then_click": {"type": "string", "description": "全部填完后要点的按钮的文字，例如“搜索”；不需要就不给"}},
+        "then_click": {"type": "string", "description": "全部填完后要点的按钮的文字，例如“搜索”；不需要就不给"},
+        "then_highlight": {"type": "string", "description": "全部填完后要标出的审核提交按钮文字；不会点击"},
+        "answer": {"type": "string", "description": "表单字段核验并标出按钮后给用户的答复；只在 then_highlight 一并完成时填写"}},
         ["fields"]),
     _tool("scroll", "滚动页面；给出 index 时滚动那个元素所在的可滚动区域（例如弹窗）。", {
         "down": {"type": "boolean"}, "index": {"type": "integer"}}, ["down"]),
@@ -696,8 +696,9 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
    - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。工具返回应用实时权限时直接依据该权限事实；明确无编辑权限时如实说明，不能滚动或更换入口重试。除此之外只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。产品这类〔下拉〕用 select 选，数量用 input 填；要再加一行时先点“添加…”按钮，再对新的一行操作。只填用户给的列，单价、税率这些没提到的列不要动。
-   - 一次要填或选两个以上字段（表单、筛选条件、明细行）时，用 fill_fields 按字段名一次做完，不要一个个 input/select；筛选可以带 then_click="搜索"。它报告某个字段没做成时，再对那个字段单独用 input 或 select。
-   - 填完后看返回的观察，确认每个值都显示正确；然后用 highlight 标出表单的“确定/保存/提交”按钮，把给用户的答复写在它的 answer 里。
+   - search_menu 已给出审核表单入口时，用 goto(path, open="入口文字") 一步打开页面和表单；当前页面上有唯一入口时也可直接 click。进入表单后先看返回的观察。
+   - 填表用 fill_fields 按字段名一次做完，不要一个个 input/select。已看到提交按钮时，同时带 then_highlight="按钮原文" 和 answer：程序逐个核验字段，再回读整张表单并标出按钮，通过才直接结束，无须再 highlight/finish。字段或交接没做成时先读反馈，再修正剩余部分。筛选仍用 then_click="搜索" 并检查结果后结束。
+   - 下拉不存在会返回它自己的选项；从反馈中选精确文字纠正，保留空格，不替换成相近记录。只读核验了没有改变表单的拒绝可继续，未确认的已发出动作不能重试。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：留空，在答复里提醒用户还有哪些必填项要自己补，然后照常以 done 结束。
    - 只有用户一个具体值都没给（比如只说“新增一家供应商”“帮我新增一个产品单位”）时，才用 need_input 问要填什么，不要自己编；这时可以先把表单打开，但不要 highlight 提交按钮，也不要以 done 结束。用户指明了关联对象（比如“给某客户新增联系人”“给某客户开一张订单”）就算给了值：打开表单并带上这个对象后以 done 结束，说明其余由用户补。
@@ -705,7 +706,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 通用规则：
 - 每次只根据最新的观察行动；序号只在最新观察里有效。观察只包含当前屏幕上看得见的部分，要找的控件不在里面时先 scroll。
 - 一次回复里可以连着调用几个工具，按顺序执行。页面变化之后，同一次回复里按序号的操作（click、input、select、highlight）不会执行，按路径或字段名的（goto、fill_fields、call_api）照常执行：能一次说清的就一次说完，例如 goto 之后接着 fill_fields 筛选。
-- 最后一步是 goto 打开页面或 highlight 标出按钮时，把给用户的答复写在这一步的 answer 里，不用再单独调用 finish：用户只要求打开某个页面、要回答的值已经读到而只差打开页面、表单已经填好只差标出提交按钮，都是这样；用户要打开的是某一条记录时，goto 到它所在的列表不算打开了它，不带 answer。程序确认页面打开了（按钮标出了）才结束本轮，没有成功就把结果交给你。answer 里不要写你还没看到的页面内容（条数、某一行的值）。其它工具（call_api、find_record、click、fill_fields、select、input、scroll）的结果必须先看到，再 finish。
+- 最后一步是 goto 打开页面、highlight 标出按钮，或 fill_fields 同时带 then_highlight 完成表单交接时，把给用户的答复写在这一步的 answer 里，不用再单独调用 finish。程序确认通过才结束，没有成功就把结果交给你。goto 带 open 时要先读表单观察，不带 answer；用户要打开的是某一条记录时，到列表还不算打开它。answer 里不要写你还没看到的页面内容（条数、某一行的值）。其它工具结果必须先看到，再 finish。
 - 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。用户说了它是哪一类（员工、供应商、客户……），find_record 一定带上 kind。
 - find_record 带 kind 查过、说这些模块里没有的，就是没有：直接 cannot，说明查了哪些模块；不要再用 call_api、search_menu、goto 换名字或换模块去确认。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
@@ -1199,15 +1200,15 @@ class YudaoLoopProcedures:
                    "expired": "本次动作授权已过期。"}
         feedback = ("未执行：" if outcome.dispatch == "not_dispatched" else
                     "操作已发出但结果未确认，不会自动重发：") + reasons.get(outcome.error_code, "请根据错误码和最新观察决定下一步。")
+        if outcome.state == "refused" and outcome.error_code == "option_unavailable":
+            labels = outcome.receipt.candidate_labels if outcome.receipt is not None else ()
+            feedback = ("未选择：应用已核验这个下拉操作没有改变表单。请从它的选项中核对精确名称；保留空格，不会自动替换。\n"
+                        + fenced(redacted("\n".join(labels), self.knowledge.handoffs)))
         return LoopToolResult(feedback, kind="page", state=outcome.state,
                               dispatch=outcome.dispatch, error_code=outcome.error_code)
 
     def _select(self, s, element, value):
-        """Inspect a transient form's owned live choices before issuing selection.
-
-        An unknown label yields current choices to the same Agent, without an
-        acknowledged failed selection or an automatic name substitution.
-        """
+        """Select directly; the fixed Runtime owns the exact-label choice process."""
         attrs = element.attrs
         if (element.role == "combobox" and attrs.get("aria-haspopup") == "listbox"
                 and str(attrs.get("form_scope", "")).startswith("dialog")
@@ -1216,39 +1217,8 @@ class YudaoLoopProcedures:
             if not owner or not attrs.get("form_instance"):
                 return LoopToolResult("尚未选择：下拉框缺少当前表单或选项归属，请重新观察。",
                                       kind="page", state="refused", error_code="invalid_target")
-            if attrs.get("aria-expanded") != "true":
-                failed = self._act(s, "click", {"ref": element.ref})
-                if failed:
-                    return failed
-                self._settled(s, waits=2)
-            current = [e for e in s.obs.elements if e.role == element.role and e.tag == element.tag
-                and all(e.attrs.get(k) == attrs.get(k) for k in (
-                    "form_scope", "form_instance", "field_label", "title", "aria-controls"))]
-            if len(current) != 1 or current[0].attrs.get("aria-expanded") != "true":
-                return LoopToolResult("尚未选择：展开后下拉框已变化，请根据最新观察重新选择。",
-                                      kind="page", state="refused", error_code="stale_binding")
-            element = current[0]
-            options = [e for e in s.obs.elements if e.role == "option"
-                       and e.attrs.get("listbox_owner") == owner]
-            matches = [e for e in options if re.sub(r"\s+", " ", e.name).strip() == value]
-            if not matches and options:
-                # Viewport absence is not absence from this owned list. The fixed
-                # Runtime select searches it with bounded scrolling, binds the same
-                # form/field/listbox throughout, and chooses only an exact label.
-                result = self._act(s, "select", {"ref": element.ref, "value": value, "option_label": value})
-                if result is not None:
-                    labels = [re.sub(r"\s+", " ", e.name).strip()[:200] for e in options
-                              if e.attrs.get("aria-disabled") != "true" and not form_control_unavailable(e.attrs)]
-                    return replace(result, feedback=result.feedback + "\n此前可见的选项如下；保留原文空格，不会自动替换名称。\n"
-                                   + fenced(redacted("\n".join(labels[:12]), self.knowledge.handoffs)))
-                return None
-            if (len(matches) != 1 or matches[0].attrs.get("aria-disabled") == "true"
-                    or form_control_unavailable(matches[0].attrs)):
-                labels = [re.sub(r"\s+", " ", e.name).strip()[:200] for e in options
-                          if e.attrs.get("aria-disabled") != "true" and not form_control_unavailable(e.attrs)]
-                return LoopToolResult("尚未选择：当前可见选项没有唯一的精确标签。核对或在此下拉框内滚动后，仍对该下拉框重新 select，保留空格；不要直接点击选项，也不会自动替换名称。\n"
-                        + fenced(redacted("\n".join(labels[:12]), self.knowledge.handoffs)),
-                        kind="page", state="refused", error_code="option_unavailable")
+            # Expansion, bounded scrolling, exact matching and dismissal are owned by the
+            # fixed Runtime. Re-opening the list here duplicated those waits.
         return self._act(s, "select", {"ref": element.ref, "value": value, "option_label": value})
 
     @staticmethod
@@ -1261,7 +1231,18 @@ class YudaoLoopProcedures:
                 and not isinstance(value, bool)}
         if name == "search_menu":
             self._note(s, stage="search", what="page", term=args["keyword"], tool=name, arguments=said)
-            return LoopToolResult(know.search_menu(args["keyword"]))
+            text = know.search_menu(args["keyword"])
+            review = getattr(self.goal_port, "review", None)
+            if review is not None:
+                for line in text.splitlines():
+                    path = line.split(" ", 1)[0]
+                    entries = sorted({control for family, route, _, _, controls in review.scopes
+                        if family == "form_entry" and re.fullmatch(
+                            re.escape(route).replace(r"\{id\}", r"[1-9][0-9]*"), path)
+                        for control in controls})
+                    if entries:
+                        text += f"\n{path} 已审核表单入口：" + "、".join(entries) + "（goto 的 open；仍核对当前唯一可见入口）"
+            return LoopToolResult(text)
         if name == "search_api":
             self._note(s, stage="search", what="source", term=args["keyword"], tool=name, arguments=said)
             return LoopToolResult(know.search_api(args["keyword"]))
@@ -1289,7 +1270,8 @@ class YudaoLoopProcedures:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
             return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused")
         if name == "fill_fields":
-            return self._fill_fields(s, args["fields"], args.get("then_click", ""), turn)
+            return self._fill_fields(s, args["fields"], args.get("then_click", ""),
+                                     turn, then_highlight=args.get("then_highlight", ""))
         if name == "observe":
             outcome = s.page.execute("observe", {})
             return LoopToolResult("观察如下。", kind="page",
@@ -1312,6 +1294,24 @@ class YudaoLoopProcedures:
                 return LoopToolResult(f"浏览器到了 {path}，但应用还没有报告这个页面已经显示出来：看下面的页面再决定。",
                                       kind="page", state="unverified", dispatch="acknowledged")
             access = self._record_access(s, path)
+            opening = str(args.get("open", "")).strip()
+            if opening:
+                lines, _hints = _page_lines(s.obs)
+                shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
+                wanted = re.sub(r"\s+", "", opening)
+                review = getattr(self.goal_port, "review", None)
+                buttons = [e for e in s.obs.elements if e.ref[1:] in shown and e.tag == "button"
+                           and re.sub(r"\s+", "", e.name) == wanted and review is not None
+                           and review.permits("form_entry", path, e.name.strip())]
+                if len(buttons) != 1:
+                    return LoopToolResult(f"没有找到唯一的“{opening}”表单入口，没有打开。", kind="page",
+                                          state="refused", error_code="invalid_target")
+                failed = self._act(s, "click", {"ref": buttons[0].ref})
+                if failed:
+                    return failed
+                self._settled(s)
+                return LoopToolResult("已打开。" + access + f" 已进入“{opening}”表单。", kind="page",
+                                      dispatch="acknowledged")
             return LoopToolResult("已打开。" + access, kind="page", dispatch="acknowledged")
         if name in ("click", "input", "select", "highlight") or (name == "scroll" and args.get("index") is not None):
             element = self._element(s, args.get("index", -1))
@@ -1406,9 +1406,11 @@ class YudaoLoopProcedures:
         if str(got) == str(int(number)):
             return LoopToolResult(f"{label}：已改为{'每页 ' + number + ' 条' if control == 'page_size' else '第 ' + number + ' 页'}（列表读回：第 {read.get('page')} 页，每页 {read.get('page_size')} 条，共 {read.get('total')} 条）", kind="page", state="completed")
         return LoopToolResult(f"{label}：已操作，但列表读回的不是 {number}（{got if got is not None else '没有读回'}），看下面的页面再决定", kind="page", state="unverified")
-    def _fill_fields(self, s, fields, then_click: str, turn: dict) -> LoopToolResult:
+    def _fill_fields(self, s, fields, then_click: str, turn: dict, *, then_highlight="") -> LoopToolResult:
         """Fill or choose several named fields one after another, each found afresh on the
         page as it then is, so that one model request does the work of several."""
+        from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft
+        before, expected = s.obs, []
         said, incomplete, failure = [], False, None
         for item in fields[:12]:
             label, value = str(item.get("label", "")).strip().rstrip(":：").strip(), str(item.get("value", ""))
@@ -1444,6 +1446,10 @@ class YudaoLoopProcedures:
                     continue
                 steps = list(zip(pair, ends))
             else:
+                if len(found) != 1:
+                    incomplete = True
+                    said.append(f"{label}：屏幕上有多个同名字段，尚未填写")
+                    continue
                 steps = [(found[0], value)]
             failed = ""
             for at, (element, text) in enumerate(steps):
@@ -1465,6 +1471,7 @@ class YudaoLoopProcedures:
                                                    "commit": _commits(element, s.obs.elements)})
                 if failed or s.terminal_reason:
                     break
+                expected.append((field_identity(element), text))
                 self._settled(s, waits=2)
             if s.terminal_reason:
                 return LoopToolResult("操作没有完成。", kind="page", state="unverified")
@@ -1493,6 +1500,11 @@ class YudaoLoopProcedures:
                 failure = failure or failed
                 said.append(failed.feedback if failed else f"已点“{then_click}”")
         text = "；".join(said) + "。"
+        if then_highlight and not then_click and not incomplete and not failure:
+            result = handoff_draft(s, before, expected, then_highlight)
+            if result.marked:
+                turn["marked"] = result.marked
+            return replace(result, feedback=text + result.feedback)
         return (replace(failure, feedback=text) if failure else
                 LoopToolResult(text, kind="page", state="unverified" if incomplete else "completed"))
 
@@ -1638,12 +1650,15 @@ class _Procedure:
 def _requirements(name, arguments, observation, review=None):
     if name == "highlight":
         return frozenset({"handoffs"})
+    if name == "goto" and arguments.get("open"):
+        return frozenset({"fill"})
     if name == "fill_fields":
         return frozenset({"paging" if item["label"] in _PAGING else
             "lines" if _LINE.match(item["label"]) else
             "facets" if any(e.attrs.get("page_control") == "query" and
                 item["label"] in {e.attrs.get("field_label"), e.attrs.get("title")} for e in observation.elements)
-            else "fill" for item in arguments["fields"]})
+            else "fill" for item in arguments["fields"]}) | (frozenset({"handoffs"})
+                if arguments.get("then_highlight") else frozenset())
     if name in {"input", "select", "click"}:
         element = next((e for e in observation.elements if e.ref == "e" + str(arguments["index"])), None)
         if element:

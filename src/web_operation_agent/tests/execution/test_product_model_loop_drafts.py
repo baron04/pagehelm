@@ -67,5 +67,33 @@ class DraftContractTests(unittest.TestCase):
         with self.assertRaises(ActionAdmissionRefused):
             self.runtime.prepare("submit", {"ref": "e1"}, self.before, context=self.context, checkpoint=lambda: None)
 
+    def test_no_effect_requires_explicit_mechanism_fact_and_application_proof(self):
+        class ChoicePort(Port):
+            actions = frozenset({"select"})
+            def verify_no_effect(self, permit, intent, receipt, *, observation, **kwargs):
+                return observation.elements[1].attrs.get("form_instance") == "live-instance"
+        admission = DraftStepAdmission(ChoicePort(), "fixture.app")
+        args = {"ref": "e2", "value": "Missing", "option_label": "Missing"}
+        intent, permit = admission.prepare("select", args, self.before, context=self.context, checkpoint=lambda: None)
+        admission.consume(intent, permit, self.before, context=self.context, checkpoint=lambda: None)
+        after = page(2); after.elements[1].attrs.update(form_instance="live-instance")
+        receipt = ActionReceipt(1, "choice", "select", _remote_args_echo({**args, "epoch": 1}), False,
+            error_code="option_unavailable", no_effect=True, candidate_labels=("Exact option",),
+            observation=after, url_before=self.before.url, url_after=after.url, write_guard_held=True)
+        admission.verify_no_effect(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
+        replaced = page(3); replaced.elements[1].attrs.update(form_instance="replaced")
+        for bad in (replace(receipt, no_effect=False), replace(receipt, write_guard_held=False),
+                    replace(receipt, observation=replaced), replace(receipt, args_echo={"ref": "e3", "epoch": 1}),
+                    replace(receipt, observation=self.before)):
+            with self.subTest(bad=bad), self.assertRaises(ActionAdmissionRefused):
+                admission.verify_no_effect(intent, permit, bad, context=self.context, checkpoint=lambda: None)
+        actor = replace(self.context, principal=replace(self.context.principal, actor_id="changed"))
+        with self.assertRaises(ActionAdmissionRefused):
+            admission.verify_no_effect(intent, permit, receipt, context=actor, checkpoint=lambda: None)
+        # An existing port without this optional proof remains fail closed.
+        admission.port = Port()
+        with self.assertRaises(ActionAdmissionRefused):
+            admission.verify_no_effect(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
+
 
 if __name__ == "__main__": unittest.main()

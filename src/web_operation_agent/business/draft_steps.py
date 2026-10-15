@@ -6,6 +6,7 @@ once. There is no persistent effect, submit, save-on-leave or retry capability.
 """
 from dataclasses import dataclass
 from typing import Callable, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from ..execution.action_admission import (
     ActionAdmissionRefused, ActionEffect, ActionIntent, ActionPermit, verified_observation)
@@ -48,6 +49,20 @@ class ApplicationDraftStepPort(Protocol):
     def verify_step(self, permit: DraftStepPermit, intent: ActionIntent, receipt: ActionReceipt, *,
                     observation: PageObservation, context: OperationContext,
                     checkpoint: Callable[[], None]) -> bool: ...
+
+
+@runtime_checkable
+class ApplicationNoEffectPort(Protocol):
+    """Optional proof that an acknowledged action left the bound draft unchanged.
+
+    This is deliberately separate from :class:`ApplicationDraftStepPort`: existing
+    integrations remain fail closed unless the application implements this proof
+    for the bound form/field under the same actor.
+    """
+
+    def verify_no_effect(self, permit: DraftStepPermit, intent: ActionIntent,
+                         receipt: ActionReceipt, *, observation: PageObservation,
+                         context: OperationContext, checkpoint: Callable[[], None]) -> bool: ...
 
 
 class DraftStepAdmission:
@@ -104,3 +119,35 @@ class DraftStepAdmission:
         self._check(context, checkpoint)
         if verified is not True:
             raise ActionAdmissionRefused("unverified")
+
+    def verify_no_effect(self, intent, permit, receipt, *, context, checkpoint):
+        """Verify a typed, acknowledged no-op without treating it as success.
+
+        Only the explicit ``option_unavailable`` runtime fact is eligible.  The normal
+        successful-observation verifier is intentionally not reused because it requires
+        ``ok``; this path still checks its binding, actor, origin, freshness and guard.
+        """
+        self._check(context, checkpoint)
+        if (intent.operation_binding not in self._consumed
+                or permit.binding_digest != intent.binding_digest
+                or self._issued.get(intent.binding_digest) != permit
+                or receipt.ok or receipt.error_code != "option_unavailable" or not receipt.no_effect
+                or intent.action != "select" or context.binding_digest != intent.operation_binding
+                or receipt.action != intent.action or receipt.observation is None
+                or not receipt.write_guard_held):
+            raise ActionAdmissionRefused("unverified")
+        before, after = intent.observation, receipt.observation
+        from ..transport.protocol import _remote_args_echo
+        echo = dict(receipt.args_echo)
+        echoed_epoch = echo.pop("epoch", None)
+        if (echo != _remote_args_echo(intent.arguments)
+                or ("ref" in intent.arguments and echoed_epoch != before.epoch)
+                or receipt.url_before != before.url or receipt.url_after != after.url
+                or after.epoch <= before.epoch
+                or after.render_state != "ready"
+                or urlsplit(after.url)[:2] != urlsplit(before.url)[:2]):
+            raise ActionAdmissionRefused("unverified")
+        if not isinstance(self.port, ApplicationNoEffectPort) or self.port.verify_no_effect(permit, intent, receipt,
+                observation=after, context=context, checkpoint=checkpoint) is not True:
+            raise ActionAdmissionRefused("unverified")
+        self._check(context, checkpoint)

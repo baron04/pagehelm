@@ -125,6 +125,9 @@ export interface ActionReceipt {
   relogin: boolean
   /** The application held this session read-only for the whole action; see `writeGuard.ts`. */
   write_guard_held: boolean
+  /** Bounded labels from an owned choice list when an exact option was unavailable. */
+  candidate_labels?: string[]
+  no_effect?: boolean
   observation: PageObservation | null
 }
 

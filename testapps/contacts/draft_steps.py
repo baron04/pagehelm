@@ -11,7 +11,7 @@ from .read_actions import ContactsReadActions
 class ContactsDraftSteps:
     application_id = APPLICATION_ID
     required_scope = "contacts:read"
-    actions = frozenset({"click", "fill"})
+    actions = frozenset({"click", "fill", "select"})
 
     def __init__(self, adapter):
         self.actor = ContactsReadActions(adapter)
@@ -36,9 +36,12 @@ class ContactsDraftSteps:
             raise ActionAdmissionRefused("unreviewed")
         args = intent.arguments
         line = label.startswith("Local line ") and label.removeprefix("Local line ").isdigit()
-        if intent.action == "fill":
-            if (element.tag != "input" or label not in {"Period start", "Period end"} and not line
-                    or args.get("commit", True) is not True):
+        if intent.action in {"fill", "select"}:
+            choice = (intent.action == "select" and label == "Priority"
+                      and element.role == "combobox" and element.attrs.get("aria-controls") == "contact-priorities")
+            if (not choice and (intent.action != "fill" or element.tag != "input"
+                    or label not in {"Period start", "Period end"} and not line
+                    or args.get("commit", True) is not True)):
                 raise ActionAdmissionRefused("unsafe_effect")
             step, values = "enter_value", ((label, args["value"]),)
         elif element.tag == "button" and element.name == "Add local line":
@@ -64,4 +67,17 @@ class ContactsDraftSteps:
             controls = [e for e in self._controls(observation) if e.attrs.get("form_lifetime") == lifetime]
             return sum(e.attrs.get("field_label", "").startswith("Local line ") for e in controls) == count + 1
         matches = [e for e in controls if e.attrs.get("field_label") == label]
-        return len(matches) == 1 and matches[0].attrs.get("value", "") == value
+        return len(matches) == 1 and matches[0].attrs.get(
+            "selected_option" if intent.action == "select" else "value", "") == value
+
+    def verify_no_effect(self, permit, intent, receipt, *, observation, context, checkpoint):
+        self.actor._actor(context, checkpoint)
+        from web_operation_agent.execution.draft_handoff import draft_fields, field_identity, field_value
+        if (intent.action != "select" or not receipt.no_effect or observation.url != intent.observation.url
+                or observation.page_route != "/contacts/new"):
+            return False
+        def state(obs):
+            return sorted((field_identity(e), field_value(e), e.attrs.get("aria-controls", ""))
+                          for e in draft_fields(obs))
+        before, after = state(intent.observation), state(observation)
+        return bool(before) and before == after

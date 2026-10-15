@@ -278,7 +278,8 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         const priority = app.querySelector('#contact-draft-priority');
         const choices = app.querySelector('#contact-priorities');
         priority.addEventListener('click', () => {{
-          choices.hidden = false; priority.setAttribute('aria-expanded', 'true');
+          choices.hidden = !choices.hidden;
+          priority.setAttribute('aria-expanded', String(!choices.hidden));
         }});
         for (const option of choices.querySelectorAll('[role=option]')) option.addEventListener('click', () => {{
           for (const peer of choices.querySelectorAll('[role=option]'))
