@@ -60,14 +60,22 @@ class LoopFixture(ModelDrivenTurnExecutor):
 
     def _dispatch(self, state, action, arguments, **kwargs):
         before = state.obs
-        route = arguments.get("url", before.url).split("synthetic.test")[-1]
-        after = page(before.epoch + 1, content=before.content, route=route)
+        channel = getattr(self, "channel", None)
+        latest = (channel.latest_observation_envelope
+                  if channel is not None else None)
+        if action == "observe" and latest is not None:
+            after = latest.observation
+        else:
+            route = arguments.get("url", before.url).split("synthetic.test")[-1]
+            after = page(before.epoch + 1, content=before.content, route=route)
         state.obs = after
         self.actions.append(action)
         receipt = ActionReceipt(1, "command", action, arguments, True,
             observation=after, url_before=before.url, url_after=after.url, write_guard_held=True)
         self._tool_receipts.append(receipt)
         self._verified_action_commands = {receipt.command_id}
+        if channel is not None:
+            channel.latest_observation_envelope = NS(observation=after)
         return receipt
 
     def run(self, prompt="q"):
@@ -107,6 +115,87 @@ class ModelLoopTests(unittest.TestCase):
         next_messages = fixture.state.chat.seen[1]
         result = next(m for m in next_messages if m["role"] == "tool" and m["tool_call_id"] == "read_records-call")
         self.assertIn("total=3\nepoch=2", result["content"])
+
+    def test_consecutive_reads_share_one_fresh_observation(self):
+        fixture = LoopFixture([
+            reply(call("search_records"), call("read_records")),
+            reply(call("finish", status="done", answer="3 records"))],
+            lambda *_: LoopToolResult("total=3", kind="read"))
+        self.assertEqual("3 records", fixture.run())
+        self.assertEqual(["observe"], fixture.actions)
+        first = next(m for m in fixture.state.chat.seen[1]
+                     if m.get("tool_call_id") == "search_records-call")
+        second = next(m for m in fixture.state.chat.seen[1]
+                      if m.get("tool_call_id") == "read_records-call")
+        self.assertIn("total=3\nepoch=2", first["content"])
+        self.assertIn("当前页面观察与本次响应上一条完整观察相同", second["content"])
+        self.assertNotIn("epoch=2\n", second["content"])
+
+    def test_reads_across_model_responses_share_one_fresh_observation(self):
+        fixture = LoopFixture([
+            reply(call("read_one")),
+            reply(call("read_two")),
+            reply(call("finish", status="done", answer="3 records"))],
+            lambda *_: LoopToolResult("total=3", kind="read"))
+        fixture.channel = NS(latest_observation_envelope=NS(observation=page()))
+        self.assertEqual("3 records", fixture.run())
+        self.assertEqual(["observe"], fixture.actions)
+        second = next(m for m in fixture.state.chat.seen[2]
+                      if m.get("tool_call_id") == "read_two-call")
+        self.assertIn("当前页面观察与本次响应上一条完整观察相同", second["content"])
+
+    def test_external_page_change_invalidates_cross_response_observation_cache(self):
+        fixture = LoopFixture([
+            reply(call("read_one")),
+            reply(call("read_two")),
+            reply(call("finish", status="done", answer="3 records"))],
+            lambda *_: LoopToolResult("total=3", kind="read"))
+        fixture.channel = NS(latest_observation_envelope=NS(observation=page()))
+        original = fixture.state.chat.complete_cancellable
+        calls = 0
+
+        def complete(messages, tools, run_id, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                fixture.channel.latest_observation_envelope = NS(
+                    observation=page(3, content="changed controls"))
+            return original(messages, tools, run_id, **kwargs)
+
+        fixture.state.chat.complete_cancellable = complete
+        self.assertEqual("3 records", fixture.run())
+        self.assertEqual(["observe", "observe"], fixture.actions)
+        second = next(m for m in fixture.state.chat.seen[2]
+                      if m.get("tool_call_id") == "read_two-call")
+        self.assertIn("epoch=3", second["content"])
+        self.assertNotIn("当前页面观察与本次响应上一条完整观察相同", second["content"])
+
+    def test_page_action_invalidates_read_observation_reuse(self):
+        def handler(fixture, name, arguments):
+            if name == "goto":
+                fixture._dispatch(fixture.state, "goto", {"url": "https://synthetic.test/list"})
+                return LoopToolResult("opened", kind="page")
+            return LoopToolResult("total=3", kind="read")
+
+        fixture = LoopFixture([
+            reply(call("search_records"), call("goto", path="/list"), call("read_records")),
+            reply(call("finish", status="done", answer="3 records"))], handler)
+        self.assertEqual("3 records", fixture.run())
+        self.assertEqual(["observe", "goto"], fixture.actions)
+        read = next(m for m in fixture.state.chat.seen[1]
+                    if m.get("tool_call_id") == "read_records-call")
+        self.assertIn("total=3\n当前页面观察与本次响应上一条完整观察相同", read["content"])
+
+    def test_reused_observation_does_not_hide_the_full_page_from_history_trim(self):
+        fixture = LoopFixture([
+            reply(call("read_one"), call("read_two"), call("read_three")),
+            reply(call("finish", status="done", answer="3 records"))],
+            lambda *_: LoopToolResult("total=3", kind="read"))
+        self.assertEqual("3 records", fixture.run())
+        next_messages = fixture.state.chat.seen[1]
+        full = next(m for m in next_messages if m.get("tool_call_id") == "read_one-call")
+        self.assertIn("epoch=2", full["content"])
+        self.assertNotIn("更早的页面观察已省略", full["content"])
 
     def test_feedback_language_does_not_determine_success_or_write_dispatch(self):
         for feedback in ("没有执行", "已执行", "not done", "finished"):

@@ -171,7 +171,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 pass
         turn = {"reads": [], "marked": "", "trace": [], "touched": [], "shown": [],
                 "done": set(), "stalled": 0, "writes": writes, "written": [], "corrections": 0,
-                "final": "", "skills": set()}
+                "final": "", "skills": set(), "observation_cache": None}
         prompt = s.message.text
         self._messages.append({"role": "user", "_user_text": prompt, "_observation": True,
             "content": prompt + ("\n" + found if found else "")
@@ -202,6 +202,44 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         if self.debug_dir:
             turn["shown"].append(text)
         return text
+
+    @staticmethod
+    def _page_reference(s):
+        """Reference a page already delivered in this response without copying it."""
+        return ("当前页面观察与本次响应上一条完整观察相同（"
+                f"epoch={s.obs.epoch}，digest={s.obs.content_digest}）。")
+
+    def _observation_cache_valid(self, s, turn):
+        """Return whether a prior fresh page can be cited for another read.
+
+        The cache is turn-local and only covers read/metadata results. The browser
+        observer may publish a newer page between model calls, so compare its page
+        fingerprint before reusing the cached observation. Epoch-only changes do not
+        invalidate the page facts; element refs are still checked by page dispatch.
+        """
+        cache = turn.get("observation_cache")
+        if not isinstance(cache, dict):
+            return False
+        fingerprint = cache.get("fingerprint")
+        if not isinstance(fingerprint, str) or fingerprint != self._page_fingerprint(s.obs):
+            return False
+        message = cache.get("message")
+        if not isinstance(message, dict) or not message.get("_observation"):
+            return False
+        channel = getattr(self, "channel", None)
+        latest = (channel.latest_observation_envelope
+                  if channel is not None else None)
+        if latest is not None and self._page_fingerprint(latest.observation) != fingerprint:
+            return False
+        return True
+
+    def _remember_observation(self, s, turn, message):
+        """Remember the exact full-page message that backs a reusable observation."""
+        if message.get("_observation"):
+            turn["observation_cache"] = {
+                "fingerprint": self._page_fingerprint(s.obs),
+                "message": message,
+            }
 
     def _tools(self, turn):
         supported = capabilities_of(self.goal_port)
@@ -497,6 +535,13 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                        "请用工具继续；全部完成或确实做不到时调用 finish。"})
                 continue
             finish, changed_page, unwritten, unseen = None, False, False, ""
+            # A single model response may contain several independent read calls. The
+            # first read refreshes the page; later reads can use that same observation
+            # while it remains the latest receipt in this response. This preserves the
+            # observation handed to the model while avoiding redundant browser round trips
+            # and repeated page text.
+            observation_delivered = self._observation_cache_valid(s, turn)
+            read_observation_available = observation_delivered
             for position, call in enumerate(calls):
                 name = (call.get("function") or {}).get("name") or ""
                 try:
@@ -590,13 +635,32 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 confirmed = result.state == "completed" and self._completion_proved(s, name, args)
                 if result.terminal_reason:
                     s.terminal_reason = s.terminal_reason or result.terminal_reason
+                receipts = tuple(self._tool_receipts)
+                has_observation = any(r.observation is not None for r in receipts)
+                has_page_action = any(r.action not in {"observe", "wait_for"} for r in receipts)
+                if has_observation:
+                    # Page actions and explicit observe both carry the runtime's fresh
+                    # observation. It is safe to reuse that receipt for a later read in
+                    # this response; only a procedure with no observation needs a new
+                    # browser round trip.
+                    read_observation_available = True
+                    if has_page_action:
+                        # A changed page invalidates the previous full-page message.
+                        # The action's own result will append the new page below.
+                        observation_delivered = (self._page_fingerprint(s.obs) == before)
                 # API and Skill reads have no browser receipt; obtain the current page
-                # before returning their result to the same decision conversation.
-                if not any(r.observation is not None for r in self._tool_receipts) and not s.terminal_reason:
-                    fresh = self._dispatch(s, "observe", {})
-                    if fresh is None or not fresh.ok or fresh.observation is None:
-                        s.terminal_reason = s.terminal_reason or "transport_error"
-                        s.detail = "fresh page observation unavailable"
+                # before returning their result to the same decision conversation. A
+                # consecutive read in this response may reuse the already fresh page.
+                if not has_observation and not s.terminal_reason:
+                    can_reuse = (result.kind in {"metadata", "read"}
+                                 and read_observation_available and not has_page_action)
+                    if not can_reuse:
+                        fresh = self._dispatch(s, "observe", {})
+                        if fresh is None or not fresh.ok or fresh.observation is None:
+                            s.terminal_reason = s.terminal_reason or "transport_error"
+                            s.detail = "fresh page observation unavailable"
+                        else:
+                            read_observation_available = True
                 changed = before_epoch != s.obs.epoch
                 s.ledger.append("model_loop_result", tool=name, kind=result.kind,
                                 state=result.state, dispatch=result.dispatch,
@@ -630,9 +694,14 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 if result.kind == "read":
                     entry["_api"] = True
                 if not s.terminal_reason:
-                    entry["content"] = text + "\n" + self._page(s, turn)
-                    entry["_observation"] = True
+                    if observation_delivered and result.kind in {"metadata", "read"}:
+                        entry["content"] = text + "\n" + self._page_reference(s)
+                    else:
+                        entry["content"] = text + "\n" + self._page(s, turn)
+                        entry["_observation"] = True
+                        observation_delivered = True
                 self._messages.append(entry)
+                self._remember_observation(s, turn, entry)
                 if s.terminal_reason:
                     return turn.get("final") or (text + "本次没有完成。"
                         if s.terminal_reason == "permission_denied" else "操作没有完成。")
