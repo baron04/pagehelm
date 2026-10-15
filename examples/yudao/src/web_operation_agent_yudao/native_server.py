@@ -51,7 +51,7 @@ from web_operation_agent.state.conversation import SQLiteConversationState
 from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.state.store import SQLiteSessionStore
 
-from .application import YudaoApplication
+from .application import YudaoApplication, YudaoIdentityPort
 from .client import YudaoClient, YudaoReadRefused
 from .conventions import REFERENCE_CONVENTIONS
 from .repository import repository_source
@@ -264,9 +264,11 @@ class YudaoHost:
         if not token or not tenant.isdigit() or not instance or len(instance) > 80:
             raise BootstrapRefused(401, "sign_in_required")
         client = YudaoClient.for_token(self.config.api_base, token, tenant)
-        app = self._application(client)
         try:
-            page = app.identity.page_identity(token)
+            # Verify the browser token before assembling optional write tools: their
+            # dictionary choices are read from yudao during application construction.
+            page = YudaoIdentityPort(self.config.api_base, client).page_identity(token)
+            app = self._application(client)
             key = (tenant, page.actor_id)
             with self._lock:
                 active = self._sessions.get(key)

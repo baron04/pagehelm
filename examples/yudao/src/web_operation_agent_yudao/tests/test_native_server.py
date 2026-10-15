@@ -255,6 +255,28 @@ class NativeHostTests(unittest.TestCase):
                 host.bootstrap("synthetic-a", "1", "tab")
         self.assertEqual(host.server.session_count, 0)
 
+    def test_expired_token_precedes_write_catalog_and_is_not_reported_as_503(self):
+        self.config = replace(self.config, native_writes=True)
+        host = self.host()
+        with patch.object(YudaoIdentityPort, "page_identity", self.real_page_identity), \
+                patch.object(YudaoClient, "_request",
+                             return_value=(401, {"code": 401})) as request:
+            with self.assertRaises(BootstrapRefused) as refused:
+                host.bootstrap("synthetic-a", "1", "tab")
+        self.assertEqual((refused.exception.status, refused.exception.code),
+                         (401, "sign_in_required"))
+        self.assertEqual([call.args[1] for call in request.call_args_list],
+                         ["system/auth/get-permission-info"])
+        self.assertEqual(host.server.session_count, 0)
+
+        # The token can expire between the identity read and the catalog read.
+        with patch.object(YudaoClient, "_request", return_value=(401, {"code": 401})):
+            with self.assertRaises(BootstrapRefused) as refused:
+                host.bootstrap("synthetic-a", "1", "tab")
+        self.assertEqual((refused.exception.status, refused.exception.code),
+                         (401, "sign_in_required"))
+        self.assertEqual(host.server.session_count, 0)
+
     def test_expired_token_during_existing_session_renewal_is_a_bootstrap_401(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
