@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import tempfile
 import threading
@@ -30,7 +31,7 @@ from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
 from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _draft_only_request, _read_only_status_question, _tabs_not_shown,
-                                                 _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
+                                                 _business_handoff_ready, _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.tests import test_native_writes as native
 from web_operation_agent_yudao.writes import native_tools
@@ -73,6 +74,45 @@ def observation(epoch: int = 1, customer: str = "Acme", **kw) -> PageObservation
                 element(10, "button", "Search", "button"), element(11, "button", "Details", "button")]
     return PageObservation(1, epoch, "https://synthetic.test/orders", "Orders", [],
                            [replace(item, epoch=epoch) for item in elements], **{"content": CONTENT, **kw})
+
+
+class BusinessHandoffTests(unittest.TestCase):
+    def test_list_button_requires_a_verified_single_row_and_unique_control(self):
+        button = element(12, "button", "删除", "button")
+        target = "目标供应商"
+        name_digest = hashlib.sha256(json.dumps([target], ensure_ascii=False,
+                                               separators=(",", ":")).encode()).hexdigest()
+        read = {"path": "/admin-api/erp/supplier/page", "query_digest": "a" * 64,
+                "query_fields": {"name": name_digest}, "revision": 1,
+                "page": 1, "page_size": 10, "total": 13, "rows": 10}
+        name_box = element(13, "textbox", "名称", "input", page_control="query",
+                           query_field="name", value=target)
+        page = replace(observation(), elements=[button, name_box], page_route="/orders",
+                       page_query={"path": read["path"], "parameters": {}},
+                       page_read=read)
+        self.assertFalse(_business_handoff_ready(page, button, f"删除{target}"))
+        page = replace(page, page_read={**read, "total": 1, "rows": 1})
+        self.assertFalse(_business_handoff_ready(page, button, "删除另一家供应商"))
+        self.assertTrue(_business_handoff_ready(page, button, f"删除{target}"))
+        self.assertFalse(_business_handoff_ready(replace(page, elements=[button]),
+                                                 button, f"删除{target}"))
+        self.assertFalse(_business_handoff_ready(page, replace(button, tag="span"),
+                                                 f"删除{target}"))
+        self.assertFalse(_business_handoff_ready(
+            replace(page, page_read={**page.page_read, "query_fields": {"name": "c" * 64}}),
+            button, f"删除{target}"))
+        duplicate = replace(button, ref="e14")
+        self.assertFalse(_business_handoff_ready(replace(page, elements=[button, name_box, duplicate]),
+                                                 button, f"删除{target}"))
+
+    def test_record_button_and_draft_submit_use_their_own_page_or_form_state(self):
+        button = element(12, "button", "审核", "button")
+        detail = replace(observation(), elements=[button], url="https://synthetic.test/orders/7",
+                         page_route="/orders/7", record_route="/orders/7")
+        self.assertTrue(_business_handoff_ready(detail, button, "审核订单"))
+        draft = replace(button, name="提交", attrs={"form_scope": "dialog:new"})
+        self.assertTrue(_business_handoff_ready(replace(observation(), elements=[draft]), draft,
+                                                "填表并标出提交按钮"))
 
 
 class PageTextTests(unittest.TestCase):

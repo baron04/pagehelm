@@ -30,6 +30,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from dataclasses import replace
 from types import SimpleNamespace
+import hashlib
 import json
 import os
 import re
@@ -63,6 +64,7 @@ _DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
 _CURRENT_REQUEST = ContextVar("yudao_slim_current_request", default="")
 _WRITE_INTENT = ContextVar("yudao_slim_write_intent", default=None)
 _MARK = re.compile(r"^\s*\*?\[(\d+)\]")
+_BUSINESS_BUTTON = re.compile(r"删除|审核|审批|确认|提交|启用|停用")
 _RUN, _HEAD, _TAIL = 60, 3, 30
 _PAGE_CHARS = 9_000
 #: What one API result may add to the conversation, and how much of earlier API results
@@ -739,10 +741,10 @@ TOOLS = [
                    "只取这些列（列名是返回行里的键）。给了 fields，分页接口从 pageNo 起最多读 5000 行；"
                    "只有确认从第 1 页读完且页数一致，才计算全量合计、最大、最小、分组和月份行数。统计、比较、找最大最小、按日期数个数时必须用。"}},
         ["path"]),
-    _tool("highlight", "把一个控件标出来交给用户自己点（例如表单的确定按钮）。不会点击它。", {
+    _tool("highlight", "把当前页面中已确认属于目标记录的业务按钮标出来，交给用户自己点（例如删除、审核、启停或表单确定）。不会点击或完成该业务动作。", {
         "index": {"type": "integer"},
         "answer": {"type": "string", "description":
-                   "标出它就全部完成时（例如表单已经填好、核对过），给用户的答复：程序标出后本轮随之结束"}},
+                   "标出后页面交接已完成时给用户的答复；业务按钮尚未点击，不能说业务动作已经完成。程序标出后本轮随之结束"}},
         ["index"]),
     _tool("finish", "结束本轮。", {
         "status": {"type": "string", "enum": ["done", "need_input", "cannot"],
@@ -806,6 +808,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 页面元素行尾的标记说明这个控件怎么用：〔下拉〕〔单选〕用 select(index, option) 或 fill_fields 按字段名选择，工具会自行展开并精确匹配，无须先 click 展开；未找到时先读工具返回的本字段选项，不能直接点击下拉选项。〔日期〕用 input 填 2026-10-20，带时间的填 2026-10-20 09:00:00；日期范围是〔日期·开始〕和〔日期·结束〕两个框，先填开始再填结束，两个都要填，不要去点日历。
    - 打开某条记录的详情：find_record 给出了这条记录的详情页时，直接 goto 那个地址；没有给出时，在列表里找到那一行再点它的名称或“详情”。这条记录没有详情页时，让它在列表里显示出来就算打开了；不要为了查看去点“编辑”，编辑表单只在用户要修改时才打开。
    - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。列候选时，每一条用来区分的信息（编号、手机、所属客户等）必须来自按这个名称筛选后的列表或接口结果，逐条对应；不要从没筛选的列表里凭位置去读。
+   - 用户要求提交、确认、删除、审核、启用或停用，而本轮没有可办理该动作的已安装写入操作时，仍要完成页面交接：先精确定位目标记录，把列表筛选到唯一行或打开确切详情，再从最新观察中找到属于它的业务按钮，用 highlight 标出交给用户；不要只说“请自行点击”就 finish(cannot)。按钮不在眼前就筛选、翻页或打开详情；同名多条先让用户选，无法确认归属或按钮不可见时才说明不能安全标出。highlight 的 answer 写“已标出…，尚未点击或完成业务动作”，不能写成已删除、已审核等。已有可办理的写入操作且用户要求直接办理时，按批准流程执行，不能用标出来代替。
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
    - “某名称的资料先填上…”“新产品先填…”这类请求如未指明已有编号或修改原值，应按新建草稿理解，直接打开新增表单；名称是要填的值，不要先把它当已存在记录查找。已有记录查询返回零条也不构成不能预填，继续打开新增表单。用户明确要求修改已有记录时才定位原记录。
@@ -898,6 +901,45 @@ def _fields(observation) -> dict[str, str]:
         value = element.attrs.get("selected_option") or element.attrs.get("value") or ""
         found.setdefault(str(label).rstrip(":：").strip(), str(value))
     return found
+
+
+def _business_handoff_ready(observation, element, request: str) -> bool:
+    """A list action must be bound to one named row in its application's latest GET.
+
+    The button's label cannot establish which row it belongs to when the list has
+    many rows. Draft submit controls use the separate form handoff verifier.
+    """
+    if not _BUSINESS_BUTTON.search(element.name):
+        return True
+    if element.tag != "button":
+        return False
+    if str(element.attrs.get("form_scope", "")).startswith("dialog"):
+        return True
+    route = urlsplit(observation.url).path
+    same_name = [candidate for candidate in observation.elements
+                 if candidate.tag == "button" and candidate.name.strip() == element.name.strip()]
+    if len(same_name) != 1 or observation.page_route != route:
+        return False
+    if observation.record_route == route:
+        return True
+    read, query = observation.page_read, observation.page_query
+    if not read or not query or read["page"] != 1 or read["total"] != 1 or read["rows"] != 1:
+        return False
+    if query["path"] != read["path"]:
+        return False
+    # The page's scalar query projection can be empty even after a list GET included
+    # the native name filter. Bind its current visible control to that GET's field
+    # digest, and to words the person supplied; one visible row alone is insufficient.
+    names = [control for control in observation.elements
+             if control.attrs.get("page_control") == "query"
+             and control.attrs.get("query_field") == "name"
+             and control.attrs.get("value", "").strip()]
+    if len(names) != 1:
+        return False
+    name = names[0].attrs["value"].strip()
+    digest = hashlib.sha256(json.dumps([name], ensure_ascii=False,
+                                    separators=(",", ":")).encode()).hexdigest()
+    return bool(name and name in request and read["query_fields"].get("name") == digest)
 
 
 _DEPTH = re.compile(r"^(\t*)\*?\[(\d+)\]")
@@ -1514,6 +1556,10 @@ class YudaoLoopProcedures:
             text = ("滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。"
                     if _shown(s.obs) == before else "已滚动。")
         elif name == "highlight":
+            if not _business_handoff_ready(s.obs, element, _CURRENT_REQUEST.get()):
+                return LoopToolResult("未标出：业务按钮须在确切记录详情页，或先把列表筛选到已核验的唯一一行。"
+                                      "请核对目标记录和按钮归属；不能在多行列表上直接交接。",
+                                      kind="page", state="refused", error_code="invalid_target")
             failed = self._act(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})
             if not failed:
                 turn["marked"] = element.name.splitlines()[0][:60] if element.name else "(控件)"
