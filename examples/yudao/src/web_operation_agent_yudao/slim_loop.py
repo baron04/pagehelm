@@ -970,7 +970,7 @@ def _fields(observation) -> dict[str, str]:
     return found
 
 
-def _business_handoff_ready(observation, element, request: str) -> bool:
+def _business_handoff_ready(observation, element, request: str, *, detail_target: bool = False) -> bool:
     """A list action must be bound to one named row in its application's latest GET.
 
     The button's label cannot establish which row it belongs to when the list has
@@ -988,7 +988,7 @@ def _business_handoff_ready(observation, element, request: str) -> bool:
     if len(same_name) != 1 or observation.page_route != route:
         return False
     if observation.record_route == route:
-        return True
+        return detail_target and observation.render_state == "ready"
     read, query = observation.page_read, observation.page_query
     if not read or not query or read["page"] != 1 or read["total"] != 1 or read["rows"] != 1:
         return False
@@ -1412,6 +1412,54 @@ class YudaoLoopProcedures:
             return "\n应用实时权限：当前账号有此客户记录本身的编辑资格；不代表可编辑其联系人。页面动作仍须单独审核，写入仍须新的批准。"
         return "\n应用实时权限：当前账号没有此客户记录本身的编辑权限；不代表其联系人不能修改。这是客户记录的权限限制，不是记录不存在。无需为编辑客户而滚动或更换入口重试。"
 
+    def _detail_handoff_target(self, s, request: str) -> bool:
+        """Bind a detail button to the actor-read record the person actually named."""
+        observation = s.obs
+        path = urlsplit(observation.url).path
+        if (observation.render_state != "ready" or observation.page_route != path
+                or observation.record_route != path):
+            return False
+        data = self.goal_port.data
+        candidates = []
+        for page in self.goal_port.index(context=s.operation).pages:
+            template = data._ui.records.get(page.key, "")
+            if not page.entity or template.count("{id}") != 1:
+                continue
+            match = re.fullmatch(re.escape(template).replace(r"\{id\}", r"([1-9][0-9]*)"), path)
+            if match:
+                candidates.append((page.entity, match[1]))
+        if len(candidates) != 1:
+            return False
+        entity, identifier = candidates[0]
+        spec = data._entities.get(entity)
+        if spec is None or not spec.has_get:
+            return False
+        from .bound_data_reads import BoundDataReads
+        bound = BoundDataReads(data, s.operation, s.page.checkpoint)
+        try:
+            record = bound._invoke(data._client.get, spec.get_path, id=identifier)
+            if (not isinstance(record, dict) or str(record.get("id")) != identifier
+                    or bound.record_address(entity, identifier) != path):
+                return False
+            display = data._display(entity, record).strip()
+            if not display:
+                return False
+            if re.search(r"(?:编号|ID)\s*[=:：#]?\s*" + re.escape(identifier) + r"(?![0-9])",
+                         request, re.I):
+                return True
+            if display.isdecimal() or display not in request:
+                return False
+            # A name alone cannot choose between same-named records. This search is
+            # complete under the actor or fails; it never accepts a truncated list.
+            named = [ref for ref in bound.find(entity, display, limit=2) if ref.name == display]
+            return len(named) == 1 and named[0].id == identifier
+        except DataRefused as exc:
+            if exc.permission_denied or exc.read_failed:
+                raise
+            return False
+        except ValueError:
+            return False
+
     def _element(self, s, index):
         """The element the model named, if the page text it was last shown listed it."""
         number = str(int(index))
@@ -1631,8 +1679,12 @@ class YudaoLoopProcedures:
             text = ("滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。"
                     if _shown(s.obs) == before else "已滚动。")
         elif name == "highlight":
-            if not _business_handoff_ready(s.obs, element, _CURRENT_REQUEST.get()):
-                return LoopToolResult("未标出：业务按钮须在确切记录详情页，或先把列表筛选到已核验的唯一一行。"
+            request = _CURRENT_REQUEST.get()
+            detail_target = (self._detail_handoff_target(s, request)
+                             if _BUSINESS_BUTTON.search(element.name)
+                             and s.obs.record_route == urlsplit(s.obs.url).path else False)
+            if not _business_handoff_ready(s.obs, element, request, detail_target=detail_target):
+                return LoopToolResult("未标出：业务按钮须在已核对用户目标的记录详情页，或先把列表筛选到已核验的唯一一行。"
                                       "请核对目标记录和按钮归属；不能在多行列表上直接交接。",
                                       kind="page", state="refused", error_code="invalid_target")
             failed = self._act(s, "highlight", {"ref": element.ref, "epoch": s.obs.epoch})

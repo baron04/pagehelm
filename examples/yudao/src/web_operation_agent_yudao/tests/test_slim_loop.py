@@ -18,6 +18,7 @@ from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, Lo
     VerificationResult, ModelLoopProfile, LoopProcedure, PageActionOutcome)
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.business.approvals import ApprovalWatch
+from web_operation_agent.business.errors import BusinessToolAuthenticationError
 from web_operation_agent.business.runtime import BusinessToolResult, BusinessToolRuntime
 from web_operation_agent.composition.business_operations import RegisteredOperations
 from web_operation_agent.goal.data import DataRefused
@@ -106,14 +107,53 @@ class BusinessHandoffTests(unittest.TestCase):
         self.assertFalse(_business_handoff_ready(replace(page, elements=[button, name_box, duplicate]),
                                                  button, f"删除{target}"))
 
-    def test_record_button_and_draft_submit_use_their_own_page_or_form_state(self):
+    def test_record_button_requires_a_separately_verified_target(self):
         button = element(12, "button", "审核", "button")
         detail = replace(observation(), elements=[button], url="https://synthetic.test/orders/7",
-                         page_route="/orders/7", record_route="/orders/7")
-        self.assertTrue(_business_handoff_ready(detail, button, "审核订单"))
+                         page_route="/orders/7", record_route="/orders/7", render_state="ready")
+        self.assertFalse(_business_handoff_ready(detail, button, "审核订单"))
+        self.assertTrue(_business_handoff_ready(detail, button, "审核编号7的订单",
+                                                detail_target=True))
+        self.assertFalse(_business_handoff_ready(replace(detail, render_state="pending"), button,
+                                                 "审核编号7的订单", detail_target=True))
         draft = replace(button, name="提交", attrs={"form_scope": "dialog:new"})
         self.assertTrue(_business_handoff_ready(replace(observation(), elements=[draft]), draft,
                                                 "填表并标出提交按钮"))
+
+    def test_detail_button_binds_actor_read_name_and_rejects_ambiguous_names(self):
+        path = "/orders/detail/7"
+        page = replace(observation(), url="https://synthetic.test" + path,
+                       page_route=path, record_route=path, render_state="ready")
+        data = NS(_ui=NS(records={"/orders": "/orders/detail/{id}"}),
+                  _entities={"orders": NS(has_get=True, get_path="orders/get")},
+                  _client=NS(get=lambda *a, **k: None),
+                  _display=lambda _entity, record: record["name"])
+        port = NS(data=data, index=lambda **kw: NS(pages=[NS(key="/orders", entity="orders")]))
+        procedure = YudaoLoopProcedures(NS(), port, "https://synthetic.test")
+        state = NS(obs=page, operation=object(), page=NS(checkpoint=lambda: None))
+        detail = {"id": 7, "name": "甲订单"}
+        matches = [NS(id="7", name="甲订单")]
+        bound = NS(_invoke=lambda *a, **kw: detail,
+                   record_address=lambda *a: path,
+                   find=lambda *a, **kw: tuple(matches))
+        with patch("web_operation_agent_yudao.bound_data_reads.BoundDataReads", return_value=bound):
+            self.assertTrue(procedure._detail_handoff_target(state, "审核甲订单"))
+            self.assertFalse(procedure._detail_handoff_target(state, "审核乙订单"))
+            matches.append(NS(id="8", name="甲订单"))
+            self.assertFalse(procedure._detail_handoff_target(state, "审核甲订单"))
+            self.assertTrue(procedure._detail_handoff_target(state, "审核甲订单，编号7"))
+            self.assertFalse(procedure._detail_handoff_target(state, "审核甲订单，编号70"))
+            detail["id"] = 8
+            self.assertFalse(procedure._detail_handoff_target(state, "审核甲订单，编号7"))
+            detail["id"] = 7
+            state.obs = replace(page, record_route="/orders/detail/8")
+            self.assertFalse(procedure._detail_handoff_target(state, "审核甲订单，编号7"))
+            state.obs = page
+            def expired(*_args, **_kwargs):
+                raise BusinessToolAuthenticationError("session expired")
+            bound._invoke = expired
+            with self.assertRaises(BusinessToolAuthenticationError):
+                procedure._detail_handoff_target(state, "审核甲订单，编号7")
 
 
 class PageTextTests(unittest.TestCase):
