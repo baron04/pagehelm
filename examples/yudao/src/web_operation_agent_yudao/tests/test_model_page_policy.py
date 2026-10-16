@@ -81,7 +81,7 @@ class ReviewTests(unittest.TestCase):
             changed = Path(folder) / "fence.json"
             changed.write_text((native / "fence.json").read_text() + "\n")
             config = NS(native_read_policy=changed, native_page_policy=native / "pages.json",
-                        native_live_forms=True, source_release="v2026.09")
+                        source_release="v2026.09")
             with self.assertRaisesRegex(ValueError, "different method fence"):
                 validate_native_deployment(config)
             config.native_read_policy = native / "fence.json"

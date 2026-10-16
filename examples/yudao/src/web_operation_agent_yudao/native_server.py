@@ -114,29 +114,14 @@ class YudaoHostConfig:
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
     native_page_policy: Path | None = None
-    #: Retained solely for explicit migration errors, never used to construct a route.
-    native_form_policy: Path | None = None
-    native_create_policies: tuple[Path, ...] = ()
-    native_create_class: Path | None = None
-    native_filter_policies: tuple[Path, ...] = ()
     native_guard_port: int = 48093
-    native_navigation: bool = False
     #: Only reviewed server-side typed mutations; browser submission stays disabled.
     native_writes: bool = False
-    #: Sole native decision route. Retained to reject old configurations explicitly.
-    executor_mode: str = "slim"
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
     #: what that text changes; the operations and every check on a write are the same.
     slim_skill_knowledge: bool = True
-    #: Warm actor menu/API descriptions and outline at session start; no line-table prefetch.
+    #: Internal cold-start test switch; production CLI always warms actor metadata.
     warm_index: bool = True
-    #: Removed switches retained solely to reject existing deployment configurations.
-    native_action_effect_review: str = ""
-    auto_read_catalog: bool = False
-    #: The application's own read-only window is mandatory.
-    native_live_forms: bool = True
-    #: Removed goal-route budget; non-default values get a migration error.
-    page_reach_steps: int = 8
 
     def __post_init__(self):
         if not isinstance(self.native_writes, bool):
@@ -145,20 +130,6 @@ class YudaoHostConfig:
             raise ValueError("slim_skill_knowledge is on or off")
         if not isinstance(self.warm_index, bool):
             raise ValueError("warm_index is on or off")
-        if (not isinstance(self.native_action_effect_review, str)
-                or len(self.native_action_effect_review) > 200
-                or self.native_action_effect_review and not self.native_action_effect_review.strip()):
-            raise ValueError("native action effects need a bounded deployment review")
-        if self.executor_mode != "slim":
-            raise ValueError("the native host has one executor: slim; goal/page-agent configurations must migrate")
-        if (self.native_form_policy is not None or self.native_create_policies
-                or self.native_create_class is not None or self.native_filter_policies
-                or self.native_action_effect_review or self.native_navigation or self.auto_read_catalog):
-            raise ValueError("legacy native policies and navigation/catalog switches are removed; use --native-page-policy")
-        if not isinstance(self.native_live_forms, bool):
-            raise ValueError("native live forms must be enabled")
-        if type(self.page_reach_steps) is not int or self.page_reach_steps != 8:
-            raise ValueError("page_reach_steps belongs to the removed goal route")
 
 
 @dataclass
@@ -505,23 +476,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-page-policy", type=Path,
                     help="release-reviewed model page handlers; required for slim")
-    ap.add_argument("--native-form-policy", type=Path, help=argparse.SUPPRESS)
-    ap.add_argument("--native-create-policy", type=Path, action="append", default=[], help=argparse.SUPPRESS)
-    ap.add_argument("--native-create-class", type=Path,
-                    help=argparse.SUPPRESS)
-    ap.add_argument("--native-filter-policy", type=Path, action="append", default=[], help=argparse.SUPPRESS)
     ap.add_argument("--native-guard-port", type=int, default=48093)
-    ap.add_argument("--native-navigation", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--native-action-effect-review", default="", help=argparse.SUPPRESS)
-    ap.add_argument("--auto-read-catalog", action="store_true",
-                    help=argparse.SUPPRESS)
-    ap.add_argument("--native-live-forms", action=argparse.BooleanOptionalAction, default=True,
-                    help="under a method-fence read policy: fill the form a page shows and take "
-                         "bounded page steps, inside the application's own read-only window")
-    ap.add_argument("--executor", choices=("slim",), default=YudaoHostConfig.executor_mode,
-                    help="the native host has one route; goal/page-agent are removed")
-    ap.add_argument("--warm-index", action=argparse.BooleanOptionalAction, default=True,
-                    help="warm actor menu/API descriptions and outline at session start; on by default")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")
@@ -542,14 +497,7 @@ def main(argv=None) -> int:
             source_release=a.source_release, source_commits=commits, gateway_port=a.gateway_port,
             bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
             native_read_policy=a.native_read_policy, native_page_policy=a.native_page_policy, native_guard_port=a.native_guard_port,
-            native_navigation=a.native_navigation,
-            auto_read_catalog=a.auto_read_catalog,
-            native_form_policy=a.native_form_policy, native_create_policies=tuple(a.native_create_policy),
-            native_create_class=a.native_create_class,
-            native_filter_policies=tuple(a.native_filter_policy),
-            executor_mode=a.executor, native_action_effect_review=a.native_action_effect_review,
-            native_writes=a.native_writes, warm_index=a.warm_index,
-            native_live_forms=a.native_live_forms,
+            native_writes=a.native_writes,
             max_sessions=a.max_sessions,
             daily_allowance_cny=a.daily_allowance_cny)
         from .deployment_validation import validate_native_deployment

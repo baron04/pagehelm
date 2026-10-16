@@ -31,8 +31,6 @@ class ValidatedNativeDeployment:
 def validate_native_deployment(config):
     if config.native_read_policy is None:
         raise ValueError("the native host requires --native-read-policy in v2 method-fence mode")
-    if not config.native_live_forms:
-        raise ValueError("the native host requires live forms and the application's own read-only window")
     if config.native_page_policy is None:
         raise ValueError("the native host requires --native-page-policy with release-reviewed page handlers")
     policy = _document(config.native_read_policy, "native read")

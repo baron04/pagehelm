@@ -210,18 +210,18 @@ receives every typed tool result and fresh observation before deciding again, an
 uses fixed Runtime actions. Yudao owns the framework-specific procedures.
 
 Startup requires `--native-read-policy` in v2 `method-fence` mode, matching
-`--source-release`, enabled live forms, `--native-page-policy` and the application's
+`--source-release`, `--native-page-policy` and the application's
 own read-only window. The page policy separately lists exact route/template scopes,
 reviewed handler families and exact form-entry/line-add controls. It does not grant
-submit or other persistent actions. Missing policies, incompatible releases, or legacy
-form/create/filter policies with slim fail before model configuration or proxy startup.
-There is no automatic fallback. Old `goal`/`page-agent` configurations and legacy
-form/create/filter/action-review switches are rejected with migration diagnostics.
+submit or other persistent actions. Live forms are always enabled. Missing policies or
+incompatible releases fail before model configuration or proxy startup. There is no
+automatic fallback. Old `goal`/`page-agent` and legacy form/create/filter/action-review
+options are no longer accepted by this host's CLI.
 Ordinary API and page operation do not require a source checkout; policies remain
 release-reviewed deployment artifacts.
 
 The cloud example supplies both policy files. Actor metadata warms by default;
-`--no-warm-index` disables it for an explicitly cold session.
+cold-start tests may disable it through the Python test configuration.
 Its page review is [release-bound](cloud/native-policy/v2026.09-page-handlers.md);
 another release needs its own review. A minimal startup selects that release and both
 `--native-read-policy <fence.json>` and `--native-page-policy <pages.json>`. `warm_index`
@@ -334,11 +334,11 @@ is after the second. A `goto` reports the page opened only when it arrived; one 
 the browser at another path, a page that reports an error or a failed read, and a page
 whose rendering was not reported in time are each said as such, with the page.
 
-Slim's first menu/API search or name lookup may need actor metadata. The default `--warm-index`
+Slim's first menu/API search or name lookup may need actor metadata. The host
 starts menu/API descriptions and the outline in the background when the session opens;
 it does not prefetch line-table details. Workload depends on installed modules.
-Warming is not evidence of cold-start latency; use `--no-warm-index` for cold measurement. `main()` also
-warms process-level API documentation in the background independently of this flag.
+Warming is not evidence of cold-start latency; use the Python test configuration for cold measurement. `main()` also
+warms process-level API documentation in the background independently of session warmup.
 
 Ordinary slim completion has `success_claim="not_claimed"`. Application readback verifies
 the individual action or write, without certifying the complete model answer or request.
@@ -416,15 +416,6 @@ ingress on this origin. A nonce probe checks both public routes before the host 
 native tabs; a failed probe aborts startup. The ordinary deployment is unchanged unless
 the option and ingress are installed together.
 
-`--native-navigation` separately enables default-menu clicks under this same fence.
-It requires `--native-read-policy`. The app-owned controller extracts mounted menu
-targets, while the server checks branches and destinations against the acting user's
-page index. It does not require source retrieval or per-page menu allowlists. Overrides
-such as custom `menuSelect`, root-only menus and supplied menu trees fail closed.
-Visible approval and fresh element refs are still required. This option does not
-enable arbitrary buttons, search fields, record-row clicks or submission, and does not
-switch the default `goal` executor to the `page-agent` pilot.
-
 During a window, only reviewed GETs reach the upstream. Begin waits for earlier admitted
 requests; end acknowledges only when no actor window remains. Lost mutation responses
 persist as uncertain admission in `native-guard.sqlite3`; acknowledged windows are also
@@ -492,23 +483,3 @@ PYTHONPATH=src:examples/yudao/src python -m web_operation_agent_yudao.coverage \
 ## Offline qualification
 
 `scripts/qualify.sh` runs this adapter's tests, the native host lifecycle tests and the Yudao evaluation apparatus without an application connection or model call. The wheel gate builds the separate adapter, checks its conventions and modules, and composes it outside the checkout. CI installs this distribution alongside core and Odoo.
-
-A deployment may install a reviewed customer-bound contact creation entry with
-`--native-create-policy <contact-review.json>` and reference `contact-create`. Pin
-`ui/src/views/crm/contact/components/ContactList.vue`, `ContactForm.vue` in the
-same contact directory, the customer detail index, and the shared Dialog source. Review the real opener,
-create permissions and transient persistence before generating hashes. This admits
-an already-open contact creation dialog on a readable customer detail page, with
-its parent customer disabled and owner enabled; it never submits or changes the parent.
-
-`--native-filter-policy <query-review.json>` explicitly enables native Goal page
-filtering under the existing verified GET guard. The JSON has `schema_version: 1`,
-`release`, `entity`, `route`, `component`, `endpoint` (without `/admin-api/`) and
-`hashes` for the reviewed query component and its relevant API/helper dependencies.
-All bytes must match the allowlisted release and the endpoint must already be in
-`native-read-policy`. Review input handlers and query/persistence semantics; hashes
-alone grant no authority. The initial compiler accepts reviewed date ranges and
-single-choice dictionary/customer selectors, and verifies the successful applied
-query through application-owned observations. Calendar entry selects exact enabled days in its owned native popup, preserving the source-defined default endpoint times; dates outside its displayed months are refused. Unsupported fields or changed
-actors, form instances, choices, source bytes or query results prevent completion.
-No production review is supplied; browser/API writes and form submission remain closed.

@@ -52,10 +52,10 @@ class NativeNavigationTests(unittest.TestCase):
             replace(item,attrs={**item.attrs,'href':'/other'})):
             self.assertTrue(policy.decide(replace(page,elements=[changed]),changed))
 
-    def test_default_configuration_requires_a_reviewed_write_fence(self):
+    def test_native_navigation_is_not_a_host_option(self):
         from web_operation_agent_yudao.native_server import YudaoHostConfig
         from pathlib import Path
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             YudaoHostConfig('http://fixture.test','http://fixture.test',Path('/tmp/unused'),native_navigation=True)
 
 

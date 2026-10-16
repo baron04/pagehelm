@@ -1,13 +1,7 @@
-"""Deployment-level read catalog generated from the compiled UI source.
+"""Offline read-catalog generator retained for experiments.
 
-One list page's compiled endpoint becomes one reviewed read path. This replaces the
-hand-written per-endpoint whitelist: the deployment reviews the *generator* and the
-release binding once, and every standard list page's read is admitted from the same
-compiled index the rest of the integration already trusts (UiSource). The guard keeps
-its exact-path semantics and actor fence; only the provenance of the path set changes.
-
-Not enabled by any default: the host opts in with ``--auto-read-catalog`` and the
-generated set is audited against the release hash like every other reviewed artifact.
+The native host does not consume this catalog or accept an auto-catalog switch.
+Deployments supply a reviewed method fence explicitly.
 """
 from __future__ import annotations
 

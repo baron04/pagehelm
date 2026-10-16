@@ -2356,7 +2356,7 @@ class HostConfigTests(unittest.TestCase):
         from web_operation_agent_yudao.deployment_validation import validate_native_deployment
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(ValueError):
             validate_native_deployment(YudaoHostConfig(api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
-                            state_dir=Path(tmp), executor_mode="slim"))
+                            state_dir=Path(tmp)))
 
 
 if __name__ == "__main__":
