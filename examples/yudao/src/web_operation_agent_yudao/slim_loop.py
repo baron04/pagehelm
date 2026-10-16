@@ -70,7 +70,7 @@ _PAGE_CHARS = 9_000
 #: the run's input-token ceiling before it can answer.
 _API_CHARS, _API_KEPT = 5_000, 12_000
 #: How many rows a read of chosen columns follows the pages for.
-_ALL_ROWS = 1_000
+_ALL_ROWS = 5_000
 #: The most kinds a chosen column's rows are counted and summed by.
 _GROUPS = 12
 _TIME_KEY = re.compile(r"(?:Time|Date)$", re.I)
@@ -361,15 +361,44 @@ class ActorKnowledge:
         if not (isinstance(data, dict) and isinstance(data.get("list"), list)):
             return data, None, None, True
         rows, total, page = list(data["list"]), data.get("total"), params.get("pageNo")
-        if follow and isinstance(total, int) and isinstance(page, int):
-            while rows and len(rows) < min(total, _ALL_ROWS):
+        if isinstance(total, bool) or not isinstance(total, int) or total < 0:
+            return data, rows, total, False
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            return data, rows, total, False
+        if len(rows) > total:
+            return data, rows, total, False
+        # A count alone does not prove that later pages contain distinct records.
+        # Without row IDs, a repeated page could reach `total` while omitting rows.
+        def ids(batch):
+            values = [row.get("id") for row in batch if isinstance(row, dict)]
+            if (len(values) != len(batch) or any(isinstance(v, bool) or not isinstance(v, (int, str))
+                                                 or v == "" for v in values)):
+                return None
+            return tuple(str(v) for v in values)
+
+        first_page = page
+        seen = ids(rows)
+        if seen is not None and len(set(seen)) != len(seen):
+            return data, rows, total, False
+        if follow and rows and len(rows) < min(total, _ALL_ROWS):
+            if seen is None:
+                return data, rows, total, False
+            visited = set(seen)
+            while len(rows) < min(total, _ALL_ROWS):
                 page += 1
                 more = self._read(path, **{**params, "pageNo": page})
-                chunk = more.get("list") if isinstance(more, dict) else None
-                if not chunk:
+                if (not isinstance(more, dict) or type(more.get("total")) is not int
+                        or more["total"] != total
+                        or not isinstance(more.get("list"), list)):
+                    break
+                chunk = more["list"]
+                next_ids = ids(chunk)
+                if (not chunk or next_ids is None or len(set(next_ids)) != len(next_ids)
+                        or visited.intersection(next_ids) or len(rows) + len(chunk) > total):
                     break
                 rows += chunk
-        return data, rows, total, not isinstance(total, int) or len(rows) >= total
+                visited.update(next_ids)
+        return data, rows, total, first_page == 1 and len(rows) == total
 
     def call_api(self, path: str, params: dict, fields=()) -> str:
         self._load()
@@ -436,7 +465,9 @@ class ActorKnowledge:
                 if isinstance(data, list):
                     out.append(f"返回 {len(rows)} 行")
                 elif rows is not None:
-                    out.append(f"total={total}（符合条件的总数），本次读了 {len(rows)} 行"
+                    count = (f"total={total}（符合条件的总数）" if type(total) is int and total >= 0
+                             else "total=未知")
+                    out.append(f"{count}，本次读了 {len(rows)} 行"
                                + ("（已读完所有页）" if whole and fields else ""))
         except DataRefused as exc:
             if exc.permission_denied or exc.read_failed:
@@ -488,15 +519,17 @@ class ActorKnowledge:
             data_lines.add(len(out))
             out.append(json.dumps(shown, ensure_ascii=False)[:3500])
             return self._told(out, data_lines)
+        if fields and not whole:
+            out.append("这次没有读完符合条件的全部记录；不能据已读行给出全量合计、最大最小、分组、完整名单或不存在结论。请缩小筛选范围，或说明此项无法完整核实。")
         # A list usually carries several instants (made, ordered, received). Which one a
         # question means is the model's to read from the words, so every one is counted
         # and named, not only the one it happened to ask for.
         clocks = [k for k in dict.fromkeys((*fields, *(keys if fields else ()))) if _TIME_KEY.search(k)][:5]
-        if len(clocks) > 1:
+        if whole and len(clocks) > 1:
             named = [(k, (self._deref(props.get(k) or {}).get("description") or "")[:20]) for k in clocks]
             out.append("这些行有几个时间列: " + "; ".join(f"{k}={d}" if d else k for k, d in named)
                        + "。用户说的是哪个时间（创建、下单、入库…）就用哪一列的行数。")
-        for key in clocks:
+        for key in clocks if whole else ():
             # Counting the rows of a month is the program's work, not the model's.
             months: dict[str, int] = {}
             for row in rows:
@@ -507,7 +540,7 @@ class ActorKnowledge:
                 out.append(f"{key} 按月的行数: " + "，".join(
                     f"{month} {count} 行" for month, count in sorted(months.items(), reverse=True)[:12]))
         quantities = []
-        for key in fields:
+        for key in fields if whole else ():
             values = [row.get(key) for row in rows if isinstance(row, dict)]
             if _TIME_KEY.search(key):
                 continue
@@ -528,7 +561,7 @@ class ActorKnowledge:
         # Rows of a few kinds (a type, a status) counted and summed per kind: the program's
         # work, not one more read per kind.
         grouped = 0
-        for key in fields:
+        for key in fields if whole else ():
             if key in quantities or _TIME_KEY.search(key) or grouped >= 2:
                 continue
             groups: dict[str, list] = {}
@@ -557,9 +590,9 @@ class ActorKnowledge:
             out.append(line)
             used, listed = used + len(line), listed + 1
         if listed < len(rows):
-            out.append(f"……只列出了前 {listed} 行，其余 {len(rows) - listed} 行未列出。"
+            out.append(f"……本次已读的行只列出了前 {listed} 行，其余 {len(rows) - listed} 行未列出。"
                        + ("加筛选参数缩小范围。" if fields else
-                          "要统计、比较或找最大最小：用 fields 只取要用的列，会读完所有页并算好合计、最大、最小。"))
+                          "要统计、比较或找最大最小：用 fields 只取要用的列；只有结果明确显示已读完所有页，统计才代表全量。"))
         return self._told(out, data_lines)
 
     def _validate_params(self, path, params):
@@ -698,8 +731,8 @@ TOOLS = [
         "path": {"type": "string"},
         "params": {"type": "string", "maxLength": 8000, "description": "查询参数的 JSON 对象字符串，例如 {\"pageNo\":1,\"pageSize\":20}"},
         "fields": {"type": "array", "items": {"type": "string"}, "description":
-                   "只取这些列（列名是返回行里的键）。给了 fields，分页接口会从 pageNo 起读完所有页，"
-                   "并算好数值列的合计、最大、最小，类型、状态这类列按取值分组算行数和合计。统计、比较、找最大最小、按日期数个数时必须用。"}},
+                   "只取这些列（列名是返回行里的键）。给了 fields，分页接口从 pageNo 起最多读 5000 行；"
+                   "只有确认从第 1 页读完且页数一致，才计算全量合计、最大、最小、分组和月份行数。统计、比较、找最大最小、按日期数个数时必须用。"}},
         ["path"]),
     _tool("highlight", "把一个控件标出来交给用户自己点（例如表单的确定按钮）。不会点击它。", {
         "index": {"type": "integer"},
@@ -751,7 +784,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 
 你能做三类事，一句话里可能同时包含几类，每一类都要做完：
 1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
-   - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序会读完所有页，算好数值列的合计、最大、最小，日期列每个月的行数，以及类型、状态这类列每种取值的行数和合计（带上代码的名称），直接用这些数，不要自己一页页翻、一行行加，也不要按每种取值再读一次。
+   - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序最多跟读 5000 行；只有结果写明已读完所有页时，给出的数值合计、极值、按月行数和分组合计才代表全量。未读完时缩小筛选范围，仍不能读全就说明这项无法完整核实，不要把已读行当全集。
    - “超过 / 不少于 / 低于”等比较条件，只有接口明确声明相应比较参数时才传给接口；等值金额参数不能代替比较条件。接口没有比较参数时，用 fields 读完有关列，按每行的值判断。筛选读到 0 行而较宽查询读到记录时，先核对参数和已读记录，不要反复换一组猜测参数。
    - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。

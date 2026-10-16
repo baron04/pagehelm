@@ -587,6 +587,81 @@ class KnowledgeTests(unittest.TestCase):
         self.assertLess(len(long), 10_600)
         self.assertRegex(long, r"只列出了前 \d+ 行，其余 \d+ 行未列出")
 
+    def test_more_than_five_thousand_rows_never_gets_a_partial_aggregate(self):
+        class LargeClient(Client):
+            def get(self, path, **params):
+                if path != "deals/page":
+                    return super().get(path, **params)
+                self.calls.append((path, params))
+                page, size = params["pageNo"], params["pageSize"]
+                return {"total": 5001, "list": [
+                    {"id": n + 1, "totalPrice": 999999 if n == 5000 else 1}
+                    for n in range((page - 1) * size, min(page * size, 5001))]}
+
+        client = LargeClient()
+        text = ActorKnowledge(client, lambda: DOCS).call_api(
+            "deals/page", {"pageNo": 1, "pageSize": 100}, ["totalPrice"])
+        self.assertIn("total=5001（符合条件的总数），本次读了 5000 行", text)
+        self.assertIn("没有读完符合条件的全部记录", text)
+        self.assertNotIn("totalPrice（5000 行）", text)
+        self.assertNotIn("最大 999999", text)
+        self.assertEqual([params["pageNo"] for path, params in client.calls
+                          if path == "deals/page"], list(range(1, 51)))
+
+    def test_one_thousand_one_rows_gets_a_complete_aggregate(self):
+        class LargeClient(Client):
+            def get(self, path, **params):
+                if path != "deals/page":
+                    return super().get(path, **params)
+                page, size = params["pageNo"], params["pageSize"]
+                return {"total": 1001, "list": [
+                    {"id": n + 1, "totalPrice": 10000 if n == 1000 else 1}
+                    for n in range((page - 1) * size, min(page * size, 1001))]}
+
+        text = ActorKnowledge(LargeClient(), lambda: DOCS).call_api(
+            "deals/page", {"pageNo": 1, "pageSize": 100}, ["totalPrice"])
+        self.assertIn("total=1001（符合条件的总数），本次读了 1001 行（已读完所有页）", text)
+        self.assertIn("totalPrice（1001 行）: 合计 11000，最大 10000", text)
+
+    def test_paged_aggregate_requires_a_count_and_consistent_distinct_pages(self):
+        class PagedClient(Client):
+            def __init__(self, mode):
+                super().__init__()
+                self.mode = mode
+
+            def get(self, path, **params):
+                if path != "deals/page":
+                    return super().get(path, **params)
+                self.calls.append((path, params))
+                page = params["pageNo"]
+                if page == 1:
+                    data = {"total": 4, "list": [{"id": 1, "totalPrice": 1},
+                                                 {"id": 2, "totalPrice": 2}]}
+                    if self.mode == "missing_total":
+                        del data["total"]
+                    return data
+                return {"total": (5 if self.mode == "changed_total" else 4.0
+                                  if self.mode == "invalid_total" else 4),
+                        "list": ([{"id": 1, "totalPrice": 1}, {"id": 2, "totalPrice": 2}]
+                                 if self.mode == "duplicate" else
+                                 [{"id": 3, "totalPrice": 3}, {"id": 4, "totalPrice": 4}])}
+
+        for mode in ("missing_total", "changed_total", "invalid_total", "duplicate", "complete"):
+            with self.subTest(mode=mode):
+                client = PagedClient(mode)
+                text = ActorKnowledge(client, lambda: DOCS).call_api(
+                    "deals/page", {"pageNo": 1, "pageSize": 2}, ["totalPrice"])
+                if mode == "complete":
+                    self.assertIn("已读完所有页", text)
+                    self.assertIn("totalPrice（4 行）: 合计 10", text)
+                else:
+                    self.assertIn("没有读完符合条件的全部记录", text)
+                    self.assertNotIn("totalPrice（", text)
+                    self.assertNotIn("已读完所有页", text)
+                if mode == "missing_total":
+                    self.assertIn("total=未知", text)
+                    self.assertEqual(len([c for c in client.calls if c[0] == "deals/page"]), 1)
+
     def test_a_get_that_writes_is_never_called(self):
         text = self.know.call_api("/admin-api/wallet/get", {})
         self.assertIn("不允许调用", text)
