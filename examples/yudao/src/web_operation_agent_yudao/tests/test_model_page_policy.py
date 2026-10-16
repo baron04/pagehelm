@@ -39,6 +39,8 @@ class ReviewTests(unittest.TestCase):
             self.assertTrue(review.permits("form_entry", route, "详情"))
         self.assertEqual(len(review.menu_routes), 506)
         self.assertEqual(review.labels_on("/erp/sale/order")["totalPrice"], "含税金额")
+        self.assertTrue(review.reviewed_control("lines", "/erp/sale/order", "+ 添加销售产品"))
+        self.assertFalse(review.reviewed_control("lines", "/erp/sale/order", "保存"))
         self.assertTrue(review.permits("query", "/system/user"))
         self.assertFalse(review.permits("query", "/not-in-actor-menu"))
         self.assertTrue(_unsafe_button(ElementRef("e1", "button", "批量删除", "button", 1)))
@@ -276,6 +278,35 @@ class QueryTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ActionAdmissionRefused):
                         admission.verify(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
+
+    def test_exact_reviewed_line_button_can_add_one_transient_row(self):
+        document = review_document()
+        next(item for item in document["handlers"] if item["kind"] == "lines")["controls"] = ["+ 添加销售产品"]
+        review = NativePageReview.load(document, "synthetic-v1")
+        forms = NS(_evidence=NS(mark=lambda: 0, since=lambda mark: ()))
+        admission = DraftStepAdmission(NativeDraftSteps(self.policy.data, forms, review), "yudao")
+        attrs = {"form_scope": "dialog:editor", "form_instance": "live", "form_lifetime": "dialog-1"}
+        button = ElementRef("e1", "button", "+ 添加销售产品", "button", 1, attrs)
+        first = ElementRef("e2", "textbox", "产品", "input", 1,
+                           {**attrs, "title": "明细第1行·产品名称"})
+        before = self.page(path="/crm/customer", elements=(button, first))
+        intent, permit = admission.prepare("click", {"ref": "e1"}, before,
+                                           context=self.context, checkpoint=lambda: None)
+        self.assertEqual(permit.step, "add_line")
+        admission.consume(intent, permit, before, context=self.context, checkpoint=lambda: None)
+        second = ElementRef("e3", "textbox", "产品", "input", 2,
+                            {**attrs, "title": "明细第2行·产品名称"})
+        after = replace(before, epoch=2, elements=[replace(button, epoch=2),
+                                                    replace(first, epoch=2), second])
+        receipt = ActionReceipt(1, "draft", "click", {"ref": "e1", "epoch": 1}, True,
+                                observation=after, url_before=before.url, url_after=after.url,
+                                write_guard_held=True)
+        admission.verify(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
+        for name in ("保存", "删除", "未经审核的按钮"):
+            with self.subTest(name=name), self.assertRaises(ActionAdmissionRefused):
+                unreviewed = replace(button, name=name)
+                admission.prepare("click", {"ref": "e1"}, replace(before, elements=[unreviewed, first]),
+                                  context=self.context, checkpoint=lambda: None)
 
     def test_no_effect_choice_requires_unchanged_entire_bound_form_and_write_evidence(self):
         attrs = {"form_scope":"dialog:editor", "form_instance":"live", "title":"明细第1行·产品名称",

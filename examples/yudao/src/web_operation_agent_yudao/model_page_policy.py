@@ -150,6 +150,12 @@ class NativePageReview:
                    and (control is None or control in controls)
                    for family, route, _, _, controls in self.scopes)
 
+    def reviewed_control(self, kind, path, control):
+        """An exact control named by the application review, not a generated route grant."""
+        return (bool(control) and self.permits(kind, path, control)
+                and any(family == kind and _matches_route(route, path) and control in controls
+                        for family, route, _, _, controls in self.scopes))
+
     @property
     def digest(self):
         return hashlib.sha256(json.dumps([self.release, self.reference, self.scopes,
@@ -484,7 +490,10 @@ class NativeDraftSteps:
         elif scope.startswith("dialog"):
             if not instance:
                 raise ActionAdmissionRefused("invalid_target")
-            if _line_add_button(element) and self.review.permits("lines", route, element.name.strip()):
+            if (element.tag == "button" and not _unsafe_button(element)
+                    and self.review.permits("lines", route, element.name.strip())
+                    and (_line_add_button(element) or self.review.reviewed_control(
+                        "lines", route, element.name.strip()))):
                 step = "add_line"
                 if not prepared["lifetime"]:
                     raise ActionAdmissionRefused("invalid_target")
