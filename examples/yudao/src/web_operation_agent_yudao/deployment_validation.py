@@ -8,6 +8,7 @@ import hashlib
 import json
 
 from .model_page_policy import NativePageReview
+from .money_review import VerifiedMoneyReview
 from .page_guard import NativePageGuard
 
 
@@ -23,6 +24,7 @@ class ValidatedNativeDeployment:
     policy_json: str | None
     live_forms: bool
     page_review: NativePageReview | None
+    money_review: VerifiedMoneyReview | None = None
 
     @property
     def policy(self): return json.loads(self.policy_json) if self.policy_json else None
@@ -45,4 +47,13 @@ def validate_native_deployment(config):
     if (page_review.fence_digest and hashlib.sha256(config.native_read_policy.read_bytes()).hexdigest()
             != page_review.fence_digest):
         raise ValueError("native page catalog was generated for a different method fence")
-    return ValidatedNativeDeployment(json.dumps(policy), True, page_review)
+    money_review = None
+    money_path = getattr(config, "native_money_policy", None)
+    if money_path is not None:
+        if config.ui_source is None:
+            raise ValueError("verified money policy requires a deployment UI source")
+        from .ui_source import UiSource
+        ui = UiSource.read(config.ui_source)
+        money_review = VerifiedMoneyReview.load(money_path, ui_source=config.ui_source,
+                                                release=config.source_release, ui=ui)
+    return ValidatedNativeDeployment(json.dumps(policy), True, page_review, money_review)

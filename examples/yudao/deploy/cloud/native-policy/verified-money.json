@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "release": "v2026.09",
+  "review": "P15 isolated same-actor nonzero API and page matches; see local verification report",
+  "source_functions": {
+    "src/utils/index.ts": "1ad3646317483155c32feab45d7f4d6a92fdd47e7e0ce0dd48f1d0cd528dece3",
+    "src/utils/formatter.ts": "463fdebf43306e6960df55006470eb15ee557ad086d6f4a38f44977083281ded"
+  },
+  "fields": [
+    {
+      "route": "/crm/product",
+      "endpoint": "/crm/product/page",
+      "field": "price",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "crm/product/index",
+      "component_sha256": "7292cc01ced45cbd6e9fa05e48ee109371c7d875b1111b3a084b78535ae052c7",
+      "nonzero_samples": 1
+    },
+    {
+      "route": "/erp/product/product",
+      "endpoint": "/erp/product/page",
+      "field": "minPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/product/product/index",
+      "component_sha256": "25349b34f49876b462a531b55d5a18feeed08cea4d5b395cc2284089e918ce4c",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/product/product",
+      "endpoint": "/erp/product/page",
+      "field": "purchasePrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/product/product/index",
+      "component_sha256": "25349b34f49876b462a531b55d5a18feeed08cea4d5b395cc2284089e918ce4c",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/product/product",
+      "endpoint": "/erp/product/page",
+      "field": "salePrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/product/product/index",
+      "component_sha256": "25349b34f49876b462a531b55d5a18feeed08cea4d5b395cc2284089e918ce4c",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/purchase/in",
+      "endpoint": "/erp/purchase-in/page",
+      "field": "totalPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/purchase/in/index",
+      "component_sha256": "35b73eba356f8754180b99b2718658d568a6c1649074c9323abbb553dff276c3",
+      "nonzero_samples": 8
+    },
+    {
+      "route": "/erp/purchase/order",
+      "endpoint": "/erp/purchase-order/page",
+      "field": "totalPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/purchase/order/index",
+      "component_sha256": "a182d20612cc031d70b8987b69bd74386f10e276c547ea236a9fdffcee37a432",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/purchase/order",
+      "endpoint": "/erp/purchase-order/page",
+      "field": "totalProductPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/purchase/order/index",
+      "component_sha256": "a182d20612cc031d70b8987b69bd74386f10e276c547ea236a9fdffcee37a432",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/sale/order",
+      "endpoint": "/erp/sale-order/page",
+      "field": "totalPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/sale/order/index",
+      "component_sha256": "012ce263cabdc92f0928429bb3a6b78655c7075c35f89ca7e81428c907b46ffb",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/sale/order",
+      "endpoint": "/erp/sale-order/page",
+      "field": "totalProductPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/sale/order/index",
+      "component_sha256": "012ce263cabdc92f0928429bb3a6b78655c7075c35f89ca7e81428c907b46ffb",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/sale/out",
+      "endpoint": "/erp/sale-out/page",
+      "field": "totalPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/sale/out/index",
+      "component_sha256": "3da4ffee4b52ef13f39eb7e522210df390b2bb52d6d17d5b3b91255c255f1ae5",
+      "nonzero_samples": 6
+    }
+  ]
+}

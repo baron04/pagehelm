@@ -227,6 +227,14 @@ another release needs its own review. A minimal startup selects that release and
 `--native-read-policy <fence.json>` and `--native-page-policy <pages.json>`. `warm_index`
 is true by default.
 
+An optional `--native-money-policy <verified-money.json>` enables fields that the
+deployment owner has checked against the same actor's nonzero page values. At startup
+the host checks the pinned UI component and formatter hashes and the page-to-API
+mapping; a mismatch stops startup. For these fields `call_api` gives the displayed
+numeric value and its unit. Other money fields still require a same-record page check.
+The included policy describes 10 fields checked only in an isolated synthetic instance;
+the cloud example does not enable it until those fields are checked in that deployment.
+
 Without `--native-writes` it has no write path; with it, see the end of this section.
 What the model is shown leaves out the application's navigation menu and
 names the regions that scroll; only an element listed there may be acted on. A dropdown,

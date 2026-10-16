@@ -424,7 +424,7 @@ class NativeHostTests(unittest.TestCase):
         wrong.write_text(json.dumps(doc))
         variants = [dict(native_read_policy=None), dict(native_read_policy=missing),
             dict(native_page_policy=None), dict(native_page_policy=missing), dict(native_page_policy=wrong),
-            dict(source_release="wrong")]
+            dict(source_release="wrong"), dict(native_money_policy=missing)]
         for number, changes in enumerate(variants):
             with self.subTest(changes=changes), patch("web_operation_agent_yudao.native_server.UiSource.read") as source, \
                     patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:

@@ -471,6 +471,31 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("price=金额，单位：分", text)
         self.assertEqual(self.client.calls[-1], ("orders/page", {"pageNo": 1}))
 
+    def test_verified_money_is_presented_in_page_units_without_a_page_read(self):
+        from decimal import Decimal
+        from web_operation_agent_yudao.money_review import VerifiedMoneyField, VerifiedMoneyReview
+        review = VerifiedMoneyReview((VerifiedMoneyField(
+            "/sale/order", "orders/page", "price", Decimal("0.01"), "元"),))
+        know = ActorKnowledge(self.client, lambda: DOCS, money_review=review)
+        text = know.call_api("orders/page", {"pageNo": 1}, fields=["price"])
+        self.assertIn("已按部署前端源码和同记录非零页面样本逐字段核验", text)
+        self.assertIn('"price": 10', text)
+        self.assertIn('"price": 2.5', text)
+        self.assertIn("合计 12.5", text)
+        self.assertNotIn("price=金额，单位：分", text)
+        self.assertTrue(know.last_read["complete"])
+
+        class StringMoney(Client):
+            def get(self, path, **params):
+                if path == "orders/page":
+                    return {"total": 1, "list": [{"id": 1, "price": "1000"}]}
+                return super().get(path, **params)
+
+        unconverted = ActorKnowledge(StringMoney(), lambda: DOCS, money_review=review)
+        text = unconverted.call_api("orders/page", {"pageNo": 1}, fields=["price"])
+        self.assertNotIn("逐字段核验", text)
+        self.assertIn('"price": "1000"', text)
+
     def test_chosen_columns_are_read_to_the_last_page_with_their_sums_and_extremes(self):
         text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 2}, ["name", "totalPrice"])
         self.assertEqual([c[1]["pageNo"] for c in self.client.calls if c[0] == "deals/page"], [1, 2, 3])

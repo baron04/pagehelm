@@ -114,6 +114,7 @@ class YudaoHostConfig:
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
     native_page_policy: Path | None = None
+    native_money_policy: Path | None = None
     native_guard_port: int = 48093
     #: Only reviewed server-side typed mutations; browser submission stays disabled.
     native_writes: bool = False
@@ -146,6 +147,7 @@ class YudaoHost:
         from .deployment_validation import validate_native_deployment
         validated = validate_native_deployment(config)
         self.page_review = validated.page_review
+        self.money_review = validated.money_review
         self.config = config
         config.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._api_documents = None
@@ -357,7 +359,8 @@ class YudaoHost:
                 disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                 knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                          time_zone=app.goal_data.time_zone(),
-                                         codes=app.goal_data.code_names),
+                                         codes=app.goal_data.code_names,
+                                         money_review=self.money_review),
                 conventions=load_conventions(REFERENCE_CONVENTIONS),
                 time_zone=app.goal_data.time_zone(),
                 skill_knowledge=self.config.slim_skill_knowledge)
@@ -476,6 +479,8 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-page-policy", type=Path,
                     help="release-reviewed model page handlers; required for slim")
+    ap.add_argument("--native-money-policy", type=Path,
+                    help="optional release-bound fields verified against same-actor page values")
     ap.add_argument("--native-guard-port", type=int, default=48093)
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
@@ -496,7 +501,8 @@ def main(argv=None) -> int:
             state_dir=a.state_dir, ui_source=a.ui_source, source_root=a.source_root,
             source_release=a.source_release, source_commits=commits, gateway_port=a.gateway_port,
             bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
-            native_read_policy=a.native_read_policy, native_page_policy=a.native_page_policy, native_guard_port=a.native_guard_port,
+            native_read_policy=a.native_read_policy, native_page_policy=a.native_page_policy,
+            native_money_policy=a.native_money_policy, native_guard_port=a.native_guard_port,
             native_writes=a.native_writes,
             max_sessions=a.max_sessions,
             daily_allowance_cny=a.daily_allowance_cny)
