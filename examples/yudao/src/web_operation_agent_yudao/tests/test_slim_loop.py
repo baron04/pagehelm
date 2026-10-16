@@ -478,6 +478,66 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("别人的", text)
         self.assertEqual(text.count('"name": "乙"'), 1)
 
+    def test_a_large_scope_union_counts_ids_without_exposing_partial_rows(self):
+        class LargeClient(Client):
+            def get(self, path, **params):
+                if path != "leads/page":
+                    return super().get(path, **params)
+                scene = params["sceneType"]
+                records = (range(1, 5003) if scene == 1 else
+                           range(5002, 5022) if scene == 2 else ())
+                page, size = params["pageNo"], params["pageSize"]
+                offset = (page - 1) * size
+                return {"total": len(records), "list": [
+                    {"id": n, "name": f"Synthetic {n}"}
+                    for n in list(records)[offset:offset + size]]}
+
+        knowledge = ActorKnowledge(LargeClient(), lambda: DOCS)
+        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
+        self.assertEqual(knowledge.last_read, {"count": 5022, "scope": "线索",
+                                               "complete": True, "declared_total": 5021})
+        self.assertIn("total=5021", text)
+        self.assertIn("只核对记录数", text)
+        self.assertNotIn("5020", text)
+        self.assertNotIn("Synthetic", text)
+
+    def test_a_scope_union_beyond_the_count_limit_withholds_partial_numbers(self):
+        class OversizeClient(Client):
+            def get(self, path, **params):
+                if path != "leads/page":
+                    return super().get(path, **params)
+                total = 20_001 if params["sceneType"] == 1 else 0
+                start = (params["pageNo"] - 1) * params["pageSize"]
+                return {"total": total, "list": [
+                    {"id": n + 1, "name": f"Synthetic {n}"}
+                    for n in range(start, min(start + params["pageSize"], total))]}
+
+        knowledge = ActorKnowledge(OversizeClient(), lambda: DOCS)
+        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
+        self.assertEqual(knowledge.last_read, {"count": 5000, "scope": "线索",
+                                               "complete": False, "declared_total": None})
+        self.assertIn("范围合并读取未完成", text)
+        self.assertNotIn("5000", text)
+        self.assertNotIn("total=", text)
+        self.assertNotIn("Synthetic", text)
+
+    def test_a_repeated_page_does_not_prove_a_scope_union_count(self):
+        class RepeatingClient(Client):
+            def get(self, path, **params):
+                if path != "leads/page":
+                    return super().get(path, **params)
+                if params["sceneType"] != 1:
+                    return {"total": 0, "list": []}
+                return {"total": 5001, "list": [
+                    {"id": n, "name": f"Synthetic {n}"} for n in range(1, 101)]}
+
+        knowledge = ActorKnowledge(RepeatingClient(), lambda: DOCS)
+        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
+        self.assertFalse(knowledge.last_read["complete"])
+        self.assertIsNone(knowledge.last_read["declared_total"])
+        self.assertNotIn("total=", text)
+        self.assertNotIn("Synthetic", text)
+
     def test_a_record_that_exists_outside_the_actor_s_scopes_is_not_reported_as_absent(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "别人"})
         self.assertIn("total=0（当前账号可见的全部", text)

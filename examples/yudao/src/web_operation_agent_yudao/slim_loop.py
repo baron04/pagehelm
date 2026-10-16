@@ -73,6 +73,7 @@ _PAGE_CHARS = 9_000
 _API_CHARS, _API_KEPT = 5_000, 12_000
 #: How many rows a read of chosen columns follows the pages for.
 _ALL_ROWS = 5_000
+_COUNT_ROWS = 20_000
 #: The most kinds a chosen column's rows are counted and summed by.
 _GROUPS = 12
 _TIME_KEY = re.compile(r"(?:Time|Date)$", re.I)
@@ -402,6 +403,41 @@ class ActorKnowledge:
                 visited.update(next_ids)
         return data, rows, total, first_page == 1 and len(rows) == total
 
+    def _scoped_count(self, path: str, params: dict) -> tuple[int, int] | None:
+        """Count a bounded union by ID without keeping or exposing business rows."""
+        union: set[str] = set()
+        scanned = 0
+        for scene in _SCENES:
+            local: set[str] = set()
+            total = None
+            page = 1
+            while True:
+                data = self._read(path, **{**params, "sceneType": scene,
+                                           "pageNo": page, "pageSize": 100})
+                if (not isinstance(data, dict) or type(data.get("total")) is not int
+                        or data["total"] < 0 or not isinstance(data.get("list"), list)
+                        or (total is not None and data["total"] != total)):
+                    return None
+                total = data["total"]
+                if scanned + total - len(local) > _COUNT_ROWS:
+                    return None
+                rows = data["list"]
+                if len(rows) > 100 or len(local) + len(rows) > total:
+                    return None
+                ids = [str(row["id"]) for row in rows if isinstance(row, dict)
+                       and type(row.get("id")) in (int, str) and row["id"] != ""]
+                if len(ids) != len(rows) or len(set(ids)) != len(ids) or local.intersection(ids):
+                    return None
+                local.update(ids)
+                scanned += len(rows)
+                if len(local) == total:
+                    union.update(local)
+                    break
+                if not rows:
+                    return None
+                page += 1
+        return len(union), scanned
+
     def call_api(self, path: str, params: dict, fields=()) -> str:
         self._load()
         self.last_read = None
@@ -435,9 +471,28 @@ class ActorKnowledge:
                     for row in rows or []:
                         merged.setdefault(row.get("id", len(merged)) if isinstance(row, dict) else len(merged), row)
                 rows = list(merged.values())
-                declared_total = len(rows) if whole else None
-                out.append(f"total={len(rows) if whole else '至少 ' + str(len(rows))}（当前账号可见的全部：负责的、参与的、"
-                           f"下属负责的三个范围合并去重），本次读了 {len(rows)} 行" + ("（已读完所有页）" if whole else ""))
+                if not whole:
+                    if not fields:
+                        counted = self._scoped_count(relative, params)
+                        if counted is not None:
+                            unique, scanned = counted
+                            self.last_read = {"count": scanned, "scope": self._by_path[path]["tag"],
+                                              "complete": True, "declared_total": unique}
+                            return (f"total={unique}（当前账号三个可见范围按记录编号合并去重；"
+                                    f"逐页读取并核对了 {scanned} 行）。本次只核对记录数，"
+                                    "没有读取各字段的全量统计或完整名单。")
+                    # A partial union has no trustworthy total: overlapping scopes make
+                    # even the sum of their declared totals unsuitable as an answer.
+                    # Do not put the observed lower bound or partial rows in the model's
+                    # reply, where they can be mistaken for the full visible set.
+                    self.last_read = {"count": len(rows), "scope": self._by_path[path]["tag"],
+                                      "complete": False, "declared_total": None}
+                    return ("范围合并读取未完成：至少一个范围未读完或分页发生变化。"
+                            "本次结果不能用于当前账号可见总数、全量统计、完整名单或不存在的结论。"
+                            "请用应用支持的条件缩小查询；仍无法读全时，明确说明无法完整核实。")
+                declared_total = len(rows)
+                out.append(f"total={len(rows)}（当前账号可见的全部：负责的、参与的、"
+                           f"下属负责的三个范围合并去重），本次读了 {len(rows)} 行（已读完所有页）")
                 if not rows and any(k not in ("pageNo", "pageSize") for k in params):
                     # The ordinary list can disclose a candidate without granting detail
                     # access. Only an exact detail read can decide whether this actor may
