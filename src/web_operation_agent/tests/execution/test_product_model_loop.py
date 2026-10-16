@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
-from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult
+from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
+                                                                VerificationResult)
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.executor import GoalTurnExecutor
@@ -479,6 +480,53 @@ class ModelLoopTests(unittest.TestCase):
             LoopToolResult("x", state="unknown")
         with self.assertRaises(ValueError):
             VerificationResult("passed", ("not passed",))
+
+    def test_answer_target_is_a_bounded_relative_application_read(self):
+        target = AnswerTarget("record", "/contacts/7", "Mira", "contacts:7")
+        self.assertEqual(LoopToolResult("Mira", kind="read", answer_targets=(target,)).answer_targets,
+                         (target,))
+        for address in ("https://synthetic.test/contacts/7", "//outside.test/", "/contacts/7?token=x",
+                        "/contacts/7#edit", "/contacts/7\\else", "/contacts/7\n"):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                AnswerTarget("record", address, "Mira", "contacts:7")
+        with self.assertRaises(ValueError):
+            LoopToolResult("Mira", kind="page", answer_targets=(target,))
+
+    def test_contacts_read_target_is_bound_only_to_a_completed_answer_naming_it(self):
+        target = AnswerTarget("record", "/contacts/7", "Mira", "contacts:7")
+        def read(_fixture, _name, _arguments):
+            return LoopToolResult("Mira is contact 7", kind="read", answer_targets=(target,))
+        done = LoopFixture([reply(call("list_contacts")),
+                            reply(call("finish", status="done", answer="Mira is contact 7"))], read)
+        self.assertEqual(done.run(), "Mira is contact 7")
+        self.assertEqual([item.to_json() for item in done.state.answer_targets], [{
+            "kind": "record", "address": "/contacts/7", "label": "Mira",
+            "identity": "contacts:7", "read_ref": "read#1"}])
+        refused = LoopFixture([reply(call("list_contacts")),
+                               reply(call("finish", status="cannot", answer="Cannot verify"))], read)
+        self.assertEqual(refused.run(), "Cannot verify")
+        self.assertEqual(refused.state.answer_targets, ())
+
+    def test_same_name_from_two_reads_does_not_choose_a_record_link(self):
+        targets = (AnswerTarget("record", "/contacts/7", "Mira", "contacts:7"),
+                   AnswerTarget("record", "/contacts/8", "Mira", "contacts:8"))
+        def read(_fixture, _name, _arguments):
+            return LoopToolResult("Two actor-visible Miras", kind="read", answer_targets=targets)
+        fixture = LoopFixture([reply(call("list_contacts")),
+                               reply(call("finish", status="done", answer="Mira is ambiguous"))], read)
+        self.assertEqual(fixture.run(), "Mira is ambiguous")
+        self.assertEqual(fixture.state.answer_targets, ())
+
+    def test_actor_menu_metadata_can_issue_a_page_link(self):
+        target = AnswerTarget("page", "/contacts", "Contacts", "menu:/contacts")
+        def search(_fixture, _name, _arguments):
+            return LoopToolResult("Contacts /contacts", answer_targets=(target,))
+        fixture = LoopFixture([reply(call("list_contacts")),
+                               reply(call("finish", status="done", answer="Open Contacts"))], search)
+        self.assertEqual(fixture.run(), "Open Contacts")
+        self.assertEqual([item.to_json() for item in fixture.state.answer_targets], [{
+            "kind": "page", "address": "/contacts", "label": "Contacts",
+            "identity": "menu:/contacts", "read_ref": "read#1"}])
 
 
 if __name__ == "__main__":

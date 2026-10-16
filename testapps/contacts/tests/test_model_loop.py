@@ -2,12 +2,13 @@
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 from testapps.contacts.adapter import MinimalContactsAdapter
 from testapps.contacts.app import ACTORS_BY_ID, DEMO_SESSION_COOKIE, MinimalContactsApplication
 from testapps.contacts.goal import ContactsGoalPort
-from testapps.contacts.model_loop import contacts_profile
+from testapps.contacts.model_loop import ContactsProcedure, contacts_profile
 from web_operation_agent.business.control import ReadOnlyControl
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
@@ -128,6 +129,23 @@ class ContactsModelLoopTests(unittest.TestCase):
                     self.assertEqual(ModelDrivenTurnExecutor, type(executor))
             self.assertEqual(0, app.write_requests)
 
+    def test_unique_contact_link_uses_a_second_actor_read_and_the_answer_name(self):
+        with MinimalContactsApplication() as app:
+            result, _chat, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"name_contains": "Grace Hopper"}),
+                ("finish", {"status": "done", "answer": "Grace Hopper: grace@example.test"})])
+            self.assertEqual([target.to_json() for target in result.answer_targets], [{
+                "kind": "record", "address": "/contacts/grace-hopper", "label": "Grace Hopper",
+                "identity": "contacts:grace-hopper", "read_ref": "read#1"}])
+            missing_name, _chat, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"name_contains": "Grace Hopper"}),
+                ("finish", {"status": "done", "answer": "grace@example.test"})])
+            self.assertEqual((), missing_name.answer_targets)
+            ambiguous, _chat, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"name_contains": ""}),
+                ("finish", {"status": "done", "answer": "Grace Hopper is visible."})])
+            self.assertEqual((), ambiguous.answer_targets)
+
     def test_unavailable_capability_is_not_called_or_claimed(self):
         with MinimalContactsApplication() as app:
             result, chat, _ = self.execute(app, "ada-lovelace", [
@@ -145,6 +163,36 @@ class ContactsModelLoopTests(unittest.TestCase):
             self.assertEqual(AgentTurnStatus.REFUSED, result.status)
             self.assertIn("工具参数有误", str(chat.messages[1]))
             self.assertEqual(0, app.write_requests)
+
+
+class ContactsAnswerTargetTests(unittest.TestCase):
+    def test_actor_page_and_unique_record_are_read_again_before_issuing_targets(self):
+        reads = []
+        rows = [{"id": "grace-hopper", "name": "Grace Hopper", "ui_path": "/contacts/grace-hopper"}]
+        def execute(_name, arguments, *, context):
+            reads.append((arguments, context))
+            return NS(content={"contacts": rows}, render=lambda: "Grace Hopper")
+        actor = object()
+        port = NS(_require_actor=lambda context: frozenset({"contacts:read"}),
+                  _index=lambda context, permissions: (
+                      NS(page=lambda key: NS(label="Contacts") if key == "contacts" else None),
+                      {"contacts": "/contacts"}))
+        adapter = NS(business_tools=NS(_executor=NS(execute=execute)))
+        context = NS(page=NS(checkpoint=lambda: None), operation=actor)
+        result = ContactsProcedure(adapter, port, "list_contacts").execute(
+            {"name_contains": "Grace"}, context=context)
+        self.assertEqual([(t.kind, t.address, t.label) for t in result.answer_targets], [
+            ("page", "/contacts", "Contacts"),
+            ("record", "/contacts/grace-hopper", "Grace Hopper")])
+        self.assertEqual([args for args, _ in reads], [
+            {"name_contains": "Grace"}, {"name_contains": "Grace Hopper"}])
+        self.assertTrue(all(context is actor for _, context in reads))
+
+        rows[:] = [rows[0], {"id": "grace-2", "name": "Grace Hopper",
+                             "ui_path": "/contacts/grace-2"}]
+        ambiguous = ContactsProcedure(adapter, port, "list_contacts").execute(
+            {"name_contains": "Grace"}, context=context)
+        self.assertEqual([target.kind for target in ambiguous.answer_targets], ["page"])
 
 
 if __name__ == "__main__":

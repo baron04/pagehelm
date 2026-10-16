@@ -475,6 +475,7 @@ class AgentTurnExecution:
     answer_fallback_used: bool
     started_at: float
     finished_at: float
+    answer_targets: tuple = ()
 
     def to_json(self) -> dict:
         business = self.business_result
@@ -515,6 +516,7 @@ class AgentTurnExecution:
                         and business.query_answer is not None) else None),
             } if business is not None else None),
             "answer_fallback_used": self.answer_fallback_used,
+            "answer_targets": [target.to_json() for target in self.answer_targets],
             "clarification": public_clarification,
             "started_at": self.started_at,
             "finished_at": self.finished_at,

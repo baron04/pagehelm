@@ -21,7 +21,7 @@ import type {
   ConnectionState, HostNotice, PanelExample, PanelHost as PanelHostContract, PanelSnapshot,
 } from '../bridge/host'
 import type {
-  ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
+  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
 } from '../contract/panel'
 // Not a hand-written `1` any more: `scripts/build-tokens.mjs` lifts it out of the server's
 // own `panel_contract.json`, the same source `contract/panel.ts` re-exports for the panel.
@@ -106,6 +106,7 @@ export interface PanelActions {
   newConversation(): void
   loadOlder(before: string): void
   panelVisibility?(open: boolean): void
+  openAnswerTarget?(address: string): boolean
 }
 
 const REQUIRED_ACTIONS = ['submit', 'cancel', 'decide', 'newConversation', 'loadOlder'] as const
@@ -204,6 +205,17 @@ export class PanelHost implements PanelHostContract {
   snapshot(): PanelSnapshot { return this.state }
 
   panelVisibility(open: boolean): void { this.verbs.panelVisibility?.(open) }
+
+  openAnswerTarget(target: AnswerTarget): boolean {
+    try {
+      const url = new URL(target.address, location.href)
+      if (target.address.startsWith('//') || !target.address.startsWith('/')
+          || url.origin !== location.origin || url.search || url.hash) return false
+      return this.verbs.openAnswerTarget?.(url.href) === true
+    } catch {
+      return false
+    }
+  }
 
   subscribe(listener: (snapshot: PanelSnapshot) => void): () => void {
     this.listeners.add(listener)

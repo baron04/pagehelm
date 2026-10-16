@@ -23,6 +23,7 @@ import {
   absoluteUrl, armChildFrameNavigation, canonicalUrl, documentNavigation, navigationWal,
   recoveryProvesNavigation,
 } from './navigation'
+import {tryOpenAnswerInPlace} from './answerNavigation'
 import {Page, loadPageController, formFieldMatches, type FormHandoffField,
   type FormSubmitTarget, type PageControllerApi, type PageFacetReader,
   type PageHighlight, type PageRecordRouteReader, type PageBlockerReader,
@@ -395,6 +396,8 @@ export class EmbeddedWebRuntime {
       loadOlder: before => {
         detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
       },
+      openAnswerTarget: url => Boolean(this.openPage)
+        && tryOpenAnswerInPlace(url, target => this._openInApplication(target)),
       panelVisibility: open => { if (!open) this._clearHighlight() },
     })
   }

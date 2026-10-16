@@ -128,6 +128,22 @@ class PanelContractTests(unittest.TestCase):
         entry = project_event(_event("progress", {"state": "finished", "message": text}), at=0)
         self.assertEqual(entry["text"], text)
 
+    def test_answer_navigation_is_a_separate_bounded_terminal_projection(self):
+        target = {"kind": "record", "address": "/contacts/7", "label": "Mira",
+                  "identity": "contacts:7", "read_ref": "read#1"}
+        payload = {"state": "finished", "message": "Mira is contact 7",
+                   "answer_targets": [target]}
+        live = project_event(_event("progress", payload), at=0)
+        recovered = project_history_record({"kind": "progress", "payload": payload}, index=1)
+        self.assertEqual(live["answer_targets"], [target])
+        self.assertEqual(recovered["answer_targets"], [target])
+        for address in ("https://outside.test/", "//outside.test/", "/contacts/7?token=x"):
+            with self.subTest(address=address):
+                invalid = {**payload, "answer_targets": [{**target, "address": address}]}
+                self.assertNotIn("answer_targets", project_event(_event("progress", invalid), at=0))
+        self.assertNotIn("answer_targets", project_event(_event("progress", {
+            **payload, "state": "needs_input"}), at=0))
+
     def test_the_projection_shows_prose_and_never_a_capability(self):
         action = project_event(
             _action({"action": "fill", "args": {"ref": "e12", "value": "private-value"}}), at=7)

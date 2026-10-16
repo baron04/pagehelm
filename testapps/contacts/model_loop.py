@@ -2,7 +2,7 @@
 import json
 
 from web_operation_agent.execution.model_loop_contracts import (
-    LoopProcedure, LoopToolResult, ModelLoopProfile)
+    AnswerTarget, LoopProcedure, LoopToolResult, ModelLoopProfile)
 from web_operation_agent.privacy import redact_sensitive_assignments
 
 
@@ -32,13 +32,34 @@ class ContactsProcedure:
 
     def execute(self, arguments, *, context):
         context.page.checkpoint()
-        self.goal_port._require_actor(context.operation)
+        permissions = self.goal_port._require_actor(context.operation)
         if self.name == "list_contacts":
             result = self.adapter.business_tools._executor.execute(self.name, arguments, context=context.operation)
             context.page.checkpoint()
             text = "BEGIN_UNTRUSTED_APPLICATION_DATA\n" + redact_sensitive_assignments(result.render()) \
                 + "\nEND_UNTRUSTED_APPLICATION_DATA"
-            return LoopToolResult(text, kind="read", read_summary=(self.name, text[:1500]))
+            index, page_routes = self.goal_port._index(context.operation, permissions)
+            contacts_page = index.page("contacts")
+            targets = []
+            if contacts_page is not None and page_routes.get("contacts") == "/contacts":
+                targets.append(AnswerTarget("page", "/contacts", contacts_page.label,
+                                            "contacts:list"))
+            rows = result.content.get("contacts", ())
+            if arguments.get("name_contains") and len(rows) == 1:
+                row = rows[0]
+                # A unique substring match is not enough to identify an answer link. Re-read
+                # the exact name under this actor and require the same record and app route.
+                verified = self.adapter.business_tools._executor.execute(
+                    self.name, {"name_contains": row["name"]}, context=context.operation)
+                context.page.checkpoint()
+                exact = [item for item in verified.content.get("contacts", ())
+                         if item.get("name") == row["name"]]
+                if (len(exact) == 1 and exact[0].get("id") == row["id"]
+                        and exact[0].get("ui_path") == f"/contacts/{row['id']}"):
+                    targets.append(AnswerTarget("record", exact[0]["ui_path"],
+                                                row["name"], f"contacts:{row['id']}"))
+            return LoopToolResult(text, kind="read", read_summary=(self.name, text[:1500]),
+                                  answer_targets=tuple(targets))
         if self.name == "goto":
             outcome = context.page.execute("goto", {"url": self.adapter.descriptor.origin + arguments["path"]},
                                            navigating=True)

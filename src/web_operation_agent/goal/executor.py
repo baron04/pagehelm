@@ -752,6 +752,8 @@ class _TurnState:
     source_requests: tuple = ()
     source_answer: str = ""
     source_complete: bool = True
+    #: Application-issued addresses selected from this turn's completed reads only.
+    answer_targets: tuple = ()
     unsupported: str = ""
     #: Quantities the request wrote that the declaration acted on carries nowhere, as
     #: written. What was done may be right, but it is not all that was asked.
@@ -2853,6 +2855,9 @@ class GoalTurnExecutor:
             business_result=(BusinessToolResult(
                 {"outcomes": s.mutation_outcomes}, {"verified_outcomes": len(s.mutation_outcomes)})
                 if s.mutation_outcomes else None), answer_fallback_used=fallback,
+            answer_targets=(tuple(target for target in s.answer_targets
+                                  if terminal == "agent_finished" and not fallback
+                                  and target.target.label in user_answer)),
             started_at=s.started_at, finished_at=time.time())
         self.conversation_state.record(
             message_id=s.message.message_id, user_text=s.message.text,
@@ -2869,6 +2874,7 @@ class GoalTurnExecutor:
         try:
             self.channel.publish("progress", {
                 "state": status.value, "terminal_reason": terminal, "message": user_answer,
+                "answer_targets": [target.to_json() for target in execution.answer_targets],
             }, turn_id=s.message.message_id)
         except Exception as exc:
             s.ledger.append("terminal_delivery_lost", status=status.value,

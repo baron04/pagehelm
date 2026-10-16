@@ -8,7 +8,7 @@
  * `state() ?? status()` probe does not survive into this contract.
  */
 import type {
-  ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
+  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, TimelineEntry, TimelinePage,
 } from '../contract/panel'
 
 export interface ConnectionState {
@@ -71,6 +71,8 @@ export interface PanelHost {
   loadOlder(): void
   dismissNotice(): void
   reload(): void
+  /** Browser-only navigation decision for a server-issued answer link. */
+  openAnswerTarget?(target: AnswerTarget): boolean
   /** Report a view-only visibility change to the host, which may clear page markers. */
   panelVisibility?(open: boolean): void
 }

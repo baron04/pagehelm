@@ -1,6 +1,7 @@
 """Immutable facts returned to the server's model-driven decision loop."""
 from dataclasses import dataclass
 import json
+from urllib.parse import urlsplit
 from typing import Callable, Literal, Protocol
 
 from ..business.write_service import OperationOutcome
@@ -129,6 +130,31 @@ class ModelLoopProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class AnswerTarget:
+    """One actor-read application address that a later answer may cite as a link."""
+
+    kind: Literal["page", "record"]
+    address: str
+    label: str
+    identity: str
+
+    def __post_init__(self):
+        if not isinstance(self.address, str):
+            raise ValueError("invalid answer navigation target")
+        parsed = urlsplit(self.address)
+        if (self.kind not in {"page", "record"}
+                or not isinstance(self.address, str) or not 1 <= len(self.address) <= 1000
+                or not self.address.startswith("/") or self.address.startswith("//")
+                or parsed.scheme or parsed.netloc or parsed.query or parsed.fragment
+                or any(ord(char) < 33 or ord(char) == 127 or char == "\\" for char in self.address)
+                or not isinstance(self.label, str) or not 1 <= len(self.label) <= 160
+                or not self.label.strip() or any(ord(char) < 32 or ord(char) == 127 for char in self.label)
+                or not isinstance(self.identity, str) or not 1 <= len(self.identity) <= 160
+                or any(ord(char) < 33 or ord(char) == 127 for char in self.identity)):
+            raise ValueError("invalid answer navigation target")
+
+
+@dataclass(frozen=True, slots=True)
 class LoopToolResult:
     feedback: str
     kind: Literal["metadata", "read", "page", "write"] = "metadata"
@@ -144,6 +170,7 @@ class LoopToolResult:
     read_count: int | None = None
     marked: str = ""
     completion_command: str = ""
+    answer_targets: tuple[AnswerTarget, ...] = ()
 
     def __post_init__(self):
         if (not isinstance(self.feedback, str) or len(self.feedback) > 32000
@@ -164,7 +191,11 @@ class LoopToolResult:
                 or not isinstance(self.trace, tuple) or len(self.trace) > 40
                 or any(not isinstance(v, str) or len(v) > 4000 for v in self.trace)
                 or not isinstance(self.marked, str) or len(self.marked) > 200
-                or not isinstance(self.completion_command, str) or len(self.completion_command) > 200):
+                or not isinstance(self.completion_command, str) or len(self.completion_command) > 200
+                or not isinstance(self.answer_targets, tuple) or len(self.answer_targets) > 8
+                or any(not isinstance(target, AnswerTarget) for target in self.answer_targets)
+                or self.answer_targets and (self.kind not in {"read", "metadata"}
+                                            or self.state != "completed")):
             raise ValueError("invalid model-loop result")
 
 

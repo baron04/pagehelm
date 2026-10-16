@@ -5,9 +5,8 @@ renders in the timeline is produced here, so that a full page navigation replays
 timeline from the server instead of losing it with the previous document (F8a), and so that
 no user-visible string or bound is written down twice (F8b).
 
-Nothing in this module may emit an action envelope, an approval capability, a page
-observation or a URL the panel could act on: the panel shows prose, it does not drive the
-page.
+Navigation targets are separately issued from actor-read application results. They are
+links for a user's click, never an assistant action envelope or an approval capability.
 """
 from __future__ import annotations
 
@@ -87,6 +86,34 @@ def _clip(value: Any, limit: int) -> str:
     text = "".join(character for character in text
                    if character == "\n" or ord(character) >= 32)
     return text[:limit]
+
+
+def _answer_targets(payload: dict, answer: str) -> list[dict]:
+    """Project only bounded relative links from a completed server answer."""
+    raw = payload.get("answer_targets")
+    if not isinstance(raw, list) or len(raw) > 4:
+        return []
+    projected = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return []
+        kind, address = item.get("kind"), item.get("address")
+        label, identity, read_ref = item.get("label"), item.get("identity"), item.get("read_ref")
+        if (kind not in {"page", "record"} or not isinstance(address, str)
+                or not 1 <= len(address) <= 1000 or not address.startswith("/")
+                or address.startswith("//") or any(ord(c) < 33 or ord(c) == 127 or c == "\\" for c in address)
+                or urlsplit(address).scheme or urlsplit(address).netloc
+                or urlsplit(address).query or urlsplit(address).fragment
+                or not isinstance(label, str) or not label.strip() or len(label) > 160
+                or any(ord(c) < 32 or ord(c) == 127 for c in label) or label not in answer
+                or not isinstance(identity, str) or not identity or len(identity) > 160
+                or any(ord(c) < 33 or ord(c) == 127 for c in identity)
+                or not isinstance(read_ref, str) or not read_ref.startswith("read#")
+                or len(read_ref) > 20 or not read_ref[5:].isdigit()):
+            return []
+        projected.append({"kind": kind, "address": address, "label": _clip(label, 160),
+                          "identity": identity, "read_ref": read_ref})
+    return projected
 
 
 #: Page commands already reach the timeline as `action` events; a second line for the same
@@ -368,9 +395,11 @@ def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> d
         text = "正在执行" if not mapping["terminal"] else "任务结束"
     node = payload.get("step")
     node = node if state == "step" and isinstance(node, dict) and node else None
+    targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text,
             "panel_state": mapping["panel_state"],
+            **({"answer_targets": targets} if targets else {}),
             **({"step": node} if node else {}),
             **({"transient": True} if node and node.get("stage") in _TRANSIENT_STAGES else {})}
 
@@ -404,8 +433,10 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
             or progress_message(state))
     if not text:
         return None
+    targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
-            "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"]}
+            "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"],
+            **({"answer_targets": targets} if targets else {})}
 
 
 def collapse_timeline(entries: list[dict]) -> list[dict]:

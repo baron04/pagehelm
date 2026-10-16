@@ -2,7 +2,7 @@ import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState
 import {
   AlertTriangle, ArrowDown, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
 } from 'lucide-react'
-import type {Labels, PanelLimits, TimelineEntry} from '../contract/panel'
+import type {AnswerTarget, Labels, PanelLimits, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
 import {plainText} from '../markdown/plain'
 import {formatFullTime, formatTime} from '../state/clock'
@@ -283,12 +283,13 @@ function Starting({labels}: {labels: Labels}): React.JSX.Element {
   )
 }
 
-function Outcome({entry, labels, limits, live, allowedOrigins}: {
+function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget}: {
   entry: TimelineEntry
   labels: Labels
   limits: PanelLimits
   live: boolean
   allowedOrigins: readonly string[]
+  onOpenTarget?: ((target: AnswerTarget) => boolean) | undefined
 }): React.JSX.Element {
   // Only the two outcomes a person has to act on get a card of their own. Everything else
   // is prose, because giving every ending a card flattens the two that matter.
@@ -300,6 +301,23 @@ function Outcome({entry, labels, limits, live, allowedOrigins}: {
       <Answer text={entry.text.slice(0, limits.result_max_chars)}
               authored={entry.authored ?? 'server'} live={live}
               labels={labels} allowedOrigins={allowedOrigins} />
+      {entry.answer_targets?.length ? (
+        <nav className="woa-answer-targets" aria-label={labels.relatedLinks}>
+          <span>{labels.relatedLinks}</span>
+          {entry.answer_targets.map(target => (
+            <a key={`${target.read_ref}:${target.identity}`} href={target.address}
+               target="_blank" rel="noreferrer noopener"
+               onClick={event => {
+                 if (event.button === 0 && !event.metaKey && !event.ctrlKey
+                     && !event.shiftKey && !event.altKey && onOpenTarget?.(target)) {
+                   event.preventDefault()
+                 }
+               }}>
+              {target.label}
+            </a>
+          ))}
+        </nav>
+      ) : null}
       <div className="woa-answer-actions">
         <CopyButton text={() => plainText(entry.text.slice(0, limits.result_max_chars))}
                     label={labels.copyAnswer} copiedLabel={labels.copied}
@@ -329,6 +347,7 @@ export interface ThreadProps {
   labels: Labels
   limits: PanelLimits
   allowedOrigins: readonly string[]
+  onOpenTarget?: (target: AnswerTarget) => boolean
   onLoadOlder: () => void
   onRetry: () => void
   children?: React.ReactNode
@@ -582,7 +601,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                 {turn.outcome?.text && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
                            live={!turn.outcome.replayed && !settledAtMount.current?.has(turn.outcome.id)}
-                           allowedOrigins={allowedOrigins} />
+                           allowedOrigins={allowedOrigins} onOpenTarget={props.onOpenTarget} />
                 )}
               </div>
             </li>

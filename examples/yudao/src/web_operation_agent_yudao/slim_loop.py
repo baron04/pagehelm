@@ -40,8 +40,9 @@ from zoneinfo import ZoneInfo
 
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, history_messages
-from web_operation_agent.execution.model_loop_contracts import (LoopToolResult, VerificationResult,
-                                                               ModelLoopProfile, LoopProcedure)
+from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
+                                                               VerificationResult, ModelLoopProfile, LoopProcedure)
+from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
 from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 from web_operation_agent.business.tools.contracts import form_control_unavailable
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
@@ -189,11 +190,14 @@ class ActorKnowledge:
         self._load()
         return any(m["path"] == path for m in self._menu)
 
-    def search_menu(self, keyword: str) -> str:
+    def menu_matches(self, keyword: str) -> list[dict]:
         self._load()
         ranked = sorted(((_score(keyword, (2, m["leaf"]), (1, m["name"])), m) for m in self._menu),
                         key=lambda pair: -pair[0])
-        hits = [m for score, m in ranked[:8] if score > 2]
+        return [m for score, m in ranked[:8] if score > 2]
+
+    def search_menu(self, keyword: str) -> str:
+        hits = self.menu_matches(keyword)
         if not hits:
             return "没有匹配的菜单页面。换一个更短的业务词再试。"
         return "\n".join(f"{m['path']}  {m['name']}" for m in hits)
@@ -1464,6 +1468,12 @@ class YudaoLoopProcedures:
         if name == "search_menu":
             self._note(s, stage="search", what="page", term=args["keyword"], tool=name, arguments=said)
             text = know.search_menu(args["keyword"])
+            matches = know.menu_matches(args["keyword"])
+            targets = ()
+            if len(matches) == 1:
+                match = matches[0]
+                targets = (AnswerTarget("page", match["path"], match["leaf"],
+                                        "menu:" + match["path"]),)
             review = getattr(self.goal_port, "review", None)
             if review is not None:
                 for line in text.splitlines():
@@ -1474,18 +1484,20 @@ class YudaoLoopProcedures:
                         for control in controls})
                     if entries:
                         text += f"\n{path} 已审核表单入口：" + "、".join(entries) + "（goto 的 open；仍核对当前唯一可见入口）"
-            return LoopToolResult(text)
+            return LoopToolResult(text, answer_targets=targets)
         if name == "search_api":
             self._note(s, stage="search", what="source", term=args["keyword"], tool=name, arguments=said)
             return LoopToolResult(know.search_api(args["keyword"]))
         if name == "find_record":
             self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
+            targets: list[AnswerTarget] = []
             try:
-                text = self._find_record(s, args["name"].strip(), args.get("kind", "").strip())
+                text = self._find_record(s, args["name"].strip(), args.get("kind", "").strip(),
+                                         answer_targets=targets)
             except QueryParametersError as exc:
                 return LoopToolResult("查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
                                       kind="read", state="refused", error_code="invalid_arguments")
-            return LoopToolResult(text, kind="read")
+            return LoopToolResult(text, kind="read", answer_targets=tuple(targets))
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
             params = json.loads(args.get("params", "{}"))
@@ -1798,7 +1810,8 @@ class YudaoLoopProcedures:
         return (replace(failure, feedback=text) if failure else
                 LoopToolResult(text, kind="page", state="unverified" if incomplete else "completed"))
 
-    def _find_record(self, s, name: str, kind: str = "") -> str:
+    def _find_record(self, s, name: str, kind: str = "", *,
+                     answer_targets: list[AnswerTarget] | None = None) -> str:
         """Where the application has a record of this name, through the goal port's own
         "records found by name": every entity a page shows, read as the actor. With the
         person's word for the kind of record, only the entities whose name, other names or
@@ -1930,6 +1943,27 @@ class YudaoLoopProcedures:
             out += ["这些模块的列表接口：", *("    " + api.replace("\n", "\n    ") for api in lists)]
         if scope_notes:
             out.append("另有未查完的模块：" + "；".join(scope_notes))
+        if answer_targets is not None and len(hits) == 1 and len(hits[0][1]) == 1:
+            entity, records = hits[0]
+            rid, display, address = records[0]
+            page = pages.get(entity, "")
+            list_path = self.knowledge.page_path(page) if page else ""
+            data = getattr(self.goal_port, "data", None)
+            if data is not None and _record_page(address, rid, list_path):
+                from .bound_data_reads import BoundDataReads
+                try:
+                    bound = BoundDataReads(data, s.operation, s.page.checkpoint)
+                    row = bound.read(entity, rid, ())
+                    current_address = bound.record_address(entity, rid)
+                    if (row.id == rid and row.display and row.display in display
+                            and _record_page(current_address, rid, list_path)):
+                        answer_targets.append(AnswerTarget("record", current_address,
+                                                           display, f"{entity}:{rid}"))
+                except (DataRefused, BusinessToolPermissionError, BusinessToolUnavailableError,
+                        ValueError):
+                    # The prose still reports the earlier scoped list read. A link needs
+                    # the stricter exact detail read under this actor and current route.
+                    pass
         return "\n".join(out)
 
     def verification_messages(self, prompt, answer, turn, obs, history):

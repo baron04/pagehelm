@@ -76,6 +76,23 @@ describe('PanelHost enforces the protocol and the required actions at constructi
   })
 })
 
+describe('PanelHost accepts only same-origin structured answer targets', () => {
+  it('refuses another origin and query-bearing routes before asking the runtime to open', () => {
+    const openAnswerTarget = vi.fn(() => true)
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION,
+      actions: {...actions(), openAnswerTarget}})
+    const target = {kind: 'record' as const, address: '/contacts/grace', label: 'Grace',
+      identity: 'contacts:grace', read_ref: 'read#1'}
+    expect(host.openAnswerTarget(target)).toBe(true)
+    expect(openAnswerTarget).toHaveBeenCalledWith(new URL(target.address, location.href).href)
+    for (const address of ['//elsewhere.test/path', 'https://elsewhere.test/path',
+      '/contacts/grace?secret=1', '/contacts/grace#edit']) {
+      expect(host.openAnswerTarget({...target, address})).toBe(false)
+    }
+    expect(openAnswerTarget).toHaveBeenCalledOnce()
+  })
+})
+
 describe('PanelHost.applyTimeline merges by event id and is idempotent', () => {
   it('does not duplicate an entry seen twice', () => {
     const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})

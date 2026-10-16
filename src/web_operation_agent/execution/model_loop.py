@@ -30,6 +30,7 @@ from pathlib import Path
 from ..modeling.provider import ProviderError
 from ..schemas import ActionReceipt, PageObservation
 from .model_loop_contracts import LoopToolResult, VerificationResult, PageActionOutcome
+from .navigation import BoundAnswerTarget, answer_targets_for
 from .action_admission import (ADMITTED_ACTIONS, ActionAdmission,
                                ActionIntent, ActionPermit, ActionAdmissionRefused, ActionResultPending)
 from ..business.draft_steps import DraftStepAdmission
@@ -191,7 +192,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         turn = {"reads": [], "marked": "", "trace": [], "touched": [], "shown": [],
                 "done": set(), "stalled": 0, "writes": writes, "written": [], "corrections": 0,
                 "final": "", "skills": set(), "observation_cache": None,
-                "sources": sources, "prepared": s.obs is not None, "runtime_used": False}
+                "sources": sources, "prepared": s.obs is not None, "runtime_used": False,
+                "issued_targets": [], "read_sequence": 0}
         prompt = s.message.text
         self._messages.append({"role": "user", "_user_text": prompt, "_observation": True,
             "content": prompt + ("\n" + found if found else "")
@@ -867,6 +869,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                             error_code="invalid_arguments")
                 if not isinstance(result, LoopToolResult):
                     raise TypeError("model loop tools must return LoopToolResult")
+                if result.kind in {"read", "metadata"} and result.state == "completed":
+                    turn["read_sequence"] = turn.get("read_sequence", 0) + 1
+                    ref = f"read#{turn['read_sequence']}"
+                    if result.answer_targets:
+                        turn.setdefault("issued_targets", []).extend(
+                            BoundAnswerTarget(ref, target) for target in result.answer_targets)
                 if result.kind == "page":
                     # Dispatch is a transport fact, including earlier steps of a
                     # partially completed procedure; application prose cannot reset it.
@@ -1017,6 +1025,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 # finished, which is for a turn that stopped part-way.
                 s.terminal_reason = "agent_finished"
             answer = answer or "已完成。"
+            s.answer_targets = answer_targets_for(tuple(turn.get("issued_targets", ())),
+                answer[:getattr(getattr(self, "config", None), "max_user_answer_chars", 4000)],
+                finished=status == "done" and not s.mutation_outcomes and not s.terminal_reason)
             handoff = turn.get("handoff")
             if status == "done" and handoff and handoff[0] == self._page_fingerprint(s.obs):
                 # The explicit handoff belongs to the server's verified outcome,

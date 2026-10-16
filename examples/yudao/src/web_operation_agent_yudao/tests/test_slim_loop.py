@@ -14,7 +14,8 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
-from web_operation_agent.execution.model_loop_contracts import LoopToolResult, VerificationResult, ModelLoopProfile, LoopProcedure, PageActionOutcome
+from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
+    VerificationResult, ModelLoopProfile, LoopProcedure, PageActionOutcome)
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.business.approvals import ApprovalWatch
 from web_operation_agent.business.runtime import BusinessToolResult, BusinessToolRuntime
@@ -369,6 +370,13 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("/sale/order  销售 > 订单", found)
         self.assertNotIn("隐藏页", found)
         self.assertEqual(self.know.user_name, "合成用户")
+
+    def test_a_unique_actor_menu_page_issues_a_structured_page_target(self):
+        procedure = YudaoLoopProcedures(self.know, NS(review=None), "https://synthetic.test")
+        procedure._note = lambda *_args, **_kwargs: None
+        result = procedure._tool(NS(), "search_menu", {"keyword": "订单"}, {})
+        self.assertEqual(result.answer_targets,
+                         (AnswerTarget("page", "/sale/order", "订单", "menu:/sale/order"),))
 
     def test_pages_and_lists_the_person_s_words_name_are_offered_before_any_model_request(self):
         found = self.know.suggest("这个月的订单有几张")
@@ -1815,6 +1823,32 @@ class FindRecordTests(unittest.TestCase):
                                          name, kind)
         finally:
             _CURRENT_REQUEST.reset(token)
+
+    def test_only_a_unique_record_with_a_fresh_actor_detail_read_issues_a_target(self):
+        port = self.Port(hits=(("crm/customer", (("7", "晨岚机电", "/crm/customer/detail/7"),)),))
+        port.data = object()
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        executor.goal_port, executor.knowledge = port, ActorKnowledge(Client(), lambda: DOCS)
+        state = NS(measure=lambda _name: contextlib.nullcontext(), operation=None,
+                   page=NS(checkpoint=lambda: None))
+        class Checked:
+            def __init__(self, *_args): pass
+            def read(self, entity, rid, fields):
+                return NS(id=rid, display="晨岚机电")
+            def record_address(self, entity, rid):
+                return f"/crm/customer/detail/{rid}"
+        targets = []
+        with patch("web_operation_agent_yudao.bound_data_reads.BoundDataReads", Checked):
+            executor._find_record(state, "晨岚机电", "客户", answer_targets=targets)
+        self.assertEqual(targets, [AnswerTarget("record", "/crm/customer/detail/7",
+                                                "晨岚机电", "crm/customer:7")])
+
+        port.hits = (("crm/customer", (("7", "晨岚机电", "/crm/customer/detail/7"),
+                                      ("8", "晨岚机电", "/crm/customer/detail/8"))),)
+        targets = []
+        with patch("web_operation_agent_yudao.bound_data_reads.BoundDataReads", Checked):
+            executor._find_record(state, "晨岚机电", "客户", answer_targets=targets)
+        self.assertEqual(targets, [])
 
     def test_the_kind_the_person_named_narrows_the_lookup_to_the_entities_it_names(self):
         port = self.Port(hits=(("hrm/employee", "张伟"),))
