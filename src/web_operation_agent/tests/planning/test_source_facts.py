@@ -211,7 +211,7 @@ class SourceAnswerTests(unittest.TestCase):
                  "statement": "当 x 成立时，操作会被拒绝。",
                  "support": "if x: raise Y"}]}})
         text = render_payload(payload, user_text="托盘为什么不能再发芽？", max_chars=2000)
-        self.assertEqual(text, "当 x 成立时，操作会被拒绝。")
+        self.assertEqual(text, "根据 v0 源码：当 x 成立时，操作会被拒绝。")
         self.assertEqual(payload["conclusions"][0]["citation"],
                          "apps/greenhouse/rules.py:3-4")
         self.assertEqual(payload["conclusions"][0]["support"], "if x: raise Y")
@@ -283,7 +283,7 @@ class SourceAnswerTests(unittest.TestCase):
                  "statement": "这行的提交记录归于 Fixture Author。",
                  "support": "Fixture Author"}]}})
         text = render_payload(payload, user_text="谁改了这行？", max_chars=2000)
-        self.assertEqual(text, "这行的提交记录归于 Fixture Author。")
+        self.assertEqual(text, "根据 v0 的 Git 历史：这行的提交记录归于 Fixture Author。")
         self.assertNotIn("git:", text)
 
     def test_runtime_history_is_evidence_or_explicitly_unavailable(self):

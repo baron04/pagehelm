@@ -6,6 +6,7 @@ import unittest
 
 from web_operation_agent.answer.conclusion import ConclusionRefused
 from web_operation_agent.answer.evidence import EvidenceUnknown
+from web_operation_agent.answer.answer_view import source_release_label
 from web_operation_agent.execution.model_sources import TurnSources
 from web_operation_agent.privacy import SessionHandoffPolicy
 
@@ -34,7 +35,8 @@ class SourceToolsTests(unittest.TestCase):
         found = self.tools.execute("lookup_source", {"query": "batch_limit"})
         self.assertIn("source#1", found.feedback)
         self.assertNotIn("private-value", found.feedback)
-        self.assertEqual("The batch limit is 125.", self.finish())
+        self.assertEqual("According to the fixture-1 source: The batch limit is 125.",
+                         self.finish())
         read = self.tools.execute("read_source", {"path": "src/policy.py", "start_line": 1, "end_line": 1})
         self.assertIn("batch_limit = 125", read.feedback)
         self.assertTrue(self.events)
@@ -65,3 +67,15 @@ class SourceToolsTests(unittest.TestCase):
         with self.assertRaises(ConclusionRefused):
             self.tools.finish({"status": "done", "answer": "The batch limit is 999."},
                 runtime_used=False, user_text="limit?", max_chars=8000)
+
+    def test_source_refusal_uses_bounded_server_text_and_release(self):
+        self.tools.execute("lookup_source", {"query": "absent rule"})
+        answer = self.tools.finish({"status": "cannot", "answer": "The rule always allows this."},
+            runtime_used=False, user_text="Does this rule allow it?", max_chars=8000)
+        self.assertIn("fixture-1", answer)
+        self.assertIn("no direct basis", answer)
+        self.assertNotIn("always allows", answer)
+        self.assertNotIn("absent rule", answer)
+
+    def test_source_version_label_cannot_add_markdown_or_a_new_line(self):
+        self.assertEqual(r"v1 \[draft\]", source_release_label("v1\n[draft]"))

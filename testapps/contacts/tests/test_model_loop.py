@@ -53,11 +53,26 @@ class ContactsModelLoopTests(unittest.TestCase):
                          "statement": "The batch limit is 125.", "support": "batch_limit = 125"}]})],
                     source=source, observation=False)
             self.assertEqual("agent_finished", result.terminal_reason)
-            self.assertEqual("The batch limit is 125.", result.user_answer)
+            self.assertEqual("According to the fixture-1 source: The batch limit is 125.",
+                             result.user_answer)
             self.assertIsNone(result.entry_observation_id)
             self.assertIsNone(executor.channel.latest_observation_envelope)
             self.assertIn("source#1", str(chat.messages[1]))
             self.assertEqual("not_claimed", result.agent.success_claim)
+            self.assertEqual(0, app.write_requests)
+
+    def test_source_only_refusal_does_not_expose_model_guess(self):
+        from web_operation_agent.tests.execution.test_repository_source_turn import RepositorySourceTurns
+        with MinimalContactsApplication() as app, tempfile.TemporaryDirectory() as tmp:
+            source = RepositorySourceTurns()._source(Path(tmp), "src/policy.py", "batch_limit = 125\n")
+            result, _chat, _executor = self.execute(app, "ada-lovelace", [
+                ("lookup_source", {"query": "missing rule"}),
+                ("finish", {"status": "cannot", "answer": "The missing rule always allows it."})],
+                source=source, observation=False)
+            self.assertEqual("agent_refused", result.terminal_reason)
+            self.assertIn("fixture-1", result.user_answer)
+            self.assertIn("no direct basis", result.user_answer)
+            self.assertNotIn("always allows", result.user_answer)
             self.assertEqual(0, app.write_requests)
 
     def test_source_without_page_cannot_start_business_tools(self):

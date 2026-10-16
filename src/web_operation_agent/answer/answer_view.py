@@ -232,6 +232,11 @@ def _literal(value: object) -> str:
     return re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", text)
 
 
+def source_release_label(value: object) -> str:
+    """A bounded Markdown-safe display label for deployment-supplied source versions."""
+    return _literal(" ".join(str(value).split())[:80])
+
+
 def render(answer: VerifiedAnswer, *, user_text: str, max_chars: int,
            presentation: str = "brief", action_text: str = "",
            labels: dict[str, str] | None = None,
@@ -501,8 +506,14 @@ def _one(words: dict, item: dict, *, presentation: str) -> list[str]:
         # would say the application answered a question it was never asked.
         return [words["capability_gap"]]
     if kind == "source_excerpt":
-        return [_literal(item["statement"])]
-    if kind in ("source_history", "skill_statement"):
+        release = source_release_label(item["release"])
+        return [(f"根据 {release} 源码：" if words["lang"] == "zh" else
+                 f"According to the {release} source: ") + _literal(item["statement"])]
+    if kind == "source_history":
+        release = source_release_label(item["release"])
+        return [(f"根据 {release} 的 Git 历史：" if words["lang"] == "zh" else
+                 f"According to the {release} Git history: ") + _literal(item["statement"])]
+    if kind == "skill_statement":
         return [_literal(item["statement"])]
     if kind == "page_observation":
         label = "页面显示" if words["lang"] == "zh" else "The page shows"

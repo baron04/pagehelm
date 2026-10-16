@@ -9,7 +9,7 @@ import json
 import time
 
 from ..answer.conclusion import SourceExcerpt, SourceHistory, VerifiedAnswer, ConclusionRefused
-from ..answer.answer_view import render
+from ..answer.answer_view import render, source_release_label
 from ..answer.evidence import Origin, SourceEvidence, SourceHistoryEvidence, TurnEvidence
 from ..planning.source_read import SourceReadError
 from ..planning.source_history import HistoryUnavailable
@@ -44,6 +44,8 @@ SOURCE_INSTRUCTIONS = """
 即使用户没有写“当前”，也先用应用读取工具确认，不能用源码中的默认值、示例或常量代答。
 只有用户明确问源码、实现、业务规则或Git历史时才查源码；混合请求分别读取实际数据和源码。
 实际数据读取失败时如实说明，源码只能解释实现或默认值，不能补成已确认的当前事实。
+检索不到直接相关的源码时明确拒答，不能用相近代码、开源项目的记忆或通用经验补答案。
+源码结论只描述本部署绑定版本的实现，不代表当前业务数据或配置；版本由服务端显示，statement 不重复版本。
 源码结论写入 finish.source_conclusions，每项引用本轮 evidence_ref，statement 是普通语言，
 support 是该证据中8至400字符的原文。source_excerpt对应源码，source_history对应Git。
 不要在 answer 或 statement 编造路径、引用、哈希；程序记录引用。只有源码结果时，
@@ -70,6 +72,7 @@ class TurnSources:
         self.source, self.handoffs, self.ledger = source, handoffs, ledger
         self.evidence, self.keys = TurnEvidence(), {}
         self.used = False
+        self.searched: list[str] = []
 
     def _safe(self, value):
         return redact_sensitive_assignments(self.handoffs.redact(value))
@@ -89,6 +92,10 @@ class TurnSources:
 
     def execute(self, name, args):
         self.used = True
+        where = {"lookup_source": "源码索引", "read_source": "指定源码文件",
+                 "lookup_source_history": "Git 历史"}[name]
+        if where not in self.searched:
+            self.searched.append(where)
         try:
             if name == "lookup_source":
                 lookup = self.source.fact_lookup()
@@ -142,6 +149,15 @@ class TurnSources:
         if not claims:
             if self.used and arguments["status"] == "done" and not runtime_used:
                 raise ConclusionRefused("source-only answer needs cited conclusions")
+            if self.used and arguments["status"] == "cannot" and not runtime_used:
+                release = source_release_label(self.source.release)
+                if any("\u3400" <= char <= "\u9fff" for char in user_text):
+                    return (f"在本部署 {release} 的"
+                            f"{'、'.join(self.searched)}中没有找到能直接回答这个问题的依据。"
+                            "这不能证明规则不存在，也不能说明当前业务数据或配置。")
+                return (f"I found no direct basis for this answer in the deployment's "
+                        f"{release} {' and '.join(self.searched)}. "
+                        "This does not prove the rule is absent or establish current data or configuration.")
             return arguments["answer"]
         conclusions = tuple((SourceExcerpt if claim["kind"] == "source_excerpt" else SourceHistory)(
             claim["evidence_ref"], self._safe(claim["statement"]), claim["support"]).verify(self.evidence)
