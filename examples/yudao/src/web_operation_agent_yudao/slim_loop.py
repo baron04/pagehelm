@@ -362,19 +362,19 @@ class ActorKnowledge:
 
     def _pages(self, path: str, params: dict, follow: bool):
         """One read of a list, and with `follow` its later pages: (first answer, rows or
-        None when it is not a list, total, whether every row was read)."""
+        None when it is not a list, total, whether every row was read, request count)."""
         data = self._read(path, **params)
         if isinstance(data, list):
-            return data, list(data), len(data), True
+            return data, list(data), len(data), True, 1
         if not (isinstance(data, dict) and isinstance(data.get("list"), list)):
-            return data, None, None, True
+            return data, None, None, True, 1
         rows, total, page = list(data["list"]), data.get("total"), params.get("pageNo")
         if isinstance(total, bool) or not isinstance(total, int) or total < 0:
-            return data, rows, total, False
+            return data, rows, total, False, 1
         if isinstance(page, bool) or not isinstance(page, int) or page < 1:
-            return data, rows, total, False
+            return data, rows, total, False, 1
         if len(rows) > total:
-            return data, rows, total, False
+            return data, rows, total, False, 1
         # A count alone does not prove that later pages contain distinct records.
         # Without row IDs, a repeated page could reach `total` while omitting rows.
         def ids(batch):
@@ -387,13 +387,15 @@ class ActorKnowledge:
         first_page = page
         seen = ids(rows)
         if seen is not None and len(set(seen)) != len(seen):
-            return data, rows, total, False
+            return data, rows, total, False, 1
+        requests = 1
         if follow and rows and len(rows) < min(total, _ALL_ROWS):
             if seen is None:
-                return data, rows, total, False
+                return data, rows, total, False, requests
             visited = set(seen)
             while len(rows) < min(total, _ALL_ROWS):
                 page += 1
+                requests += 1
                 more = self._read(path, **{**params, "pageNo": page})
                 if (not isinstance(more, dict) or type(more.get("total")) is not int
                         or more["total"] != total
@@ -406,7 +408,7 @@ class ActorKnowledge:
                     break
                 rows += chunk
                 visited.update(next_ids)
-        return data, rows, total, first_page == 1 and len(rows) == total
+        return data, rows, total, first_page == 1 and len(rows) == total, requests
 
     def _scoped_count(self, path: str, params: dict) -> tuple[int, int] | None:
         """Count a bounded union by ID without keeping or exposing business rows."""
@@ -470,7 +472,7 @@ class ActorKnowledge:
             if scoped:
                 merged, whole = {}, True
                 for scene in _SCENES:
-                    data, rows, _total, done = self._pages(
+                    data, rows, _total, done, _requests = self._pages(
                         relative, {**params, "sceneType": scene, "pageNo": 1, "pageSize": 100}, True)
                     whole = whole and done
                     for row in rows or []:
@@ -485,7 +487,9 @@ class ActorKnowledge:
                                               "complete": True, "declared_total": unique}
                             return (f"total={unique}（当前账号三个可见范围按记录编号合并去重；"
                                     f"逐页读取并核对了 {scanned} 行）。本次只核对记录数，"
-                                    "没有读取各字段的全量统计或完整名单。")
+                                    "没有读取各字段的全量统计或完整名单。"
+                                    "三个范围经多次请求读取，应用没有提供同一时点快照；"
+                                    "若读取期间有变更，此数可能混合不同时点的记录。")
                     # A partial union has no trustworthy total: overlapping scopes make
                     # even the sum of their declared totals unsuitable as an answer.
                     # Do not put the observed lower bound or partial rows in the model's
@@ -498,6 +502,8 @@ class ActorKnowledge:
                 declared_total = len(rows)
                 out.append(f"total={len(rows)}（当前账号可见的全部：负责的、参与的、"
                            f"下属负责的三个范围合并去重），本次读了 {len(rows)} 行（已读完所有页）")
+                out.append("三个范围经多次请求读取，应用没有提供同一时点快照；"
+                           "若读取期间有变更，数量和统计可能混合不同时点的记录。")
                 if not rows and any(k not in ("pageNo", "pageSize") for k in params):
                     # The ordinary list can disclose a candidate without granting detail
                     # access. Only an exact detail read can decide whether this actor may
@@ -525,7 +531,7 @@ class ActorKnowledge:
                                                and detail.get("id") == rid else "结果无法核实")
                                 out.append(f"编号 {rid} 的详情：{outcome}")
             else:
-                data, rows, total, whole = self._pages(relative, params, bool(fields))
+                data, rows, total, whole, requests = self._pages(relative, params, bool(fields))
                 declared_total = total if type(total) is int and total >= 0 else None
                 if isinstance(data, list):
                     out.append(f"返回 {len(rows)} 行")
@@ -534,6 +540,9 @@ class ActorKnowledge:
                              else "total=未知")
                     out.append(f"{count}，本次读了 {len(rows)} 行"
                                + ("（已读完所有页）" if whole and fields else ""))
+                    if requests > 1:
+                        out.append("本次经多次分页请求读取，应用没有提供同一时点快照；"
+                                   "若读取期间有变更，合计、极值和完整名单可能混合不同时点的记录。")
         except DataRefused as exc:
             if exc.permission_denied or exc.read_failed:
                 raise

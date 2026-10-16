@@ -571,6 +571,7 @@ class KnowledgeTests(unittest.TestCase):
                                                "complete": True, "declared_total": 5021})
         self.assertIn("total=5021", text)
         self.assertIn("只核对记录数", text)
+        self.assertIn("没有提供同一时点快照", text)
         self.assertNotIn("5020", text)
         self.assertNotIn("Synthetic", text)
 
@@ -796,6 +797,7 @@ class KnowledgeTests(unittest.TestCase):
             "deals/page", {"pageNo": 1, "pageSize": 100}, ["totalPrice"])
         self.assertIn("total=1001（符合条件的总数），本次读了 1001 行（已读完所有页）", text)
         self.assertIn("totalPrice（1001 行）: 合计 11000，最大 10000", text)
+        self.assertIn("没有提供同一时点快照", text)
 
     def test_paged_aggregate_requires_a_count_and_consistent_distinct_pages(self):
         class PagedClient(Client):
@@ -828,6 +830,7 @@ class KnowledgeTests(unittest.TestCase):
                 if mode == "complete":
                     self.assertIn("已读完所有页", text)
                     self.assertIn("totalPrice（4 行）: 合计 10", text)
+                    self.assertIn("没有提供同一时点快照", text)
                 else:
                     self.assertIn("没有读完符合条件的全部记录", text)
                     self.assertNotIn("totalPrice（", text)
