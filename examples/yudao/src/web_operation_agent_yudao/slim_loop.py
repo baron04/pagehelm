@@ -26,6 +26,7 @@ starts from those and reads the page and the data again.
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime
 from dataclasses import replace
 from types import SimpleNamespace
@@ -58,6 +59,7 @@ _STILL_LOOKS = 2
 #: Development only: a directory to which each turn's conversation is written as the model
 #: saw it. Unset in any deployment; what a page shows does not belong in a log.
 _DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
+_CURRENT_REQUEST = ContextVar("yudao_slim_current_request", default="")
 _MARK = re.compile(r"^\s*\*?\[(\d+)\]")
 _RUN, _HEAD, _TAIL = 60, 3, 30
 _PAGE_CHARS = 9_000
@@ -728,6 +730,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。
+   - 后续追问说“其中那张”“它”时，上一轮答复中的单号或唯一标识可用于定位。用它重新读取当前记录，金额仍要在该记录的页面上核对；历史答复里的值不能直接当作当前值。优先按该标识筛选或打开详情，不要靠反复滚动列表找记录。
    - 用户只是提问、没要求打开或查看页面时，接口读到答案就结束，不要再去打开、筛选页面来核对或展示（金额、单价例外，见下一条）。
    - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以同一记录、同一列显示的数字为准。芋道 ERP 销售/采购订单的“含税金额”是 totalPrice 列；“金额合计”是 totalProductPrice，税额也不是含税金额。若目标列没有显示或页面操作被拒绝，不要用相邻列或原始接口值猜答案。
 2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
@@ -1642,7 +1645,7 @@ class YudaoLoopProcedures:
                 told += ["按名称的一部分查到的记录，名称与用户说的不同，不是它：", fenced("、".join(names))]
             for entity, text in lists:
                 told += [f"{labels.get(entity, entity)} 的列表第一页（看现有的名称用；不用再读）：", text[:2500]]
-            if _new_form_draft_request(s.message.text):
+            if _new_form_draft_request(_CURRENT_REQUEST.get()):
                 told.append("这是已有记录的查找结果，不是新增草稿的可行性判断。用户本轮要先填新资料；"
                             "不要因为没有同名旧记录而拒绝。现在打开对应页面的新增表单，填入用户给出的值并交接提交。")
             else:
@@ -1650,7 +1653,7 @@ class YudaoLoopProcedures:
                             "用户没说清是哪一类，它也可能在别的模块里，那样就不带 kind 再查一次。")
             return redacted("\n".join(told), self.knowledge.handoffs)
         if not hits:
-            if _new_form_draft_request(s.message.text):
+            if _new_form_draft_request(_CURRENT_REQUEST.get()):
                 return ("这是已有记录的查找结果；用户本轮要先填新资料，不应因为查不到旧记录而拒绝。"
                         "现在打开对应页面的新增表单，填入用户给出的值并交接提交。")
             return redacted(f"索引已涵盖的模块里，没有名称是（或以它开头的）“{name}”的记录。"
@@ -1787,8 +1790,12 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
 
     def _run(self, state):
         from .bound_data_reads import turn_actor_reads
-        with turn_actor_reads(self.knowledge.client):
-            return super()._run(state)
+        token = _CURRENT_REQUEST.set(state.message.text)
+        try:
+            with turn_actor_reads(self.knowledge.client):
+                return super()._run(state)
+        finally:
+            _CURRENT_REQUEST.reset(token)
 
     def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
         if _draft_only_request(s.message.text):

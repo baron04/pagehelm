@@ -29,7 +29,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
-from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _draft_only_request, _tabs_not_shown,
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _draft_only_request, _tabs_not_shown,
                                                  _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -1506,8 +1506,13 @@ class FindRecordTests(unittest.TestCase):
     def find(self, port, name, kind="", request=""):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.goal_port, executor.knowledge = port, ActorKnowledge(Client(), lambda: DOCS)
-        turn = type("Turn", (self.Turn,), {"message": NS(text=request)})
-        return executor._find_record(turn, name, kind)
+        token = _CURRENT_REQUEST.set(request)
+        try:
+            # A public page procedure context carries no user message.
+            return executor._find_record(NS(measure=lambda _name: contextlib.nullcontext(), operation=None),
+                                         name, kind)
+        finally:
+            _CURRENT_REQUEST.reset(token)
 
     def test_the_kind_the_person_named_narrows_the_lookup_to_the_entities_it_names(self):
         port = self.Port(hits=(("hrm/employee", "张伟"),))
