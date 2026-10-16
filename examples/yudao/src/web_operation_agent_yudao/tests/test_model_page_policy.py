@@ -48,6 +48,8 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(review.reviewed_control("lines", "/erp/sale/order", "+ 添加销售产品"))
         self.assertFalse(review.reviewed_control("lines", "/erp/sale/order", "保存"))
         self.assertTrue(review.permits("query", "/system/user"))
+        self.assertTrue(review.explicitly_reviewed("tabs", "/crm/customer"))
+        self.assertFalse(review.explicitly_reviewed("tabs", "/system/user"))
         self.assertFalse(review.permits("query", "/not-in-actor-menu"))
         self.assertTrue(_unsafe_button(ElementRef("e1", "button", "批量删除", "button", 1)))
         self.assertTrue(_unsafe_button(ElementRef("e1", "button", "", "button", 1,
@@ -107,6 +109,29 @@ class QueryTests(unittest.TestCase):
         self.runtime = ActionAdmission(self.policy, "yudao")
         self.proof = {"path": "/admin-api/crm/customer/page", "query_digest": "b"*64, "query_fields": {},
                       "revision": 1, "page": 1, "page_size": 10, "rows": 10, "total": 30}
+
+    def test_model_list_tab_needs_explicit_handler_review(self):
+        tab = ElementRef("e1", "tab", "我参与的", "div", 1,
+                         {"id": "tab-2", "aria-controls": "pane-2", "aria-selected": "false"})
+        before = replace(self.page(path="/crm/customer", elements=(tab,)), page_read=self.proof,
+            page_query={"path": self.proof["path"], "parameters": {"sceneType": "1"}})
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.runtime.prepare("click", {"ref": "e1"}, before,
+                                 context=self.context, checkpoint=lambda: None)
+        document = review_document()
+        document["handlers"].append({"kind": "tabs", "route": "/crm/customer",
+            "evidence": "reviewed-source.vue", "sha256": "a" * 64, "controls": []})
+        data = self.policy.data
+        self.policy = NativeModelReadActions("https://fixture.test", data, {},
+            NS(outline_index=lambda **kw: data.index(context=kw["context"])),
+            NativePageReview.load(document, "synthetic-v1"))
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        selected = replace(tab, epoch=2, attrs={**tab.attrs,
+                                                "aria-selected": "true", "panel_ready": "true"})
+        after = replace(self.page(2, path="/crm/customer", elements=(selected,)),
+            page_read={**self.proof, "revision": 2, "query_digest": "c" * 64},
+            page_query={"path": self.proof["path"], "parameters": {"sceneType": "2"}})
+        self.transact(before, after, "click", {"ref": "e1"})
 
     def input(self, epoch, value=""):
         return ElementRef("e1", "textbox", "名称", "input", epoch,

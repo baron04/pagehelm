@@ -4,16 +4,20 @@ from urllib.parse import urlsplit
 
 
 class NativeTabPolicy:
-    def __init__(self, record_routes):
+    def __init__(self, record_routes, list_routes=()):
         self._routes = tuple(re.compile(re.escape(route).replace(r"\{id\}", r"[0-9]+") + r"\Z")
                              for route in record_routes if isinstance(route, str) and "{id}" in route)
+        self._list_routes = frozenset(route for route in list_routes if isinstance(route, str))
 
     def decide(self, observation, element):
         path = urlsplit(observation.url).path
-        if observation.render_state != "ready" or observation.record_route != path:
-            return "the application has not verified this rendered record"
-        if not any(route.fullmatch(path) for route in self._routes):
-            return "this is not a deployed record detail page"
+        record = observation.record_route == path and any(route.fullmatch(path) for route in self._routes)
+        list_page = (path in self._list_routes and observation.page_route == path
+                     and not observation.record_route and observation.page_read is not None
+                     and observation.page_query is not None
+                     and observation.page_query["path"] == observation.page_read["path"])
+        if observation.render_state != "ready" or not (record or list_page):
+            return "the application has not verified this rendered tab page"
         if (element.role != "tab" or not element.attrs.get("aria-controls")
                 or not element.attrs.get("id")
                 or str(element.attrs.get("aria-disabled", "false")).lower() == "true"

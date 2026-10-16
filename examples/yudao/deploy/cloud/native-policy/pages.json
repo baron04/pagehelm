@@ -519,6 +519,13 @@
       "controls": []
     },
     {
+      "kind": "tabs",
+      "route": "/crm/customer",
+      "evidence": "v2026.09-page-handlers.md#crm-customer",
+      "sha256": "1f1496450d0603ef4fd65942fea79ba5f61eec2ee90349de7fd11862c8e12137",
+      "controls": []
+    },
+    {
       "kind": "form_entry",
       "route": "/crm/customer",
       "evidence": "v2026.09-page-handlers.md#crm-customer",

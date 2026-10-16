@@ -40,7 +40,8 @@ class NativeReadActionTests(unittest.TestCase):
         self.request = request
         data = YudaoGoalData(self.client, docs)
         self.policy = NativeReadActions("https://fixture.test", data,
-            {"/crm/customer": "/crm/customer/detail/{id}"}, review="synthetic-handler-effect-review")
+            {"/crm/customer": "/crm/customer/detail/{id}"}, review="synthetic-handler-effect-review",
+            list_tab_routes=("/crm/customer",))
         self.runtime = ActionAdmission(self.policy, "yudao")
         now = int(time.time() * 1000)
         principal = PrincipalContext(1, "yudao", "1", "10", "1", "delegation", now-1000,
@@ -91,6 +92,75 @@ class NativeReadActionTests(unittest.TestCase):
         with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
             self.settle(before, replace(after, elements=[replace(chosen,
                 attrs={**chosen.attrs, "panel_ready": "false"})]))
+
+    def test_list_tab_requires_selected_tab_and_fresh_changed_list_read(self):
+        attrs = {"id": "tab-2", "aria-controls": "pane-2", "aria-selected": "false"}
+        tab = ElementRef("e1", "tab", "我参与的", "div", 1, attrs)
+        read = {"path": "/admin-api/crm/customer/page", "query_digest": "a" * 64,
+                "query_fields": {}, "revision": 1, "page": 1, "page_size": 10,
+                "total": 20, "rows": 10}
+        before = replace(self.page(path="/crm/customer", elements=(tab,)), page_read=read,
+            page_query={"path": read["path"], "parameters": {"sceneType": "1"}})
+        chosen = replace(tab, epoch=2, attrs={**attrs, "aria-selected": "true", "panel_ready": "true"})
+        after = replace(self.page(2, path="/crm/customer", elements=(chosen,)),
+            page_read={**read, "revision": 2, "query_digest": "b" * 64},
+            page_query={"path": read["path"], "parameters": {"sceneType": "2"}})
+        self.settle(before, after)
+        self.policy.list_tab_routes = frozenset()
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.runtime.prepare("click", {"ref": "e1"}, before,
+                                 context=self.context, checkpoint=lambda: None)
+        self.policy.list_tab_routes = frozenset(("/crm/customer",))
+        for pending in (replace(after, page_read=None),
+                        replace(after, page_read={**after.page_read, "revision": 1})):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            with self.subTest(pending=pending), self.assertRaises(ActionResultPending):
+                self.settle(before, pending)
+        for changed in (replace(after, page_read={**after.page_read, "query_digest": read["query_digest"]}),
+                        replace(after, page_read={**after.page_read, "path": "/admin-api/other/page"}),
+                        replace(after, elements=[replace(chosen, attrs={**chosen.attrs, "panel_ready": "false"})]),
+                        replace(after, elements=[replace(chosen, attrs={**chosen.attrs, "aria-selected": "false"})])):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            with self.subTest(changed=changed), self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+                self.settle(before, changed)
+        for unqualified in (replace(before, page_read=None), replace(before, page_query=None),
+                            replace(before, page_route="/other"), replace(before, url="https://fixture.test/other")):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            with self.subTest(unqualified=unqualified), self.assertRaises(ActionAdmissionRefused):
+                self.runtime.prepare("click", {"ref": "e1"}, unqualified,
+                                     context=self.context, checkpoint=lambda: None)
+
+    def test_list_tab_waits_on_one_click_until_its_read_settles(self):
+        tab = ElementRef("e1", "tab", "我参与的", "div", 1,
+            {"id": "tab-2", "aria-controls": "pane-2", "aria-selected": "false"})
+        read = {"path": "/admin-api/crm/customer/page", "query_digest": "a" * 64,
+                "query_fields": {}, "revision": 1, "page": 1, "page_size": 10,
+                "total": 20, "rows": 10}
+        before = replace(self.page(path="/crm/customer", elements=(tab,)), page_read=read,
+            page_query={"path": read["path"], "parameters": {"sceneType": "1"}})
+        chosen = replace(tab, epoch=2, attrs={**tab.attrs,
+            "aria-selected": "true", "panel_ready": "true"})
+        pending = self.page(2, path="/crm/customer", elements=(chosen,))
+        final = replace(self.page(3, path="/crm/customer", elements=(replace(chosen, epoch=3),)),
+            page_read={**read, "revision": 2, "query_digest": "b" * 64},
+            page_query={"path": read["path"], "parameters": {"sceneType": "2"}})
+        args = {"ref": "e1"}
+        intent, permit = self.runtime.prepare("click", args, before,
+            context=self.context, checkpoint=lambda: None)
+        self.runtime.consume(intent, permit, before, context=self.context, checkpoint=lambda: None)
+        receipt = ActionReceipt(1, "command", "click", {**args, "epoch": before.epoch}, True,
+            url_before=before.url, url_after=pending.url, observation=pending, write_guard_held=True)
+        with self.assertRaises(ActionResultPending):
+            self.runtime.verify(intent, permit, receipt,
+                context=self.context, checkpoint=lambda: None)
+        settlement = ActionReceipt(1, "observe", "wait_for", {"ms": 150}, True,
+            url_before=final.url, url_after=final.url, observation=final, write_guard_held=True)
+        self.runtime.verify(intent, permit, receipt, settlement=settlement,
+            context=self.context, checkpoint=lambda: None)
+        self.assertTrue(self.runtime.query_verified(final, command_id="command"))
+        with self.assertRaisesRegex(ActionAdmissionRefused, "already_consumed"):
+            self.runtime.consume(intent, permit, before, context=self.context, checkpoint=lambda: None)
 
     def test_identity_or_credential_drift_cannot_verify_acknowledged_action(self):
         intent, permit = self.runtime.prepare("goto", {"url": "/crm/customer"}, self.page(),

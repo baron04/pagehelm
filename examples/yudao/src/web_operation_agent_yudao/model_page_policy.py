@@ -156,6 +156,11 @@ class NativePageReview:
                 and any(family == kind and _matches_route(route, path) and control in controls
                         for family, route, _, _, controls in self.scopes))
 
+    def explicitly_reviewed(self, kind, path):
+        """A handler reviewed for this route, independent of generated menu coverage."""
+        return (self.permits(kind, path) and any(family == kind and _matches_route(route, path)
+                for family, route, *_ in self.scopes))
+
     @property
     def digest(self):
         return hashlib.sha256(json.dumps([self.release, self.reference, self.scopes,
@@ -193,7 +198,10 @@ class NativeModelReadActions(NativeReadActions):
     actions = frozenset({"goto", "click", "fill", "select"})
 
     def __init__(self, origin, data, record_routes, goal_port, review):
-        super().__init__(origin, data, record_routes, review=review.reference)
+        list_tabs = (route for family, route, *_ in review.scopes
+                     if family == "tabs" and "{id}" not in route)
+        super().__init__(origin, data, record_routes, review=review.reference,
+                         list_tab_routes=list_tabs)
         self.actions = type(self).actions
         self.goal_port, self.page_review, self._queries, self._drafts = goal_port, review, {}, {}
         self._query_turn = None
@@ -219,6 +227,9 @@ class NativeModelReadActions(NativeReadActions):
                 raise ActionAdmissionRefused("unreviewed")
             return super().admit(intent, context=context, checkpoint=checkpoint)
         category = "tabs" if element.role == "tab" else "navigation"
+        if (element.role == "tab" and before.record_route != path
+                and not self.page_review.explicitly_reviewed("tabs", path)):
+            raise ActionAdmissionRefused("unreviewed")
         if element.attrs.get("page_control") in {"query", "pagination", "page_size"} or element.role == "option":
             return self._query(intent, element, context, checkpoint)
         if not self.page_review.permits(category, path):

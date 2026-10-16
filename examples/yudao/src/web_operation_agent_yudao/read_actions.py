@@ -21,11 +21,13 @@ class NativeReadActions:
     required_scope = "yudao.read"
     actions = frozenset({"click", "goto"})
 
-    def __init__(self, origin, data, record_routes, *, review, list_actions=None, form_entries=None):
+    def __init__(self, origin, data, record_routes, *, review, list_actions=None,
+                 form_entries=None, list_tab_routes=()):
         if not isinstance(review, str) or not review.strip() or len(review) > 200:
             raise ValueError("native action effects require a deployment handler review")
         self.origin, self.data, self.review = origin.rstrip("/"), data, review
         self.record_routes = dict(record_routes)
+        self.list_tab_routes = frozenset(list_tab_routes)
         self.list_actions = list_actions
         if list_actions is not None:
             self.actions = self.actions | list_actions.actions
@@ -152,9 +154,10 @@ class NativeReadActions:
                     expectation = ["branch", target, attrs["aria-expanded"] == "false"]
             elif element.role == "tab" and not attrs.get("href"):
                 routes = {k: v for k, v in self.record_routes.items() if k in pages}
-                if not NativeTabPolicy(routes.values()).decide(before, element):
+                if not NativeTabPolicy(routes.values(), pages & self.list_tab_routes).decide(before, element):
                     effect = ActionEffect.READ_ONLY
-                    expectation = ["tab", attrs["id"], attrs["aria-controls"], element.name]
+                    expectation = ["tab" if before.record_route == path else "list_tab",
+                                   attrs["id"], attrs["aria-controls"], element.name]
             elif element.role == "link" and attrs.get("href"):
                 from urllib.parse import urljoin
                 target = self._path(urljoin(before.url, attrs["href"]))
@@ -203,6 +206,18 @@ class NativeReadActions:
             matches = [e for e in after.elements if e.attrs.get("navigation_kind") == "branch"
                        and e.attrs.get("navigation_path") == expected[1]]
             return len(matches) == 1 and matches[0].attrs.get("aria-expanded") == str(expected[2]).lower()
+        if expected[0] == "list_tab":
+            previous, current = before.page_read, after.page_read
+            if previous is None:
+                return False
+            if current is None or current["revision"] <= previous["revision"]:
+                # The tab can select before its list GET finishes. Wait on this
+                # consumed receipt; never click the tab again to settle it.
+                raise ActionResultPending()
+            if (after.page_query is None or current["path"] != previous["path"]
+                    or after.page_query["path"] != current["path"]
+                    or current["query_digest"] == previous["query_digest"]):
+                return False
         matches = [e for e in after.elements if e.role == "tab" and e.attrs.get("id") == expected[1]
                    and e.attrs.get("aria-controls") == expected[2] and e.name == expected[3]]
         # selected_controls is a bounded toolbar supplement. Native tab state is

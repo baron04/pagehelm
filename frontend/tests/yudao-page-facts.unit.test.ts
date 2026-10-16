@@ -118,6 +118,21 @@ describe('native Yudao record and read completion facts', () => {
     failure(200,{code:500,data:{list:[],total:25}})
     expect(facts.readPageRead()).toBeUndefined()
   })
+  it('tracks a customer list tab as a newer read with a changed scene query', async () => {
+    mountedPage('/crm/customer', 'CrmCustomer')
+    const facts = createPageFacts()
+    const path = '/admin-api/crm/customer/page'
+    const first = facts.begin(`${path}?pageNo=1&pageSize=10&sceneType=1`)!
+    await first(200, {code:0, data:{list:[{id:1}], total:2}})
+    const original = facts.readPageRead()!
+    expect(facts.readPageQuery()).toEqual({path, parameters:{pageNo:'1', pageSize:'10', sceneType:'1'}})
+    const next = facts.begin(`${path}?pageNo=1&pageSize=10&sceneType=2`)!
+    expect(facts.readPageRead()).toBeUndefined()
+    await next(200, {code:0, data:{list:[{id:2}], total:2}})
+    expect(facts.readPageRead()).toMatchObject({path, revision:original.revision + 1})
+    expect(facts.readPageRead()?.query_digest).not.toBe(original.query_digest)
+    expect(facts.readPageQuery()).toEqual({path, parameters:{pageNo:'1', pageSize:'10', sceneType:'2'}})
+  })
   it('settles the current pending count when another list read starts before hashing completes', async () => {
     mountedPage('/erp/sale/order', 'SaleOrder')
     const facts = createPageFacts()
