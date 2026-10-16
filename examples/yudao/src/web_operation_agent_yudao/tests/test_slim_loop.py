@@ -29,7 +29,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
-from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _tabs_not_shown,
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _draft_only_request, _tabs_not_shown,
                                                  _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -1598,6 +1598,20 @@ class FindRecordTests(unittest.TestCase):
         self.assertFalse(knowledge.outside_actor_scope("orders", "合成名称"))
         self.assertFalse(any(path in {"leads/page", "orders/page"} for path, _ in client.calls))
 
+    def test_contact_list_visibility_is_not_a_detail_permission_denial(self):
+        from copy import deepcopy
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/crm/contact/page"] = {"get": {
+            "summary": "联系人分页", "parameters": [
+                {"name": name, "in": "query", "schema": {"type": kind}}
+                for name, kind in (("name", "string"), ("sceneType", "integer"),
+                                   ("pageNo", "integer"), ("pageSize", "integer"))]}}
+        client = Client()
+        client.get = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("contact list must not be used as a permission probe"))
+        knowledge = ActorKnowledge(client, lambda: docs)
+        self.assertFalse(knowledge.outside_actor_scope("crm/contact", "合成联系人"))
+
     def test_several_records_of_one_entity_are_listed_with_their_numbers_for_the_person_to_choose(self):
         port = self.Port(hits=(("hrm/employee", (("1", "李文博（ID=1）", "/hrm/employee/detail/1"),
                                                   ("2", "李文博（ID=2）", "/hrm/employee/detail/2"))),))
@@ -1791,6 +1805,24 @@ class WriteTurnTests(unittest.TestCase):
             "business_skill_loaded", *["business_skill_resource_loaded"] * 4,
             "skill_effect_bound", "business_mutation_proposed",
             "business_mutation_execution_started", "business_mutation_result"])
+
+    def test_draft_only_request_never_reaches_approval_or_dispatch(self):
+        self.assertTrue(_draft_only_request("在合成星河名下先填一位联系人，名字为顾溪"))
+        self.assertTrue(_draft_only_request("只填表单，暂不提交"))
+        self.assertFalse(_draft_only_request("先填好，然后提交"))
+        self.assertFalse(_draft_only_request("先填好并保存"))
+        self.assertFalse(_draft_only_request("在合成星河名下新建联系人顾溪"))
+        executor = self.executor(asked="在合成星河名下先填一位联系人，名字为顾溪")
+        state = self.state()
+        state.message.text = "在合成星河名下先填一位联系人，名字为顾溪"
+        writes = SkillWrites(self.application, state.approvals)
+        writes.load("yudao.crm-contact-creation", step=0)
+        turn = {"skills": set(), "corrections": 0, "written": []}
+        result = SlimTurnExecutor._propose(executor, state, writes, "crm_contact_create",
+                                           {"customer": "合成星河", "name": "顾溪"}, turn)
+        self.assertEqual((result.state, result.error_code, result.dispatch),
+                         ("refused", "draft_only", "not_dispatched"))
+        self.assertEqual((self.person.shown, self.client.writes, state.mutation_outcomes), ([], [], []))
 
     def test_searches_and_reads_are_told_to_whoever_is_watching(self):
         find = {"id": "call-find", "type": "function", "function": {

@@ -754,6 +754,24 @@ class YudaoGoalData:
             entity, self._narrowing(entity, text))
         hits = [(self._display(entity, r), r) for r in rows]
         hits = [(d, r) for d, r in hits if wanted in d.casefold()]
+        if entity == "crm/contact" and not hits:
+            # The customer detail's contact list can expose an actor-readable
+            # contact absent from mine/participant/subordinate scenes. Search the
+            # same actor's ordinary contact list, then require exact detail GET
+            # before offering a record address. A list row alone is not access.
+            spec = self._entities[entity]
+            if "sceneType" in spec.params and spec.name_field in spec.params:
+                where = self._narrowing(entity, text)
+                params = self._with_parent(spec, self._pushdown(spec, where))
+                listed = self._fetch_pages(entity, spec, params, scenes=(None,))
+                for row in listed:
+                    display = self._display(entity, row)
+                    if wanted not in display.casefold():
+                        continue
+                    detail = self._detail(spec, _row_id(row))
+                    if (str(detail.get("id")) == _row_id(row)
+                            and self._display(entity, detail) == display):
+                        hits.append((display, row))
         hits.sort(key=lambda h: (h[0].casefold() != wanted, not h[0].casefold().startswith(wanted), len(h[0])))
         # Two records shown alike ("张伟" at two customers) are told apart by whose they
         # are, so a person asked which can answer; the name itself stays what it is.
@@ -1056,7 +1074,8 @@ class YudaoGoalData:
         self._keep_read(key, tuple(rows), generation)
         return rows
 
-    def _fetch_pages(self, entity: str, spec: "_Entity", params: dict) -> list[dict]:
+    def _fetch_pages(self, entity: str, spec: "_Entity", params: dict,
+                     *, scenes: tuple[int | None, ...] | None = None) -> list[dict]:
         if "id" not in spec.props:
             if spec.has_get or not _unpaged(self._docs, spec.list_path):
                 raise DataRefused("identifier-free tables require a complete unpaged read", read_failed=True)
@@ -1073,9 +1092,9 @@ class YudaoGoalData:
             if spec.list_path.endswith("/tree") or any(r.values.get("children") for r in converted):
                 raise DataRefused("identifier-free hierarchical tables require a reviewed row projection", read_failed=True)
             return [{**r.values, _TABLE_REF:r.reference} for r in converted]
-        scenes = (_SCENES if "sceneType" in spec.params and "sceneType" not in spec.fixed_params
-                  and "sceneType" not in params
-                  else (None,))
+        if scenes is None:
+            scenes = (_SCENES if "sceneType" in spec.params and "sceneType" not in spec.fixed_params
+                      and "sceneType" not in params else (None,))
         rows: dict[str, dict] = {}
         for scene in scenes:
             page = 1

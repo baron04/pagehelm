@@ -249,6 +249,11 @@ class ActorKnowledge:
         disclose a name without granting access to its detail. Never use this to
         navigate, read that detail, or choose a different record.
         """
+        # Only the customer list has the reviewed scene/pool distinction used
+        # here. Other CRM lists can show a contact that this actor can open;
+        # their scoped name miss is not evidence of a detail permission denial.
+        if entity != "crm/customer":
+            return False
         path = self.list_path(entity)
         if not path or path in self.writing_gets:
             return False
@@ -700,11 +705,12 @@ _OPERATION_NOTE = "【写入提案】先给用户看批准卡片，用户批准�
 WRITE_RULES = """
 
 4. 直接替用户办理会改数据的事（新建、修改、写跟进、状态变更）。只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。
-   - 用户要求办理一件事（“新建…”“把…改成…”“给…写一条跟进”），而某个 Skill 覆盖它：先 load_skill，读它的做法；加载后它的写入操作会成为可以调用的工具，调用那个工具就是提出提案。这时不要改走第 3 类去填表单。第 3 类只用于没有 Skill 覆盖的修改，或用户明说只要把表单填好、由自己提交。
+   - 用户要求办理一件事（“新建…”“把…改成…”“给…写一条跟进”），而某个 Skill 覆盖它：先 load_skill，读它的做法；加载后它的写入操作会成为可以调用的工具，调用那个工具就是提出提案。这时不要改走第 3 类去填表单。用户说“先填”“只填”“预填”“填好但不提交”时，只做第 3 类；即使有 Skill 也不得提出持久写入。第 3 类也用于没有 Skill 覆盖的表单修改。
    - 用户只是询问、查看、打开页面，或问“怎么做”“能不能”：不加载 Skill，不提提案。
    - 操作的参数只填用户明确给出的内容。名称、电话、正文、备注这类文字照用户原话完整填写，不改写、不缩写、不补全；要引用的记录写它确切的业务名称（有同名时写候选的完整显示名），不填数字 ID；有固定选项的参数只用列出的选项。
    - 必填的信息用户没给，或者目标记录有几条候选：用 need_input 问清楚，不要猜，也不要先办一部分。
    - 拿不准记录是否存在、属于哪个模块、当前值是什么时，先用 find_record / call_api 读，再提案。
+   - 要新建单据而关联对象不在原生选择器里时，先读该对象当前状态。若对象已关闭且应用可选列表不含它，如实说明关闭和不可选，保留用户给的单据明细，不提案、不换相近对象。
    - 提案返回“没有执行”：按它给的原因修正后再提；原因是缺信息或有歧义就问用户。同样的提案不要重复提交。
    - 提案返回“已执行并核对”：这件事办完了，答复里写明办了什么。用户同时要求的其它事（再办一件、再查询、再打开页面）接着做完，每件写入都会单独请用户批准。
    - 用户要的事里有 Skill 办不到的部分（参数里没有的字段、另一种业务动作）：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。
@@ -723,7 +729,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。
    - 用户只是提问、没要求打开或查看页面时，接口读到答案就结束，不要再去打开、筛选页面来核对或展示（金额、单价例外，见下一条）。
-   - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以页面上显示的数字为准。
+   - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以同一记录、同一列显示的数字为准。芋道 ERP 销售/采购订单的“含税金额”是 totalPrice 列；“金额合计”是 totalProductPrice，税额也不是含税金额。若目标列没有显示或页面操作被拒绝，不要用相邻列或原始接口值猜答案。
 2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
    - 用 search_menu 找页面，goto 打开；同一个业务词常常在几个模块里都有页面，先看全部结果再选最贴合用户说法的那个，并在答复里说明用的是哪个模块的页面。
    - 筛选前先核对最新观察里是否已有要填的字段。只有“展开”按钮而没有该字段时，先 click 展开，再根据新观察填；不能猜隐藏字段名先试填。字段都可见后，用 fill_fields(fields, then_click="搜索", answer="已按所给条件筛选") 一步完成；程序从应用读回的查询确认参数已生效才结束。要回答结果条数或记录内容时先不带 answer，读返回的观察再回答。
@@ -735,11 +741,13 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 用户要打开或修改“某一条”记录时：按用户给的名称或条件筛选后，只有一条才继续；有多条就 need_input 并列出全部候选让用户选，不要自己挑；一条也没有就 cannot。列候选时，每一条用来区分的信息（编号、手机、所属客户等）必须来自按这个名称筛选后的列表或接口结果，逐条对应；不要从没筛选的列表里凭位置去读。
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
+   - “某名称的资料先填上…”“新产品先填…”这类请求如未指明已有编号或修改原值，应按新建草稿理解，打开新增表单；名称是要填的值，不要先把它当已存在记录查找，查不到也不构成不能预填。用户明确要求修改已有记录时才定位原记录。
    - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。工具返回应用实时权限时直接依据该权限事实；明确无编辑权限时如实说明，不能滚动或更换入口重试。除此之外只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。需要新行时，在 fill_fields 带 add_lines={{"button":"观察中的添加按钮原文","count":要新增的行数}}，同一次调用带齐主表和各行用户给的字段，以及 then_highlight 和 answer。新行使用已观察到的列名与新增后的行号，程序先逐行建行核验，再按字段名填写，无须先单独填写主表或先点击添加行。只填用户给的列，单价、税率这些没提到的列不要动。
    - search_menu 已给出审核表单入口时，用 goto(path, open="入口文字") 一步打开页面和表单；当前页面上有唯一入口时也可直接 click。进入表单后先看返回的观察。
    - 填表用 fill_fields 按字段名一次做完，不要一个个 input/select。已看到提交按钮时，同时带 then_highlight="按钮原文" 和 answer：程序逐个核验字段，再回读整张表单并标出按钮，通过才直接结束，无须再 highlight/finish。字段或交接没做成时先读反馈，再修正剩余部分。筛选带 then_click="搜索" 和 answer，程序核验全部字段和生效查询后直接结束。
    - 新增表单中类型已明确的客户、供应商、产品等关联字段，先直接填写用户说的名称；填表前不要用 find_record、search_api 或 call_api 确认下拉名称。下拉不存在会返回它自己的选项；从反馈中选精确文字纠正，保留空格，不替换成相近记录。只有本字段选项不完整或不足以确定对象时，才用所属类型的只读查询补充；有歧义仍需问用户。定位要修改的已有记录，以及用户另外要求查询的数据，照常读取。只读核验了没有改变表单的拒绝可继续，未确认的已发出动作不能重试。
+   - 关联对象不在当前原生选择器中时，读取它的资料和状态解释原因；若状态为关闭而选择器只给出开启的对象，明确说明该对象已关闭、目前不可选，保留用户给出的其它明细并停止，不改选近似对象。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
    - 用户没提到的字段一律不填，包括必填项：保持原样；只有最新观察确认为空的必填项才提醒用户补充，应用可能自动带出其它值，不能把“没填写”说成“仍为空”。然后照常以 done 结束。
    - 只有用户一个具体值都没给（比如只说“新增一家供应商”“帮我新增一个产品单位”）时，才用 need_input 问要填什么，不要自己编；这时可以先把表单打开，但不要 highlight 提交按钮，也不要以 done 结束。用户指明了关联对象（比如“给某客户新增联系人”“给某客户开一张订单”）就算给了值：打开表单并带上这个对象后以 done 结束，说明其余由用户补。
@@ -1755,6 +1763,13 @@ def _requirements(name, arguments, observation, review=None):
     return frozenset()
 
 
+def _draft_only_request(text: str) -> bool:
+    """A current-turn request to prepare a form without a persistent write."""
+    draft = re.search(r"先填|只填|预填|填好(?:但|而)?不提交|不要提交|暂不提交|先别提交", text)
+    explicit_commit = re.search(r"(?:再|然后|随后|接着|并|直接|立即|就)(?:提交|保存|创建)|提交(?:保存|创建)", text)
+    return bool(draft and not explicit_commit)
+
+
 class SlimTurnExecutor(ModelDrivenTurnExecutor):
     """Yudao composition of the application-neutral model-driven executor."""
 
@@ -1762,6 +1777,13 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         from .bound_data_reads import turn_actor_reads
         with turn_actor_reads(self.knowledge.client):
             return super()._run(state)
+
+    def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
+        if _draft_only_request(s.message.text):
+            return LoopToolResult(
+                "用户本轮只要求预填表单。未提出写入提案，也未执行写入；请改用页面表单步骤，停在提交前。",
+                kind="write", state="refused", dispatch="not_dispatched", error_code="draft_only")
+        return super()._propose(s, writes, operation, inputs, turn)
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
                  draft_steps=None, **kwargs):

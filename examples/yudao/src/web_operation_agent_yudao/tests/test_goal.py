@@ -140,6 +140,49 @@ class _Client:
 
 
 class YudaoGoalDataTests(unittest.TestCase):
+    def test_contact_name_falls_back_to_actor_list_and_checks_detail(self):
+        docs = deepcopy(DOCS)
+        docs["paths"]["/admin-api/crm/contact/page"] = _page("管理后台 - CRM 联系人", "Contact", [
+            ("name", "string"), ("sceneType", "integer")])
+        docs["paths"]["/admin-api/crm/contact/get"] = {"get": {"parameters": [
+            {"in": "query", "name": "id", "required": True}]}}
+        docs["components"]["schemas"].update(_schemas("Contact", {
+            "id": _prop("integer", "编号"), "name": _prop("string", "联系人姓名")}))
+        menus = deepcopy(MENUS)
+        menus[0]["children"].append({"name": "联系人管理", "path": "contact", "component": "crm/contact/index"})
+
+        class ContactClient(_Client):
+            deny_detail = False
+            def get(self, path, **params):
+                if path == "system/auth/get-permission-info":
+                    return {"menus": menus, "permissions": [*PERMISSIONS, "crm:contact:query"]}
+                if path == "crm/contact/page":
+                    self.calls.append((path, params))
+                    rows = [] if params.get("sceneType") is not None else [{"id": 42, "name": "合成联系人"}]
+                    return {"list": [r for r in rows if params.get("name", "") in r["name"]],
+                            "total": len(rows)}
+                if path == "crm/contact/get":
+                    self.calls.append((path, params))
+                    if self.deny_detail:
+                        raise DataRefused("detail denied", permission_denied=True)
+                    return {"id": 42, "name": "合成联系人"}
+                return super().get(path, **params)
+
+        client = ContactClient()
+        data = YudaoGoalData(client, docs, ui=UiSource(
+            records={"/crm/contact": "/crm/contact/detail/{id}"}))
+        self.assertEqual([(r.id, r.display) for r in data.find("crm/contact", "合成联系人")],
+                         [("42", "合成联系人")])
+        self.assertTrue(any(path == "crm/contact/page" and "sceneType" not in params
+                            for path, params in client.calls))
+        self.assertTrue(any(path == "crm/contact/get" and str(params["id"]) == "42"
+                            for path, params in client.calls))
+        client.deny_detail = True
+        data = YudaoGoalData(client, docs, ui=UiSource())
+        with self.assertRaises(DataRefused) as denied:
+            data.find("crm/contact", "合成联系人")
+        self.assertTrue(denied.exception.permission_denied)
+
     def test_ui_alias_keeps_api_field_and_requires_matching_endpoint(self):
         for endpoint, labels, alias in (
             ("/crm/contract/page", (("totalPrice", "含税金额"),), ("含税金额",)),

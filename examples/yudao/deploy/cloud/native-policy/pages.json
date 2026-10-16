@@ -205,7 +205,38 @@
       "kind": "navigation",
       "route": "/erp/purchase/supplier",
       "evidence": "v2026.09-page-handlers.md#erp-purchase-supplier",
-      "sha256": "2f1f7b6c26ac1e441781e5e330b9694dfcec9f563d59a85b2bc7b38645cf29ad",
+      "sha256": "212e4db7bcc320715ed38876761aee6b0e4ab327231da23b25d927ef95c328c2",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/purchase/supplier",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-supplier",
+      "sha256": "212e4db7bcc320715ed38876761aee6b0e4ab327231da23b25d927ef95c328c2",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/purchase/supplier",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-supplier",
+      "sha256": "212e4db7bcc320715ed38876761aee6b0e4ab327231da23b25d927ef95c328c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/purchase/supplier",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-supplier",
+      "sha256": "212e4db7bcc320715ed38876761aee6b0e4ab327231da23b25d927ef95c328c2",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/purchase/supplier",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-supplier",
+      "sha256": "212e4db7bcc320715ed38876761aee6b0e4ab327231da23b25d927ef95c328c2",
       "controls": []
     },
     {
@@ -649,7 +680,8 @@
       "sha256": "abfcb5538804cdb932d34e5d413e0a146f9b6352a7bf633b6b2ffd58cfe27bba",
       "controls": [
         "新增",
-        "编辑"
+        "编辑",
+        "详情"
       ]
     },
     {
@@ -669,6 +701,20 @@
       ]
     },
     {
+      "kind": "query",
+      "route": "/erp/sale/order",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-order",
+      "sha256": "abfcb5538804cdb932d34e5d413e0a146f9b6352a7bf633b6b2ffd58cfe27bba",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/sale/order",
+      "evidence": "v2026.09-page-handlers.md#erp-sale-order",
+      "sha256": "abfcb5538804cdb932d34e5d413e0a146f9b6352a7bf633b6b2ffd58cfe27bba",
+      "controls": []
+    },
+    {
       "kind": "navigation",
       "route": "/erp/purchase/order",
       "evidence": "v2026.09-page-handlers.md#erp-purchase-order",
@@ -682,7 +728,8 @@
       "sha256": "399fa766d4a9521d60a3f4e77bced4871706badfbfd834fca22ffdb8e09b74a7",
       "controls": [
         "新增",
-        "编辑"
+        "编辑",
+        "详情"
       ]
     },
     {
@@ -700,6 +747,20 @@
       "controls": [
         "+ 添加采购产品"
       ]
+    },
+    {
+      "kind": "query",
+      "route": "/erp/purchase/order",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-order",
+      "sha256": "399fa766d4a9521d60a3f4e77bced4871706badfbfd834fca22ffdb8e09b74a7",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/purchase/order",
+      "evidence": "v2026.09-page-handlers.md#erp-purchase-order",
+      "sha256": "399fa766d4a9521d60a3f4e77bced4871706badfbfd834fca22ffdb8e09b74a7",
+      "controls": []
     },
     {
       "kind": "navigation",
@@ -746,6 +807,82 @@
       "route": "/crm/business",
       "evidence": "v2026.09-page-handlers.md#crm-business",
       "sha256": "211e7bbff748510d65728652aaed39bb916cb12331513de31ffe9fb8beda4624",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/stock/warehouse",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-warehouse",
+      "sha256": "cb502e55b3782041643b448f8e2d9e1eec4a2489e635d94eddc414d9101fdd7e",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/stock/warehouse",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-warehouse",
+      "sha256": "cb502e55b3782041643b448f8e2d9e1eec4a2489e635d94eddc414d9101fdd7e",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/stock/warehouse",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-warehouse",
+      "sha256": "cb502e55b3782041643b448f8e2d9e1eec4a2489e635d94eddc414d9101fdd7e",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/stock/warehouse",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-warehouse",
+      "sha256": "cb502e55b3782041643b448f8e2d9e1eec4a2489e635d94eddc414d9101fdd7e",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/stock/warehouse",
+      "evidence": "v2026.09-page-handlers.md#erp-stock-warehouse",
+      "sha256": "cb502e55b3782041643b448f8e2d9e1eec4a2489e635d94eddc414d9101fdd7e",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/erp/product/product",
+      "evidence": "v2026.09-page-handlers.md#erp-product-product",
+      "sha256": "44a0ec44fbbfc2819d3a1d026e042e9a9fce709d993cf1c1c9880978ff351036",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/erp/product/product",
+      "evidence": "v2026.09-page-handlers.md#erp-product-product",
+      "sha256": "44a0ec44fbbfc2819d3a1d026e042e9a9fce709d993cf1c1c9880978ff351036",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/erp/product/product",
+      "evidence": "v2026.09-page-handlers.md#erp-product-product",
+      "sha256": "44a0ec44fbbfc2819d3a1d026e042e9a9fce709d993cf1c1c9880978ff351036",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/product/product",
+      "evidence": "v2026.09-page-handlers.md#erp-product-product",
+      "sha256": "44a0ec44fbbfc2819d3a1d026e042e9a9fce709d993cf1c1c9880978ff351036",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/product/product",
+      "evidence": "v2026.09-page-handlers.md#erp-product-product",
+      "sha256": "44a0ec44fbbfc2819d3a1d026e042e9a9fce709d993cf1c1c9880978ff351036",
       "controls": []
     }
   ]

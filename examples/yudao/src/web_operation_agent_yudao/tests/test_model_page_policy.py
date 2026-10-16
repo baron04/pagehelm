@@ -2,6 +2,7 @@
 from dataclasses import replace
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
 
@@ -21,6 +22,22 @@ def review_document():
 
 
 class ReviewTests(unittest.TestCase):
+    def test_pinned_yudao_review_admits_only_named_p14_routes_and_controls(self):
+        policy = Path(__file__).resolve().parents[3] / "deploy/cloud/native-policy/pages.json"
+        review = NativePageReview.load(json.loads(policy.read_text()), "v2026.09")
+        for route in ("/erp/purchase/supplier", "/erp/stock/warehouse", "/erp/product/product"):
+            for kind in ("navigation", "query", "paging", "form_entry", "fields"):
+                self.assertTrue(review.permits(kind, route), (kind, route))
+            self.assertTrue(review.permits("form_entry", route, "新增"))
+            self.assertFalse(review.permits("form_entry", route, "删除"))
+        for route in ("/erp/sale/order", "/erp/purchase/order"):
+            self.assertTrue(review.permits("query", route))
+            self.assertTrue(review.permits("paging", route))
+            self.assertTrue(review.permits("form_entry", route, "详情"))
+            self.assertFalse(review.permits("form_entry", route, "审核"))
+        self.assertFalse(review.permits("form_entry", "/erp/stock/warehouse", "设为默认"))
+        self.assertFalse(review.permits("fields", "/erp/stock/warehouse/unknown"))
+
     def test_release_exact_routes_and_capability_declarations(self):
         review = NativePageReview.load(review_document(), "synthetic-v1")
         self.assertTrue(review.permits("fields", "/crm/customer"))
