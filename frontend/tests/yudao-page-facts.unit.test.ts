@@ -1,7 +1,7 @@
 import {afterAll, beforeEach, describe, expect, it} from 'vitest'
 import {createHash} from 'node:crypto'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, readElementPageControl, nativeControlElement, openPage} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -814,6 +814,26 @@ describe('native date range selection uses only an exact owned live calendar', (
     cell.parentElement!.lastChild!.remove()
     input.setAttribute('aria-controls','other')
     expect(nativeRangeDateCell(input,'2026-10-31')).toBeNull()
+  })
+
+  it('moves only through the owned adjacent native month controls', () => {
+    document.body.innerHTML = '<div class="el-date-editor--daterange"><input class="el-range-input" aria-controls="calendar" aria-haspopup="dialog"></div>'
+      + '<div id="calendar" role="dialog">'
+      + '<div class="el-date-range-picker__content is-left"><div class="el-date-range-picker__header">'
+      + '<button class="arrow-left" aria-label="上个月"></button>'
+      + '<span role="button">2026 年</span><span role="button">10 月</span></div></div>'
+      + '<div class="el-date-range-picker__content is-right"><div class="el-date-range-picker__header">'
+      + '<button class="arrow-right" aria-label="下个月"></button>'
+      + '<span role="button">2026 年</span><span role="button">11 月</span></div></div></div>'
+    const input = document.querySelector('input')!
+    expect(nativeRangeDateStep(input, '2026-09-01')).toBe(document.querySelector('.arrow-left'))
+    expect(nativeRangeDateStep(input, '2026-12-01')).toBe(document.querySelector('.arrow-right'))
+    expect(nativeRangeDateStep(input, '2026-09-31')).toBeNull()
+    expect(nativeRangeDateStep(input, '2026-10-01')).toBeNull()
+    document.querySelector('.arrow-left')!.setAttribute('disabled', '')
+    expect(nativeRangeDateStep(input, '2026-09-01')).toBeNull()
+    input.setAttribute('aria-controls', 'other')
+    expect(nativeRangeDateStep(input, '2026-12-01')).toBeNull()
   })
 })
 

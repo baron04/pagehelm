@@ -1,7 +1,7 @@
 /** Application-owned wrapper around the pinned generic controller, never a new harness. */
 import {PageController as GenericPageController, getElementByIndex as controllerElement,
   scrollIntoViewIfNeeded} from './page-controller.js'
-import {lineControls, nativeControlElement, nativeRangeDateCell, withLineControls} from './page-facts.js'
+import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep, withLineControls} from './page-facts.js'
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 let pressed = null
@@ -68,7 +68,13 @@ export class PageController extends GenericPageController {
     const range = element instanceof HTMLInputElement && element.matches('.el-date-editor--daterange > .el-range-input')
     const result = await this.typed(index, element, text)
     if (!range || result?.success !== true) return result
-    const cell = nativeRangeDateCell(element, text)
+    let cell = nativeRangeDateCell(element, text)
+    for (let turns = 0; !cell && turns < 48; turns++) {
+      const step = nativeRangeDateStep(element, text)
+      if (!step) break
+      await clickElement(step)
+      cell = nativeRangeDateCell(element, text)
+    }
     if (!cell || !cell.isConnected || !cell.getBoundingClientRect().width) {
       throw new Error('the exact native calendar day is unavailable')
     }

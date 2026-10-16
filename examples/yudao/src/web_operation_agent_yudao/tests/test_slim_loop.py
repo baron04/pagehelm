@@ -1487,6 +1487,7 @@ class FindRecordTests(unittest.TestCase):
 
     class Turn:
         step = 0
+        message = NS(text="")
 
         class approvals:
             @staticmethod
@@ -1502,10 +1503,11 @@ class FindRecordTests(unittest.TestCase):
                 import contextlib
                 return contextlib.nullcontext()
 
-    def find(self, port, name, kind=""):
+    def find(self, port, name, kind="", request=""):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.goal_port, executor.knowledge = port, ActorKnowledge(Client(), lambda: DOCS)
-        return executor._find_record(self.Turn, name, kind)
+        turn = type("Turn", (self.Turn,), {"message": NS(text=request)})
+        return executor._find_record(turn, name, kind)
 
     def test_the_kind_the_person_named_narrows_the_lookup_to_the_entities_it_names(self):
         port = self.Port(hits=(("hrm/employee", "张伟"),))
@@ -1531,6 +1533,15 @@ class FindRecordTests(unittest.TestCase):
                       "都没有名称是或包含“恒昌五金”的记录。", told)
         self.assertIn("如实说明这些模块里没有它（cannot），不要再换名字查", told)
         self.assertIn("不带 kind 再查一次", told)
+
+    def test_new_draft_name_miss_points_to_create_form_instead_of_cannot(self):
+        told = self.find(self.Port(), "星澜物资", "供应商",
+                         request="星澜物资的供应商资料先填上联系人王岚")
+        self.assertIn("打开对应页面的新增表单", told)
+        self.assertNotIn("没有它（cannot）", told)
+        existing = self.find(self.Port(), "星澜物资", "供应商",
+                             request="先在编辑表单里把星澜物资的联系人改成王岚")
+        self.assertIn("没有它（cannot）", existing)
 
     def test_a_list_of_the_named_kind_is_shown_with_what_was_not_found_in_it(self):
         told = self.find(self.Port(), "松原设备", "订单")

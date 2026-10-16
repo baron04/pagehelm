@@ -849,3 +849,34 @@ export function nativeRangeDateCell(element, value) {
   })
   return matches.length === 1 ? matches[0] : null
 }
+
+/** One bounded native calendar step toward a date outside the displayed months. */
+export function nativeRangeDateStep(element, value) {
+  if (!(element instanceof HTMLInputElement) || element.disabled || element.readOnly ||
+      !element.matches('.el-date-editor--daterange > .el-range-input') ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const [year, monthNumber, day] = value.split('-').map(Number)
+  if (new Date(Date.UTC(year, monthNumber - 1, day)).toISOString().slice(0, 10) !== value) return null
+  const id = element.getAttribute('aria-controls')
+  if (!id || !/^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(id) || element.getAttribute('aria-haspopup') !== 'dialog') return null
+  const popups = element.ownerDocument.querySelectorAll(`[id="${id}"]`)
+  if (popups.length !== 1 || popups[0].getAttribute('role') !== 'dialog') return null
+  const left = popups[0].querySelector('.el-date-range-picker__content.is-left')
+  const right = popups[0].querySelector('.el-date-range-picker__content.is-right')
+  if (!left || !right) return null
+  const month = panel => {
+    const labels = [...panel.querySelectorAll('.el-date-range-picker__header [role="button"]')]
+      .map(e => (e.textContent || '').replace(/\s/g, ''))
+    const year = /^(\d{4})年$/.exec(labels[0] || '')
+    const number = /^(\d{1,2})月$/.exec(labels[1] || '')
+    if (!year || !number || +number[1] < 1 || +number[1] > 12) return null
+    return +year[1] * 12 + +number[1] - 1
+  }
+  const first = month(left), last = month(right)
+  if (first === null || last !== first + 1) return null
+  const target = +value.slice(0, 4) * 12 + +value.slice(5, 7) - 1
+  const button = target < first
+    ? left.querySelector('button.arrow-left[aria-label="上个月"]')
+    : target > last ? right.querySelector('button.arrow-right[aria-label="下个月"]') : null
+  return button instanceof HTMLButtonElement && !button.disabled && button.isConnected ? button : null
+}
