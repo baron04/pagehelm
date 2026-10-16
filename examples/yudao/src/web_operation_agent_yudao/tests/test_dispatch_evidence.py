@@ -54,14 +54,19 @@ class DispatchEvidenceTests(unittest.TestCase):
                         evidence.claimed()
                         if error:
                             with self.assertRaises(error) as caught:
-                                client.write_once("POST", "crm/customer/create", body={"name": "Synthetic"})
+                                client.write_once("POST", "crm/customer/create", body={"name": "Synthetic"},
+                                                  operation="crm_customer_create")
                             if reply.get("code") == 500:
                                 self.assertEqual(caught.exception.reconciliation,
                                     {"response_class": "application_error", "upstream_code": "500",
-                                     "message_class": "server_error", "phase": "dispatch"})
+                                     "message_class": "server_error", "phase": "dispatch",
+                                     "backend_transactional": True,
+                                     "backend_service_method": "CrmCustomerServiceImpl#createCustomer"})
                                 self.assertNotIn("synthetic-secret", str(caught.exception.reconciliation))
                         else:
-                            self.assertEqual(client.write_once("POST", "crm/customer/create", body={"name": "Synthetic"}), 31)
+                            self.assertEqual(client.write_once("POST", "crm/customer/create",
+                                                               body={"name": "Synthetic"},
+                                                               operation="crm_customer_create"), 31)
                     receipt, = events.snapshot("normal-turn")["receipts"]
                     self.assertEqual(receipt["effect_status"], expected)
                     self.assertEqual(receipt["dispatch_state"], "dispatched")
