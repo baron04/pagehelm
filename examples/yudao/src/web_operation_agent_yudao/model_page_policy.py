@@ -144,7 +144,9 @@ class NativePageReview:
     def permits(self, kind, path, control=None):
         if any(family == kind and _matches_route(route, path) for route, family in self.excluded):
             return False
-        if (kind in HANDLERS and path in self.menu_routes and (path, kind) not in self.excluded):
+        # The generated menu establishes an actor-visible navigation address. It does not
+        # review the effects of that page's query controls or form entry handlers.
+        if kind == "navigation" and path in self.menu_routes:
             return True
         return any(family == kind and _matches_route(route, path)
                    and (control is None or control in controls)
@@ -173,8 +175,6 @@ class NativePageReview:
     @property
     def capabilities(self):
         installed = {kind for kind, *_ in self.scopes}
-        if self.menu_routes:
-            installed |= HANDLERS
         return frozenset({"handoffs"} | {name for kind, name in (
             ("tabs", "sections"), ("query", "facets"), ("paging", "paging"),
             ("fields", "fill"), ("lines", "lines")) if kind in installed})

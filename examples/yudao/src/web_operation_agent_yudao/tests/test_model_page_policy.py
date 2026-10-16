@@ -47,7 +47,9 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.labels_on("/erp/sale/order")["totalPrice"], "含税金额")
         self.assertTrue(review.reviewed_control("lines", "/erp/sale/order", "+ 添加销售产品"))
         self.assertFalse(review.reviewed_control("lines", "/erp/sale/order", "保存"))
-        self.assertTrue(review.permits("query", "/system/user"))
+        self.assertFalse(review.permits("query", "/system/user"))
+        self.assertFalse(review.permits("form_entry", "/mes/pro/feedback", "新增"))
+        self.assertFalse(review.permits("fields", "/mes/pro/feedback"))
         self.assertTrue(review.explicitly_reviewed("tabs", "/crm/customer"))
         self.assertFalse(review.explicitly_reviewed("tabs", "/system/user"))
         self.assertFalse(review.permits("query", "/not-in-actor-menu"))
@@ -67,6 +69,8 @@ class ReviewTests(unittest.TestCase):
         route = "/pay/wallet/wallet-balance"
         self.assertIn(route, review.menu_routes)
         self.assertTrue(review.permits("navigation", route))
+        self.assertFalse(review.permits("query", route))
+        self.assertFalse(review.permits("form_entry", route, "新增"))
         self.assertFalse(review.permits("navigation", route + "/detail/1"))
 
     def test_release_exact_routes_and_capability_declarations(self):
