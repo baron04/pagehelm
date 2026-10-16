@@ -44,9 +44,10 @@ class BusinessWriteService:
         return self.runtime.prepare_mutation(name, inputs, self.loaded_ids,
                                               context=context, skill_id=skill_id)
 
-    def approve(self, proposal, *, step, context, identity):
+    def approve(self, proposal, *, step, context, identity, offer_prefill=False):
         return self.approvals.approve_mutation(proposal, step=step,
-            tool=proposal.tool, context=context, identity=identity)
+            tool=proposal.tool, context=context, identity=identity,
+            offer_prefill=offer_prefill)
 
     def dispatch(self, proposal, approval, *, step, context, identity):
         with mutation_evidence(proposal, approval, context) as evidence:
@@ -60,14 +61,16 @@ class BusinessWriteService:
         self.approvals.mutation_completed()
         return result
 
-    def settle(self, proposal, *, step, context, identity):
-        approval = self.approve(proposal, step=step, context=context, identity=identity)
+    def settle(self, proposal, *, step, context, identity, offer_prefill=False):
+        approval = self.approve(proposal, step=step, context=context, identity=identity,
+                                offer_prefill=offer_prefill)
         if not approval.approved:
             return WriteSettlement(approval)
         result = self.dispatch(proposal, approval, step=step, context=context, identity=identity)
         return WriteSettlement(approval, result)
 
-    def run(self, name, inputs, *, step, context, skill_id="", expected=None) -> OperationOutcome:
+    def run(self, name, inputs, *, step, context, skill_id="", expected=None,
+            offer_prefill=False) -> OperationOutcome:
         """One proposed operation from preparation to its verified result, exactly once.
 
         Preparation is read-only. With `expected`, the application's projection of what it
@@ -87,7 +90,8 @@ class BusinessWriteService:
                 ledger.append("skill_effect_bound", step=step, tool=name,
                               proposal_digest=proposal.content_digest, side_effect_possible=False)
             asked = True
-            settlement = self.settle(proposal, step=step, context=context, identity=identity)
+            settlement = self.settle(proposal, step=step, context=context, identity=identity,
+                                     offer_prefill=offer_prefill)
         except BusinessMutationIndeterminate as exc:
             self.approvals.mutation_indeterminate()
             ledger.append("business_mutation_indeterminate", step=step, tool=name,
@@ -105,6 +109,9 @@ class BusinessWriteService:
                       else "business_mutation_refused" if isinstance(exc, BusinessMutationRefusedError)
                       else "agent_refused")
             return OperationOutcome("refused", proposal, reason=reason, error=exc, asked=asked)
+        if settlement.approval.prefill_selected:
+            return OperationOutcome("prefill_selected", proposal, reason="prefill_selected",
+                                    asked=True)
         if not settlement.approval.approved:
             return OperationOutcome("not_approved", proposal, reason=settlement.approval.reason,
                                     asked=True)

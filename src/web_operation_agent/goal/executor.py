@@ -934,10 +934,11 @@ class GoalTurnExecutor:
                                      operation_context_digest=(
                                          context.binding_digest if context else ""))
 
-        def approve_business(proposal, *, context=None):
+        def approve_business(proposal, *, context=None, offer_prefill=False):
             try:
                 return gate.decide_plan(proposal, effect=proposal.effect, targets=proposal.targets,
-                                        ttl_s=self.config.approval_ttl_s, context=context)
+                                        ttl_s=self.config.approval_ttl_s, context=context,
+                                        offer_prefill=offer_prefill)
             except RemoteProtocolError as exc:
                 if exc.code != "approval_expired":
                     raise

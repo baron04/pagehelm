@@ -57,6 +57,10 @@ class MutationApproval:
     def approved(self) -> bool:
         return not self.reason
 
+    @property
+    def prefill_selected(self) -> bool:
+        return self.reason == "prefill_selected"
+
 
 class ApprovalWatch:
     """Bind approval requests and decisions to the current authenticated turn."""
@@ -182,7 +186,7 @@ class ApprovalWatch:
 
     def approve_mutation(self, proposal: BusinessMutationProposal, *, step: int,
                          tool: str, context: OperationContext | None,
-                         identity: dict) -> MutationApproval:
+                         identity: dict, offer_prefill: bool = False) -> MutationApproval:
         """Ask once and verify that the answer belongs to this proposal and operation."""
         self.business_counts["approval_requested"] += 1
         self.ledger.append(
@@ -204,9 +208,10 @@ class ApprovalWatch:
                 detail="the user stopped this task before approval")
         try:
             with self.awaiting_person():
-                grant = (self.business_approval(proposal)
-                         if context is None
-                         else self.business_approval(proposal, context=context))
+                kwargs = {"context": context} if context is not None else {}
+                if offer_prefill:
+                    kwargs["offer_prefill"] = True
+                grant = self.business_approval(proposal, **kwargs)
             from ..execution.events import current_events
             observed = current_events()
             if observed:
@@ -238,6 +243,23 @@ class ApprovalWatch:
             return MutationApproval(
                 reason="approval_expired",
                 detail="business mutation approval expired before dispatch")
+        if decision == "prefill":
+            if (not offer_prefill or approved_digest != proposal.content_digest
+                    or context is not None
+                    and approved_context_digest != context.binding_digest):
+                self.ledger.append(
+                    "business_mutation_approval_mismatch", step=step, tool=tool,
+                    approval_id=approval_id, proposal_digest=proposal.content_digest,
+                    dispatched=False, side_effect_possible=False)
+                return MutationApproval(
+                    reason="approval_failed",
+                    detail="form handoff choice did not match the offered proposal")
+            self.ledger.append(
+                "business_mutation_prefill_selected", step=step, tool=tool,
+                approval_id=approval_id, proposal_digest=proposal.content_digest,
+                dispatched=False, side_effect_possible=False, identity=identity)
+            return MutationApproval(approval_id=approval_id, reason="prefill_selected",
+                                    detail="the user selected form handoff without saving")
         if decision != "approved":
             self.business_counts["approval_denied"] += 1
             self.ledger.append(

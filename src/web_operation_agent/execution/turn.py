@@ -272,7 +272,8 @@ class AgentTurnExecutor:
         )
 
         def approve_business_mutation(
-                proposal, *, context: OperationContext | None = None):
+                proposal, *, context: OperationContext | None = None,
+                offer_prefill: bool = False):
             try:
                 return approval_gate.decide_plan(
                     proposal,
@@ -280,6 +281,7 @@ class AgentTurnExecutor:
                     targets=proposal.targets,
                     ttl_s=self.config.approval_ttl_s,
                     context=context,
+                    offer_prefill=offer_prefill,
                 )
             except RemoteProtocolError as exc:
                 if exc.code != "approval_expired":
