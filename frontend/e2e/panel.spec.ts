@@ -154,6 +154,24 @@ test.describe('the launcher', () => {
   })
 })
 
+test.describe('structured answer links', () => {
+  test('the built panel renders the issued record separately and hands a click to its host', async ({open}) => {
+    const panel = await open(snapshot({entries: [
+      entry('e1', 'goal', 'Find Grace Hopper'),
+      entry('e2', 'result', 'Grace Hopper is visible.', {panel_state: 'success',
+        answer_targets: [{kind: 'record', address: '/contacts/grace-hopper',
+          label: 'Grace Hopper', identity: 'contacts:grace-hopper', read_ref: 'read#1'}]}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    const related = panel.page.getByRole('navigation', {name: labels.relatedLinks})
+    const link = related.getByRole('link', {name: 'Grace Hopper'})
+    await expect(link).toHaveAttribute('href', '/contacts/grace-hopper')
+    await link.click()
+    expect(await panel.calls()).toEqual([['openAnswerTarget', '/contacts/grace-hopper']])
+    expect(panel.errors).toEqual([])
+  })
+})
+
 test.describe('the default state', () => {
   test('a conversation being fetched shows nothing at first, then a skeleton, never the greeting', async ({open}) => {
     // A tab that already has a conversation fetches it when the panel opens. A quick fetch

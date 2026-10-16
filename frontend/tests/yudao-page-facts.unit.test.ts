@@ -1,5 +1,6 @@
 import {afterAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createHash} from 'node:crypto'
+import {tryOpenAnswerInPlace} from '../src/runtime/answerNavigation'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
 import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage} from '../src/integrations/yudao/page-facts.js'
 
@@ -920,6 +921,26 @@ describe('the application opens its own page through its router, in this documen
     await expect(openPage('https://synthetic.test/system/post?status=0', app.options)).resolves.toBe(true)
     expect(app.calls).toEqual(['drop kept pages', 'push /redirect/system/post?status=0'])
     expect(app.location.pathname + app.location.search).toBe('/system/post?status=0')
+  })
+  it('opens an answer target through the SPA and uses the reserved tab if the router refuses', async () => {
+    const target = 'https://synthetic.test/system/post'
+    for (const refuses of [false, true]) {
+      const app = application({refuses})
+      const tab = {closed: false, opener: window as Window | null,
+        close: vi.fn(), location: {replace: vi.fn()}}
+      const view = {open: vi.fn(() => tab)} as unknown as Window
+      expect(tryOpenAnswerInPlace(target, url => openPage(url, app.options),
+        app.options.doc as unknown as Document, view)).toBe(true)
+      if (refuses) {
+        await vi.waitFor(() => expect(tab.location.replace).toHaveBeenCalledWith(target))
+        expect(tab.close).not.toHaveBeenCalled()
+      } else {
+        await vi.waitFor(() => expect(tab.close).toHaveBeenCalledOnce())
+        expect(tab.location.replace).not.toHaveBeenCalled()
+        expect(app.location.pathname).toBe('/system/post')
+      }
+      expect(tab.opener).toBeNull()
+    }
   })
   it('leaves the page to be loaded when there is nothing to ask or nothing would change', async () => {
     for (const [url, options] of [

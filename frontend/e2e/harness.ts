@@ -96,6 +96,7 @@ class ScriptedHost {
   }
   dismissNotice() { this.note('dismissNotice') }
   reload() { this.note('reload') }
+  openAnswerTarget(target) { this.note('openAnswerTarget', target.address); return true }
   note(...args) { window.__calls.push(args) }
 }
 

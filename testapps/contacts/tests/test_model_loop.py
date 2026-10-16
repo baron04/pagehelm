@@ -199,6 +199,47 @@ if __name__ == "__main__":
     unittest.main()
 
 class ModelBrowserTests(unittest.TestCase):
+    def test_structured_record_link_opens_an_actor_page_without_losing_a_draft(self):
+        from playwright.sync_api import sync_playwright
+        from testapps.contacts.server import NativeContactsHost, NativeServerConfig
+        from testapps.contacts.tests.test_native_server import _CONNECTED, _SUBMIT
+        chat = _Chat([
+            ("list_contacts", {"name_contains": "Grace Hopper"}),
+            ("finish", {"status": "done", "answer": "Grace Hopper: grace@example.test"}),
+        ])
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(Path(directory), port=0, model_loop=True)) as host, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(host.origin + "/demo/login/ada-lovelace")
+                page.goto(host.origin + "/contacts")
+                page.evaluate(_CONNECTED)
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, "Find Grace Hopper.")
+                outcome = session.runner.next_outcome(timeout_s=35)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error, outcome.error)
+                self.assertEqual("agent_finished", outcome.result.terminal_reason)
+                self.assertEqual("/contacts/grace-hopper",
+                                 outcome.result.answer_targets[0].target.address)
+                page.locator(".woa-launcher").click()
+                link = page.locator(".woa-answer-targets a", has_text="Grace Hopper")
+                link.wait_for(state="visible")
+                page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=local-unsaved>')")
+                page.locator("#local-unsaved").fill("keep this draft")
+                with page.expect_popup() as popup_event:
+                    link.click()
+                popup = popup_event.value
+                popup.wait_for_load_state()
+                self.assertEqual(host.origin + "/contacts/grace-hopper", popup.url)
+                self.assertEqual("keep this draft", page.locator("#local-unsaved").input_value())
+                self.assertEqual(0, host.application.write_requests)
+            finally:
+                browser.close()
+
     def test_selected_section_finishes_on_its_verified_click_in_plain_html(self):
         import json
         from playwright.sync_api import sync_playwright
@@ -282,7 +323,7 @@ class ModelBrowserTests(unittest.TestCase):
                         self.assertEqual(2 if success else 3, len(chat.messages))
                         if mode == "lines":
                             self.assertEqual("Second synthetic note", page.get_by_label("Local line 2", exact=True).input_value())
-                            self.assertTrue(page.get_by_role("button", name="Save contact").evaluate("e => !!e.style.outline"))
+                            self.assertEqual(1, page.locator(".woa-submit-guide").count())
                         if mode == "filter":
                             self.assertEqual("Grace Hopper", page.locator('#contact-filter-results').inner_text())
                         if mode == "partial_filter":
@@ -333,13 +374,13 @@ class ModelBrowserTests(unittest.TestCase):
                         if mode == "changed_draft":
                             self.assertEqual("agent_refused", outcome.result.terminal_reason)
                             self.assertEqual(2, len(chat.messages))
-                            self.assertFalse(page.get_by_role("button", name="Save contact").evaluate("e => !!e.style.outline"))
+                            self.assertEqual(0, page.locator(".woa-submit-guide").count())
                             self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
                             continue
                         self.assertEqual("agent_finished", outcome.result.terminal_reason, (outcome.result.user_answer, logs))
                         self.assertIn("Fields ready.", outcome.result.user_answer)
-                        self.assertIn("请检查表单", outcome.result.user_answer)
-                        self.assertIn("「Save contact」提交；助手未提交。", outcome.result.user_answer)
+                        self.assertIn("请核对后，手动点击", outcome.result.user_answer)
+                        self.assertIn("「Save contact」提交。", outcome.result.user_answer)
                         self.assertEqual(3 if recovery else 2, len(chat.messages))
                         if recovery:
                             self.assertIn("option_unavailable", str(chat.messages[-1]))
@@ -347,7 +388,7 @@ class ModelBrowserTests(unittest.TestCase):
                             self.assertEqual("Urgent", page.get_by_label("Priority", exact=True).input_value())
                         else:
                             self.assertEqual("2026-10-20/2026-10-22", page.locator('#contact-create').get_attribute('data-period'))
-                        self.assertTrue(page.get_by_role("button", name="Save contact").evaluate("e => !!e.style.outline"))
+                        self.assertEqual(1, page.locator(".woa-submit-guide").count())
                         self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
                     finally:
                         browser.close()
