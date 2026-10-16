@@ -97,16 +97,20 @@ describe('one-row numeric table facts', () => {
       element.getBoundingClientRect = () => ({width: 120, height: 32, top: 100, bottom: 132, left: 0, right: 120,
         x: 0, y: 100, toJSON: () => ({})})
     }
-    const html = 'XS2026090001\n2450.00\n2630.07'
-    expect(withSingleRowNumericColumns(html)).toContain('金额合计=2450.00；含税金额=2630.07')
-    expect(withSingleRowNumericColumns(html)).not.toContain('收取订金=0.00')
-    expect(withSingleRowNumericColumns('XS2026090001\n2450.00')).not.toContain('含税金额=2630.07')
-    expect(withSingleRowNumericColumns(html)).not.toContain('张三')
+    const wrapper = host.querySelector('.el-table__body-wrapper')!
+    const selectors = new Map([[78, {ref: wrapper, tagName: 'div'}]])
+    const html = '订单金额: 0.00\n[78]<div data-scrollable="right=302, " >XS2026090001\n2450.00\n2630.07 />\n页脚 0.00'
+    const observed = (page: string) => withSingleRowNumericColumns(page, document, selectors)
+    expect(observed(html)).toContain('金额合计=2450.00；含税金额=2630.07')
+    expect(observed(html)).not.toContain('收取订金=0.00')
+    expect(observed('[78]<div >XS2026090001\n2450.00 />\n页脚 2630.07')).not.toContain('含税金额=2630.07')
+    expect(observed(html)).not.toContain('张三')
+    expect(withSingleRowNumericColumns(html)).toBe(html)
     const dialog = document.createElement('div')
     dialog.className = 'el-dialog'
     dialog.getBoundingClientRect = () => ({width: 120, height: 32, top: 100, bottom: 132, left: 0, right: 120,
       x: 0, y: 100, toJSON: () => ({})})
     document.body.append(dialog)
-    expect(withSingleRowNumericColumns(html)).toBe(html)
+    expect(observed(html)).toBe(html)
   })
 })

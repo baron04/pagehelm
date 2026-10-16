@@ -754,24 +754,29 @@ class YudaoGoalData:
             entity, self._narrowing(entity, text))
         hits = [(self._display(entity, r), r) for r in rows]
         hits = [(d, r) for d, r in hits if wanted in d.casefold()]
-        if entity == "crm/contact" and not hits:
+        if entity == "crm/contact":
             # The customer detail's contact list can expose an actor-readable
             # contact absent from mine/participant/subordinate scenes. Search the
-            # same actor's ordinary contact list, then require exact detail GET
-            # before offering a record address. A list row alone is not access.
+            # same actor's ordinary contact list even when a scene has matches:
+            # otherwise a same-named contact outside those scenes disappears from
+            # the candidates and an ambiguous name looks unique. Require exact
+            # detail GET for each new candidate before offering its address.
             spec = self._entities[entity]
             if "sceneType" in spec.params and spec.name_field in spec.params:
                 where = self._narrowing(entity, text)
                 params = self._with_parent(spec, self._pushdown(spec, where))
                 listed = self._fetch_pages(entity, spec, params, scenes=(None,))
+                seen = {_row_id(row) for _display, row in hits}
                 for row in listed:
                     display = self._display(entity, row)
-                    if wanted not in display.casefold():
+                    row_id = _row_id(row)
+                    if wanted not in display.casefold() or row_id in seen:
                         continue
-                    detail = self._detail(spec, _row_id(row))
-                    if (str(detail.get("id")) == _row_id(row)
+                    detail = self._detail(spec, row_id)
+                    if (str(detail.get("id")) == row_id
                             and self._display(entity, detail) == display):
                         hits.append((display, row))
+                        seen.add(row_id)
         hits.sort(key=lambda h: (h[0].casefold() != wanted, not h[0].casefold().startswith(wanted), len(h[0])))
         # Two records shown alike ("张伟" at two customers) are told apart by whose they
         # are, so a person asked which can answer; the name itself stays what it is.

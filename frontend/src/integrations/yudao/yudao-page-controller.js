@@ -54,7 +54,7 @@ export class PageController extends GenericPageController {
   async updateTree() {
     const html = await super.updateTree()
     const next = withSingleRowNumericColumns(
-      withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()))
+      withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()), document, this.selectorMap)
     if (next === this.simplifiedHTML) return html
     this.simplifiedHTML = next
     for (const line of next.split('\n')) {

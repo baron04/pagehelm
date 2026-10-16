@@ -1775,9 +1775,18 @@ def _requirements(name, arguments, observation, review=None):
 
 def _draft_only_request(text: str) -> bool:
     """A current-turn request to prepare a form without a persistent write."""
-    draft = re.search(r"先填|只填|预填|填好(?:但|而)?不提交|不要提交|暂不提交|先别提交", text)
-    explicit_commit = re.search(r"(?:再|然后|随后|接着|并|直接|立即|就)(?:提交|保存|创建)|提交(?:保存|创建)", text)
-    return bool(draft and not explicit_commit)
+    negated_writes = tuple(re.finditer(
+        r"(?:不(?:要|用|必|需要|能|得|许)?|无(?:需|须)|别|请勿|切勿|暂不)"
+        r"(?:再|直接|立即|马上|现在|就)?(?:提交|保存|创建)", text))
+    draft = re.search(r"先填|只填|预填|填好(?:但|而)?不提交", text) or negated_writes
+    # "不要直接提交" contains "直接提交"; that substring is not permission to write.
+    commits = re.finditer(
+        r"(?:再|然后|随后|接着|并|直接|立即|马上|现在|就)(?:提交|保存|创建)|提交(?:保存|创建)", text)
+    for commit in commits:
+        if not any(negative.start() <= commit.start() and commit.end() <= negative.end()
+                   for negative in negated_writes):
+            return False
+    return bool(draft)
 
 
 def _new_form_draft_request(text: str) -> bool:

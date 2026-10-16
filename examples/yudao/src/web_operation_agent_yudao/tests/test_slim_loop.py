@@ -1825,20 +1825,28 @@ class WriteTurnTests(unittest.TestCase):
     def test_draft_only_request_never_reaches_approval_or_dispatch(self):
         self.assertTrue(_draft_only_request("在合成星河名下先填一位联系人，名字为顾溪"))
         self.assertTrue(_draft_only_request("只填表单，暂不提交"))
+        self.assertTrue(_draft_only_request("先填好，不要直接提交"))
+        self.assertTrue(_draft_only_request("先填好，别立即保存"))
+        self.assertTrue(_draft_only_request("先填好，不需要直接提交"))
+        self.assertTrue(_draft_only_request("预填即可，无须立即保存"))
+        self.assertTrue(_draft_only_request("只填联系人资料，不要再创建记录"))
         self.assertFalse(_draft_only_request("先填好，然后提交"))
         self.assertFalse(_draft_only_request("先填好并保存"))
         self.assertFalse(_draft_only_request("在合成星河名下新建联系人顾溪"))
-        executor = self.executor(asked="在合成星河名下先填一位联系人，名字为顾溪")
-        state = self.state()
-        state.message.text = "在合成星河名下先填一位联系人，名字为顾溪"
-        writes = SkillWrites(self.application, state.approvals)
-        writes.load("yudao.crm-contact-creation", step=0)
-        turn = {"skills": set(), "corrections": 0, "written": []}
-        result = SlimTurnExecutor._propose(executor, state, writes, "crm_contact_create",
-                                           {"customer": "合成星河", "name": "顾溪"}, turn)
-        self.assertEqual((result.state, result.error_code, result.dispatch),
-                         ("refused", "draft_only", "not_dispatched"))
-        self.assertEqual((self.person.shown, self.client.writes, state.mutation_outcomes), ([], [], []))
+        for request in ("在合成星河名下先填一位联系人，名字为顾溪",
+                        "在合成星河名下先填一位联系人顾溪，不要直接提交"):
+            with self.subTest(request=request):
+                executor = self.executor(asked=request)
+                state = self.state()
+                state.message.text = request
+                writes = SkillWrites(self.application, state.approvals)
+                writes.load("yudao.crm-contact-creation", step=0)
+                turn = {"skills": set(), "corrections": 0, "written": []}
+                result = SlimTurnExecutor._propose(executor, state, writes, "crm_contact_create",
+                                                   {"customer": "合成星河", "name": "顾溪"}, turn)
+                self.assertEqual((result.state, result.error_code, result.dispatch),
+                                 ("refused", "draft_only", "not_dispatched"))
+                self.assertEqual((self.person.shown, self.client.writes, state.mutation_outcomes), ([], [], []))
 
     def test_searches_and_reads_are_told_to_whoever_is_watching(self):
         find = {"id": "call-find", "type": "function", "function": {

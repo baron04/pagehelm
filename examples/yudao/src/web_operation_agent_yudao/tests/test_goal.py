@@ -153,19 +153,22 @@ class YudaoGoalDataTests(unittest.TestCase):
 
         class ContactClient(_Client):
             deny_detail = False
+            include_scoped = False
             def get(self, path, **params):
                 if path == "system/auth/get-permission-info":
                     return {"menus": menus, "permissions": [*PERMISSIONS, "crm:contact:query"]}
                 if path == "crm/contact/page":
                     self.calls.append((path, params))
-                    rows = [] if params.get("sceneType") is not None else [{"id": 42, "name": "合成联系人"}]
+                    scoped = [{"id": 41, "name": "合成联系人"}] if self.include_scoped else []
+                    rows = (scoped if params.get("sceneType") is not None
+                            else [*scoped, {"id": 42, "name": "合成联系人"}])
                     return {"list": [r for r in rows if params.get("name", "") in r["name"]],
                             "total": len(rows)}
                 if path == "crm/contact/get":
                     self.calls.append((path, params))
                     if self.deny_detail:
                         raise DataRefused("detail denied", permission_denied=True)
-                    return {"id": 42, "name": "合成联系人"}
+                    return {"id": int(params["id"]), "name": "合成联系人"}
                 return super().get(path, **params)
 
         client = ContactClient()
@@ -182,6 +185,14 @@ class YudaoGoalDataTests(unittest.TestCase):
         with self.assertRaises(DataRefused) as denied:
             data.find("crm/contact", "合成联系人")
         self.assertTrue(denied.exception.permission_denied)
+
+        client.deny_detail = False
+        client.include_scoped = True
+        data = YudaoGoalData(client, docs, ui=UiSource())
+        matches = data.find("crm/contact", "合成联系人")
+        self.assertEqual({r.id for r in matches}, {"41", "42"})
+        self.assertEqual(len(matches), 2)
+        self.assertNotEqual(matches[0].display, matches[1].display)
 
     def test_ui_alias_keeps_api_field_and_requires_matching_endpoint(self):
         for endpoint, labels, alias in (
