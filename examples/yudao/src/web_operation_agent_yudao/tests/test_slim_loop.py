@@ -556,6 +556,7 @@ class KnowledgeTests(unittest.TestCase):
             def get(self, path, **params):
                 if path != "leads/page":
                     return super().get(path, **params)
+                self.calls.append((path, params))
                 scene = params["sceneType"]
                 records = (range(1, 5003) if scene == 1 else
                            range(5002, 5022) if scene == 2 else ())
@@ -565,7 +566,8 @@ class KnowledgeTests(unittest.TestCase):
                     {"id": n, "name": f"Synthetic {n}"}
                     for n in list(records)[offset:offset + size]]}
 
-        knowledge = ActorKnowledge(LargeClient(), lambda: DOCS)
+        client = LargeClient()
+        knowledge = ActorKnowledge(client, lambda: DOCS)
         text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
         self.assertEqual(knowledge.last_read, {"count": 5022, "scope": "线索",
                                                "complete": True, "declared_total": 5021})
@@ -574,6 +576,10 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("没有提供同一时点快照", text)
         self.assertNotIn("5020", text)
         self.assertNotIn("Synthetic", text)
+        page_calls = [params for path, params in client.calls if path == "leads/page"]
+        self.assertLessEqual(len(page_calls), 35,
+                             "a large count must not first read 5,000 full rows and then rescan IDs")
+        self.assertTrue(any(params["pageSize"] == 200 for params in page_calls))
 
     def test_a_scope_union_beyond_the_count_limit_withholds_partial_numbers(self):
         class OversizeClient(Client):
@@ -594,6 +600,24 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("5000", text)
         self.assertNotIn("total=", text)
         self.assertNotIn("Synthetic", text)
+
+    def test_overlapping_scopes_under_the_field_bound_keep_list_rows(self):
+        class OverlapClient(Client):
+            def get(self, path, **params):
+                if path != "leads/page":
+                    return super().get(path, **params)
+                records = range(1, 1701)
+                offset = (params["pageNo"] - 1) * params["pageSize"]
+                return {"total": len(records), "list": [
+                    {"id": n, "name": f"Synthetic {n}"}
+                    for n in list(records)[offset:offset + params["pageSize"]]]}
+
+        knowledge = ActorKnowledge(OverlapClient(), lambda: DOCS)
+        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
+        self.assertEqual(knowledge.last_read, {"count": 1700, "scope": "线索",
+                                               "complete": True, "declared_total": 1700})
+        self.assertIn("total=1700（当前账号可见的全部", text)
+        self.assertIn("Synthetic 1", text)
 
     def test_a_repeated_page_does_not_prove_a_scope_union_count(self):
         class RepeatingClient(Client):

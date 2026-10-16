@@ -360,10 +360,10 @@ class ActorKnowledge:
         fields and session parameters blanked before anything is counted or shown."""
         return redacted(self.client.get(path, **params), self.handoffs)
 
-    def _pages(self, path: str, params: dict, follow: bool):
+    def _pages(self, path: str, params: dict, follow: bool, first=None):
         """One read of a list, and with `follow` its later pages: (first answer, rows or
         None when it is not a list, total, whether every row was read, request count)."""
-        data = self._read(path, **params)
+        data = self._read(path, **params) if first is None else first
         if isinstance(data, list):
             return data, list(data), len(data), True, 1
         if not (isinstance(data, dict) and isinstance(data.get("list"), list)):
@@ -414,13 +414,14 @@ class ActorKnowledge:
         """Count a bounded union by ID without keeping or exposing business rows."""
         union: set[str] = set()
         scanned = 0
+        page_size = 200  # This deployment's PageParam maximum.
         for scene in _SCENES:
             local: set[str] = set()
             total = None
             page = 1
             while True:
                 data = self._read(path, **{**params, "sceneType": scene,
-                                           "pageNo": page, "pageSize": 100})
+                                           "pageNo": page, "pageSize": page_size})
                 if (not isinstance(data, dict) or type(data.get("total")) is not int
                         or data["total"] < 0 or not isinstance(data.get("list"), list)
                         or (total is not None and data["total"] != total)):
@@ -429,7 +430,7 @@ class ActorKnowledge:
                 if scanned + total - len(local) > _COUNT_ROWS:
                     return None
                 rows = data["list"]
-                if len(rows) > 100 or len(local) + len(rows) > total:
+                if len(rows) > page_size or len(local) + len(rows) > total:
                     return None
                 ids = [str(row["id"]) for row in rows if isinstance(row, dict)
                        and type(row.get("id")) in (int, str) and row["id"] != ""]
@@ -444,6 +445,16 @@ class ActorKnowledge:
                     return None
                 page += 1
         return len(union), scanned
+
+    def _scoped_count_reply(self, path: str, counted: tuple[int, int]) -> str:
+        unique, scanned = counted
+        self.last_read = {"count": scanned, "scope": self._by_path[path]["tag"],
+                          "complete": True, "declared_total": unique}
+        return (f"total={unique}（当前账号三个可见范围按记录编号合并去重；"
+                f"逐页读取并核对了 {scanned} 行）。本次只核对记录数，"
+                "没有读取各字段的全量统计或完整名单。"
+                "三个范围经多次请求读取，应用没有提供同一时点快照；"
+                "若读取期间有变更，此数可能混合不同时点的记录。")
 
     def call_api(self, path: str, params: dict, fields=()) -> str:
         self._load()
@@ -469,11 +480,27 @@ class ActorKnowledge:
         declared_total = None
         data_lines: set[int] = set()
         try:
+            probes = None
+            if scoped and not fields:
+                # For a count larger than the field-read bound, do not read up to
+                # 5,000 full records only to discard them and scan the same IDs
+                # again. Reuse these first pages when the smaller list path wins.
+                probes = [self._read(relative, **{**params, "sceneType": scene,
+                                                 "pageNo": 1, "pageSize": 100})
+                          for scene in _SCENES]
+                totals = [probe.get("total") if isinstance(probe, dict) else None
+                          for probe in probes]
+                if (all(type(total) is int and total >= 0 for total in totals)
+                        and _ALL_ROWS < sum(totals) <= _COUNT_ROWS):
+                    counted = self._scoped_count(relative, params)
+                    if counted is not None and counted[0] > _ALL_ROWS:
+                        return self._scoped_count_reply(path, counted)
             if scoped:
                 merged, whole = {}, True
-                for scene in _SCENES:
+                for index, scene in enumerate(_SCENES):
                     data, rows, _total, done, _requests = self._pages(
-                        relative, {**params, "sceneType": scene, "pageNo": 1, "pageSize": 100}, True)
+                        relative, {**params, "sceneType": scene, "pageNo": 1, "pageSize": 100}, True,
+                        first=probes[index] if probes is not None else None)
                     whole = whole and done
                     for row in rows or []:
                         merged.setdefault(row.get("id", len(merged)) if isinstance(row, dict) else len(merged), row)
@@ -482,14 +509,7 @@ class ActorKnowledge:
                     if not fields:
                         counted = self._scoped_count(relative, params)
                         if counted is not None:
-                            unique, scanned = counted
-                            self.last_read = {"count": scanned, "scope": self._by_path[path]["tag"],
-                                              "complete": True, "declared_total": unique}
-                            return (f"total={unique}（当前账号三个可见范围按记录编号合并去重；"
-                                    f"逐页读取并核对了 {scanned} 行）。本次只核对记录数，"
-                                    "没有读取各字段的全量统计或完整名单。"
-                                    "三个范围经多次请求读取，应用没有提供同一时点快照；"
-                                    "若读取期间有变更，此数可能混合不同时点的记录。")
+                            return self._scoped_count_reply(path, counted)
                     # A partial union has no trustworthy total: overlapping scopes make
                     # even the sum of their declared totals unsuitable as an answer.
                     # Do not put the observed lower bound or partial rows in the model's
