@@ -60,7 +60,7 @@ const ANSWER = `已扫完全部 12 条，命中 3 条。
 
 export type Scenario =
   | 'read' | 'write' | 'operate' | 'refused' | 'indeterminate'
-  | 'reconnecting' | 'offline' | 'disconnect' | 'undelivered'
+  | 'connecting' | 'reconnecting' | 'offline' | 'disconnect' | 'undelivered'
   | 'many' | 'older' | 'longtext' | 'clear' | 'effects'
 
 export interface DevHost extends PanelHost {
@@ -401,6 +401,18 @@ export function createDevHost(): DevHost {
           commit({entries: [], pendingApproval: null, notice: null, optimistic: null,
                   hasOlder: false,
                   connection: {state: 'ready', busy: false, stopping: false, online: true}})
+          return
+        case 'connecting':
+          // No scripted run passes through the connecting state a returning session sees,
+          // so this holds it on an emptied thread: the skeleton is up once its delay
+          // passes and stays until another button moves the state on.
+          live = 0
+          sequence = 0
+          turn = 1
+          commit({entries: [], pendingApproval: null, notice: null, optimistic: null,
+                  hasOlder: false,
+                  connection: {state: 'connecting', busy: false, stopping: false,
+                               online: true}})
           return
         case 'read':
           void runRead('列出所有待开票的销售订单，带金额')

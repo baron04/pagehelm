@@ -725,12 +725,17 @@ export function readElementPageControl(element) {
 
 /** Map one Element Plus select hit area to its own accessible form input. */
 export function nativeControlElement(element) {
-  // The controller may index a query label while omitting its readonly select
-  // input. Resolve only HTML's exact association inside the current owned query
-  // item; keep the original label as the click hit area.
-  if (element instanceof HTMLLabelElement && readElementPageControl(element)?.kind === 'query') {
+  // The controller may index an Element Plus form label while omitting its
+  // readonly select input. Resolve only HTML's exact association inside one
+  // query item or the same dialog form; keep the label as the click hit area.
+  if (element instanceof HTMLLabelElement) {
     const control = element.control, item = element.closest('.el-form-item')
-    if (control instanceof HTMLInputElement && item && control.closest('.el-form-item') === item
+    const dialog = element.closest('[role="dialog"],dialog')
+    const dialogField = dialog && control?.closest('[role="dialog"],dialog') === dialog
+      && element.closest('form') && element.closest('form') === control.closest('form')
+    if ((dialogField || !dialog && readElementPageControl(element)?.kind === 'query')
+        && control instanceof HTMLInputElement && item && control.closest('.el-form-item') === item
+        && item.querySelectorAll('input[role="combobox"]').length === 1
         && /^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(control.id)
         && document.querySelectorAll(`[id="${control.id}"]`).length === 1
         && control.getAttribute('role') === 'combobox' && control.getAttribute('aria-haspopup') === 'listbox'

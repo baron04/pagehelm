@@ -205,8 +205,16 @@ class GuardProxyTests(unittest.TestCase):
                              ("GET", "/admin-api/system/tenant/get-by-website?website=fixture.test")):
             self.assertEqual(self.request(method, path, token="")[0], 200)
         count = len(self.calls)
-        self.assertEqual(self.request("GET", READ, token="")[0], 401)
-        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update", token="")[0], 401)
+        for method, path in (("GET", READ), ("POST", "/admin-api/crm/customer/update")):
+            status, body, _ = self.request(method, path, token="")
+            self.assertEqual((status, body["code"], body["data"]), (200, 401, None))
+        self.assertEqual(len(self.calls), count)
+
+    def test_expired_browser_token_uses_native_login_envelope_without_dispatch(self):
+        count = len(self.calls)
+        for method, path in (("GET", READ), ("POST", "/admin-api/crm/customer/update")):
+            status, body, _ = self.request(method, path, token="expired", assistant=False)
+            self.assertEqual((status, body), (200, {"code": 401, "msg": "账号未登录", "data": None}))
         self.assertEqual(len(self.calls), count)
 
     def test_unsupported_visit_tenant_context_is_not_silently_read_as_the_primary_tenant(self):

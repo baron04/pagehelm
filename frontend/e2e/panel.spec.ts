@@ -1114,8 +1114,27 @@ test.describe('the work process', () => {
     const after = await panel.page.locator('.woa-jump').boundingBox()
     expect(Math.abs(before!.y - after!.y)).toBeLessThanOrEqual(1)
 
-    await panel.page.locator('.woa-jump').click()
-    await panel.page.waitForTimeout(500)
+    const jump = panel.page.locator('.woa-jump')
+    const restingBackground = await jump.evaluate(node => getComputedStyle(node).backgroundColor)
+    await jump.hover()
+    await expect.poll(() => jump.evaluate(node => getComputedStyle(node).backgroundColor))
+      .not.toBe(restingBackground)
+
+    await panel.page.emulateMedia({reducedMotion: 'no-preference'})
+    await thread.evaluate(node => {
+      const original = node.scrollTo.bind(node)
+      node.scrollTo = (options?: ScrollToOptions | number, y?: number) => {
+        if (typeof options === 'object' && options.behavior === 'smooth') {
+          node.setAttribute('data-smooth-jump', 'true')
+        }
+        if (typeof options === 'number') original(options, y ?? 0)
+        else original(options)
+      }
+    })
+    await jump.click()
+    await expect(thread).toHaveAttribute('data-smooth-jump', 'true')
+    await expect.poll(() => thread.evaluate(
+      node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(28)
     const turn = await panel.page.locator('.woa-turn').last().boundingBox()
     const composer = await panel.page.locator('.woa-composer').boundingBox()
     expect(composer!.y - (turn!.y + turn!.height)).toBeGreaterThanOrEqual(85)
@@ -2247,7 +2266,7 @@ test.describe('conversation history paging', () => {
     await panel.set({loadingOlder: true})
     await panel.set({entries: [...turns(0, 20), ...current], loadingOlder: false, hasOlder: false})
     await expect.poll(async () => (await message.boundingBox())!.y).toBeCloseTo(before!.y, 0)
-    await expect(panel.page.locator('.woa-jump')).toHaveText(labels.jumpLatest)
+    await expect(panel.page.locator('.woa-jump')).toHaveAttribute('aria-label', labels.jumpLatest)
     expect(panel.errors).toEqual([])
   })
 
@@ -2270,7 +2289,7 @@ test.describe('conversation history paging', () => {
     await panel.set({entries: [entry('e1', 'goal', '这一轮的早期问题', {turn_id: 'partial'}), answer],
       loadingOlder: false, hasOlder: false})
     await expect.poll(async () => (await result.boundingBox())!.y).toBeCloseTo(before!.y, 0)
-    await expect(panel.page.locator('.woa-jump')).toHaveText(labels.jumpLatest)
+    await expect(panel.page.locator('.woa-jump')).toHaveAttribute('aria-label', labels.jumpLatest)
     expect(panel.errors).toEqual([])
   })
 

@@ -29,7 +29,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
-from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _draft_only_request, _tabs_not_shown,
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _draft_only_request, _read_only_status_question, _tabs_not_shown,
                                                  _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -414,11 +414,21 @@ class KnowledgeTests(unittest.TestCase):
                                  {"path": "/admin-api/orders/page", "params": "{\"pageNo\": 1}"},
                                  {"reads": []})
         self.assertIn("no→订单编号", result.feedback)
+        self.assertEqual((result.read_key, result.read_count), ("/admin-api/orders/page", 2))
         state.obs = replace(state.obs, page_read={**read, "path": "/admin-api/other/page"})
         result = procedure._tool(state, "call_api",
                                  {"path": "/admin-api/orders/page", "params": "{\"pageNo\": 1}"},
                                  {"reads": []})
         self.assertNotIn("no→订单编号", result.feedback)
+
+    def test_an_empty_list_read_reports_zero_as_structured_progress(self):
+        procedure = YudaoLoopProcedures(self.know, NS(review=None), "https://synthetic.test")
+        state = NS(obs=observation(), measure=lambda _name: contextlib.nullcontext(),
+                   progress=lambda facts: None)
+        result = procedure._tool(state, "call_api", {"path": "leads/page",
+            "params": '{"pageNo":1,"sceneType":1,"name":"不存在"}'}, {"reads": []})
+        self.assertEqual((result.state, result.read_key, result.read_count),
+                         ("completed", "/admin-api/leads/page", 0))
 
     def test_a_list_divided_by_whose_records_they_are_is_read_as_everything_the_actor_sees(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
@@ -661,6 +671,31 @@ class State:
     @staticmethod
     def cancelled():
         return False
+
+
+class StatusQuestionTests(unittest.TestCase):
+    def test_only_status_questions_without_page_or_money_work_are_read_only(self):
+        self.assertTrue(_read_only_status_question("新程办公的销售订单现在是什么状态？"))
+        self.assertFalse(_read_only_status_question("打开新程办公的销售订单页面，看看是什么状态？"))
+        self.assertFalse(_read_only_status_question("销售订单状态和金额是多少？"))
+        self.assertFalse(_read_only_status_question("把销售订单状态改成已审核"))
+        self.assertFalse(_read_only_status_question("销售订单状态变更为已审核？"))
+
+    def test_status_question_cannot_be_given_or_invoke_page_tools(self):
+        schemas = [schema for schema in TOOLS if schema["function"]["name"] in
+                   {"find_record", "call_api", "goto", "click", "finish"}]
+        token = _CURRENT_REQUEST.set("新程办公的销售订单现在是什么状态？")
+        try:
+            executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+            with patch.object(ModelDrivenTurnExecutor, "_tools", return_value=schemas):
+                offered = executor._tools({})
+            self.assertEqual([schema["function"]["name"] for schema in offered],
+                             ["find_record", "call_api", "finish"])
+            result = executor._invoke_tool(None, "goto", {"path": "/erp/sale/order"}, {})
+            self.assertEqual(result.error_code, "read_only_question")
+            self.assertEqual(result.state, "refused")
+        finally:
+            _CURRENT_REQUEST.reset(token)
 
 
 class DraftChoiceTests(unittest.TestCase):
@@ -1087,6 +1122,75 @@ class LoopTests(unittest.TestCase):
         _executor, state, text = self.loop(*[reply(call("search_menu", keyword="x")) for _ in range(3)], steps=3)
         self.assertEqual(state.terminal_reason, "agent_refused")
         self.assertIn("步骤用完", text)
+
+    def test_varying_empty_queries_of_one_source_force_an_early_summary(self):
+        def empty(_s, name, _args, _turn):
+            self.assertEqual(name, "call_api")
+            self.ran.append(name)
+            return LoopToolResult("total=0，本次读了 0 行", kind="read",
+                                  read_key="/admin-api/orders/page", read_count=0)
+
+        queries = [reply(call("call_api", path="/admin-api/orders/page",
+                              params={"pageNo": 1, "name": str(n)})) for n in range(4)]
+        executor, state, text = self.loop(*queries,
+            reply(call("finish", status="cannot", answer="此前读到 12 条，但金额条件未核实。")),
+            steps=12, tool=empty)
+        self.assertEqual(text, "此前读到 12 条，但金额条件未核实。")
+        self.assertEqual(self.ran, ["call_api"] * 4)
+        self.assertEqual([tool["function"]["name"] for tool in state.chat.offered[-1]], ["finish"])
+        self.assertEqual(self.turn["forced_summary_kind"], "read")
+        self.assertTrue(any("较宽查询" in m["content"] for m in executor._messages if m["role"] == "tool"))
+
+    def test_a_nonempty_read_resets_the_empty_read_streak(self):
+        counts = iter([0, 0, 0, 12, 0, 0, 0])
+        def read(_s, name, _args, _turn):
+            self.assertEqual(name, "call_api")
+            count = next(counts)
+            return LoopToolResult(f"本次读了 {count} 行", kind="read",
+                                  read_key="/admin-api/orders/page", read_count=count)
+
+        queries = [reply(call("call_api", path="/admin-api/orders/page",
+                              params={"pageNo": 1, "name": str(n)})) for n in range(7)]
+        _executor, state, text = self.loop(*queries,
+            reply(call("finish", status="done", answer="核实完毕")), steps=12, tool=read)
+        self.assertEqual((text, state.terminal_reason), ("核实完毕", ""))
+        self.assertNotIn("forced_summary_at", self.turn)
+
+    def test_an_unoffered_read_after_empty_read_limit_is_not_dispatched(self):
+        def empty(_s, name, _args, _turn):
+            self.ran.append(name)
+            return LoopToolResult("total=0", kind="read", read_key="orders/page", read_count=0)
+
+        read = reply(call("call_api", path="orders/page", params={"pageNo": 1}))
+        executor, state, text = self.loop(*([read] * 5),
+            reply(call("finish", status="cannot", answer="无法核实筛选结果")), steps=12, tool=empty)
+        self.assertEqual((text, state.terminal_reason), ("无法核实筛选结果", "agent_refused"))
+        self.assertEqual(self.ran, ["call_api"] * 4)
+        self.assertTrue(any("只允许用 finish" in m["content"] for m in executor._messages
+                            if m["role"] == "tool"))
+
+    def test_parallel_empty_reads_stop_inside_the_same_model_reply(self):
+        def empty(_s, name, _args, _turn):
+            self.ran.append(name)
+            return LoopToolResult("total=0", kind="read", read_key="orders/page", read_count=0)
+
+        many = reply(*(call("call_api", path="orders/page", params={"pageNo": n})
+                       for n in range(1, 7)))
+        _executor, state, text = self.loop(many,
+            reply(call("finish", status="cannot", answer="未找到可核实结果")), steps=12, tool=empty)
+        self.assertEqual((text, state.terminal_reason), ("未找到可核实结果", "agent_refused"))
+        self.assertEqual(self.ran, ["call_api"] * 4)
+
+    def test_multiple_tools_in_one_model_reply_cannot_bypass_the_turn_limit(self):
+        many = reply(*(call("search_menu", keyword=str(n)) for n in range(6)))
+        executor, state, text = self.loop(many,
+            reply(call("finish", status="cannot", answer="只核实了部分结果")), steps=4)
+        self.assertEqual((text, state.terminal_reason), ("只核实了部分结果", "agent_refused"))
+        self.assertEqual(self.ran, ["search_menu"] * 4)
+        self.assertEqual(self.turn["tool_calls"], 4)
+        self.assertEqual([tool["function"]["name"] for tool in state.chat.offered[-1]], ["finish"])
+        self.assertTrue(any("工具执行次数已达上限" in m["content"] for m in executor._messages
+                            if m["role"] == "tool"))
 
     def test_before_its_last_steps_the_turn_is_told_to_report_what_it_has(self):
         executor, _state, _text = self.loop(

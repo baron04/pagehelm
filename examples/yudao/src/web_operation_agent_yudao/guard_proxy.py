@@ -235,7 +235,14 @@ class NativeGuardProxy:
                     else:
                         self.forward()
                 except GuardRefused as exc:
-                    self.reply(401 if exc.code == "identity_required" else 403, {"error": exc.code})
+                    if exc.code == "identity_required" and self.path.startswith("/admin-api/"):
+                        # Yudao refreshes an expired access token from its own code=401
+                        # envelope. An HTTP 401 reaches Axios's transport-error path and
+                        # leaves the page signed out without attempting that refresh.
+                        # The refused request is never forwarded or executed.
+                        self.reply(200, {"code": 401, "msg": "账号未登录", "data": None})
+                    else:
+                        self.reply(401 if exc.code == "identity_required" else 403, {"error": exc.code})
                 except (ValueError, json.JSONDecodeError):
                     self.reply(400, {"error": "invalid_request"})
                 except Exception:

@@ -18,7 +18,7 @@ _COMMIT_AFTER_DRAFT = re.compile(
     r"(?:再|然后|随后|接着|并|之后|后)(?:由你|帮我|直接|立即|马上|现在|就)?(?:提交|保存)"
 )
 _SAVE = re.compile(
-    r"新建|新增|创建|添加|开一张|改成|改为|调成|设为|清空|记一条|补条|记好|"
+    r"新建|新增|创建|添加|开一张|改成|改为|换成|更换|调成|设为|清空|记一条|补条|记好|"
     r"写一条跟进|审批|审核|删除|关闭|启用|停用|分配|领取|放入公海|提交|保存"
 )
 _NEGATIVE_PREFIX = re.compile(r"(?:不(?:要|用|必|需要)?|别|请勿|切勿|无(?:需|须)|暂不)$")
@@ -50,6 +50,9 @@ def classify_write_intent(text: str, *, prior_draft: bool = False) -> WriteInten
         prefix = compact[max(0, match.start() - 4):match.start()]
         suffix = compact[match.end():match.end() + 6]
         if (_NEGATIVE_PREFIX.search(prefix) or _QUESTION_PREFIX.search(prefix)
+                or match.group() in {"换成", "更换"} and (
+                    prefix.endswith(("已", "已经", "可以", "能否"))
+                    or re.match(r"(?:后|过|了?(?:吗|么))", suffix))
                 or match.group() in {"提交", "保存"} and (
                     prefix.endswith(("已", "未", "没"))
                     or re.match(r"(?:的|状态|了?(?:几|多少|哪些))", suffix))

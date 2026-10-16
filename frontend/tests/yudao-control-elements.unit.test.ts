@@ -1,8 +1,40 @@
 import {describe, expect, it} from 'vitest'
+import {elementsFrom, hydrateFormFacts} from '../src/runtime/pageModel'
+import {createRedactor} from '../src/runtime/redaction'
 // @ts-expect-error Application module is served separately from the generic Runtime.
 import {nativeControlElement} from '../src/integrations/yudao/page-facts.js'
 
 describe('Element Plus accessible select input mapping', () => {
+  it('resolves one native customer select in an open dialog form', () => {
+    const dialog = document.createElement('section')
+    dialog.setAttribute('role', 'dialog')
+    dialog.id = 'sale-order-editor'
+    dialog.innerHTML = '<form><div class="el-form-item"><label for="customer-choice">客户</label>'
+      + '<div class="el-select__wrapper"><input id="customer-choice" role="combobox" '
+      + 'aria-haspopup="listbox" aria-controls="customer-options" readonly></div></div></form>'
+    document.body.append(dialog)
+    try {
+      const label = dialog.querySelector('label')!, input = dialog.querySelector('input')!
+      expect(nativeControlElement(label)).toBe(input)
+      const elements = elementsFrom('[0]<label>客户 />', 1, createRedactor())
+      hydrateFormFacts(elements, {}, () => nativeControlElement(label), createRedactor())
+      expect(elements[0]?.role).toBe('combobox')
+      expect(elements[0]?.attrs).toMatchObject({field_label: '客户', form_scope: 'dialog:sale-order-editor',
+        'aria-controls': 'customer-options'})
+      input.disabled = true
+      expect(nativeControlElement(label)).toBe(label)
+      input.disabled = false
+      const duplicate = input.cloneNode() as HTMLElement
+      dialog.querySelector('.el-form-item')!.append(duplicate)
+      expect(nativeControlElement(label)).toBe(label)
+      duplicate.remove()
+      const other = document.createElement('form')
+      dialog.append(other)
+      other.append(input)
+      expect(nativeControlElement(label)).toBe(label)
+      other.remove()
+    } finally { dialog.remove() }
+  })
   it('keeps the controller hit area while resolving its one owned accessible input', () => {
     const area = document.createElement('div')
     area.className = 'el-select__wrapper'

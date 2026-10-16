@@ -80,6 +80,17 @@ describe('a page the application can open itself is not loaded as a document', (
   const goto = {command_id: 'g1', action: 'goto', args: {url: '/sale/order?status=1'}, expect_navigation: true}
   const noPage = () => { throw new Error('page_error: no page') }
 
+  it('keeps the current document when goto names the current address', async () => {
+    const open = vi.fn().mockResolvedValue(false)
+    const here = window.location.href
+    const command = {...goto, args: {url: here}}
+    expect(mayNavigate(command, noPage)).toBe(false)
+    expect(await executeCommand(command, noPage, {navigationMode: 'document'}, open))
+      .toEqual({success: true, message: 'already on page'})
+    expect(open).not.toHaveBeenCalled()
+    expect(window.location.href).toBe(here)
+  })
+
   it('asks the application first, with the address on this origin, and loads nothing when it opened it', async () => {
     const open = vi.fn().mockResolvedValue(true)
     const pushed = vi.spyOn(window.history, 'pushState')

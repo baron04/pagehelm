@@ -183,7 +183,7 @@ class ProductSharedBudgetTests(unittest.TestCase):
 
 
 class ProductPageLeaveTests(unittest.TestCase):
-    def test_leave_to_work_the_page_is_asked_once_for_the_conversation(self):
+    def test_leave_to_work_the_page_is_asked_once_per_turn(self):
         from web_operation_agent.schemas import ElementRef
         url = "https://ledger.example/invoices"
         channel = _Channel(page_url=url)
@@ -211,10 +211,8 @@ class ProductPageLeaveTests(unittest.TestCase):
                     gone.append("goto" in _RemoteBrowser.instances[-1].actions)
             events = [json.loads(line) for line in path.read_text().splitlines()]
         self.assertEqual(gone, [True, True, True])
-        # Asked in the first turn, gone ahead on in the second, asked again in a new conversation.
-        self.assertEqual([a.kind for a in channel.approvals], ["operate", "operate"])
-        self.assertEqual([e["message_id"] for e in events if e["event"] == "operation_leave_carried"],
-                         ["message-1"])
+        self.assertEqual([a.kind for a in channel.approvals], ["operate"] * 3)
+        self.assertFalse(any(e["event"] == "operation_leave_carried" for e in events))
 
 
 if __name__ == "__main__":

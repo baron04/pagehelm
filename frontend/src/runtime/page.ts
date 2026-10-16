@@ -23,6 +23,7 @@ import {ChoiceUnavailable, listboxCombobox, ownedListbox, optionText, selectedOp
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
 import {suspendPanelHitTargets} from './panelObservation'
+import {createSubmitGuide} from '../handoff/guide'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
@@ -105,7 +106,7 @@ export type PageRouteReader = () => unknown
 export type PageQueryReader = () => unknown
 /** Application-owned target facts, never authorization to click. */
 export type ElementNavigationReader = (element: ElementLike | null | undefined) => unknown
-export interface PageHighlight { clear(): void; active(): boolean }
+export interface PageHighlight { clear(): void; active(): boolean; readonly preserveOnInteraction?: boolean }
 export interface FormHandoffField {
   ref?: string; field: string; control: string; value: string
   binding?: string; label?: string; scope?: string; instance?: string
@@ -630,6 +631,25 @@ export class Page {
         formControlScope(live) !== candidate.scope) return false
     const label = String(live.textContent || '').replace(/\s+/g, ' ').trim()
     return label === candidate.label
+  }
+
+  /** Follow the exact verified submit control; all geometry and hints stay in this browser. */
+  guideSubmit(ref: unknown, turnId: string): PageHighlight {
+    const element = this.element(ref)
+    if (!(element instanceof HTMLElement) || !element.isConnected)
+      throw new Error('bad_arguments: highlight target is no longer on the page')
+    const scope = formControlScope(element)
+    const label = element.textContent
+    const owner = element.closest('[role="dialog"],dialog,form') ?? element.parentElement
+    if (this.panelContainer) {
+      try {
+        const guide = createSubmitGuide({target: element, container: this.panelContainer, turnId,
+          current: () => formControlScope(element) === scope && element.textContent === label
+            && (element.closest('[role="dialog"],dialog,form') ?? element.parentElement) === owner})
+        if (guide) return guide
+      } catch { /* A presentation failure must not fail the verified handoff. */ }
+    }
+    return this.highlight(ref)
   }
 
   /** Mark one observed control without focusing, clicking, or covering its hit target. */

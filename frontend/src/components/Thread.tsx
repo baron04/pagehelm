@@ -433,6 +433,16 @@ export function Thread(props: ThreadProps): React.JSX.Element {
     follow.current = true
   }, [])
 
+  const jumpToLatest = useCallback(() => {
+    const root = scroller.current
+    if (!root) return
+    // Keep automatic following paused until the smooth scroll reaches the tail;
+    // a resize during the animation must not snap the reader there immediately.
+    follow.current = false
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    root.scrollTo({top: root.scrollHeight, behavior: reducedMotion ? 'auto' : 'smooth'})
+  }, [])
+
   // One scroll listener decides both things: whether to keep following, and whether the
   // reader is far enough away to be offered a way back. Only a deliberate gesture can
   // turn following off -- a programmatic scroll always lands at the bottom, so it cannot.
@@ -597,9 +607,10 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       </div>
     </div>
     {detached && (
-      <button type="button" className="woa-jump" onClick={pin}>
-        <ArrowDown {...iconProps(12)} />
-        {labels.jumpLatest}{unseen > 0 ? ` · ${unseen}` : ''}
+      <button type="button" className="woa-jump" onClick={jumpToLatest}
+              aria-label={`${labels.jumpLatest}${unseen > 0 ? ` · ${unseen}` : ''}`}
+              title={labels.jumpLatest}>
+        <ArrowDown {...iconProps(16)} />
       </button>
     )}
     </div>

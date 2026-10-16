@@ -140,6 +140,8 @@ class LoopToolResult:
     entered: tuple[tuple[str, str], ...] = ()
     trace: tuple[str, ...] = ()
     read_summary: tuple[str, str] | None = None
+    read_key: str = ""
+    read_count: int | None = None
     marked: str = ""
     completion_command: str = ""
 
@@ -153,6 +155,9 @@ class LoopToolResult:
                 or self.read_summary is not None and (not isinstance(self.read_summary, tuple)
                     or len(self.read_summary) != 2 or any(not isinstance(v, str) or len(v) > 4000
                                                         for v in self.read_summary))
+                or not isinstance(self.read_key, str) or len(self.read_key) > 200
+                or self.read_count is not None and (type(self.read_count) is not int or self.read_count < 0
+                    or not self.read_key or self.kind != "read")
                 or not isinstance(self.entered, tuple) or len(self.entered) > 32
                 or any(not isinstance(pair, tuple) or len(pair) != 2
                        or any(not isinstance(v, str) or len(v) > 4000 for v in pair) for pair in self.entered)

@@ -179,6 +179,11 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
     case 'goto': {
       if (!args.url) throw new Error('bad_arguments: goto needs url')
       const href = sameOriginUrl(args.url)
+      // A route already shown is not a navigation. Loading it again destroys the
+      // assistant and page state; the server verifies the current rendered route.
+      if (href === window.location.href) {
+        return {success: true, message: 'already on page'}
+      }
       if (config.navigationMode === 'spa') {
         // The event must carry the state that was just pushed. A router is entitled to read
         // `event.state` and ignore a stateless popstate as "a click on an anchor" -- Odoo's
@@ -206,7 +211,10 @@ export async function executeCommand(command: ActionCommand, access: PageAccess,
 
 /** Whether a command can leave the page, so the Runtime must wait to see if it did. */
 export function mayNavigate(command: ActionCommand, access: PageAccess): boolean {
-  if (command.action === 'goto' || command.action === 'back') return true
+  if (command.action === 'goto') {
+    return !command.args?.url || sameOriginUrl(command.args.url) !== window.location.href
+  }
+  if (command.action === 'back') return true
   if (command.expect_navigation) return true
   if (command.action !== 'click') return false
   try {

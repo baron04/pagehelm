@@ -752,6 +752,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
 你能做三类事，一句话里可能同时包含几类，每一类都要做完：
 1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
    - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序会读完所有页，算好数值列的合计、最大、最小，日期列每个月的行数，以及类型、状态这类列每种取值的行数和合计（带上代码的名称），直接用这些数，不要自己一页页翻、一行行加，也不要按每种取值再读一次。
+   - “超过 / 不少于 / 低于”等比较条件，只有接口明确声明相应比较参数时才传给接口；等值金额参数不能代替比较条件。接口没有比较参数时，用 fields 读完有关列，按每行的值判断。筛选读到 0 行而较宽查询读到记录时，先核对参数和已读记录，不要反复换一组猜测参数。
    - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。
@@ -770,7 +771,8 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 用户说“只看…”“翻到下一页”而没说哪个页面时，指的是当前页面。
 3. 替用户把表单填好但不提交：打开“新增”或那条记录的“编辑”表单，只填用户明确给出的字段，其它字段保持原样。
    - “某名称的资料先填上…”“新产品先填…”这类请求如未指明已有编号或修改原值，应按新建草稿理解，直接打开新增表单；名称是要填的值，不要先把它当已存在记录查找。已有记录查询返回零条也不构成不能预填，继续打开新增表单。用户明确要求修改已有记录时才定位原记录。
-   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。工具返回应用实时权限时直接依据该权限事实；明确无编辑权限时如实说明，不能滚动或更换入口重试。除此之外只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
+   - 修改一条已有记录时，从哪里进入编辑：这条记录在列表里能点开详情页的（名称是链接，或有“详情”，或 find_record 给出了它的详情页），先进它的详情页（有地址就直接 goto），从详情页上的“编辑”进入表单；当前屏幕没有“编辑”入口时，先按观察提示滚动查看；仍找不到就如实说明当前未找到入口，不能据此判断无权限。工具返回应用实时权限时只依据它明确指向的记录判断该记录；客户的权限不能用来判断其关联联系人。明确无该记录编辑权限时如实说明，不能滚动或更换入口重试。除此之外只有应用明确拒绝权限时才说明无权限，不要再换入口重试。只有没有详情页的记录，才直接点列表里那一行的“编辑”。
+   - 要修改某客户的联系人时，联系人是独立记录；先确认具体联系人。用户说“把手机号换成新的”却没有提供新号码时，先用 need_input 询问号码，不打开表单，也不把客户本身的编辑权限当作联系人权限。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。需要新行时，在 fill_fields 带 add_lines={{"button":"观察中的添加按钮原文","count":要新增的行数}}，同一次调用带齐主表和各行用户给的字段，以及 then_highlight 和 answer。新行使用已观察到的列名与新增后的行号，程序先逐行建行核验，再按字段名填写，无须先单独填写主表或先点击添加行。只填用户给的列，单价、税率这些没提到的列不要动。
    - search_menu 已给出审核表单入口时，用 goto(path, open="入口文字") 一步打开页面和表单；当前页面上有唯一入口时也可直接 click。进入表单后先看返回的观察。
    - 填表用 fill_fields 按字段名一次做完，不要一个个 input/select。已看到提交按钮时，同时带 then_highlight="按钮原文" 和 answer：程序逐个核验字段，再回读整张表单并标出按钮，通过才直接结束，无须再 highlight/finish。字段或交接没做成时先读反馈，再修正剩余部分。筛选带 then_click="搜索" 和 answer，程序核验全部字段和生效查询后直接结束。
@@ -1226,13 +1228,22 @@ class YudaoLoopProcedures:
 
     def _record_access(self, s, path):
         # The application's exact permission rows, never missing DOM controls,
-        # establish this read-only fact. Form and write admission remain separate.
-        match = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
-        if match is None:
+        # establish this read-only fact for the exact CRM record. Form and write
+        # admission remain separate; a customer's rights say nothing about contacts.
+        customer = re.fullmatch(r"/crm/customer/detail/([1-9][0-9]{0,19})", path)
+        contact = re.fullmatch(r"/crm/contact/detail/([1-9][0-9]{0,19})", path)
+        if customer and "联系人" in _CURRENT_REQUEST.get():
+            return ""
+        intent = _WRITE_INTENT.get()
+        if contact and (not isinstance(intent, WriteIntent) or intent.mode not in {"draft", "save"}):
+            return ""
+        if not customer and not contact:
             return ""
         from .bound_data_reads import BoundDataReads
-        from .record_access import customer_can_edit
+        from .record_access import contact_can_edit, customer_can_edit
         from web_operation_agent.business.errors import BusinessToolContractError, BusinessToolUnavailableError
+        record = customer or contact
+        biz_type, can_edit_record = ((2, customer_can_edit) if customer else (3, contact_can_edit))
         bound = BoundDataReads(self.goal_port.data, s.operation, s.page.checkpoint)
         identity = bound._invoke(self.knowledge.client.get, "system/auth/get-permission-info")
         user = identity.get("user") if isinstance(identity, dict) else None
@@ -1241,14 +1252,18 @@ class YudaoLoopProcedures:
                 or str(user.get("deptId") or "none") != principal.workspace_id):
             from web_operation_agent.business.errors import BusinessToolIdentityError
             raise BusinessToolIdentityError("the customer permission actor changed")
-        team = bound._invoke(self.knowledge.client.get, "crm/permission/list", bizType=2, bizId=match[1])
+        team = bound._invoke(self.knowledge.client.get, "crm/permission/list", bizType=biz_type, bizId=record[1])
         try:
-            can_edit = customer_can_edit(identity, team, match[1], principal.actor_id)
+            can_edit = can_edit_record(identity, team, record[1], principal.actor_id)
         except BusinessToolContractError:
             raise BusinessToolUnavailableError("the application edit permission could not be verified") from None
+        if contact:
+            if can_edit:
+                return "\n应用实时权限：当前账号有此联系人记录本身的编辑资格；页面动作仍须单独审核，写入仍须新的批准。"
+            return "\n应用实时权限：当前账号没有此联系人记录本身的编辑权限，不能修改该联系人；这是联系人权限限制，不是客户记录不存在。无需为编辑该联系人而滚动或更换入口重试。"
         if can_edit:
-            return "\n应用实时权限：当前账号有此客户的编辑资格；页面动作仍须单独审核，写入仍须新的批准。"
-        return "\n应用实时权限：当前账号没有此客户的编辑权限，不能修改；这是权限限制，不是记录不存在。无需滚动或更换入口重试。"
+            return "\n应用实时权限：当前账号有此客户记录本身的编辑资格；不代表可编辑其联系人。页面动作仍须单独审核，写入仍须新的批准。"
+        return "\n应用实时权限：当前账号没有此客户记录本身的编辑权限；不代表其联系人不能修改。这是客户记录的权限限制，不是记录不存在。无需为编辑客户而滚动或更换入口重试。"
 
     def _element(self, s, index):
         """The element the model named, if the page text it was last shown listed it."""
@@ -1360,7 +1375,10 @@ class YudaoLoopProcedures:
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
-            return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused")
+            return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused",
+                                  read_key=("/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/"))
+                                  if know.last_read else "",
+                                  read_count=know.last_read["count"] if know.last_read else None)
         if name == "fill_fields":
             return self._fill_fields(s, args["fields"], args.get("then_click", ""),
                                      turn, then_highlight=args.get("then_highlight", ""),
@@ -1862,6 +1880,16 @@ def _new_form_draft_request(text: str) -> bool:
     return _draft_only_request(text) and not re.search(r"编辑|修改|已有|原值|当前值|改成|改为", text)
 
 
+_STATUS_READ_TOOLS = frozenset({"find_record", "search_api", "call_api", "finish"})
+
+
+def _read_only_status_question(text: str) -> bool:
+    """Only unmistakable status questions; mixed page, money and write requests retain tools."""
+    return (bool(re.search(r"状态|进度|情况", text))
+            and bool(re.search(r"[?？]|什么|如何|怎样|目前|现在|当前", text))
+            and not re.search(r"金额|价格|单价|费用|余额|打开|进入|跳转|页面|筛选|过滤|点击|选择|选中|填写|切换|翻页|定位|显示在|修改|改成|改为|变更|调整|设为|置为|标记|更新|设置|保存|提交|创建|新建|删除|取消|执行|办理", text))
+
+
 class SlimTurnExecutor(ModelDrivenTurnExecutor):
     """Yudao composition of the application-neutral model-driven executor."""
 
@@ -1882,6 +1910,9 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
 
     def _tools(self, turn):
         offered = super()._tools(turn)
+        if _read_only_status_question(_CURRENT_REQUEST.get()):
+            return [tool for tool in offered
+                    if tool["function"]["name"] in _STATUS_READ_TOOLS]
         intent = _WRITE_INTENT.get()
         if not isinstance(intent, WriteIntent) or intent.mode != "draft":
             return offered
@@ -1892,6 +1923,10 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         return [tool for tool in offered if tool["function"]["name"] not in names]
 
     def _invoke_tool(self, s, name, args, turn):
+        if _read_only_status_question(_CURRENT_REQUEST.get()):
+            if name not in _STATUS_READ_TOOLS:
+                return LoopToolResult("本轮只询问状态；请根据当前账号的只读接口结果直接回答，不操作页面。",
+                                      kind="read", state="refused", error_code="read_only_question")
         intent = _WRITE_INTENT.get()
         if isinstance(intent, WriteIntent) and intent.mode == "draft":
             writes = turn.get("writes")

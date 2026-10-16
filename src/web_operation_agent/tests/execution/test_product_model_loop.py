@@ -183,8 +183,8 @@ class ModelLoopTests(unittest.TestCase):
                 answer = fixture.run()
                 self.assertTrue(answer.startswith("Fields ready."))
                 valid = mode in {"combined", "separate_finish"}
-                self.assertEqual(valid, "请检查表单" in answer)
-                self.assertEqual(valid, "「Save」提交；助手未提交。" in answer)
+                self.assertEqual(valid, answer.endswith("\n\n**请核对后，手动点击「Save」提交。**"))
+                self.assertNotIn("请检查表单", answer)
                 self.assertEqual(len(replies), len(fixture.state.chat.seen))
 
     def test_unrelated_searches_do_not_restart_unreviewed_control_recovery(self):

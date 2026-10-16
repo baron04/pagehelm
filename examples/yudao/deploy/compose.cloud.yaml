@@ -30,7 +30,8 @@ services:
   agent:
     # The assistant host, on when the owner has put the model provider's settings in
     # /opt/yudao/agent.env (deploy.sh then enables the profile). It reads yudao as each
-    # signed-in person, with their own token, and offers no writes. Page work runs under
+    # signed-in person, with their own token, and offers the reviewed typed writes below,
+    # each after its own approval. Page work runs under
     # release-reviewed handlers (cloud/native-policy/pages.json), the method fence and
     # the server's own read-only window (patches/server); the host's nginx sends the API
     # and /woa/page-guard through port 48093 (cloud/nginx.native-guard.locations.conf).
@@ -44,7 +45,9 @@ services:
               "--state-dir", "/var/lib/woa-yudao", "--ui-source", "/opt/source/ui",
               "--source-root", "/opt/source", "--source-release", "${YUDAO_RELEASE:-v2026.09}",
               "--native-read-policy", "/opt/native-policy/fence.json",
-              "--native-page-policy", "/opt/native-policy/pages.json"]
+              "--native-page-policy", "/opt/native-policy/pages.json",
+              # The demo site offers writes; remove this line for a read-only site.
+              "--native-writes"]
     volumes:
       - agent-state:/var/lib/woa-yudao
       - ${YUDAO_CACHE}/native-policy:/opt/native-policy:ro

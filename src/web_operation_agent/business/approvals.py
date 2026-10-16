@@ -91,8 +91,7 @@ class ApprovalWatch:
             "mutation_indeterminate": 0,
         }
         self.operation_counts = {"requested": 0, "confirmed": 0, "not_confirmed": 0}
-        #: Whether the person has let the assistant work the page. A watch lives for one
-        #: turn; its owner may carry the leave in from an earlier turn of the conversation.
+        #: Whether the person has let the assistant work the page during this turn.
         self.operation_granted = False
         #: The operation the card was answered for, until the next dispatch settles it.
         self.answered_for: tuple[str, str] | None = None

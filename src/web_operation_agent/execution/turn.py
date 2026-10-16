@@ -120,10 +120,6 @@ class AgentTurnExecutor:
                 conversation_state, ConversationState):
             raise TypeError("conversation_state must be a ConversationState or None")
         self.conversation_state = conversation_state or ConversationState()
-        #: The person's leave to work the page, answered once for the conversation: a
-        #: later turn goes ahead on it, a new conversation asks again. Writes are not
-        #: covered by it; each still asks on its own.
-        self.page_leave = False
 
     def _publish_step(self, facts: dict, turn_id: str) -> None:
         """Put one step of the running turn on the timeline, or nothing if it has no line.
@@ -157,8 +153,6 @@ class AgentTurnExecutor:
         # between planning and execution of a turn already under way.
         dropped_on_new_conversation = (self.conversation_state.clear()
                             if self.channel.take_new_conversation() else -1)
-        if dropped_on_new_conversation >= 0:
-            self.page_leave = False
         if self.application is not None:
             if not self.application.descriptor.owns_url(turn_message.page_url):
                 raise AgentTurnError(
@@ -296,14 +290,14 @@ class AgentTurnExecutor:
                     operation_context_digest=(context.binding_digest if context else ""))
 
         def confirm_operation(plan, *, context: OperationContext | None = None):
-            """One card for the conversation: may the assistant work the page."""
+            """One card for this turn: may the assistant work the page."""
             chinese = bool(re.search(r"[\u3400-\u9fff]", turn_message.text))
             effect = ("在页面上帮你完成这件事" if chinese
                       else "Work the page to do this for you")
             # The request is the message right above the card; the card says only what
             # leave to work the page lets the assistant do.
-            targets = (("会打开页面、点击、填写和选择；这次对话里不再询问",) if chinese
-                       else ("Opens pages, clicks, fills and chooses; not asked again in this conversation",))
+            targets = (("会打开页面、点击、填写和选择；本次提问只询问一次",) if chinese
+                       else ("Opens pages, clicks, fills and chooses; asked once for this request",))
             try:
                 return approval_gate.decide_plan(
                     plan, effect=effect, targets=targets,
@@ -430,9 +424,6 @@ class AgentTurnExecutor:
         )
         if current is not None:
             session.adopt_entry(current.observation)
-        session._approvals.operation_granted = self.page_leave
-        if self.page_leave and session._approvals.operation_confirmation is not None:
-            ledger.append("operation_leave_carried", message_id=turn_message.message_id)
         try:
             with receipt.stage("source"):
                 session.plan()
@@ -449,11 +440,6 @@ class AgentTurnExecutor:
                 retryable=False,
                 run_id=run_id,
             ) from exc
-        finally:
-            # Leave answered in this turn carries to the next; leave withdrawn here (the
-            # task read anew) is asked again.
-            self.page_leave = session._approvals.operation_granted
-
         agent.model_receipt = {**receipt.report(self.chat, run_id),
                                "budget": budget.projection()}
         ledger.append("turn_model_receipt", **agent.model_receipt)

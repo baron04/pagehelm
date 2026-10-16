@@ -398,12 +398,17 @@ describe('a page action in an application that names a write guard', () => {
     try {
       state.config = {...(state.config as object), pageWriteGuard: '/woa/page-guard'}
       state.writeGuardUntil = Date.now() + 60_000
+      const guide = {clear: vi.fn(), active: () => true, preserveOnInteraction: true}
+      state.highlightHandle = guide
       const event = {isTrusted: true, cancelable: true, composedPath: () => [document.body],
         preventDefault: vi.fn(), stopImmediatePropagation: vi.fn()} as unknown as Event
       runtime._userActed(event)
       // Asked for synchronously, before the application's own handler for the gesture runs.
       expect(calls).toEqual(['/woa/page-guard/end'])
       expect(state.writeGuardUntil).toBe(0)
+      // Reviewing/scrolling keeps the local form guide, while the write window still closes.
+      expect(state.highlightHandle).toBe(guide)
+      expect(guide.clear).not.toHaveBeenCalled()
       // A synthetic event, or one inside the assistant's own panel, closes nothing.
       state.writeGuardUntil = Date.now() + 60_000
       runtime._userActed({...event, isTrusted: false} as unknown as Event)

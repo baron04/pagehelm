@@ -829,16 +829,17 @@ export class EmbeddedWebRuntime {
   /**
    * A person's real gesture on the page is theirs: it is never held back, never swallowed
    * and never stops the assistant. Two things follow from it. The marker the assistant
-   * left on a control is cleared, and the read-only window the assistant opened for its
-   * own page work is closed at once, before the application handles the gesture, so what
-   * the person does is not refused as if the assistant had done it. The assistant opens
+   * left on a control is cleared; a form guide instead follows scrolling and review. The
+   * read-only window the assistant opened for its own page work is closed at once, before
+   * the application handles the gesture, so what the person does is not refused as if
+   * the assistant had done it. The assistant opens
    * the window again before its next action, and the server checks that action against a
    * fresh observation either way.
    */
   _userActed(event: Event): void {
     if (!event.isTrusted) return
     if (event.composedPath().includes(this.panelContainer as EventTarget)) return
-    this._clearHighlight()
+    if (!this.highlightHandle?.preserveOnInteraction) this._clearHighlight()
     const guard = this.config?.pageWriteGuard
     if (guard && this.writeGuardUntil > Date.now()) {
       this.writeGuardUntil = 0
@@ -1233,7 +1234,8 @@ export class EmbeddedWebRuntime {
           throw new Error('bad_arguments: form submit control does not match the current page')
         }
         this._clearHighlight()
-        this.highlightHandle = this.page.highlight(command.args.submit.ref)
+        this.highlightHandle = this.page.guideSubmit(command.args.submit.ref,
+          this.stored?.inFlight?.turn_id ?? this.stored?.activeMessageId ?? '')
       }
       return Promise.resolve({success: true, message: 'form fields verified for handoff'})
     }

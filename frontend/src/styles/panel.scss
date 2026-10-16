@@ -1,4 +1,4 @@
-@use './tokens.generated' as *;
+@use "./tokens.generated" as *;
 
 /* The panel owns a shadow root, so `:host` is the only thing it can style outside itself.
    The generated token block above declares the palette on `:host`; this rule must not use
@@ -32,7 +32,11 @@
   visibility: visible;
 }
 
-*, *::before, *::after { box-sizing: border-box; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 .woa-root {
   font-family: var(--woa-font-stack);
@@ -45,8 +49,10 @@
 
 .woa-sr {
   position: absolute;
-  width: 1px; height: 1px;
-  padding: 0; margin: -1px;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
@@ -60,7 +66,9 @@ button {
   color: inherit;
   cursor: pointer;
 }
-button:disabled { cursor: not-allowed; }
+button:disabled {
+  cursor: not-allowed;
+}
 
 :focus-visible {
   outline: 2px solid var(--woa-focus);
@@ -71,7 +79,8 @@ button:disabled { cursor: not-allowed; }
 /* The light is fixed to the viewport, outside the window's clipping and drawer layout.
    All descendants stay inert: no hit target, focus, scroll, native cursor or event changes. */
 .woa-screen-effects {
-  position: fixed; inset: 0;
+  position: fixed;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
   user-select: none;
@@ -79,69 +88,142 @@ button:disabled { cursor: not-allowed; }
   opacity: 1;
   transition: opacity var(--woa-motion-effect-exit) ease;
 }
-.woa-screen-effects *, .woa-screen-effects::before, .woa-screen-effects::after {
+.woa-screen-effects *,
+.woa-screen-effects::before,
+.woa-screen-effects::after {
   pointer-events: none;
 }
 .woa-screen-effects__glow {
-  position: absolute; inset: 0;
+  position: absolute;
+  inset: 0;
   opacity: var(--woa-effect-opacity);
 }
-.woa-screen-effects__renderer { position: absolute; inset: 0; }
-.woa-screen-effects__canvas { display: block; width: 100%; height: 100%; opacity: 0; }
-.woa-screen-effects__canvas[data-ready] { opacity: 1; }
-.woa-screen-effects__renderer:has([data-ready]) + .woa-screen-effects__fallback { display: none; }
+.woa-screen-effects__renderer {
+  position: absolute;
+  inset: 0;
+}
+.woa-screen-effects__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+.woa-screen-effects__canvas[data-ready] {
+  opacity: 1;
+}
+.woa-screen-effects__renderer:has([data-ready]) + .woa-screen-effects__fallback {
+  display: none;
+}
 .woa-screen-effects__fallback {
-  position: absolute; inset: 0;
+  position: absolute;
+  inset: 0;
   animation: woa-ambient-breathe var(--woa-motion-ambient) ease-in-out infinite;
-  mask-image:
-    linear-gradient(90deg, var(--woa-effect-mask-solid), var(--woa-effect-mask-soft) 24px,
-      transparent var(--woa-effect-depth), transparent calc(100% - var(--woa-effect-depth)),
-      var(--woa-effect-mask-soft) calc(100% - 24px), var(--woa-effect-mask-solid)),
-    linear-gradient(180deg, var(--woa-effect-mask-solid), var(--woa-effect-mask-soft) 24px,
-      transparent var(--woa-effect-depth), transparent calc(100% - var(--woa-effect-depth)),
-      var(--woa-effect-mask-soft) calc(100% - 24px), var(--woa-effect-mask-solid));
+  mask-image: linear-gradient(
+      90deg,
+      var(--woa-effect-mask-solid),
+      var(--woa-effect-mask-soft) 24px,
+      transparent var(--woa-effect-depth),
+      transparent calc(100% - var(--woa-effect-depth)),
+      var(--woa-effect-mask-soft) calc(100% - 24px),
+      var(--woa-effect-mask-solid)
+    ),
+    linear-gradient(
+      180deg,
+      var(--woa-effect-mask-solid),
+      var(--woa-effect-mask-soft) 24px,
+      transparent var(--woa-effect-depth),
+      transparent calc(100% - var(--woa-effect-depth)),
+      var(--woa-effect-mask-soft) calc(100% - 24px),
+      var(--woa-effect-mask-solid)
+    );
 }
 /* CSS approximation only when ai-motion cannot render. The inward mask stays fixed. */
 .woa-screen-effects__light {
-  position: absolute; inset: -100vmax;
-  background: conic-gradient(from -100deg, var(--woa-glow-blue), var(--woa-glow-violet),
-    var(--woa-glow-coral), var(--woa-glow-gold), var(--woa-glow-blue));
+  position: absolute;
+  inset: -100vmax;
+  background: conic-gradient(
+    from -100deg,
+    var(--woa-glow-blue),
+    var(--woa-glow-violet),
+    var(--woa-glow-coral),
+    var(--woa-glow-gold),
+    var(--woa-glow-blue)
+  );
   filter: blur(var(--woa-effect-blur));
   animation: woa-ambient-flow var(--woa-motion-color) linear infinite;
 }
 .woa-screen-effects__light--alternate {
-  background: conic-gradient(from -100deg, var(--woa-glow-violet), var(--woa-glow-blue),
-    var(--woa-glow-coral), var(--woa-glow-gold), var(--woa-glow-violet));
+  background: conic-gradient(
+    from -100deg,
+    var(--woa-glow-violet),
+    var(--woa-glow-blue),
+    var(--woa-glow-coral),
+    var(--woa-glow-gold),
+    var(--woa-glow-violet)
+  );
   animation: woa-ambient-flow var(--woa-motion-color) linear infinite reverse,
-             woa-ambient-color var(--woa-motion-ambient) ease-in-out infinite;
+    woa-ambient-color var(--woa-motion-ambient) ease-in-out infinite;
 }
 @keyframes woa-ambient-breathe {
-  0%, 100% { opacity: calc(var(--woa-effect-opacity) * 0.78); }
-  50% { opacity: var(--woa-effect-opacity); }
+  0%,
+  100% {
+    opacity: calc(var(--woa-effect-opacity) * 0.78);
+  }
+  50% {
+    opacity: var(--woa-effect-opacity);
+  }
 }
-@keyframes woa-ambient-color { 0%, 100% { opacity: 0; } 50% { opacity: 0.8; } }
-@keyframes woa-ambient-flow { to { transform: rotate(360deg); } }
+@keyframes woa-ambient-color {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+@keyframes woa-ambient-flow {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .woa-agent-cursor {
   position: absolute;
-  left: var(--woa-effect-cursor-inset); top: var(--woa-effect-cursor-inset);
-  width: var(--woa-effect-cursor-size); height: var(--woa-effect-cursor-size);
+  left: var(--woa-effect-cursor-inset);
+  top: var(--woa-effect-cursor-inset);
+  width: var(--woa-effect-cursor-size);
+  height: var(--woa-effect-cursor-size);
   filter: drop-shadow(0 2px 3px rgba(16, 18, 23, 0.22));
   transition: left var(--woa-motion-cursor) var(--woa-motion-easing),
-              top var(--woa-motion-cursor) var(--woa-motion-easing),
-              opacity var(--woa-motion-cursor) ease;
+    top var(--woa-motion-cursor) var(--woa-motion-easing), opacity var(--woa-motion-cursor) ease;
 }
 .woa-agent-cursor__pointer {
-  position: absolute; left: 0; top: 0;
+  position: absolute;
+  left: 0;
+  top: 0;
 }
-.woa-screen-effects[data-phase='waiting'] { opacity: 0.28; }
-.woa-screen-effects:not([data-phase='active']) .woa-screen-effects__fallback,
-.woa-screen-effects:not([data-phase='active']) .woa-screen-effects__light {
-  animation: none; opacity: 1;
+.woa-screen-effects[data-phase="waiting"] {
+  opacity: 0.28;
 }
-.woa-screen-effects[data-phase='waiting'] .woa-screen-effects__light--alternate { opacity: 0; }
-.woa-screen-effects[data-phase='off'] { opacity: 0; }
-.woa-screen-effects:not([data-phase='active']) .woa-agent-cursor { opacity: 0; }
-@media (forced-colors: active) { .woa-screen-effects { display: none; } }
+.woa-screen-effects:not([data-phase="active"]) .woa-screen-effects__fallback,
+.woa-screen-effects:not([data-phase="active"]) .woa-screen-effects__light {
+  animation: none;
+  opacity: 1;
+}
+.woa-screen-effects[data-phase="waiting"] .woa-screen-effects__light--alternate {
+  opacity: 0;
+}
+.woa-screen-effects[data-phase="off"] {
+  opacity: 0;
+}
+.woa-screen-effects:not([data-phase="active"]) .woa-agent-cursor {
+  opacity: 0;
+}
+@media (forced-colors: active) {
+  .woa-screen-effects {
+    display: none;
+  }
+}
 
 /* ─────────────────────────────────────────────── launcher */
 .woa-launcher {
@@ -155,31 +237,38 @@ button:disabled { cursor: not-allowed; }
 /* Both halves of the swap announce themselves; neither blinks into place. What leaves
    does so at once -- the collapse is the person's own action and wants no ceremony. */
 @keyframes woa-pop-in {
-  from { opacity: 0; transform: scale(0.8); }
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
 }
 
 /* The portrait is the identity; a quiet edge and shallow shadow lift it off the page. */
 .woa-launcher__disc {
-  position: absolute; inset: 0;
+  position: absolute;
+  inset: 0;
   border-radius: 50%;
   overflow: hidden;
   background: var(--woa-accent-soft);
   box-shadow: var(--woa-shadow-launcher);
 }
 .woa-launcher__disc img {
-  display: block; width: 100%; height: 100%; object-fit: cover;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   /* This portrait already fills its square. Preserve the headband and side earcups
      inside the circular mask instead of enlarging the face a second time. */
 }
 /* The idle launcher echoes the welcome portrait's fine ring. It sits outside the image,
    preserving every pixel of the headband, and gives way to the state ring while working. */
-.woa-launcher[data-state='idle']::before {
-  content: '';
-  position: absolute; inset: -2px;
+.woa-launcher[data-state="idle"]::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
   border-radius: 50%;
   padding: 2px;
-  background: linear-gradient(135deg, var(--woa-face-ring), var(--woa-face-ring-mid),
-    var(--woa-face-ring-end));
+  background: linear-gradient(135deg, var(--woa-face-ring), var(--woa-face-ring-mid), var(--woa-face-ring-end));
   -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
@@ -188,27 +277,53 @@ button:disabled { cursor: not-allowed; }
 }
 
 /* Working, the disc breathes -- slowly, so it reads as busy rather than as calling out. */
-.woa-launcher[data-state='working'] .woa-launcher__disc {
+.woa-launcher[data-state="working"] .woa-launcher__disc {
   animation: woa-launcher-breathe 4s ease-in-out infinite;
 }
-@keyframes woa-launcher-breathe { 50% { transform: scale(1.04); } }
-.woa-launcher[data-state='closed'] .woa-launcher__disc { opacity: 0.6; }
+@keyframes woa-launcher-breathe {
+  50% {
+    transform: scale(1.04);
+  }
+}
+.woa-launcher[data-state="closed"] .woa-launcher__disc {
+  opacity: 0.6;
+}
 
-.woa-launcher__ring { position: absolute; inset: -3px; pointer-events: none; }
-.woa-launcher[data-state='idle'] .woa-launcher__ring { display: none; }
-.woa-launcher__ring svg { width: 100%; height: 100%; display: block; }
+.woa-launcher__ring {
+  position: absolute;
+  inset: -3px;
+  pointer-events: none;
+}
+.woa-launcher[data-state="idle"] .woa-launcher__ring {
+  display: none;
+}
+.woa-launcher__ring svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 
 .woa-launcher__nub {
-  position: absolute; top: 0; right: 0;
-  min-width: 16px; height: 16px; padding: 0 4px;
-  display: flex; align-items: center; justify-content: center;
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--woa-radius-pill);
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
-  font-size: var(--woa-font-size-micro); font-weight: 600;
+  font-size: var(--woa-font-size-micro);
+  font-weight: 600;
   box-shadow: 0 0 0 2px var(--woa-bg);
 }
-.woa-launcher__nub[data-await='true'] { background: var(--woa-warning); color: var(--woa-warning-ink); }
+.woa-launcher__nub[data-await="true"] {
+  background: var(--woa-warning);
+  color: var(--woa-warning-ink);
+}
 
 /* ─────────────────────────────────────────────── window */
 .woa-window {
@@ -216,7 +331,8 @@ button:disabled { cursor: not-allowed; }
   pointer-events: auto;
   display: flex;
   flex-direction: column;
-  min-width: 320px; min-height: 360px;
+  min-width: 320px;
+  min-height: 360px;
   border-radius: var(--woa-radius-window);
   background: var(--woa-bg);
   overflow: hidden;
@@ -229,14 +345,15 @@ button:disabled { cursor: not-allowed; }
   animation: woa-window-in var(--woa-motion-base) var(--woa-motion-easing);
 }
 .woa-window[data-welcome] {
-  background:
-    radial-gradient(120% 60% at 0% 0%, var(--woa-canvas-glow) 0%, transparent 60%),
-    radial-gradient(100% 50% at 100% 25%, var(--woa-canvas-glow-alt) 0%, transparent 55%),
-    var(--woa-canvas-bg);
+  background: radial-gradient(120% 60% at 0% 0%, var(--woa-canvas-glow) 0%, transparent 60%),
+    radial-gradient(100% 50% at 100% 25%, var(--woa-canvas-glow-alt) 0%, transparent 55%), var(--woa-canvas-bg);
   border-radius: var(--woa-radius-welcome);
 }
 @keyframes woa-window-in {
-  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
 }
 /* A docked window grows out of the launcher it replaces, from the corner they share. */
 .woa-window[data-docked] {
@@ -244,13 +361,18 @@ button:disabled { cursor: not-allowed; }
   animation-name: woa-window-from-launcher;
 }
 @keyframes woa-window-from-launcher {
-  from { opacity: 0; transform: scale(0.9); }
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
 }
 /* A drawer is the full height of the viewport at its right edge. It slides in from that
    edge; the page beside it is narrowed at once rather than animated, since a page that
    re-lays itself out every frame would be the slow part. */
-.woa-window[data-mode='drawer'] {
-  top: 0; right: 0; bottom: 0;
+.woa-window[data-mode="drawer"] {
+  top: 0;
+  right: 0;
+  bottom: 0;
   height: auto;
   min-height: 0;
   border-radius: var(--woa-radius-flush);
@@ -258,79 +380,181 @@ button:disabled { cursor: not-allowed; }
   animation-name: woa-drawer-in;
 }
 @keyframes woa-drawer-in {
-  from { opacity: 0; transform: translateX(24px); }
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
 }
-.woa-window[data-mode='drawer'] .woa-titlebar { cursor: default; }
-.woa-window[data-mode='drawer'] .woa-handle[data-handle='w'] { top: 0; bottom: 0; }
-.woa-window[data-dragging='w'] { transition: none; }
+.woa-window[data-mode="drawer"] .woa-titlebar {
+  cursor: default;
+}
+.woa-window[data-mode="drawer"] .woa-handle[data-handle="w"] {
+  top: 0;
+  bottom: 0;
+}
+.woa-window[data-dragging="w"] {
+  transition: none;
+}
 /* On a phone the window is the screen. It settles into place without ever overhanging the
    screen's edge, keeps clear of the notch and the home indicator, and neither moves nor
    resizes. */
-.woa-window[data-mode='full'] {
+.woa-window[data-mode="full"] {
   inset: 0;
-  min-width: 0; min-height: 0;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right)
-           env(safe-area-inset-bottom) env(safe-area-inset-left);
+  min-width: 0;
+  min-height: 0;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   border-radius: var(--woa-radius-flush);
   box-shadow: none;
   animation-name: woa-full-in;
 }
 @keyframes woa-full-in {
-  from { opacity: 0; transform: scale(0.98); }
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
 }
-.woa-window[data-mode='full'] .woa-titlebar { cursor: default; }
+.woa-window[data-mode="full"] .woa-titlebar {
+  cursor: default;
+}
 /* The end of the conversation is not a cue to scroll the page hidden under it. */
-.woa-window[data-mode='full'] .woa-thread { overscroll-behavior: contain; }
+.woa-window[data-mode="full"] .woa-thread {
+  overscroll-behavior: contain;
+}
 /* A phone enlarges the page around a text box set smaller than 16px when it takes focus,
    and does not give the size back. */
-.woa-window[data-mode='full'] .woa-field textarea { font-size: var(--woa-font-size-field-touch); }
-.woa-window[data-dragging] { user-select: none; }
+.woa-window[data-mode="full"] .woa-field textarea {
+  font-size: var(--woa-font-size-field-touch);
+}
+.woa-window[data-dragging] {
+  user-select: none;
+}
 
 /* Resize affordances: a 6px hot zone on each edge, larger at the corners. */
-.woa-handle { position: absolute; z-index: 2; }
-.woa-handle[data-handle='n'] { top: 0; left: 12px; right: 12px; height: 6px; cursor: ns-resize; }
-.woa-handle[data-handle='s'] { bottom: 0; left: 12px; right: 12px; height: 6px; cursor: ns-resize; }
-.woa-handle[data-handle='w'] { left: 0; top: 12px; bottom: 12px; width: 6px; cursor: ew-resize; }
-.woa-handle[data-handle='e'] { right: 0; top: 12px; bottom: 12px; width: 6px; cursor: ew-resize; }
-.woa-handle[data-handle='nw'] { top: 0; left: 0; width: 14px; height: 14px; cursor: nwse-resize; }
-.woa-handle[data-handle='se'] { bottom: 0; right: 0; width: 14px; height: 14px; cursor: nwse-resize; }
-.woa-handle[data-handle='ne'] { top: 0; right: 0; width: 14px; height: 14px; cursor: nesw-resize; }
-.woa-handle[data-handle='sw'] { bottom: 0; left: 0; width: 14px; height: 14px; cursor: nesw-resize; }
+.woa-handle {
+  position: absolute;
+  z-index: 2;
+}
+.woa-handle[data-handle="n"] {
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.woa-handle[data-handle="s"] {
+  bottom: 0;
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.woa-handle[data-handle="w"] {
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.woa-handle[data-handle="e"] {
+  right: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.woa-handle[data-handle="nw"] {
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+.woa-handle[data-handle="se"] {
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+.woa-handle[data-handle="ne"] {
+  top: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
+.woa-handle[data-handle="sw"] {
+  bottom: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nesw-resize;
+}
 
 /* The affordance is a hint, not a control: short, pale, and well inside the corner
    radius, because the window clips to it and a mark sitting on the curve reads as a
    rendering fault rather than a handle. */
 .woa-handle::after {
-  content: '';
+  content: "";
   position: absolute;
   opacity: 0;
   background: var(--woa-line-strong);
   transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-handle:hover::after { opacity: 1; }
-.woa-handle[data-handle='n']::after,
-.woa-handle[data-handle='s']::after {
-  left: 50%; transform: translateX(-50%);
-  width: 60px; height: 3px; border-radius: var(--woa-radius-pill);
+.woa-handle:hover::after {
+  opacity: 1;
 }
-.woa-handle[data-handle='n']::after { top: 2px; }
-.woa-handle[data-handle='s']::after { bottom: 2px; }
-.woa-handle[data-handle='w']::after,
-.woa-handle[data-handle='e']::after {
-  top: 50%; transform: translateY(-50%);
-  height: 60px; width: 3px; border-radius: var(--woa-radius-pill);
+.woa-handle[data-handle="n"]::after,
+.woa-handle[data-handle="s"]::after {
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 3px;
+  border-radius: var(--woa-radius-pill);
 }
-.woa-handle[data-handle='w']::after { left: 2px; }
-.woa-handle[data-handle='e']::after { right: 2px; }
-.woa-handle[data-handle^='n']:not([data-handle='n'])::after,
-.woa-handle[data-handle^='s']:not([data-handle='s'])::after {
-  width: 6px; height: 6px; border-radius: 50%;
+.woa-handle[data-handle="n"]::after {
+  top: 2px;
+}
+.woa-handle[data-handle="s"]::after {
+  bottom: 2px;
+}
+.woa-handle[data-handle="w"]::after,
+.woa-handle[data-handle="e"]::after {
+  top: 50%;
+  transform: translateY(-50%);
+  height: 60px;
+  width: 3px;
+  border-radius: var(--woa-radius-pill);
+}
+.woa-handle[data-handle="w"]::after {
+  left: 2px;
+}
+.woa-handle[data-handle="e"]::after {
+  right: 2px;
+}
+.woa-handle[data-handle^="n"]:not([data-handle="n"])::after,
+.woa-handle[data-handle^="s"]:not([data-handle="s"])::after {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
   background: var(--woa-line-strong);
 }
-.woa-handle[data-handle='nw']::after { top: 6px; left: 6px; }
-.woa-handle[data-handle='ne']::after { top: 6px; right: 6px; }
-.woa-handle[data-handle='sw']::after { bottom: 6px; left: 6px; }
-.woa-handle[data-handle='se']::after { bottom: 6px; right: 6px; }
+.woa-handle[data-handle="nw"]::after {
+  top: 6px;
+  left: 6px;
+}
+.woa-handle[data-handle="ne"]::after {
+  top: 6px;
+  right: 6px;
+}
+.woa-handle[data-handle="sw"]::after {
+  bottom: 6px;
+  left: 6px;
+}
+.woa-handle[data-handle="se"]::after {
+  bottom: 6px;
+  right: 6px;
+}
 
 /* ─────────────────────────────────────────────── title bar */
 /* The bar is part of the window's own surface: no fill of its own and no rule under it.
@@ -346,15 +570,28 @@ button:disabled { cursor: not-allowed; }
   cursor: grab;
   background: var(--woa-bg);
 }
-.woa-window[data-dragging='move'] .woa-titlebar { cursor: grabbing; }
+.woa-window[data-dragging="move"] .woa-titlebar {
+  cursor: grabbing;
+}
 /* A new conversation has no face or name in the bar, so its controls sit at the right edge
    on their own -- where the brand's `margin-right: auto` would otherwise put them. */
-.woa-titlebar[data-welcome] { justify-content: flex-end; }
-.woa-titlebar[data-welcome] { background: transparent; height: 56px; padding-right: 24px; }
+.woa-titlebar[data-welcome] {
+  justify-content: flex-end;
+}
+.woa-titlebar[data-welcome] {
+  background: transparent;
+  height: 56px;
+  padding-right: 24px;
+}
 
-.woa-brand { display: flex; align-items: center; margin-right: auto; }
+.woa-brand {
+  display: flex;
+  align-items: center;
+  margin-right: auto;
+}
 .woa-brand__face {
-  width: 30px; height: 30px;
+  width: 30px;
+  height: 30px;
   margin-right: 8px;
   border-radius: 50%;
   object-fit: cover;
@@ -370,26 +607,42 @@ button:disabled { cursor: not-allowed; }
 }
 
 .woa-icon-button {
-  width: 28px; height: 28px;
-  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--woa-radius-control);
   color: var(--woa-ink-faint);
   flex: none;
 }
-.woa-icon-button:hover { background: var(--woa-surface-muted); color: var(--woa-ink); }
-.woa-icon-button { transition: background var(--woa-motion-fast) var(--woa-motion-easing),
-                               transform var(--woa-motion-fast) var(--woa-motion-easing); }
-.woa-icon-button:active { transform: scale(0.94); }
-.woa-titlebar .woa-icon-button { color: var(--woa-ink-muted); }
+.woa-icon-button:hover {
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink);
+}
+.woa-icon-button {
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing),
+    transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-icon-button:active {
+  transform: scale(0.94);
+}
+.woa-titlebar .woa-icon-button {
+  color: var(--woa-ink-muted);
+}
 
 /* A control that is only a glyph says what it does when pointed at or reached by keyboard.
    Drawn here rather than by `title`: the browser's own tip waits a second and looks like no
    part of the panel. It hangs centred below the control; the corner's cross carries none, so
    the nearest tip to the window's edge still has room on both sides. */
-.woa-icon-button[data-tip] { position: relative; }
+.woa-icon-button[data-tip] {
+  position: relative;
+}
 .woa-icon-button[data-tip]::after {
   content: attr(data-tip);
-  position: absolute; top: calc(100% + 6px); left: 50%;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
   z-index: 4;
   padding: 3px 8px;
   border-radius: var(--woa-radius-control);
@@ -403,13 +656,17 @@ button:disabled { cursor: not-allowed; }
   opacity: 0;
   transform: translate(-50%, -2px);
   transition: opacity var(--woa-motion-fast) var(--woa-motion-easing),
-              transform var(--woa-motion-fast) var(--woa-motion-easing);
+    transform var(--woa-motion-fast) var(--woa-motion-easing);
 }
 .woa-icon-button[data-tip]:hover::after {
-  opacity: 1; transform: translate(-50%, 0);
+  opacity: 1;
+  transform: translate(-50%, 0);
   transition-delay: 350ms;
 }
-.woa-icon-button[data-tip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+.woa-icon-button[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
 
 /* ─────────────────────────────────────────────── thread */
 .woa-thread-shell {
@@ -422,8 +679,11 @@ button:disabled { cursor: not-allowed; }
 }
 /* The title bar's rule, drawn only while something is scrolled up beneath it. */
 .woa-thread-shell::before {
-  content: '';
-  position: absolute; top: 0; left: 0; right: 0;
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 1;
   height: 1px;
   background: var(--woa-line);
@@ -431,7 +691,9 @@ button:disabled { cursor: not-allowed; }
   transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
   pointer-events: none;
 }
-.woa-thread-shell[data-scrolled]::before { opacity: 1; }
+.woa-thread-shell[data-scrolled]::before {
+  opacity: 1;
+}
 .woa-thread {
   height: 100%;
   overflow-y: auto;
@@ -450,17 +712,27 @@ button:disabled { cursor: not-allowed; }
   outline: none;
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
 }
-.woa-thread__content { display: flex; flex-direction: column; min-height: 100%; }
+.woa-thread__content {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
 .woa-thread__content:not([data-empty]):not([data-approval])::after {
-  content: '';
+  content: "";
   flex: 0 0 100px;
 }
 /* With nothing said yet, the greeting starts at the top, under the title bar. */
-.woa-thread__content[data-empty] { justify-content: flex-start; }
+.woa-thread__content[data-empty] {
+  justify-content: flex-start;
+}
 
 /* Scrollbars are chrome, not content: thin, on the panel's own neutrals, and never a
    dark overlay pill sitting on top of the composer. */
-.woa-thread, .woa-field textarea, .woa-md__tablewrap, .woa-md__block pre, .woa-approval {
+.woa-thread,
+.woa-field textarea,
+.woa-md__tablewrap,
+.woa-md__block pre,
+.woa-approval {
   scrollbar-width: thin;
   scrollbar-color: var(--woa-line-strong) transparent;
 }
@@ -468,12 +740,17 @@ button:disabled { cursor: not-allowed; }
 .woa-field textarea::-webkit-scrollbar,
 .woa-md__tablewrap::-webkit-scrollbar,
 .woa-md__block pre::-webkit-scrollbar,
-.woa-approval::-webkit-scrollbar { width: 8px; height: 8px; }
+.woa-approval::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
 .woa-thread::-webkit-scrollbar-track,
 .woa-field textarea::-webkit-scrollbar-track,
 .woa-md__tablewrap::-webkit-scrollbar-track,
 .woa-md__block pre::-webkit-scrollbar-track,
-.woa-approval::-webkit-scrollbar-track { background: transparent; }
+.woa-approval::-webkit-scrollbar-track {
+  background: transparent;
+}
 .woa-thread::-webkit-scrollbar-thumb,
 .woa-field textarea::-webkit-scrollbar-thumb,
 .woa-md__tablewrap::-webkit-scrollbar-thumb,
@@ -485,18 +762,43 @@ button:disabled { cursor: not-allowed; }
   border-radius: var(--woa-radius-pill);
 }
 
-.woa-turns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 24px; }
+.woa-turns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
 /* Settled turns are skipped by layout and paint when off screen, but stay in the DOM so
    find-in-page, screen readers and select-all keep working. */
-.woa-turn[data-settled] { content-visibility: auto; contain-intrinsic-size: auto 180px; }
+.woa-turn[data-settled] {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}
 /* That skipping contains paint, so a settled turn clips whatever overhangs its box. The box
    reaches 6px into the thread's gutter on each side, where the answer's controls overhang
    the text to line their glyphs up with it; the text itself stays where it was. */
-.woa-turn { display: flex; flex-direction: column; gap: 12px; margin: 0 -6px; padding: 0 6px; }
+.woa-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
 /* What arrives, arrives: a short fade and a 4px rise, on the person's words and on each
    part of the reply as it is added. */
-.woa-user, .woa-agent > *, .woa-pending { animation: woa-arrive var(--woa-motion-base) var(--woa-motion-easing); }
-@keyframes woa-arrive { from { opacity: 0; transform: translateY(4px); } }
+.woa-user,
+.woa-agent > *,
+.woa-pending {
+  animation: woa-arrive var(--woa-motion-base) var(--woa-motion-easing);
+}
+@keyframes woa-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
 
 /* The person's words: a soft tinted bubble on their side, its tail corner tucked in. The
    agent's words get no bubble at all -- they are the page, set for reading. */
@@ -505,26 +807,43 @@ button:disabled { cursor: not-allowed; }
   max-width: 85%;
   margin: 0;
   padding: 8px 14px;
-  border-radius: var(--woa-radius-field) var(--woa-radius-field) var(--woa-radius-inline)
-                 var(--woa-radius-field);
+  border-radius: var(--woa-radius-field) var(--woa-radius-field) var(--woa-radius-inline) var(--woa-radius-field);
   background: var(--woa-accent-soft);
   color: var(--woa-ink);
   overflow-wrap: anywhere;
 }
 
-.woa-agent, .woa-result { display: flex; flex-direction: column; gap: 10px; }
+.woa-agent,
+.woa-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 
 /* A boundary the server drew: everything above it is still readable, and no longer
    context for the model. */
-.woa-pending { display: flex; flex-direction: column; gap: 4px; margin-top: 16px; }
-.woa-sending, .woa-undelivered {
+.woa-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 16px;
+}
+.woa-sending,
+.woa-undelivered {
   align-self: flex-end;
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: var(--woa-font-size-meta);
   color: var(--woa-ink-faint);
 }
-.woa-undelivered { color: var(--woa-danger); }
-.woa-undelivered button { color: var(--woa-accent); font-weight: 500; }
+.woa-undelivered {
+  color: var(--woa-danger);
+}
+.woa-undelivered button {
+  color: var(--woa-accent);
+  font-weight: 500;
+}
 
 /* The shell, rather than the scrolling element, is the containing block. The control stays
    above the composer while the transcript moves behind it. */
@@ -534,26 +853,72 @@ button:disabled { cursor: not-allowed; }
   left: 50%;
   transform: translateX(-50%);
   z-index: 1;
-  display: inline-flex; align-items: center; gap: 4px;
-  height: 24px; padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   border-radius: var(--woa-radius-pill);
   background: var(--woa-surface-raised);
   color: var(--woa-ink);
   font-size: var(--woa-font-size-meta);
   box-shadow: var(--woa-shadow-2), inset 0 0 0 1px var(--woa-line-strong);
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-jump:hover {
+  background: var(--woa-surface-muted);
 }
 
-.woa-skeleton { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 12px; }
+.woa-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0 12px;
+}
 .woa-skeleton i {
-  display: block; height: 14px; border-radius: var(--woa-radius-control);
+  position: relative;
+  overflow: hidden;
+  display: block;
+  height: 30px;
+  border-radius: var(--woa-radius-control);
   background: var(--woa-surface-muted);
+}
+/* A wait reads as motion across the line, not as the line breathing: a band of sheen
+   crosses each bar left to right and leaves by the right edge. The bar itself never
+   changes colour, so a still frame and a moving one say the same thing. Reduced motion
+   runs the crossing once, instantly, and what remains is the plain bar. */
+.woa-skeleton i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, var(--woa-sheen-fill) 30%,
+              var(--woa-sheen-edge) 50%, var(--woa-sheen-fill) 70%, transparent);
   animation: woa-sheen 1.5s ease-in-out infinite;
 }
-/* Long, short, medium. */
-.woa-skeleton i:nth-child(1) { width: 86%; }
-.woa-skeleton i:nth-child(2) { width: 48%; animation-delay: 0.1s; }
-.woa-skeleton i:nth-child(3) { width: 66%; animation-delay: 0.2s; }
-@keyframes woa-sheen { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.6; } }
+/* Long, short, medium. The delays stagger the crossing, so the three bars read as one
+   wave passing down the stack rather than three blinkers in phase. */
+.woa-skeleton i:nth-child(1) {
+  width: 86%;
+}
+.woa-skeleton i:nth-child(2) {
+  width: 42%;
+}
+.woa-skeleton i:nth-child(2)::after {
+  animation-delay: 0.1s;
+}
+.woa-skeleton i:nth-child(3) {
+  width: 62%;
+}
+.woa-skeleton i:nth-child(3)::after {
+  animation-delay: 0.2s;
+}
+@keyframes woa-sheen {
+  to {
+    transform: translateX(100%);
+  }
+}
 
 /* ─────────────────────────────────────────────── work process */
 /* ── the work timeline ──────────────────────────────────────────────────────
@@ -561,13 +926,17 @@ button:disabled { cursor: not-allowed; }
    so the steps read as one run rather than a list of unrelated lines. It stays after the
    answer: it is where a reader checks which call produced the numbers above. */
 .woa-work {
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 /* A running turn's steps, folded to one live line: a spinner, the step being worked on, and
    the turn's clock. Each new step rises into place; a confirmation waiting on the person
    turns the line amber and the spinner into a slow pulse. */
 .woa-work__live {
-  display: flex; align-items: center; gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   inline-size: calc(100% + 12px);
   margin-inline: -6px;
   padding: 3px 6px;
@@ -577,29 +946,46 @@ button:disabled { cursor: not-allowed; }
   color: var(--woa-ink);
   transition: background var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-work__live:hover { background: var(--woa-surface-muted); }
+.woa-work__live:hover {
+  background: var(--woa-surface-muted);
+}
 .woa-work__live:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
 }
 .woa-work__mark {
-  inline-size: 16px; block-size: 16px; flex: none;
-  display: flex; align-items: center; justify-content: center;
+  inline-size: 16px;
+  block-size: 16px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .woa-work__now {
   min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  background: linear-gradient(90deg, var(--woa-ink-muted) 0%, var(--woa-ink-muted) 35%,
-                              var(--woa-ink) 50%, var(--woa-ink-muted) 65%,
-                              var(--woa-ink-muted) 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: linear-gradient(
+    90deg,
+    var(--woa-ink-muted) 0%,
+    var(--woa-ink-muted) 35%,
+    var(--woa-ink) 50%,
+    var(--woa-ink-muted) 65%,
+    var(--woa-ink-muted) 100%
+  );
   background-size: 250% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: woa-step-in var(--woa-motion-base) var(--woa-motion-easing),
-             woa-shimmer 1.8s linear infinite;
+  animation: woa-step-in var(--woa-motion-base) var(--woa-motion-easing), woa-shimmer 1.8s linear infinite;
 }
-@keyframes woa-step-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes woa-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
 .woa-work__live[data-waiting] .woa-work__now {
   background: none;
   color: var(--woa-warning);
@@ -611,8 +997,12 @@ button:disabled { cursor: not-allowed; }
   color: var(--woa-ink-muted);
   animation: woa-step-in var(--woa-motion-base) var(--woa-motion-easing);
 }
-.woa-work__live .woa-work__chevron { flex: none; }
-.woa-work__live[aria-expanded='true'] .woa-work__chevron { transform: rotate(180deg); }
+.woa-work__live .woa-work__chevron {
+  flex: none;
+}
+.woa-work__live[aria-expanded="true"] .woa-work__chevron {
+  transform: rotate(180deg);
+}
 .woa-work__clock {
   margin-inline-start: auto;
   flex: none;
@@ -620,13 +1010,17 @@ button:disabled { cursor: not-allowed; }
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
 }
-.woa-work__live + .woa-work__steps { animation: woa-unfold var(--woa-motion-base) var(--woa-motion-easing); }
+.woa-work__live + .woa-work__steps {
+  animation: woa-unfold var(--woa-motion-base) var(--woa-motion-easing);
+}
 
 /* A landed turn's steps, folded to one line: how much work stood behind the answer, and a
    way in. Quiet, because the answer below it is the point. */
 .woa-work__summary {
   align-self: flex-start;
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 3px 8px 3px 6px;
   margin-inline-start: -6px;
   border-radius: var(--woa-radius-control);
@@ -634,23 +1028,41 @@ button:disabled { cursor: not-allowed; }
   color: var(--woa-ink-muted);
   font-variant-numeric: tabular-nums;
   transition: background var(--woa-motion-fast) var(--woa-motion-easing),
-              color var(--woa-motion-fast) var(--woa-motion-easing);
+    color var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-work__summary:hover { background: var(--woa-surface-muted); color: var(--woa-ink); }
-.woa-work__summary > svg:first-child { color: var(--woa-success); }
-.woa-work__summary[data-failed] > svg:first-child { color: var(--woa-danger); }
-.woa-work__summary[data-stopped] > svg:first-child { color: var(--woa-ink-faint); }
+.woa-work__summary:hover {
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink);
+}
+.woa-work__summary > svg:first-child {
+  color: var(--woa-success);
+}
+.woa-work__summary[data-failed] > svg:first-child {
+  color: var(--woa-danger);
+}
+.woa-work__summary[data-stopped] > svg:first-child {
+  color: var(--woa-ink-faint);
+}
 .woa-work__chevron {
   color: var(--woa-ink-faint);
   transition: transform var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-work__summary[aria-expanded='true'] .woa-work__chevron { transform: rotate(180deg); }
+.woa-work__summary[aria-expanded="true"] .woa-work__chevron {
+  transform: rotate(180deg);
+}
 .woa-work__summary:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
 }
-.woa-work__summary + .woa-work__steps { animation: woa-unfold var(--woa-motion-base) var(--woa-motion-easing); }
-@keyframes woa-unfold { from { opacity: 0; transform: translateY(-4px); } }
+.woa-work__summary + .woa-work__steps {
+  animation: woa-unfold var(--woa-motion-base) var(--woa-motion-easing);
+}
+@keyframes woa-unfold {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
 .woa-work__steps {
   list-style: none;
   margin: 0;
@@ -663,7 +1075,7 @@ button:disabled { cursor: not-allowed; }
    one run. Drawn once rather than per node: a per-node segment between two short rows is
    a few pixels long and reads as a speck. */
 .woa-work__steps::before {
-  content: '';
+  content: "";
   position: absolute;
   inset-inline-start: 7px;
   inset-block: 12px;
@@ -682,8 +1094,11 @@ button:disabled { cursor: not-allowed; }
 /* As tall as the text's first line and offset by the line's own padding, so a mark sits on
    the middle of that line whatever the font's size. */
 .woa-step__mark {
-  inline-size: 16px; block-size: calc(1em * var(--woa-line-height));
-  display: flex; align-items: center; justify-content: center;
+  inline-size: 16px;
+  block-size: calc(1em * var(--woa-line-height));
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-block-start: 4px;
   color: var(--woa-ink-faint);
   /* The mark sits on the rail, so it carries the panel's own background to punch a hole
@@ -691,26 +1106,49 @@ button:disabled { cursor: not-allowed; }
   background: var(--woa-bg);
   position: relative;
 }
-.woa-step[data-status='done'] .woa-step__mark { color: var(--woa-ink-faint); }
-.woa-step[data-status='running'] .woa-step__mark { color: var(--woa-accent); }
-.woa-step[data-status='failed'] .woa-step__mark { color: var(--woa-danger); }
-.woa-step[data-status='stopped'] .woa-step__mark { color: var(--woa-ink-faint); }
-.woa-step[data-status='running'] { color: var(--woa-ink); }
-.woa-step[data-status='waiting'] { color: var(--woa-warning); }
-@keyframes woa-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.woa-step[data-status="done"] .woa-step__mark {
+  color: var(--woa-ink-faint);
+}
+.woa-step[data-status="running"] .woa-step__mark {
+  color: var(--woa-accent);
+}
+.woa-step[data-status="failed"] .woa-step__mark {
+  color: var(--woa-danger);
+}
+.woa-step[data-status="stopped"] .woa-step__mark {
+  color: var(--woa-ink-faint);
+}
+.woa-step[data-status="running"] {
+  color: var(--woa-ink);
+}
+.woa-step[data-status="waiting"] {
+  color: var(--woa-warning);
+}
+@keyframes woa-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
 .woa-dot {
-  inline-size: 6px; block-size: 6px;
+  inline-size: 6px;
+  block-size: 6px;
   border-radius: 50%;
   background: currentColor;
 }
 /* Waiting on the person stays solid, without a competing animation. */
 .woa-pulse {
-  inline-size: 8px; block-size: 8px;
+  inline-size: 8px;
+  block-size: 8px;
   border-radius: 50%;
   background: var(--woa-warning);
 }
 .woa-step__line {
-  display: flex; align-items: center; gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   inline-size: 100%;
   padding: 4px 0;
   text-align: start;
@@ -727,20 +1165,28 @@ button.woa-step__line {
   border-radius: var(--woa-radius-control);
   transition: background var(--woa-motion-fast) var(--woa-motion-easing);
 }
-button.woa-step__line:hover { color: var(--woa-ink); background: var(--woa-surface-muted); }
+button.woa-step__line:hover {
+  color: var(--woa-ink);
+  background: var(--woa-surface-muted);
+}
 .woa-step__chevron {
   margin-inline-start: auto;
   flex: none;
   color: var(--woa-ink-faint);
   transition: transform var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-step[data-open] .woa-step__chevron { transform: rotate(180deg); }
+.woa-step[data-open] .woa-step__chevron {
+  transform: rotate(180deg);
+}
 button.woa-step__line:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--woa-line-strong);
   border-radius: var(--woa-radius-control);
 }
-.woa-step__text { min-width: 0; overflow-wrap: anywhere; }
+.woa-step__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 /* 4px between the card and its own line and 4px between it and the next line, measured
    box to box: a line's box is what lights under the pointer, so it must not touch the card. */
 .woa-step__detail {
@@ -756,26 +1202,43 @@ button.woa-step__line:focus-visible {
   row-gap: 4px;
   font-size: var(--woa-font-size-meta);
 }
-.woa-step__detail dt { color: var(--woa-ink-faint); }
-.woa-step__detail dd { margin: 0; overflow-wrap: anywhere; }
-.woa-step__detail code { font-size: var(--woa-font-size-meta); }
+.woa-step__detail dt {
+  color: var(--woa-ink-faint);
+}
+.woa-step__detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.woa-step__detail code {
+  font-size: var(--woa-font-size-meta);
+}
 /* The summary line of a turn with nothing to unfold: its mark and words sit where the
    summary button's do, without the button. */
 .woa-took {
   align-self: flex-start;
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   padding-block: 3px;
   font-size: var(--woa-font-size-small);
   color: var(--woa-ink-muted);
   font-variant-numeric: tabular-nums;
 }
-.woa-took > svg:first-child { color: var(--woa-success); }
-.woa-took[data-failed] > svg:first-child { color: var(--woa-danger); }
-.woa-took[data-stopped] > svg:first-child { color: var(--woa-ink-faint); }
+.woa-took > svg:first-child {
+  color: var(--woa-success);
+}
+.woa-took[data-failed] > svg:first-child {
+  color: var(--woa-danger);
+}
+.woa-took[data-stopped] > svg:first-child {
+  color: var(--woa-ink-faint);
+}
 
 .woa-spinner {
-  width: 12px; height: 12px; flex: none;
+  width: 12px;
+  height: 12px;
+  flex: none;
   border-radius: 50%;
   border: 1.6px solid var(--woa-line-strong);
   border-top-color: var(--woa-accent);
@@ -783,29 +1246,62 @@ button.woa-step__line:focus-visible {
   animation: woa-spin 1.6s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .woa-spinner { animation-duration: 3s; }
+  .woa-spinner {
+    animation-duration: 3s;
+  }
 }
-@keyframes woa-spin { to { transform: rotate(360deg) } }
+@keyframes woa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* ─────────────────────────────────────────────── answer */
 .woa-md {
-  display: flex; flex-direction: column; gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   /* The agent's answer is read, not scanned: a looser line than the chrome around it. */
   line-height: var(--woa-line-height-prose);
   overflow-wrap: anywhere;
 }
-.woa-md p, .woa-md h2, .woa-md h3, .woa-md blockquote, .woa-md ul, .woa-md ol { margin: 0; }
-.woa-md h2 { font-size: var(--woa-font-size-title); font-weight: 600; }
-.woa-md h3 { font-size: var(--woa-font-size); font-weight: 600; }
+.woa-md p,
+.woa-md h2,
+.woa-md h3,
+.woa-md blockquote,
+.woa-md ul,
+.woa-md ol {
+  margin: 0;
+}
+.woa-md h2 {
+  font-size: var(--woa-font-size-title);
+  font-weight: 600;
+}
+.woa-md h3 {
+  font-size: var(--woa-font-size);
+  font-weight: 600;
+}
 /* Wide enough for a two-digit marker: at 18px, item 10 onwards lost its first glyph. */
-.woa-md__list { padding-inline-start: 24px; display: flex; flex-direction: column; gap: 4px; }
-.woa-md__list li::marker { color: var(--woa-ink-faint); font-variant-numeric: tabular-nums; }
+.woa-md__list {
+  padding-inline-start: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.woa-md__list li::marker {
+  color: var(--woa-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
 .woa-md blockquote {
   padding-inline-start: 10px;
   border-inline-start: 2px solid var(--woa-line-strong);
   color: var(--woa-ink-muted);
 }
-.woa-md hr { border: 0; border-top: 1px solid var(--woa-line); margin: 2px 0; }
+.woa-md hr {
+  border: 0;
+  border-top: 1px solid var(--woa-line);
+  margin: 2px 0;
+}
 .woa-md__code {
   font-family: var(--woa-mono-stack);
   font-size: var(--woa-font-size-meta);
@@ -813,21 +1309,34 @@ button.woa-step__line:focus-visible {
   border-radius: var(--woa-radius-inline);
   background: var(--woa-surface-muted);
 }
-.woa-md__inert { color: var(--woa-ink); text-decoration: underline dotted var(--woa-line-strong); }
-.woa-md a { color: var(--woa-accent); text-underline-offset: 2px; }
+.woa-md__inert {
+  color: var(--woa-ink);
+  text-decoration: underline dotted var(--woa-line-strong);
+}
+.woa-md a {
+  color: var(--woa-accent);
+  text-underline-offset: 2px;
+}
 
 .woa-md__caret {
   display: inline-block;
-  width: 2px; height: 1.02em;
+  width: 2px;
+  height: 1.02em;
   vertical-align: -0.16em;
   background: var(--woa-accent);
   animation: woa-blink 1.05s steps(2, start) infinite;
 }
-@keyframes woa-blink { 50% { opacity: 0; } }
+@keyframes woa-blink {
+  50% {
+    opacity: 0;
+  }
+}
 
 /* A table sits in the prose, not in a box: no frame, a firmer rule under the header than
    between rows, and its outer columns aligned with the text around it. */
-.woa-md__tablewrap { overflow-x: auto; }
+.woa-md__tablewrap {
+  overflow-x: auto;
+}
 .woa-md table {
   width: 100%;
   border-collapse: collapse;
@@ -851,10 +1360,20 @@ button.woa-step__line:focus-visible {
      reader miss that the row beside it had more columns. Headers keep their line. */
   overflow-wrap: anywhere;
 }
-.woa-md tr:last-child td { border-bottom: 0; }
-.woa-md th:first-child, .woa-md td:first-child { padding-inline-start: 0; }
-.woa-md th:last-child, .woa-md td:last-child { padding-inline-end: 0; }
-.woa-md [data-align='right'] { text-align: right; }
+.woa-md tr:last-child td {
+  border-bottom: 0;
+}
+.woa-md th:first-child,
+.woa-md td:first-child {
+  padding-inline-start: 0;
+}
+.woa-md th:last-child,
+.woa-md td:last-child {
+  padding-inline-end: 0;
+}
+.woa-md [data-align="right"] {
+  text-align: right;
+}
 
 .woa-md__block {
   margin: 0;
@@ -864,7 +1383,9 @@ button.woa-step__line:focus-visible {
   box-shadow: inset 0 0 0 1px var(--woa-line);
 }
 .woa-md__block header {
-  display: flex; align-items: center; gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 4px 8px;
   font-family: var(--woa-mono-stack);
   font-size: var(--woa-font-size-micro);
@@ -873,33 +1394,51 @@ button.woa-step__line:focus-visible {
 }
 .woa-md__copy {
   margin-left: auto;
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-family: var(--woa-font-stack);
   color: var(--woa-ink-muted);
 }
-.woa-md__copy:hover { color: var(--woa-ink); }
+.woa-md__copy:hover {
+  color: var(--woa-ink);
+}
 
 /* Under a landed answer, the things to do with it and when it was said. They stay out of
    the way until the turn is pointed at or reached by keyboard. The copy control's tooltip
    opens upwards from its left edge: below the last line the thread clips it, and centred
    it would overhang the turn's box, which clips it too. */
 .woa-answer-actions {
-  display: flex; align-items: center; gap: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin: -4px 0 0 -6px;
   opacity: 0;
   transition: opacity var(--woa-motion-fast) var(--woa-motion-easing);
 }
 .woa-turn:hover .woa-answer-actions,
-.woa-answer-actions:focus-within { opacity: 1; }
-.woa-answer-actions .woa-icon-button { color: var(--woa-ink-faint); }
-.woa-answer-actions .woa-icon-button:hover { color: var(--woa-ink); }
-.woa-answer-actions .woa-icon-button[data-copied] { color: var(--woa-success); }
+.woa-answer-actions:focus-within {
+  opacity: 1;
+}
+.woa-answer-actions .woa-icon-button {
+  color: var(--woa-ink-faint);
+}
+.woa-answer-actions .woa-icon-button:hover {
+  color: var(--woa-ink);
+}
+.woa-answer-actions .woa-icon-button[data-copied] {
+  color: var(--woa-success);
+}
 .woa-answer-actions .woa-icon-button[data-tip]::after {
-  top: auto; bottom: calc(100% + 6px); left: 0;
+  top: auto;
+  bottom: calc(100% + 6px);
+  left: 0;
   transform: translateY(2px);
 }
 .woa-answer-actions .woa-icon-button[data-tip]:hover::after,
-.woa-answer-actions .woa-icon-button[data-tip]:focus-visible::after { transform: none; }
+.woa-answer-actions .woa-icon-button[data-tip]:focus-visible::after {
+  transform: none;
+}
 .woa-answer-time {
   font-size: var(--woa-font-size-meta);
   line-height: var(--woa-line-height);
@@ -910,7 +1449,9 @@ button.woa-step__line:focus-visible {
 
 /* Without a pointer that hovers there is nothing to reveal them: they simply show. */
 @media (hover: none) {
-  .woa-answer-actions { opacity: 1; }
+  .woa-answer-actions {
+    opacity: 1;
+  }
 }
 .woa-md__block pre {
   margin: 0;
@@ -937,14 +1478,19 @@ button.woa-step__line:focus-visible {
 .woa-outcome {
   border-radius: var(--woa-radius-card);
   padding: 14px 16px;
-  display: flex; flex-direction: column; gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   background: var(--woa-surface-raised);
   border: 1px solid var(--woa-line);
 }
 .woa-outcome h3 {
   margin: 0;
-  display: flex; align-items: center; gap: 8px;
-  font-size: var(--woa-font-size); font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--woa-font-size);
+  font-weight: 600;
 }
 .woa-outcome h3 > svg {
   flex: none;
@@ -955,13 +1501,16 @@ button.woa-step__line:focus-visible {
 .woa-outcome p {
   margin: 0;
   color: var(--woa-ink-muted);
-  font-size: var(--woa-font-size-small); line-height: var(--woa-line-height);
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
 }
-.woa-outcome[data-kind='indeterminate'] h3 > svg {
-  color: var(--woa-warning); background: var(--woa-warning-soft);
+.woa-outcome[data-kind="indeterminate"] h3 > svg {
+  color: var(--woa-warning);
+  background: var(--woa-warning-soft);
 }
-.woa-outcome[data-kind='refused'] h3 > svg {
-  color: var(--woa-danger); background: var(--woa-danger-soft);
+.woa-outcome[data-kind="refused"] h3 > svg {
+  color: var(--woa-danger);
+  background: var(--woa-danger-soft);
 }
 
 /* ─────────────────────────────────────────────── approval */
@@ -982,10 +1531,18 @@ button.woa-step__line:focus-visible {
   animation: woa-rise var(--woa-motion-base) var(--woa-motion-easing);
 }
 @keyframes woa-rise {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
-.woa-approval__inner { padding: 12px 14px; }
+.woa-approval__inner {
+  padding: 12px 14px;
+}
 .woa-approval__detail pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -995,30 +1552,42 @@ button.woa-step__line:focus-visible {
 /* The header is a caption, not a headline: the effect below it is what is being asked. */
 .woa-approval h2 {
   margin: 0 0 6px;
-  display: flex; align-items: center; gap: 6px;
-  font-size: var(--woa-font-size-meta); font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
   line-height: var(--woa-line-height);
   color: var(--woa-warning);
 }
-.woa-approval h2 > svg { flex: none; }
+.woa-approval h2 > svg {
+  flex: none;
+}
 .woa-approval__time {
   margin-left: auto;
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-weight: 400;
   color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
 }
-.woa-approval__time[data-urgent] { color: var(--woa-warning); }
+.woa-approval__time[data-urgent] {
+  color: var(--woa-warning);
+}
 
 .woa-approval__effect {
   margin: 0;
-  font-size: var(--woa-font-size); font-weight: 600; line-height: var(--woa-line-height);
+  font-size: var(--woa-font-size);
+  font-weight: 600;
+  line-height: var(--woa-line-height);
   overflow-wrap: anywhere;
 }
 /* Record identifiers, not prose: a monospaced block is harder to pass a sentence off as. */
 .woa-approval__targets {
   list-style: none;
-  margin: 8px 0 0; padding: 6px 10px;
+  margin: 8px 0 0;
+  padding: 6px 10px;
   border-radius: var(--woa-radius-control);
   background: var(--woa-surface-muted);
   /* The dark theme's muted surface is within a shade of the card's; the hairline keeps the
@@ -1035,40 +1604,60 @@ button.woa-step__line:focus-visible {
 }
 .woa-approval__fine {
   margin: 8px 0 0;
-  font-size: var(--woa-font-size-meta); line-height: var(--woa-line-height);
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
   color: var(--woa-ink-faint);
 }
 /* Read to a screen reader, not shown: it restates what the two buttons already mean. */
 .woa-approval__fine[data-quiet] {
   position: absolute;
-  width: 1px; height: 1px;
-  margin: -1px; padding: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
 }
 .woa-approval__blocked {
   margin: 8px 0 0;
-  display: flex; gap: 6px; align-items: flex-start;
-  font-size: var(--woa-font-size-meta); line-height: var(--woa-line-height);
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
   color: var(--woa-warning);
 }
-.woa-approval__blocked svg { flex: none; margin-top: 2px; }
+.woa-approval__blocked svg {
+  flex: none;
+  margin-top: 2px;
+}
 
 .woa-approval__actions {
-  display: flex; justify-content: flex-end; gap: 8px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
   /* When the card is taller than the window can show -- a narrow or zoomed one -- the two
      answers stay pinned at its foot. Focusing the first one then has nothing to scroll to,
      so the header and the time left are not pushed out of view to reach it. */
-  position: sticky; bottom: 0;
-  margin: 4px -14px -12px; padding: 8px 14px 12px;
+  position: sticky;
+  bottom: 0;
+  margin: 4px -14px -12px;
+  padding: 8px 14px 12px;
   background: var(--woa-surface-raised);
 }
-.woa-approval__actions .woa-btn { height: 32px; padding: 0 14px; }
-.woa-approval__spacer { display: none; }
+.woa-approval__actions .woa-btn {
+  height: 32px;
+  padding: 0 14px;
+}
+.woa-approval__spacer {
+  display: none;
+}
 
 .woa-btn {
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
   height: 36px;
   padding: 0 16px;
@@ -1077,14 +1666,18 @@ button.woa-step__line:focus-visible {
   font-size: var(--woa-font-size-small);
   white-space: nowrap;
   transition: background var(--woa-motion-fast) var(--woa-motion-easing),
-              transform var(--woa-motion-fast) var(--woa-motion-easing);
+    transform var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-btn:active:not(:disabled) { transform: scale(0.98); }
+.woa-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
 .woa-btn--primary {
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
 }
-.woa-btn--primary:hover:not(:disabled) { background: var(--woa-accent-hover); }
+.woa-btn--primary:hover:not(:disabled) {
+  background: var(--woa-accent-hover);
+}
 /* A hairline as well as the fill: in the dark theme the muted fill is within a shade of the
    card it sits on, and the button read as loose text. */
 .woa-btn--ghost {
@@ -1092,39 +1685,60 @@ button.woa-step__line:focus-visible {
   box-shadow: inset 0 0 0 1px var(--woa-line);
   color: var(--woa-ink);
 }
-.woa-btn--ghost:hover:not(:disabled) { background: var(--woa-line); }
-.woa-btn:disabled { opacity: 0.42; }
+.woa-btn--ghost:hover:not(:disabled) {
+  background: var(--woa-line);
+}
+.woa-btn:disabled {
+  opacity: 0.42;
+}
 
 /* ─────────────────────────────────────────────── inline error */
 /* "Can I keep going?" is answered right above the composer, on a small raised card rather
    than a band across the window: it belongs to the conversation, not to the frame. */
 .woa-inline-error {
   flex: none;
-  display: flex; align-items: center; gap: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0 12px 6px;
   padding: 10px 12px;
   border-radius: var(--woa-radius-card);
-  font-size: var(--woa-font-size-small); line-height: var(--woa-line-height);
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
   color: var(--woa-ink-muted);
   background: var(--woa-surface-raised);
   border: 1px solid var(--woa-line);
   box-shadow: var(--woa-shadow-2);
   animation: woa-arrive var(--woa-motion-base) var(--woa-motion-easing);
 }
-.woa-inline-error > svg { flex: none; color: var(--woa-warning); }
-.woa-inline-error[data-terminal] > svg { color: var(--woa-danger); }
-.woa-inline-error__text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.woa-inline-error > svg {
+  flex: none;
+  color: var(--woa-warning);
+}
+.woa-inline-error[data-terminal] > svg {
+  color: var(--woa-danger);
+}
+.woa-inline-error__text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .woa-inline-error__retry {
   flex: none;
-  display: inline-flex; align-items: center; gap: 4px;
-  height: 28px; padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
   border-radius: var(--woa-radius-pill);
   background: var(--woa-surface-muted);
   color: var(--woa-ink);
   font-weight: 500;
   transition: background var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-inline-error__retry:hover { background: var(--woa-line); }
+.woa-inline-error__retry:hover {
+  background: var(--woa-line);
+}
 
 /* ─────────────────────────────────────────────── composer */
 /* The composer sits on the window's own surface; the field is the one object in it. */
@@ -1134,7 +1748,9 @@ button.woa-step__line:focus-visible {
   background: var(--woa-bg);
 }
 .woa-field {
-  display: flex; align-items: flex-end; gap: 8px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
   padding: 12px 8px 8px 14px;
   border-radius: var(--woa-radius-field);
   background: var(--woa-bg);
@@ -1167,8 +1783,12 @@ button.woa-step__line:focus-visible {
   letter-spacing: inherit;
   line-height: var(--woa-line-height);
 }
-.woa-field textarea:focus { outline: none; }
-.woa-field textarea::placeholder { color: var(--woa-ink-faint); }
+.woa-field textarea:focus {
+  outline: none;
+}
+.woa-field textarea::placeholder {
+  color: var(--woa-ink-faint);
+}
 /* Nobody can type while a confirmation is pending, and a long draft kept at full height
    would push the composer past the window's floor. Two lines say a draft is kept. */
 .woa-field textarea:disabled {
@@ -1179,17 +1799,24 @@ button.woa-step__line:focus-visible {
 /* Round and solid when there is something to send; quiet when there is not. Stopping is
    the one other thing it can do: the same solid disc, told apart by its square. */
 .woa-send {
-  width: 30px; height: 30px;
+  width: 30px;
+  height: 30px;
   flex: none;
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
   transition: background var(--woa-motion-fast) var(--woa-motion-easing),
-              transform var(--woa-motion-fast) var(--woa-motion-easing);
+    transform var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-send:not([data-off]):hover { background: var(--woa-accent-hover); }
-.woa-send:not([data-off]):active { transform: scale(0.94); }
+.woa-send:not([data-off]):hover {
+  background: var(--woa-accent-hover);
+}
+.woa-send:not([data-off]):active {
+  transform: scale(0.94);
+}
 .woa-send[data-off] {
   background: var(--woa-surface-muted);
   color: var(--woa-ink-faint);
@@ -1198,10 +1825,13 @@ button.woa-step__line:focus-visible {
   background: var(--woa-accent);
   color: var(--woa-accent-ink);
 }
-.woa-send[data-stop]:not(:disabled):hover { background: var(--woa-accent-hover); }
+.woa-send[data-stop]:not(:disabled):hover {
+  background: var(--woa-accent-hover);
+}
 .woa-composer__limit {
   margin: 6px 2px 0;
-  display: inline-flex; align-items: center;
+  display: inline-flex;
+  align-items: center;
   padding: 2px 8px;
   border-radius: var(--woa-radius-pill);
   background: var(--woa-warning-soft);
@@ -1222,10 +1852,14 @@ button.woa-step__line:focus-visible {
 
 /* ─────────────────────────────────────────────── new conversation */
 .woa-body {
-  flex: 1; min-height: 0;
-  display: flex; flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
-.woa-window { container-type: inline-size; }
+.woa-window {
+  container-type: inline-size;
+}
 /* One scroll surface at the start. Once there is a turn, the transcript takes over
    scrolling and this same composer sits at its foot without losing the input node. */
 .woa-empty {
@@ -1235,35 +1869,66 @@ button.woa-step__line:focus-visible {
   scrollbar-color: var(--woa-line-strong) transparent;
   padding: 0 24px 14px;
 }
-.woa-empty > .woa-thread-shell { display: none; }
+.woa-empty > .woa-thread-shell {
+  display: none;
+}
 /* The design's composition: the invitation and its ways in are centred in the room above
    the writing surface, and the writing surface sits at the foot -- where it stays once the
    conversation begins. `order` arranges them, so the composer keeps its place in the DOM
    (and with it the input node, draft and caret); only where it is drawn changes. */
-.woa-empty::before, .woa-empty::after { content: ''; flex: 1 0 0; }
-.woa-empty::before { order: 0; }
-.woa-empty::after { order: 3; }
-.woa-empty > :not(.woa-thread-shell) { width: 100%; max-width: 520px; margin-inline: auto; }
-.woa-empty__hero { order: 1; }
-.woa-examples { order: 2; }
-.woa-empty .woa-composer { order: 4; }
-.woa-empty > .woa-composer__disclaimer { order: 5; }
+.woa-empty::before,
+.woa-empty::after {
+  content: "";
+  flex: 1 0 0;
+}
+.woa-empty::before {
+  order: 0;
+}
+.woa-empty::after {
+  order: 3;
+}
+.woa-empty > :not(.woa-thread-shell) {
+  width: 100%;
+  max-width: 520px;
+  margin-inline: auto;
+}
+.woa-empty__hero {
+  order: 1;
+}
+.woa-examples {
+  order: 2;
+}
+.woa-empty .woa-composer {
+  order: 4;
+}
+.woa-empty > .woa-composer__disclaimer {
+  order: 5;
+}
 
 /* The assistant introduces itself: its face on a soft halo, one line beside it. */
-.woa-empty__hero { flex: none; padding: 0 2px 24px; }
+.woa-empty__hero {
+  flex: none;
+  padding: 0 2px 24px;
+}
 .woa-empty__hello {
-  display: flex; align-items: center; gap: 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
   margin-bottom: 12px;
 }
 .woa-empty__face {
-  position: relative; flex: none;
-  display: grid; place-items: center;
-  width: 48px; height: 48px;
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
 }
 /* A blurred breath of the accent behind the face, four seconds to a cycle. */
 .woa-empty__face::before {
-  content: '';
-  position: absolute; inset: 0;
+  content: "";
+  position: absolute;
+  inset: 0;
   border-radius: 50%;
   background: var(--woa-face-halo);
   filter: blur(var(--woa-effect-blur));
@@ -1272,7 +1937,8 @@ button.woa-step__line:focus-visible {
 .woa-empty__face img {
   position: relative;
   display: block;
-  width: 48px; height: 48px;
+  width: 48px;
+  height: 48px;
   border-radius: 50%;
   object-fit: cover;
   /* In the mock the gradient frame has a second, solid inset between it and the portrait. */
@@ -1280,12 +1946,12 @@ button.woa-step__line:focus-visible {
 }
 /* The ring: a gradient that a plain border cannot carry, so a masked ring wraps the face. */
 .woa-empty__face::after {
-  content: '';
-  position: absolute; inset: -2px;
+  content: "";
+  position: absolute;
+  inset: -2px;
   border-radius: 50%;
   padding: 2px;
-  background: linear-gradient(135deg, var(--woa-face-ring), var(--woa-face-ring-mid),
-    var(--woa-face-ring-end));
+  background: linear-gradient(135deg, var(--woa-face-ring), var(--woa-face-ring-mid), var(--woa-face-ring-end));
   -webkit-mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(black 0 0) content-box, linear-gradient(black 0 0);
@@ -1293,27 +1959,35 @@ button.woa-step__line:focus-visible {
   pointer-events: none;
 }
 @keyframes woa-face-halo {
-  0%, 100% { transform: scale(1); opacity: 0.75; }
-  50% { transform: scale(1.12); opacity: 0.35; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.35;
+  }
 }
 /* The first line is spoken, so it is a bubble rather than a caption. */
 .woa-empty__intro {
   margin: 0;
   align-self: center;
   padding: 6px 14px;
-  border-radius: var(--woa-radius-field) var(--woa-radius-field) var(--woa-radius-inline)
-                 var(--woa-radius-field);
+  border-radius: var(--woa-radius-field) var(--woa-radius-field) var(--woa-radius-inline) var(--woa-radius-field);
   background: var(--woa-welcome-bubble);
   border: 1px solid var(--woa-welcome-bubble-border);
   box-shadow: var(--woa-shadow-1);
   color: var(--woa-ink-muted);
-  font-size: var(--woa-font-size-small); font-weight: 500;
+  font-size: var(--woa-font-size-small);
+  font-weight: 500;
   line-height: var(--woa-line-height);
 }
 .woa-empty h3 {
   margin: 0;
   font-family: var(--woa-font-stack-display);
-  font-size: var(--woa-font-size-hero); font-weight: 700;
+  font-size: var(--woa-font-size-hero);
+  font-weight: 700;
   letter-spacing: -0.025em;
   line-height: var(--woa-line-height-heading);
   background: var(--woa-welcome-title);
@@ -1349,12 +2023,17 @@ button.woa-step__line:focus-visible {
   border-color: var(--woa-accent);
   box-shadow: var(--woa-welcome-input-focus-shadow);
 }
-.woa-empty .woa-field textarea { width: 100%; }
+.woa-empty .woa-field textarea {
+  width: 100%;
+}
 .woa-empty .woa-send {
-  width: 36px; height: 36px;
+  width: 36px;
+  height: 36px;
   border-radius: var(--woa-radius-field);
 }
-.woa-empty .woa-send:not([data-stop]) { color: var(--woa-welcome-send-ink); }
+.woa-empty .woa-send:not([data-stop]) {
+  color: var(--woa-welcome-send-ink);
+}
 /* The send disc is the one accent gradient in the panel; stopping is the plain disc, so the
    two affordances are told apart at a glance as well as by their glyph. */
 .woa-empty .woa-send:not([data-stop]):not([data-off]) {
@@ -1364,7 +2043,10 @@ button.woa-step__line:focus-visible {
 .woa-empty .woa-send:not([data-stop]):not([data-off]):hover {
   background: linear-gradient(135deg, var(--woa-welcome-send-hover-start), var(--woa-welcome-send-hover-end));
 }
-.woa-empty .woa-send[data-stop] { background: var(--woa-accent); color: var(--woa-accent-ink); }
+.woa-empty .woa-send[data-stop] {
+  background: var(--woa-accent);
+  color: var(--woa-accent-ink);
+}
 .woa-empty .woa-send[data-off] {
   background: linear-gradient(135deg, var(--woa-welcome-send-start), var(--woa-welcome-send-end));
   color: var(--woa-welcome-send-ink);
@@ -1374,14 +2056,24 @@ button.woa-step__line:focus-visible {
 /* The ways in: four equal cards, each a category and one concrete request. */
 .woa-examples {
   flex: none;
-  list-style: none; margin: 0; padding: 0;
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
-.woa-examples li:only-child { grid-column: 1 / -1; }
+.woa-examples li:only-child {
+  grid-column: 1 / -1;
+}
 .woa-example {
   position: relative;
-  width: 100%; height: 100%;
-  display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
   min-height: 100px;
   padding: 14px;
   text-align: left;
@@ -1391,7 +2083,7 @@ button.woa-step__line:focus-visible {
   box-shadow: var(--woa-welcome-card-shadow);
   backdrop-filter: blur(16px);
   transition: box-shadow var(--woa-motion-base) var(--woa-motion-easing),
-              transform var(--woa-motion-base) var(--woa-motion-easing);
+    transform var(--woa-motion-base) var(--woa-motion-easing);
 }
 .woa-example:hover {
   background: var(--woa-welcome-card-hover);
@@ -1401,7 +2093,9 @@ button.woa-step__line:focus-visible {
 }
 /* The kind: a tinted pill, the glyph and the name on the request's own colour. */
 .woa-example__badge {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   width: fit-content;
   padding: 2px 10px;
   border-radius: var(--woa-radius-pill);
@@ -1409,42 +2103,50 @@ button.woa-step__line:focus-visible {
   color: var(--woa-ink-muted);
 }
 .woa-example__title {
-  font-size: var(--woa-font-size-micro); font-weight: 600;
+  font-size: var(--woa-font-size-micro);
+  font-weight: 600;
   line-height: var(--woa-line-height);
 }
 .woa-example__text {
   color: var(--woa-ink);
-  font-size: var(--woa-font-size-small); font-weight: 600;
+  font-size: var(--woa-font-size-small);
+  font-weight: 600;
   line-height: var(--woa-line-height-heading);
   overflow-wrap: anywhere;
   text-wrap: pretty;
   transition: color var(--woa-motion-fast) var(--woa-motion-easing);
 }
-.woa-example__halt { font-feature-settings: 'halt'; }
+.woa-example__halt {
+  font-feature-settings: "halt";
+}
 
 /* Each card wears its own colour, and hover raises it into the request's words. */
-.woa-example[data-kind='query'] .woa-example__badge {
-  background: var(--woa-kind-query-soft); color: var(--woa-kind-query);
-}
-.woa-example[data-kind='find'] .woa-example__badge {
-  background: var(--woa-kind-find-soft); color: var(--woa-kind-find);
-}
-.woa-example[data-kind='operate'] .woa-example__badge {
-  background: var(--woa-kind-operate-soft); color: var(--woa-kind-operate);
-}
-.woa-example[data-kind='more'] .woa-example__badge {
-  background: var(--woa-warning-soft); color: var(--woa-warning);
-}
-.woa-example[data-kind='query']:is(:hover, :focus-visible) .woa-example__text {
+.woa-example[data-kind="query"] .woa-example__badge {
+  background: var(--woa-kind-query-soft);
   color: var(--woa-kind-query);
 }
-.woa-example[data-kind='find']:is(:hover, :focus-visible) .woa-example__text {
+.woa-example[data-kind="find"] .woa-example__badge {
+  background: var(--woa-kind-find-soft);
   color: var(--woa-kind-find);
 }
-.woa-example[data-kind='operate']:is(:hover, :focus-visible) .woa-example__text {
+.woa-example[data-kind="operate"] .woa-example__badge {
+  background: var(--woa-kind-operate-soft);
   color: var(--woa-kind-operate);
 }
-.woa-example[data-kind='more']:is(:hover, :focus-visible) .woa-example__text {
+.woa-example[data-kind="more"] .woa-example__badge {
+  background: var(--woa-warning-soft);
+  color: var(--woa-warning);
+}
+.woa-example[data-kind="query"]:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-kind-query);
+}
+.woa-example[data-kind="find"]:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-kind-find);
+}
+.woa-example[data-kind="operate"]:is(:hover, :focus-visible) .woa-example__text {
+  color: var(--woa-kind-operate);
+}
+.woa-example[data-kind="more"]:is(:hover, :focus-visible) .woa-example__text {
   color: var(--woa-warning);
 }
 .woa-empty > .woa-composer__disclaimer {
@@ -1453,40 +2155,74 @@ button.woa-step__line:focus-visible {
   font-size: var(--woa-font-size-micro);
 }
 @container (max-width: 360px) {
-  .woa-empty { padding: 24px 16px 20px; }
-  .woa-empty__hero { padding-bottom: 20px; }
-  .woa-empty__hello { gap: 10px; }
-  .woa-empty__face, .woa-empty__face img { width: 40px; height: 40px; }
-  .woa-empty h3 { font-size: var(--woa-font-size-display); }
-  .woa-example { padding: 12px; min-height: 92px; }
+  .woa-empty {
+    padding: 24px 16px 20px;
+  }
+  .woa-empty__hero {
+    padding-bottom: 20px;
+  }
+  .woa-empty__hello {
+    gap: 10px;
+  }
+  .woa-empty__face,
+  .woa-empty__face img {
+    width: 40px;
+    height: 40px;
+  }
+  .woa-empty h3 {
+    font-size: var(--woa-font-size-display);
+  }
+  .woa-example {
+    padding: 12px;
+    min-height: 92px;
+  }
 }
 
 /* A panel that vanished read as one that never loaded. It says which it is. */
 .woa-fatal {
   position: absolute;
-  right: 16px; bottom: 16px;
+  right: 16px;
+  bottom: 16px;
   max-width: min(360px, calc(100vw - 32px));
   pointer-events: auto;
-  display: flex; align-items: flex-start; gap: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 10px 12px;
   border-radius: var(--woa-radius-panel);
   background: var(--woa-bg);
   color: var(--woa-ink);
-  font-size: var(--woa-font-size-small); line-height: var(--woa-line-height);
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
   box-shadow: 0 0 0 1px var(--woa-line-strong), var(--woa-shadow-2);
 }
-.woa-fatal > svg { flex: none; margin-top: 2px; color: var(--woa-warning); }
-.woa-fatal button { color: var(--woa-accent); font-weight: 500; white-space: nowrap; }
+.woa-fatal > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--woa-warning);
+}
+.woa-fatal button {
+  color: var(--woa-accent);
+  font-weight: 500;
+  white-space: nowrap;
+}
 
 /* ─────────────────────────────────────────────── narrow and reduced motion */
 @media (max-width: 360px) {
   /* Stacked, with the safe answer last -- nearest the thumb. */
-  .woa-approval__actions { flex-direction: column; align-items: stretch; }
-  .woa-approval__actions > [data-testid='woa-deny'] { order: 1; }
+  .woa-approval__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .woa-approval__actions > [data-testid="woa-deny"] {
+    order: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
@@ -1495,23 +2231,86 @@ button.woa-step__line:focus-visible {
 
 /* Forced colours drop the gradient ring and the halo; the face still needs its edge. */
 @media (forced-colors: active) {
-  .woa-launcher[data-state='idle']::before {
-    background: none; padding: 0; border: 2px solid CanvasText;
-    -webkit-mask: none; mask: none;
+  .woa-launcher[data-state="idle"]::before {
+    background: none;
+    padding: 0;
+    border: 2px solid CanvasText;
+    -webkit-mask: none;
+    mask: none;
   }
-  .woa-empty__face::before { display: none; }
+  .woa-empty__face::before {
+    display: none;
+  }
   .woa-empty__face::after {
-    background: none; padding: 0;
+    background: none;
+    padding: 0;
     border: 2px solid CanvasText;
   }
-  .woa-empty__face img { border-color: Canvas; }
-  .woa-empty h3 { background: none; -webkit-text-fill-color: CanvasText; }
+  .woa-empty__face img {
+    border-color: Canvas;
+  }
+  .woa-empty h3 {
+    background: none;
+    -webkit-text-fill-color: CanvasText;
+  }
 }
 
 .woa-history {
   text-align: center;
   padding-block: 8px;
   color: var(--woa-ink-muted);
-  button { cursor: pointer; color: var(--woa-accent); }
-  button:disabled { cursor: wait; }
+  button {
+    cursor: pointer;
+    color: var(--woa-accent);
+  }
+  button:disabled {
+    cursor: wait;
+  }
+}
+
+/* A local handoff follows the verified control without touching application styles or hits. */
+.woa-submit-guide {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  user-select: none;
+  color: var(--woa-accent);
+  font: var(--woa-font-size-small) / 1.6 var(--woa-font-stack);
+}
+.woa-submit-guide *,
+.woa-submit-guide svg { pointer-events: none; }
+.woa-submit-guide svg {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.woa-submit-guide svg[hidden],
+.woa-submit-guide__hint[hidden] { display: none; }
+.woa-submit-guide circle { fill: currentColor; stroke: none; }
+.woa-submit-guide__hint {
+  position: fixed;
+  padding: 7px 10px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-surface-raised);
+  box-shadow: var(--woa-shadow-window);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.woa-submit-guide[data-state="assistant"] .woa-submit-guide__hint,
+.woa-submit-guide[data-state="covered"] .woa-submit-guide__hint,
+.woa-submit-guide[data-state="disabled"] .woa-submit-guide__hint,
+.woa-submit-guide[data-state="hidden"] .woa-submit-guide__hint {
+  border-radius: var(--woa-radius-flush);
+  box-shadow: none;
+  padding: 8px 0 0;
+  border-top: var(--woa-border-width) solid var(--woa-line);
+  background: var(--woa-bg);
 }

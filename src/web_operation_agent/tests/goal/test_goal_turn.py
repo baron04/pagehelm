@@ -436,7 +436,7 @@ class GoalTurnTests(unittest.TestCase):
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
         return execution, channel, chat, port, events
 
-    def test_leave_to_work_the_page_is_asked_once_for_the_conversation(self):
+    def test_leave_to_work_the_page_is_asked_once_per_turn(self):
         goal = _declaration(kind="page", entity="order", record="S00006", section="Other Info")
         resolved = [Resolved(kind="page", page=PagePlan(url="/orders/6", label="S00006",
             expected_path="/orders/6", section="Other Info"))]
@@ -452,10 +452,9 @@ class GoalTurnTests(unittest.TestCase):
             statuses.append(executor.execute({"message_id": f"m{i}", "text": "打开 S00006 看看其他信息",
                                               "page_url": "http://127.0.0.1:8080/home"}).status)
         self.assertEqual(statuses, [AgentTurnStatus.FINISHED] * 3)
-        # Asked in the first turn, gone ahead on in the second, asked again in a new conversation.
-        self.assertEqual(len(channel.approvals), 2)
+        self.assertEqual(len(channel.approvals), 3)
         events = [json.loads(line) for line in self.ledger.read_text().splitlines()]
-        self.assertEqual([e["message_id"] for e in events if e["event"] == "operation_leave_carried"], ["m1"])
+        self.assertFalse(any(e["event"] == "operation_leave_carried" for e in events))
 
     def test_leave_declined_is_asked_for_again_next_turn(self):
         goal = _declaration(kind="page", entity="order", record="S00006", section="Other Info")
@@ -471,7 +470,7 @@ class GoalTurnTests(unittest.TestCase):
             executor.execute({"message_id": f"m{i}", "text": "打开 S00006 看看其他信息",
                               "page_url": "http://127.0.0.1:8080/home"})
         self.assertEqual(len(channel.approvals), 2)
-        self.assertFalse(executor.page_leave)
+        self.assertFalse(hasattr(executor, "page_leave"))
 
     def test_goal_uses_the_same_narrow_click_policy_as_the_tool_loop(self):
         class Policy:

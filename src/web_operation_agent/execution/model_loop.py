@@ -691,12 +691,27 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             taken = turn["model_calls"] = turn.get("model_calls", 0) + 1
             forced_at = turn.get("forced_summary_at")
             if forced_at and taken > forced_at + 2:
+                if turn.get("forced_summary_kind") == "read":
+                    s.terminal_reason, s.detail = "agent_refused", "empty reads exceeded the summary allowance"
+                    return "连续查询没有读到新记录，已停止重复读取；本次未能确认完整结果。"
+                if turn.get("forced_summary_kind") == "tools":
+                    s.terminal_reason, s.detail = "agent_refused", "tool executions exceeded the summary allowance"
+                    return "工具执行次数已用完，本次未能确认完整结果。"
                 s.terminal_reason, s.detail = "agent_refused", "page failures exceeded the summary allowance"
                 return "多次页面操作未完成；已停止尝试，请核对已查到的结果并手动处理剩余部分。"
             if forced_at and taken == forced_at + 1:
-                self._messages.append({"role": "user", "content":
-                    "页面动作已失败六次。只剩两步：汇总已核实的事实，用 finish(cannot) 说明未完成的部分；"
-                    "不要再尝试同一页面动作。"})
+                if turn.get("forced_summary_kind") == "read":
+                    self._messages.append({"role": "user", "content":
+                        "同一数据来源连续四次查询均为空，不能再靠改查询参数猜测。现在只根据已读到的记录"
+                        "调用 finish：能完整核实才用 done，否则用 cannot 说明已知事实和未核实的条件。"})
+                elif turn.get("forced_summary_kind") == "tools":
+                    self._messages.append({"role": "user", "content":
+                        "本轮工具执行次数已达上限。现在只根据已核实的结果调用 finish；"
+                        "未核实的部分用 cannot 说明，不要再尝试工具。"})
+                else:
+                    self._messages.append({"role": "user", "content":
+                        "页面动作已失败六次。只剩两步：汇总已核实的事实，用 finish(cannot) 说明未完成的部分；"
+                        "不要再尝试同一页面动作。"})
             if taken == self.model_steps - 1 and taken > 1:
                 # What was found so far is worth more to the person than "ran out of steps".
                 self._messages.append({"role": "user", "content":
@@ -705,8 +720,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             self._forget_old_observations()
             wire = [{k: v for k, v in m.items() if not k.startswith("_")} for m in self._messages]
             try:
+                tools = ([self._finish_tool(turn)] if forced_at and turn.get("forced_summary_kind") in {"read", "tools"}
+                         and taken > forced_at else self._tools(turn))
                 message = s.chat.complete_cancellable(
-                    wire, self._tools(turn), s.run_id, cancelled=s.cancelled, max_tokens=1500,
+                    wire, tools, s.run_id, cancelled=s.cancelled, max_tokens=1500,
                     timeout_s=max(1.0, s.budget.remaining()))
             except ProviderError as exc:
                 s.ledger.append("slim_model_failed", error_type=type(exc).__name__)
@@ -744,6 +761,14 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                                            "content": "未执行：工具参数必须是合法的 JSON 对象。"})
                     continue
+                if (turn.get("forced_summary_at") and turn.get("forced_summary_kind") in {"read", "tools"}
+                        and taken >= turn["forced_summary_at"] and name != "finish"):
+                    unseen = unseen or name
+                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                                           "content": ("未执行：工具执行次数已达上限，只允许用 finish 汇总已核实的结果。"
+                                                       if turn["forced_summary_kind"] == "tools" else
+                                                       "未执行：连续空读后只允许用 finish 汇总已核实的结果。")})
+                    continue
                 if name == "finish" and unwritten:
                     # Written before the proposal's refusal could be read: not an ending.
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
@@ -775,6 +800,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         continue
                     finish = args
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
+                    continue
+                if turn.get("tool_calls", 0) >= self.model_steps:
+                    unseen = unseen or name
+                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
+                                           "未执行：本轮工具执行次数已达上限，只能汇总已核实结果。"})
                     continue
                 # A step that names an element by its number was chosen on a page that is no
                 # longer there; one that names a path, a field or a record was not.
@@ -813,6 +843,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 before = self._page_fingerprint(s.obs)
                 before_epoch = s.obs.epoch if s.obs is not None else None
                 try:
+                    turn["tool_calls"] = turn.get("tool_calls", 0) + 1
+                    if turn["tool_calls"] >= self.model_steps and "forced_summary_at" not in turn:
+                        turn["forced_summary_at"] = taken
+                        turn["forced_summary_kind"] = "tools"
                     result = self._invoke_tool(s, name, args, turn)
                 except (PrincipalError, BusinessToolPermissionError, BusinessToolAuthenticationError):
                     s.terminal_reason = "permission_denied"
@@ -845,6 +879,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         turn["page_failures"] = failures
                         if failures >= 6 and "forced_summary_at" not in turn:
                             turn["forced_summary_at"] = taken
+                            turn["forced_summary_kind"] = "page"
                         if failure_base is not None:
                             counts = turn.setdefault("failure_counts", {})
                             failure = failure_base, result.error_code
@@ -852,6 +887,19 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             if counts[failure] >= 2:
                                 turn.setdefault("blocked_failures", set()).add(failure_base)
                 text = result.feedback
+                if result.state == "completed" and result.read_count is not None:
+                    empty = turn.setdefault("empty_reads", {})
+                    if result.read_count:
+                        empty.pop(result.read_key, None)
+                    else:
+                        attempts = empty[result.read_key] = empty.get(result.read_key, 0) + 1
+                        if attempts == 2:
+                            text += ("\n同一数据来源已连续两次返回空列表。检查筛选条件；此前若有较宽查询"
+                                     "读到记录，应根据那些记录判断，或用较宽查询和 fields 一次读全所需列。")
+                        if attempts >= 4 and "forced_summary_at" not in turn:
+                            turn["forced_summary_at"] = taken
+                            turn["forced_summary_kind"] = "read"
+                            text += "\n连续四次空读，停止尝试这个数据来源；下一步只汇总已核实的事实。"
                 if result.error_code:
                     text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
                 confirmed = result.state == "completed" and self._completion_proved(s, name, args, result, target=target)
@@ -973,7 +1021,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             if status == "done" and handoff and handoff[0] == self._page_fingerprint(s.obs):
                 # The explicit handoff belongs to the server's verified outcome,
                 # not to whether the model remembered to mention manual submission.
-                answer += f"\n\n请检查表单，确认无误后自行点击已标出的「{handoff[1]}」提交；助手未提交。"
+                answer += f"\n\n**请核对后，手动点击「{handoff[1]}」提交。**"
             return answer
         if not s.terminal_reason:
             s.terminal_reason, s.detail = "agent_refused", "the turn's model steps were used up"
