@@ -452,6 +452,12 @@ class ChannelIngress:
                     code="approval_context_mismatch",
                     status=403,
                 )
+            if decision.decision == "prefill" and not request.offer_prefill:
+                raise RemoteProtocolError(
+                    "form handoff was not offered for this approval",
+                    code="approval_choice_unavailable",
+                    status=403,
+                )
             previous = self._approval_decisions.get(decision.approval_id)
             if previous is not None:
                 if previous.content_digest != decision.content_digest:

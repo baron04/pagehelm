@@ -1,3 +1,4 @@
+import dataclasses
 import unittest
 
 from web_operation_agent import schemas as S
@@ -201,10 +202,23 @@ class WireTypes(unittest.TestCase):
             effect="Accept supplier quote", targets=("Quote Q-1042",),
             expires_at=2_000_000_000_000)
         self.assertEqual(S.ApprovalRequest.from_json(request.to_json()), request)
+        self.assertNotIn("offer_prefill", request.to_json())
+        offered = S.ApprovalRequest(
+            schema_version=1, approval_id="approval-prefill", effect="Update company",
+            targets=("Acme",), expires_at=2_000_000_000_000, offer_prefill=True)
+        self.assertEqual(S.ApprovalRequest.from_json(offered.to_json()), offered)
+        self.assertTrue(offered.to_json()["offer_prefill"])
+        with self.assertRaises(S.SchemaError):
+            S.ApprovalRequest(schema_version=1, approval_id="approval-operate",
+                              effect="Open a page", targets=("Acme",),
+                              expires_at=2_000_000_000_000, kind="operate",
+                              offer_prefill=True)
         decision = S.ApprovalDecision(
             schema_version=1, session_id="session-1",
             approval_id=request.approval_id, decision="approved")
         self.assertEqual(S.ApprovalDecision.from_json(decision.to_json()), decision)
+        self.assertEqual(S.ApprovalDecision.from_json(
+            dataclasses.replace(decision, decision="prefill").to_json()).decision, "prefill")
         with self.assertRaises(S.SchemaError):
             S.ApprovalDecision(schema_version=1, session_id="session-1",
                                approval_id="approval-1", decision="maybe")

@@ -567,6 +567,28 @@ class ChannelTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteProtocolError, "conflicts"):
             self.channel.accept_approval(conflict, lease_id=self.lease)
 
+    def test_prefill_choice_requires_an_explicit_write_offer_and_is_single_use(self):
+        expires = int(time.time() * 1000) + 5000
+        plain = ApprovalRequest(1, "plain-write", "Update record", ("Record 1",), expires)
+        self.channel.request_approval(plain)
+        unoffered = ApprovalDecision(1, self.grant.session_id, plain.approval_id, "prefill")
+        with self.assertRaises(RemoteProtocolError) as caught:
+            self.channel.accept_approval(unoffered, lease_id=self.lease)
+        self.assertEqual(caught.exception.code, "approval_choice_unavailable")
+        self.channel.accept_approval(dataclasses.replace(unoffered, decision="denied"),
+                                     lease_id=self.lease)
+
+        offered = ApprovalRequest(1, "offered-write", "Update record", ("Record 1",),
+                                  expires, offer_prefill=True)
+        self.channel.request_approval(offered)
+        prefill = dataclasses.replace(unoffered, approval_id=offered.approval_id)
+        self.assertFalse(self.channel.accept_approval(prefill, lease_id=self.lease)["duplicate"])
+        self.assertTrue(self.channel.accept_approval(prefill, lease_id=self.lease)["duplicate"])
+        with self.assertRaises(RemoteProtocolError) as conflict:
+            self.channel.accept_approval(dataclasses.replace(prefill, decision="approved"),
+                                         lease_id=self.lease)
+        self.assertEqual(conflict.exception.code, "approval_conflict")
+
     def test_approval_unknown_expired_and_concurrent_requests_fail_closed(self):
         now = int(time.time() * 1000)
         first = ApprovalRequest(1, "approval-1", "Change a record", ("Record 1",), now + 5000)

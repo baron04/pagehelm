@@ -16,6 +16,17 @@ import {
 } from './harness'
 
 test.describe('the launcher', () => {
+  test('an explicitly offered form handoff requires the same visible card gate as saving', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.raiseApproval({offer_prefill: true})
+    await expect(panel.page.getByTestId('woa-prefill')).toHaveText(labels.prefillChoice)
+    await expect(panel.page.getByTestId('woa-approve')).toHaveText(labels.saveChoice)
+    expect((await panel.active()).testid).toBe('woa-deny')
+    await panel.page.waitForTimeout(presentation.approval_visibility.min_visible_ms + 250)
+    await panel.page.getByTestId('woa-prefill').click()
+    expect(await panel.calls()).toContainEqual(['decide', 'a-1', 'prefill'])
+    expect(panel.errors).toEqual([])
+  })
   test('a multi-field write card fills its scrollport without a tail gap blocking approval', async ({open}) => {
     const panel = await open(snapshot())
     await panel.raiseApproval({details: Array.from({length: 12}, (_, i) => ({
@@ -510,6 +521,15 @@ test.describe('a confirmation', () => {
     await panel.page.getByTestId('woa-approve').dispatchEvent('click')
     await panel.page.locator('.woa-approval__blocked').waitFor({timeout: 3000})
     await expect(panel.page.locator('.woa-approval__blocked')).toContainText(labels.approvalObscured)
+    expect(await panel.calls()).toEqual([])
+    expect(panel.errors).toEqual([])
+  })
+
+  test('the form handoff choice also refuses before the card is visible', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.raiseApproval({offer_prefill: true})
+    await panel.page.getByTestId('woa-prefill').dispatchEvent('click')
+    await panel.page.locator('.woa-approval__blocked').waitFor({timeout: 3000})
     expect(await panel.calls()).toEqual([])
     expect(panel.errors).toEqual([])
   })

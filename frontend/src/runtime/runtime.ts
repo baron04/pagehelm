@@ -617,7 +617,7 @@ export class EmbeddedWebRuntime {
   }
 
   /** Record the decision before dispatching it, so a reload replays rather than re-asks. */
-  async _postApproval(request: ApprovalRequest, decision: 'approved' | 'denied'): Promise<void> {
+  async _postApproval(request: ApprovalRequest, decision: 'approved' | 'denied' | 'prefill'): Promise<void> {
     this.stored.approvals[request.approval_id] = decision
     this._save()
     try {
@@ -645,7 +645,7 @@ export class EmbeddedWebRuntime {
       return
     }
     this.panelHost?.setPendingApproval(null)
-    this._panelState(decision === 'approved' ? 'acting' : 'cancelled')
+    this._panelState(decision === 'denied' ? 'cancelled' : 'acting')
   }
 
   // -- the timeline the panel shows ------------------------------------------------------
@@ -789,7 +789,7 @@ export class EmbeddedWebRuntime {
       case 'approval_required': {
         this._panelState('awaiting_confirmation')
         const request = event.payload as unknown as ApprovalRequest
-        const decided = this.stored.approvals[request.approval_id] as 'approved' | 'denied' | undefined
+        const decided = this.stored.approvals[request.approval_id] as 'approved' | 'denied' | 'prefill' | undefined
         if (decided) {
           // A document that reloaded between deciding and posting finishes the POST rather
           // than asking again: the decision is already recorded and idempotent.

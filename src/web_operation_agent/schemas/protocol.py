@@ -375,6 +375,9 @@ class ApprovalRequest:
     #: turn with the page untouched.
     kind: str = "write"
     details: tuple = ()
+    #: The application offered an exact-proposal form handoff. Older clients omit this
+    #: optional choice and retain the original approve/deny card.
+    offer_prefill: bool = False
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ApprovalRequest")
@@ -382,6 +385,9 @@ class ApprovalRequest:
         validate_details(self.details)
         _require(self.kind in APPROVAL_KINDS,
                  f"kind must be one of {sorted(APPROVAL_KINDS)}")
+        _require(type(self.offer_prefill) is bool and
+                 (not self.offer_prefill or self.kind == "write"),
+                 "prefill may only be offered for a write approval")
         _str(self.approval_id, "approval_id")
         _str(self.effect, "effect")
         object.__setattr__(self, "targets", _string_sequence(self.targets, "targets"))
@@ -404,13 +410,16 @@ class ApprovalRequest:
                 "turn_id": self.turn_id,
                 "operation_id": self.operation_id,
                 "kind": self.kind,
+                **({"offer_prefill": True} if self.offer_prefill else {}),
                 **({"details": [d.to_json() for d in self.details]} if self.details else {})}
 
     @staticmethod
     def from_json(d: dict) -> "ApprovalRequest":
         allowed = {"schema_version", "approval_id", "effect", "targets", "expires_at",
-                   "principal_digest", "turn_id", "operation_id", "kind", "details"}
-        required = allowed - {"principal_digest", "turn_id", "operation_id", "kind", "details"}
+                   "principal_digest", "turn_id", "operation_id", "kind", "details",
+                   "offer_prefill"}
+        required = allowed - {"principal_digest", "turn_id", "operation_id", "kind",
+                              "details", "offer_prefill"}
         d = _strict_object(d, "ApprovalRequest", allowed=allowed, required=required)
         _require(isinstance(d["targets"], list), "targets must be an array")
         from .approval_details import ApprovalDetail
@@ -426,7 +435,8 @@ class ApprovalRequest:
                                principal_digest=d.get("principal_digest", ""),
                                turn_id=d.get("turn_id", ""),
                                operation_id=d.get("operation_id", ""),
-                               kind=d.get("kind", "write"), details=tuple(details))
+                               kind=d.get("kind", "write"), details=tuple(details),
+                               offer_prefill=d.get("offer_prefill", False))
 
     @property
     def content_digest(self) -> str:
@@ -449,8 +459,8 @@ class ApprovalDecision:
         _schema_version(self.schema_version, "ApprovalDecision")
         _str(self.session_id, "session_id")
         _str(self.approval_id, "approval_id")
-        _require(self.decision in {"approved", "denied"},
-                 "decision must be approved or denied")
+        _require(self.decision in {"approved", "denied", "prefill"},
+                 "decision must be approved, denied or prefill")
         for name in ("principal_digest", "turn_id", "operation_id"):
             _str(getattr(self, name), name, allow_empty=True)
         bound = (bool(self.principal_digest), bool(self.turn_id), bool(self.operation_id))

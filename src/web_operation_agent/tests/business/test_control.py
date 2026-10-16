@@ -150,6 +150,30 @@ class AuthorizationPrimitiveTests(unittest.TestCase):
             self.assertEqual(denied.decision, "denied")
             self.assertEqual(denied.plan_digest, plan.content_digest)
 
+    def test_explicit_prefill_offer_returns_a_bound_choice_without_write_grant(self):
+        grant, channel, lease = _connected_channel("approval-prefill")
+        plan = _plan()
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = ApprovalGate(channel, SessionLedger(Path(tmp) / "approval.jsonl", "approval-run"))
+            answer = {}
+
+            def wait_for_user():
+                answer["grant"] = gate.decide_plan(plan, effect="Update synthetic record",
+                    targets=("Record 1",), ttl_s=5, offer_prefill=True)
+
+            worker = threading.Thread(target=wait_for_user)
+            worker.start()
+            event = next(item for item in channel.events_after(
+                "e00000001", lease_id=lease, wait_s=1)
+                         if item.kind == "approval_required")
+            self.assertTrue(event.payload["offer_prefill"])
+            channel.accept_approval(ApprovalDecision(
+                1, grant.session_id, event.payload["approval_id"], "prefill"), lease_id=lease)
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(answer["grant"].decision, "prefill")
+            self.assertEqual(answer["grant"].plan_digest, plan.content_digest)
+
     def test_read_only_control_never_reports_a_write(self):
         control = ReadOnlyControl()
         control.begin_run("run-1")

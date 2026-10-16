@@ -275,17 +275,24 @@ export function createDevHost(): DevHost {
     commit({connection: {...state.connection, busy: false, state: 'success'}})
   }
 
-  async function settleWrite(decision: 'approved' | 'denied'): Promise<void> {
+  async function settleWrite(decision: 'approved' | 'denied' | 'prefill'): Promise<void> {
     const mine = live
     commit({
       pendingApproval: null,
-      connection: {...state.connection, state: decision === 'approved' ? 'acting' : 'cancelled'},
+      connection: {...state.connection, state: decision === 'denied' ? 'cancelled' : 'acting'},
     })
     if (decision === 'denied') {
       push(entry('result', '已取消，没有执行任何写入。', {
         tone: 'neutral', panel_state: 'cancelled', authored: 'server',
       }))
       commit({connection: {...state.connection, busy: false, state: 'cancelled'}})
+      return
+    }
+    if (decision === 'prefill') {
+      push(entry('result', '已按卡片内容填到表单，请你核对后自行提交。', {
+        tone: 'success', panel_state: 'success', authored: 'server',
+      }))
+      commit({connection: {...state.connection, busy: false, state: 'success'}})
       return
     }
     if (!await play(mine, [
@@ -356,7 +363,8 @@ export function createDevHost(): DevHost {
     decide(_approvalId, decision) {
       void (state.pendingApproval?.operation_id.startsWith('effects-preview-')
         && decision === 'approved' ? playEffects()
-        : state.pendingApproval?.kind === 'operate' ? settleOperate(decision)
+        : state.pendingApproval?.kind === 'operate' ? settleOperate(
+          decision === 'prefill' ? 'denied' : decision)
         : settleWrite(decision))
     },
     newConversation() {

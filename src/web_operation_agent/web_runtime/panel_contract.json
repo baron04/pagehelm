@@ -86,6 +86,8 @@
     "approvalValidFor": "有效期剩余",
     "deny": "取消",
     "approve": "确认执行",
+    "saveChoice": "保存更改",
+    "prefillChoice": "只填到表单，我自己提交",
     "approvalHint": "只会授权上述操作，且只能使用一次。页面变化后需要重新确认；取消将结束这一轮，不会执行任何写入。",
     "approvalObscured": "确认卡当前不完全可见，无法确认。请移开遮挡内容或把窗口拉大后重试。",
     "operateTitle": "操作页面前请确认",

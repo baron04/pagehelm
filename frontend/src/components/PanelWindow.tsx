@@ -138,7 +138,7 @@ export function PanelWindow({host, allowedOrigins}: {
   const unread = open ? 0 : unreadAnswers(snapshot.entries, seen)
 
   const decidingTimer = useRef(0)
-  const decide = useCallback((decision: 'approved' | 'denied') => {
+  const decide = useCallback((decision: 'approved' | 'denied' | 'prefill') => {
     if (!pending) return
     setDeciding(true)
     setEffectConfirmation(decision === 'approved'

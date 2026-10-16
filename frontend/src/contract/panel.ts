@@ -74,7 +74,11 @@ export interface ApprovalRequest {
   operation_id: string
   /** `operate` asks once per turn before the assistant works the page. */
   kind?: ApprovalKind
+  /** Present only when the server bound a transient form handoff to this write. */
+  offer_prefill?: boolean
 }
+
+export type ApprovalChoice = 'approved' | 'denied' | 'prefill'
 
 export type ApprovalKind = Exclude<keyof typeof presentation.approval_kinds, 'comment'>
 

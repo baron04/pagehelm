@@ -66,7 +66,7 @@ export interface PanelHost {
   submit(text: string): void
   retrySubmit(): void
   cancel(): void
-  decide(approvalId: string, decision: 'approved' | 'denied'): void
+  decide(approvalId: string, decision: 'approved' | 'denied' | 'prefill'): void
   newConversation(): void
   loadOlder(): void
   dismissNotice(): void

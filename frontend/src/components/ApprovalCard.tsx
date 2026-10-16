@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from 'react'
 import {ShieldAlert, Clock, Route, Sparkles, TriangleAlert} from 'lucide-react'
-import {declinable, type ApprovalRequest, type Labels, type PanelLimits} from '../contract/panel'
+import {declinable, type ApprovalChoice, type ApprovalRequest, type Labels, type PanelLimits} from '../contract/panel'
 import {useVisibilityGate} from '../state/visibility'
 import {iconProps} from './icon'
 
@@ -16,7 +16,7 @@ export interface ApprovalCardProps {
   limits: PanelLimits
   visibility: {min_visible_ratio: number; min_visible_ms: number}
   busy: boolean
-  onDecide: (decision: 'approved' | 'denied') => void
+  onDecide: (decision: ApprovalChoice) => void
   onRefused: (code: string) => void
 }
 
@@ -24,6 +24,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const {approval, labels, visibility, busy, onDecide, onRefused} = props
   const card = useRef<HTMLElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
+  const prefill = useRef<HTMLButtonElement>(null)
   const confirm = useRef<HTMLButtonElement>(null)
   const [countdown, setCountdown] = useState(() => remaining(approval.expires_at))
   const [blocked, setBlocked] = useState(false)
@@ -31,6 +32,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   // also replace the waiting turn from the composer.
   const canDecline = declinable(approval.kind)
   const operate = approval.kind === 'operate'
+  const offerPrefill = !operate && approval.offer_prefill === true
   const gate = useVisibilityGate({
     minVisibleRatio: visibility.min_visible_ratio,
     minVisibleMs: visibility.min_visible_ms,
@@ -60,10 +62,10 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   // The last minute: long enough to notice and answer, short enough not to hurry anyone.
   const urgent = approval.expires_at - Date.now() < 60_000
 
-  const answer = (decision: 'approved' | 'denied') => (event: React.MouseEvent) => {
+  const answer = (decision: ApprovalChoice) => (event: React.MouseEvent) => {
     if (busy) return
-    // Refusing never needs proof that anything was seen; only approving does.
-    const refusal = decision === 'approved' ? gate.refusalFor(event.nativeEvent) : ''
+    // Both forms of permission need the same visibility proof; refusal does not.
+    const refusal = decision !== 'denied' ? gate.refusalFor(event.nativeEvent) : ''
     if (refusal) {
       setBlocked(true)
       onRefused(refusal)
@@ -166,13 +168,20 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
             </button>
           )}
           <span className="woa-approval__spacer" />
+          {offerPrefill && (
+            <button type="button" className="woa-btn woa-btn--ghost" ref={prefill}
+                    data-testid="woa-prefill" disabled={busy} onClick={answer('prefill')}>
+              {labels.prefillChoice}
+            </button>
+          )}
           {/* A refusal explains itself and stays pressable: the next press succeeds once
               the card is genuinely visible. Disabling it here would leave a person with a
               dead button and no way back. */}
           <button type="button" className="woa-btn woa-btn--primary" ref={confirm}
                   data-testid="woa-approve" disabled={busy}
                   onClick={answer('approved')}>
-            {operate ? <><Sparkles {...iconProps(14)} />{labels.operateConfirm}</> : labels.approve}
+            {operate ? <><Sparkles {...iconProps(14)} />{labels.operateConfirm}</>
+              : offerPrefill ? labels.saveChoice : labels.approve}
           </button>
         </div>
       </div>

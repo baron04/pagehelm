@@ -102,7 +102,7 @@ export function backoffAfter(previous: number): number {
 export interface PanelActions {
   submit(text: string): void
   cancel(): void
-  decide(approvalId: string, decision: 'approved' | 'denied'): void
+  decide(approvalId: string, decision: 'approved' | 'denied' | 'prefill'): void
   newConversation(): void
   loadOlder(before: string): void
   panelVisibility?(open: boolean): void
@@ -380,7 +380,7 @@ export class PanelHost implements PanelHostContract {
 
   cancel(): void { this.verbs.cancel() }
 
-  decide(approvalId: string, decision: 'approved' | 'denied'): void {
+  decide(approvalId: string, decision: 'approved' | 'denied' | 'prefill'): void {
     this.verbs.decide(String(approvalId), decision)
   }
 

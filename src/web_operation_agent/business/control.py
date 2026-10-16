@@ -89,7 +89,8 @@ class ApprovalGate:
     def decide_plan(self, plan, *, effect: str, targets: tuple[str, ...],
                     ttl_s: int = 120,
                     context: OperationContext | None = None,
-                    kind: str = "write") -> ApprovalGrant:
+                    kind: str = "write",
+                    offer_prefill: bool = False) -> ApprovalGrant:
         """Return the authenticated decision without treating denial as an exception."""
         if kind not in self._EVENTS:
             raise ValueError("approval kind is invalid")
@@ -127,6 +128,7 @@ class ApprovalGate:
             operation_id=(context.operation_id if context else ""),
             kind=kind,
             details=getattr(plan, "details", ()),
+            offer_prefill=offer_prefill,
         )
         ensure_safe_browser_payload(request.to_json())
         self.ledger.append(
