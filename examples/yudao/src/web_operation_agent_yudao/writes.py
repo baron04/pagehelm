@@ -61,6 +61,25 @@ class NativeWriteHandler:
                 for g in grants if isinstance(g, dict)):
             raise BusinessToolPermissionError("related follow-up requires the actor's OWNER or WRITE permission")
 
+    def _require_follow_up_target_write(self, biz_type, record_id):
+        """Reject an empty permission set before the nontransactional native create.
+
+        The application's @CrmPermission aspect allows CRM admins without record
+        grants. A nonempty set is only a candidate, not proof that this actor can
+        write: the aspect also checks self and subordinate grants at dispatch.
+        """
+        actor_info = self.client.get("system/auth/get-permission-info") or {}
+        roles = actor_info.get("roles")
+        if not isinstance(roles, list) or any(not isinstance(role, str) for role in roles):
+            raise BusinessToolRequestError("current CRM role facts are unavailable")
+        if "crm_admin" in roles:
+            return
+        grants = self.client.get("crm/permission/list", bizType=biz_type, bizId=record_id)
+        if not isinstance(grants, list):
+            raise BusinessToolRequestError("current CRM target permission facts are unavailable")
+        if not grants:
+            raise BusinessToolPermissionError("the application has no writable permission for this follow-up target")
+
     def _prepare_relations(self, args, actor):
         values, relations, details = {}, [], []
         for path, entity, field, label in (("contacts", "crm/contact", "contactIds", "关联联系人"),
@@ -149,6 +168,7 @@ class NativeWriteHandler:
             snapshot = record
             follow_up = follow_up_target(entity)
             follow_up.require_readable(record)
+            self._require_follow_up_target_write(follow_up.biz_type, record["id"])
             follow_choices = [item for item in self.client.get("system/dict-data/simple-list") or []
                        if item.get("dictType") == "crm_follow_up_type" and item.get("label") == args["type"]]
             if len(follow_choices) != 1:
@@ -210,6 +230,7 @@ class NativeWriteHandler:
             follow_up = follow_up_target(entity)
             current = self.client.get(entity + "/get", id=body["bizId"])
             follow_up.require_readable(current)
+            self._require_follow_up_target_write(body["bizType"], body["bizId"])
             if current.get("id") != body["bizId"] or body["bizType"] != follow_up.biz_type:
                 raise BusinessMutationRefusedError("follow-up target changed after approval", reason="precondition_changed")
             choices = [row for row in self.client.get("system/dict-data/simple-list") or []

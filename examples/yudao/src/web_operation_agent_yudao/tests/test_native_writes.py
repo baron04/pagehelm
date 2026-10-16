@@ -4,7 +4,7 @@ import time
 import unittest
 
 from web_operation_agent.business.errors import (BusinessMutationIndeterminate,
-    BusinessMutationRefusedError, BusinessToolRequestError)
+    BusinessMutationRefusedError, BusinessToolPermissionError, BusinessToolRequestError)
 from web_operation_agent.state.identity import PrincipalContext, OperationContext
 from web_operation_agent.goal.data import Ref
 from web_operation_agent_yudao.writes import native_tools
@@ -30,13 +30,15 @@ class Client:
                                   "contactLastContent": "之前", "followUpStatus": False}}
         self.writes = []
         self.partial = False
+        self.roles = []
+        self.permission_rows = [{"userId": 9, "level": 1}]
         self.dictionary = [{"dictType": "crm_follow_up_type", "label": "电话", "value": "1"}]
         self.areas = [{"id": 100, "name": "合成省", "children": [{"id": 101, "name": "合成市"}]}]
     def get(self, path, **params):
         if path == "system/dict-data/simple-list": return copy.deepcopy(self.dictionary)
         if path == "system/area/tree": return copy.deepcopy(self.areas)
-        if path == "system/auth/get-permission-info": return {"user": {"id": 9, "nickname": "合成员工"}}
-        if path == "crm/permission/list": return [{"userId": 9, "level": 1}]
+        if path == "system/auth/get-permission-info": return {"user": {"id": 9, "nickname": "合成员工"}, "roles": self.roles}
+        if path == "crm/permission/list": return copy.deepcopy(self.permission_rows)
         if path == "crm/follow-up-record/page":
             return {"list": [copy.deepcopy(row) for (entity, _), row in self.records.items()
                              if entity == "crm/follow-up-record" and row["bizId"] == params["bizId"]]}
@@ -113,6 +115,20 @@ class NativeWriteTests(unittest.TestCase):
         spec.effect_projection.require_receipt(receipt.content)
         with self.assertRaises(BusinessMutationIndeterminate):
             spec.effect_projection.require_receipt({**receipt.content, "effects": [receipt.content["effects"][0]]})
+    def test_follow_up_rejects_empty_native_permission_set_before_dispatch(self):
+        values = {"entity": "crm/customer", "target": "合成星河", "type": "电话",
+                  "content": "合成记录", "nextTime": "2026-10-12 10:00:00"}
+        self.client.permission_rows = []
+        with self.assertRaises(BusinessToolPermissionError):
+            self.tools.prepare_mutation("crm_follow_up_create", values, context=context())
+        self.assertFalse(self.client.writes)
+        self.client.roles = ["crm_admin"]
+        prepared = self.tools.prepare_mutation("crm_follow_up_create", values, context=context())
+        self.assertEqual(prepared.args["body"]["bizId"], 20)
+        self.client.roles = []
+        with self.assertRaises(BusinessToolPermissionError):
+            self.tools.execute_mutation("crm_follow_up_create", prepared.args, context=context())
+        self.assertFalse(self.client.writes)
     def test_current_dictionary_constrains_proposals_and_is_checked_again_at_prepare(self):
         self.client.dictionary[0]["label"] = "打电话"
         tools = native_tools(self.client, self.data, runtime_dictionary=True)

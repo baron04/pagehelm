@@ -24,7 +24,9 @@ class _Records(_Client):
 
     def get(self, path, **params):
         if path == "system/auth/get-permission-info":
-            return {**super().get(path, **params), "user": {"id": 9}}
+            return {**super().get(path, **params), "user": {"id": 9}, "roles": []}
+        if path == "crm/permission/list":
+            return [{"userId": 9, "level": 1}]
         if path == "system/dict-data/simple-list":
             return [{"dictType": "crm_follow_up_type", "label": "电话", "value": "1"}]
         if path == "crm/contract/page":
