@@ -102,7 +102,7 @@ class BusinessMutationBlockedError(BusinessToolError):
 
 
 class BusinessMutationRefusedError(BusinessToolError):
-    """A definite application refusal made before any write was dispatched.
+    """A definite application refusal with proof of no persistent effect.
 
     This is distinct from ``BusinessMutationBlockedError``: a refusal such as a
     duplicate record is a settled business answer, while a blocked mutation points
