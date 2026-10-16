@@ -141,6 +141,19 @@ class LiveFormTests(unittest.TestCase):
         self.assertEqual([name for _, name in missing], ["微信"])
         self.assertIn("备注", [label for label, _ in free])
 
+    def test_tall_dialog_fields_can_be_prepared_before_submit_is_in_view(self):
+        visible = replace(self.form, elements=self.form.elements[:3])
+        self.port.adopt_open(visible, (("手机", "13900000000"),), context=self.context)
+        self.assertIsNone(self.port.describe_form(visible, context=self.context))
+        form = self.port.describe_form(visible, context=self.context,
+                                       allow_unobserved_submit=True)
+        self.assertEqual(form.submit_label, "")
+        field = next(field for field in form.fields if field.label == "手机")
+        draft = self.port.prepare_form(form, (ApplicationFormValue(
+            field, "13900000000", "textbox"),), context=self.context)
+        self.assertEqual(draft.fields[0].value, "13900000000")
+        self.assertEqual(draft.submit_label, "")
+
     def test_a_field_can_be_bound_only_to_a_label_the_form_offered(self):
         _, reference = self.open(self.request(("手机", "1"), ("说明", "回访")))
         missing, free = self.port.unbound_fields(reference, self.form, context=self.context)

@@ -273,6 +273,28 @@ class QueryTests(unittest.TestCase):
             self.transact(source, replace(arrived, render_state="blocked"), "goto",
                           {"url": "https://fixture.test" + route})
 
+    def test_meeting_room_field_admits_without_offscreen_submit(self):
+        from web_operation_agent_yudao.live_forms import FenceEvidence, LiveFormPort
+        from web_operation_agent_yudao.page_guard import NativePageGuard
+        actor, owner = "a" * 64, "c" * 64
+        guard = NativePageGuard(frozenset(), writing_gets=frozenset())
+        guard.begin(actor, owner)
+        forms = LiveFormPort(FenceEvidence(guard, lambda: actor))
+        attrs = {"form_scope": "dialog_describedby:meeting-room",
+                 "form_instance": "live", "form_lifetime": "dialog-one"}
+        name = ElementRef("e1", "textbox", "请输入名称", "input", 1,
+                          {**attrs, "field_label": "会议室名称"})
+        location = ElementRef("e2", "textbox", "请输入位置", "input", 1,
+                              {**attrs, "field_label": "会议室位置"})
+        before = self.page(path="/oa/meetingroom/room", elements=(name, location))
+        admission = DraftStepAdmission(NativeDraftSteps(
+            self.policy.data, forms, deployment_review()), "yudao")
+        intent, permit = admission.prepare("fill", {"ref": "e1", "value": "云台厅"}, before,
+                                           context=self.context, checkpoint=lambda: None)
+        self.assertEqual(permit.step, "enter_value")
+        self.assertEqual(permit.values, (("会议室名称", "云台厅"),))
+        admission.consume(intent, permit, before, context=self.context, checkpoint=lambda: None)
+
     def test_paging_option_requires_owned_popup_and_fresh_matching_read(self):
         owner = ElementRef("e1", "combobox", "每页", "input", 1,
                            {"page_control": "page_size", "aria-controls": "owned-list"})

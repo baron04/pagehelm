@@ -415,7 +415,8 @@ class LiveFormPort:
         bound.described = None
 
     def describe_form(self, observation: PageObservation, *,
-                      context: OperationContext | None = None) -> ApplicationFormDescriptor | None:
+                      context: OperationContext | None = None,
+                      allow_unobserved_submit: bool = False) -> ApplicationFormDescriptor | None:
         bound = self._bound
         if bound is None or context is None or observation.render_state != "ready":
             return None
@@ -445,7 +446,11 @@ class LiveFormPort:
             if item is not None:
                 fields.append(item)
         submits = [e for e in controls if e.role == "button" and plain(e.name) in SUBMIT_WORDS]
-        if not fields or len(submits) != 1:
+        # Page observations cover the viewport. A tall dialog can expose its fields
+        # while its footer is below the fold. Individual guarded draft steps may
+        # prepare those visible fields; a complete form handoff still needs the
+        # observed submit control and never uses this exception.
+        if not fields or len(submits) > 1 or (not submits and not allow_unobserved_submit):
             return None
         names = dict((key, names[0]) for key, names in bound.request.fields)
         found = {key: (label, tier) for label, (key, tier) in assigned.items()}
@@ -454,7 +459,7 @@ class LiveFormPort:
         form = ApplicationFormDescriptor(
             bound.reference, (bound.request.entity_label or "表单")[:200], bound.route, tuple(fields),
             scope=("new record" if bound.request.mode == "create" else "existing record"),
-            control_scope=bound.scope, submit_label=submits[0].name)
+            control_scope=bound.scope, submit_label=submits[0].name if submits else "")
         bound.described = form
         return form
 

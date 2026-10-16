@@ -114,6 +114,29 @@ def handoff_draft(context, before, expected, submit_label):
         return refused()
     buttons = [e for e in after.elements if e.role == "button" and e.name.strip() == submit_label.strip()
                and e.attrs.get("form_scope") == scope and e.attrs.get("form_instance") == instance]
+    scrolled = False
+    if not buttons and scope.startswith("dialog"):
+        # A tall modal can show every requested field while its footer is below
+        # the viewport. Read back the whole draft first, then bring the footer
+        # into view. The Runtime will recheck the entered fields against their
+        # live DOM controls before it highlights the submit button.
+        if any(not (now_map[key].attrs.get("field") or now_map[key].attrs.get("field_label"))
+               for key in wanted):
+            return refused()
+        anchor = next(iter(now_map.values()), None)
+        if anchor is None:
+            return refused()
+        moved = context.page.execute("scroll", {"direction": "down", "pages": 1, "ref": anchor.ref})
+        if moved.state != "completed" or context.terminal_reason:
+            return refused()
+        scrolled = True
+        at_submit = context.obs
+        if at_submit.url != after.url or at_submit.page_route != after.page_route:
+            return refused()
+        buttons = [e for e in at_submit.elements if e.role == "button"
+                   and e.name.strip() == submit_label.strip()
+                   and e.attrs.get("form_scope") == scope
+                   and e.attrs.get("form_instance") == instance]
     if len(buttons) != 1:
         return refused()
     fields = []
@@ -137,7 +160,8 @@ def handoff_draft(context, before, expected, submit_label):
             native, option = matches[0]["value"], value
         elif a.get("selected_option") is not None:
             option = value
-        fields.append({"ref": element.ref, "field": field or label or title, "control": element.role,
+        fields.append({**({} if scrolled else {"ref": element.ref}),
+                       "field": field or label or title, "control": element.role,
                        "value": native, "scope": scope,
                        **({"binding": "label", "label": label} if not field and label else
                           {"binding": "ref", "instance": instance} if not field else {}),
@@ -148,9 +172,10 @@ def handoff_draft(context, before, expected, submit_label):
                               dispatch=outcome.dispatch, error_code=outcome.error_code)
     final = {field_identity(e): e for e in draft_fields(context.obs)
              if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)}
-    if (final.keys() != now_map.keys()
-            or any(not value_matches(final[key], value) for key, value in wanted.items())
-            or any(field_value(final[key]) != field_value(e) for key, e in old_map.items() if key not in wanted)):
+    if ((not scrolled and final.keys() != now_map.keys())
+            or any(key in final and not value_matches(final[key], value) for key, value in wanted.items())
+            or any(key in final and field_value(final[key]) != field_value(e)
+                   for key, e in old_map.items() if key not in wanted)):
         return refused()
     context.audit("page_handoff_ready", observation_epoch=context.obs.epoch, submitted=False, persisted=False)
     return LoopToolResult("表单已核验，提交按钮已标出。", kind="page", dispatch="acknowledged",

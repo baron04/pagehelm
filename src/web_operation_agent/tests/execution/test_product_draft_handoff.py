@@ -54,6 +54,49 @@ class DraftHandoffTests(unittest.TestCase):
         self.assertEqual("unverified", result.state)
         self.assertFalse(result.completion_command)
 
+    def test_tall_dialog_scrolls_to_submit_after_full_field_readback(self):
+        attrs = {"form_scope": "dialog:editor", "form_instance": "live"}
+        def observation(epoch, *, footer=False, value="Synthetic", instance="live"):
+            bound = {**attrs, "form_instance": instance}
+            fields = [ElementRef("e1", "textbox", "Name", "input", epoch,
+                                 {**bound, "field_label": "Name", "value": value}),
+                      ElementRef("e2", "textbox", "Note", "input", epoch,
+                                 {**bound, "field_label": "Note", "value": "keep"})]
+            if footer:
+                fields = [fields[1], ElementRef("e3", "button", "Save", "button", epoch, bound)]
+            return PageObservation(1, epoch, "http://app.test/new", "New", [], fields,
+                                   "form", page_route="/new", render_state="ready")
+        before, filled, footer = observation(1, value=""), observation(2), observation(3, footer=True)
+        context = NS(obs=filled, terminal_reason="", audit=lambda *a, **k: None)
+        calls = []
+        def scroll(action, args):
+            calls.append((action, args))
+            context.obs = footer
+            receipt = ActionReceipt(1, "scroll", "scroll", args, True,
+                                    observation=footer, url_before=filled.url, url_after=filled.url)
+            return PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(receipt.to_json()))
+        def handoff(fields, submit):
+            calls.append(("handoff", fields, submit))
+            context.obs = observation(4, footer=True)
+            receipt = ActionReceipt(1, "ready", "handoff_form", {}, True,
+                                    observation=context.obs, url_before=filled.url, url_after=filled.url)
+            return PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(receipt.to_json()))
+        context.page = NS(checkpoint=lambda: None, execute=scroll, handoff=handoff)
+        result = handoff_draft(context, before, [(field_identity(before.elements[0]), "Synthetic")], "Save")
+        self.assertEqual(result.completion_command, "ready")
+        self.assertEqual(calls[0], ("scroll", {"direction": "down", "pages": 1, "ref": "e1"}))
+        self.assertNotIn("ref", calls[1][1][0])
+        self.assertEqual(calls[1][2]["ref"], "e3")
+
+        context.obs = filled
+        wrong = observation(3, footer=True, instance="replaced")
+        context.page.execute = lambda action, args: (setattr(context, "obs", wrong)
+            or PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(
+                ActionReceipt(1, "scroll", "scroll", args, True, observation=wrong,
+                              url_before=filled.url, url_after=filled.url).to_json())))
+        result = handoff_draft(context, before, [(field_identity(before.elements[0]), "Synthetic")], "Save")
+        self.assertEqual(result.state, "unverified")
+
     def test_adapter_completion_id_must_name_this_tools_actual_fresh_handoff_receipt(self):
         executor, state = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor), NS(obs=page(3, first="Synthetic"))
         receipt = ActionReceipt(1, "actual", "handoff_form", {}, True, observation=state.obs, url_after=state.obs.url)

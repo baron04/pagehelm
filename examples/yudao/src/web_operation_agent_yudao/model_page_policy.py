@@ -474,7 +474,8 @@ class NativeDraftSteps:
                 try:
                     with self.data._client.read_window(bound._check):
                         _, requested = self.forms.adopt_open(before, ((label, args["value"]),), context=context)
-                        form = self.forms.describe_form(before, context=context)
+                        form = self.forms.describe_form(before, context=context,
+                                                        allow_unobserved_submit=True)
                         fields = [f for f in form.fields if f.reference == requested[0][0]] if form else []
                         if len(fields) != 1:
                             raise ActionAdmissionRefused("unreviewed")
