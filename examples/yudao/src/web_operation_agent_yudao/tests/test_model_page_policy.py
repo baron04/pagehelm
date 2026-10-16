@@ -24,6 +24,12 @@ def review_document():
                      for kind in ("navigation", "query", "paging", "fields", "lines", "form_entry")]}
 
 
+def deployment_review():
+    path = Path(__file__).resolve().parents[3] / "deploy/cloud/native-policy/pages.json"
+    document = json.loads(path.read_text())
+    return NativePageReview.load(document, document["release"])
+
+
 class ReviewTests(unittest.TestCase):
     def test_pinned_yudao_review_covers_actor_menu_and_blocks_unsafe_controls(self):
         policy = Path(__file__).resolve().parents[3] / "deploy/cloud/native-policy/pages.json"
@@ -53,6 +59,13 @@ class ReviewTests(unittest.TestCase):
         self.assertFalse(narrowed.permits("form_entry", "/erp/stock/warehouse"))
         self.assertFalse(narrowed.permits("fields", "/crm/customer/detail/42"))
         self.assertFalse(review.permits("fields", "/erp/stock/warehouse/unknown"))
+
+    def test_wallet_balance_is_in_the_generated_menu_review(self):
+        review = deployment_review()
+        route = "/pay/wallet/wallet-balance"
+        self.assertIn(route, review.menu_routes)
+        self.assertTrue(review.permits("navigation", route))
+        self.assertFalse(review.permits("navigation", route + "/detail/1"))
 
     def test_release_exact_routes_and_capability_declarations(self):
         review = NativePageReview.load(review_document(), "synthetic-v1")
@@ -221,6 +234,19 @@ class QueryTests(unittest.TestCase):
         unknown = replace(menu, attrs={**menu.attrs,"navigation_path":"/unreviewed","href":"/unreviewed"})
         with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
             self.transact(replace(before, elements=[unknown]), after, "click", {"ref":"e1"})
+
+    def test_wallet_balance_navigation_verifies_even_when_the_list_is_empty(self):
+        route = "/pay/wallet/wallet-balance"
+        self.policy.page_review = deployment_review()
+        self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[NS(key=route)]))
+        before = self.page()
+        after = replace(self.page(2, path=route), page_read={**self.proof,
+            "path": "/admin-api/pay/wallet/page", "total": 0, "rows": 0})
+        self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
+        self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[]))
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
 
     def test_paging_option_requires_owned_popup_and_fresh_matching_read(self):
         owner = ElementRef("e1", "combobox", "每页", "input", 1,
