@@ -409,7 +409,8 @@ class KnowledgeTests(unittest.TestCase):
         review = NS(labels_on=lambda route: {"no": "订单编号"})
         procedure = YudaoLoopProcedures(self.know, NS(review=review), "https://synthetic.test")
         state = NS(obs=replace(observation(), page_route="/orders", page_read=read),
-                   measure=lambda _name: contextlib.nullcontext(), progress=lambda facts: None)
+                   measure=lambda _name: contextlib.nullcontext(), progress=lambda facts: None,
+                   audit=lambda *_args, **_kwargs: None)
         result = procedure._tool(state, "call_api",
                                  {"path": "/admin-api/orders/page", "params": "{\"pageNo\": 1}"},
                                  {"reads": []})
@@ -424,7 +425,7 @@ class KnowledgeTests(unittest.TestCase):
     def test_an_empty_list_read_reports_zero_as_structured_progress(self):
         procedure = YudaoLoopProcedures(self.know, NS(review=None), "https://synthetic.test")
         state = NS(obs=observation(), measure=lambda _name: contextlib.nullcontext(),
-                   progress=lambda facts: None)
+                   progress=lambda facts: None, audit=lambda *_args, **_kwargs: None)
         result = procedure._tool(state, "call_api", {"path": "leads/page",
             "params": '{"pageNo":1,"sceneType":1,"name":"不存在"}'}, {"reads": []})
         self.assertEqual((result.state, result.read_key, result.read_count),
@@ -2088,10 +2089,29 @@ class WriteTurnTests(unittest.TestCase):
         self.assertNotIn("progress_publish_failed", [event["event"] for event in state.ledger.events])
 
     def test_a_read_the_application_refused_is_not_told_as_read(self):
-        self.loop(reply(call("call_api", path="/admin-api/orders/page", params={"pageNo": 1, "customerId": "0"})),
-                  reply(call("call_api", path="/admin-api/nothing/page", params={})),
-                  reply(call("finish", status="cannot", answer="读不到")))
+        _executor, state, _text = self.loop(
+            reply(call("call_api", path="/admin-api/orders/page", params={"pageNo": 1, "customerId": "0"})),
+            reply(call("call_api", path="/admin-api/nothing/page", params={})),
+            reply(call("finish", status="cannot", answer="读不到")))
         self.assertEqual(self.channel.steps(), ["正在读取业务数据", "正在读取业务数据"])
+        self.assertFalse(any(event["event"] == "yudao_api_read" for event in state.ledger.events))
+
+    def test_api_audit_records_route_and_query_shape_without_filter_values(self):
+        _executor, state, _text = self.loop(
+            reply(call("call_api", path="/admin-api/orders/page",
+                       params={"pageNo": 1, "customerId": "private-customer-value"},
+                       fields=["no", "private-field-value"])),
+            reply(call("finish", status="done", answer="查到了")))
+        reads = [event for event in state.ledger.events if event["event"] == "yudao_api_read"]
+        expected = {"path": "/admin-api/orders/page",
+                    "query_keys": ["customerId", "pageNo"], "paging": {"pageNo": 1},
+                    "field_keys": ["no"], "read_count": 2,
+                    "declared_total": 2, "complete": True}
+        self.assertEqual(len(reads), 1)
+        self.assertEqual({key: reads[0][key] for key in expected}, expected)
+        serialized = json.dumps(state.ledger.events)
+        self.assertNotIn("private-customer-value", serialized)
+        self.assertNotIn("private-field-value", serialized)
 
     def test_a_write_is_told_as_being_prepared_and_never_with_its_values(self):
         self.loop(self.LOAD(), self.UPDATE(), reply(call("finish", status="done", answer="已改")))

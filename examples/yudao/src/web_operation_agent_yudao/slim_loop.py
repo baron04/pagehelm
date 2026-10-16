@@ -421,6 +421,7 @@ class ActorKnowledge:
         # the three together, as the adapter's own data port reads it.
         scoped = "sceneType" in published and "sceneType" not in params and "pageNo" in published
         relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
+        declared_total = None
         data_lines: set[int] = set()
         try:
             if scoped:
@@ -432,6 +433,7 @@ class ActorKnowledge:
                     for row in rows or []:
                         merged.setdefault(row.get("id", len(merged)) if isinstance(row, dict) else len(merged), row)
                 rows = list(merged.values())
+                declared_total = len(rows) if whole else None
                 out.append(f"total={len(rows) if whole else '至少 ' + str(len(rows))}（当前账号可见的全部：负责的、参与的、"
                            f"下属负责的三个范围合并去重），本次读了 {len(rows)} 行" + ("（已读完所有页）" if whole else ""))
                 if not rows and any(k not in ("pageNo", "pageSize") for k in params):
@@ -462,6 +464,7 @@ class ActorKnowledge:
                                 out.append(f"编号 {rid} 的详情：{outcome}")
             else:
                 data, rows, total, whole = self._pages(relative, params, bool(fields))
+                declared_total = total if type(total) is int and total >= 0 else None
                 if isinstance(data, list):
                     out.append(f"返回 {len(rows)} 行")
                 elif rows is not None:
@@ -473,7 +476,9 @@ class ActorKnowledge:
             if exc.permission_denied or exc.read_failed:
                 raise
             return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
-        self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"]}
+        self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
+                          "complete": whole if rows is not None else None,
+                          "declared_total": declared_total}
         if rows is None:
             keys = list(data.keys()) if isinstance(data, dict) else []
         else:
@@ -1389,17 +1394,34 @@ class YudaoLoopProcedures:
             params = json.loads(args.get("params", "{}"))
             if not isinstance(params, dict):
                 raise ValueError("query parameters must be an object")
+            called_path = "/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/")
             with s.measure("business"):
                 try:
                     text = know.call_api(args["path"], params, args.get("fields", ()))
                 except QueryParametersError as exc:
                     return LoopToolResult("未执行：" + str(exc), kind="read", state="refused",
                                           error_code="invalid_arguments")
+            if know.last_read:
+                # Audit the chosen API and the query vocabulary, never filter values.
+                # Keys and field names come from the installed API schema; paging is
+                # operational metadata, not a business filter.
+                def valid_key(key):
+                    return isinstance(key, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key))
+                published_fields = know._row_schema(called_path)
+                paging = {key: int(params[key]) for key in ("pageNo", "pageSize")
+                          if key in params and re.fullmatch(r"[1-9][0-9]{0,5}", str(params[key]))}
+                s.audit("yudao_api_read", path=called_path,
+                                query_keys=sorted(key for key in params if valid_key(key))[:32],
+                                paging=paging,
+                                field_keys=sorted({key for key in args.get("fields") or ()
+                                                   if valid_key(key) and key in published_fields})[:12],
+                                read_count=know.last_read["count"],
+                                declared_total=know.last_read["declared_total"],
+                                complete=know.last_read["complete"])
             review = getattr(self.goal_port, "review", None)
             if know.last_read and review and s.obs and s.obs.page_read is not None:
                 route = urlsplit(s.obs.url).path
                 observed_path = s.obs.page_read.get("path")
-                called_path = "/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/")
                 if s.obs.page_route == route and observed_path == called_path:
                     labels = review.labels_on(route)
                     named = [f"{key}→{labels[key]}" for key in know.last_keys if key in labels][:30]
@@ -1409,7 +1431,7 @@ class YudaoLoopProcedures:
             if know.last_read:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
             return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused",
-                                  read_key=("/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/"))
+                                  read_key=called_path
                                   if know.last_read else "",
                                   read_count=know.last_read["count"] if know.last_read else None)
         if name == "fill_fields":
