@@ -68,7 +68,8 @@ class ReviewTests(unittest.TestCase):
         review = deployment_review()
         route = "/pay/wallet/wallet-balance"
         self.assertIn(route, review.menu_routes)
-        self.assertTrue(review.permits("navigation", route))
+        self.assertFalse(review.permits("navigation", route))
+        self.assertFalse(review.permits("navigation", "/pms/pm/project/list"))
         self.assertFalse(review.permits("query", route))
         self.assertFalse(review.permits("form_entry", route, "新增"))
         self.assertFalse(review.permits("navigation", route + "/detail/1"))
@@ -264,21 +265,22 @@ class QueryTests(unittest.TestCase):
         with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
             self.transact(replace(before, elements=[unknown]), after, "click", {"ref":"e1"})
 
-    def test_wallet_balance_navigation_verifies_even_when_the_list_is_empty(self):
+    def test_generated_menu_address_without_navigation_review_is_refused(self):
         route = "/pay/wallet/wallet-balance"
         self.policy.page_review = deployment_review()
         self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[NS(key=route)]))
         before = self.page()
         after = replace(self.page(2, path=route), page_read={**self.proof,
             "path": "/admin-api/pay/wallet/page", "total": 0, "rows": 0})
-        self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
         self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[]))
         self.runtime = ActionAdmission(self.policy, "yudao")
         with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
             self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
 
-    def test_wallet_navigation_leaves_blocked_source_but_still_requires_review_and_arrival(self):
-        route = "/pay/wallet/wallet-balance"
+    def test_reviewed_navigation_leaves_blocked_source_but_still_requires_arrival(self):
+        route = "/crm/customer"
         self.policy.page_review = deployment_review()
         self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[NS(key=route)]))
         source = replace(self.page(path="/erp/sale/order"), render_state="blocked", page_route="")

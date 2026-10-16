@@ -144,10 +144,10 @@ class NativePageReview:
     def permits(self, kind, path, control=None):
         if any(family == kind and _matches_route(route, path) for route, family in self.excluded):
             return False
-        # The generated menu establishes an actor-visible navigation address. It does not
-        # review the effects of that page's query controls or form entry handlers.
-        if kind == "navigation" and path in self.menu_routes:
-            return True
+        # A menu address alone does not review page-load effects. Some native pages
+        # issue writing GETs after navigation has settled, outside the action window.
+        # Navigation therefore needs an explicit reviewed handler like every other
+        # page action. The generated menu remains an actor-visible address index.
         return any(family == kind and _matches_route(route, path)
                    and (control is None or control in controls)
                    for family, route, _, _, controls in self.scopes)
