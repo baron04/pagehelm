@@ -1,7 +1,8 @@
 /** Application-owned wrapper around the pinned generic controller, never a new harness. */
 import {PageController as GenericPageController, getElementByIndex as controllerElement,
   scrollIntoViewIfNeeded} from './page-controller.js'
-import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep, withLineControls} from './page-facts.js'
+import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep,
+  withLineControls, withSingleRowNumericColumns} from './page-facts.js'
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 let pressed = null
@@ -52,7 +53,8 @@ export async function inputTextElement(element, text) {
 export class PageController extends GenericPageController {
   async updateTree() {
     const html = await super.updateTree()
-    const next = withLineControls(this.selectorMap, this.simplifiedHTML, lineControls())
+    const next = withSingleRowNumericColumns(
+      withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()))
     if (next === this.simplifiedHTML) return html
     this.simplifiedHTML = next
     for (const line of next.split('\n')) {

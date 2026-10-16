@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, it} from 'vitest'
 // @ts-expect-error Application module is served separately from the generic Runtime.
-import {lineControls, withLineControls} from '../src/integrations/yudao/page-facts.js'
+import {lineControls, withLineControls, withSingleRowNumericColumns} from '../src/integrations/yudao/page-facts.js'
 
 const TABLE = `
 <form class="el-form"><div class="el-table">
@@ -81,5 +81,32 @@ describe('line controls in the page text', () => {
     expect(map.get(10)!.ref).toBe(host.querySelectorAll('.el-select__wrapper')[0])
     expect(map.get(11)!.ref).toBe(host.querySelectorAll('.el-select__wrapper')[1])
     expect(withLineControls(new Map(), 'x', [])).toBe('x')
+  })
+})
+
+describe('one-row numeric table facts', () => {
+  it('pairs only already observed numeric values with their live column headers', () => {
+    const host = document.createElement('div')
+    host.innerHTML = `<div class="el-table"><div class="el-table__header-wrapper"><table><thead><tr>
+      <th>订单单号</th><th>金额合计</th><th>含税金额</th><th>收取订金</th><th>联系人</th>
+      </tr></thead></table></div><div class="el-table__body-wrapper"><table><tbody><tr>
+      <td>XS2026090001</td><td>2450.00</td><td>2630.07</td><td>0.00</td><td>张三</td>
+      </tr></tbody></table></div></div>`
+    document.body.append(host)
+    for (const element of host.querySelectorAll('*')) {
+      element.getBoundingClientRect = () => ({width: 120, height: 32, top: 100, bottom: 132, left: 0, right: 120,
+        x: 0, y: 100, toJSON: () => ({})})
+    }
+    const html = 'XS2026090001\n2450.00\n2630.07'
+    expect(withSingleRowNumericColumns(html)).toContain('金额合计=2450.00；含税金额=2630.07')
+    expect(withSingleRowNumericColumns(html)).not.toContain('收取订金=0.00')
+    expect(withSingleRowNumericColumns('XS2026090001\n2450.00')).not.toContain('含税金额=2630.07')
+    expect(withSingleRowNumericColumns(html)).not.toContain('张三')
+    const dialog = document.createElement('div')
+    dialog.className = 'el-dialog'
+    dialog.getBoundingClientRect = () => ({width: 120, height: 32, top: 100, bottom: 132, left: 0, right: 120,
+      x: 0, y: 100, toJSON: () => ({})})
+    document.body.append(dialog)
+    expect(withSingleRowNumericColumns(html)).toBe(html)
   })
 })

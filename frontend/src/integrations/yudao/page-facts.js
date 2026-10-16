@@ -828,6 +828,38 @@ export function withLineControls(selectorMap, html, lines) {
   return texts.join('\n')
 }
 
+/** Restore the column names for numeric cells of one visible list row. Element Plus
+ * keeps horizontally clipped cell text in its row, while the generic observation can
+ * omit the corresponding headers. Only values already in that observation are repeated;
+ * no hidden cell value or nonnumeric record content is added. */
+export function withSingleRowNumericColumns(html, root = document) {
+  const shown = element => {
+    const rect = element.getBoundingClientRect()
+    return element.isConnected && rect.width > 0 && rect.height > 0 &&
+      rect.bottom > 0 && rect.top < (window.innerHeight || 0) &&
+      !element.closest('[hidden],[aria-hidden="true"]')
+  }
+  if ([...root.querySelectorAll('.el-dialog')].some(shown)) return html
+  const text = element => (element.textContent || '').replace(/\s+/g, ' ').trim()
+  const observedNumbers = new Set(html.match(/(?<![\d.])-?\d{1,15}(?:\.\d{1,4})?(?![\d.])/g) || [])
+  for (const table of root.querySelectorAll('.el-table')) {
+    if (table.closest('.el-form') || !shown(table)) continue
+    const heads = [...table.querySelectorAll('.el-table__header-wrapper thead tr:last-child th')]
+    const rows = [...table.querySelectorAll('.el-table__body-wrapper tbody > tr')].filter(shown)
+    if (rows.length !== 1) continue
+    const cells = [...rows[0].children]
+    if (heads.length !== cells.length || heads.length > 40) continue
+    const facts = []
+    for (let i = 0; i < cells.length; i++) {
+      const label = text(heads[i]), value = text(cells[i])
+      if (label && label.length <= 40 && /^-?\d{1,15}(?:\.\d{1,4})?$/.test(value) &&
+          observedNumbers.has(value)) facts.push(`${label}=${value}`)
+    }
+    if (facts.length) return html + '\n单行列表数值列（同一行的表头和值）: ' + facts.slice(0, 20).join('；')
+  }
+  return html
+}
+
 /** Locate an exact enabled native calendar day without touching Vue state. */
 export function nativeRangeDateCell(element, value) {
   if (!(element instanceof HTMLInputElement) || element.disabled || element.readOnly ||
