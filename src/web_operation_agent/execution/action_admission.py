@@ -87,7 +87,11 @@ class ActionIntent:
             expected |= {"expect_navigation"}
         if set(args) != expected or any(not isinstance(args[k], str) for k in expected - {"expect_navigation", "commit"}):
             raise ActionAdmissionRefused("invalid_target")
-        if observation.render_state != "ready":
+        # A failed read can leave the current page blocked after an application
+        # recovers. Navigating away is safe only when the application reviews the
+        # exact destination; element actions still require a ready source page.
+        if observation.render_state != "ready" and not (
+                action == "goto" and observation.render_state == "blocked"):
             raise ActionAdmissionRefused("invalid_target")
         if action == "goto":
             here, there = urlsplit(observation.url), urlsplit(urljoin(observation.url, args["url"]))

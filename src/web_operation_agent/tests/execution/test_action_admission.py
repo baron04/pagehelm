@@ -112,6 +112,19 @@ class ActionAdmissionTests(unittest.TestCase):
                 self.prepare(action, args)
         self.assertEqual([], self.policy.admissions)
 
+    def test_blocked_source_allows_navigation_but_rejects_other_actions(self):
+        self.before = replace(self.before, render_state="blocked", page_route="")
+        intent, permit = self.prepare("goto", {"url": "http://app/detail"})
+        self.assertEqual("http://app/detail", intent.arguments["url"])
+        self.assertEqual(intent.binding_digest, permit.binding_digest)
+        for action, args in (("click", {"ref": "e1"}),
+                             ("goto", {"url": "http://elsewhere/detail"})):
+            with self.subTest(action=action), self.assertRaisesRegex(ActionAdmissionRefused, "invalid_target"):
+                self.prepare(action, args)
+        self.before = replace(self.before, render_state="pending")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "invalid_target"):
+            self.prepare("goto", {"url": "http://app/detail"})
+
     def test_guard_or_dom_change_alone_cannot_prove_the_result(self):
         intent, permit = self.prepare()
         self.runtime.consume(intent, permit, self.before, context=self.context, checkpoint=lambda: None)

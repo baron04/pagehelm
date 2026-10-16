@@ -113,7 +113,9 @@ class NativeReadActions:
         bound = self._actor(context, checkpoint)
         index = self._index(context, bound)
         path = self._path(before.url)
-        if before.page_route != path:
+        if before.page_route != path and not (
+                intent.action == "goto" and before.render_state == "blocked"
+                and not before.page_route):
             raise ActionAdmissionRefused("invalid_target")
         pages = {p.key for p in index.pages}
         expectation = None

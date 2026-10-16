@@ -725,6 +725,7 @@ class ActionFeedbackTests(unittest.TestCase):
         procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         procedures.knowledge = None
         for code, dispatch, state in (("unreviewed", "not_dispatched", "refused"),
+                                      ("invalid_target", "not_dispatched", "refused"),
                                       ("stale_binding", "not_dispatched", "refused"),
                                       ("unverified", "uncertain", "unverified")):
             with self.subTest(code=code):
@@ -737,6 +738,8 @@ class ActionFeedbackTests(unittest.TestCase):
                 self.assertEqual((state, dispatch, code), (result.state, result.dispatch, result.error_code))
                 if code == "unreviewed":
                     self.assertIn("尚未审核", result.feedback)
+                if code == "invalid_target":
+                    self.assertIn("不能据此断定菜单未审核", result.feedback)
 
 
 class SettledTests(unittest.TestCase):

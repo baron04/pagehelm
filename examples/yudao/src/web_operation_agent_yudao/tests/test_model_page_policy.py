@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import unittest
 
 from web_operation_agent.business.draft_steps import DraftStepAdmission
-from web_operation_agent.execution.action_admission import ActionAdmission, ActionAdmissionRefused
+from web_operation_agent.execution.action_admission import ActionAdmission, ActionAdmissionRefused, ActionResultPending
 from web_operation_agent.schemas import ElementRef, ActionReceipt
 from web_operation_agent.transport.protocol import _remote_args_echo
 from web_operation_agent_yudao.model_page_policy import (NativePageReview, NativeModelReadActions,
@@ -247,6 +247,31 @@ class QueryTests(unittest.TestCase):
         self.runtime = ActionAdmission(self.policy, "yudao")
         with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
             self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
+
+    def test_wallet_navigation_leaves_blocked_source_but_still_requires_review_and_arrival(self):
+        route = "/pay/wallet/wallet-balance"
+        self.policy.page_review = deployment_review()
+        self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[NS(key=route)]))
+        source = replace(self.page(path="/erp/sale/order"), render_state="blocked", page_route="")
+        arrived = self.page(2, path=route)
+        self.transact(source, arrived, "goto", {"url": "https://fixture.test" + route})
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        for rejected_source in (replace(source, render_state="pending"),
+                                replace(source, render_state="ready"),
+                                replace(source, page_route="/another")):
+            with self.subTest(state=rejected_source.render_state, route=rejected_source.page_route), \
+                    self.assertRaisesRegex(ActionAdmissionRefused, "invalid_target"):
+                self.transact(rejected_source, arrived, "goto", {"url": "https://fixture.test" + route})
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.transact(source, arrived, "goto", {"url": "https://fixture.test/system/secret"})
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        with self.assertRaises(ActionResultPending):
+            self.transact(source, replace(arrived, page_route=""), "goto",
+                          {"url": "https://fixture.test" + route})
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+            self.transact(source, replace(arrived, render_state="blocked"), "goto",
+                          {"url": "https://fixture.test" + route})
 
     def test_paging_option_requires_owned_popup_and_fresh_matching_read(self):
         owner = ElementRef("e1", "combobox", "每页", "input", 1,

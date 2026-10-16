@@ -1276,6 +1276,7 @@ class YudaoLoopProcedures:
                                       completion_command=outcome.receipt.command_id)
             return None
         reasons = {"unreviewed": "应用尚未审核这个动作的效果；不要重复点击同一控件，也不要据此判断账号无权限。",
+                   "invalid_target": "当前页面状态或目标地址未通过校验；不能据此断定菜单未审核或账号无权限。",
                    "stale_binding": "页面已变化，请根据最新观察重新选择。",
                    "permission_denied": "当前账号没有执行这项操作的权限。",
                    "expired": "本次动作授权已过期。"}
