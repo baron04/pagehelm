@@ -24,17 +24,56 @@ from .read_actions import NativeReadActions
 HANDLERS = frozenset({"navigation", "tabs", "query", "paging", "form_entry", "fields", "lines"})
 
 
+def _matches_route(template, path):
+    return re.fullmatch(re.escape(template).replace(r"\{id\}", r"[1-9][0-9]*"), path) is not None
+_UNSAFE_BUTTON = re.compile(
+    r"导出|导入|下载|批量|删除|移除|清除|重置密码|审核|审批|提交|保存|确定|确认|发布|"
+    r"停用|启用|归档|同步|推送|发送|执行|复制|打印|上传|支付|退款"
+)
+_UNSAFE_ICON = re.compile(
+    r"(?:download|upload|delete|remove|trash|check|confirm|save|printer|print|send|export|import)"
+)
+
+
+def _unsafe_button(element):
+    labels = " ".join(str(value) for value in (element.name, element.attrs.get("title"),
+        element.attrs.get("aria-label"), element.attrs.get("action_name")) if value)
+    icon = str(element.attrs.get("action_icon") or "")
+    return bool(_UNSAFE_BUTTON.search(labels) or _UNSAFE_ICON.search(icon)
+                or not labels.strip() and icon not in {"ep:search", "ep:refresh", "ep:plus", "ep:edit"})
+
+
+def _entry_button(element):
+    return (element.tag == "button" and not _unsafe_button(element)
+            and (bool(re.search(r"新增|新建|添加|编辑|修改|详情", element.name))
+                 or element.attrs.get("action_icon") in {"ep:plus", "ep:edit"}))
+
+
+def _line_add_button(element):
+    return (element.tag == "button" and not _unsafe_button(element)
+            and (bool(re.search(r"新增.*行|添加.*行|添加明细|新增明细|添加产品|添加商品", element.name))
+                 or element.attrs.get("action_icon") == "ep:plus"))
+
+
 @dataclass(frozen=True)
 class NativePageReview:
     release: str
     reference: str
     # family, exact route/template, inspected source/effect reference and hash
     scopes: tuple[tuple[str, str, str, str, tuple[str, ...]], ...]
+    menu_routes: tuple[str, ...] = ()
+    excluded: tuple[tuple[str, str], ...] = ()
+    menu_digest: str = ""
+    fence_digest: str = ""
+    column_labels: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
 
     @classmethod
     def load(cls, document, release):
-        if (not isinstance(document, dict) or set(document) != {"schema_version", "release", "review", "handlers"}
-                or document["schema_version"] != 1 or not release or document["release"] != release
+        if (not isinstance(document, dict) or document.get("schema_version") not in {1, 2}
+                or set(document) != ({"schema_version", "release", "review", "handlers"}
+                    if document.get("schema_version") == 1 else
+                    {"schema_version", "release", "review", "handlers", "generated"})
+                or not release or document["release"] != release
                 or not isinstance(document["review"], str) or not 0 < len(document["review"]) <= 200
                 or not isinstance(document["handlers"], list) or not 1 <= len(document["handlers"]) <= 2000):
             raise ValueError("native page policy must match the deployment release and reviewed handlers")
@@ -49,7 +88,8 @@ class NativePageReview:
                     or not isinstance(item["controls"], list) or len(item["controls"]) > 32
                     or any(not isinstance(c, str) or not 0 < len(c) <= 100 for c in item["controls"])
                     or len(set(item["controls"])) != len(item["controls"])
-                    or (item["kind"] in {"form_entry", "lines"} and not item["controls"])
+                    or (document["schema_version"] == 1 and item["kind"] in {"form_entry", "lines"}
+                        and not item["controls"])
                     or (item["kind"] not in {"form_entry", "lines", "query"} and item["controls"])
                     or not isinstance(item["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])):
                 raise ValueError("native page policy contains an unknown or unbound handler")
@@ -57,20 +97,73 @@ class NativePageReview:
             if any(s[:2] == scope[:2] for s in scopes):
                 raise ValueError("native page policy handler scopes must be unique")
             scopes.append(scope)
-        return cls(release, document["review"], tuple(scopes))
+        if document["schema_version"] == 1:
+            return cls(release, document["review"], tuple(scopes))
+        generated = document["generated"]
+        if (not isinstance(generated, dict)
+                or set(generated) != {"routes", "excluded", "menu_sha256", "fence_sha256",
+                                      "columns", "columns_sha256"}
+                or not isinstance(generated["routes"], list)
+                or not 1 <= len(generated["routes"]) <= 600
+                or not isinstance(generated["excluded"], list)
+                or len(generated["excluded"]) > 600
+                or any(not isinstance(route, str)
+                       or not re.fullmatch(r"/[A-Za-z0-9_/-]{1,200}", route)
+                       for route in generated["routes"])
+                or len(set(generated["routes"])) != len(generated["routes"])
+                or any(not isinstance(item, list) or len(item) != 2
+                       or item[0] not in set(generated["routes"]) | {scope[1] for scope in scopes}
+                       or item[1] not in HANDLERS
+                       for item in generated["excluded"])
+                or len({tuple(item) for item in generated["excluded"]}) != len(generated["excluded"])
+                or any(not isinstance(generated[key], str)
+                       or not re.fullmatch(r"[0-9a-f]{64}", generated[key])
+                       for key in ("menu_sha256", "fence_sha256", "columns_sha256"))
+                or not isinstance(generated["columns"], dict)
+                or any(route not in generated["routes"] or not isinstance(fields, dict)
+                       or len(fields) > 80 or any(not isinstance(key, str)
+                       or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,79}", key)
+                       or not isinstance(label, str) or not 0 < len(label) <= 40
+                       for key, label in fields.items())
+                       for route, fields in generated["columns"].items())):
+            raise ValueError("native page policy generated menu routes are invalid")
+        routes = tuple(generated["routes"])
+        digest = hashlib.sha256(json.dumps(routes, ensure_ascii=False,
+            separators=(",", ":")).encode()).hexdigest()
+        if digest != generated["menu_sha256"]:
+            raise ValueError("native page policy menu digest does not match routes")
+        column_digest = hashlib.sha256(json.dumps(generated["columns"], ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if column_digest != generated["columns_sha256"]:
+            raise ValueError("native page policy column digest does not match labels")
+        return cls(release, document["review"], tuple(scopes), routes,
+                   tuple(tuple(item) for item in generated["excluded"]),
+                   digest, generated["fence_sha256"], tuple((route, tuple(fields.items()))
+                       for route, fields in generated["columns"].items()))
 
     def permits(self, kind, path, control=None):
-        return any(family == kind and re.fullmatch(re.escape(route).replace(r"\{id\}", r"[1-9][0-9]*"), path)
+        if any(family == kind and _matches_route(route, path) for route, family in self.excluded):
+            return False
+        if (kind in HANDLERS and path in self.menu_routes and (path, kind) not in self.excluded):
+            return True
+        return any(family == kind and _matches_route(route, path)
                    and (control is None or control in controls)
                    for family, route, _, _, controls in self.scopes)
 
     @property
     def digest(self):
-        return hashlib.sha256(json.dumps([self.release, self.reference, self.scopes]).encode()).hexdigest()
+        return hashlib.sha256(json.dumps([self.release, self.reference, self.scopes,
+            self.menu_routes, self.excluded, self.menu_digest, self.fence_digest,
+            self.column_labels]).encode()).hexdigest()
+
+    def labels_on(self, route):
+        return dict(next((fields for page, fields in self.column_labels if page == route), ()))
 
     @property
     def capabilities(self):
         installed = {kind for kind, *_ in self.scopes}
+        if self.menu_routes:
+            installed |= HANDLERS
         return frozenset({"handoffs"} | {name for kind, name in (
             ("tabs", "sections"), ("query", "facets"), ("paging", "paging"),
             ("fields", "fill"), ("lines", "lines")) if kind in installed})
@@ -176,20 +269,21 @@ class NativeModelReadActions(NativeReadActions):
                             option=args.get("option_label", ""))
         elif intent.action == "click":
             if family == "query":
-                if (element.tag == "button" and self.page_review.permits("query", path, element.name.strip())
-                        and element.name.strip() in {"展开", "收起"} and attrs.get("form_instance")):
+                if (element.tag != "button" or _unsafe_button(element) or _entry_button(element)
+                        or not attrs.get("form_instance")):
+                    raise ActionAdmissionRefused("unreviewed")
+                if element.name.strip() in {"展开", "收起"}:
                     expected.update(toggle=element.name.strip(), scope=attrs.get("form_scope"),
                                     instance=attrs["form_instance"])
                     digest = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
                     self._queries[intent.binding_digest] = expected
                     return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY,
                                         self.page_review.reference, digest)
-                if element.tag != "button" or element.name.strip() not in {"搜索", "查询"}:
-                    raise ActionAdmissionRefused("unreviewed")
-                if not attrs.get("form_instance"):
-                    raise ActionAdmissionRefused("invalid_target")
-                expected["fields"] = {**before.page_read["query_fields"],
-                    **self._drafts.get((path, attrs["form_instance"]), {})}
+                if element.name.strip() == "重置" or attrs.get("action_icon") == "ep:refresh":
+                    expected["fields"] = {}
+                else:
+                    expected["fields"] = {**before.page_read["query_fields"],
+                        **self._drafts.get((path, attrs["form_instance"]), {})}
             elif attrs.get("page_control") == "pagination":
                 if not attrs.get("page_number", "").isdigit():
                     raise ActionAdmissionRefused("invalid_target")
@@ -283,7 +377,7 @@ class NativeDraftSteps:
             return False
         element = self._target(intent)
         scope = str(element.attrs.get("form_scope", ""))
-        return scope.startswith("dialog") or (intent.action == "click" and element.tag == "button"
+        return scope.startswith("dialog") or (intent.action == "click" and _entry_button(element)
             and self.review.permits("form_entry", urlsplit(intent.observation.url).path, element.name.strip()))
 
     @staticmethod
@@ -352,7 +446,7 @@ class NativeDraftSteps:
         elif scope.startswith("dialog"):
             if not instance:
                 raise ActionAdmissionRefused("invalid_target")
-            if element.tag == "button" and self.review.permits("lines", route, element.name.strip()):
+            if _line_add_button(element) and self.review.permits("lines", route, element.name.strip()):
                 step = "add_line"
                 if not prepared["lifetime"]:
                     raise ActionAdmissionRefused("invalid_target")
@@ -365,7 +459,7 @@ class NativeDraftSteps:
             else:
                 raise ActionAdmissionRefused("unsafe_effect")
         else:
-            if element.tag != "button" or not self.review.permits("form_entry", route, element.name.strip()):
+            if not _entry_button(element) or not self.review.permits("form_entry", route, element.name.strip()):
                 raise ActionAdmissionRefused("unreviewed")
             step, scope, instance = "open_entry", "entry", "document-" + str(before.epoch)
         prepared["step"] = step
@@ -436,3 +530,12 @@ class NativeDraftSteps:
                            e.attrs.get("aria-controls", ""), form_control_unavailable(e.attrs)) for e in fields)
         before, after = state(intent.observation), state(observation)
         return bool(before) and before == after
+
+    def may_continue_unverified(self, permit, intent, receipt, *, observation, context, checkpoint):
+        """The page may have changed locally; guarded business state did not."""
+        BoundDataReads(self.data, context, checkpoint)
+        expected = self._prepared.get(intent.binding_digest)
+        return bool(expected and self.data._client.read_generation == expected["generation"]
+                    and not self.forms._evidence.since(expected["mark"])
+                    and observation.url == intent.observation.url
+                    and observation.page_route == expected["route"])

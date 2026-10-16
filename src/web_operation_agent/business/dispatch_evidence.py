@@ -74,3 +74,18 @@ def mutation_transport(component_id="primary"):
         current[0].unbound_mutation(current[1])
     with turn_interval("application"):
         yield TransportEvidence(evidence.begin(component_id) if evidence else None)
+
+
+def verified_after_readback():
+    """Mark one uncertain transport effect applied after a complete actor-bound readback.
+
+    This is for an adapter that can prove the approved effect despite a lost
+    acknowledgement. It does not resolve the mutation journal or dispatch again.
+    """
+    evidence = _CURRENT.get()
+    if evidence is not None:
+        components = evidence.receipt["components"]
+        if len(components) != 1 or components[0]["effect_status"] != "unknown":
+            raise ValueError("readback recovery requires one uncertain dispatch")
+        components[0]["effect_status"] = "applied"
+        components[0]["proof"] = "actor_readback"

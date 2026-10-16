@@ -95,5 +95,26 @@ class DraftContractTests(unittest.TestCase):
         with self.assertRaises(ActionAdmissionRefused):
             admission.verify_no_effect(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
 
+    def test_unverified_draft_can_continue_only_with_application_proof_and_guard(self):
+        class LocalPort(Port):
+            def may_continue_unverified(self, permit, intent, receipt, *, observation, **kwargs):
+                return observation.url == intent.observation.url
+        admission = DraftStepAdmission(LocalPort(), "fixture.app")
+        intent, permit = admission.prepare("fill", self.args, self.before,
+            context=self.context, checkpoint=lambda: None)
+        admission.consume(intent, permit, self.before, context=self.context, checkpoint=lambda: None)
+        after = page(2)
+        receipt = ActionReceipt(1, "command", "fill", _remote_args_echo({**self.args, "epoch": 1}), True,
+            observation=after, url_before=self.before.url, url_after=after.url, write_guard_held=True)
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+            admission.verify(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
+        self.assertTrue(admission.may_continue_unverified(intent, permit, receipt,
+            context=self.context, checkpoint=lambda: None))
+        self.assertFalse(admission.may_continue_unverified(intent, permit,
+            replace(receipt, write_guard_held=False), context=self.context, checkpoint=lambda: None))
+        admission.port = Port()
+        self.assertFalse(admission.may_continue_unverified(intent, permit, receipt,
+            context=self.context, checkpoint=lambda: None))
+
 
 if __name__ == "__main__": unittest.main()

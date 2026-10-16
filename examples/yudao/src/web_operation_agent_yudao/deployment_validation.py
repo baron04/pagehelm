@@ -4,6 +4,7 @@ Reading reviewed files and matching their release precedes model configuration a
 all proxy/network startup. These checks grant no action or business-write authority.
 """
 from dataclasses import dataclass
+import hashlib
 import json
 
 from .model_page_policy import NativePageReview
@@ -43,4 +44,7 @@ def validate_native_deployment(config):
         raise ValueError("the v2 method fence policy must match the deployment release")
     NativePageGuard(frozenset(), writing_gets=frozenset(policy["writing_gets"]))
     page_review = NativePageReview.load(_document(config.native_page_policy, "native page"), config.source_release)
+    if (page_review.fence_digest and hashlib.sha256(config.native_read_policy.read_bytes()).hexdigest()
+            != page_review.fence_digest):
+        raise ValueError("native page catalog was generated for a different method fence")
     return ValidatedNativeDeployment(json.dumps(policy), True, page_review)

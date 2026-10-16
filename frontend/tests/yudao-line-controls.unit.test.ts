@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, it} from 'vitest'
 // @ts-expect-error Application module is served separately from the generic Runtime.
-import {lineControls, withLineControls, withSingleRowNumericColumns} from '../src/integrations/yudao/page-facts.js'
+import {lineControls, withLineControls, withObservedRowColumns} from '../src/integrations/yudao/page-facts.js'
 
 const TABLE = `
 <form class="el-form"><div class="el-table">
@@ -84,7 +84,7 @@ describe('line controls in the page text', () => {
   })
 })
 
-describe('one-row numeric table facts', () => {
+describe('observed table row facts', () => {
   it('pairs only already observed numeric values with their live column headers', () => {
     const host = document.createElement('div')
     host.innerHTML = `<div class="el-table"><div class="el-table__header-wrapper"><table><thead><tr>
@@ -100,17 +100,39 @@ describe('one-row numeric table facts', () => {
     const wrapper = host.querySelector('.el-table__body-wrapper')!
     const selectors = new Map([[78, {ref: wrapper, tagName: 'div'}]])
     const html = '订单金额: 0.00\n[78]<div data-scrollable="right=302, " >XS2026090001\n2450.00\n2630.07 />\n页脚 0.00'
-    const observed = (page: string) => withSingleRowNumericColumns(page, document, selectors)
+    const observed = (page: string) => withObservedRowColumns(page, document, selectors)
     expect(observed(html)).toContain('金额合计=2450.00；含税金额=2630.07')
     expect(observed(html)).not.toContain('收取订金=0.00')
     expect(observed('[78]<div >XS2026090001\n2450.00 />\n页脚 2630.07')).not.toContain('含税金额=2630.07')
-    expect(observed(html)).not.toContain('张三')
-    expect(withSingleRowNumericColumns(html)).toBe(html)
+    expect(observed(html)).not.toContain('联系人=张三')
+    expect(withObservedRowColumns(html)).toBe(html)
     const dialog = document.createElement('div')
     dialog.className = 'el-dialog'
     dialog.getBoundingClientRect = () => ({width: 120, height: 32, top: 100, bottom: 132, left: 0, right: 120,
       x: 0, y: 100, toJSON: () => ({})})
     document.body.append(dialog)
     expect(observed(html)).toBe(html)
+  })
+
+  it('keeps two visible rows separate and omits values clipped from one row', () => {
+    const host = document.createElement('div')
+    host.innerHTML = `<div class="el-table"><div class="el-table__header-wrapper"><table><thead><tr>
+      <th>单号</th><th>含税金额</th><th>状态</th></tr></thead></table></div>
+      <div class="el-table__body-wrapper"><table><tbody>
+      <tr><td>XS001</td><td>2630.07</td><td>已完成</td></tr>
+      <tr><td>XS002</td><td>140.00</td><td>待处理</td></tr>
+      </tbody></table></div></div>`
+    document.body.append(host)
+    for (const element of host.querySelectorAll('*')) {
+      element.getBoundingClientRect = () => ({width: 120, height: 32, top: 100, bottom: 132,
+        left: 0, right: 120, x: 0, y: 100, toJSON: () => ({})})
+    }
+    const wrapper = host.querySelector('.el-table__body-wrapper')!
+    const selectors = new Map([[78, {ref: wrapper, tagName: 'div'}]])
+    const html = '[78]<div >XS001\n2630.07\n已完成\nXS002\n140.00 />'
+    const result = withObservedRowColumns(html, document, selectors)
+    expect(result).toContain('第1行 单号=XS001；含税金额=2630.07；状态=已完成')
+    expect(result).toContain('第2行 单号=XS002；含税金额=140.00')
+    expect(result).not.toContain('状态=待处理')
   })
 })

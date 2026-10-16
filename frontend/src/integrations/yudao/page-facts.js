@@ -828,11 +828,11 @@ export function withLineControls(selectorMap, html, lines) {
   return texts.join('\n')
 }
 
-/** Restore column names only for numeric cells present in this table's own observed row.
+/** Bind visible table cells to their own observed row and column.
  * The generic controller may emit the row inside an indexed scrollable wrapper while
  * omitting horizontally clipped headers. Values elsewhere in the page are not evidence
  * that a cell in this row was observed. */
-export function withSingleRowNumericColumns(html, root = document, selectorMap = new Map()) {
+export function withObservedRowColumns(html, root = document, selectorMap = new Map()) {
   const shown = element => {
     const rect = element.getBoundingClientRect()
     return element.isConnected && rect.width > 0 && rect.height > 0 &&
@@ -841,19 +841,19 @@ export function withSingleRowNumericColumns(html, root = document, selectorMap =
   }
   if ([...root.querySelectorAll('.el-dialog')].some(shown)) return html
   const text = element => (element.textContent || '').replace(/\s+/g, ' ').trim()
-  const numeric = /^-?\d{1,15}(?:\.\d{1,4})?$/
+  const safeValue = value => value.length > 0 && value.length <= 80 && !/[\n\r]/.test(value)
+  const sensitive = /password|token|secret|credential|api.?key|密码|密钥|令牌/i
+  const facts = []
   for (const table of root.querySelectorAll('.el-table')) {
-    if (table.closest('.el-form') || !shown(table)) continue
+    if (table.closest('.el-form') || !shown(table) || facts.length >= 20) continue
     const heads = [...table.querySelectorAll('.el-table__header-wrapper thead tr:last-child th')]
-    const rows = [...table.querySelectorAll('.el-table__body-wrapper tbody > tr')]
-    if (rows.length !== 1 || !shown(rows[0])) continue
-    const row = rows[0], cells = [...row.children]
-    if (heads.length !== cells.length || heads.length > 40) continue
+    const rows = [...table.querySelectorAll('.el-table__body-wrapper tbody > tr')].filter(shown).slice(0, 20)
+    if (!rows.length || heads.length > 40) continue
     // Find the controller record emitted by the closest indexed wrapper inside this
     // table. A number in another component, even an identical one, cannot prove this
     // row's cell was in the page observation.
     const wrappers = [...selectorMap].filter(([, node]) =>
-      node.ref instanceof Element && table.contains(node.ref) && node.ref.contains(row))
+      node.ref instanceof Element && table.contains(node.ref) && rows.every(row => node.ref.contains(row)))
       .sort((a, b) => a[1].ref === b[1].ref ? 0 : a[1].ref.contains(b[1].ref) ? 1 : -1)
     let observed = ''
     for (const [index, node] of wrappers) {
@@ -866,26 +866,35 @@ export function withSingleRowNumericColumns(html, root = document, selectorMap =
       break
     }
     const body = observed.slice(observed.indexOf('>') + 1, -3)
-    const lines = body.split('\n').map(value => value.trim())
-    const identity = cells.map(text).find(value => value.length >= 2 && value.length <= 80 && !numeric.test(value))
-    if (!identity || !lines.includes(identity)) continue
-    const observedCounts = new Map()
-    for (const value of lines.filter(value => numeric.test(value))) {
-      observedCounts.set(value, (observedCounts.get(value) || 0) + 1)
+    const identities = rows.map(row => [...row.children].map(text).find(value =>
+      value.length >= 2 && value.length <= 80 && /[^\d.,-]/.test(value)))
+    if (identities.some(identity => !identity) || new Set(identities).size !== rows.length) continue
+    const positions = identities.map(identity => body.indexOf(identity))
+    if (positions.some((position, index) => position < 0 || body.indexOf(identities[index], position + 1) >= 0 ||
+        index > 0 && position <= positions[index - 1])) continue
+    for (let rowIndex = 0; rowIndex < rows.length && facts.length < 20; rowIndex++) {
+      const cells = [...rows[rowIndex].children]
+      if (cells.length !== heads.length) continue
+      const segment = body.slice(positions[rowIndex], positions[rowIndex + 1] ?? body.length)
+      const lines = segment.split('\n').map(value => value.trim())
+      const cellCounts = new Map()
+      for (const value of cells.map(text).filter(safeValue)) {
+        cellCounts.set(value, (cellCounts.get(value) || 0) + 1)
+      }
+      const observedCounts = new Map()
+      for (const value of lines.filter(safeValue)) {
+        observedCounts.set(value, (observedCounts.get(value) || 0) + 1)
+      }
+      const columns = []
+      for (let i = 0; i < cells.length && columns.length < 20; i++) {
+        const label = text(heads[i]), value = text(cells[i])
+        if (label && label.length <= 40 && !sensitive.test(label) && safeValue(value) &&
+            observedCounts.get(value) >= cellCounts.get(value)) columns.push(`${label}=${value}`)
+      }
+      if (columns.length) facts.push(`第${rowIndex + 1}行 ${columns.join('；')}`)
     }
-    const cellCounts = new Map()
-    for (const value of cells.map(text).filter(value => numeric.test(value))) {
-      cellCounts.set(value, (cellCounts.get(value) || 0) + 1)
-    }
-    const facts = []
-    for (let i = 0; i < cells.length; i++) {
-      const label = text(heads[i]), value = text(cells[i])
-      if (label && label.length <= 40 && numeric.test(value) &&
-          observedCounts.get(value) >= cellCounts.get(value)) facts.push(`${label}=${value}`)
-    }
-    if (facts.length) return html + '\n单行列表数值列（同一行的表头和值）: ' + facts.slice(0, 20).join('；')
   }
-  return html
+  return facts.length ? '可见列表行（每行的表头和值）: ' + facts.join(' | ').slice(0, 3000) + '\n' + html : html
 }
 
 /** Locate an exact enabled native calendar day without touching Vue state. */

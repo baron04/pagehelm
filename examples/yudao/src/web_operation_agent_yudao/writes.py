@@ -229,7 +229,18 @@ class NativeWriteHandler:
         path = (entity + ("/update" if self.operation.endswith("update") else "/create")
                 if self.operation in RECORD_OPERATIONS else "crm/follow-up-record/create")
         started_ms = int(time.time() * 1000)
-        result_id = self.client.write_once("PUT" if self.operation.endswith("update") else "POST", path, body=body)
+        uncertain_dispatch = False
+        try:
+            result_id = self.client.write_once("PUT" if self.operation.endswith("update") else "POST", path,
+                                               body=body, operation=self.operation)
+        except BusinessMutationIndeterminate:
+            # An update already has an exact record ID. Its full actor readback
+            # below may prove all approved effects despite a lost/error response.
+            # A create without an acknowledged ID cannot be attributed safely.
+            if not self.operation.endswith("update"):
+                raise
+            result_id = body["id"]
+            uncertain_dispatch = True
         record_id = body.get("id") if self.operation.endswith("update") else result_id
         with turn_interval("verification"):
             try:
@@ -282,6 +293,9 @@ class NativeWriteHandler:
                 raise BusinessMutationIndeterminate("native write acknowledged; actor readback failed", phase="postcondition",
                                                     reconciliation={"id": record_id}) from exc
         self.goal_data.invalidate_reads(frozenset({entity, *(r["entity"] for r in args["relations"])}))
+        if uncertain_dispatch:
+            from web_operation_agent.business.dispatch_evidence import verified_after_readback
+            verified_after_readback()
         contract = RECORD_OPERATIONS.get(self.operation)
         name = actual.get(contract.name_field if contract else "name")
         reference = f"{name}（ID={record_id}）" if name else ""

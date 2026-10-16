@@ -41,7 +41,7 @@ class Client:
             return {"list": [copy.deepcopy(row) for (entity, _), row in self.records.items()
                              if entity == "crm/follow-up-record" and row["bizId"] == params["bizId"]]}
         return copy.deepcopy(self.records.get((path.removesuffix("/get"), int(params["id"]))))
-    def write_once(self, method, path, *, body):
+    def write_once(self, method, path, *, body, operation=""):
         self.writes.append((method, path, copy.deepcopy(body)))
         if path.endswith("/update"):
             self.records[(path.removesuffix("/update"), body["id"])].update(body)
@@ -292,6 +292,27 @@ class NativeWriteTests(unittest.TestCase):
         self.tools.execute_mutation("crm_contact_update", prepared.args, context=context())
         self.assertEqual(self.client.records[("crm/contact", 10)]["remark"], "保留备注")
         self.assertEqual(self.client.records[("crm/contact", 10)]["email"], "lin@example.test")
+
+    def test_uncertain_update_is_completed_only_after_exact_actor_readback(self):
+        prepared = self.tools.prepare_mutation("crm_contact_update",
+            {"target": "林舟", "changes": {"mobile": "13800000002"}}, context=context())
+        dispatch = self.client.write_once
+        def lost_answer(method, path, *, body, operation=""):
+            dispatch(method, path, body=body)
+            raise BusinessMutationIndeterminate("synthetic lost answer", phase="dispatch")
+        self.client.write_once = lost_answer
+        result = self.tools.execute_mutation("crm_contact_update", prepared.args, context=context())
+        self.assertTrue(result.content["verified"])
+        self.assertEqual(len(self.client.writes), 1)
+
+    def test_uncertain_update_without_confirmed_effect_stays_indeterminate(self):
+        prepared = self.tools.prepare_mutation("crm_contact_update",
+            {"target": "林舟", "changes": {"mobile": "13800000002"}}, context=context())
+        def lost_answer(method, path, *, body, operation=""):
+            raise BusinessMutationIndeterminate("synthetic lost answer", phase="dispatch")
+        self.client.write_once = lost_answer
+        with self.assertRaises(BusinessMutationIndeterminate):
+            self.tools.execute_mutation("crm_contact_update", prepared.args, context=context())
     def test_changed_required_field_refuses_before_native_dispatch(self):
         prepared = self.tools.prepare_mutation("crm_contact_update",
             {"target": "林舟", "changes": {"mobile": "13800000002"}}, context=context())
@@ -303,7 +324,7 @@ class NativeWriteTests(unittest.TestCase):
         prepared = self.tools.prepare_mutation("crm_contact_update",
             {"target": "林舟", "changes": {"mobile": "13800000002"}}, context=context())
         dispatch = self.client.write_once
-        def altered(method, path, *, body):
+        def altered(method, path, *, body, operation=""):
             result = dispatch(method, path, body=body)
             self.client.records[("crm/contact", 10)]["remark"] = "未批准的合成变化"
             return result

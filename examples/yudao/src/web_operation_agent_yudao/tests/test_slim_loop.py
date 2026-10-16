@@ -402,6 +402,24 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn('"price":', text)
         self.assertNotIn("1000", text)
 
+    def test_api_fields_use_labels_only_from_the_matching_live_page_list(self):
+        read = {"path": "/admin-api/orders/page", "query_digest": "a" * 64,
+                "query_fields": {}, "revision": 1, "page": 1, "page_size": 10,
+                "rows": 2, "total": 2}
+        review = NS(labels_on=lambda route: {"no": "订单编号"})
+        procedure = YudaoLoopProcedures(self.know, NS(review=review), "https://synthetic.test")
+        state = NS(obs=replace(observation(), page_route="/orders", page_read=read),
+                   measure=lambda _name: contextlib.nullcontext(), progress=lambda facts: None)
+        result = procedure._tool(state, "call_api",
+                                 {"path": "/admin-api/orders/page", "params": "{\"pageNo\": 1}"},
+                                 {"reads": []})
+        self.assertIn("no→订单编号", result.feedback)
+        state.obs = replace(state.obs, page_read={**read, "path": "/admin-api/other/page"})
+        result = procedure._tool(state, "call_api",
+                                 {"path": "/admin-api/orders/page", "params": "{\"pageNo\": 1}"},
+                                 {"reads": []})
+        self.assertNotIn("no→订单编号", result.feedback)
+
     def test_a_list_divided_by_whose_records_they_are_is_read_as_everything_the_actor_sees(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
         self.assertEqual([c[1]["sceneType"] for c in self.client.calls if c[0] == "leads/page"], [1, 2, 3])
@@ -412,14 +430,15 @@ class KnowledgeTests(unittest.TestCase):
     def test_a_record_that_exists_outside_the_actor_s_scopes_is_not_reported_as_absent(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "别人"})
         self.assertIn("total=0（当前账号可见的全部", text)
-        self.assertIn("不限范围时同样条件有 8 条记录", text)
-        self.assertIn("这是没有权限，不是记录不存在", text)
+        self.assertIn("不限范围时同样条件有 8 条候选记录", text)
+        self.assertIn("不能判断详情权限", text)
         absent = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "没有这个"})
         self.assertNotIn("不限范围", absent)
 
     def test_the_names_of_records_outside_the_actor_s_scopes_are_told_as_data(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "别人"})
-        self.assertIn("这是没有权限，不是记录不存在。它们的名称：\n" + BEGIN + "\n别人的、别人的", text)
+        self.assertIn(BEGIN + "\n别人的、别人的", text)
+        self.assertNotIn("这是没有权限", text)
 
     def test_credentials_in_a_read_are_blanked_before_the_model_is_told(self):
         text = self.know.call_api("channels/page", {"pageNo": 1})
@@ -1579,29 +1598,46 @@ class FindRecordTests(unittest.TestCase):
         client = Client()
         original = client.get
         rows = [{"id": 7, "name": "合成范围客户"}]
+        detail = {"id": 7, "name": "合成范围客户"}
         def get(path, **params):
             if path == "crm/customer/page":
                 client.calls.append((path, params))
                 return {"total": len(rows), "list": rows}
+            if path == "crm/customer/get":
+                client.calls.append((path, params))
+                return detail
             return original(path, **params)
         client.get = get
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.goal_port = self.Port()
         executor.knowledge = ActorKnowledge(client, lambda: docs)
-        with self.assertRaises(DataRefused) as caught:
-            executor._find_record(self.Turn, "合成范围客户", "客户")
-        self.assertTrue(caught.exception.permission_denied)
-        self.assertNotIn("不存在", str(caught.exception))
+        told = executor._find_record(self.Turn, "合成范围客户", "客户")
+        self.assertIn("合成范围客户（编号 7）", told)
         self.assertEqual([p for path, p in client.calls if path == "crm/customer/page"],
                          [{"pool": False, "name": "合成范围客户", "pageNo": 1, "pageSize": 5}])
-        self.assertFalse(any(path.endswith("/get") for path, _ in client.calls))
+        self.assertEqual([p for path, p in client.calls if path == "crm/customer/get"], [{"id": "7"}])
+
+        def denied(path, **params):
+            if path == "crm/customer/get":
+                raise DataRefused("detail denied", permission_denied=True)
+            return get(path, **params)
+        client.get = denied
+        told = executor._find_record(self.Turn, "合成范围客户", "客户")
+        self.assertIn("详情读取被应用明确拒绝", told)
+        self.assertNotIn("不存在", told)
 
         rows[:] = [{"id": 9, "name": "另一个客户"}]
         self.assertFalse(executor.knowledge.outside_actor_scope("crm/customer", "合成范围客户"))
-        client.get = lambda *a, **kw: (_ for _ in ()).throw(DataRefused("offline", read_failed=True))
+        def list_failure(path, **params):
+            if path == "crm/customer/page":
+                raise DataRefused("offline", read_failed=True)
+            return get(path, **params)
+        client.get = list_failure
         with self.assertRaises(DataRefused) as failed:
             executor.knowledge.outside_actor_scope("crm/customer", "合成范围客户")
         self.assertTrue(failed.exception.read_failed)
+        told = executor._find_record(self.Turn, "合成范围客户", "客户")
+        self.assertIn("普通列表读取未完成", told)
 
     def test_scope_probe_skips_unpublished_or_parent_bound_queries(self):
         from copy import deepcopy

@@ -48,6 +48,7 @@ from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHando
 
 from .api_content import REDACTED, composed, fenced, program_lines, redacted
 from .goal import _SCENES
+from .write_intent import WriteIntent, classify_write_intent
 
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
 MODEL_STEPS = 24
@@ -60,6 +61,7 @@ _STILL_LOOKS = 2
 #: saw it. Unset in any deployment; what a page shows does not belong in a log.
 _DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
 _CURRENT_REQUEST = ContextVar("yudao_slim_current_request", default="")
+_WRITE_INTENT = ContextVar("yudao_slim_write_intent", default=None)
 _MARK = re.compile(r"^\s*\*?\[(\d+)\]")
 _RUN, _HEAD, _TAIL = 60, 3, 30
 _PAGE_CHARS = 9_000
@@ -143,6 +145,7 @@ class ActorKnowledge:
         #: (one for a single record) and which of the application's lists; None when the
         #: read was refused or named no interface.
         self.last_read: dict | None = None
+        self.last_keys: tuple[str, ...] = ()
 
     def _load(self):
         with self._loading:
@@ -251,14 +254,18 @@ class ActorKnowledge:
         disclose a name without granting access to its detail. Never use this to
         navigate, read that detail, or choose a different record.
         """
+        return bool(self.outside_actor_scope_records(entity, name))
+
+    def outside_actor_scope_records(self, entity: str, name: str) -> tuple[tuple[str, str], ...]:
+        """Ordinary-list candidates, not a permission verdict about their details."""
         # Only the customer list has the reviewed scene/pool distinction used
         # here. Other CRM lists can show a contact that this actor can open;
         # their scoped name miss is not evidence of a detail permission denial.
         if entity != "crm/customer":
-            return False
+            return ()
         path = self.list_path(entity)
         if not path or path in self.writing_gets:
-            return False
+            return ()
         published = {p["name"]: p for p in self._by_path[path]["op"].get("parameters", ())
                      if isinstance(p, dict) and p.get("in") == "query" and isinstance(p.get("name"), str)}
         params = {"name": name, "pageNo": 1, "pageSize": 5}
@@ -268,14 +275,16 @@ class ActorKnowledge:
             params["pool"] = False
         if (not {"sceneType", *params} <= published.keys()
                 or any(p.get("required") is True and key not in params for key, p in published.items())):
-            return False
+            return ()
         self._validate_params(path, params)
         data = self._read(path[len("/admin-api/"):], **params)
         wanted = name.strip().casefold()
-        return bool(wanted and isinstance(data, dict) and any(
-            isinstance(row, dict) and isinstance(row.get("name"), str)
-            and row["name"].strip().casefold().startswith(wanted)
-            for row in data.get("list") or ()))
+        if not wanted or not isinstance(data, dict):
+            return ()
+        return tuple((str(row["id"]), row["name"]) for row in data.get("list") or ()
+                     if isinstance(row, dict) and type(row.get("id")) is int and row["id"] > 0
+                     and isinstance(row.get("name"), str)
+                     and row["name"].strip().casefold() == wanted)[:5]
 
     def suggest(self, sentence: str) -> str:
         """Pages and lists whose own names the person's words contain, found without a
@@ -365,6 +374,7 @@ class ActorKnowledge:
     def call_api(self, path: str, params: dict, fields=()) -> str:
         self._load()
         self.last_read = None
+        self.last_keys = ()
         if not path.startswith("/admin-api/"):
             path = "/admin-api/" + path.lstrip("/")
         if path not in self._by_path:
@@ -396,17 +406,31 @@ class ActorKnowledge:
                 out.append(f"total={len(rows) if whole else '至少 ' + str(len(rows))}（当前账号可见的全部：负责的、参与的、"
                            f"下属负责的三个范围合并去重），本次读了 {len(rows)} 行" + ("（已读完所有页）" if whole else ""))
                 if not rows and any(k not in ("pageNo", "pageSize") for k in params):
-                    # Nothing of this actor's matches; whether anything matches at all is the
-                    # difference between "there is no such record" and "it is not yours".
+                    # The ordinary list can disclose a candidate without granting detail
+                    # access. Only an exact detail read can decide whether this actor may
+                    # open it; do not infer denial from the scoped list's empty result.
                     others = self._read(relative, **{**params, "pageNo": 1, "pageSize": 5})
                     count = others.get("total") if isinstance(others, dict) else 0
                     if count:
-                        names = [str(r.get("name")) for r in others.get("list") or [] if isinstance(r, dict) and r.get("name")]
-                        out.append(f"不限范围时同样条件有 {count} 条记录：它们存在，但不在当前账号负责、参与或下属负责的范围里，"
-                                   "当前账号打不开、改不了。这是没有权限，不是记录不存在。" + ("它们的名称：" if names else ""))
+                        out.append(f"不限范围时同样条件有 {count} 条候选记录；负责范围列表的空结果不能判断详情权限。")
+                        names = [str(r["name"]) for r in (others.get("list") or [])[:5]
+                                 if isinstance(r, dict) and isinstance(r.get("name"), str)]
                         if names:
                             data_lines.add(len(out))
-                            out.append("、".join(names[:5]))
+                            out.append("、".join(names))
+                        if relative == "crm/customer/page":
+                            for candidate in (others.get("list") or [])[:5]:
+                                if not isinstance(candidate, dict) or type(candidate.get("id")) is not int:
+                                    continue
+                                rid = candidate["id"]
+                                try:
+                                    detail = self._read("crm/customer/get", id=rid)
+                                except DataRefused as exc:
+                                    outcome = "明确拒绝" if exc.permission_denied else "读取未完成"
+                                else:
+                                    outcome = ("可读取" if isinstance(detail, dict)
+                                               and detail.get("id") == rid else "结果无法核实")
+                                out.append(f"编号 {rid} 的详情：{outcome}")
             else:
                 data, rows, total, whole = self._pages(relative, params, bool(fields))
                 if isinstance(data, list):
@@ -423,6 +447,7 @@ class ActorKnowledge:
             keys = list(data.keys()) if isinstance(data, dict) else []
         else:
             keys = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
+        self.last_keys = tuple(str(key) for key in keys)
         # A field told blanked needs no gloss; `password=...` here would also read as a
         # credential assignment where the request leaves for the provider.
         blanked = {k for row in (rows if rows is not None else [data]) if isinstance(row, dict)
@@ -707,7 +732,7 @@ _OPERATION_NOTE = "【写入提案】先给用户看批准卡片，用户批准�
 WRITE_RULES = """
 
 4. 直接替用户办理会改数据的事（新建、修改、写跟进、状态变更）。只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。
-   - 用户要求办理一件事（“新建…”“把…改成…”“给…写一条跟进”），而某个 Skill 覆盖它：先 load_skill，读它的做法；加载后它的写入操作会成为可以调用的工具，调用那个工具就是提出提案。这时不要改走第 3 类去填表单。即使上一轮查询时已打开编辑表单，下一轮明确说“改成/改为”仍要走 Skill 的批准写入，填好表单交给用户不算完成。用户说“先填”“只填”“预填”“填好但不提交”时，只做第 3 类；即使有 Skill 也不得提出持久写入。第 3 类也用于没有 Skill 覆盖的表单修改。
+   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。程序会按本轮原话和草稿续轮决定是否提供这些工具，工具可见也不构成写入授权。
    - 用户只是询问、查看、打开页面，或问“怎么做”“能不能”：不加载 Skill，不提提案。
    - 操作的参数只填用户明确给出的内容。名称、电话、正文、备注这类文字照用户原话完整填写，不改写、不缩写、不补全；要引用的记录写它确切的业务名称（有同名时写候选的完整显示名），不填数字 ID；有固定选项的参数只用列出的选项。
    - 必填的信息用户没给，或者目标记录有几条候选：用 need_input 问清楚，不要猜，也不要先办一部分。
@@ -732,7 +757,7 @@ SYSTEM = """你是嵌入在企业管理后台里的助手，替当前登录用�
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。
    - 后续追问说“其中那张”“它”时，上一轮答复中的单号或唯一标识可用于定位。用它重新读取当前记录，金额仍要在该记录的页面上核对；历史答复里的值不能直接当作当前值。优先按该标识筛选或打开详情，不要靠反复滚动列表找记录。
    - 用户只是提问、没要求打开或查看页面时，接口读到答案就结束，不要再去打开、筛选页面来核对或展示（金额、单价例外，见下一条）。
-   - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以同一记录、同一列显示的数字为准。芋道 ERP 销售/采购订单的“含税金额”是 totalPrice 列；“金额合计”是 totalProductPrice，税额也不是含税金额。若目标列没有显示或页面操作被拒绝，不要用相邻列或原始接口值猜答案。
+   - 金额、单价这类值：接口返回的是原始数，字段说明里的单位（分/元）不一定准确。回答前必须打开对应的列表或详情页，以同一记录、同一列显示的数字为准。若目标列没有显示或页面操作被拒绝，不要用相邻列或原始接口值猜答案。
 2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
    - 用 search_menu 找页面，goto 打开；同一个业务词常常在几个模块里都有页面，先看全部结果再选最贴合用户说法的那个，并在答复里说明用的是哪个模块的页面。
    - 筛选前先核对最新观察里是否已有要填的字段。只有“展开”按钮而没有该字段时，先 click 展开，再根据新观察填；不能猜隐藏字段名先试填。字段都可见后，用 fill_fields(fields, then_click="搜索", answer="已按所给条件筛选") 一步完成；程序从应用读回的查询确认参数已生效才结束。要回答结果条数或记录内容时先不带 answer，读返回的观察再回答。
@@ -1321,6 +1346,16 @@ class YudaoLoopProcedures:
                 except QueryParametersError as exc:
                     return LoopToolResult("未执行：" + str(exc), kind="read", state="refused",
                                           error_code="invalid_arguments")
+            review = getattr(self.goal_port, "review", None)
+            if know.last_read and review and s.obs and s.obs.page_read is not None:
+                route = urlsplit(s.obs.url).path
+                observed_path = s.obs.page_read.get("path")
+                called_path = "/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/")
+                if s.obs.page_route == route and observed_path == called_path:
+                    labels = review.labels_on(route)
+                    named = [f"{key}→{labels[key]}" for key in know.last_keys if key in labels][:30]
+                    if named:
+                        text += "\n本页表格列名（接口字段→页面列）：" + "、".join(named)
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
@@ -1600,6 +1635,7 @@ class YudaoLoopProcedures:
         once more by parts of the name, and what was looked for is said."""
         if not name:
             return "请给出要找的名称。"
+        scope_notes = []
         try:
             with s.measure("business"):
                 context = s.operation
@@ -1607,23 +1643,52 @@ class YudaoLoopProcedures:
                 # tables a session's index is still reading.
                 index = getattr(self.goal_port, "outline_index", self.goal_port.index)(context=context)
                 among = _of_kind(index, kind)
-                hits = (self.goal_port.records_named(name, context=context, entities=among) if among
-                        else self.goal_port.records_named(name, context=context))[:4]
+                diagnostic = getattr(self.goal_port, "records_named_diagnostics", None)
+                if diagnostic:
+                    hits, failures = diagnostic(name, context=context, entities=among)
+                else:
+                    hits = self.goal_port.records_named(name, context=context, entities=among)
+                    failures = ()
+                hits = hits[:4]
+                scope_notes.extend(f"{entity} 的列表读取" + ("被应用明确拒绝" if denied else "未完成")
+                                   for entity, denied, _read_failed in failures)
                 near, lists = [], []
                 if not hits:
-                    # records_named reads the actor's mine/participant/subordinate
-                    # scopes. An empty union cannot establish global absence.
+                    # A scoped-list miss is not a detail permission verdict. Probe
+                    # the exact record under the same actor before naming access.
                     for entity in among or tuple(dict.fromkeys(p.entity for p in index.pages if p.entity)):
-                        if self.knowledge.outside_actor_scope(entity, name):
-                            raise DataRefused("记录存在，但不在当前账号可打开的范围内。",
-                                              reason="当前账号没有打开这条记录的权限。", permission_denied=True)
+                        try:
+                            candidates = self.knowledge.outside_actor_scope_records(entity, name)
+                        except DataRefused as exc:
+                            scope_notes.append(f"{entity} 的普通列表读取被应用拒绝" if exc.permission_denied
+                                               else f"{entity} 的普通列表读取未完成")
+                            continue
+                        readable = []
+                        for rid, display in candidates:
+                            try:
+                                row = self.knowledge.client.get("crm/customer/get", id=rid)
+                            except DataRefused as exc:
+                                scope_notes.append(f"{entity} 的“{display}”（编号 {rid}）详情读取"
+                                                   + ("被应用明确拒绝" if exc.permission_denied else "未完成"))
+                                continue
+                            if isinstance(row, dict) and str(row.get("id")) == rid:
+                                readable.append((rid, display, f"/crm/customer/detail/{rid}"))
+                            else:
+                                scope_notes.append(f"{entity} 的“{display}”（编号 {rid}）详情结果无法核实")
+                        if readable:
+                            hits += ((entity, tuple(readable)),)
                 if not hits and among:
                     for part in _name_parts(name):
                         near += self.goal_port.records_named(part, context=context, entities=among)
                     # What the model went on to read to see the names a list does hold: the
                     # first page of each, for the few entities a kind names.
                     for entity in among[:3]:
-                        preview = self.knowledge.list_preview(entity)
+                        try:
+                            preview = self.knowledge.list_preview(entity)
+                        except DataRefused as exc:
+                            scope_notes.append(f"{entity} 的列表预览" +
+                                               ("被应用明确拒绝" if exc.permission_denied else "未完成"))
+                            continue
                         if preview:
                             lists.append((entity, preview))
         except DataRefused as exc:
@@ -1636,6 +1701,9 @@ class YudaoLoopProcedures:
             if page.entity:
                 pages.setdefault(page.entity, page.breadcrumb or page.label)
         if not hits and among:
+            if scope_notes:
+                return redacted("；".join(scope_notes) + "。不能凭负责范围列表的空结果判断详情权限或记录状态。",
+                                self.knowledge.handoffs)
             where = "、".join(labels.get(e, e) for e in among)
             parts = "”“".join(_name_parts(name))
             looked = f"按名称“{name}”" + (f"和它的一部分（“{parts}”）" if parts else "")
@@ -1653,6 +1721,9 @@ class YudaoLoopProcedures:
                             "用户没说清是哪一类，它也可能在别的模块里，那样就不带 kind 再查一次。")
             return redacted("\n".join(told), self.knowledge.handoffs)
         if not hits:
+            if scope_notes:
+                return redacted("；".join(scope_notes) + "。记录的详情状态尚未全部核实。",
+                                self.knowledge.handoffs)
             if _new_form_draft_request(_CURRENT_REQUEST.get()):
                 return ("这是已有记录的查找结果；用户本轮要先填新资料，不应因为查不到旧记录而拒绝。"
                         "现在打开对应页面的新增表单，填入用户给出的值并交接提交。")
@@ -1682,6 +1753,8 @@ class YudaoLoopProcedures:
             out.append("同一个模块里有几条可能是它：用户要的是其中一条时，不要自己挑，用 need_input 把它们（名称和编号）列给用户选。")
         if lists:
             out += ["这些模块的列表接口：", *("    " + api.replace("\n", "\n    ") for api in lists)]
+        if scope_notes:
+            out.append("另有未查完的模块：" + "；".join(scope_notes))
         return "\n".join(out)
 
     def verification_messages(self, prompt, answer, turn, obs, history):
@@ -1718,7 +1791,12 @@ class YudaoLoopProcedures:
         bound = BoundDataReads(self.goal_port.data, context.operation, context.page.checkpoint)
         with self.knowledge.client.read_window(bound._check):
             self.knowledge._load()
-            return self.knowledge.suggest(prompt)
+            suggested = self.knowledge.suggest(prompt)
+        intent = _WRITE_INTENT.get()
+        if isinstance(intent, WriteIntent) and intent.mode == "save":
+            return (f"本轮原话中的“{intent.phrase}”表示用户要求保存；已安装的 Skill 覆盖这项操作时，"
+                    "用 Skill 提出写入（仍需用户批准）。必填信息缺失就先问。\n" + suggested)
+        return suggested
 
     def execute(self, name, arguments, context):
         from .bound_data_reads import BoundDataReads
@@ -1775,18 +1853,7 @@ def _requirements(name, arguments, observation, review=None):
 
 def _draft_only_request(text: str) -> bool:
     """A current-turn request to prepare a form without a persistent write."""
-    negated_writes = tuple(re.finditer(
-        r"(?:不(?:要|用|必|需要|能|得|许)?|无(?:需|须)|别|请勿|切勿|暂不)"
-        r"(?:再|直接|立即|马上|现在|就)?(?:提交|保存|创建)", text))
-    draft = re.search(r"先填|只填|预填|填好(?:但|而)?不提交", text) or negated_writes
-    # "不要直接提交" contains "直接提交"; that substring is not permission to write.
-    commits = re.finditer(
-        r"(?:再|然后|随后|接着|并|直接|立即|马上|现在|就)(?:提交|保存|创建)|提交(?:保存|创建)", text)
-    for commit in commits:
-        if not any(negative.start() <= commit.start() and commit.end() <= negative.end()
-                   for negative in negated_writes):
-            return False
-    return bool(draft)
+    return classify_write_intent(text).mode == "draft"
 
 
 def _new_form_draft_request(text: str) -> bool:
@@ -1800,14 +1867,42 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
     def _run(self, state):
         from .bound_data_reads import turn_actor_reads
         token = _CURRENT_REQUEST.set(state.message.text)
+        from .write_intent import preceding_draft_handoff
+        prior_draft = preceding_draft_handoff(
+            (self.conversation_state.model_context() or {}).get("prior_turns"))
+        intent_token = _WRITE_INTENT.set(classify_write_intent(state.message.text,
+                                                               prior_draft=prior_draft))
         try:
             with turn_actor_reads(self.knowledge.client):
                 return super()._run(state)
         finally:
+            _WRITE_INTENT.reset(intent_token)
             _CURRENT_REQUEST.reset(token)
 
+    def _tools(self, turn):
+        offered = super()._tools(turn)
+        intent = _WRITE_INTENT.get()
+        if not isinstance(intent, WriteIntent) or intent.mode != "draft":
+            return offered
+        names = {"load_skill", "read_skill_resource"}
+        writes = turn.get("writes")
+        if writes is not None:
+            names.update(definition.name for definition in writes.definitions())
+        return [tool for tool in offered if tool["function"]["name"] not in names]
+
+    def _invoke_tool(self, s, name, args, turn):
+        intent = _WRITE_INTENT.get()
+        if isinstance(intent, WriteIntent) and intent.mode == "draft":
+            writes = turn.get("writes")
+            operations = {definition.name for definition in writes.definitions()} if writes is not None else set()
+            if name in {"load_skill", "read_skill_resource"} | operations:
+                return LoopToolResult("用户本轮只要求预填表单；Skill 写入工具不可用。",
+                                      kind="write", state="refused", error_code="draft_only")
+        return super()._invoke_tool(s, name, args, turn)
+
     def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
-        if _draft_only_request(s.message.text):
+        intent = _WRITE_INTENT.get()
+        if (isinstance(intent, WriteIntent) and intent.mode == "draft") or _draft_only_request(s.message.text):
             return LoopToolResult(
                 "用户本轮只要求预填表单。未提出写入提案，也未执行写入；请改用页面表单步骤，停在提交前。",
                 kind="write", state="refused", dispatch="not_dispatched", error_code="draft_only")

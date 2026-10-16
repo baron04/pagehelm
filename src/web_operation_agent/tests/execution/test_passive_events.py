@@ -4,7 +4,8 @@ import unittest
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 
-from web_operation_agent.business.dispatch_evidence import mutation_evidence, mutation_transport
+from web_operation_agent.business.dispatch_evidence import (
+    mutation_evidence, mutation_transport, verified_after_readback)
 from web_operation_agent.execution.events import TurnEvents, turn_interval
 from web_operation_agent.execution.receipt import MeasuredChat, TurnReceipt
 from web_operation_agent.tests.execution.test_receipt import Chat
@@ -102,3 +103,17 @@ class PassiveEventsTests(unittest.TestCase):
         self.assertEqual(receipt["effect_status"], "unknown")
         self.assertEqual(len(receipt["components"]), 3)
         self.assertEqual(observed["unbound_mutations"], 1)
+
+    def test_exact_actor_readback_can_prove_one_uncertain_transport(self):
+        events = TurnEvents()
+        with events.turn("normal-turn"):
+            with mutation_evidence(SimpleNamespace(content_digest="digest"),
+                    SimpleNamespace(approval_id="approval"), SimpleNamespace(operation_id="effect")):
+                with mutation_transport():
+                    pass  # The response was lost after native dispatch.
+                verified_after_readback()
+                with self.assertRaises(ValueError):
+                    verified_after_readback()  # Proof is consumed once.
+        receipt, = events.snapshot("normal-turn")["receipts"]
+        self.assertEqual(receipt["effect_status"], "applied")
+        self.assertEqual(receipt["components"][0]["proof"], "actor_readback")

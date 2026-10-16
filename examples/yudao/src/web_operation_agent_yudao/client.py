@@ -100,7 +100,7 @@ class YudaoClient:
             return self._data(path, code, body)
         raise DataRefused(f"{path}: not authorised")
 
-    def write_once(self, method: str, path: str, *, body: dict, params=None):
+    def write_once(self, method: str, path: str, *, body: dict, params=None, operation: str = ""):
         """One approved native dispatch; never retry, relogin, or follow redirects.
 
         Business errors after native dispatch may have partial effects. Only an
@@ -108,9 +108,19 @@ class YudaoClient:
         zero effects; everything else retains the unresolved journal entry.
         """
         from web_operation_agent.business.errors import (BusinessMutationIndeterminate,
-            BusinessToolAuthenticationError, BusinessToolPermissionError)
+            BusinessMutationRefusedError, BusinessToolAuthenticationError, BusinessToolPermissionError)
+        from .write_definitions import BACKEND_WRITE_ATOMICITY
         if method not in {"POST", "PUT"} or not re_safe_native_path(path):
             raise ValueError("native write requires a reviewed method and path")
+        if operation and operation not in BACKEND_WRITE_ATOMICITY:
+            raise ValueError("native write has no reviewed backend contract")
+        atomicity = BACKEND_WRITE_ATOMICITY.get(operation)
+        def evidence(response_class, **details):
+            result = {"response_class": response_class, **details}
+            if atomicity is not None:
+                result["backend_transactional"] = atomicity[0]
+                result["backend_service_method"] = atomicity[1]
+            return result
         with self._lock:
             token = self._token
         if not token:
@@ -134,14 +144,39 @@ class YudaoClient:
                 if exc.code in (401, 403):
                     transport.rejected()
                     raise BusinessToolPermissionError("the application denied this write") from exc
-                raise BusinessMutationIndeterminate("native dispatch returned no safe outcome", phase="dispatch") from exc
+                raise BusinessMutationIndeterminate("native dispatch returned no safe outcome", phase="dispatch",
+                    reconciliation=evidence("http_error", upstream_code=str(exc.code))) from exc
             except (OSError, ValueError, urllib.error.URLError) as exc:
                 raise BusinessMutationIndeterminate("native dispatch returned no safe outcome", phase="dispatch") from exc
             if not isinstance(payload, dict) or payload.get("code") != 0:
                 if isinstance(payload, dict) and payload.get("code") in (401, 403):
                     transport.rejected()
                     raise BusinessToolPermissionError("the application denied this write")
-                raise BusinessMutationIndeterminate("native operation may have partially completed", phase="dispatch")
+                code = payload.get("code") if isinstance(payload, dict) else None
+                message = (payload.get("msg") or payload.get("message") or "") if isinstance(payload, dict) else ""
+                # These two prefixes come only from Spring MVC argument binding
+                # before entering the controller. The similar "请求参数不正确:" is
+                # also used for ConstraintViolationException and is not proof
+                # that an already-running service had no partial effect.
+                if code == 400 and isinstance(message, str) and message.startswith(
+                        ("请求参数类型错误:", "请求参数缺失:")):
+                    transport.rejected()
+                    raise BusinessMutationRefusedError("the application rejected the request parameter before the write",
+                        reason="application_parameter_rejected")
+                result_evidence = evidence("application_error" if isinstance(payload, dict)
+                            else "invalid_response")
+                if type(code) is int and 0 <= code <= 999999999:
+                    result_evidence["upstream_code"] = str(code)
+                if isinstance(message, str) and message.startswith("请求参数不正确"):
+                    result_evidence["message_class"] = "validation_wording"
+                elif type(code) is int and code >= 500:
+                    result_evidence["message_class"] = "server_error"
+                elif isinstance(message, str) and message:
+                    result_evidence["message_class"] = "application_wording"
+                else:
+                    result_evidence["message_class"] = "unspecified"
+                raise BusinessMutationIndeterminate("native operation may have partially completed",
+                    phase="dispatch", reconciliation=result_evidence)
             value = payload.get("data")
             acknowledged = (value is True if method == "PUT" else type(value) is int and value > 0)
             if not acknowledged:

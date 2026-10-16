@@ -3,6 +3,7 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace as NS
 import unittest
 
@@ -10,7 +11,9 @@ from web_operation_agent.business.draft_steps import DraftStepAdmission
 from web_operation_agent.execution.action_admission import ActionAdmission, ActionAdmissionRefused
 from web_operation_agent.schemas import ElementRef, ActionReceipt
 from web_operation_agent.transport.protocol import _remote_args_echo
-from web_operation_agent_yudao.model_page_policy import NativePageReview, NativeModelReadActions, NativeDraftSteps
+from web_operation_agent_yudao.model_page_policy import (NativePageReview, NativeModelReadActions,
+    NativeDraftSteps, _unsafe_button)
+from web_operation_agent_yudao.deployment_validation import validate_native_deployment
 from . import test_read_actions as read_fixture
 
 
@@ -22,20 +25,31 @@ def review_document():
 
 
 class ReviewTests(unittest.TestCase):
-    def test_pinned_yudao_review_admits_only_named_p14_routes_and_controls(self):
+    def test_pinned_yudao_review_covers_actor_menu_and_blocks_unsafe_controls(self):
         policy = Path(__file__).resolve().parents[3] / "deploy/cloud/native-policy/pages.json"
         review = NativePageReview.load(json.loads(policy.read_text()), "v2026.09")
         for route in ("/erp/purchase/supplier", "/erp/stock/warehouse", "/erp/product/product"):
             for kind in ("navigation", "query", "paging", "form_entry", "fields"):
                 self.assertTrue(review.permits(kind, route), (kind, route))
             self.assertTrue(review.permits("form_entry", route, "新增"))
-            self.assertFalse(review.permits("form_entry", route, "删除"))
+            self.assertTrue(review.permits("form_entry", route))
         for route in ("/erp/sale/order", "/erp/purchase/order"):
             self.assertTrue(review.permits("query", route))
             self.assertTrue(review.permits("paging", route))
             self.assertTrue(review.permits("form_entry", route, "详情"))
-            self.assertFalse(review.permits("form_entry", route, "审核"))
-        self.assertFalse(review.permits("form_entry", "/erp/stock/warehouse", "设为默认"))
+        self.assertEqual(len(review.menu_routes), 506)
+        self.assertEqual(review.labels_on("/erp/sale/order")["totalPrice"], "含税金额")
+        self.assertTrue(review.permits("query", "/system/user"))
+        self.assertFalse(review.permits("query", "/not-in-actor-menu"))
+        self.assertTrue(_unsafe_button(ElementRef("e1", "button", "批量删除", "button", 1)))
+        self.assertTrue(_unsafe_button(ElementRef("e1", "button", "", "button", 1,
+                                              {"action_icon": "ep:download"})))
+        document = json.loads(policy.read_text())
+        document["generated"]["excluded"].append(["/erp/stock/warehouse", "form_entry"])
+        document["generated"]["excluded"].append(["/crm/customer/detail/{id}", "fields"])
+        narrowed = NativePageReview.load(document, "v2026.09")
+        self.assertFalse(narrowed.permits("form_entry", "/erp/stock/warehouse"))
+        self.assertFalse(narrowed.permits("fields", "/crm/customer/detail/42"))
         self.assertFalse(review.permits("fields", "/erp/stock/warehouse/unknown"))
 
     def test_release_exact_routes_and_capability_declarations(self):
@@ -45,6 +59,18 @@ class ReviewTests(unittest.TestCase):
         self.assertFalse(review.permits("tabs", "/crm/customer"))
         self.assertEqual(frozenset({"fill", "lines", "facets", "paging", "handoffs"}), review.capabilities)
         self.assertEqual(64, len(review.digest))
+
+    def test_generated_page_catalog_is_bound_to_the_deployed_method_fence(self):
+        native = Path(__file__).resolve().parents[3] / "deploy/cloud/native-policy"
+        with tempfile.TemporaryDirectory() as folder:
+            changed = Path(folder) / "fence.json"
+            changed.write_text((native / "fence.json").read_text() + "\n")
+            config = NS(native_read_policy=changed, native_page_policy=native / "pages.json",
+                        native_live_forms=True, source_release="v2026.09")
+            with self.assertRaisesRegex(ValueError, "different method fence"):
+                validate_native_deployment(config)
+            config.native_read_policy = native / "fence.json"
+            self.assertEqual(506, len(validate_native_deployment(config).page_review.menu_routes))
 
     def test_unknown_duplicate_or_wrong_release_is_not_a_grant(self):
         for change in (lambda d: d.update(release="wrong"),
@@ -140,23 +166,29 @@ class QueryTests(unittest.TestCase):
             with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
                 self.transact(initial, changed, "select", {"ref":"e1", "value":"Synthetic", "option_label":"Synthetic"})
 
-    def test_only_explicit_reviewed_query_toggle_can_reveal_fields(self):
+    def test_query_toggle_uses_live_form_instance_and_readback(self):
         attrs = {"page_control":"query", "form_scope":"form:query", "form_instance":"live"}
         button = ElementRef("e1", "button", "展开", "button", 1, attrs)
         before = replace(self.page(elements=(button,), path="/crm/customer"), page_read=self.proof)
         after = replace(before, epoch=2, elements=[replace(button, epoch=2, name="收起")])
-        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
-            self.transact(before, after, "click", {"ref":"e1"})
-        document = review_document()
-        next(h for h in document["handlers"] if h["kind"]=="query")["controls"] = ["展开", "收起"]
-        self.policy.page_review = NativePageReview.load(document, "synthetic-v1")
-        self.runtime = ActionAdmission(self.policy, "yudao")
         self.transact(before, after, "click", {"ref":"e1"})
         for changed in (replace(after, page_read={**self.proof,"revision":2}),
                         replace(after, elements=[replace(button, epoch=2, name="收起", attrs={**attrs,"form_instance":"other"})])):
             self.runtime = ActionAdmission(self.policy, "yudao")
             with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
                 self.transact(before, changed, "click", {"ref":"e1"})
+
+    def test_query_row_export_and_delete_are_refused_before_dispatch(self):
+        attrs = {"page_control": "query", "form_scope": "form:query", "form_instance": "live"}
+        for name, icon in (("导出", "ep:download"), ("批量删除", "ep:delete"),
+                           ("", "ep:download")):
+            with self.subTest(name=name, icon=icon):
+                button = ElementRef("e1", "button", name, "button", 1,
+                                    {**attrs, "action_icon": icon})
+                before = replace(self.page(elements=(button,), path="/crm/customer"), page_read=self.proof)
+                with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+                    self.transact(before, replace(before, epoch=2, elements=[replace(button, epoch=2)]),
+                                  "click", {"ref": "e1"})
 
     def test_menu_authorization_binds_reviewed_destination_from_any_page(self):
         menu = ElementRef("e1", "menuitem", "Customers", "li", 1,

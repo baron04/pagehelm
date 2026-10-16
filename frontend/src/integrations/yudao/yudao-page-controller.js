@@ -2,7 +2,7 @@
 import {PageController as GenericPageController, getElementByIndex as controllerElement,
   scrollIntoViewIfNeeded} from './page-controller.js'
 import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep,
-  withLineControls, withSingleRowNumericColumns} from './page-facts.js'
+  withLineControls, withObservedRowColumns} from './page-facts.js'
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 let pressed = null
@@ -53,7 +53,7 @@ export async function inputTextElement(element, text) {
 export class PageController extends GenericPageController {
   async updateTree() {
     const html = await super.updateTree()
-    const next = withSingleRowNumericColumns(
+    const next = withObservedRowColumns(
       withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()), document, this.selectorMap)
     if (next === this.simplifiedHTML) return html
     this.simplifiedHTML = next

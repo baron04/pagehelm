@@ -9,7 +9,8 @@ from typing import Callable, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 from ..execution.action_admission import (
-    ActionAdmissionRefused, ActionEffect, ActionIntent, ActionPermit, verified_observation)
+    ActionAdmissionRefused, ActionEffect, ActionIntent, ActionPermit, ActionResultPending,
+    verified_observation)
 from ..schemas import ActionReceipt, PageObservation
 from ..state.identity import OperationContext
 
@@ -63,6 +64,19 @@ class ApplicationNoEffectPort(Protocol):
     def verify_no_effect(self, permit: DraftStepPermit, intent: ActionIntent,
                          receipt: ActionReceipt, *, observation: PageObservation,
                          context: OperationContext, checkpoint: Callable[[], None]) -> bool: ...
+
+
+@runtime_checkable
+class ApplicationUnverifiedDraftPort(Protocol):
+    """Optional proof that an uncertain local draft can be observed further.
+
+    It does not settle the attempted step or allow a replay. The application must
+    attest that the guarded step had no persistent business effect.
+    """
+
+    def may_continue_unverified(self, permit: DraftStepPermit, intent: ActionIntent,
+                                receipt: ActionReceipt, *, observation: PageObservation,
+                                context: OperationContext, checkpoint: Callable[[], None]) -> bool: ...
 
 
 class DraftStepAdmission:
@@ -151,3 +165,20 @@ class DraftStepAdmission:
                 observation=after, context=context, checkpoint=checkpoint) is not True:
             raise ActionAdmissionRefused("unverified")
         self._check(context, checkpoint)
+
+    def may_continue_unverified(self, intent, permit, receipt, *, context, checkpoint, settlement=None):
+        """Keep an acknowledged local draft unresolved while the model sees new facts."""
+        self._check(context, checkpoint)
+        if (intent.operation_binding not in self._consumed
+                or permit.binding_digest != intent.binding_digest
+                or self._issued.get(intent.binding_digest) != permit
+                or not isinstance(self.port, ApplicationUnverifiedDraftPort)):
+            return False
+        try:
+            observation = verified_observation(intent, receipt, context=context, settlement=settlement)
+        except (ActionAdmissionRefused, ActionResultPending):
+            return False
+        safe = self.port.may_continue_unverified(permit, intent, receipt,
+            observation=observation, context=context, checkpoint=checkpoint)
+        self._check(context, checkpoint)
+        return safe is True

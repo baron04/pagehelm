@@ -81,3 +81,10 @@ class ContactsDraftSteps:
                           for e in draft_fields(obs))
         before, after = state(intent.observation), state(observation)
         return bool(before) and before == after
+
+    def may_continue_unverified(self, permit, intent, receipt, *, observation, context, checkpoint):
+        self.actor._actor(context, checkpoint)
+        # This synthetic form persists only on Save, which this port never admits.
+        return (intent.binding_digest in self._prepared
+                and observation.url == intent.observation.url
+                and observation.page_route == "/contacts/new")

@@ -273,7 +273,18 @@ class NativeSpecialHandler:
                 raise BusinessMutationRefusedError("contract plan periods changed after approval", reason="precondition_changed")
             receivers = self._audience(actor) if self.operation == "oa_announcement_create" else []
             path, method, record_id, preserved = args["entity"] + "/create", "POST", None, {}
-        result = self.client.write_once(method, path, body=args["body"], params=args["params"])
+        uncertain_dispatch = False
+        try:
+            result = self.client.write_once(method, path, body=args["body"], params=args["params"],
+                                            operation=self.operation)
+        except BusinessMutationIndeterminate:
+            # State transitions have a bound target ID and the checks below cover
+            # both the requested state and their related effects. A create has no
+            # attributable ID after an uncertain response.
+            if self.operation not in STATE_PATHS:
+                raise
+            result = record_id
+            uncertain_dispatch = True
         record_id = record_id if record_id is not None else result
         with turn_interval("verification"):
             try:
@@ -322,6 +333,9 @@ class NativeSpecialHandler:
                 raise BusinessMutationIndeterminate("native write acknowledged; same-actor readback failed", phase="postcondition",
                     reconciliation={"id": record_id, "entity": args["entity"]}) from exc
         self.goal_data.invalidate_reads(frozenset({args["entity"], "crm/contact"} if self.operation in STATE_PATHS else {args["entity"]}))
+        if uncertain_dispatch:
+            from web_operation_agent.business.dispatch_evidence import verified_after_readback
+            verified_after_readback()
         name = actual.get("name") or actual.get("title") or "回款计划"
         return BusinessToolResult({"verified": True, "record_id": str(record_id), "entity": args["entity"],
             "reference": f"{name}（ID={record_id}）", "effects": effects}, {"verified": True, "operation": self.operation, "effects": effects})

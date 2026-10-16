@@ -170,6 +170,45 @@ RECORD_CONTRACTS = (
 RECORD_OPERATIONS = MappingProxyType({contract.prefix + "_" + operation: contract
                      for contract in RECORD_CONTRACTS for operation in contract.operations})
 
+# Reviewed against yudao-2609 server service implementations. This describes
+# whether the named service entry point declares rollback on Exception; it does
+# not prove that every application error was raised inside that transaction.
+# In particular, crm_follow_up_create inserts before updating linked records
+# without a transaction. Never turn a generic 500 into a safe refusal based on
+# this metadata alone.
+BACKEND_WRITE_ATOMICITY = MappingProxyType({
+    "crm_customer_create": (True, "CrmCustomerServiceImpl#createCustomer"),
+    "crm_customer_update": (True, "CrmCustomerServiceImpl#updateCustomer"),
+    "crm_contact_create": (True, "CrmContactServiceImpl#createContact"),
+    "crm_contact_update": (True, "CrmContactServiceImpl#updateContact"),
+    "erp_supplier_create": (False, "ErpSupplierServiceImpl#createSupplier"),
+    "erp_supplier_update": (False, "ErpSupplierServiceImpl#updateSupplier"),
+    "erp_warehouse_create": (False, "ErpWarehouseServiceImpl#createWarehouse"),
+    "erp_warehouse_update": (False, "ErpWarehouseServiceImpl#updateWarehouse"),
+    "erp_customer_create": (False, "ErpCustomerServiceImpl#createCustomer"),
+    "erp_customer_update": (False, "ErpCustomerServiceImpl#updateCustomer"),
+    "system_post_create": (False, "PostServiceImpl#createPost"),
+    "member_tag_create": (False, "MemberTagServiceImpl#createTag"),
+    "member_group_create": (False, "MemberGroupServiceImpl#createGroup"),
+    "bpm_category_create": (False, "BpmCategoryServiceImpl#createCategory"),
+    "crm_clue_create": (True, "CrmClueServiceImpl#createClue"),
+    "crm_clue_update": (True, "CrmClueServiceImpl#updateClue"),
+    "erp_product_create": (False, "ErpProductServiceImpl#createProduct"),
+    "erp_product_update": (False, "ErpProductServiceImpl#updateProduct"),
+    "system_dept_create": (False, "DeptServiceImpl#createDept"),
+    "system_notice_create": (False, "NoticeServiceImpl#createNotice"),
+    "product_brand_create": (False, "ProductBrandServiceImpl#createBrand"),
+    "product_brand_update": (False, "ProductBrandServiceImpl#updateBrand"),
+    "product_category_create": (False, "ProductCategoryServiceImpl#createCategory"),
+    "crm_customer_put_pool": (True, "CrmCustomerServiceImpl#putCustomerPool"),
+    "crm_customer_receive": (True, "CrmCustomerServiceImpl#receiveCustomer"),
+    "crm_customer_lock": (False, "CrmCustomerServiceImpl#lockCustomer"),
+    "crm_customer_deal_status": (False, "CrmCustomerServiceImpl#updateCustomerDealStatus"),
+    "crm_receivable_plan_create": (True, "CrmReceivablePlanServiceImpl#createReceivablePlan"),
+    "oa_announcement_create": (True, "OaAnnouncementServiceImpl#createAnnouncement"),
+    "crm_follow_up_create": (False, "CrmFollowUpRecordServiceImpl#createFollowUpRecord"),
+})
+
 
 def record_entries():
     """Build bounded public inputs, provenance and field coverage from reviewed facts."""

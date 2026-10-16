@@ -6,17 +6,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 from web_operation_agent.business.dispatch_evidence import mutation_evidence
-from web_operation_agent.business.errors import BusinessMutationIndeterminate, BusinessToolPermissionError
+from web_operation_agent.business.errors import (BusinessMutationIndeterminate,
+    BusinessMutationRefusedError, BusinessToolPermissionError)
 from web_operation_agent.execution.events import TurnEvents
 from web_operation_agent_yudao.client import YudaoClient
+from web_operation_agent_yudao.write_definitions import BACKEND_WRITE_ATOMICITY, RECORD_OPERATIONS
 
 
 class DispatchEvidenceTests(unittest.TestCase):
+    def test_every_native_operation_has_a_reviewed_backend_service_contract(self):
+        from web_operation_agent_yudao.write_special import STATE_PATHS
+        self.assertEqual(set(BACKEND_WRITE_ATOMICITY), set(RECORD_OPERATIONS) | set(STATE_PATHS) |
+                         {"crm_receivable_plan_create", "oa_announcement_create", "crm_follow_up_create"})
+        self.assertFalse(BACKEND_WRITE_ATOMICITY["crm_follow_up_create"][0])
+
     def test_native_ack_refusal_invalid_ack_and_partial_error_remain_distinct(self):
         replies = [({"code": 0, "data": 31}, "applied", None),
             ({"code": 403}, "rejected", BusinessToolPermissionError),
+            ({"code": 400, "msg": "请求参数类型错误:synthetic-invalid"}, "rejected", BusinessMutationRefusedError),
+            ({"code": 400, "msg": "请求参数不正确:synthetic-invalid"}, "unknown", BusinessMutationIndeterminate),
             ({"code": 0}, "unknown", BusinessMutationIndeterminate),
-            ({"code": 500}, "unknown", BusinessMutationIndeterminate)]
+            ({"code": 500, "msg": "server token=synthetic-secret"}, "unknown", BusinessMutationIndeterminate)]
         requests = []
         selected = [None]
         class Handler(BaseHTTPRequestHandler):
@@ -43,8 +53,13 @@ class DispatchEvidenceTests(unittest.TestCase):
                         SimpleNamespace(operation_id="authorized-effect")) as evidence:
                         evidence.claimed()
                         if error:
-                            with self.assertRaises(error):
+                            with self.assertRaises(error) as caught:
                                 client.write_once("POST", "crm/customer/create", body={"name": "Synthetic"})
+                            if reply.get("code") == 500:
+                                self.assertEqual(caught.exception.reconciliation,
+                                    {"response_class": "application_error", "upstream_code": "500",
+                                     "message_class": "server_error", "phase": "dispatch"})
+                                self.assertNotIn("synthetic-secret", str(caught.exception.reconciliation))
                         else:
                             self.assertEqual(client.write_once("POST", "crm/customer/create", body={"name": "Synthetic"}), 31)
                     receipt, = events.snapshot("normal-turn")["receipts"]

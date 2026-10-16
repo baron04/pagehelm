@@ -518,7 +518,13 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 state, code = "unverified", exc.code
                 s.ledger.append("model_action_unverified", tool=action, error_code=exc.code,
                                 command_id=receipt.command_id, repeated=False, target=target)
-                if isinstance(admission, DraftStepAdmission):
+                continue_draft = (isinstance(admission, DraftStepAdmission)
+                    and admission.may_continue_unverified(intent, permit, receipt,
+                        context=context, checkpoint=checkpoint, settlement=settlement))
+                if continue_draft:
+                    s.ledger.append("model_draft_unverified_continuing", tool=action,
+                                    command_id=receipt.command_id, target=target)
+                elif isinstance(admission, DraftStepAdmission):
                     s.terminal_reason, s.detail = "agent_refused", "acknowledged draft step could not be verified"
         return finish(receipt, state=state, code=code, observations=observations)
 
@@ -632,24 +638,21 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         return (element.name.splitlines() or [element.attrs.get("field_label") or element.role])[0][:80]
 
     @staticmethod
-    def _refusal_target(observation, name, arguments):
-        """A no-progress key, never an authorization or a cached refusal.
-
-        Re-admit every attempt. Count repeated rejections only for one uniquely
-        identifiable live control; unrelated list refreshes are not its recovery.
-        """
-        if observation is None or name not in {"click", "input", "select"}:
+    def _failure_base(name, arguments, target):
+        """A turn-local retry key without epoch, route, or raw entered values."""
+        if name not in {"click", "input", "select", "fill_fields", "goto"}:
             return None
-        ref = "e" + str(arguments.get("index"))
-        target = next((e for e in observation.elements if e.ref == ref), None)
-        if target is None or not target.name.strip():
-            return None
-        identity = lambda e: (e.role, e.tag, e.name, e.attrs)
-        if sum(identity(e) == identity(target) for e in observation.elements) != 1:
-            return None
-        return json.dumps([name, observation.url, observation.page_route, observation.record_route,
-            identity(target), {k: v for k, v in arguments.items() if k != "index"}],
-            sort_keys=True, ensure_ascii=False)
+        if name == "fill_fields":
+            fields = arguments.get("fields") or ()
+            labels = tuple(str(item.get("label") or "") for item in fields if isinstance(item, dict))
+            values = tuple(str(item.get("value") or "") for item in fields if isinstance(item, dict))
+        else:
+            labels = (str((target.attrs.get("field_label") or target.name or target.role) if target else
+                          arguments.get("path") or arguments.get("url") or
+                          f"index:{arguments.get('index')}"),)
+            values = (arguments.get("value") or arguments.get("option") or "",)
+        digest = hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
+        return name, labels, digest
 
     def _forget_old_observations(self) -> None:
         seen = kept = 0
@@ -686,6 +689,14 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         while turn.get("model_calls", 0) < self.model_steps and not s.terminal_reason:
             # Completion correction shares the original decision allowance.
             taken = turn["model_calls"] = turn.get("model_calls", 0) + 1
+            forced_at = turn.get("forced_summary_at")
+            if forced_at and taken > forced_at + 2:
+                s.terminal_reason, s.detail = "agent_refused", "page failures exceeded the summary allowance"
+                return "多次页面操作未完成；已停止尝试，请核对已查到的结果并手动处理剩余部分。"
+            if forced_at and taken == forced_at + 1:
+                self._messages.append({"role": "user", "content":
+                    "页面动作已失败六次。只剩两步：汇总已核实的事实，用 finish(cannot) 说明未完成的部分；"
+                    "不要再尝试同一页面动作。"})
             if taken == self.model_steps - 1 and taken > 1:
                 # What was found so far is worth more to the person than "ran out of steps".
                 self._messages.append({"role": "user", "content":
@@ -777,6 +788,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 acts = name in ("click", "input", "select", "scroll", "fill_fields")
                 target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
                           and isinstance(args.get("index"), int) else None)
+                failure_base = self._failure_base(name, args, target)
+                if failure_base is not None and failure_base in turn.get("blocked_failures", set()):
+                    unseen = unseen or name
+                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
+                        "未执行：同一目标和值此前已连续失败两次；请换方法或如实说明做不到。"})
+                    continue
                 where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), self._page_fingerprint(s.obs))
                 if acts and where in turn["done"]:
                     # The same step from a page that shows the same: it led nowhere the first time.
@@ -795,7 +812,6 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 self._uncertain_page_dispatch = False
                 before = self._page_fingerprint(s.obs)
                 before_epoch = s.obs.epoch if s.obs is not None else None
-                refusal_target = self._refusal_target(s.obs, name, args)
                 try:
                     result = self._invoke_tool(s, name, args, turn)
                 except (PrincipalError, BusinessToolPermissionError, BusinessToolAuthenticationError):
@@ -824,15 +840,17 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                      for r in self._tool_receipts)
                     result = replace(result, dispatch="acknowledged" if dispatched else
                                      "uncertain" if self._uncertain_page_dispatch else "not_dispatched")
-                if refusal_target is not None:
-                    rejections = turn.setdefault("rejections", {})
-                    if result.state == "refused" and result.error_code == "unreviewed" and result.dispatch == "not_dispatched":
-                        rejections[refusal_target] = rejections.get(refusal_target, 0) + 1
-                        if rejections[refusal_target] >= 3:
-                            s.terminal_reason, s.detail = "agent_refused", "the same uniquely bound control remains unreviewed"
-                            turn["final"] = "应用仍未审核这个控件的操作效果，重复尝试没有解决。本次没有完成，请手动处理剩余操作。"
-                    elif result.state == "completed":
-                        rejections.pop(refusal_target, None)
+                    if result.state != "completed" and result.error_code:
+                        failures = turn.setdefault("page_failures", 0) + 1
+                        turn["page_failures"] = failures
+                        if failures >= 6 and "forced_summary_at" not in turn:
+                            turn["forced_summary_at"] = taken
+                        if failure_base is not None:
+                            counts = turn.setdefault("failure_counts", {})
+                            failure = failure_base, result.error_code
+                            counts[failure] = counts.get(failure, 0) + 1
+                            if counts[failure] >= 2:
+                                turn.setdefault("blocked_failures", set()).add(failure_base)
                 text = result.feedback
                 if result.error_code:
                     text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"

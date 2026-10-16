@@ -78,7 +78,7 @@ class DataGoalPort:
         return tuple(hit for hit in self._each_entity(text, context, entities, named) if hit is not None)[:3]
 
     def records_named(self, text: str, *, context: OperationContext | None = None,
-                      entities: tuple[str, ...] = ()):
+                      entities: tuple[str, ...] = (), failures: list | None = None):
         """What the entities a page shows (or those of `entities` a page shows) hold under a
         name: (entity key, ((id, display, address), ...)) for each that holds one record it
         names, or several that it may mean; the others are left out. `address` is the
@@ -93,8 +93,16 @@ class DataGoalPort:
             else:
                 return None
             return entity, tuple((r.id, r.display, self._address(entity, r.id)) for r in refs)
-        return tuple(hit for hit in self._each_entity(text, context, entities, named, outline=True)
+        return tuple(hit for hit in self._each_entity(text, context, entities, named, outline=True,
+                                                     failures=failures)
                      if hit is not None)
+
+    def records_named_diagnostics(self, text: str, *, context: OperationContext | None = None,
+                                  entities: tuple[str, ...] = ()):
+        """Return name matches plus per-entity read refusals without aborting other entities."""
+        failures = []
+        hits = self.records_named(text, context=context, entities=entities, failures=failures)
+        return hits, tuple(sorted(failures, key=lambda item: item[0]))
 
     def outline_index(self, *, context: OperationContext | None = None) -> ApplicationIndex:
         """The index a lookup by name reads: the adapter's outline view, when it offers
@@ -108,7 +116,7 @@ class DataGoalPort:
         except (DataRefused, AttributeError, KeyError, ValueError):
             return ""
 
-    def _each_entity(self, text, context, entities, named, *, outline=False):
+    def _each_entity(self, text, context, entities, named, *, outline=False, failures=None):
         """`named(resolver, entity, found)` for the record lookup on each entity, in index
         order: every entity a page shows, or those of `entities` a page shows. With
         `outline`, over the adapter's outline view when it offers one."""
@@ -132,8 +140,10 @@ class DataGoalPort:
                 return None
             try:
                 return named(resolver, entity, resolver._find_record(entity, text))
-            except DataRefused:
+            except DataRefused as exc:
                 # A missing parent/context on one list does not hide other entities.
+                if failures is not None:
+                    failures.append((entity, exc.permission_denied, exc.read_failed))
                 return None
 
         if self.reference_workers > 1 and len(entities) > 1:

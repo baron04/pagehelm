@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "release": "v2026.09",
   "review": "v2026.09-explicit-submit-page-handlers-1",
   "handlers": [
@@ -884,6 +884,4793 @@
       "evidence": "v2026.09-page-handlers.md#erp-product-product",
       "sha256": "44a0ec44fbbfc2819d3a1d026e042e9a9fce709d993cf1c1c9880978ff351036",
       "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/business/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/business/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/business/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/clue/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/clue/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/clue/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/clue/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/clue/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/clue/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/clue/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/contact/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/contact/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/contact/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/contract/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/contract/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/contract/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/contract/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/contract/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/contract/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/contract/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/customer/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/customer/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/customer/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/receivable/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/receivable/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/receivable/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/receivable/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/receivable/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/receivable/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/receivable/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/crm/receivable-plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/crm/receivable-plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/crm/receivable-plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/crm/receivable-plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/receivable-plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/receivable-plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/crm/receivable-plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/dept/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/dept/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/dept/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/dept/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/dept/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/dept/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/dept/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/employee/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/employee/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/employee/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/insurance/month-record/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/insurance/month-record/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/insurance/month-record/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/insurance/month-record/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/insurance/month-record/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/insurance/month-record/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/insurance/month-record/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/performance/assessment/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/performance/assessment/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/performance/assessment/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/performance/assessment/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/performance/assessment/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/performance/assessment/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/performance/assessment/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/performance/plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/performance/plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/performance/plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/performance/plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/performance/plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/performance/plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/performance/plan/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/recruit/candidate/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/recruit/candidate/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/recruit/candidate/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/recruit/candidate/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/recruit/candidate/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/recruit/candidate/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/recruit/candidate/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/recruit/post/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/recruit/post/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/recruit/post/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/recruit/post/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/recruit/post/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/recruit/post/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/recruit/post/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/salary/employee-info/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/salary/employee-info/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/salary/employee-info/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/salary/employee-info/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/salary/employee-info/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/salary/employee-info/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/salary/employee-info/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/salary/history/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/salary/history/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/salary/history/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/salary/history/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/salary/history/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/salary/history/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/salary/history/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/hrm/salary/slip/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/hrm/salary/slip/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/hrm/salary/slip/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/hrm/salary/slip/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/salary/slip/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/salary/slip/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/hrm/salary/slip/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/iot/device/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/iot/device/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/iot/device/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/iot/device/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/iot/device/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/iot/device/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/iot/device/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/iot/product/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/iot/product/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/iot/product/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/iot/product/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/iot/product/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/iot/product/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/iot/product/product/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/iot/ota/operation/firmware/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/iot/ota/operation/firmware/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/iot/ota/operation/firmware/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/iot/ota/operation/firmware/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/iot/ota/operation/firmware/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/iot/ota/operation/firmware/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/iot/ota/operation/firmware/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/mall/product/spu/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/mall/product/spu/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/mall/product/spu/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/mall/product/spu/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/product/spu/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/product/spu/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/mall/product/spu/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/mall/trade/after-sale/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/mall/trade/after-sale/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/mall/trade/after-sale/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/mall/trade/after-sale/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/trade/after-sale/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/trade/after-sale/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/mall/trade/after-sale/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/mall/trade/order/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/mall/trade/order/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/mall/trade/order/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/mall/trade/order/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/trade/order/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/trade/order/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/mall/trade/order/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/oa/discussion/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/oa/discussion/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/oa/discussion/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/oa/discussion/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/discussion/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/discussion/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/oa/discussion/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/oa/leave/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/oa/leave/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/oa/leave/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/oa/leave/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/leave/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/leave/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/oa/leave/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/oa/overtime/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/oa/overtime/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/oa/overtime/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/oa/overtime/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/overtime/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/overtime/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/oa/overtime/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/oa/regular/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/oa/regular/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/oa/regular/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/oa/regular/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/regular/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/regular/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/oa/regular/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/oa/reimbursement/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/oa/reimbursement/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/oa/reimbursement/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/oa/reimbursement/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/reimbursement/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/reimbursement/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/oa/reimbursement/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/oa/resign/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/oa/resign/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/oa/resign/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/oa/resign/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/resign/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/resign/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/oa/resign/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "navigation",
+      "route": "/pms/pm/iteration/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "tabs",
+      "route": "/pms/pm/iteration/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/pms/pm/iteration/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "paging",
+      "route": "/pms/pm/iteration/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/pms/pm/iteration/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "fields",
+      "route": "/pms/pm/iteration/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
+    },
+    {
+      "kind": "lines",
+      "route": "/pms/pm/iteration/detail/{id}",
+      "evidence": "src/router/modules/remaining.ts",
+      "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
+      "controls": []
     }
-  ]
+  ],
+  "generated": {
+    "routes": [
+      "/ai/chat",
+      "/ai/console/api-key",
+      "/ai/console/chat-conversation",
+      "/ai/console/chat-role",
+      "/ai/console/image",
+      "/ai/console/mind-map",
+      "/ai/console/model",
+      "/ai/console/music",
+      "/ai/console/tool",
+      "/ai/console/write",
+      "/ai/image",
+      "/ai/knowledge",
+      "/ai/mind-map",
+      "/ai/music",
+      "/ai/workflow",
+      "/ai/write",
+      "/bpm/manager/category",
+      "/bpm/manager/form",
+      "/bpm/manager/model",
+      "/bpm/manager/process-expression",
+      "/bpm/manager/process-instance/manager",
+      "/bpm/manager/process-listener",
+      "/bpm/manager/process-tasnk",
+      "/bpm/manager/user-group",
+      "/bpm/oa/leave",
+      "/bpm/task/copy",
+      "/bpm/task/create",
+      "/bpm/task/done",
+      "/bpm/task/my",
+      "/bpm/task/todo",
+      "/cms/config/block",
+      "/cms/config/form-type",
+      "/cms/config/friend-link-type",
+      "/cms/config/global",
+      "/cms/config/message-board-type",
+      "/cms/config/model",
+      "/cms/config/performance-type",
+      "/cms/config/site",
+      "/cms/config/word",
+      "/cms/content/article",
+      "/cms/content/article-audit",
+      "/cms/content/attachment",
+      "/cms/content/block-item",
+      "/cms/content/channel",
+      "/cms/content/form",
+      "/cms/content/form-audit",
+      "/cms/content/friend-link",
+      "/cms/content/statictask",
+      "/cms/content/tag",
+      "/cms/file/html",
+      "/cms/file/template",
+      "/cms/file/upload-file",
+      "/cms/home",
+      "/cms/interaction/collection",
+      "/cms/interaction/comment",
+      "/cms/interaction/message-board",
+      "/cms/interaction/survey",
+      "/cms/interaction/survey-record",
+      "/cms/interaction/vote",
+      "/cms/stat/article",
+      "/cms/stat/performance",
+      "/cms/stat/visit",
+      "/cms/stat/visitor",
+      "/crm/backlog",
+      "/crm/business",
+      "/crm/clue",
+      "/crm/config/business-status",
+      "/crm/config/contract-config",
+      "/crm/config/customer-limit-config",
+      "/crm/config/customer-pool-config",
+      "/crm/config/performance-config",
+      "/crm/config/product/category",
+      "/crm/contact",
+      "/crm/contract",
+      "/crm/customer",
+      "/crm/customer/pool",
+      "/crm/product",
+      "/crm/receivable",
+      "/crm/receivable-plan",
+      "/crm/statistics/customer",
+      "/crm/statistics/funnel",
+      "/crm/statistics/performance",
+      "/crm/statistics/performance-target",
+      "/crm/statistics/portrait",
+      "/crm/statistics/product",
+      "/crm/statistics/ranking",
+      "/eam/asset",
+      "/eam/asset-allocation",
+      "/eam/asset-borrow",
+      "/eam/asset-borrow-return",
+      "/eam/asset-category-report",
+      "/eam/asset-category-status-report",
+      "/eam/asset-category-tree-report",
+      "/eam/asset-collection",
+      "/eam/asset-collection-return",
+      "/eam/asset-company-status-report",
+      "/eam/asset-dashboard",
+      "/eam/asset-data-range",
+      "/eam/asset-depreciation",
+      "/eam/asset-depreciation-oper",
+      "/eam/asset-finance-category",
+      "/eam/asset-leaving-employee",
+      "/eam/asset-operate",
+      "/eam/asset-operation-report",
+      "/eam/asset-organization-status-report",
+      "/eam/asset-position",
+      "/eam/asset-repair",
+      "/eam/asset-scrap",
+      "/eam/asset-software",
+      "/eam/asset-software-change",
+      "/eam/asset-software-distribute",
+      "/eam/asset-software-maintenance",
+      "/eam/asset-status",
+      "/eam/asset-stock-collection",
+      "/eam/asset-storage",
+      "/eam/asset-unlinked-goods",
+      "/eam/check-item",
+      "/eam/consumables-goods-in",
+      "/eam/consumables-goods-out",
+      "/eam/consumables-goods-stock",
+      "/eam/device-sp",
+      "/eam/device-sp-type",
+      "/eam/goods-stock",
+      "/eam/goods-stock-abnormal",
+      "/eam/goods-stock-usage",
+      "/eam/goods-stock-warn",
+      "/eam/inspection-group",
+      "/eam/inspection-plan",
+      "/eam/inspection-point",
+      "/eam/inspection-point-pos",
+      "/eam/inspection-point-report",
+      "/eam/inspection-process-action",
+      "/eam/inspection-route",
+      "/eam/inspection-task",
+      "/eam/inspection-task-abnormal",
+      "/eam/inventory",
+      "/eam/inventory-plan",
+      "/eam/maintain-group",
+      "/eam/maintain-plan",
+      "/eam/maintain-project",
+      "/eam/maintain-task",
+      "/eam/maintainer",
+      "/eam/manufacturer",
+      "/eam/mro-dashboard",
+      "/eam/part-goods-in",
+      "/eam/part-goods-out",
+      "/eam/part-goods-stock",
+      "/eam/purchase-apply",
+      "/eam/purchase-check",
+      "/eam/repair-category",
+      "/eam/repair-category-tpl",
+      "/eam/repair-group",
+      "/eam/repair-order",
+      "/eam/repair-order-acceptance",
+      "/eam/repair-order-act",
+      "/eam/repair-urgency",
+      "/eam/stock-goods-in",
+      "/eam/stock-goods-out",
+      "/eam/supplier",
+      "/eam/warehouse",
+      "/eam/warehouse-position",
+      "/erp/finance/account",
+      "/erp/finance/payment",
+      "/erp/finance/receipt",
+      "/erp/home",
+      "/erp/product/product",
+      "/erp/product/product-category",
+      "/erp/product/unit",
+      "/erp/purchase/in",
+      "/erp/purchase/order",
+      "/erp/purchase/return",
+      "/erp/purchase/supplier",
+      "/erp/sale/customer",
+      "/erp/sale/order",
+      "/erp/sale/out",
+      "/erp/sale/return",
+      "/erp/stock/check",
+      "/erp/stock/in",
+      "/erp/stock/move",
+      "/erp/stock/out",
+      "/erp/stock/record",
+      "/erp/stock/stock",
+      "/erp/stock/warehouse",
+      "/fms/closing/period",
+      "/fms/config/account-set",
+      "/fms/config/auxiliary",
+      "/fms/config/currency",
+      "/fms/config/digest",
+      "/fms/config/finance-indicator",
+      "/fms/config/finance-parameter",
+      "/fms/config/initial-balance",
+      "/fms/config/subject",
+      "/fms/config/voucher-template",
+      "/fms/config/voucher-word",
+      "/fms/home",
+      "/fms/ledger/auxiliary-balance",
+      "/fms/ledger/auxiliary-detail",
+      "/fms/ledger/detail",
+      "/fms/ledger/general",
+      "/fms/ledger/multi-column",
+      "/fms/ledger/quantity-detail",
+      "/fms/ledger/quantity-general",
+      "/fms/ledger/subject-balance",
+      "/fms/report/balance-sheet",
+      "/fms/report/cash-flow-statement",
+      "/fms/report/income-statement",
+      "/fms/voucher/create",
+      "/fms/voucher/list",
+      "/fms/voucher/statistics",
+      "/hrm/attendance/clock",
+      "/hrm/attendance/config/group",
+      "/hrm/attendance/config/holiday",
+      "/hrm/attendance/leave",
+      "/hrm/attendance/month",
+      "/hrm/dept",
+      "/hrm/employee/config",
+      "/hrm/employee/list",
+      "/hrm/home",
+      "/hrm/insurance/config/scheme",
+      "/hrm/insurance/month-record",
+      "/hrm/performance/assessment",
+      "/hrm/performance/config/assessment-template",
+      "/hrm/performance/config/result-template",
+      "/hrm/performance/plan",
+      "/hrm/portal/attendance/report",
+      "/hrm/portal/employee",
+      "/hrm/portal/home",
+      "/hrm/portal/insurance",
+      "/hrm/portal/performance/assessment",
+      "/hrm/portal/performance/history",
+      "/hrm/portal/salary/slip",
+      "/hrm/recruit/candidate",
+      "/hrm/recruit/post",
+      "/hrm/recruit/settings/channel",
+      "/hrm/recruit/settings/eliminate-reason",
+      "/hrm/salary/config/change-template",
+      "/hrm/salary/config/config",
+      "/hrm/salary/config/group",
+      "/hrm/salary/config/option",
+      "/hrm/salary/config/tax-rule",
+      "/hrm/salary/employee-info",
+      "/hrm/salary/history",
+      "/hrm/salary/month-record",
+      "/hrm/salary/slip",
+      "/hrm/team-home",
+      "/im/channel/list",
+      "/im/channel/material",
+      "/im/channel/message",
+      "/im/face/pack",
+      "/im/face/user-item",
+      "/im/group/list",
+      "/im/group/message",
+      "/im/group/request",
+      "/im/private/friend",
+      "/im/private/friend-request",
+      "/im/private/message",
+      "/im/rtc",
+      "/im/sensitive-word",
+      "/im/statistics",
+      "/infra/build",
+      "/infra/codegen",
+      "/infra/config",
+      "/infra/data-source-config",
+      "/infra/demo/demo01-contact",
+      "/infra/demo/demo02-category",
+      "/infra/demo/demo03-erp",
+      "/infra/demo/demo03-inner",
+      "/infra/demo/demo03-normal",
+      "/infra/file/file",
+      "/infra/file/file-config",
+      "/infra/job",
+      "/infra/log/api-access-log",
+      "/infra/log/api-error-log",
+      "/infra/monitors/admin-server",
+      "/infra/monitors/druid",
+      "/infra/monitors/redis",
+      "/infra/monitors/skywalking",
+      "/infra/swagger",
+      "/infra/websocket",
+      "/iot/alert/config",
+      "/iot/alert/record",
+      "/iot/device/device",
+      "/iot/device/device-group",
+      "/iot/device/product",
+      "/iot/device/product-category",
+      "/iot/home",
+      "/iot/operation/ota/firmware",
+      "/iot/rule/data-rule",
+      "/iot/rule/scene",
+      "/mall/home",
+      "/mall/kefu",
+      "/mall/product/brand",
+      "/mall/product/category",
+      "/mall/product/comment",
+      "/mall/product/property",
+      "/mall/product/spu",
+      "/mall/promotion/bargain/activity",
+      "/mall/promotion/bargain/record",
+      "/mall/promotion/combination/acitivity",
+      "/mall/promotion/combination/record",
+      "/mall/promotion/content/article",
+      "/mall/promotion/content/article/category",
+      "/mall/promotion/content/banner",
+      "/mall/promotion/coupon/list",
+      "/mall/promotion/coupon/template",
+      "/mall/promotion/diy-template/diy-page",
+      "/mall/promotion/diy-template/diy-template",
+      "/mall/promotion/point-activity",
+      "/mall/promotion/seckill/activity",
+      "/mall/promotion/seckill/config",
+      "/mall/promotion/youhui/discount-activity",
+      "/mall/promotion/youhui/reward-activity",
+      "/mall/statistics/member",
+      "/mall/statistics/product",
+      "/mall/statistics/trade",
+      "/mall/trade/after-sale",
+      "/mall/trade/brokerage/brokerage-record",
+      "/mall/trade/brokerage/brokerage-user",
+      "/mall/trade/brokerage/brokerage-withdraw",
+      "/mall/trade/config",
+      "/mall/trade/delivery/express/express",
+      "/mall/trade/delivery/express/express-template",
+      "/mall/trade/delivery/pick-up-store/pick-up-order",
+      "/mall/trade/delivery/pick-up-store/pick-up-store",
+      "/mall/trade/order",
+      "/member/config",
+      "/member/group",
+      "/member/level",
+      "/member/record",
+      "/member/signin/config",
+      "/member/signin/record",
+      "/member/tag",
+      "/member/user",
+      "/mes/cal/calendar",
+      "/mes/cal/holiday",
+      "/mes/cal/plan",
+      "/mes/cal/team",
+      "/mes/dv/check-record",
+      "/mes/dv/checkplan",
+      "/mes/dv/machinery",
+      "/mes/dv/machinery/type",
+      "/mes/dv/mainten-record",
+      "/mes/dv/repair",
+      "/mes/dv/subject",
+      "/mes/md/auto-code",
+      "/mes/md/client",
+      "/mes/md/item",
+      "/mes/md/item-type",
+      "/mes/md/unit-measure",
+      "/mes/md/vendor",
+      "/mes/md/workstation",
+      "/mes/md/workstation/workshop",
+      "/mes/mes/home/index",
+      "/mes/pro/andon",
+      "/mes/pro/card",
+      "/mes/pro/feedback",
+      "/mes/pro/process",
+      "/mes/pro/route",
+      "/mes/pro/task",
+      "/mes/pro/work-order",
+      "/mes/pro/workrecord",
+      "/mes/qc/batch-trace",
+      "/mes/qc/defect",
+      "/mes/qc/indicator",
+      "/mes/qc/ipqc",
+      "/mes/qc/iqc",
+      "/mes/qc/oqc",
+      "/mes/qc/pending-inspect",
+      "/mes/qc/rqc",
+      "/mes/qc/template",
+      "/mes/tm/tool",
+      "/mes/tm/tool/type",
+      "/mes/wm/arrival-notice",
+      "/mes/wm/barcode",
+      "/mes/wm/item-receipt",
+      "/mes/wm/material-stock",
+      "/mes/wm/misc-issue",
+      "/mes/wm/misc-receipt",
+      "/mes/wm/outsource-issue",
+      "/mes/wm/outsource-receipt",
+      "/mes/wm/packages",
+      "/mes/wm/product-issue",
+      "/mes/wm/product-receipt",
+      "/mes/wm/product-sales",
+      "/mes/wm/return-issue",
+      "/mes/wm/return-sales",
+      "/mes/wm/return-vendor",
+      "/mes/wm/sales-notice",
+      "/mes/wm/sn",
+      "/mes/wm/stock-taking/plan",
+      "/mes/wm/stock-taking/task",
+      "/mes/wm/transfer",
+      "/mes/wm/warehouse",
+      "/mp/account",
+      "/mp/auto-reply",
+      "/mp/draft",
+      "/mp/free-publish",
+      "/mp/material",
+      "/mp/menu",
+      "/mp/message",
+      "/mp/message-template",
+      "/mp/statistics",
+      "/mp/tag",
+      "/mp/user",
+      "/oa/announcement/list",
+      "/oa/announcement/my",
+      "/oa/attendance/list",
+      "/oa/attendance/my",
+      "/oa/attendance/report",
+      "/oa/contact",
+      "/oa/discussion/list",
+      "/oa/discussion/manage",
+      "/oa/file",
+      "/oa/home",
+      "/oa/mail/account",
+      "/oa/mail/inbox",
+      "/oa/mail/provider",
+      "/oa/meetingroom/booking",
+      "/oa/meetingroom/room",
+      "/oa/note",
+      "/oa/officialdoc/receive",
+      "/oa/officialdoc/send",
+      "/oa/officialdoc/template",
+      "/oa/plan/list",
+      "/oa/plan/report",
+      "/oa/process/leave",
+      "/oa/process/overtime",
+      "/oa/process/regular",
+      "/oa/process/reimbursement",
+      "/oa/process/resign",
+      "/oa/schedule/calendar",
+      "/oa/schedule/list",
+      "/oa/seal/apply",
+      "/oa/seal/list",
+      "/oa/supply/apply",
+      "/oa/supply/issue",
+      "/oa/supply/item",
+      "/oa/task/list",
+      "/oa/task/my",
+      "/oa/travel/apply",
+      "/oa/travel/reimbursement",
+      "/oa/vehicle/apply",
+      "/oa/vehicle/list",
+      "/oa/vehicle/return",
+      "/oa/work-report/my",
+      "/oa/work-report/statistics",
+      "/pay/app",
+      "/pay/demo/order",
+      "/pay/demo/transfer",
+      "/pay/notify",
+      "/pay/order",
+      "/pay/refund",
+      "/pay/transfer",
+      "/pay/wallet/wallet-balance",
+      "/pay/wallet/wallet-recharge-package",
+      "/pms/kb/favorite",
+      "/pms/kb/label",
+      "/pms/kb/library",
+      "/pms/kb/library-template",
+      "/pms/kb/recent",
+      "/pms/kb/recycle",
+      "/pms/kb/search",
+      "/pms/pm/project/archive",
+      "/pms/pm/project/list",
+      "/pms/pm/project/recycle",
+      "/pms/pm/project/template",
+      "/pms/pm/workbench",
+      "/report/go-view",
+      "/report/jimu-bi",
+      "/report/jimu-report",
+      "/system/area",
+      "/system/dept",
+      "/system/dict",
+      "/system/log/login-log",
+      "/system/log/operate-log",
+      "/system/menu",
+      "/system/messages/mail/mail-account",
+      "/system/messages/mail/mail-log",
+      "/system/messages/mail/mail-template",
+      "/system/messages/notice",
+      "/system/messages/notify/notify-message",
+      "/system/messages/notify/notify-template",
+      "/system/messages/sms/sms-channel",
+      "/system/messages/sms/sms-log",
+      "/system/messages/sms/sms-template",
+      "/system/oauth2/oauth2/application",
+      "/system/oauth2/token",
+      "/system/post",
+      "/system/role",
+      "/system/social/client",
+      "/system/social/user",
+      "/system/tenant/list",
+      "/system/tenant/package",
+      "/system/user",
+      "/wms/check",
+      "/wms/home",
+      "/wms/inventory/history",
+      "/wms/inventory/index",
+      "/wms/md/item",
+      "/wms/md/item/brand",
+      "/wms/md/item/category",
+      "/wms/md/merchant",
+      "/wms/md/warehouse",
+      "/wms/movement",
+      "/wms/receipt",
+      "/wms/shipment"
+    ],
+    "excluded": [],
+    "menu_sha256": "4f8968d354dd8995800328327d71cab8297df87342fe2c4971cbdeddfd38baac",
+    "fence_sha256": "df6493fbff0db5dd7201c1edb47e0d8c79c8b64c26b4ffa6bab4b4a13b7c7cec",
+    "columns": {
+      "/ai/console/api-key": {
+        "name": "名称",
+        "platform": "所属平台",
+        "status": "状态",
+        "url": "自定义 API URL"
+      },
+      "/ai/console/chat-role": {
+        "avatar": "角色头像",
+        "category": "角色类别",
+        "description": "角色描述",
+        "knowledgeIds": "知识库",
+        "modelName": "绑定模型",
+        "name": "角色名称",
+        "publicStatus": "是否公开",
+        "sort": "角色排序",
+        "status": "状态",
+        "systemMessage": "角色设定",
+        "toolIds": "工具"
+      },
+      "/ai/console/image": {
+        "createTime": "创建时间",
+        "errorMessage": "错误信息",
+        "height": "高度",
+        "id": "编号",
+        "model": "模型",
+        "picUrl": "图片",
+        "platform": "平台",
+        "prompt": "提示词",
+        "publicStatus": "是否发布",
+        "status": "绘画状态",
+        "taskId": "任务编号",
+        "userId": "用户",
+        "width": "宽度"
+      },
+      "/ai/console/mind-map": {
+        "createTime": "创建时间",
+        "errorMessage": "错误信息",
+        "generatedContent": "思维导图",
+        "id": "编号",
+        "model": "模型",
+        "prompt": "提示词",
+        "userId": "用户"
+      },
+      "/ai/console/model": {
+        "keyId": "API 秘钥",
+        "maxContexts": "上下文数量",
+        "model": "模型标识",
+        "name": "模型名字",
+        "sort": "排序",
+        "status": "状态",
+        "temperature": "温度参数"
+      },
+      "/ai/console/music": {
+        "createTime": "创建时间",
+        "duration": "时长（秒）",
+        "errorMessage": "错误信息",
+        "generateMode": "生成模式",
+        "gptDescriptionPrompt": "描述",
+        "id": "编号",
+        "lyric": "歌词",
+        "model": "模型",
+        "prompt": "提示词",
+        "publicStatus": "是否发布",
+        "status": "音乐状态",
+        "tags": "风格标签",
+        "taskId": "任务编号",
+        "title": "音乐名称",
+        "userId": "用户"
+      },
+      "/ai/console/tool": {
+        "createTime": "创建时间",
+        "description": "工具描述",
+        "id": "工具编号",
+        "name": "工具名称",
+        "status": "状态"
+      },
+      "/ai/console/write": {
+        "createTime": "创建时间",
+        "errorMessage": "错误信息",
+        "format": "格式",
+        "generatedContent": "生成的内容",
+        "id": "编号",
+        "language": "语言",
+        "length": "长度",
+        "model": "模型",
+        "originalContent": "原文",
+        "platform": "平台",
+        "prompt": "生成内容提示",
+        "tone": "语气",
+        "type": "写作类型",
+        "userId": "用户"
+      },
+      "/ai/knowledge": {
+        "createTime": "创建时间",
+        "description": "知识库描述",
+        "embeddingModel": "向量化模型",
+        "id": "编号",
+        "name": "知识库名称",
+        "status": "是否启用"
+      },
+      "/ai/workflow": {
+        "code": "流程标识",
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "流程名称",
+        "remark": "备注"
+      },
+      "/bpm/manager/category": {
+        "code": "分类标志",
+        "createTime": "创建时间",
+        "description": "分类描述",
+        "id": "分类编号",
+        "name": "分类名",
+        "sort": "分类排序",
+        "status": "分类状态"
+      },
+      "/bpm/manager/form": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "表单名",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/bpm/manager/process-expression": {
+        "createTime": "创建时间",
+        "expression": "表达式",
+        "id": "编号",
+        "name": "名字",
+        "status": "状态"
+      },
+      "/bpm/manager/process-instance/manager": {
+        "categoryName": "流程分类",
+        "durationInMillis": "耗时",
+        "endTime": "结束时间",
+        "id": "流程编号",
+        "name": "流程名称",
+        "startTime": "发起时间",
+        "status": "流程状态",
+        "tasks": "当前审批任务"
+      },
+      "/bpm/manager/process-listener": {
+        "createTime": "创建时间",
+        "event": "事件",
+        "id": "编号",
+        "name": "名字",
+        "status": "状态",
+        "type": "类型",
+        "value": "值",
+        "valueType": "值类型"
+      },
+      "/bpm/manager/process-tasnk": {
+        "durationInMillis": "耗时",
+        "endTime": "任务结束时间",
+        "id": "任务编号",
+        "name": "当前任务",
+        "processInstanceId": "流程编号",
+        "reason": "审批建议",
+        "status": "审批状态"
+      },
+      "/bpm/manager/user-group": {
+        "createTime": "创建时间",
+        "description": "描述",
+        "id": "编号",
+        "name": "组名",
+        "status": "状态"
+      },
+      "/bpm/oa/leave": {
+        "createTime": "申请时间",
+        "endTime": "结束时间",
+        "id": "申请编号",
+        "reason": "原因",
+        "startTime": "开始时间",
+        "status": "状态",
+        "type": "请假类型"
+      },
+      "/bpm/task/copy": {
+        "activityName": "抄送节点",
+        "createTime": "抄送时间",
+        "processInstanceName": "流程名",
+        "processInstanceStartTime": "流程发起时间",
+        "reason": "抄送意见",
+        "summary": "摘要"
+      },
+      "/bpm/task/done": {
+        "durationInMillis": "耗时",
+        "endTime": "任务结束时间",
+        "id": "任务编号",
+        "name": "当前任务",
+        "processInstanceId": "流程编号",
+        "reason": "审批建议",
+        "status": "审批状态"
+      },
+      "/bpm/task/my": {
+        "categoryName": "流程分类",
+        "endTime": "结束时间",
+        "name": "流程名称",
+        "startTime": "发起时间",
+        "status": "流程状态",
+        "summary": "摘要"
+      },
+      "/bpm/task/todo": {
+        "createTime": "任务时间",
+        "id": "任务编号",
+        "name": "当前任务",
+        "processInstanceId": "流程编号"
+      },
+      "/crm/business": {
+        "contactLastTime": "最后跟进时间",
+        "contactNextTime": "下次联系时间",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "customerName": "客户名称",
+        "dealTime": "预计成交日期",
+        "name": "商机名称",
+        "ownerUserDeptName": "所属部门",
+        "ownerUserName": "负责人",
+        "remark": "备注",
+        "statusName": "商机阶段",
+        "statusTypeName": "商机状态组",
+        "totalPrice": "商机金额（元）",
+        "updateTime": "更新时间"
+      },
+      "/crm/clue": {
+        "contactLastContent": "最后跟进记录",
+        "contactLastTime": "最后跟进时间",
+        "contactNextTime": "下次联系时间",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "detailAddress": "地址",
+        "email": "邮箱",
+        "industryId": "客户行业",
+        "level": "客户级别",
+        "mobile": "手机",
+        "name": "线索名称",
+        "ownerUserDeptName": "所属部门",
+        "ownerUserName": "负责人",
+        "remark": "备注",
+        "source": "线索来源",
+        "telephone": "电话",
+        "updateTime": "更新时间"
+      },
+      "/crm/config/business-status": {
+        "createTime": "创建时间",
+        "creator": "创建人",
+        "deptNames": "应用部门",
+        "name": "状态组名"
+      },
+      "/crm/config/performance-config": {
+        "bizType": "目标类型",
+        "createTime": "创建时间",
+        "objectName": "目标对象",
+        "objectType": "对象类型",
+        "year": "年份",
+        "yearTargetPrice": "年度目标"
+      },
+      "/crm/config/product/category": {
+        "createTime": "创建时间",
+        "id": "分类编号",
+        "name": "分类名称"
+      },
+      "/crm/contact": {
+        "contactLastTime": "最后跟进时间",
+        "contactNextTime": "下次联系时间",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "customerName": "客户名称",
+        "detailAddress": "地址",
+        "email": "邮箱",
+        "master": "关键决策人",
+        "mobile": "手机",
+        "name": "联系人姓名",
+        "ownerUserDeptName": "所属部门",
+        "ownerUserName": "负责人",
+        "parentName": "直属上级",
+        "post": "职位",
+        "remark": "备注",
+        "sex": "性别",
+        "telephone": "电话",
+        "updateTime": "更新时间"
+      },
+      "/crm/contract": {
+        "auditStatus": "合同状态",
+        "businessName": "商机名称",
+        "contactLastTime": "最后跟进时间",
+        "contactName": "客户签约人",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "customerName": "客户名称",
+        "endTime": "合同结束时间",
+        "name": "合同名称",
+        "no": "合同编号",
+        "orderDate": "下单时间",
+        "ownerUserDeptName": "所属部门",
+        "ownerUserName": "负责人",
+        "remark": "备注",
+        "signUserName": "公司签约人",
+        "startTime": "合同开始时间",
+        "totalPrice": "合同金额（元）",
+        "updateTime": "更新时间"
+      },
+      "/crm/customer": {
+        "contactLastContent": "最后跟进记录",
+        "contactLastTime": "最后跟进时间",
+        "contactNextTime": "下次联系时间",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "dealStatus": "成交状态",
+        "detailAddress": "地址",
+        "email": "邮箱",
+        "industryId": "客户行业",
+        "level": "客户级别",
+        "lockStatus": "锁定状态",
+        "mobile": "手机",
+        "name": "客户名称",
+        "ownerUserDeptName": "所属部门",
+        "ownerUserName": "负责人",
+        "poolDay": "距离进入公海天数",
+        "remark": "备注",
+        "source": "客户来源",
+        "telephone": "电话",
+        "updateTime": "更新时间"
+      },
+      "/crm/customer/pool": {
+        "contactLastContent": "最后跟进记录",
+        "contactLastTime": "最后跟进时间",
+        "contactNextTime": "下次联系时间",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "dealStatus": "成交状态",
+        "email": "邮箱",
+        "industryId": "客户行业",
+        "level": "客户级别",
+        "mobile": "手机",
+        "name": "客户名称",
+        "remark": "备注",
+        "source": "客户来源",
+        "telephone": "电话",
+        "updateTime": "更新时间"
+      },
+      "/crm/product": {
+        "categoryName": "产品类型",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "description": "产品描述",
+        "name": "产品名称",
+        "no": "产品编码",
+        "ownerUserName": "负责人",
+        "price": "价格（元）",
+        "status": "上架状态",
+        "unit": "产品单位",
+        "updateTime": "更新时间"
+      },
+      "/crm/receivable": {
+        "auditStatus": "回款状态",
+        "contractNo": "合同编号",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "customerName": "客户名称",
+        "no": "回款编号",
+        "ownerUserDeptName": "所属部门",
+        "ownerUserName": "负责人",
+        "price": "回款金额(元)",
+        "remark": "备注",
+        "returnTime": "回款日期",
+        "returnType": "回款方式",
+        "updateTime": "更新时间"
+      },
+      "/crm/receivable-plan": {
+        "contractNo": "合同编号",
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "customerName": "客户名称",
+        "ownerUserName": "负责人",
+        "period": "期数",
+        "price": "计划回款金额（元）",
+        "remark": "备注",
+        "remindDays": "提前几天提醒",
+        "remindTime": "提醒日期",
+        "returnTime": "计划回款日期",
+        "returnType": "回款方式",
+        "updateTime": "更新时间"
+      },
+      "/crm/statistics/performance-target": {
+        "completionRate": "完成率",
+        "currentPrice": "完成金额（元）",
+        "month": "月份",
+        "targetPrice": "目标金额（元）"
+      },
+      "/erp/finance/account": {
+        "createTime": "创建时间",
+        "defaultStatus": "是否默认",
+        "name": "名称",
+        "no": "编码",
+        "remark": "备注",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/erp/finance/payment": {
+        "accountName": "付款账户",
+        "creatorName": "创建人",
+        "discountPrice": "优惠金额",
+        "financeUserName": "财务人员",
+        "no": "付款单号",
+        "paymentPrice": "实际付款",
+        "paymentTime": "付款时间",
+        "status": "状态",
+        "supplierName": "供应商",
+        "totalPrice": "合计付款"
+      },
+      "/erp/finance/receipt": {
+        "accountName": "收款账户",
+        "creatorName": "创建人",
+        "customerName": "客户",
+        "discountPrice": "优惠金额",
+        "financeUserName": "财务人员",
+        "no": "收款单号",
+        "receiptPrice": "实际收款",
+        "receiptTime": "收款时间",
+        "status": "状态",
+        "totalPrice": "合计收款"
+      },
+      "/erp/product/product": {
+        "barCode": "条码",
+        "categoryName": "分类",
+        "createTime": "创建时间",
+        "minPrice": "最低价格",
+        "name": "名称",
+        "purchasePrice": "采购价格",
+        "salePrice": "销售价格",
+        "standard": "规格",
+        "status": "状态",
+        "unitName": "单位"
+      },
+      "/erp/product/product-category": {
+        "code": "编码",
+        "createTime": "创建时间",
+        "name": "名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/erp/product/unit": {
+        "createTime": "创建时间",
+        "name": "名字",
+        "status": "状态"
+      },
+      "/erp/purchase/in": {
+        "creatorName": "创建人",
+        "inTime": "入库时间",
+        "no": "入库单号",
+        "paymentPrice": "已付金额",
+        "productNames": "产品信息",
+        "status": "审核状态",
+        "supplierName": "供应商",
+        "totalCount": "总数量",
+        "totalPrice": "应付金额"
+      },
+      "/erp/purchase/order": {
+        "creatorName": "创建人",
+        "depositPrice": "支付订金",
+        "inCount": "入库数量",
+        "no": "订单单号",
+        "orderTime": "订单时间",
+        "productNames": "产品信息",
+        "returnCount": "退货数量",
+        "status": "状态",
+        "supplierName": "供应商",
+        "totalCount": "总数量",
+        "totalPrice": "含税金额",
+        "totalProductPrice": "金额合计"
+      },
+      "/erp/purchase/return": {
+        "creatorName": "创建人",
+        "no": "退货单号",
+        "productNames": "产品信息",
+        "refundPrice": "已退金额",
+        "returnTime": "退货时间",
+        "status": "审核状态",
+        "supplierName": "供应商",
+        "totalCount": "总数量",
+        "totalPrice": "应退金额"
+      },
+      "/erp/purchase/supplier": {
+        "contact": "联系人",
+        "email": "电子邮箱",
+        "mobile": "手机号码",
+        "name": "名称",
+        "remark": "备注",
+        "sort": "排序",
+        "status": "状态",
+        "telephone": "联系电话"
+      },
+      "/erp/sale/customer": {
+        "contact": "联系人",
+        "email": "电子邮箱",
+        "mobile": "手机号码",
+        "name": "名称",
+        "remark": "备注",
+        "sort": "排序",
+        "status": "状态",
+        "telephone": "联系电话"
+      },
+      "/erp/sale/order": {
+        "creatorName": "创建人",
+        "customerName": "客户",
+        "depositPrice": "收取订金",
+        "no": "订单单号",
+        "orderTime": "订单时间",
+        "outCount": "出库数量",
+        "productNames": "产品信息",
+        "returnCount": "退货数量",
+        "status": "状态",
+        "totalCount": "总数量",
+        "totalPrice": "含税金额",
+        "totalProductPrice": "金额合计"
+      },
+      "/erp/sale/out": {
+        "creatorName": "创建人",
+        "customerName": "客户",
+        "no": "出库单号",
+        "outTime": "出库时间",
+        "productNames": "产品信息",
+        "receiptPrice": "已收金额",
+        "status": "审核状态",
+        "totalCount": "总数量",
+        "totalPrice": "应收金额"
+      },
+      "/erp/sale/return": {
+        "creatorName": "创建人",
+        "customerName": "客户",
+        "no": "退货单号",
+        "productNames": "产品信息",
+        "refundPrice": "已退金额",
+        "returnTime": "退货时间",
+        "status": "审核状态",
+        "totalCount": "总数量",
+        "totalPrice": "应退金额"
+      },
+      "/erp/stock/check": {
+        "checkTime": "盘点时间",
+        "creatorName": "创建人",
+        "no": "盘点单号",
+        "productNames": "产品信息",
+        "status": "状态",
+        "totalCount": "数量",
+        "totalPrice": "金额"
+      },
+      "/erp/stock/in": {
+        "creatorName": "创建人",
+        "inTime": "入库时间",
+        "no": "入库单号",
+        "productNames": "产品信息",
+        "status": "状态",
+        "supplierName": "供应商",
+        "totalCount": "数量",
+        "totalPrice": "金额"
+      },
+      "/erp/stock/move": {
+        "creatorName": "创建人",
+        "moveTime": "调度时间",
+        "no": "调度单号",
+        "productNames": "产品信息",
+        "status": "状态",
+        "totalCount": "数量",
+        "totalPrice": "金额"
+      },
+      "/erp/stock/out": {
+        "creatorName": "创建人",
+        "customerName": "客户",
+        "no": "出库单号",
+        "outTime": "出库时间",
+        "productNames": "产品信息",
+        "status": "状态",
+        "totalCount": "数量",
+        "totalPrice": "金额"
+      },
+      "/erp/stock/record": {
+        "bizNo": "出入库单号",
+        "bizType": "类型",
+        "categoryName": "产品分类",
+        "count": "出入库数量",
+        "createTime": "出入库日期",
+        "creatorName": "操作人",
+        "productName": "产品名称",
+        "totalCount": "库存量",
+        "unitName": "产品单位",
+        "warehouseName": "仓库编号"
+      },
+      "/erp/stock/stock": {
+        "categoryName": "产品分类",
+        "count": "库存量",
+        "productName": "产品名称",
+        "unitName": "产品单位",
+        "warehouseName": "仓库"
+      },
+      "/erp/stock/warehouse": {
+        "address": "仓库地址",
+        "createTime": "创建时间",
+        "defaultStatus": "是否默认",
+        "name": "仓库名称",
+        "principal": "负责人",
+        "remark": "备注",
+        "sort": "排序",
+        "status": "状态",
+        "truckagePrice": "搬运费",
+        "warehousePrice": "仓储费"
+      },
+      "/fms/config/account-set": {
+        "companyCode": "公司编码",
+        "companyName": "账套名称",
+        "contactName": "联系人",
+        "createTime": "创建时间",
+        "initialized": "账套状态",
+        "mobile": "手机号码",
+        "startTime": "启用期间"
+      },
+      "/fms/config/currency": {
+        "code": "币别编码",
+        "createTime": "创建时间",
+        "name": "币别名称"
+      },
+      "/fms/config/digest": {
+        "content": "摘要内容",
+        "createTime": "创建时间"
+      },
+      "/fms/config/finance-indicator": {
+        "code": "编码",
+        "formula": "公式",
+        "name": "名称",
+        "sort": "排序"
+      },
+      "/fms/config/subject": {
+        "code": "编码",
+        "name": "名称"
+      },
+      "/fms/config/voucher-template": {
+        "name": "模板名称"
+      },
+      "/fms/config/voucher-word": {
+        "createTime": "创建时间",
+        "name": "凭证字",
+        "printTitle": "打印标题"
+      },
+      "/fms/ledger/auxiliary-balance": {
+        "code": "编码",
+        "name": "项目名称"
+      },
+      "/fms/ledger/auxiliary-detail": {
+        "accountDate": "日期",
+        "balanceDirection": "方向",
+        "digest": "摘要"
+      },
+      "/fms/ledger/detail": {
+        "accountDate": "日期",
+        "balanceDirection": "方向",
+        "digest": "摘要"
+      },
+      "/fms/ledger/general": {
+        "balanceDirection": "方向",
+        "digest": "摘要",
+        "period": "期间",
+        "subjectCode": "科目编码",
+        "subjectName": "科目名称"
+      },
+      "/fms/ledger/multi-column": {
+        "accountDate": "日期",
+        "balanceDirection": "方向",
+        "digest": "摘要"
+      },
+      "/fms/ledger/quantity-detail": {
+        "accountDate": "日期",
+        "balanceDirection": "方向",
+        "digest": "摘要"
+      },
+      "/fms/ledger/quantity-general": {
+        "endingBalanceDirection": "方向",
+        "openingBalanceDirection": "方向",
+        "quantityUnit": "单位",
+        "subjectCode": "科目编码",
+        "subjectName": "科目名称"
+      },
+      "/fms/ledger/subject-balance": {
+        "subjectCode": "科目编码",
+        "subjectName": "科目名称"
+      },
+      "/fms/report/income-statement": {
+        "rowNo": "行次"
+      },
+      "/fms/voucher/list": {
+        "creatorUserName": "制单人",
+        "reviewerUserName": "审核人",
+        "voucherTime": "日期"
+      },
+      "/fms/voucher/statistics": {
+        "creditAmount": "贷方金额",
+        "debitAmount": "借方金额",
+        "subjectCode": "科目编码",
+        "subjectName": "科目名称"
+      },
+      "/hrm/attendance/config/group": {
+        "name": "考勤组"
+      },
+      "/hrm/attendance/config/holiday": {
+        "createTime": "创建时间",
+        "date": "日期",
+        "id": "编号",
+        "type": "日期类型"
+      },
+      "/hrm/attendance/leave": {
+        "day": "请假天数",
+        "deptName": "部门",
+        "employeeName": "姓名",
+        "endTime": "请假结束时间",
+        "jobNumber": "工号",
+        "postName": "岗位",
+        "reason": "请假事由",
+        "remark": "备注",
+        "startTime": "请假开始时间"
+      },
+      "/hrm/attendance/month": {
+        "attendDays": "应出勤天数",
+        "deptName": "部门",
+        "earlyCount": "早退次数",
+        "earlyMinute": "早退时长（分钟）",
+        "employeeName": "员工",
+        "jobNumber": "工号",
+        "lateCount": "迟到次数",
+        "lateMinute": "迟到时长（分钟）",
+        "misscardCount": "缺卡次数",
+        "postName": "岗位"
+      },
+      "/hrm/employee/list": {
+        "accumulationFundNumber": "个人公积金账号",
+        "channelName": "招聘渠道",
+        "deptName": "部门",
+        "entryStatus": "入职状态",
+        "entryTime": "入职时间",
+        "jobNumber": "工号",
+        "leaderEmployeeName": "直属上级",
+        "mobile": "手机号",
+        "name": "员工姓名",
+        "postName": "岗位",
+        "regularTime": "转正时间",
+        "salaryCardAreaName": "开户地区",
+        "salaryCardBankBranchName": "开户支行",
+        "salaryCardBankName": "银行名称",
+        "salaryCardNumber": "银行卡号",
+        "sex": "性别",
+        "socialSecurityNumber": "个人社保账号",
+        "status": "员工状态",
+        "type": "聘用形式",
+        "workAddress": "工作地点"
+      },
+      "/hrm/insurance/config/scheme": {
+        "areaName": "参保城市",
+        "monthRecordCount": "历史月记录",
+        "name": "方案名称",
+        "useCount": "使用人数"
+      },
+      "/hrm/insurance/month-record": {
+        "insuredEmployeeCount": "参保人数",
+        "stoppedEmployeeCount": "停保人数",
+        "title": "社保表"
+      },
+      "/hrm/performance/assessment": {
+        "assessmentCount": "考核次数",
+        "deptName": "部门",
+        "employeeName": "员工姓名",
+        "jobNumber": "工号",
+        "latestPlanName": "最近考核计划",
+        "latestResultLevel": "最近绩效等级",
+        "latestScore": "最近绩效评分",
+        "mobile": "手机号",
+        "postName": "职位"
+      },
+      "/hrm/performance/config/assessment-template": {
+        "creatorName": "创建人",
+        "dimensionCount": "考核维度",
+        "illustrate": "描述",
+        "name": "模板名称",
+        "quotaCount": "考核指标",
+        "updateTime": "最近更新时间",
+        "upperLimitScore": "总分"
+      },
+      "/hrm/performance/config/result-template": {
+        "creatorName": "创建人",
+        "name": "结果模板名称",
+        "updateTime": "最近更新时间"
+      },
+      "/hrm/performance/plan": {
+        "assessmentTemplateName": "考核模板",
+        "createTime": "创建时间",
+        "cycle": "考核周期",
+        "name": "计划名称",
+        "resultTemplateName": "结果模板",
+        "stageType": "阶段",
+        "status": "状态"
+      },
+      "/hrm/portal/performance/history": {
+        "name": "考核名称"
+      },
+      "/hrm/portal/salary/slip": {
+        "monthTitle": "所属月份"
+      },
+      "/hrm/recruit/candidate": {
+        "age": "年龄",
+        "channelName": "招聘渠道",
+        "createTime": "创建时间",
+        "deptName": "用人部门",
+        "education": "学历",
+        "email": "邮箱",
+        "graduateSchool": "毕业院校",
+        "interviewEmployeeName": "主面试官",
+        "interviewTime": "面试时间",
+        "interviewType": "面试方式",
+        "latestWorkPlace": "最近工作单位",
+        "mobile": "手机号码",
+        "name": "姓名",
+        "ownerEmployeeName": "招聘负责人",
+        "postName": "应聘职位",
+        "sex": "性别",
+        "stageNumber": "面试轮次",
+        "status": "候选人状态",
+        "workTime": "工作年限"
+      },
+      "/hrm/recruit/post": {
+        "areaName": "工作城市",
+        "deptName": "用人部门",
+        "educationRequire": "学历要求",
+        "emergencyLevel": "紧急程度",
+        "hasEntryNum": "已入职人数",
+        "interviewEmployeeNames": "面试官",
+        "jobNature": "工作性质",
+        "latestEntryTime": "最迟到岗时间",
+        "minAge": "年龄要求",
+        "minSalary": "薪资范围",
+        "ownerEmployeeName": "招聘负责人",
+        "postName": "职位名称",
+        "postTypeName": "职位类型",
+        "recruitNum": "招聘人数",
+        "recruitSchedule": "招聘进度",
+        "status": "状态",
+        "workTime": "工作经验"
+      },
+      "/hrm/recruit/settings/channel": {
+        "createTime": "创建时间",
+        "id": "渠道编号",
+        "name": "渠道名称",
+        "remark": "备注",
+        "sort": "排序",
+        "status": "状态",
+        "systemFlag": "系统内置"
+      },
+      "/hrm/salary/config/change-template": {
+        "createTime": "创建时间",
+        "defaultStatus": "默认模板",
+        "name": "模板名称"
+      },
+      "/hrm/salary/config/group": {
+        "changeRule": "调薪规则",
+        "name": "薪资组名称",
+        "salaryStandard": "计薪标准",
+        "taxRuleName": "计税规则"
+      },
+      "/hrm/salary/config/option": {
+        "name": "薪资项",
+        "remark": "备注",
+        "taxEnabled": "计税",
+        "type": "加减类型"
+      },
+      "/hrm/salary/config/tax-rule": {
+        "cycleType": "计税周期",
+        "decimalScale": "个税结果保留小数位",
+        "name": "方案名称",
+        "taxEnabled": "是否计税",
+        "threshold": "起征点",
+        "type": "个税类型"
+      },
+      "/hrm/salary/employee-info": {
+        "changeReason": "调薪原因",
+        "deptName": "部门",
+        "effectTime": "最近调整日期",
+        "entryTime": "入职日期",
+        "jobNumber": "工号",
+        "postName": "岗位",
+        "regularTime": "转正日期"
+      },
+      "/hrm/salary/history": {
+        "employeeCount": "计薪人数",
+        "title": "工资表"
+      },
+      "/hrm/salary/month-record": {
+        "deptName": "部门",
+        "employeeName": "姓名",
+        "jobNumber": "工号",
+        "postName": "岗位"
+      },
+      "/hrm/salary/slip": {
+        "createTime": "发放时间",
+        "creatorName": "创建人",
+        "employeeCount": "工资表总人数",
+        "readCount": "已查看人数",
+        "sendEmployeeCount": "发放人数"
+      },
+      "/im/channel/list": {
+        "avatar": "头像",
+        "code": "编码",
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/im/channel/material": {
+        "channelName": "频道",
+        "coverUrl": "封面",
+        "createTime": "创建时间",
+        "id": "编号",
+        "summary": "摘要",
+        "title": "标题",
+        "type": "内容类型"
+      },
+      "/im/channel/message": {
+        "channelName": "频道",
+        "id": "编号",
+        "materialCoverUrl": "封面",
+        "materialTitle": "素材标题",
+        "receiverUserIds": "接收人",
+        "sendTime": "发送时间"
+      },
+      "/im/face/pack": {
+        "createTime": "创建时间",
+        "icon": "封面",
+        "id": "编号",
+        "name": "名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/im/face/user-item": {
+        "createTime": "添加时间",
+        "id": "编号",
+        "name": "表情名",
+        "url": "表情图"
+      },
+      "/im/group/list": {
+        "banned": "封禁状态",
+        "createTime": "创建时间",
+        "id": "编号",
+        "memberCount": "成员数",
+        "mutedAll": "全群禁言",
+        "name": "群名称",
+        "status": "群状态"
+      },
+      "/im/group/message": {
+        "id": "编号",
+        "receiptStatus": "回执",
+        "sendTime": "发送时间",
+        "status": "状态",
+        "type": "类型"
+      },
+      "/im/group/request": {
+        "addSource": "加入来源",
+        "applyContent": "申请理由",
+        "createTime": "创建时间",
+        "handleContent": "处理理由",
+        "handleResult": "处理结果",
+        "handleTime": "处理时间",
+        "id": "编号"
+      },
+      "/im/private/friend": {
+        "addSource": "添加来源",
+        "addTime": "添加时间",
+        "blocked": "拉黑",
+        "deleteTime": "删除时间",
+        "displayName": "备注",
+        "id": "编号",
+        "pinned": "置顶",
+        "silent": "免打扰",
+        "status": "状态"
+      },
+      "/im/private/friend-request": {
+        "addSource": "添加来源",
+        "applyContent": "申请理由",
+        "createTime": "创建时间",
+        "displayName": "备注",
+        "handleContent": "处理理由",
+        "handleResult": "处理结果",
+        "handleTime": "处理时间",
+        "id": "编号"
+      },
+      "/im/private/message": {
+        "id": "编号",
+        "receiptStatus": "回执",
+        "sendTime": "发送时间",
+        "status": "状态",
+        "type": "类型"
+      },
+      "/im/rtc": {
+        "conversationType": "会话类型",
+        "endReason": "结束原因",
+        "id": "编号",
+        "mediaType": "媒体类型",
+        "startTime": "发起时间",
+        "status": "通话状态"
+      },
+      "/im/sensitive-word": {
+        "createTime": "创建时间",
+        "creatorName": "创建人",
+        "id": "编号",
+        "status": "状态",
+        "word": "敏感词"
+      },
+      "/infra/codegen": {
+        "className": "实体",
+        "tableComment": "表描述",
+        "tableName": "表名称"
+      },
+      "/infra/config": {
+        "category": "参数分类",
+        "createTime": "创建时间",
+        "id": "参数主键",
+        "key": "参数键名",
+        "name": "参数名称",
+        "remark": "备注",
+        "type": "系统内置",
+        "value": "参数键值",
+        "visible": "是否可见"
+      },
+      "/infra/data-source-config": {
+        "createTime": "创建时间",
+        "id": "主键编号",
+        "name": "数据源名称",
+        "url": "数据源连接",
+        "username": "用户名"
+      },
+      "/infra/demo/demo01-contact": {
+        "avatar": "头像",
+        "birthday": "出生年",
+        "createTime": "创建时间",
+        "description": "简介",
+        "id": "编号",
+        "name": "名字",
+        "sex": "性别"
+      },
+      "/infra/demo/demo02-category": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "名字"
+      },
+      "/infra/demo/demo03-erp": {
+        "birthday": "出生日期",
+        "createTime": "创建时间",
+        "description": "简介",
+        "id": "编号",
+        "name": "名字",
+        "sex": "性别"
+      },
+      "/infra/demo/demo03-inner": {
+        "birthday": "出生日期",
+        "createTime": "创建时间",
+        "description": "简介",
+        "id": "编号",
+        "name": "名字",
+        "sex": "性别"
+      },
+      "/infra/demo/demo03-normal": {
+        "birthday": "出生日期",
+        "createTime": "创建时间",
+        "description": "简介",
+        "id": "编号",
+        "name": "名字",
+        "sex": "性别"
+      },
+      "/infra/file/file": {
+        "createTime": "上传时间",
+        "name": "文件名",
+        "path": "文件路径",
+        "size": "文件大小",
+        "type": "文件类型"
+      },
+      "/infra/file/file-config": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "配置名",
+        "primary": "主配置",
+        "remark": "备注",
+        "storage": "存储器"
+      },
+      "/infra/job": {
+        "cronExpression": "CRON 表达式",
+        "handlerName": "处理器的名字",
+        "handlerParam": "处理器的参数",
+        "id": "任务编号",
+        "name": "任务名称",
+        "status": "任务状态"
+      },
+      "/infra/log/api-access-log": {
+        "applicationName": "应用名",
+        "beginTime": "请求时间",
+        "duration": "执行时长",
+        "id": "日志编号",
+        "operateModule": "操作模块",
+        "operateName": "操作名",
+        "operateType": "操作类型",
+        "requestMethod": "请求方法",
+        "requestUrl": "请求地址",
+        "status": "操作结果",
+        "userId": "用户编号",
+        "userType": "用户类型"
+      },
+      "/infra/log/api-error-log": {
+        "applicationName": "应用名",
+        "exceptionName": "异常名",
+        "exceptionTime": "异常发生时间",
+        "id": "日志编号",
+        "processStatus": "处理状态",
+        "requestMethod": "请求方法",
+        "requestUrl": "请求地址",
+        "userId": "用户编号",
+        "userType": "用户类型"
+      },
+      "/iot/alert/config": {
+        "createTime": "创建时间",
+        "description": "配置描述",
+        "id": "配置编号",
+        "level": "告警级别",
+        "name": "配置名称",
+        "receiveTypes": "接收类型",
+        "receiveUserNames": "接收人",
+        "sceneRuleIds": "关联场景联动规则",
+        "status": "配置状态"
+      },
+      "/iot/alert/record": {
+        "configLevel": "告警级别",
+        "configName": "告警名称",
+        "createTime": "创建时间",
+        "deviceId": "设备名称",
+        "deviceMessage": "触发的设备消息",
+        "id": "记录编号",
+        "processRemark": "处理结果",
+        "processStatus": "是否处理",
+        "productId": "产品名称"
+      },
+      "/iot/device/device": {
+        "deviceName": "DeviceName",
+        "deviceType": "设备类型",
+        "groupId": "所属分组",
+        "nickname": "备注名称",
+        "onlineTime": "最后上线时间",
+        "productId": "所属产品",
+        "state": "设备状态"
+      },
+      "/iot/device/device-group": {
+        "createTime": "创建时间",
+        "description": "分组描述",
+        "deviceCount": "设备数量",
+        "id": "分组 ID",
+        "name": "分组名字",
+        "status": "分组状态"
+      },
+      "/iot/device/product": {
+        "categoryName": "品类",
+        "createTime": "创建时间",
+        "deviceType": "设备类型",
+        "icon": "产品图标",
+        "id": "ID",
+        "picture": "产品图片",
+        "productKey": "ProductKey"
+      },
+      "/iot/device/product-category": {
+        "createTime": "创建时间",
+        "description": "描述",
+        "id": "ID",
+        "name": "名字",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/iot/operation/ota/firmware": {
+        "createTime": "创建时间",
+        "description": "固件版本",
+        "fileUrl": "固件文件",
+        "id": "固件编号",
+        "name": "固件名称",
+        "productId": "所属产品",
+        "version": "版本号"
+      },
+      "/iot/rule/scene": {
+        "createTime": "创建时间",
+        "lastTriggerTime": "最近触发",
+        "name": "规则名称"
+      },
+      "/mall/product/brand": {
+        "createTime": "创建时间",
+        "name": "品牌名称",
+        "picUrl": "品牌图片",
+        "sort": "品牌排序",
+        "status": "开启状态"
+      },
+      "/mall/product/category": {
+        "createTime": "创建时间",
+        "name": "名称",
+        "picUrl": "分类图标",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/mall/product/comment": {
+        "benefitScores": "服务评分",
+        "content": "评论内容",
+        "createTime": "评论时间",
+        "descriptionScores": "商品评分",
+        "id": "评论编号",
+        "replyContent": "回复内容",
+        "userNickname": "用户名称"
+      },
+      "/mall/product/property": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "属性名称",
+        "remark": "备注"
+      },
+      "/mall/product/spu": {
+        "createTime": "创建时间",
+        "id": "商品编号",
+        "price": "价格",
+        "salesCount": "销量",
+        "sort": "排序",
+        "stock": "库存"
+      },
+      "/mall/promotion/bargain/activity": {
+        "bargainFirstPrice": "起始价格",
+        "bargainMinPrice": "砍价底价",
+        "createTime": "创建时间",
+        "helpUserCount": "助力人数",
+        "id": "活动编号",
+        "name": "活动名称",
+        "recordSuccessUserCount": "成功砍价人数",
+        "recordUserCount": "总砍价人数",
+        "status": "活动状态",
+        "stock": "库存",
+        "totalStock": "总库存"
+      },
+      "/mall/promotion/bargain/record": {
+        "bargainPrice": "当前价",
+        "createTime": "发起时间",
+        "endTime": "结束时间",
+        "helpCount": "剩余砍价次数",
+        "id": "编号",
+        "orderId": "订单编号",
+        "status": "砍价状态"
+      },
+      "/mall/promotion/combination/acitivity": {
+        "createTime": "创建时间",
+        "groupCount": "开团组数",
+        "groupSuccessCount": "成团组数",
+        "id": "活动编号",
+        "marketPrice": "原价",
+        "name": "活动名称",
+        "recordCount": "购买次数",
+        "seckillPrice": "拼团价",
+        "status": "活动状态"
+      },
+      "/mall/promotion/combination/record": {
+        "avatar": "头像",
+        "createTime": "参团时间",
+        "endTime": "结束时间",
+        "headId": "开团团长",
+        "id": "编号",
+        "nickname": "昵称",
+        "startTime": "开团时间",
+        "status": "拼团状态",
+        "type": "拼团商品",
+        "userCount": "参与人数",
+        "userSize": "几人团"
+      },
+      "/mall/promotion/content/article": {
+        "author": "作者",
+        "browseCount": "浏览量",
+        "categoryId": "分类",
+        "createTime": "发布时间",
+        "id": "ID",
+        "introduction": "文章简介",
+        "picUrl": "封面",
+        "sort": "排序",
+        "status": "状态",
+        "title": "标题"
+      },
+      "/mall/promotion/content/article/category": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "分类名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/mall/promotion/content/banner": {
+        "createTime": "创建时间",
+        "memo": "描述",
+        "picUrl": "图片",
+        "position": "定位",
+        "sort": "排序",
+        "status": "状态",
+        "title": "Banner标题",
+        "url": "跳转地址"
+      },
+      "/mall/promotion/coupon/list": {
+        "createTime": "领取时间",
+        "discount": "优惠",
+        "discountType": "类型",
+        "name": "优惠券名称",
+        "nickname": "会员昵称",
+        "status": "状态",
+        "takeType": "领取方式",
+        "useTime": "使用时间"
+      },
+      "/mall/promotion/coupon/template": {
+        "createTime": "创建时间",
+        "discount": "优惠",
+        "name": "优惠券名称",
+        "productScope": "类型",
+        "status": "状态",
+        "takeLimitCount": "领取上限",
+        "takeType": "领取方式",
+        "validityType": "使用时间"
+      },
+      "/mall/promotion/diy-template/diy-page": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "页面名称",
+        "previewPicUrls": "预览图",
+        "remark": "备注"
+      },
+      "/mall/promotion/diy-template/diy-template": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "模板名称",
+        "previewPicUrls": "预览图",
+        "remark": "备注",
+        "used": "是否使用"
+      },
+      "/mall/promotion/point-activity": {
+        "createTime": "创建时间",
+        "id": "活动编号",
+        "marketPrice": "原价",
+        "redeemedQuantity": "已兑换数量",
+        "status": "活动状态",
+        "stock": "库存",
+        "totalStock": "总库存"
+      },
+      "/mall/promotion/seckill/activity": {
+        "configIds": "秒杀时段",
+        "createTime": "创建时间",
+        "id": "活动编号",
+        "marketPrice": "原价",
+        "name": "活动名称",
+        "seckillPrice": "秒杀价",
+        "status": "活动状态",
+        "stock": "库存",
+        "totalStock": "总库存"
+      },
+      "/mall/promotion/seckill/config": {
+        "createTime": "创建时间",
+        "endTime": "结束时间点",
+        "name": "秒杀时段名称",
+        "sliderPicUrls": "秒杀轮播图",
+        "startTime": "开始时间点",
+        "status": "活动状态"
+      },
+      "/mall/promotion/youhui/discount-activity": {
+        "createTime": "创建时间",
+        "id": "活动编号",
+        "name": "活动名称",
+        "status": "活动状态"
+      },
+      "/mall/promotion/youhui/reward-activity": {
+        "createTime": "创建时间",
+        "endTime": "活动结束时间",
+        "name": "活动名称",
+        "productScope": "活动范围",
+        "startTime": "活动开始时间",
+        "status": "状态"
+      },
+      "/mall/statistics/member": {
+        "orderCreateUserCount": "订单创建数量",
+        "orderPayPrice": "订单支付金额",
+        "orderPayUserCount": "订单支付数量",
+        "userCount": "会员数量"
+      },
+      "/mall/trade/after-sale": {
+        "createTime": "申请时间",
+        "no": "退款编号",
+        "orderNo": "订单编号",
+        "refundPrice": "订单金额",
+        "spuName": "商品信息"
+      },
+      "/mall/trade/brokerage/brokerage-record": {
+        "bizId": "业务编号",
+        "bizType": "业务类型",
+        "createTime": "创建时间",
+        "description": "说明",
+        "id": "编号",
+        "price": "金额",
+        "status": "状态",
+        "title": "标题",
+        "unfreezeTime": "解冻时间",
+        "userAvatar": "头像",
+        "userId": "用户编号",
+        "userNickname": "昵称"
+      },
+      "/mall/trade/brokerage/brokerage-user": {
+        "avatar": "头像",
+        "bindUserId": "上级推广员编号",
+        "bindUserTime": "推广员绑定时间",
+        "brokerageEnabled": "推广资格",
+        "brokerageOrderCount": "推广订单数量",
+        "brokerageOrderPrice": "推广订单金额",
+        "brokerageTime": "成为推广员时间",
+        "brokerageUserCount": "推广人数",
+        "frozenPrice": "冻结中佣金",
+        "id": "用户编号",
+        "nickname": "昵称",
+        "price": "未提现金额",
+        "withdrawCount": "已提现次数",
+        "withdrawPrice": "已提现金额"
+      },
+      "/mall/trade/brokerage/brokerage-withdraw": {
+        "createTime": "申请时间",
+        "id": "编号",
+        "price": "提现金额",
+        "remark": "备注",
+        "status": "状态",
+        "type": "提现方式"
+      },
+      "/mall/trade/delivery/express/express": {
+        "code": "公司编码",
+        "createTime": "创建时间",
+        "logo": "公司 logo ",
+        "name": "公司名称",
+        "sort": "排序",
+        "status": "开启状态"
+      },
+      "/mall/trade/delivery/express/express-template": {
+        "chargeMode": "计费方式",
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "模板名称",
+        "sort": "排序"
+      },
+      "/mall/trade/delivery/pick-up-store/pick-up-order": {
+        "createTime": "下单时间",
+        "no": "订单号",
+        "payPrice": "实付金额(元)",
+        "payStatus": "支付状态",
+        "pickUpStoreId": "核销门店",
+        "spuName": "商品信息",
+        "status": "订单状态",
+        "storeStaffName": "核销员"
+      },
+      "/mall/trade/delivery/pick-up-store/pick-up-store": {
+        "createTime": "创建时间",
+        "detailAddress": "地址",
+        "id": "编号",
+        "logo": "门店 logo",
+        "name": "门店名称",
+        "phone": "门店手机",
+        "status": "开启状态"
+      },
+      "/member/group": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "名称",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/member/level": {
+        "backgroundUrl": "等级背景图",
+        "createTime": "创建时间",
+        "discountPercent": "享受折扣(%)",
+        "experience": "升级经验",
+        "icon": "等级图标",
+        "id": "编号",
+        "level": "等级",
+        "name": "等级名称",
+        "status": "状态"
+      },
+      "/member/record": {
+        "bizId": "业务编码",
+        "bizType": "业务类型",
+        "createTime": "获得时间",
+        "description": "描述",
+        "id": "编号",
+        "nickname": "用户",
+        "point": "获得积分",
+        "title": "标题",
+        "totalPoint": "总积分"
+      },
+      "/member/signin/config": {
+        "day": "签到天数",
+        "experience": "奖励经验",
+        "point": "奖励积分",
+        "status": "状态"
+      },
+      "/member/signin/record": {
+        "createTime": "签到时间",
+        "day": "签到天数",
+        "id": "编号",
+        "nickname": "签到用户",
+        "point": "获得积分"
+      },
+      "/member/tag": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "标签名称"
+      },
+      "/member/user": {
+        "avatar": "头像",
+        "createTime": "注册时间",
+        "email": "邮箱",
+        "groupName": "分组",
+        "id": "用户编号",
+        "levelName": "等级",
+        "loginDate": "登录时间",
+        "mobile": "手机号",
+        "nickname": "昵称",
+        "point": "积分",
+        "status": "状态",
+        "tagNames": "用户标签"
+      },
+      "/mes/cal/plan": {
+        "calendarType": "班组类型",
+        "code": "计划编码",
+        "createTime": "创建时间",
+        "endDate": "结束日期",
+        "name": "计划名称",
+        "shiftMethod": "倒班方式",
+        "shiftType": "轮班方式",
+        "startDate": "开始日期",
+        "status": "单据状态"
+      },
+      "/mes/cal/team": {
+        "calendarType": "班组类型",
+        "code": "班组编码",
+        "createTime": "创建时间",
+        "name": "班组名称",
+        "remark": "备注"
+      },
+      "/mes/dv/check-record": {
+        "checkTime": "点检时间",
+        "machineryBrand": "品牌",
+        "machineryCode": "设备编码",
+        "machineryName": "设备名称",
+        "machinerySpecification": "规格型号",
+        "nickname": "点检人",
+        "planCode": "计划编码",
+        "planName": "计划名称",
+        "status": "状态"
+      },
+      "/mes/dv/checkplan": {
+        "code": "方案编码",
+        "createTime": "创建时间",
+        "cycleCount": "周期数量",
+        "cycleType": "周期类型",
+        "endDate": "结束日期",
+        "name": "方案名称",
+        "startDate": "开始日期",
+        "status": "状态",
+        "type": "方案类型"
+      },
+      "/mes/dv/machinery": {
+        "brand": "品牌",
+        "code": "设备编码",
+        "createTime": "创建时间",
+        "machineryTypeName": "设备类型",
+        "name": "设备名称",
+        "specification": "规格型号",
+        "status": "设备状态",
+        "workshopName": "所属车间"
+      },
+      "/mes/dv/machinery/type": {
+        "code": "设备类型编码",
+        "createTime": "创建时间",
+        "name": "设备类型名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/mes/dv/mainten-record": {
+        "machineryBrand": "品牌",
+        "machineryCode": "设备编码",
+        "machineryName": "设备名称",
+        "machinerySpecification": "规格型号",
+        "maintenTime": "保养时间",
+        "nickname": "保养人",
+        "planName": "计划名称",
+        "status": "状态"
+      },
+      "/mes/dv/repair": {
+        "acceptedUserNickname": "维修人员",
+        "code": "维修单编号",
+        "confirmDate": "验收日期",
+        "confirmUserNickname": "验收人员",
+        "finishDate": "维修完成日期",
+        "machineryCode": "设备编码",
+        "machineryName": "设备名称",
+        "name": "维修单名称",
+        "requireDate": "报修日期",
+        "result": "维修结果",
+        "status": "单据状态"
+      },
+      "/mes/dv/subject": {
+        "code": "项目编码",
+        "content": "项目内容",
+        "createTime": "创建时间",
+        "name": "项目名称",
+        "standard": "标准",
+        "status": "状态",
+        "type": "项目类型"
+      },
+      "/mes/md/auto-code": {
+        "code": "规则编码",
+        "createTime": "创建时间",
+        "description": "规则描述",
+        "maxLength": "最大长度",
+        "name": "规则名称",
+        "padded": "是否补齐",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/mes/md/client": {
+        "code": "客户编码",
+        "contact1Name": "联系人1",
+        "contact1Telephone": "联系人1-电话",
+        "createTime": "创建时间",
+        "name": "客户名称",
+        "nickname": "客户简称",
+        "status": "状态",
+        "telephone": "客户电话",
+        "type": "客户类型"
+      },
+      "/mes/md/item": {
+        "code": "物料编码",
+        "createTime": "创建时间",
+        "itemOrProduct": "物料/产品",
+        "itemTypeName": "物料分类",
+        "name": "物料名称",
+        "safeStockFlag": "安全库存",
+        "specification": "规格型号",
+        "status": "状态",
+        "unitMeasureName": "单位"
+      },
+      "/mes/md/item-type": {
+        "code": "分类编码",
+        "createTime": "创建时间",
+        "itemOrProduct": "物料/产品",
+        "name": "分类名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/mes/md/unit-measure": {
+        "changeRate": "与主单位换算比例",
+        "code": "单位编码",
+        "createTime": "创建时间",
+        "name": "单位名称",
+        "primaryFlag": "是否主单位",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/mes/md/vendor": {
+        "code": "供应商编码",
+        "level": "供应商等级",
+        "name": "供应商名称",
+        "nickname": "供应商简称",
+        "remark": "备注",
+        "score": "供应商评分",
+        "status": "状态",
+        "telephone": "供应商电话"
+      },
+      "/mes/md/workstation": {
+        "address": "工作站地点",
+        "code": "工作站编码",
+        "createTime": "创建时间",
+        "name": "工作站名称",
+        "processName": "所属工序",
+        "status": "状态",
+        "workshopName": "所在车间"
+      },
+      "/mes/md/workstation/workshop": {
+        "area": "面积",
+        "chargeUserName": "负责人",
+        "code": "车间编码",
+        "name": "车间名称",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/mes/pro/andon": {
+        "createTime": "发起时间",
+        "handleTime": "处理时间",
+        "handlerUserNickname": "处理人",
+        "level": "级别",
+        "processName": "工序名称",
+        "reason": "呼叫原因",
+        "status": "处置状态",
+        "userNickname": "发起人",
+        "workOrderCode": "工单编码",
+        "workstationCode": "工作站编码",
+        "workstationName": "工作站名称"
+      },
+      "/mes/pro/card": {
+        "batchCode": "批次号",
+        "code": "流转卡编码",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "specification": "规格型号",
+        "status": "单据状态",
+        "transferedQuantity": "流转数量",
+        "unitMeasureName": "单位",
+        "workOrderCode": "生产工单编号",
+        "workOrderName": "工单名称"
+      },
+      "/mes/pro/feedback": {
+        "approveUserNickname": "审核人",
+        "code": "报工单号",
+        "feedbackQuantity": "报工数量",
+        "feedbackTime": "报工时间",
+        "feedbackUserNickname": "报工人",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "itemSpecification": "规格型号",
+        "processName": "工序",
+        "status": "状态",
+        "type": "报工类型",
+        "unitMeasureName": "单位",
+        "workOrderCode": "生产工单编码",
+        "workstationName": "工作站"
+      },
+      "/mes/pro/process": {
+        "code": "工序编码",
+        "createTime": "创建时间",
+        "name": "工序名称",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/mes/pro/route": {
+        "code": "路线编码",
+        "createTime": "创建时间",
+        "description": "路线说明",
+        "name": "路线名称",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/mes/pro/task": {
+        "clientCode": "客户编码",
+        "clientName": "客户名称",
+        "code": "工单编码",
+        "name": "工单名称",
+        "orderSourceCode": "来源单据编号",
+        "orderSourceType": "工单来源",
+        "productCode": "产品编码",
+        "productName": "产品名称",
+        "productSpecification": "规格型号",
+        "quantity": "工单数量",
+        "quantityChanged": "调整数量",
+        "quantityProduced": "已生产数量",
+        "requestDate": "需求日期",
+        "status": "排产状态",
+        "unitMeasureName": "单位"
+      },
+      "/mes/pro/work-order": {
+        "clientCode": "客户编码",
+        "clientName": "客户名称",
+        "code": "工单编码",
+        "createTime": "创建时间",
+        "name": "工单名称",
+        "orderSourceCode": "来源单据编号",
+        "orderSourceType": "工单来源",
+        "productCode": "产品编码",
+        "productName": "产品名称",
+        "productSpecification": "规格型号",
+        "quantity": "工单数量",
+        "quantityProduced": "已生产数量",
+        "requestDate": "需求日期",
+        "status": "工单状态",
+        "type": "工单类型",
+        "unitMeasureName": "单位"
+      },
+      "/mes/pro/workrecord": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "type": "操作类型",
+        "userNickname": "用户",
+        "workstationCode": "工作站编码",
+        "workstationName": "工作站名称"
+      },
+      "/mes/qc/batch-trace": {
+        "clientCode": "客户编码",
+        "clientName": "客户名称",
+        "code": "批次编号",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "itemSpecification": "规格型号",
+        "purchaseOrderCode": "采购订单编号",
+        "salesOrderCode": "销售订单编号",
+        "unitName": "单位",
+        "vendorCode": "供应商编码",
+        "vendorName": "供应商名称"
+      },
+      "/mes/qc/defect": {
+        "code": "缺陷编码",
+        "createTime": "创建时间",
+        "level": "缺陷等级",
+        "name": "缺陷描述",
+        "remark": "备注",
+        "type": "检测项类型"
+      },
+      "/mes/qc/indicator": {
+        "code": "检测项编码",
+        "createTime": "创建时间",
+        "name": "检测项名称",
+        "remark": "备注",
+        "resultType": "结果值类型",
+        "tool": "检测工具",
+        "type": "检测项类型"
+      },
+      "/mes/qc/ipqc": {
+        "checkQuantity": "检测数量",
+        "checkResult": "检测结果",
+        "code": "检验单编号",
+        "inspectDate": "检测日期",
+        "inspectorNickname": "检测人员",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "itemSpecification": "规格型号",
+        "name": "检验单名称",
+        "status": "单据状态",
+        "type": "检验类型",
+        "unitName": "单位",
+        "workOrderCode": "生产工单编号"
+      },
+      "/mes/qc/iqc": {
+        "checkQuantity": "检测数量",
+        "checkResult": "检测结果",
+        "code": "来料检验单编号",
+        "inspectDate": "检测日期",
+        "inspectorNickname": "检测人员",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "name": "来料检验单名称",
+        "receiveDate": "来料日期",
+        "receivedQuantity": "接收数量",
+        "status": "单据状态",
+        "unqualifiedQuantity": "不合格数",
+        "vendorBatch": "供应商批次号",
+        "vendorNickname": "供应商简称"
+      },
+      "/mes/qc/oqc": {
+        "batchCode": "批次号",
+        "checkQuantity": "检测数量",
+        "checkResult": "检测结果",
+        "clientNickname": "客户名称",
+        "code": "检验单编号",
+        "inspectDate": "检测日期",
+        "inspectorNickname": "检测人员",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "itemSpecification": "规格型号",
+        "name": "检验单名称",
+        "outDate": "出货日期",
+        "outQuantity": "发货数量",
+        "status": "单据状态",
+        "unitName": "单位",
+        "unqualifiedQuantity": "不合格数"
+      },
+      "/mes/qc/pending-inspect": {
+        "itemCode": "物料编码",
+        "itemName": "物料名称",
+        "qcType": "检验类型",
+        "quantity": "待检数量",
+        "sourceDocCode": "来源单据编号",
+        "sourceDocType": "来源单据类型",
+        "specification": "规格型号",
+        "unitName": "单位"
+      },
+      "/mes/qc/rqc": {
+        "batchCode": "批次号",
+        "checkResult": "检测结果",
+        "code": "检验单编号",
+        "inspectDate": "检测日期",
+        "inspectorNickname": "检测人员",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "itemSpecification": "规格型号",
+        "name": "检验单名称",
+        "sourceDocCode": "来源单据编码",
+        "sourceDocType": "来源单据类型",
+        "status": "单据状态",
+        "unitName": "单位"
+      },
+      "/mes/qc/template": {
+        "code": "方案编号",
+        "createTime": "创建时间",
+        "name": "方案名称",
+        "remark": "备注",
+        "status": "状态",
+        "types": "检测种类"
+      },
+      "/mes/tm/tool": {
+        "availableQuantity": "可用数量",
+        "brand": "品牌",
+        "code": "工具编码",
+        "createTime": "创建时间",
+        "maintenType": "保养维护类型",
+        "name": "工具名称",
+        "quantity": "库存数量",
+        "specification": "型号规格",
+        "status": "状态",
+        "toolTypeName": "工具类型"
+      },
+      "/mes/tm/tool/type": {
+        "code": "类型编码",
+        "codeFlag": "是否编码管理",
+        "createTime": "创建时间",
+        "maintenPeriod": "保养周期",
+        "maintenType": "保养维护类型",
+        "name": "类型名称",
+        "remark": "备注"
+      },
+      "/mes/wm/arrival-notice": {
+        "arrivalDate": "到货日期",
+        "code": "通知单编号",
+        "contactName": "联系人",
+        "contactTelephone": "联系方式",
+        "name": "通知单名称",
+        "purchaseOrderCode": "采购订单编号",
+        "status": "单据状态",
+        "vendorName": "供应商名称"
+      },
+      "/mes/wm/barcode": {
+        "bizCode": "业务编码",
+        "bizName": "业务名称",
+        "bizType": "业务类型",
+        "content": "条码内容",
+        "format": "条码格式",
+        "status": "状态"
+      },
+      "/mes/wm/item-receipt": {
+        "code": "入库单编号",
+        "name": "入库单名称",
+        "purchaseOrderCode": "采购订单号",
+        "receiptDate": "入库日期",
+        "status": "单据状态",
+        "vendorName": "供应商名称"
+      },
+      "/mes/wm/material-stock": {
+        "areaName": "库位",
+        "batchCode": "批次号",
+        "frozen": "冻结",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "locationName": "库区",
+        "quantity": "在库数量",
+        "receiptTime": "入库日期",
+        "specification": "规格型号",
+        "unitMeasureName": "单位",
+        "warehouseName": "仓库"
+      },
+      "/mes/wm/misc-issue": {
+        "code": "出库单编号",
+        "issueDate": "出库日期",
+        "name": "出库单名称",
+        "sourceDocCode": "来源单据编号",
+        "sourceDocType": "来源单据类型",
+        "status": "单据状态",
+        "type": "业务类型"
+      },
+      "/mes/wm/misc-receipt": {
+        "code": "入库单编号",
+        "name": "入库单名称",
+        "receiptDate": "入库日期",
+        "sourceDocCode": "来源单据编号",
+        "sourceDocType": "来源单据类型",
+        "status": "单据状态",
+        "type": "杂项类型"
+      },
+      "/mes/wm/outsource-issue": {
+        "code": "发料单编号",
+        "issueDate": "发料日期",
+        "name": "发料单名称",
+        "status": "单据状态",
+        "vendorName": "供应商名称",
+        "workOrderCode": "生产工单号"
+      },
+      "/mes/wm/outsource-receipt": {
+        "code": "入库单编号",
+        "name": "入库单名称",
+        "receiptDate": "入库日期",
+        "status": "单据状态",
+        "vendorName": "供应商名称",
+        "workOrderCode": "外协工单号"
+      },
+      "/mes/wm/packages": {
+        "clientCode": "客户编码",
+        "clientName": "客户名称",
+        "code": "装箱单编号",
+        "grossWeight": "毛重",
+        "height": "箱高度",
+        "inspectorName": "检查员",
+        "invoiceCode": "发票编号",
+        "length": "箱长度",
+        "netWeight": "净重",
+        "packageDate": "装箱日期",
+        "salesOrderCode": "销售订单编号",
+        "sizeUnitName": "尺寸单位",
+        "status": "单据状态",
+        "weightUnitName": "重量单位",
+        "width": "箱宽度"
+      },
+      "/mes/wm/product-issue": {
+        "clientCode": "客户编号",
+        "clientName": "客户名称",
+        "code": "领料单编号",
+        "name": "领料单名称",
+        "requiredTime": "需求时间",
+        "status": "单据状态",
+        "workOrderCode": "生产工单",
+        "workstationName": "工作站"
+      },
+      "/mes/wm/product-receipt": {
+        "code": "入库单编号",
+        "itemCode": "产品物料编码",
+        "itemName": "产品物料名称",
+        "name": "入库单名称",
+        "receiptDate": "入库日期",
+        "specification": "规格型号",
+        "status": "单据状态",
+        "unitMeasureName": "计量单位",
+        "workOrderCode": "生产工单"
+      },
+      "/mes/wm/product-sales": {
+        "carrier": "承运商",
+        "clientCode": "客户编码",
+        "clientName": "客户名称",
+        "code": "出库单编号",
+        "contactAddress": "收货地址",
+        "contactName": "收货人",
+        "contactTelephone": "联系方式",
+        "name": "出库单名称",
+        "noticeCode": "发货通知单号",
+        "salesDate": "出库日期",
+        "salesOrderCode": "销售订单编号",
+        "shippingNumber": "运输单号",
+        "status": "单据状态"
+      },
+      "/mes/wm/return-issue": {
+        "code": "退料单编号",
+        "name": "退料单名称",
+        "returnDate": "退料日期",
+        "status": "单据状态",
+        "type": "退料类型",
+        "workOrderCode": "生产工单",
+        "workstationName": "工作站"
+      },
+      "/mes/wm/return-sales": {
+        "clientCode": "客户编码",
+        "clientName": "客户名称",
+        "code": "退货单编号",
+        "name": "退货单名称",
+        "returnDate": "退货日期",
+        "returnReason": "退货原因",
+        "salesOrderCode": "销售订单号",
+        "status": "单据状态"
+      },
+      "/mes/wm/return-vendor": {
+        "code": "退货单编号",
+        "name": "退货单名称",
+        "purchaseOrderCode": "采购订单号",
+        "returnDate": "退货日期",
+        "status": "单据状态",
+        "vendorCode": "供应商编码",
+        "vendorName": "供应商名称"
+      },
+      "/mes/wm/sales-notice": {
+        "clientName": "客户名称",
+        "code": "通知单编号",
+        "name": "通知单名称",
+        "recipientAddress": "收货地址",
+        "recipientName": "收货人",
+        "recipientTelephone": "联系方式",
+        "salesDate": "发货日期",
+        "salesOrderCode": "销售订单编号",
+        "status": "单据状态"
+      },
+      "/mes/wm/sn": {
+        "batchCode": "批次号",
+        "count": "SN 码数量",
+        "createTime": "生成时间",
+        "itemCode": "物料编码",
+        "itemName": "物料名称",
+        "specification": "规格型号",
+        "unitName": "单位"
+      },
+      "/mes/wm/stock-taking/plan": {
+        "blindFlag": "是否盲盘",
+        "code": "方案编码",
+        "endTime": "结束时间",
+        "frozen": "是否冻结库存",
+        "name": "方案名称",
+        "startTime": "开始时间",
+        "status": "状态",
+        "type": "盘点类型"
+      },
+      "/mes/wm/stock-taking/task": {
+        "code": "任务编码",
+        "name": "任务名称",
+        "planName": "盘点方案",
+        "status": "单据状态",
+        "takingDate": "盘点日期",
+        "type": "盘点类型",
+        "userNickname": "盘点人"
+      },
+      "/mes/wm/transfer": {
+        "code": "转移单编号",
+        "deliveryFlag": "是否配送",
+        "name": "转移单名称",
+        "status": "单据状态",
+        "transferDate": "转移日期",
+        "type": "转移单类型"
+      },
+      "/mes/wm/warehouse": {
+        "address": "仓库地址",
+        "area": "面积（㎡）",
+        "chargeUserId": "负责人",
+        "code": "仓库编码",
+        "createTime": "创建时间",
+        "frozen": "冻结",
+        "name": "仓库名称",
+        "remark": "备注"
+      },
+      "/mp/account": {
+        "account": "微信号",
+        "name": "名称",
+        "qrCodeUrl": "二维码",
+        "remark": "备注"
+      },
+      "/mp/message-template": {
+        "content": "模板内容",
+        "createTime": "创建时间",
+        "deputyIndustry": "二级行业",
+        "example": "模板示例",
+        "primaryIndustry": "一级行业",
+        "templateId": "公众号模板 ID",
+        "title": "标题"
+      },
+      "/mp/tag": {
+        "count": "粉丝数",
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "标签名称"
+      },
+      "/mp/user": {
+        "headImageUrl": "用户头像",
+        "id": "编号",
+        "nickname": "昵称",
+        "openid": "用户标识",
+        "remark": "备注",
+        "subscribeStatus": "订阅状态",
+        "subscribeTime": "订阅时间",
+        "tagIds": "标签"
+      },
+      "/oa/announcement/list": {
+        "createTime": "发布时间",
+        "priority": "优先级",
+        "publisherDeptName": "所属部门",
+        "publisherUserName": "发布人",
+        "title": "公告标题",
+        "type": "类型"
+      },
+      "/oa/announcement/my": {
+        "createTime": "发布时间",
+        "priority": "优先级",
+        "publisherDeptName": "所属部门",
+        "publisherUserName": "发布人",
+        "title": "公告标题",
+        "type": "类型"
+      },
+      "/oa/attendance/list": {
+        "attendanceIp": "考勤 IP",
+        "attendanceTime": "考勤时间",
+        "deptName": "部门",
+        "remark": "备注",
+        "userName": "员工"
+      },
+      "/oa/attendance/my": {
+        "attendanceIp": "考勤 IP",
+        "attendanceTime": "考勤时间",
+        "remark": "备注"
+      },
+      "/oa/contact": {
+        "companyName": "公司名称",
+        "email": "邮箱",
+        "mobile": "手机号码",
+        "name": "姓名",
+        "ownerUserName": "创建人",
+        "sharerName": "分享人"
+      },
+      "/oa/discussion/list": {
+        "createTime": "发布时间",
+        "likeCount": "点赞",
+        "replyCount": "回复",
+        "title": "标题",
+        "type": "类型",
+        "userName": "发布人",
+        "visitCount": "浏览"
+      },
+      "/oa/discussion/manage": {
+        "createTime": "发布时间",
+        "likeCount": "点赞",
+        "replyCount": "回复",
+        "title": "标题",
+        "type": "类型",
+        "userName": "发布人",
+        "visitCount": "浏览"
+      },
+      "/oa/file": {
+        "createTime": "创建时间"
+      },
+      "/oa/mail/account": {
+        "mail": "邮箱"
+      },
+      "/oa/mail/provider": {
+        "name": "名称"
+      },
+      "/oa/meetingroom/booking": {
+        "createTime": "创建时间",
+        "creatorName": "申请人",
+        "deptName": "申请部门",
+        "endTime": "会议结束时间",
+        "moderatorName": "主持人",
+        "no": "单据编号",
+        "roomLocation": "会议室位置",
+        "roomName": "会议室名称",
+        "startTime": "会议开始时间",
+        "status": "单据状态",
+        "title": "会议主题",
+        "useStatus": "使用状态"
+      },
+      "/oa/meetingroom/room": {
+        "allowBooking": "允许预定",
+        "createTime": "创建时间",
+        "equipments": "会议室设备",
+        "location": "会议室位置",
+        "managerName": "负责人",
+        "managerPhone": "联系方式",
+        "name": "会议室名称",
+        "needApproval": "需审批",
+        "remark": "备注",
+        "seatCount": "坐席数",
+        "sort": "显示顺序",
+        "status": "可用状态",
+        "type": "会议室类型"
+      },
+      "/oa/note": {
+        "categoryName": "目录",
+        "createTime": "创建时间",
+        "creatorUserName": "创建人",
+        "title": "标题"
+      },
+      "/oa/officialdoc/receive": {
+        "createTime": "创建时间",
+        "documentNo": "来文字号",
+        "handlerName": "主办人",
+        "receiveDeptName": "收文部门",
+        "title": "公文标题"
+      },
+      "/oa/officialdoc/send": {
+        "createTime": "创建时间",
+        "documentNo": "发文字号",
+        "sendDeptName": "发文部门",
+        "title": "公文标题"
+      },
+      "/oa/officialdoc/template": {
+        "authorityName": "机关/公司名称",
+        "createTime": "创建时间",
+        "id": "ID",
+        "name": "模板名称",
+        "noPrefix": "字号前缀",
+        "sort": "排序"
+      },
+      "/oa/plan/list": {
+        "createTime": "发布时间",
+        "deptName": "部门",
+        "endTime": "结束时间",
+        "label": "标签",
+        "startTime": "开始时间",
+        "status": "状态",
+        "title": "计划标题",
+        "type": "类型",
+        "userName": "发布人"
+      },
+      "/oa/plan/report": {
+        "deptName": "部门",
+        "summary": "总结",
+        "userName": "成员"
+      },
+      "/oa/process/leave": {
+        "createTime": "申请时间",
+        "creatorName": "申请人"
+      },
+      "/oa/process/overtime": {
+        "createTime": "申请时间",
+        "creatorName": "申请人"
+      },
+      "/oa/process/regular": {
+        "createTime": "申请时间",
+        "creatorName": "申请人"
+      },
+      "/oa/process/reimbursement": {
+        "createTime": "申请时间",
+        "creatorName": "申请人"
+      },
+      "/oa/process/resign": {
+        "createTime": "申请时间",
+        "creatorName": "申请人"
+      },
+      "/oa/schedule/list": {
+        "createTime": "发布时间",
+        "creatorDeptName": "部门",
+        "creatorName": "发布人",
+        "endTime": "结束时间",
+        "startTime": "开始时间",
+        "title": "标题"
+      },
+      "/oa/seal/apply": {
+        "createTime": "创建时间",
+        "deptName": "申请部门",
+        "expectedReturnTime": "预计归还时间",
+        "expectedUseTime": "预计用印时间",
+        "keeperName": "保管人",
+        "reason": "用印事由",
+        "sealName": "印章",
+        "sealNo": "印章编号",
+        "userName": "申请人"
+      },
+      "/oa/seal/list": {
+        "createTime": "创建时间",
+        "deptName": "所属部门",
+        "disableTime": "停用日期",
+        "enableTime": "启用日期",
+        "keeperDeptName": "保管部门",
+        "keeperName": "保管人",
+        "no": "印章编号",
+        "purchaseTime": "购买日期",
+        "remark": "备注",
+        "sort": "显示顺序"
+      },
+      "/oa/supply/apply": {
+        "createTime": "创建时间",
+        "creatorName": "申请人",
+        "deptName": "申请部门",
+        "reason": "申请事由"
+      },
+      "/oa/supply/issue": {
+        "applyQuantity": "申请数量",
+        "creatorName": "申请人",
+        "deptName": "申请部门",
+        "issueTime": "发放时间",
+        "issueUserName": "发放人",
+        "issuedQuantity": "实发数量",
+        "itemName": "物品名称",
+        "model": "规格型号",
+        "no": "申请单号",
+        "returnedQuantity": "已归还",
+        "unit": "计量单位"
+      },
+      "/oa/supply/item": {
+        "createTime": "创建时间",
+        "deptName": "所属部门",
+        "minStockQuantity": "最低库存",
+        "model": "规格型号",
+        "name": "物品名称",
+        "no": "物品编码",
+        "referencePrice": "参考单价",
+        "unit": "计量单位"
+      },
+      "/oa/task/list": {
+        "publishTime": "发布时间",
+        "publisherDeptName": "发布部门",
+        "publisherUserName": "发布人",
+        "title": "任务标题",
+        "type": "类型"
+      },
+      "/oa/task/my": {
+        "publishTime": "发布时间",
+        "publisherDeptName": "发布部门",
+        "publisherUserName": "发布人",
+        "title": "任务标题",
+        "type": "类型"
+      },
+      "/oa/travel/apply": {
+        "createTime": "创建时间",
+        "creatorName": "申请人",
+        "days": "天数",
+        "deptName": "申请部门",
+        "estimatedPrice": "预计费用",
+        "reason": "出差事由"
+      },
+      "/oa/travel/reimbursement": {
+        "createTime": "创建时间",
+        "creatorName": "申请人",
+        "deptName": "申请部门",
+        "reason": "出差事由",
+        "totalPrice": "报销总金额",
+        "travelApplyNo": "关联出差单号"
+      },
+      "/oa/vehicle/apply": {
+        "createTime": "创建时间",
+        "deptName": "申请部门",
+        "endLocation": "回车地点",
+        "endTime": "回车时间",
+        "reason": "用车事由",
+        "startLocation": "出车地点",
+        "startTime": "出车时间",
+        "userName": "申请人",
+        "vehicleNo": "车辆"
+      },
+      "/oa/vehicle/list": {
+        "barePrice": "裸车价格（元）",
+        "brandModel": "品牌型号",
+        "category": "分类",
+        "commercialInsuranceExpireTime": "商业险到期时间",
+        "compulsoryInsuranceExpireTime": "交强险到期时间",
+        "createTime": "创建时间",
+        "deptName": "所属部门",
+        "inspectionExpireTime": "年检到期时间",
+        "name": "车辆名称",
+        "no": "车牌号",
+        "picUrl": "车辆照片",
+        "remark": "备注",
+        "seatCount": "座位数",
+        "sort": "显示顺序",
+        "status": "状态",
+        "type": "车型"
+      },
+      "/oa/vehicle/return": {
+        "actualReturnTime": "回车时间",
+        "applyNo": "用车申请单",
+        "createTime": "创建时间",
+        "deptName": "申请部门",
+        "processInstanceId": "流程实例编号",
+        "returnLocation": "回车地点",
+        "userName": "申请人",
+        "vehicleNo": "车辆"
+      },
+      "/oa/work-report/my": {
+        "createTime": "创建时间",
+        "deptName": "申请部门",
+        "endTime": "结束日期",
+        "no": "单据编号",
+        "startTime": "开始日期",
+        "status": "状态",
+        "title": "汇报标题",
+        "userName": "申请人"
+      },
+      "/oa/work-report/statistics": {
+        "deptName": "部门",
+        "expectedCount": "应填",
+        "missingCount": "未填",
+        "submittedCount": "已填",
+        "userName": "员工"
+      },
+      "/pay/app": {
+        "appKey": "应用标识",
+        "name": "应用名",
+        "status": "开启状态"
+      },
+      "/pay/demo/order": {
+        "createTime": "创建时间",
+        "id": "订单编号",
+        "payOrderId": "支付单号",
+        "payStatus": "是否支付",
+        "payTime": "支付时间",
+        "price": "支付价格",
+        "refundPrice": "退款金额",
+        "refundTime": "退款时间",
+        "spuName": "商品名字",
+        "userId": "用户编号"
+      },
+      "/pay/demo/transfer": {
+        "id": "提现单编号",
+        "payTransferId": "转账单号",
+        "price": "提现金额",
+        "status": "提现状态",
+        "subject": "提现标题",
+        "transferChannelCode": "转账渠道",
+        "transferErrorMsg": "转账失败原因",
+        "transferTime": "转账时间",
+        "type": "提现类型",
+        "userAccount": "收款人账号",
+        "userName": "收款人姓名"
+      },
+      "/pay/notify": {
+        "appName": "应用编号",
+        "dataId": "关联编号",
+        "id": "任务编号",
+        "lastExecuteTime": "最后通知时间",
+        "merchant": "商户单信息",
+        "nextNotifyTime": "下次通知时间",
+        "notifyTimes": "通知次数",
+        "status": "通知状态",
+        "type": "通知类型"
+      },
+      "/pay/order": {
+        "appName": "支付应用",
+        "channelCode": "支付渠道",
+        "channelFeePrice": "手续金额",
+        "createTime": "创建时间",
+        "id": "编号",
+        "price": "支付金额",
+        "refundPrice": "退款金额",
+        "status": "支付状态",
+        "subject": "商品标题",
+        "successTime": "支付时间"
+      },
+      "/pay/refund": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "payPrice": "支付金额",
+        "refundPrice": "退款金额",
+        "status": "退款状态"
+      },
+      "/pay/transfer": {
+        "appName": "支付应用",
+        "channelCode": "转账渠道",
+        "createTime": "创建时间",
+        "id": "编号",
+        "price": "转账金额",
+        "status": "转账状态",
+        "subject": "转账标题",
+        "successTime": "转账成功时间",
+        "userAccount": "收款账号",
+        "userName": "收款人姓名"
+      },
+      "/pay/wallet/wallet-balance": {
+        "balance": "余额",
+        "createTime": "创建时间",
+        "freezePrice": "冻结金额",
+        "id": "编号",
+        "totalExpense": "累计支出",
+        "totalRecharge": "累计充值",
+        "userId": "用户编号",
+        "userType": "用户类型"
+      },
+      "/pay/wallet/wallet-recharge-package": {
+        "bonusPrice": "赠送金额",
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "套餐名",
+        "payPrice": "支付金额",
+        "status": "状态"
+      },
+      "/pms/kb/favorite": {
+        "createTime": "关注时间",
+        "libraryName": "所属知识库",
+        "targetUpdateTime": "内容更新时间"
+      },
+      "/pms/kb/label": {
+        "creatorUserName": "创建人",
+        "libraryName": "知识库",
+        "updateTime": "更新时间"
+      },
+      "/pms/kb/library": {
+        "createTime": "创建时间",
+        "creatorUserName": "创建人",
+        "documentCount": "文档数",
+        "fileCount": "文件数",
+        "memberCount": "成员"
+      },
+      "/pms/kb/library-template": {
+        "createTime": "创建时间",
+        "description": "模板描述",
+        "name": "模板名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/pms/kb/recent": {
+        "createTime": "浏览时间",
+        "libraryName": "所属知识库"
+      },
+      "/pms/kb/recycle": {
+        "deleteTime": "删除时间",
+        "deleteUserName": "删除人",
+        "name": "名称"
+      },
+      "/pms/kb/search": {
+        "creatorUserName": "创建人",
+        "libraryName": "知识库",
+        "updateTime": "更新时间"
+      },
+      "/pms/pm/project/archive": {
+        "archiveTime": "归档时间",
+        "name": "项目名称"
+      },
+      "/pms/pm/project/list": {
+        "createTime": "创建时间",
+        "endTime": "截止时间"
+      },
+      "/pms/pm/project/recycle": {
+        "name": "项目名称",
+        "recycleTime": "删除时间"
+      },
+      "/pms/pm/project/template": {
+        "createTime": "创建时间",
+        "name": "模板名称",
+        "projectType": "项目类型",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/pms/pm/workbench": {
+        "creatorUserName": "创建人",
+        "id": "ID",
+        "projectName": "所属项目"
+      },
+      "/system/dept": {
+        "createTime": "创建时间",
+        "leader": "负责人",
+        "name": "部门名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/system/dict": {
+        "createTime": "创建时间",
+        "id": "字典编号",
+        "name": "字典名称",
+        "remark": "备注",
+        "status": "状态",
+        "type": "字典类型"
+      },
+      "/system/log/login-log": {
+        "createTime": "登录日期",
+        "id": "日志编号",
+        "logType": "登录类型",
+        "result": "登陆结果",
+        "userAgent": "浏览器",
+        "userIp": "登录地址",
+        "username": "用户名称"
+      },
+      "/system/log/operate-log": {
+        "action": "操作内容",
+        "bizId": "业务编号",
+        "createTime": "操作时间",
+        "id": "日志编号",
+        "subType": "操作名",
+        "type": "操作模块",
+        "userIp": "操作 IP",
+        "userName": "操作人"
+      },
+      "/system/messages/mail/mail-account": {
+        "createTime": "创建时间",
+        "host": "SMTP 服务器域名",
+        "id": "编号",
+        "mail": "邮箱",
+        "port": "SMTP 服务器端口",
+        "sslEnable": "是否开启 SSL",
+        "starttlsEnable": "是否开启 STARTTLS",
+        "username": "用户名"
+      },
+      "/system/messages/mail/mail-log": {
+        "id": "编号",
+        "sendTime": "发送时间",
+        "templateId": "模板编号",
+        "templateTitle": "邮件标题"
+      },
+      "/system/messages/mail/mail-template": {
+        "accountId": "邮箱账号",
+        "code": "模板编码",
+        "content": "模板内容",
+        "createTime": "创建时间",
+        "name": "模板名称",
+        "nickname": "发送人名称",
+        "status": "开启状态",
+        "title": "模板标题"
+      },
+      "/system/messages/notice": {
+        "createTime": "创建时间",
+        "id": "公告编号",
+        "status": "状态",
+        "title": "公告标题",
+        "type": "公告类型"
+      },
+      "/system/messages/notify/notify-message": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "readStatus": "是否已读",
+        "readTime": "阅读时间",
+        "templateCode": "模板编码",
+        "templateContent": "模版内容",
+        "templateNickname": "发送人名称",
+        "templateParams": "模版参数",
+        "templateType": "模版类型",
+        "userId": "用户编号",
+        "userType": "用户类型"
+      },
+      "/system/messages/notify/notify-template": {
+        "code": "模板编码",
+        "content": "模板内容",
+        "createTime": "创建时间",
+        "name": "模板名称",
+        "nickname": "发送人名称",
+        "remark": "备注",
+        "status": "开启状态",
+        "type": "类型"
+      },
+      "/system/messages/sms/sms-channel": {
+        "callbackUrl": "短信发送回调 URL",
+        "code": "渠道编码",
+        "createTime": "创建时间",
+        "id": "编号",
+        "remark": "备注",
+        "signature": "短信签名",
+        "status": "启用状态"
+      },
+      "/system/messages/sms/sms-log": {
+        "createTime": "创建时间",
+        "id": "编号",
+        "mobile": "手机号",
+        "templateContent": "短信内容",
+        "templateId": "模板编号",
+        "templateType": "短信类型"
+      },
+      "/system/messages/sms/sms-template": {
+        "apiTemplateId": "短信 API 的模板编号",
+        "code": "模板编码",
+        "content": "模板内容",
+        "createTime": "创建时间",
+        "name": "模板名称",
+        "remark": "备注",
+        "status": "状态",
+        "type": "短信类型"
+      },
+      "/system/oauth2/oauth2/application": {
+        "authorizedGrantTypes": "授权类型",
+        "clientId": "客户端编号",
+        "createTime": "创建时间",
+        "logo": "应用图标",
+        "name": "应用名",
+        "status": "状态"
+      },
+      "/system/oauth2/token": {
+        "createTime": "创建时间",
+        "expiresTime": "过期时间",
+        "userId": "用户编号",
+        "userType": "用户类型"
+      },
+      "/system/post": {
+        "code": "岗位编码",
+        "createTime": "创建时间",
+        "id": "岗位编号",
+        "name": "岗位名称",
+        "remark": "岗位备注",
+        "sort": "岗位顺序",
+        "status": "状态"
+      },
+      "/system/role": {
+        "code": "角色标识",
+        "createTime": "创建时间",
+        "id": "角色编号",
+        "name": "角色名称",
+        "remark": "备注",
+        "sort": "显示顺序",
+        "status": "状态",
+        "type": "角色类型"
+      },
+      "/system/social/client": {
+        "clientId": "客户端编号",
+        "createTime": "创建时间",
+        "id": "编号",
+        "name": "应用名",
+        "socialType": "社交平台",
+        "status": "状态",
+        "userType": "用户类型"
+      },
+      "/system/social/user": {
+        "avatar": "用户头像",
+        "createTime": "创建时间",
+        "nickname": "用户昵称",
+        "openid": "社交 openid",
+        "type": "社交平台",
+        "updateTime": "更新时间"
+      },
+      "/system/tenant/list": {
+        "accountCount": "账号额度",
+        "contactMobile": "联系手机",
+        "contactName": "联系人",
+        "createTime": "创建时间",
+        "expireTime": "过期时间",
+        "id": "租户编号",
+        "name": "租户名",
+        "packageId": "租户套餐",
+        "status": "租户状态",
+        "websites": "绑定域名"
+      },
+      "/system/tenant/package": {
+        "createTime": "创建时间",
+        "id": "套餐编号",
+        "name": "套餐名",
+        "remark": "备注",
+        "status": "状态"
+      },
+      "/system/user": {
+        "createTime": "创建时间",
+        "deptName": "部门",
+        "id": "用户编号",
+        "mobile": "手机号码",
+        "nickname": "用户昵称",
+        "username": "用户名称"
+      },
+      "/wms/check": {
+        "remark": "备注"
+      },
+      "/wms/inventory/history": {
+        "createTime": "操作时间",
+        "orderNo": "单据号"
+      },
+      "/wms/inventory/index": {
+        "itemId": "商品信息",
+        "quantity": "库存",
+        "skuId": "规格信息",
+        "skuWarehouseId": "仓库",
+        "warehouseId": "仓库",
+        "warehouseItemId": "商品信息"
+      },
+      "/wms/md/item/brand": {
+        "code": "品牌编号",
+        "createTime": "创建时间",
+        "name": "品牌名称"
+      },
+      "/wms/md/item/category": {
+        "code": "分类编号",
+        "createTime": "创建时间",
+        "name": "分类名称",
+        "sort": "排序",
+        "status": "状态"
+      },
+      "/wms/md/merchant": {
+        "code": "往来企业编号",
+        "contact": "联系人",
+        "level": "级别",
+        "name": "往来企业名称",
+        "remark": "备注",
+        "type": "往来企业类型"
+      },
+      "/wms/md/warehouse": {
+        "code": "仓库编号",
+        "createTime": "创建时间",
+        "name": "仓库名称",
+        "remark": "备注",
+        "sort": "排序"
+      },
+      "/wms/movement": {
+        "remark": "备注"
+      },
+      "/wms/receipt": {
+        "merchantName": "供应商",
+        "remark": "备注"
+      },
+      "/wms/shipment": {
+        "merchantName": "客户",
+        "remark": "备注"
+      }
+    },
+    "columns_sha256": "53eca48eed08c561b56b25bbb58bb1288ba534f41b8672d8625bc301b84e89be"
+  }
 }

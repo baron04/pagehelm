@@ -123,9 +123,12 @@ class ReferenceConcurrencyTests(unittest.TestCase):
         with patch.object(port, '_resolver', side_effect=lambda _index: Reader()):
             found = port.records_named('李文博')
             held = port.records_named('李文博', entities=('two',))
+            diagnosed, failures = port.records_named_diagnostics('李文博')
         self.assertEqual(found, (('one', (('7', '李文博', '/one/detail/7'),)),
                                  ('two', (('1', '李文博（ID=1）', '/two/detail/1'), ('2', '李文博（ID=2）', '')))))
         self.assertEqual(held, (found[1],))
+        self.assertEqual(diagnosed, found)
+        self.assertEqual(failures, (('refused', False, False),))
         self.assertEqual(port.records_named('2026-10-01'), ())
 
     def test_worker_configuration_is_bounded_and_default_is_sequential(self):

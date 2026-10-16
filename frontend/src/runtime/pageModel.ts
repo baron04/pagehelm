@@ -564,6 +564,13 @@ export function hydrateButtonFacts(elements: ElementRef[], selectorMap: unknown,
       const method = explicitAttribute(element, 'name')
       if (method !== null && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(method)
           && !redactor.isSensitiveName(method)) item.attrs.action_name = method
+      const icons = element?.querySelectorAll?.('svg[data-icon]') || []
+      if (icons.length === 1) {
+        const icon = explicitAttribute(icons[0], 'data-icon')
+        if (icon !== null && /^[a-z0-9_-]+:[a-z0-9_-]{1,60}$/i.test(icon)) {
+          item.attrs.action_icon = icon
+        }
+      }
     } catch {
       // A stale index supplies no policy fact. A reviewed opener then stays refused.
     }

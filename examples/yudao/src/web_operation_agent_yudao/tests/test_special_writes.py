@@ -39,7 +39,7 @@ class SpecialClient(Records):
             return {"list": [{"id": 9, "deptId": 6}, {"id": 11, "deptId": 6}, {"id": 12, "deptId": 8}], "total": 3}
         return super().get(path, **params)
 
-    def write_once(self, method, path, *, body, params=None):
+    def write_once(self, method, path, *, body, params=None, operation=""):
         if path.startswith("crm/customer/"):
             self.writes.append((method, path, copy.deepcopy(body), copy.deepcopy(params)))
             row = self.records[("crm/customer", 20)]

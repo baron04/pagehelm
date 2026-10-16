@@ -196,10 +196,11 @@ class ModelLoopTests(unittest.TestCase):
             fixture.state.obs.content = "new list read " + str(len(attempted))
             return LoopToolResult("list refreshed", kind="read")
         fixture = LoopFixture([reply(call("click", index=1)), reply(call("search_records")),
-            reply(call("click", index=1)), reply(call("search_records")), reply(call("click", index=1))], tool)
-        self.assertIn("重复尝试", fixture.run())
+            reply(call("click", index=1)), reply(call("search_records")), reply(call("click", index=1)),
+            reply(call("finish", status="cannot", answer="控件未审核"))], tool)
+        self.assertIn("控件未审核", fixture.run())
         self.assertEqual("agent_refused", fixture.state.terminal_reason)
-        self.assertEqual(3, attempted.count("click"))
+        self.assertEqual(2, attempted.count("click"))
         self.assertTrue(any("error_code=unreviewed" in m["content"] for m in fixture._messages
                             if m["role"] == "tool"))
 
@@ -215,7 +216,21 @@ class ModelLoopTests(unittest.TestCase):
             reply(call("click", index=1)), reply(call("finish", status="done", answer="recovered"))], tool)
         self.assertEqual("recovered", fixture.run())
         self.assertEqual(2, attempted.count("click"))
-        self.assertFalse(fixture.turn["rejections"])
+        self.assertFalse(fixture.turn.get("blocked_failures"))
+
+    def test_six_distinct_page_failures_force_a_bounded_summary(self):
+        attempted = []
+        def tool(fixture, name, arguments):
+            attempted.append(name)
+            return LoopToolResult("cannot fill", kind="page", state="refused", error_code="invalid_target")
+        replies = [reply(call("input", index=1, value=str(value))) for value in range(6)]
+        replies.append(reply(call("finish", status="cannot", answer="六个字段都未能填写")))
+        fixture = LoopFixture(replies, tool)
+        self.assertIn("六个字段都未能填写", fixture.run())
+        self.assertEqual(6, attempted.count("input"))
+        self.assertEqual(6, fixture.turn["page_failures"])
+        self.assertTrue(any("页面动作已失败六次" in message["content"]
+                            for message in fixture.state.chat.seen[-1]))
 
     def test_typed_read_denial_stops_without_correction_or_later_dispatch(self):
         def denied(*_):
