@@ -140,6 +140,25 @@ class QueryTests(unittest.TestCase):
         with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
             self.transact(before, replace(after, page_read={**proof, "query_fields": {}}), "click", {"ref": "e2"})
 
+    def test_query_reset_reads_back_live_empty_field_and_preserves_hidden_scene(self):
+        digest = lambda value: hashlib.sha256(json.dumps([value], ensure_ascii=False,
+            separators=(",", ":")).encode()).hexdigest()
+        button = ElementRef("e2", "button", "重置", "button", 1,
+                            {"page_control": "query", "form_scope": "form:query", "form_instance": "live"})
+        before_fields = {"name": digest("Synthetic"), "sceneType": digest("1")}
+        before = replace(self.page(elements=(self.input(1, "Synthetic"), button), path="/crm/customer"),
+                         page_read={**self.proof, "query_fields": before_fields})
+        after_fields = {"name": digest(""), "sceneType": digest("1")}
+        empty_input = self.input(2)
+        empty_input = replace(empty_input, attrs={k: v for k, v in empty_input.attrs.items() if k != "value"})
+        after = replace(before, epoch=2, elements=[empty_input, replace(button, epoch=2)],
+                        page_read={**self.proof, "revision": 2, "query_fields": after_fields})
+        self.transact(before, after, "click", {"ref": "e2"})
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unverified"):
+            self.transact(before, replace(after, page_read={**after.page_read,
+                "query_fields": before_fields}), "click", {"ref": "e2"})
+
     def test_live_query_choice_binds_label_native_code_and_applied_read_without_source(self):
         attrs = {"page_control":"query", "query_field":"productId", "form_scope":"form:query",
                  "form_instance":"live", "field_label":"Product", "aria-haspopup":"listbox",

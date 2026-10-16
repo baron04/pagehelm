@@ -280,7 +280,9 @@ class NativeModelReadActions(NativeReadActions):
                     return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY,
                                         self.page_review.reference, digest)
                 if element.name.strip() == "重置" or attrs.get("action_icon") == "ep:refresh":
-                    expected["fields"] = {}
+                    expected.update(reset=True, scope=attrs.get("form_scope"),
+                                    instance=attrs["form_instance"],
+                                    before_fields=before.page_read["query_fields"])
                 else:
                     expected["fields"] = {**before.page_read["query_fields"],
                         **self._drafts.get((path, attrs["form_instance"]), {})}
@@ -350,6 +352,42 @@ class NativeModelReadActions(NativeReadActions):
         if expected.get("open_paging"):
             return any(e.role == "option" for e in observation.elements)
         read = observation.page_read
+        if expected.get("reset"):
+            if (read is None or read["path"] != expected["read"]["path"]
+                    or read["revision"] <= expected["read"]["revision"]
+                    or read["page"] != 1):
+                return False
+            observed_fields = set()
+            for control in observation.elements:
+                attrs = control.attrs
+                if (attrs.get("page_control") != "query" or not attrs.get("query_field")
+                        or attrs.get("form_scope") != expected["scope"]
+                        or attrs.get("form_instance") != expected["instance"]):
+                    continue
+                key = attrs["query_field"]
+                if "query_value" in attrs:
+                    value = attrs["query_value"]
+                elif "value" in attrs:
+                    value = attrs["value"]
+                elif control.role in {"textbox", "searchbox", "combobox"}:
+                    # The browser omits the value attribute for an empty native
+                    # input; the live control still proves the empty value.
+                    value = ""
+                else:
+                    continue
+                if not isinstance(value, str):
+                    return False
+                digest = hashlib.sha256(json.dumps([value], ensure_ascii=False,
+                    separators=(",", ":")).encode()).hexdigest()
+                if key in read["query_fields"]:
+                    if read["query_fields"][key] != digest:
+                        return False
+                elif value:
+                    return False
+                observed_fields.add(key)
+            changed = {key for key in set(expected["before_fields"]) | set(read["query_fields"])
+                       if expected["before_fields"].get(key) != read["query_fields"].get(key)}
+            return bool(observed_fields) and changed <= observed_fields
         return (read is not None and read["path"] == expected["read"]["path"]
                 and read["revision"] > expected["read"]["revision"]
                 and read["page"] == expected.get("page", 1)
