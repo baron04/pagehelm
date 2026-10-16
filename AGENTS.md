@@ -4,7 +4,9 @@ These instructions apply to the entire repository.
 
 ## Start with the public contract
 
-Read `README.md`, then the matching page under `docs/` (`concepts/` for why, `guides/` for how, `reference/` for current behavior), then the modules and tests. Code and passing tests are the source of truth when prose has drifted. Keep the two READMEs aligned; `docs/` is Chinese only. A behavior change updates the matching `docs/` page, not the README.
+Read `README.md`, then the matching page under `docs/` (`concepts/` for why, `guides/` for how, `reference/` for current behavior), then the modules and tests. Code and passing tests are the source of truth when prose has drifted. Keep the two READMEs aligned; `docs/` is Chinese only. A change to public behavior updates the matching `docs/` page, not the README.
+
+Document what readers need to use, integrate, or operate the product. Visual styling, animation, exact UI copy, development preview controls, and patch-by-patch implementation details belong in frontend code/tests or internal work notes; they do not require public documentation updates.
 
 ## Preserve the architecture boundary
 
