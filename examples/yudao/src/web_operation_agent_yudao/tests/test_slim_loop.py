@@ -2358,8 +2358,10 @@ class WriteTurnTests(unittest.TestCase):
         self.assertTrue(_draft_only_request("先填好，不需要直接提交"))
         self.assertTrue(_draft_only_request("预填即可，无须立即保存"))
         self.assertTrue(_draft_only_request("只填联系人资料，不要再创建记录"))
+        self.assertTrue(_draft_only_request("在 ERP 客户编辑表单里将恒达印务的邮箱改成 sales@hengda.example.test，手机号照旧。"))
         self.assertFalse(_draft_only_request("先填好，然后提交"))
         self.assertFalse(_draft_only_request("先填好并保存"))
+        self.assertFalse(_draft_only_request("在客户编辑表单里改好邮箱后保存"))
         self.assertFalse(_draft_only_request("在合成星河名下新建联系人顾溪"))
         for request in ("在合成星河名下先填一位联系人，名字为顾溪",
                         "在合成星河名下先填一位联系人顾溪，不要直接提交"):
@@ -2375,6 +2377,19 @@ class WriteTurnTests(unittest.TestCase):
                 self.assertEqual((result.state, result.error_code, result.dispatch),
                                  ("refused", "draft_only", "not_dispatched"))
                 self.assertEqual((self.person.shown, self.client.writes, state.mutation_outcomes), ([], [], []))
+
+        request = "在 ERP 客户编辑表单里将恒达印务的邮箱改成 sales@hengda.example.test，手机号照旧。"
+        executor = self.executor(asked=request)
+        state = self.state()
+        state.message.text = request
+        writes = SkillWrites(self.application, state.approvals)
+        writes.load("yudao.erp-customer-maintenance", step=0)
+        turn = {"skills": set(), "corrections": 0, "written": []}
+        result = SlimTurnExecutor._propose(executor, state, writes, "erp_customer_update",
+                                           {"target": "恒达印务", "changes": {"email": "sales@hengda.example.test"}}, turn)
+        self.assertEqual((result.state, result.error_code, result.dispatch),
+                         ("refused", "draft_only", "not_dispatched"))
+        self.assertEqual((self.person.shown, self.client.writes, state.mutation_outcomes), ([], [], []))
 
     def test_searches_and_reads_are_told_to_whoever_is_watching(self):
         find = {"id": "call-find", "type": "function", "function": {

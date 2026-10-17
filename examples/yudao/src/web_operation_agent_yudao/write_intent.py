@@ -25,6 +25,9 @@ _NEGATIVE_PREFIX = re.compile(r"(?:不(?:要|用|必|需要)?|别|请勿|切勿|
 _QUESTION_PREFIX = re.compile(r"(?:怎么|如何|怎样|能否|能不能|是否|为什么|几个|多少)$")
 _DRAFT_FOLLOWUP = re.compile(r"改|调|填|补|清空|换|设为|加上|删掉")
 _DRAFT_STATUS_SUFFIX = re.compile(r"状态|[)）、，,]")
+_IN_FORM_EDIT = re.compile(r"(?:在|打开).{0,40}?(?:编辑|修改)?表单(?:里|中|内)?.{0,80}?(?:改|填|调|设)")
+_EXPLICIT_SAVE = re.compile(r"提交|保存")
+_FORM_QUESTION = re.compile(r"^(?:怎么|如何|怎样|能否|能不能|是否|为什么)|[？?]$")
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,11 @@ def classify_write_intent(text: str, *, prior_draft: bool = False) -> WriteInten
     commit = _COMMIT_AFTER_DRAFT.search(compact)
     if draft and not commit:
         return WriteIntent("draft", draft.group())
+    # Editing *inside a form* names a transient result. A separate, explicit
+    # request to save still takes the normal one-use approval path.
+    if (_IN_FORM_EDIT.search(compact) and not _EXPLICIT_SAVE.search(compact)
+            and not _FORM_QUESTION.search(compact)):
+        return WriteIntent("draft", "表单内修改")
     if (prior_draft and _DRAFT_FOLLOWUP.search(compact)
             and not re.search(r"提交|保存|新建|新增|创建", compact)):
         return WriteIntent("draft", "沿用上一轮草稿")
