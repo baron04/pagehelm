@@ -7,6 +7,8 @@ from .errors import (BusinessMutationBlockedError, BusinessMutationIndeterminate
                      BusinessToolPermissionError, BusinessToolReferenceError)
 from .tools.contracts import BusinessMutationProposal, BusinessToolResult
 from .dispatch_evidence import mutation_evidence
+from .prefill_conversion import MutationPrefillOffer, MutationPrefillPort
+from ..state.identity import OperationContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,8 @@ class OperationOutcome:
     reason: str = ""
     error: Exception | None = None
     asked: bool = False
+    prefill_offer: MutationPrefillOffer | None = None
+    prefill_context: OperationContext | None = None
 
 
 class BusinessWriteService:
@@ -70,7 +74,8 @@ class BusinessWriteService:
         return WriteSettlement(approval, result)
 
     def run(self, name, inputs, *, step, context, skill_id="", expected=None,
-            offer_prefill=False) -> OperationOutcome:
+            prefill_port: MutationPrefillPort | None = None,
+            prefill_observation=None) -> OperationOutcome:
         """One proposed operation from preparation to its verified result, exactly once.
 
         Preparation is read-only. With `expected`, the application's projection of what it
@@ -80,7 +85,7 @@ class BusinessWriteService:
         """
         ledger = self.approvals.ledger
         identity = context.audit_projection() if context is not None else {}
-        proposal, asked = None, False
+        proposal, asked, prefill_offer = None, False, None
         try:
             proposal = self.prepare(name, inputs, context=context, skill_id=skill_id)
             if expected is not None:
@@ -89,9 +94,19 @@ class BusinessWriteService:
                 proposal.effect_projection.require(expected)
                 ledger.append("skill_effect_bound", step=step, tool=name,
                               proposal_digest=proposal.content_digest, side_effect_possible=False)
+            if prefill_port is not None:
+                if not isinstance(prefill_port, MutationPrefillPort):
+                    raise BusinessToolError("mutation prefill port is invalid")
+                if context is not None and prefill_observation is not None:
+                    prefill_offer = prefill_port.offer(
+                        proposal, context=context, observation=prefill_observation)
+                if prefill_offer is not None:
+                    if not isinstance(prefill_offer, MutationPrefillOffer):
+                        raise BusinessToolError("mutation prefill offer is invalid")
+                    prefill_offer.require(proposal, context)
             asked = True
             settlement = self.settle(proposal, step=step, context=context, identity=identity,
-                                     offer_prefill=offer_prefill)
+                                     offer_prefill=prefill_offer is not None)
         except BusinessMutationIndeterminate as exc:
             self.approvals.mutation_indeterminate()
             ledger.append("business_mutation_indeterminate", step=step, tool=name,
@@ -110,8 +125,11 @@ class BusinessWriteService:
                       else "agent_refused")
             return OperationOutcome("refused", proposal, reason=reason, error=exc, asked=asked)
         if settlement.approval.prefill_selected:
+            if prefill_offer is None:
+                raise AssertionError("unoffered prefill decision passed approval validation")
             return OperationOutcome("prefill_selected", proposal, reason="prefill_selected",
-                                    asked=True)
+                                    asked=True, prefill_offer=prefill_offer,
+                                    prefill_context=context)
         if not settlement.approval.approved:
             return OperationOutcome("not_approved", proposal, reason=settlement.approval.reason,
                                     asked=True)

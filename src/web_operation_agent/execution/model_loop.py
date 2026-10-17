@@ -121,8 +121,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         self.skill_knowledge, self.debug_dir = bool(skill_knowledge), debug_dir
         self._messages, self._earlier_words, self._carried_skills = [], [], ()
 
-    def _procedure_context(self, s, name, *, page_actions=True):
-        context = s.approvals.context(s.step, name)
+    def _procedure_context(self, s, name, *, page_actions=True, operation_context=None):
+        context = operation_context or s.approvals.context(s.step, name)
         def checkpoint():
             if s.cancelled():
                 from ..transport.browser import TurnCancelled
@@ -1109,16 +1109,64 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         s.step += 1
         turn['skills'].update((skill.skill_id for skill in writes.context.loaded if operation in skill.write_operations))
         with s.receipt.stage('business'):
-            outcome = writes.propose(operation, inputs, step=s.step, texts=self._said(s.message.text))
+            outcome = writes.propose(operation, inputs, step=s.step,
+                                     texts=self._said(s.message.text),
+                                     prefill_port=self.profile.mutation_prefill,
+                                     prefill_observation=(PageObservation.from_json(s.obs.to_json())
+                                                          if s.obs is not None else None))
         def result(feedback):
             state = {"completed": "completed", "repeated": "completed", "reference": "needs_input",
-                     "indeterminate": "indeterminate"}.get(outcome.state, "refused")
+                     "indeterminate": "indeterminate",
+                     "prefill_selected": ("completed" if s.terminal_reason == "agent_finished"
+                                          else "unverified")}.get(outcome.state, "refused")
             dispatch = ("acknowledged" if outcome.state == "completed" else
                         "uncertain" if outcome.reason == "indeterminate_write" else "not_dispatched")
             return LoopToolResult(feedback, kind="write", state=state, dispatch=dispatch,
                                   terminal_reason=s.terminal_reason, write_outcome=outcome)
         if outcome.asked:
             s.write_intent = True
+        if outcome.state == 'prefill_selected':
+            # The card was consumed without a mutation grant. Do not expose another
+            # write tool, even if form preparation fails after a partial page action.
+            turn['writes'] = None
+            port, offer, proposal = self.profile.mutation_prefill, outcome.prefill_offer, outcome.proposal
+            try:
+                if port is None or offer is None or proposal is None or outcome.prefill_context is None:
+                    raise ValueError('selected prefill has no reviewed offer')
+                context = self._procedure_context(s, operation, page_actions=True,
+                                                  operation_context=outcome.prefill_context)
+                context.operation.require_live(
+                    application_id=self.application.descriptor.application_id,
+                    required_scope=port.required_scope)
+                offer.require(proposal, context.operation)
+                context.page.checkpoint()
+                s.approvals.accept_prefill_choice_for_page(
+                    step=s.step, proposal_digest=proposal.content_digest)
+                with s.receipt.stage('ui'):
+                    handoff = port.handoff(offer, proposal, context=context)
+                context.page.checkpoint()
+                if (not isinstance(handoff, LoopToolResult) or handoff.kind != 'page'
+                        or handoff.state != 'completed' or not handoff.completion_command
+                        or not handoff.marked or not self._completion_proved(
+                            s, operation, inputs, handoff)):
+                    raise ValueError('form handoff did not prove the selected draft')
+            except Exception as exc:  # a consumed choice must never fall back to saving
+                s.ledger.append('mutation_prefill_handoff_failed', step=s.step,
+                                proposal_digest=proposal.content_digest if proposal else '',
+                                error_type=type(exc).__name__, side_effect_possible=False,
+                                page_effect_possible=True)
+                s.terminal_reason, s.detail = 'agent_refused', 'selected form handoff was not verified'
+                turn['final'] = ('已选择只填表单，业务写入没有派发；表单交接未通过核验。'
+                                 '页面可能已有未保存的输入，请在应用里核对；本轮不会自动重试或保存。')
+                return result(turn['final'])
+            s.ledger.append('mutation_prefill_handoff_completed', step=s.step,
+                            proposal_digest=proposal.content_digest,
+                            command_id=handoff.completion_command,
+                            side_effect_possible=False)
+            s.terminal_reason = 'agent_finished'
+            turn['final'] = ('已按批准卡的目标和值填入表单并核验，业务写入没有派发。'
+                             f'请核对后，手动点击「{handoff.marked}」提交。')
+            return result(turn['final'])
         if outcome.state == 'completed':
             proposal, content = (outcome.proposal, outcome.result.content)
             s.mutation_outcomes.append({'position': len(s.mutation_outcomes), 'effect': proposal.effect, 'targets': list(proposal.targets), 'verified': True, 'receipt': content})

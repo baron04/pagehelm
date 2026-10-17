@@ -155,7 +155,8 @@ class NativeContactsHost:
                 self.application.origin, api_token=actor.token,
                 allow_mutations=self.config.allow_mutations,
                 mutation_journal=(self.mutation_journal
-                                  if self.config.allow_mutations else None))
+                                  if self.config.allow_mutations else None),
+                standard_skills=self.config.model_loop and self.config.allow_mutations)
             bound = bind_application(adapter)
             page = adapter.identity.page_identity(
                 f"{DEMO_SESSION_COOKIE}={actor.session}")

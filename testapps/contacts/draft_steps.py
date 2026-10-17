@@ -29,7 +29,8 @@ class ContactsDraftSteps:
         before = intent.observation
         element = next(e for e in before.elements if e.ref == intent.arguments["ref"])
         controls = self._controls(before)
-        label = element.attrs.get("field_label", "")
+        label = element.attrs.get("field_label") or {
+            "name": "Name", "email": "Email"}.get(element.attrs.get("field"), "")
         instance = element.attrs.get("form_instance", "")
         if (element not in controls or not instance or element.attrs.get("disabled") == "true"
                 or element.attrs.get("readonly") == "true"):
@@ -40,7 +41,7 @@ class ContactsDraftSteps:
             choice = (intent.action == "select" and label == "Priority"
                       and element.role == "combobox" and element.attrs.get("aria-controls") == "contact-priorities")
             if (not choice and (intent.action != "fill" or element.tag != "input"
-                    or label not in {"Period start", "Period end"} and not line
+                    or label not in {"Name", "Email", "Period start", "Period end"} and not line
                     or args.get("commit", True) is not True)):
                 raise ActionAdmissionRefused("unsafe_effect")
             step, values = "enter_value", ((label, args["value"]),)
@@ -66,7 +67,10 @@ class ContactsDraftSteps:
             if not lifetime: return False
             controls = [e for e in self._controls(observation) if e.attrs.get("form_lifetime") == lifetime]
             return sum(e.attrs.get("field_label", "").startswith("Local line ") for e in controls) == count + 1
-        matches = [e for e in controls if e.attrs.get("field_label") == label]
+        field = {"Name": "name", "Email": "email"}.get(label, "")
+        matches = [e for e in controls
+                   if e.attrs.get("field_label") == label
+                   or field and e.attrs.get("field") == field]
         return len(matches) == 1 and matches[0].attrs.get(
             "selected_option" if intent.action == "select" else "value", "") == value
 

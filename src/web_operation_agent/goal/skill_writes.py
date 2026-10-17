@@ -83,7 +83,8 @@ class SkillWrites:
         """The operations the Skills loaded so far let this turn propose."""
         return tuple(self._offered(self.loaded_ids).values())
 
-    def propose(self, operation: str, inputs: dict, *, step: int, texts) -> OperationOutcome:
+    def propose(self, operation: str, inputs: dict, *, step: int, texts,
+                prefill_port=None, prefill_observation=None) -> OperationOutcome:
         """One proposed operation, to its verified result or to the reason it did not run.
 
         `texts` are the person's own messages: a registered literal input must copy one of
@@ -115,7 +116,9 @@ class SkillWrites:
             return OperationOutcome("refused", reason="agent_refused", error=exc)
         context = self.approvals.context(step, operation, hold_ms=self.approvals.approval_hold_ms)
         outcome = self.service.run(operation, inputs, step=step, context=context,
-                                   skill_id=supporters[0], expected=expected)
+                                   skill_id=supporters[0], expected=expected,
+                                   prefill_port=prefill_port,
+                                   prefill_observation=prefill_observation)
         if outcome.state == "completed":
             self._completed.add(key)
             self.operations.invalidate_reads(frozenset({outcome.result.content.get("entity", "")}))

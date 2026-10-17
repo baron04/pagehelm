@@ -466,8 +466,9 @@ class MinimalDemoBrowserTests(unittest.TestCase):
             return {
                 "name_exact": page.locator('#contact-create input[name=name]').input_value() == "Ada Byron",
                 "email_exact": page.locator('#contact-create input[name=email]').input_value() == "new@example.test",
-                "submit_highlighted": page.get_by_role("button", name="Save contact", exact=True).evaluate(
-                    "e => e.style.outline.includes('3px') && !e.disabled && e.getBoundingClientRect().width > 0"),
+                "submit_highlighted": page.locator(".woa-submit-guide").count() == 1
+                    and page.get_by_role("button", name="Save contact", exact=True).evaluate(
+                        "e => !e.disabled && e.getBoundingClientRect().width > 0"),
             }
         with tempfile.TemporaryDirectory() as directory, patch(
                 "testapps.contacts.demo._chat", return_value=(ScriptedDemoChat(script), None)):

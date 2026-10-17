@@ -189,6 +189,7 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
             "marked": marked}, ensure_ascii=False))
 
     from .draft_steps import ContactsDraftSteps
+    from .mutation_prefill import ContactsMutationPrefill
     return ModelLoopProfile("Answer from current REST reads. Clarify ambiguous names; never choose one silently. "
         "This application offers reviewed navigation and visible-control handoff. " +
         ("It offers two local date fields, priority, and temporary note lines for manual saving. "
@@ -197,4 +198,6 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
         ("On /contacts/filter fill Name contains and use then_click=\"Search contacts\" with answer to finish after a verified query. "
          if filters else "It does not offer list filters. ") +
         "It does not offer pagination. Source tools depend on deployment configuration.",
-        procedures, render, prepare, draft_steps=ContactsDraftSteps(adapter) if drafts else None)
+        procedures, render, prepare, draft_steps=ContactsDraftSteps(adapter) if drafts else None,
+        mutation_prefill=(ContactsMutationPrefill(adapter)
+                          if drafts and adapter.ports.operations is not None else None))

@@ -324,6 +324,19 @@ class ApprovalWatch:
             proposal_digest=proposal.content_digest,
             dispatched=False, side_effect_possible=False)
 
+    def accept_prefill_choice_for_page(self, *, step: int,
+                                       proposal_digest: str) -> None:
+        """A selected exact form handoff includes leave for its page actions.
+
+        The caller ends this turn after the reviewed adapter's handoff.  This does
+        not grant business mutation authority or bypass action admission.
+        """
+        self.operation_granted = True
+        self.answered_for = None
+        self.ledger.append("operation_confirmed_by_prefill_choice", step=step,
+                           proposal_digest=proposal_digest, dispatched=False,
+                           side_effect_possible=False)
+
     def confirm_operation(self, step: int, obs: PageObservation, *, action: str,
                           url: str = "") -> tuple[str, str]:
         """Ask before working the page unless leave is already held; later operations go

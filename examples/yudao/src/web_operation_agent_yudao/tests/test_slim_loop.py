@@ -18,6 +18,7 @@ from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, Lo
     VerificationResult, ModelLoopProfile, LoopProcedure, PageActionOutcome)
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.business.approvals import ApprovalWatch
+from web_operation_agent.business.prefill_conversion import MutationPrefillOffer
 from web_operation_agent.business.errors import BusinessToolAuthenticationError
 from web_operation_agent.business.runtime import BusinessToolResult, BusinessToolRuntime
 from web_operation_agent.composition.business_operations import RegisteredOperations
@@ -2139,10 +2140,11 @@ class Person:
     """Answers each approval card as scripted and keeps what it was shown."""
 
     def __init__(self, decision="approved"):
-        self.decision, self.shown = decision, []
+        self.decision, self.shown, self.offered = decision, [], []
 
-    def __call__(self, proposal, *, context=None):
+    def __call__(self, proposal, *, context=None, offer_prefill=False):
         self.shown.append(proposal)
+        self.offered.append(offer_prefill)
         return NS(decision=self.decision, plan_digest=proposal.content_digest,
                   operation_context_digest=context.binding_digest, approval_id=f"a{len(self.shown)}")
 
@@ -2209,7 +2211,8 @@ class WriteTurnTests(unittest.TestCase):
         executor.profile = NS(procedures=procedures, completion_conflict=lambda *_: (),
             render_page=lambda obs, marked: page_text(obs, handoffs=SessionHandoffPolicy.extending(()), marked=marked),
             instructions=system_text(user="u", date="2026-10-13", tz="Asia/Shanghai"),
-            prepare=lambda request, context: "", verification_messages=None)
+            prepare=lambda request, context: "", verification_messages=None,
+            draft_steps=None, mutation_prefill=None)
         executor.debug_dir = None
         def fresh(s, action, args, **kwargs):
             before = s.obs
@@ -2233,6 +2236,86 @@ class WriteTurnTests(unittest.TestCase):
     LOAD = staticmethod(lambda: reply(call("load_skill", skill="crm-contact-update")))
     UPDATE = staticmethod(lambda **changes: reply(call(
         "crm_contact_update", target="林舟", changes=changes or {"mobile": "13800000002"})))
+
+    def test_selected_prefill_uses_exact_offer_and_never_dispatches_mutation(self):
+        seen = []
+        class Port:
+            required_scope = "yudao.read"
+
+            def offer(self, proposal, *, context, observation):
+                return MutationPrefillOffer(proposal.content_digest, context.binding_digest,
+                    "crm/contact:10", (("mobile", proposal.args["body"]["mobile"]),))
+
+            def handoff(self, offer, proposal, *, context):
+                seen.append("entered")
+                offer.require(proposal, context.operation)
+                seen.append("bound")
+                outcome = context.page.handoff(
+                    [{"field": "mobile", "value": offer.fields[0][1]}], {"label": "保存"})
+                seen.append((outcome.state, outcome.receipt.command_id))
+                return LoopToolResult("已核验表单草稿", kind="page", state=outcome.state,
+                                      completion_command=outcome.receipt.command_id,
+                                      marked="保存")
+
+        self.person.decision = "prefill"
+        executor = self.executor()
+        executor.profile.mutation_prefill = Port()
+        executor.profile.draft_steps = object()
+        def dispatch(state, action, arguments, **kwargs):
+            before = state.obs
+            state.obs = observation(epoch=before.epoch + 1, render_state="ready",
+                                    page_route="/orders")
+            receipt = ActionReceipt(1, "handoff-1", action, arguments, True,
+                                    observation=state.obs, url_before=before.url,
+                                    url_after=state.obs.url)
+            executor._tool_receipts.append(receipt)
+            executor._page_action_outcome = PageActionOutcome(
+                "completed", "acknowledged", receipt_json=json.dumps(receipt.to_json()))
+            return receipt
+
+        executor._dispatch = dispatch
+        state = self.state(self.LOAD(), self.UPDATE())
+        turn = {"reads": [], "marked": "", "trace": [], "touched": [],
+                "shown": [], "done": set(), "stalled": 0,
+                "writes": SkillWrites(self.application, state.approvals), "written": [],
+                "corrections": 0, "final": "", "skills": set()}
+        result = executor._loop(state, self.ASKED, turn, verified=False)
+        self.assertEqual(state.terminal_reason, "agent_finished",
+                         (state.detail, seen,
+                          [(e["event"], e.get("error_type")) for e in state.ledger.events]))
+        self.assertIn("手动点击", result)
+        self.assertEqual((self.person.offered, self.client.writes, turn["writes"]),
+                         ([True], [], None))
+        self.assertEqual(state.approvals.business_counts["mutation_execution_started"], 0)
+        self.assertTrue(any(e["event"] == "mutation_prefill_handoff_completed"
+                            for e in state.ledger.events))
+
+    def test_selected_prefill_cannot_claim_handoff_without_runtime_receipt(self):
+        class Port:
+            required_scope = "yudao.read"
+
+            def offer(self, proposal, *, context, observation):
+                return MutationPrefillOffer(proposal.content_digest, context.binding_digest,
+                    "crm/contact:10", (("mobile", proposal.args["body"]["mobile"]),))
+
+            def handoff(self, offer, proposal, *, context):
+                return LoopToolResult("claimed", kind="page", state="completed",
+                                      completion_command="invented", marked="保存")
+
+        self.person.decision = "prefill"
+        executor = self.executor()
+        executor.profile.mutation_prefill = Port()
+        state = self.state()
+        writes = SkillWrites(self.application, state.approvals)
+        writes.load("yudao.crm-contact-update", step=0)
+        turn = {"skills": set(), "corrections": 0, "written": [], "writes": writes,
+                "final": ""}
+        result = executor._propose(state, writes, "crm_contact_update",
+                                   {"target": "林舟", "changes": {"mobile": "13800000002"}}, turn)
+        self.assertEqual((result.state, state.terminal_reason, turn["writes"], self.client.writes),
+                         ("unverified", "agent_refused", None, []))
+        self.assertTrue(any(e["event"] == "mutation_prefill_handoff_failed"
+                            for e in state.ledger.events))
 
     def test_a_requested_change_is_loaded_proposed_approved_and_written_once(self):
         executor, state, text = self.loop(

@@ -5,8 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from web_operation_agent.business.approvals import ApprovalWatch
+from web_operation_agent.business.prefill_conversion import MutationPrefillOffer
 from web_operation_agent.business.tools.contracts import BusinessMutationProposal
 from web_operation_agent.business.write_service import BusinessWriteService
+from web_operation_agent.schemas import PageObservation
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.tests.support.business import _operation_context
 
@@ -24,8 +26,25 @@ class _Runtime:
         raise AssertionError("the form choice must not dispatch a write")
 
 
+class _PrefillPort:
+    required_scope = "test.read"
+
+    def __init__(self, *, offered=True, wrong_digest=False):
+        self.offered, self.wrong_digest = offered, wrong_digest
+
+    def offer(self, proposal, *, context, observation):
+        if not self.offered:
+            return None
+        return MutationPrefillOffer(
+            "0" * 64 if self.wrong_digest else proposal.content_digest,
+            context.binding_digest, "company:new", (("name", proposal.args["name"]),))
+
+    def handoff(self, offer, proposal, *, context):
+        raise AssertionError("approval settlement does not enter a form")
+
+
 class PrefillChoiceTests(unittest.TestCase):
-    def _run(self, *, offered=True, digest=True, binding=True):
+    def _run(self, *, offered=True, digest=True, binding=True, wrong_offer=False):
         context = _operation_context()
         proposal = BusinessMutationProposal(
             "create_company", {"name": "Synthetic Acme"}, "Create company",
@@ -50,13 +69,17 @@ class PrefillChoiceTests(unittest.TestCase):
             runtime = _Runtime(proposal)
             outcome = BusinessWriteService(runtime, approvals, set()).run(
                 proposal.tool, {"name": "Synthetic Acme"}, step=1,
-                context=context, offer_prefill=offered)
+                context=context, prefill_port=_PrefillPort(
+                    offered=offered, wrong_digest=wrong_offer),
+                prefill_observation=PageObservation(1, 1, "https://synthetic.test/companies",
+                                                   "Companies", [], [], "Companies"))
             return outcome, runtime.dispatched, seen, ledger.events, approvals.business_counts
 
     def test_exact_offered_choice_is_distinct_and_never_dispatches(self):
         outcome, dispatched, seen, events, counts = self._run()
         self.assertEqual((outcome.state, outcome.reason, outcome.asked),
                          ("prefill_selected", "prefill_selected", True))
+        self.assertEqual(outcome.prefill_offer.fields, (("name", "Synthetic Acme"),))
         self.assertEqual((dispatched, seen), (0, [True]))
         self.assertEqual(counts["mutation_execution_started"], 0)
         self.assertEqual(counts["approval_denied"], 0)
@@ -71,6 +94,11 @@ class PrefillChoiceTests(unittest.TestCase):
                                  ("not_approved", "approval_failed", 0))
                 self.assertFalse(any(e["event"] == "business_mutation_prefill_selected"
                                      for e in events))
+
+    def test_wrong_offer_fails_before_approval(self):
+        outcome, dispatched, seen, _, _ = self._run(wrong_offer=True)
+        self.assertEqual((outcome.state, outcome.asked, dispatched, seen),
+                         ("refused", False, 0, []))
 
 
 if __name__ == "__main__":

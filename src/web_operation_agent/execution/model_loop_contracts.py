@@ -10,6 +10,7 @@ from ..goal.ports import OPTIONAL
 from ..schemas import PageObservation, ActionReceipt
 from ..state.identity import OperationContext
 from ..business.draft_steps import ApplicationDraftStepPort
+from ..business.prefill_conversion import MutationPrefillPort
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +118,7 @@ class ModelLoopProfile:
     completion_conflict: Callable[[PageObservation, str], tuple[str, ...]] = lambda _obs, _answer: ()
     verification_messages: Callable | None = None
     draft_steps: ApplicationDraftStepPort | None = None
+    mutation_prefill: MutationPrefillPort | None = None
 
     def __post_init__(self):
         names = [p.schema["function"]["name"] for p in self.procedures]
@@ -127,6 +129,11 @@ class ModelLoopProfile:
             raise ValueError("invalid model loop profile")
         if self.draft_steps is not None and not isinstance(self.draft_steps, ApplicationDraftStepPort):
             raise ValueError("model loop draft steps need an application form port")
+        if (self.mutation_prefill is not None
+                and (not isinstance(self.mutation_prefill, MutationPrefillPort)
+                     or not isinstance(self.mutation_prefill.required_scope, str)
+                     or not self.mutation_prefill.required_scope)):
+            raise ValueError("model loop mutation prefill needs a reviewed application port")
 
 
 @dataclass(frozen=True, slots=True)

@@ -553,6 +553,69 @@ class NativeContactsHostTests(unittest.TestCase):
 
 
 class NativeContactsBrowserTests(unittest.TestCase):
+    def test_write_card_form_choice_prefills_exact_contact_without_rest_write(self):
+        from playwright.sync_api import sync_playwright
+        from web_operation_agent.tests.support.skill_chat import SkillDeclarationChat
+
+        name, email = "Synthetic Prefill", "prefill@example.test"
+        chat = SkillDeclarationChat([
+            ("load_skill", {"skill": "minimal.contacts.contact-maintenance"}),
+            ("create_contact", {"name": name, "email": email}),
+        ])
+        with patch.dict(os.environ, {"NO_PROXY": "127.0.0.1,localhost"}), \
+                tempfile.TemporaryDirectory() as directory, patch(
+                "testapps.contacts.server._chat", return_value=(chat, None)), \
+                NativeContactsHost(NativeServerConfig(
+                    Path(directory), port=0, scripted=False,
+                    model_loop=True, allow_mutations=True)) as host, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1280, "height": 1000})
+                page.goto(host.origin + "/demo/login/ada-lovelace")
+                page.goto(host.origin + "/contacts")
+                page.evaluate("async () => { window.__WOA_ASSISTANT__.connect(); "
+                              "await Promise.race([window.__WOA_RUNTIME_READY__, "
+                              "new Promise((_, reject) => setTimeout(() => reject(new Error('bootstrap timeout')), 10000))]); }")
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, f"Create {name} with {email}.")
+                card = page.locator('section.woa-approval[data-kind="write"]')
+                card.wait_for(state="visible", timeout=20_000)
+                self.assertIn(name, card.inner_text())
+                self.assertIn(email, card.inner_text())
+                self.assertEqual(1, card.get_by_test_id("woa-prefill").count(),
+                                 (card.inner_text(),
+                                  [request.to_json() for request in session.channel._approvals.values()]))
+                page.wait_for_timeout(700)
+                card.get_by_test_id("woa-prefill").click()
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error, outcome.error)
+                self.assertEqual("agent_finished", outcome.result.terminal_reason,
+                                 (outcome.result.user_answer,
+                                  [json.loads(line) for file in Path(directory).rglob("audit.jsonl")
+                                   for line in file.read_text().splitlines()
+                                   if "mutation_prefill_handoff_failed" in line or "model_action_refused" in line]))
+                page.wait_for_url("**/contacts/new", timeout=10_000)
+                self.assertEqual(name, page.get_by_label("Name", exact=True).input_value())
+                self.assertEqual(email, page.get_by_label("Email", exact=True).input_value())
+                self.assertEqual(1, page.locator(".woa-submit-guide").count())
+                self.assertEqual((0, 0),
+                                 (host.application.write_requests,
+                                  host.application.records_created))
+                events = [json.loads(line) for file in Path(directory).rglob("audit.jsonl")
+                          for line in file.read_text().splitlines()]
+                self.assertEqual(1, sum(row.get("event") == "business_mutation_prefill_selected"
+                                        for row in events))
+                self.assertEqual(1, sum(row.get("event") == "mutation_prefill_handoff_completed"
+                                        for row in events))
+                self.assertFalse(any(row.get("event") == "business_mutation_execution_started"
+                                     for row in events))
+                self.assertFalse(any(row.get("event") == "operation_confirmation_needed"
+                                     for row in events))
+            finally:
+                browser.close()
+
     def test_ui_reference_cannot_replace_email_and_same_agent_recovers_with_typed_read(self):
         self._run_answer_kind_native(ui=False)
 
@@ -729,7 +792,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                 self.assertEqual(page.locator('input[name="name"]').input_value(), 'Margaret Hamilton')
                 self.assertEqual(page.locator('input[name="email"]').input_value(), 'margaret@example.test')
                 self.assertEqual((host.application.write_requests, host.application.records_created), (0, 0))
-                self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
+                self.assertEqual(1, page.locator('.woa-submit-guide').count())
                 self.assertIn('manually', outcome.result.user_answer)
                 self.assertEqual(len(chat.run_ids), 1)
                 self.assertEqual(chat.actions.count('open_form_entry'), 1)
@@ -1059,7 +1122,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     self.assertEqual(host.application.records_created, 0)
                     submit = page.get_by_role("button", name="Save contact", exact=True)
                     self.assertTrue(submit.is_enabled())
-                    self.assertTrue(submit.evaluate("e => !!e.style.outline"))
+                    self.assertEqual(1, page.locator('.woa-submit-guide').count())
                     self.assertIn("highlighted 'Save contact'", outcome.result.user_answer)
                     self.assertIn("describe_form", chat.seen[0])
                     self.assertIn("prepare_form", chat.seen[0])
@@ -1109,7 +1172,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                     field = page.get_by_label(label, exact=True)
                     self.assertEqual(field.input_value(), value)
                     self.assertEqual(field.get_attribute('data-committed'), value)
-                self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
+                self.assertEqual(1, page.locator('.woa-submit-guide').count())
                 self.assertEqual(host.application.write_requests, 0)
                 self.assertEqual(host.application.records_created, 0)
             finally:
@@ -1137,7 +1200,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                 self.assertEqual(outcome.result.terminal_reason, "agent_finished", outcome.result.user_answer)
                 self.assertEqual(page.get_by_label("Priority", exact=True).input_value(), "Urgent", outcome.result.user_answer)
                 self.assertEqual(page.locator('#contact-priorities [aria-selected=true]').inner_text(), "Urgent")
-                self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
+                self.assertEqual(1, page.locator('.woa-submit-guide').count())
                 self.assertEqual(host.application.write_requests, 0)
                 self.assertEqual(host.application.records_created, 0)
             finally:
@@ -1167,7 +1230,7 @@ class NativeContactsBrowserTests(unittest.TestCase):
                 self.assertFalse(page.get_by_role('radio', name='Email only').is_checked())
                 self.assertEqual(page.get_by_label('Name', exact=True).input_value(), 'Synthetic draft')
                 self.assertEqual(page.locator('#contact-email-preferences').count(), 0)
-                self.assertTrue(page.get_by_role('button', name='Save contact').evaluate('e => !!e.style.outline'))
+                self.assertEqual(1, page.locator('.woa-submit-guide').count())
                 self.assertEqual(host.application.write_requests, 0)
                 self.assertEqual(host.application.records_created, 0)
             finally:
