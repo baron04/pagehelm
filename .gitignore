@@ -3,6 +3,8 @@
 
 # Local upstream repositories and downloaded artifacts.
 .q0-cache/
+deploy.local.toml
+local.local.toml
 
 # Python caches and local environments
 __pycache__/

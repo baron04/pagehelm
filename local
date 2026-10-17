@@ -1,0 +1,9 @@
+#!/bin/sh
+# Start the local acceptance environment; no arguments needed.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ ! -x "$ROOT/.venv/bin/python" ]; then
+  echo '缺少 .venv；请按 docs/guides/local-yudao.md 完成首次准备。' >&2
+  exit 2
+fi
+exec "$ROOT/.venv/bin/python" "$ROOT/examples/yudao/deploy/local/command.py" "$@"

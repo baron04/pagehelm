@@ -1,9 +1,10 @@
 #!/bin/sh
 # Recreate the yudao database from the schema scripts and restart the server.
-# Discards every record in the local yudao database. Needs YUDAO_CACHE.
+# Discards every record in the local yudao database. Defaults to .q0-cache/yudao.
 set -eu
 cd "$(dirname "$0")"
-: "${YUDAO_CACHE:?set YUDAO_CACHE to the directory holding server/, ui/ and business-schema.sql}"
+: "${YUDAO_CACHE:=$(cd ../../.. && pwd)/.q0-cache/yudao}"
+export YUDAO_CACHE
 docker compose rm -sf server mysql >/dev/null
 docker volume rm -f woa-yudao_mysql >/dev/null
 docker compose up -d mysql

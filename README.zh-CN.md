@@ -42,6 +42,18 @@ Web Operation Agent 是一个 alpha 阶段的框架，用于在第一方 Web 应
 - [运行时行为详情](docs/reference/runtime-behavior.md)
 - [安全边界](SECURITY.md)
 
+## 部署芋道演示站
+
+本地验收运行 **`./local`**，在 `http://localhost:48163` 启动或更新助手，复用本地合成数据应用，跳过未变化的前端构建。
+`./local status`、`./local check`、`./local logs` 提供诊断。
+首次准备见[本地验收指南](docs/guides/local-yudao.md)，仓库 Skill 为 `$local-yudao`。
+
+服务器和当前 checkout 的私有配置准备好后，运行 **`./deploy`** 即可部署。
+缓存固定在 `.q0-cache/yudao`，无需参数或环境变量。
+`./deploy check` 检查前置条件，`./deploy status` 查看线上版本。
+首次配置与故障恢复见[部署指南](docs/guides/deploy-yudao.md)。
+仓库 Skill `$deploy-yudao` 使用同一入口。
+
 ## 仓库结构
 
 ```text

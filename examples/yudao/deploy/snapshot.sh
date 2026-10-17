@@ -2,7 +2,9 @@
 # Export the local yudao database to $YUDAO_CACHE/snapshots/<name>.sql.gz,
 # or restore it from that file with `snapshot.sh restore <name>`.
 set -eu
-: "${YUDAO_CACHE:?set YUDAO_CACHE}"
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+: "${YUDAO_CACHE:=$(cd "$HERE/../../.." && pwd)/.q0-cache/yudao}"
+export YUDAO_CACHE
 mkdir -p "$YUDAO_CACHE/snapshots"
 if [ "${1:-}" = restore ]; then
   file="$YUDAO_CACHE/snapshots/${2:?snapshot name}.sql.gz"

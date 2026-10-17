@@ -42,6 +42,19 @@ Documentation: [docs/](docs/README.md) — concepts (why), guides (how), and the
 - [Runtime behavior in detail](docs/reference/runtime-behavior.md)
 - [Security boundary](SECURITY.md)
 
+## Deploy the Yudao demo
+
+For local acceptance, run **`./local`**. It starts or updates the assistant at
+`http://localhost:48163`, reuses the local synthetic application and skips unchanged
+frontend builds. `./local status`, `./local check`, and `./local logs` provide diagnostics.
+See the [local guide](docs/guides/local-yudao.md); the repository Skill is `$local-yudao`.
+
+Once the host and this checkout's private configuration are ready, deploy with **`./deploy`**.
+The cache lives at `.q0-cache/yudao`; no arguments or environment variables are needed.
+Use `./deploy check` for preflight and `./deploy status` for the live release.
+See the [deployment guide](docs/guides/deploy-yudao.md) for initial setup and recovery.
+The repository Skill `$deploy-yudao` uses the same entry point.
+
 ## Repository layout
 
 ```text

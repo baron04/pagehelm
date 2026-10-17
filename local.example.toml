@@ -1,0 +1,2 @@
+# Optional. Copy to local.local.toml only when adopting an existing synthetic stack.
+compose_project = "woa-yudao-local"

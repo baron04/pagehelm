@@ -8,6 +8,18 @@ Read `README.md`, then the matching page under `docs/` (`concepts/` for why, `gu
 
 Document what readers need to use, integrate, or operate the product. Visual styling, animation, exact UI copy, development preview controls, and patch-by-patch implementation details belong in frontend code/tests or internal work notes; they do not require public documentation updates.
 
+## Deployment entry point
+
+For local acceptance, run `./local` (no arguments); it serves `http://localhost:48163`.
+Use `./local status`, `./local check`, and `./local logs` for diagnostics. Read
+`docs/guides/local-yudao.md` and `.agents/skills/local-yudao/SKILL.md` for local work.
+Runtime entry points belong under `examples/yudao/deploy/`, never `.workbench/` or an evaluation harness.
+
+For the configured Yudao demo, use `./deploy` (no arguments). Use `./deploy check` for
+read-only preflight and `./deploy status` for the live release. Read
+`docs/guides/deploy-yudao.md` and `.agents/skills/deploy-yudao/SKILL.md` for deployment work.
+The local cache is `.q0-cache/yudao`; do not create version- or date-suffixed copies.
+
 ## Preserve the architecture boundary
 
 - Keep planning, model access, knowledge retrieval, session policy, write authorization, and audit state on the server.

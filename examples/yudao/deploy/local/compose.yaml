@@ -1,0 +1,23 @@
+# Loopback-only synthetic application. The assistant is run from the checkout.
+services:
+  mysql:
+    ports: !reset []
+    mem_limit: 1024m
+    memswap_limit: 1024m
+  redis:
+    mem_limit: 128m
+    memswap_limit: 128m
+  server:
+    environment:
+      JAVA_OPTS: ${YUDAO_JAVA_OPTS:--Xms512m -Xmx2048m}
+    mem_limit: 2048m
+    memswap_limit: 2048m
+  web:
+    ports: !override ["127.0.0.1:48161:80"]
+    networks: [default, ingress]
+    mem_limit: 128m
+    memswap_limit: 128m
+networks:
+  default:
+    internal: true
+  ingress: {}
