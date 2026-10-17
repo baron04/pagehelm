@@ -488,6 +488,15 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             admission, intent, permit, context, checkpoint = admitted
             settlement = None
             try:
+                if receipt.error_code == "stale_observation":
+                    # The Runtime refused this command before dispatch. A page may
+                    # have changed while its dialog loaded; verification of an
+                    # effect that never ran must not end the whole draft turn.
+                    s.ledger.append("action_effect_no_effect", tool=action,
+                        command_id=receipt.command_id, binding_digest=intent.binding_digest,
+                        observation_epoch=s.obs.epoch, submitted=False, persisted=False)
+                    return finish(receipt, state="unverified", code="stale_observation",
+                                  observations=observations)
                 if isinstance(admission, DraftStepAdmission) and receipt.error_code == "option_unavailable":
                     with s.receipt.stage("action_verification"):
                         admission.verify_no_effect(intent, permit, receipt, context=context, checkpoint=checkpoint)

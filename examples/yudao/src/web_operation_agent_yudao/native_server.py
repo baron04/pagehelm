@@ -352,10 +352,15 @@ class YudaoHost:
             action_policy = NativeModelReadActions(app.origin, app.goal_data,
                 self.ui.records if self.ui is not None else {}, model_goal, self.page_review)
             draft_steps = NativeDraftSteps(app.goal_data, app.ports.forms, self.page_review)
+            mutation_prefill = None
+            if self.config.native_writes and self.live_forms:
+                from .mutation_prefill import YudaoMutationPrefill
+                mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None)
             executor = SlimTurnExecutor(
                 **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
                 goal_port=model_goal, draft_steps=draft_steps,
+                mutation_prefill=mutation_prefill,
                 disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                 knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                          time_zone=app.goal_data.time_zone(),

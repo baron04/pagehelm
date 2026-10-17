@@ -140,14 +140,20 @@ def _next_outcome(page, conversation, timeout_s: float, operations: list, *, wri
                 if turn_events:
                     turn_events.end_approval_driver(approval_id)
                 raise
-            if decision not in {"approved", "denied"}:
+            if decision not in {"approved", "denied", "prefill"}:
                 if turn_events:
                     turn_events.end_approval_driver(approval_id)
-                raise ValueError("the isolated approval apparatus must approve or deny")
+                raise ValueError("the isolated approval apparatus returned an unknown decision")
+            if decision == "prefill" and not visible["offer_prefill"]:
+                if turn_events:
+                    turn_events.end_approval_driver(approval_id)
+                raise ValueError("the visible write card did not offer form prefill")
             if write_cards is not None:
                 write_cards.append({**visible, "decision": decision,
                     "seconds": time.monotonic() - started if started is not None else None})
-            button = card.locator(_APPROVE_CONTROL if decision == "approved" else '[data-testid="woa-deny"]')
+            button = card.locator({"approved": _APPROVE_CONTROL,
+                                   "denied": '[data-testid="woa-deny"]',
+                                   "prefill": '[data-testid="woa-prefill"]'}[decision])
             button.scroll_into_view_if_needed()
             try:
                 button.click()
@@ -179,7 +185,9 @@ def _observe_write_card(page, card, timeout_s):
         const button=n.querySelector('[data-testid="woa-approve"]');
         if (r.width<=0 || r.height<=0 || r.bottom<=0 || r.top>=innerHeight || !button || button.disabled)
             return null;
+        const prefill=n.querySelector('[data-testid="woa-prefill"]');
         return {text:n.innerText, effect:n.querySelector('.woa-approval__effect').innerText,
+            offer_prefill:!!prefill && !prefill.disabled && prefill.getBoundingClientRect().width>0,
             targets:[...n.querySelectorAll('.woa-approval__targets li')].map(n=>n.innerText),
             details:[...n.querySelectorAll('.woa-approval__detail')].map(n=>({kind:n.dataset.kind,
                 label:n.querySelector('strong').textContent,text:n.querySelector('pre').textContent}))};

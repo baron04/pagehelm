@@ -2247,7 +2247,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         return super()._propose(s, writes, operation, inputs, turn)
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
-                 draft_steps=None, **kwargs):
+                 draft_steps=None, mutation_prefill=None, **kwargs):
         application, goal_port = kwargs["application"], kwargs["goal_port"]
         self.knowledge = knowledge
         knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
@@ -2264,7 +2264,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                         conventions=conventions), procedures,
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
-            owner.verification_messages, draft_steps)
+            owner.verification_messages, draft_steps, mutation_prefill)
         super().__init__(profile=profile, debug_dir=_DEBUG_DIR, **kwargs)
 
 

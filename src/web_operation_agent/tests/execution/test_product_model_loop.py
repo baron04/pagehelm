@@ -13,6 +13,7 @@ from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.execution.receipt import TurnReceipt
 from web_operation_agent.execution.action_admission import ActionPermit, ActionEffect, ActionAdmissionRefused
+from web_operation_agent.business.draft_steps import DraftStepPermit
 from web_operation_agent.tests.goal.test_data_read_tools import context
 
 
@@ -89,6 +90,49 @@ class LoopFixture(ModelDrivenTurnExecutor):
 
 
 class DispatchDiagnosticsTests(unittest.TestCase):
+    def test_stale_draft_receipt_never_dispatches_or_ends_the_turn(self):
+        events = []
+        class Draft:
+            application_id = "sample"
+            required_scope = "records:read"
+            actions = frozenset({"fill"})
+            def handles(self, intent): return True
+            def prepare_step(self, intent, **kwargs):
+                return DraftStepPermit(intent.binding_digest, "review", "exact",
+                                       "form:create", "live", "enter_value", (("Name", "Ada"),))
+            def verify_step(self, *args, **kwargs):
+                raise AssertionError("a pre-dispatch refusal has no effect to verify")
+        operation = context()
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
+        executor.config = NS(action_policy=None)
+        executor.profile = NS(draft_steps=Draft())
+        executor.application = NS(descriptor=NS(application_id="sample"))
+        executor.channel = NS(latest_observation_envelope=None)
+        before = page()
+        before.elements.append(ElementRef("e2", "textbox", "Name", "input", 1,
+            {"form_scope": "form:create", "form_instance": "live", "field_label": "Name", "value": ""}))
+        state = NS(obs=before, terminal_reason="", detail="", step=0, run_id="run",
+            cancelled=lambda: False, budget=NS(check=lambda: None), receipt=TurnReceipt(),
+            approvals=NS(confirm_operation=lambda *a, **kw: ("", ""),
+                         context=lambda *a, **kw: operation, operation_hold_ms=1000),
+            ledger=NS(append=lambda event, **facts: events.append((event, facts))))
+        after = page(2)
+        receipt = ActionReceipt(1, "stale-command", "fill",
+            {"ref": "e2", "epoch": 1, "value": "Ada", "commit": True}, False,
+            error_code="stale_observation", observation=after,
+            url_before=before.url, url_after=after.url, write_guard_held=True)
+        def dispatch(*args, **kwargs):
+            state.obs = after
+            return receipt
+        with patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch) as browser:
+            executor._dispatch(state, "fill", {"ref": "e2", "value": "Ada", "commit": True})
+        result = executor._page_action_outcome
+        self.assertEqual((result.state, result.error_code, state.terminal_reason),
+                         ("unverified", "stale_observation", ""))
+        self.assertEqual(browser.call_count, 1)
+        self.assertIn("action_effect_no_effect", [event for event, _ in events])
+        self.assertNotIn("model_action_unverified", [event for event, _ in events])
+
     def dispatch(self, *, refused=False):
         clock, events = [0.0], []
         def advance(seconds):
