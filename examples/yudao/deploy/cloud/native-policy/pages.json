@@ -4557,6 +4557,22 @@
       [
         "/mes/pro/feedback",
         "form_entry"
+      ],
+      [
+        "/pms/kb/library",
+        "navigation"
+      ],
+      [
+        "/pms/kb/library",
+        "tabs"
+      ],
+      [
+        "/pms/kb/library",
+        "query"
+      ],
+      [
+        "/pms/kb/library",
+        "paging"
       ]
     ],
     "menu_sha256": "4f8968d354dd8995800328327d71cab8297df87342fe2c4971cbdeddfd38baac",
