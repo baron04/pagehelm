@@ -682,12 +682,17 @@ class KnowledgeTests(unittest.TestCase):
             docs["paths"]["/admin-api/leads/page"]))
 
         class CustomerClient(Client):
+            matches = 1
+            total = 1
+
             def get(self, path, **params):
                 if path == "crm/customer/page":
                     self.calls.append((path, params))
                     records = [] if params.get("sceneType") else [
-                        {"id": 42, "name": "Q24 外部客户", "ownerUserName": "列表可见负责人"}]
-                    return {"total": len(records), "list": records}
+                        {"id": 42 + n, "name": "Q24 外部客户", "ownerUserName": "列表可见负责人"}
+                        for n in range(self.matches)]
+                    return {"total": 0 if params.get("sceneType") else self.total,
+                            "list": records}
                 if path == "crm/customer/get":
                     raise DataRefused("detail denied", permission_denied=True)
                 return super().get(path, **params)
@@ -699,6 +704,15 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn('"ownerUserName": "列表可见负责人"', text)
         self.assertIn("编号 42 的详情：明确拒绝", text)
         self.assertIn("仅列表可读字段", text)
+        partial = know.call_api("crm/customer/page", {"pageNo": 1, "pageSize": 10,
+                                                     "name": "Q24"}, ["name", "ownerUserName"])
+        self.assertNotIn('"ownerUserName": "列表可见负责人"', partial)
+        for count in (1, 2):
+            with self.subTest(declared_total=count):
+                know.client.matches, know.client.total = 2, count
+                ambiguous = know.call_api("crm/customer/page", {"pageNo": 1, "pageSize": 10,
+                    "name": "Q24 外部客户"}, ["name", "ownerUserName"])
+                self.assertNotIn('"ownerUserName": "列表可见负责人"', ambiguous)
 
     def test_credentials_in_a_read_are_blanked_before_the_model_is_told(self):
         text = self.know.call_api("channels/page", {"pageNo": 1})
@@ -803,41 +817,54 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("全表的 total 和自动分组不代表这批记录", SYSTEM)
         self.assertIn("完整分页只证明读全了该次接口查询范围", VERIFY_SYSTEM)
 
-    def test_code_named_cohort_withholds_unfiltered_list_evidence(self):
+    def test_subset_comparison_can_read_both_filtered_and_whole_lists(self):
         docs = json.loads(json.dumps(DOCS))
-        docs["paths"]["/admin-api/orders/page"]["get"]["parameters"].append(
-            {"name": "name", "in": "query", "schema": {"type": "string"}})
+        docs["paths"]["/admin-api/erp/product/page"] = json.loads(json.dumps(
+            docs["paths"]["/admin-api/orders/page"]))
+        for path in ("/admin-api/orders/page", "/admin-api/erp/product/page"):
+            docs["paths"][path]["get"]["parameters"].append(
+                {"name": "name", "in": "query", "schema": {"type": "string"}})
 
         class CohortClient(Client):
             def get(self, path, **params):
-                if path == "orders/page":
+                if path in ("orders/page", "erp/product/page"):
                     self.calls.append((path, params))
                     records = [{"id": 1, "name": "Q24 商品 001", "price": 100},
                                {"id": 2, "name": "Q24 商品 002", "price": 90},
                                {"id": 3, "name": "基础商品", "price": 500}]
                     if params.get("name"):
-                        records = [row for row in records if params["name"] in row["name"]]
+                        records = [row for row in records if (
+                            params["name"] in row["name"] if path == "erp/product/page"
+                            else params["name"] == row["name"])]
                     size, page = params["pageSize"], params["pageNo"]
                     return {"total": len(records), "list": records[(page - 1) * size:page * size]}
                 return super().get(path, **params)
 
         know = ActorKnowledge(CohortClient(), lambda: docs)
-        token = _CURRENT_REQUEST.set("Q24 商品 里价格最高的两个是哪几个？")
+        token = _CURRENT_REQUEST.set("比较 Q24 商品里最高价和全表最高价，两者相差多少？")
         try:
-            broad = know.call_api("orders/page", {"pageNo": 1, "pageSize": 3}, ["name", "price"])
-            self.assertIn('name="Q24 商品"', broad)
-            self.assertNotIn("total=", broad)
-            self.assertNotIn("按数值降序", broad)
-            self.assertNotIn("基础商品", broad)
+            broad = know.call_api("erp/product/page", {"pageNo": 1, "pageSize": 3},
+                                  ["name", "price"])
+            self.assertIn("未带业务筛选条件", broad)
+            self.assertIn("total=3", broad)
+            self.assertIn("最大 500", broad)
+            self.assertIn("基础商品", broad)
             self.assertEqual(know.last_read["declared_total"], 3)
-            first_page = know.call_api("orders/page", {"pageNo": 1, "pageSize": 2})
-            self.assertNotIn("total=", first_page)
-            self.assertNotIn("Q24 商品 001", first_page)
-            filtered = know.call_api("orders/page", {"pageNo": 1, "pageSize": 3,
-                                                      "name": "Q24 商品"}, ["name", "price"])
+            first_page = know.call_api("erp/product/page", {"pageNo": 1, "pageSize": 2})
+            self.assertIn("total=3", first_page)
+            self.assertIn("Q24 商品 001", first_page)
+            filtered = know.call_api("erp/product/page", {"pageNo": 1, "pageSize": 3,
+                                                           "name": "Q24 商品"}, ["name", "price"])
             self.assertIn("total=2（符合条件的总数）", filtered)
             self.assertIn("第 1 名，price=100", filtered)
             self.assertNotIn("基础商品", filtered)
+            other_api = know.call_api("orders/page", {"pageNo": 1, "pageSize": 3},
+                                      ["name", "price"])
+            self.assertIn("total=3（符合条件的总数）", other_api)
+            self.assertIn("基础商品", other_api)
+            exact_only = know.call_api("orders/page", {"pageNo": 1, "pageSize": 3,
+                                                        "name": "Q24 商品"}, ["name", "price"])
+            self.assertIn("total=0（符合条件的总数）", exact_only)
         finally:
             _CURRENT_REQUEST.reset(token)
 
@@ -1770,7 +1797,7 @@ class LoopTests(unittest.TestCase):
             [{"label": "下次联系时间", "value": "2026-10-23 10:00:00"}],
             "改成这周五，先填到表单里", ["厦门海湾食品的下次联系时间是哪天？"]), [])
 
-    def test_single_input_cannot_bypass_draft_field_scope(self):
+    def test_single_field_cannot_inherit_history_when_current_request_names_another(self):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge = None
         executor._earlier_words = ["这个客户的联系人和手机号分别是什么？"]
@@ -1783,12 +1810,16 @@ class LoopTests(unittest.TestCase):
         request_token = _CURRENT_REQUEST.set("把这个联系人先填到另一客户的编辑表单里")
         intent_token = _WRITE_INTENT.set(WriteIntent("draft"))
         try:
-            result = executor._tool(state, "input", {"index": 2, "text": "13350000184"},
-                                    {"touched": []})
+            for tool, args in (("input", {"index": 2, "text": "13350000184"}),
+                               ("fill_fields", {"fields": [
+                                   {"label": "手机号码", "value": "13350000184"}]})):
+                with self.subTest(tool=tool):
+                    result = executor._tool(state, tool, args, {"touched": [], "trace": []})
+                    self.assertEqual((result.state, result.error_code),
+                                     ("refused", "unrequested_draft_field"))
         finally:
             _WRITE_INTENT.reset(intent_token)
             _CURRENT_REQUEST.reset(request_token)
-        self.assertEqual((result.state, result.error_code), ("refused", "unrequested_draft_field"))
 
     def test_a_named_range_uses_its_unlabelled_end_from_the_fresh_observation(self):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)

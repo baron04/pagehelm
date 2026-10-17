@@ -81,18 +81,6 @@ _TIME_KEY = re.compile(r"(?:Time|Date)$", re.I)
 #: Numbers that name or classify a row; a sum or a highest value of them means nothing.
 _NOT_A_QUANTITY = re.compile(r"(?:^|[a-z])(?:Id|No|Status|State|Type|Sort|Level|Sex|Code|Enable|Flag)$"
                               r"|^(?:id|no|status|state|type|sort|level|sex|code|enable|flag)$")
-_CODE_COHORT = re.compile(r"(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{3,24}(?:\s+[\u4e00-\u9fff]{1,8})?)\s*(?=里|中|下|按)")
-
-
-def _code_cohort_name(request: str) -> str:
-    """A single literal code-like name prefix in the user's current request.
-
-    This is a narrow safety signal, not a general language parser. It can withhold an
-    unscoped read, but must never rewrite the user's query or choose a record.
-    """
-    names = {match.group(1).strip() for match in _CODE_COHORT.finditer(request)
-             if any(char.isdigit() for char in match.group(1).split()[0])}
-    return next(iter(names)) if len(names) == 1 else ""
 
 
 # -- what the application already publishes: the actor's menu and its API description ------
@@ -558,7 +546,12 @@ class ActorKnowledge:
                                 # The same actor may read list fields even when a detail
                                 # permission check denies this record. Keep that evidence
                                 # available without claiming detail access.
-                                if isinstance(candidate.get("ownerUserName"), str):
+                                if (type(count) is int and count == 1
+                                        and len(others["list"]) == 1
+                                        and isinstance(params.get("name"), str)
+                                        and isinstance(candidate.get("name"), str)
+                                        and candidate["name"].strip() == params["name"].strip()
+                                        and isinstance(candidate.get("ownerUserName"), str)):
                                     listed = {key: candidate[key] for key in
                                               ("id", "name", "ownerUserName") if key in candidate}
                                     out.append("同账号不限范围列表候选（仅列表可读字段）:")
@@ -589,20 +582,6 @@ class ActorKnowledge:
             if exc.permission_denied or exc.read_failed:
                 raise
             return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
-        anchor = _code_cohort_name(_CURRENT_REQUEST.get())
-        if (rows is not None and anchor and "name" in published
-                and str(params.get("name", "")).strip().casefold() != anchor.casefold()
-                and any(isinstance(row, dict) and isinstance(row.get("name"), str)
-                        and anchor.casefold() in row["name"].casefold() for row in rows)):
-            # A broad page may contain the named cohort and unrelated records. Do not
-            # offer its total or computed ranks for a request about that cohort.
-            self.last_read = {"count": len(rows), "scope": self._by_path[path]["tag"],
-                              "complete": whole, "declared_total": declared_total}
-            return redacted(
-                f"本轮用户点名的名称片段“{anchor}”出现在本次列表，但 name 查询条件并非该片段。"
-                "这次结果不提供 total、合计、极值、排名或行内容，不能用来回答该名称范围。"
-                f"请带 name={json.dumps(anchor, ensure_ascii=False)} 重新读取；若应用筛选含义不匹配，"
-                "须逐行核实或说明无法完整核实。", self.handoffs)
         candidates = self.money_review.fields_for(relative) if self.money_review is not None else {}
         read_rows = rows if rows is not None else [data]
         certified = {key: spec for key, spec in candidates.items()
@@ -1907,7 +1886,10 @@ class YudaoLoopProcedures:
             for e in getattr(s.obs, "elements", ()))
         if isinstance(intent, WriteIntent) and intent.mode == "draft" and not then_click and form_batch:
             unrequested = _unrequested_draft_fields(
-                fields[:12], _CURRENT_REQUEST.get(), getattr(self, "_earlier_words", ()))
+                fields[:12], _CURRENT_REQUEST.get(), getattr(self, "_earlier_words", ()),
+                other_labels=[str(e.attrs.get("field_label") or "") for e in s.obs.elements
+                              if str(e.attrs.get("form_scope") or "").startswith(("dialog:", "form:"))
+                              and e.attrs.get("page_control") != "query"])
             if unrequested:
                 return LoopToolResult(
                     "这些表单字段没有得到用户请求支持，整批未填写：" + "、".join(unrequested)
