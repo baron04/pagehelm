@@ -46,6 +46,7 @@ services:
               "--source-root", "/opt/source", "--source-release", "${YUDAO_RELEASE:-v2026.09}",
               "--native-read-policy", "/opt/native-policy/fence.json",
               "--native-page-policy", "/opt/native-policy/pages.json",
+              "--native-filter-semantics", "/opt/native-policy/filters.json",
               # The demo site offers writes; remove this line for a read-only site.
               "--native-writes"]
     volumes:

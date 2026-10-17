@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 
+from .filter_semantics import FilterSemantics
 from .model_page_policy import NativePageReview
 from .money_review import VerifiedMoneyReview
 from .page_guard import NativePageGuard
@@ -25,6 +26,7 @@ class ValidatedNativeDeployment:
     live_forms: bool
     page_review: NativePageReview | None
     money_review: VerifiedMoneyReview | None = None
+    filter_semantics: FilterSemantics | None = None
 
     @property
     def policy(self): return json.loads(self.policy_json) if self.policy_json else None
@@ -56,4 +58,12 @@ def validate_native_deployment(config):
         ui = UiSource.read(config.ui_source)
         money_review = VerifiedMoneyReview.load(money_path, ui_source=config.ui_source,
                                                 release=config.source_release, ui=ui)
-    return ValidatedNativeDeployment(json.dumps(policy), True, page_review, money_review)
+    filter_semantics = None
+    filter_path = getattr(config, "native_filter_semantics", None)
+    if filter_path is not None:
+        scan = policy.get("scan") if isinstance(policy.get("scan"), dict) else {}
+        filter_semantics = FilterSemantics.load(
+            _document(filter_path, "native filter"), release=config.source_release,
+            source_digest=scan.get("source_digest"))
+    return ValidatedNativeDeployment(json.dumps(policy), True, page_review, money_review,
+                                     filter_semantics)

@@ -64,7 +64,8 @@ def check() -> cfg.Configuration:
         raise cfg.LocalError("缺少命令：" + ", ".join(missing))
     config = cfg.configuration()
     for file in (cfg.CACHE / "ui/dist-prod/index.html", cfg.CACHE / "server/yudao-server/target/yudao-server.jar",
-                 cfg.CACHE / "business-schema.sql", cfg.POLICIES / "fence.json", cfg.POLICIES / "pages.json"):
+                 cfg.CACHE / "business-schema.sql", cfg.POLICIES / "fence.json", cfg.POLICIES / "pages.json",
+                 cfg.POLICIES / "filters.json"):
         if not file.is_file():
             raise cfg.LocalError(f"缺少 {file.relative_to(cfg.ROOT)}；见本地部署指南的首次准备。")
     cfg.load_model_environment()  # Validates required names and price only; no model call.
@@ -78,7 +79,8 @@ def check() -> cfg.Configuration:
         raise cfg.LocalError("页面控制器不符合锁定版本；按部署指南准备缓存中的 woa/ 资源。") from exc
     validate_native_deployment(YudaoHostConfig(api_base=cfg.UPSTREAM, public_origin=cfg.ORIGIN,
         state_dir=cfg.STATE / "state", source_release=cfg.RELEASE,
-        native_read_policy=cfg.POLICIES / "fence.json", native_page_policy=cfg.POLICIES / "pages.json"))
+        native_read_policy=cfg.POLICIES / "fence.json", native_page_policy=cfg.POLICIES / "pages.json",
+        native_filter_semantics=cfg.POLICIES / "filters.json"))
     subprocess.run(["docker", "info"], check=True, capture_output=True, timeout=15)
     subprocess.run(["docker", "compose", "version"], check=True, capture_output=True, timeout=15)
     print("前置检查通过：Docker、模型配置、固定缓存、页面控制器和准入策略。", flush=True)
