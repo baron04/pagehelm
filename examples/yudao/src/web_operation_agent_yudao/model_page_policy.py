@@ -23,6 +23,13 @@ from .read_actions import NativeReadActions
 
 HANDLERS = frozenset({"navigation", "tabs", "query", "paging", "form_entry", "fields", "lines"})
 
+# D2 (2026-10-17): read-shaped page families ride the actor's own menu. The
+# release scan visits every menu page and moves pages whose load or query writes
+# into `excluded`; form-entry, field and line effects stay bound to per-route
+# handler entries produced by that scan. Record detail templates keep arriving
+# through their router-evidence handler entries.
+MENU_GRANTED = frozenset({"navigation", "tabs", "query", "paging"})
+
 
 def _matches_route(template, path):
     return re.fullmatch(re.escape(template).replace(r"\{id\}", r"[1-9][0-9]*"), path) is not None
@@ -69,13 +76,17 @@ class NativePageReview:
 
     @classmethod
     def load(cls, document, release):
+        # A tiered (schema 2) policy may rest on its generated menu alone; a
+        # schema-1 policy is only its reviewed handlers, so it needs at least one.
+        min_handlers = 1 if isinstance(document, dict) and document.get("schema_version") == 1 else 0
         if (not isinstance(document, dict) or document.get("schema_version") not in {1, 2}
                 or set(document) != ({"schema_version", "release", "review", "handlers"}
                     if document.get("schema_version") == 1 else
                     {"schema_version", "release", "review", "handlers", "generated"})
                 or not release or document["release"] != release
                 or not isinstance(document["review"], str) or not 0 < len(document["review"]) <= 200
-                or not isinstance(document["handlers"], list) or not 1 <= len(document["handlers"]) <= 2000):
+                or not isinstance(document["handlers"], list)
+                or not min_handlers <= len(document["handlers"]) <= 2000):
             raise ValueError("native page policy must match the deployment release and reviewed handlers")
         scopes = []
         for item in document["handlers"]:
@@ -144,10 +155,13 @@ class NativePageReview:
     def permits(self, kind, path, control=None):
         if any(family == kind and _matches_route(route, path) for route, family in self.excluded):
             return False
-        # A menu address alone does not review page-load effects. Some native pages
-        # issue writing GETs after navigation has settled, outside the action window.
-        # Navigation therefore needs an explicit reviewed handler like every other
-        # page action. The generated menu remains an actor-visible address index.
+        # A menu address grants the read-shaped families (D2). Page-load effects of
+        # every menu route were scanned at release time; routes that write on load
+        # or query live in `excluded`, which is checked above. Form effects remain
+        # bound to exact handler entries: a menu address alone does not review them.
+        if (kind in MENU_GRANTED and control is None
+                and any(_matches_route(route, path) for route in self.menu_routes)):
+            return True
         return any(family == kind and _matches_route(route, path)
                    and (control is None or control in controls)
                    for family, route, _, _, controls in self.scopes)
@@ -175,6 +189,8 @@ class NativePageReview:
     @property
     def capabilities(self):
         installed = {kind for kind, *_ in self.scopes}
+        if self.menu_routes:
+            installed |= MENU_GRANTED
         return frozenset({"handoffs"} | {name for kind, name in (
             ("tabs", "sections"), ("query", "facets"), ("paging", "paging"),
             ("fields", "fill"), ("lines", "lines")) if kind in installed})
@@ -198,8 +214,9 @@ class NativeModelReadActions(NativeReadActions):
     actions = frozenset({"goto", "click", "fill", "select"})
 
     def __init__(self, origin, data, record_routes, goal_port, review):
-        list_tabs = (route for family, route, *_ in review.scopes
-                     if family == "tabs" and "{id}" not in route)
+        list_tabs = tuple(review.menu_routes) + tuple(
+            route for family, route, *_ in review.scopes
+            if family == "tabs" and "{id}" not in route)
         super().__init__(origin, data, record_routes, review=review.reference,
                          list_tab_routes=list_tabs)
         self.actions = type(self).actions
@@ -220,16 +237,15 @@ class NativeModelReadActions(NativeReadActions):
         navigation = element.attrs.get("navigation_kind")
         if navigation in {"page", "branch"}:
             target = element.attrs.get("navigation_path", "")
+            prefix = target.rstrip("/") + "/"
             reviewed = (self.page_review.permits("navigation", target) if navigation == "page" else
-                any(family == "navigation" and route.startswith(target.rstrip("/") + "/")
-                    for family, route, *_ in self.page_review.scopes))
+                any(family == "navigation" and route.startswith(prefix)
+                    for family, route, *_ in self.page_review.scopes)
+                or any(route.startswith(prefix) for route in self.page_review.menu_routes))
             if not reviewed:
                 raise ActionAdmissionRefused("unreviewed")
             return super().admit(intent, context=context, checkpoint=checkpoint)
         category = "tabs" if element.role == "tab" else "navigation"
-        if (element.role == "tab" and before.record_route != path
-                and not self.page_review.explicitly_reviewed("tabs", path)):
-            raise ActionAdmissionRefused("unreviewed")
         if element.attrs.get("page_control") in {"query", "pagination", "page_size"} or element.role == "option":
             return self._query(intent, element, context, checkpoint)
         if not self.page_review.permits(category, path):

@@ -1217,7 +1217,8 @@ class ActionFeedbackTests(unittest.TestCase):
                 self.assertEqual(["click"], sent)
                 self.assertEqual((state, dispatch, code), (result.state, result.dispatch, result.error_code))
                 if code == "unreviewed":
-                    self.assertIn("尚未审核", result.feedback)
+                    self.assertIn("不在本部署的支持范围内", result.feedback)
+                    self.assertIn("不要据此判断账号无权限", result.feedback)
                 if code == "invalid_target":
                     self.assertIn("不能据此断定菜单未审核", result.feedback)
 

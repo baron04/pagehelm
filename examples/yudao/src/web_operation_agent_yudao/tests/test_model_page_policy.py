@@ -24,6 +24,26 @@ def review_document():
                      for kind in ("navigation", "query", "paging", "fields", "lines", "form_entry")]}
 
 
+def _json_digest(value, **kwargs):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, separators=(",", ":"),
+                                     **kwargs).encode()).hexdigest()
+
+
+def tiered_document(excluded=(), handlers=()):
+    """A schema-2 policy whose menu routes carry no handler entries of their own."""
+    routes = ["/crm/customer", "/eam/asset/list", "/pms/pm/project/list", "/system/user"]
+    return {"schema_version": 2, "release": "synthetic-v2", "review": "synthetic-tiered-review",
+            "handlers": list(handlers),
+            "generated": {"routes": routes, "excluded": [list(item) for item in excluded],
+                          "menu_sha256": _json_digest(routes), "fence_sha256": "f" * 64,
+                          "columns": {}, "columns_sha256": _json_digest({}, sort_keys=True)}}
+
+
+def router_handler(kind, route="/crm/customer/detail/{id}"):
+    return {"kind": kind, "route": route, "evidence": "src/router/modules/remaining.ts",
+            "sha256": "b" * 64, "controls": []}
+
+
 def deployment_review():
     path = Path(__file__).resolve().parents[3] / "deploy/cloud/native-policy/pages.json"
     document = json.loads(path.read_text())
@@ -47,7 +67,10 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(review.labels_on("/erp/sale/order")["totalPrice"], "含税金额")
         self.assertTrue(review.reviewed_control("lines", "/erp/sale/order", "+ 添加销售产品"))
         self.assertFalse(review.reviewed_control("lines", "/erp/sale/order", "保存"))
-        self.assertFalse(review.permits("query", "/system/user"))
+        # D2 counter-example (the /system/user navigation incident): read-shaped
+        # families ride the actor menu; excluded routes stay refused.
+        self.assertTrue(review.permits("navigation", "/system/user"))
+        self.assertTrue(review.permits("query", "/system/user"))
         self.assertFalse(review.permits("form_entry", "/mes/pro/feedback", "新增"))
         self.assertFalse(review.permits("fields", "/mes/pro/feedback"))
         self.assertTrue(review.explicitly_reviewed("tabs", "/crm/customer"))
@@ -64,15 +87,22 @@ class ReviewTests(unittest.TestCase):
         self.assertFalse(narrowed.permits("fields", "/crm/customer/detail/42"))
         self.assertFalse(review.permits("fields", "/erp/stock/warehouse/unknown"))
 
-    def test_wallet_balance_is_in_the_generated_menu_review(self):
+    def test_wallet_balance_menu_route_is_readable_and_unsupported_routes_stay_excluded(self):
         review = deployment_review()
         route = "/pay/wallet/wallet-balance"
         self.assertIn(route, review.menu_routes)
-        self.assertFalse(review.permits("navigation", route))
-        self.assertFalse(review.permits("navigation", "/pms/pm/project/list"))
-        self.assertFalse(review.permits("query", route))
-        self.assertFalse(review.permits("form_entry", route, "新增"))
+        for kind in ("navigation", "tabs", "query", "paging"):
+            self.assertTrue(review.permits(kind, route), kind)
         self.assertFalse(review.permits("navigation", route + "/detail/1"))
+        excluded_routes = {item[0] for item in review.excluded}
+        self.assertIn("/pms/pm/project/list", excluded_routes)
+        self.assertIn("/mes/pro/feedback", excluded_routes)
+        sourceless = sorted(item for item in excluded_routes if item.startswith(("/eam/", "/cms/")))
+        self.assertEqual(108, len(sourceless))
+        for kind in ("navigation", "tabs", "query", "paging"):
+            self.assertFalse(review.permits(kind, "/pms/pm/project/list"), kind)
+            self.assertFalse(review.permits(kind, sourceless[0]), kind)
+        self.assertFalse(review.permits("form_entry", "/mes/pro/feedback", "新增"))
 
     def test_release_exact_routes_and_capability_declarations(self):
         review = NativePageReview.load(review_document(), "synthetic-v1")
@@ -103,6 +133,46 @@ class ReviewTests(unittest.TestCase):
             with self.assertRaises(ValueError): NativePageReview.load(doc, "synthetic-v1")
 
 
+class TieredReviewTests(unittest.TestCase):
+    """D2 tiers: the menu grants read-shaped families; entries grant form families."""
+
+    def review(self, **kwargs):
+        return NativePageReview.load(tiered_document(**kwargs), "synthetic-v2")
+
+    def test_menu_route_grants_read_shaped_families_without_handler_entries(self):
+        review = self.review()
+        for kind in ("navigation", "tabs", "query", "paging"):
+            self.assertTrue(review.permits(kind, "/system/user"), kind)
+        for kind in ("form_entry", "fields", "lines"):
+            self.assertFalse(review.permits(kind, "/system/user"), kind)
+        self.assertFalse(review.permits("form_entry", "/system/user", "新增"))
+        self.assertFalse(review.permits("query", "/system/user/unknown"))
+        self.assertFalse(review.permits("query", "/not-in-actor-menu"))
+
+    def test_excluded_route_wins_over_the_menu_grant_per_family(self):
+        review = self.review(excluded=[("/pms/pm/project/list", "navigation"),
+                                       ("/eam/asset/list", "query")])
+        self.assertFalse(review.permits("navigation", "/pms/pm/project/list"))
+        self.assertTrue(review.permits("query", "/pms/pm/project/list"))
+        self.assertFalse(review.permits("query", "/eam/asset/list"))
+        self.assertTrue(review.permits("navigation", "/eam/asset/list"))
+
+    def test_record_detail_template_entries_keep_admitting_read_families(self):
+        review = self.review(handlers=[router_handler(kind) for kind in
+                                       ("navigation", "tabs", "query", "paging")])
+        self.assertTrue(review.permits("navigation", "/crm/customer/detail/42"))
+        self.assertTrue(review.permits("tabs", "/crm/customer/detail/42"))
+        self.assertFalse(review.permits("navigation", "/crm/customer/detail/abc"))
+        excluded = self.review(excluded=[("/crm/customer/detail/{id}", "navigation")],
+                               handlers=[router_handler("navigation")])
+        self.assertFalse(excluded.permits("navigation", "/crm/customer/detail/42"))
+
+    def test_menu_grant_declares_read_capabilities_without_scopes(self):
+        review = self.review()
+        self.assertEqual(frozenset({"handoffs", "sections", "facets", "paging"}),
+                         review.capabilities)
+
+
 class QueryTests(unittest.TestCase):
     page = read_fixture.NativeReadActionTests.page
     def setUp(self):
@@ -130,6 +200,23 @@ class QueryTests(unittest.TestCase):
         self.policy = NativeModelReadActions("https://fixture.test", data, {},
             NS(outline_index=lambda **kw: data.index(context=kw["context"])),
             NativePageReview.load(document, "synthetic-v1"))
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        selected = replace(tab, epoch=2, attrs={**tab.attrs,
+                                                "aria-selected": "true", "panel_ready": "true"})
+        after = replace(self.page(2, path="/crm/customer", elements=(selected,)),
+            page_read={**self.proof, "revision": 2, "query_digest": "c" * 64},
+            page_query={"path": self.proof["path"], "parameters": {"sceneType": "2"}})
+        self.transact(before, after, "click", {"ref": "e1"})
+
+    def test_list_tab_on_a_menu_route_needs_no_tabs_entry(self):
+        tab = ElementRef("e1", "tab", "我参与的", "div", 1,
+                         {"id": "tab-2", "aria-controls": "pane-2", "aria-selected": "false"})
+        before = replace(self.page(path="/crm/customer", elements=(tab,)), page_read=self.proof,
+            page_query={"path": self.proof["path"], "parameters": {"sceneType": "1"}})
+        data = self.policy.data
+        self.policy = NativeModelReadActions("https://fixture.test", data, {},
+            NS(outline_index=lambda **kw: data.index(context=kw["context"])),
+            NativePageReview.load(tiered_document(), "synthetic-v2"))
         self.runtime = ActionAdmission(self.policy, "yudao")
         selected = replace(tab, epoch=2, attrs={**tab.attrs,
                                                 "aria-selected": "true", "panel_ready": "true"})
@@ -265,15 +352,13 @@ class QueryTests(unittest.TestCase):
         with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
             self.transact(replace(before, elements=[unknown]), after, "click", {"ref":"e1"})
 
-    def test_generated_menu_address_without_navigation_review_is_refused(self):
+    def test_menu_address_navigation_still_requires_the_actor_page_index(self):
         route = "/pay/wallet/wallet-balance"
         self.policy.page_review = deployment_review()
         self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[NS(key=route)]))
         before = self.page()
-        after = replace(self.page(2, path=route), page_read={**self.proof,
-            "path": "/admin-api/pay/wallet/page", "total": 0, "rows": 0})
-        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
-            self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
+        after = self.page(2, path=route)
+        self.transact(before, after, "goto", {"url": "https://fixture.test" + route})
         self.policy.goal_port = NS(outline_index=lambda **kw: NS(pages=[]))
         self.runtime = ActionAdmission(self.policy, "yudao")
         with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
