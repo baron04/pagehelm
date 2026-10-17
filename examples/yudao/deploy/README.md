@@ -213,8 +213,13 @@ uses fixed Runtime actions. Yudao owns the framework-specific procedures.
 
 Startup requires `--native-read-policy` in v2 `method-fence` mode, matching
 `--source-release`, `--native-page-policy` and the application's
-own read-only window. The page policy separately lists exact route/template scopes,
-reviewed handler families and exact form-entry/line-add controls. It does not grant
+own read-only window. The page policy tiers admission: it grants navigation, tabs,
+query and paging on the actor's generated menu routes and on the record-detail
+templates derived from the pinned UI source, while opening forms, filling fields
+and adding lines still require per-route handler entries with exact
+form-entry/line-add controls. A generated exclusion list -- routes whose load or
+query the release scan observed writing, and routes with neither source nor
+tables -- wins over both tiers. It does not grant
 submit or other persistent actions. Live forms are always enabled. Missing policies or
 incompatible releases fail before model configuration or proxy startup. There is no
 automatic fallback. Old `goal`/`page-agent` and legacy form/create/filter/action-review
