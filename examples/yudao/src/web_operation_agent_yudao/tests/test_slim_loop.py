@@ -33,9 +33,10 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
-from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _draft_only_request, _read_only_status_question, _tabs_not_shown,
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _WRITE_INTENT, _draft_only_request, _unrequested_draft_fields, _read_only_status_question, _tabs_not_shown,
                                                  _business_handoff_ready, _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
+from web_operation_agent_yudao.write_intent import WriteIntent
 from web_operation_agent_yudao.tests import test_native_writes as native
 from web_operation_agent_yudao.writes import native_tools
 
@@ -460,6 +461,30 @@ class KnowledgeTests(unittest.TestCase):
                     with self.assertRaises(DataRefused) as caught:
                         self.know.call_api("orders/page", {"pageNo": 1})
                 self.assertIs(error, caught.exception)
+
+    def test_one_denied_api_read_does_not_end_the_whole_turn(self):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        def denied(*_args, **_kwargs):
+            raise DataRefused("private application text", permission_denied=True)
+        executor.knowledge = NS(call_api=denied)
+        state = State()
+        result = executor._tool(state, "call_api",
+                                {"path": "wms/item/page", "params": "{}"}, {"reads": []})
+        self.assertEqual((result.kind, result.state, result.error_code, result.terminal_reason),
+                         ("read", "refused", "permission_denied", ""))
+        self.assertEqual(state.terminal_reason, "")
+        self.assertIn("不能据此断定其它接口", result.feedback)
+        self.assertNotIn("private application text", result.feedback)
+        self.assertIn(("yudao_api_read_refused", {"path": "/admin-api/wms/item/page",
+                                                  "reason": "permission_denied"}),
+                      state.ledger.events)
+
+        def unavailable(*_args, **_kwargs):
+            raise DataRefused("offline", read_failed=True)
+        executor.knowledge = NS(call_api=unavailable)
+        with self.assertRaises(DataRefused):
+            executor._tool(state, "call_api", {"path": "wms/item/page", "params": "{}"},
+                           {"reads": []})
 
     def test_a_read_returns_its_total_its_rows_and_what_the_fields_mean(self):
         text = self.know.call_api("/admin-api/orders/page", {"pageNo": 1})
@@ -1598,6 +1623,56 @@ class LoopTests(unittest.TestCase):
         self.assertIn("不存在：屏幕上没有这个字段", said)
         self.assertNotIn("已点“搜索”", said)  # a partial filter must never apply or complete
         self.assertEqual([label for label, _value in turn["touched"]], ["备注", "客户", "日期"])
+
+    def test_draft_copy_refuses_extra_field_before_touching_the_form(self):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        executor._earlier_words = ["ERP客户天津滨海港务服务有限公司的联系人现在是谁？"]
+        executor._act = lambda *_args, **_kwargs: self.fail("extra field reached the page")
+        state, turn = State(), {"touched": [], "trace": []}
+        state.obs = PageObservation(1, 1, "https://synthetic.test/customer", "Customer", [], [
+            element(1, "textbox", "", "input", field_label="联系人", form_scope="dialog:edit"),
+            element(2, "textbox", "", "input", field_label="手机号码", form_scope="dialog:edit")],
+            content="[1]<input />\n[2]<input />")
+        request_token = _CURRENT_REQUEST.set("把这个联系人先填到青岛蓝海冷链物流的编辑表单里，先不保存。")
+        intent_token = _WRITE_INTENT.set(WriteIntent("draft"))
+        try:
+            result = executor._fill_fields(state, [
+                {"label": "联系人", "value": "施然"},
+                {"label": "手机号码", "value": "13350000184"}], "", turn,
+                then_highlight="确 定")
+        finally:
+            _WRITE_INTENT.reset(intent_token)
+            _CURRENT_REQUEST.reset(request_token)
+        self.assertEqual((result.state, result.error_code), ("refused", "unrequested_draft_field"))
+        self.assertIn("手机号码", result.feedback)
+        self.assertEqual(turn["touched"], [])
+        self.assertEqual(_unrequested_draft_fields(
+            [{"label": "联系人", "value": "施然"}],
+            "把这个联系人先填到青岛蓝海冷链物流的编辑表单里",
+            ["ERP客户天津滨海港务服务有限公司的联系人现在是谁？"]), [])
+        self.assertEqual(_unrequested_draft_fields(
+            [{"label": "下次联系时间", "value": "2026-10-23 10:00:00"}],
+            "改成这周五，先填到表单里", ["厦门海湾食品的下次联系时间是哪天？"]), [])
+
+    def test_single_input_cannot_bypass_draft_field_scope(self):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        executor.knowledge = None
+        executor._earlier_words = ["这个客户的联系人和手机号分别是什么？"]
+        executor._act = lambda *_args, **_kwargs: self.fail("extra field reached the page")
+        state = State()
+        state.obs = PageObservation(1, 1, "https://synthetic.test/customer", "Customer", [], [
+            element(1, "textbox", "", "input", field_label="联系人", form_scope="dialog:edit"),
+            element(2, "textbox", "", "input", field_label="手机号码", form_scope="dialog:edit")],
+            content="[1]<input />\n[2]<input />")
+        request_token = _CURRENT_REQUEST.set("把这个联系人先填到另一客户的编辑表单里")
+        intent_token = _WRITE_INTENT.set(WriteIntent("draft"))
+        try:
+            result = executor._tool(state, "input", {"index": 2, "text": "13350000184"},
+                                    {"touched": []})
+        finally:
+            _WRITE_INTENT.reset(intent_token)
+            _CURRENT_REQUEST.reset(request_token)
+        self.assertEqual((result.state, result.error_code), ("refused", "unrequested_draft_field"))
 
     def test_a_named_range_uses_its_unlabelled_end_from_the_fresh_observation(self):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)

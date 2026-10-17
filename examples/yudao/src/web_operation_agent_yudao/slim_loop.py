@@ -1618,6 +1618,20 @@ class YudaoLoopProcedures:
                 except QueryParametersError as exc:
                     return LoopToolResult("未执行：" + str(exc), kind="read", state="refused",
                                           error_code="invalid_arguments")
+                except DataRefused as exc:
+                    if not exc.permission_denied:
+                        raise
+                    # A denial applies to this application read, not to the actor's
+                    # entire task. Another published endpoint may grant the same actor
+                    # the requested list or field. Keep the refusal typed and scoped.
+                    s.audit("yudao_api_read_refused", path=called_path,
+                            reason="permission_denied")
+                    return LoopToolResult(
+                        "此只读接口明确拒绝了当前账号。本次路径没有返回数据；"
+                        "不能据此断定其它接口或整个问题都无权限。"
+                        "请依据已发布的只读接口和当前账号范围寻找可用证据；"
+                        "若没有，请明确说明哪项数据未能读取。",
+                        kind="read", state="refused", error_code="permission_denied")
             if know.last_read:
                 # Audit the chosen API and the query vocabulary, never filter values.
                 # Keys and field names come from the installed API schema; paging is
@@ -1710,6 +1724,21 @@ class YudaoLoopProcedures:
                     "展开的列表只显示了一部分，在里面点容易点错。") if _control_kind(element) == "〔下拉〕" else "已点击。"
         elif name in ("input", "select"):
             value = args["text"] if name == "input" else args["option"]
+            intent = _WRITE_INTENT.get()
+            scope = str(element.attrs.get("form_scope") or "")
+            if (isinstance(intent, WriteIntent) and intent.mode == "draft"
+                    and scope.startswith(("dialog:", "form:"))
+                    and element.attrs.get("page_control") != "query"):
+                unrequested = _unrequested_draft_fields(
+                    [{"label": _control_name(element), "value": value}],
+                    _CURRENT_REQUEST.get(), getattr(self, "_earlier_words", ()),
+                    other_labels=[str(e.attrs.get("field_label") or "") for e in s.obs.elements
+                                  if e.attrs.get("form_scope") == scope])
+                if unrequested:
+                    return LoopToolResult("这个表单字段没有得到用户请求支持，未填写："
+                                          + "、".join(unrequested) + "。请只填用户指定的字段。",
+                                          kind="page", state="refused",
+                                          error_code="unrequested_draft_field")
             command = {"ref": element.ref, "value": value}
             if name == "input":
                 command["commit"] = _commits(element, s.obs.elements)
@@ -1805,6 +1834,20 @@ class YudaoLoopProcedures:
         if then_click and then_highlight:
             return LoopToolResult("筛选和表单交接不能同时执行。", kind="page", state="refused",
                                   error_code="invalid_arguments")
+        intent = _WRITE_INTENT.get()
+        form_batch = bool(then_highlight or add_lines) or any(
+            str(e.attrs.get("form_scope") or "").startswith(("dialog:", "form:"))
+            and e.attrs.get("page_control") != "query"
+            and e.attrs.get("field_label") in {item.get("label") for item in fields[:12]}
+            for e in getattr(s.obs, "elements", ()))
+        if isinstance(intent, WriteIntent) and intent.mode == "draft" and not then_click and form_batch:
+            unrequested = _unrequested_draft_fields(
+                fields[:12], _CURRENT_REQUEST.get(), getattr(self, "_earlier_words", ()))
+            if unrequested:
+                return LoopToolResult(
+                    "这些表单字段没有得到用户请求支持，整批未填写：" + "、".join(unrequested)
+                    + "。只填写用户明确指定的字段和值；需要复制其它字段时请先询问用户。",
+                    kind="page", state="refused", error_code="unrequested_draft_field")
         if add_lines:
             failed = add_draft_lines(s, add_lines["button"], add_lines["count"])
             if failed:
@@ -2175,6 +2218,36 @@ def _requirements(name, arguments, observation, review=None):
 def _draft_only_request(text: str) -> bool:
     """A current-turn request to prepare a form without a persistent write."""
     return classify_write_intent(text).mode == "draft"
+
+
+def _unrequested_draft_fields(fields: list[dict], current: str,
+                              earlier: tuple[str, ...] | list[str],
+                              *, other_labels: list[str] | tuple[str, ...] = ()) -> list[str]:
+    """Reject extra draft fields before any page action, using only the person's words.
+
+    A value copied from an earlier *assistant answer* is not permission to copy its
+    neighboring fields. When this turn names a field, older questions cannot widen
+    that field set. A pronoun-only follow-up may inherit fields named by earlier user
+    turns, while an explicit literal value in this turn can be entered by itself.
+    """
+    current = re.sub(r"\s+", "", current)
+    history = re.sub(r"\s+", "", " ".join(earlier))
+    items = [(str(item.get("label", "")).strip().rstrip(":：").strip(),
+              str(item.get("value", ""))) for item in fields]
+    labels = ({label for label, _ in items if label and label not in _PAGING}
+              | {label for label in other_labels if label})
+    named_now = {label for label in labels if _draft_field_named(label, current)}
+    return [label for label, value in items if label in labels
+            and label not in named_now
+            and not (value and re.sub(r"\s+", "", value) in current)
+            and (named_now or not _draft_field_named(label, history))]
+
+
+def _draft_field_named(label: str, text: str) -> bool:
+    aliases = {"手机号码": ("手机号码", "手机号", "手机"),
+               "联系电话": ("联系电话", "固定电话", "电话"),
+               "下次联系时间": ("下次联系时间", "下次联系日期")}
+    return any(word in text for word in aliases.get(label, (label,)))
 
 
 def _new_form_draft_request(text: str) -> bool:
