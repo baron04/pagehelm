@@ -573,5 +573,71 @@ class ModelLoopTests(unittest.TestCase):
             "identity": "menu:/contacts", "read_ref": "read#1"}])
 
 
+class UntracedNumberFeedbackTests(unittest.TestCase):
+    """The closing number check: one send-back with the list, never a gate."""
+
+    def fixture(self, hook, *replies):
+        def read(_fixture, _name, _arguments):
+            return LoopToolResult("total=12", kind="read")
+        executor = LoopFixture(list(replies), read)
+        executor.profile = NS(untraced_numbers=hook)
+        return executor
+
+    def test_an_untraced_answer_goes_back_to_the_model_once_and_the_second_answer_ends(self):
+        def hook(answer, sources):
+            return () if "共 12 条" in answer else ("999",)
+        executor = self.fixture(hook,
+                                reply(call("call_api", path="/orders/page")),
+                                reply(call("finish", status="done", answer="共 999 条")),
+                                reply(call("finish", status="done", answer="共 12 条")))
+        self.assertEqual((executor.run("有几条？"), executor.state.terminal_reason), ("共 12 条", ""))
+        sent = [m for m in executor._messages
+                if m["role"] == "user" and "以下数值在本轮读取中找不到" in m.get("content", "")]
+        self.assertEqual(len(sent), 1)
+        self.assertIn("999", sent[0]["content"])
+        self.assertIn("请改用读到的值，或说明它是计算得到的或无法核实", sent[0]["content"])
+        self.assertIn(("untraced_numbers", {"numbers": ["999"], "sent_back": True}), executor.events)
+
+    def test_the_second_answer_ends_as_it_is_and_the_audit_keeps_what_stayed_untraced(self):
+        executor = self.fixture(lambda answer, sources: ("999",),
+                                reply(call("finish", status="done", answer="共 999 条")),
+                                reply(call("finish", status="done", answer="就是 999 条")))
+        self.assertEqual((executor.run(), executor.state.terminal_reason), ("就是 999 条", ""))
+        audits = [facts for event, facts in executor.events if event == "untraced_numbers"]
+        self.assertEqual(audits, [{"numbers": ["999"], "sent_back": True},
+                                  {"numbers": ["999"], "sent_back": False}])
+
+    def test_a_fully_traced_answer_ends_without_a_second_reading(self):
+        executor = self.fixture(lambda answer, sources: (),
+                                reply(call("finish", status="done", answer="共 12 条")))
+        self.assertEqual((executor.run(), executor.state.terminal_reason), ("共 12 条", ""))
+        self.assertNotIn("untraced_numbers", [event for event, _ in executor.events])
+
+    def test_the_check_reads_this_turn_s_tool_results_and_the_person_s_words(self):
+        seen = []
+        def hook(answer, sources):
+            seen.append(sources)
+            return ()
+        executor = self.fixture(hook,
+                                reply(call("call_api", path="/orders/page")),
+                                reply(call("finish", status="done", answer="共 12 条")))
+        executor.run("有几条？")
+        self.assertIn("有几条？", seen[0])
+        self.assertTrue(any("total=12" in text for text in seen[0]))
+
+    def test_a_question_back_is_not_number_checked(self):
+        executor = self.fixture(lambda answer, sources: ("999",),
+                                reply(call("finish", status="need_input", answer="是 999 还是 1000？")))
+        executor.run()
+        self.assertEqual(executor.state.terminal_reason, "needs_clarification")
+        self.assertNotIn("untraced_numbers", [event for event, _ in executor.events])
+
+    def test_a_deployment_without_the_check_ends_on_the_first_answer(self):
+        executor = LoopFixture([reply(call("finish", status="done", answer="共 999 条"))],
+                               lambda _fixture, _name, _arguments: LoopToolResult("ok", kind="read"))
+        self.assertEqual((executor.run(), executor.state.terminal_reason), ("共 999 条", ""))
+        self.assertNotIn("untraced_numbers", [event for event, _ in executor.events])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -141,6 +141,13 @@ class NativeHostTests(unittest.TestCase):
         self.assertTrue({k.casefold() for k in SESSION_HANDOFF_KEYS} <= policy.handoffs.query_keys)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_the_slim_profile_carries_the_closing_number_check(self):
+        from web_operation_agent_yudao.answer_numbers import untraced
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "tab")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertIs(executor.profile.untraced_numbers, untraced)
+
     def test_turn_records_are_on_by_default_bounded_and_pruned_at_start(self):
         self.assertEqual(14, self.config.turn_trace_days)
         for value in (-1, 91, True, "14", 1.5):

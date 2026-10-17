@@ -14,10 +14,11 @@ is prepared read-only, shown to the person in full, dispatched once after their 
 and read back by the application; its outcome returns to the conversation like any other
 result. The page's own submit controls stay unpressed either way.
 
-A turn ends on the model's own word that it is done. One case is read a second time: the
-turn typed or chose, on the page, a value that is not in the person's words. Then a
-separate model request checks those words against what the page shows, and may send the
-turn back once.
+A turn ends on the model's own word that it is done. Two cases are read a second time: the
+turn typed or chose, on the page, a value that is not in the person's words, and then a
+separate model request checks those words against what the page shows; or the finished
+answer states a business value this turn's own reads and the person's words do not show,
+and then the list goes back to the same model. Either way the turn may be sent back once.
 
 A turn's conversation with the model lasts that turn. What later turns keep of it is the
 executor's bounded conversation state: the person's words, the answer each turn gave and
@@ -47,6 +48,7 @@ from web_operation_agent.business.tools.contracts import form_control_unavailabl
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
 
+from .answer_numbers import untraced as untraced_answer_numbers
 from .api_content import REDACTED, composed, fenced, program_lines, redacted
 from .goal import _SCENES
 from .write_intent import WriteIntent, classify_write_intent
@@ -2380,7 +2382,8 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                         conventions=conventions), procedures,
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
-            owner.verification_messages, draft_steps, mutation_prefill)
+            owner.verification_messages, draft_steps, mutation_prefill,
+            untraced_numbers=untraced_answer_numbers)
         super().__init__(profile=profile, **kwargs)
 
 

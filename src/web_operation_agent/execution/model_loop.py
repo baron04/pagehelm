@@ -1014,6 +1014,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         entry["_observation"] = True
                         observation_delivered = True
                 self._messages.append(entry)
+                # Keep the result as delivered for the closing text checks, even
+                # after older observations are elided from the decision context.
+                turn.setdefault("tool_texts", []).append(entry["content"])
                 self._remember_observation(s, turn, entry)
                 if s.terminal_reason:
                     return turn.get("final") or (text + "本次没有完成。"
@@ -1021,6 +1024,20 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             if finish is None:
                 continue
             status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
+            if status == "done" and answer:
+                # One reading of the stated values against the turn's own sources,
+                # while the step budget can still carry the correction. Feedback,
+                # not a gate: the second answer ends the turn as it stands.
+                untraced = self._untraced_numbers(prompt, answer, turn)
+                if untraced:
+                    if not turn.get("numbers_sent_back") and turn.get("model_calls", 0) < self.model_steps:
+                        turn["numbers_sent_back"] = True
+                        s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=True)
+                        self._messages.append({"role": "user", "content":
+                            "以下数值在本轮读取中找不到：" + "、".join(untraced)
+                            + "；请改用读到的值，或说明它是计算得到的或无法核实，然后重新调用 finish。"})
+                        return self._loop(s, prompt, turn, verified=verified)
+                    s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=False)
             if status == "done" and not verified and self._unsaid(prompt, turn):
                 self._note(s, stage="check")
                 verification = self._verify(s, prompt, answer, turn)
@@ -1075,6 +1092,17 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         said = re.sub(r"[\s,，。.：:]", "", " ".join(self._said(prompt)))
         return [f"{label}←{value}" for label, value in turn["touched"]
                 if value and re.sub(r"[\s,，。.：:]", "", value) not in said]
+
+    def _untraced_numbers(self, prompt: str, answer: str, turn: dict) -> tuple[str, ...]:
+        """The answer's stated values the turn's own sources do not show, in the
+        answer's display form. A deployment offers the reading through its profile;
+        the sources are what the model was given this turn: its tool results and the
+        person's words."""
+        hook = getattr(getattr(self, "profile", None), "untraced_numbers", None)
+        if hook is None:
+            return ()
+        sources = (prompt, *self._earlier_words, *turn.get("tool_texts", ()))
+        return tuple(str(item) for item in hook(answer, sources))[:20]
 
 
     # -- installed Skills and the writes they propose ---------------------------------
