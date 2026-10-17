@@ -2298,6 +2298,2474 @@
       "evidence": "src/router/modules/remaining.ts",
       "sha256": "696a52d0f060379d7cc76d5a09e307de80102f090521e5dcdc12a79fb1e2654b",
       "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/tenant/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/tenant/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/tenant/package",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/tenant/package",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/user",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/user",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/role",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/role",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/menu",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/menu",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/dept",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/dept",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/dict",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/dict",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/messages/sms/sms-channel",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/messages/sms/sms-channel",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/messages/sms/sms-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/messages/sms/sms-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/messages/mail/mail-account",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/messages/mail/mail-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/messages/mail/mail-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/messages/notify/notify-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/messages/notify/notify-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/messages/notice",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/system/messages/notice",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/system/oauth2/oauth2/application",
+      "evidence": "phase-16/menu-scan/runs/t3-b-000-v1/summary.json",
+      "sha256": "b1ccdc3123d730c6f6c0a5f8d28093d5fc9cb865c1d76f52117a166d06af7ff8",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/demo/demo01-contact",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/demo/demo02-category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/demo/demo03-normal",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/demo/demo03-erp",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/demo/demo03-inner",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "编辑"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/data-source-config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/infra/data-source-config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/file/file-config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/infra/file/file-config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/job",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增",
+        "修改"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/infra/job",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/infra/config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/infra/config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/pay/app",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/pay/app",
+      "evidence": "phase-16/menu-scan/runs/t3-b-025-v1/summary.json",
+      "sha256": "362f008d4926d2971cd1c0be0ac0ec08d0ab7c6713c41ea0200d7a8f99cac075",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/bpm/manager/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-050-v1/summary.json",
+      "sha256": "8290d3d0651499a95fdf20bfaf4e9dfd6998a9ef7912d1bf1c9a5fc85a9fb264",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/bpm/manager/process-listener",
+      "evidence": "phase-16/menu-scan/runs/t3-b-050-v1/summary.json",
+      "sha256": "8290d3d0651499a95fdf20bfaf4e9dfd6998a9ef7912d1bf1c9a5fc85a9fb264",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/bpm/manager/process-expression",
+      "evidence": "phase-16/menu-scan/runs/t3-b-050-v1/summary.json",
+      "sha256": "8290d3d0651499a95fdf20bfaf4e9dfd6998a9ef7912d1bf1c9a5fc85a9fb264",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/member/tag",
+      "evidence": "phase-16/menu-scan/runs/t3-b-050-v1/summary.json",
+      "sha256": "8290d3d0651499a95fdf20bfaf4e9dfd6998a9ef7912d1bf1c9a5fc85a9fb264",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/member/tag",
+      "evidence": "phase-16/menu-scan/runs/t3-b-050-v1/summary.json",
+      "sha256": "8290d3d0651499a95fdf20bfaf4e9dfd6998a9ef7912d1bf1c9a5fc85a9fb264",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/member/level",
+      "evidence": "phase-16/menu-scan/runs/t3-b-050-v1/summary.json",
+      "sha256": "8290d3d0651499a95fdf20bfaf4e9dfd6998a9ef7912d1bf1c9a5fc85a9fb264",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/member/level",
+      "evidence": "phase-16/menu-scan/runs/t3-b-050-v1/summary.json",
+      "sha256": "8290d3d0651499a95fdf20bfaf4e9dfd6998a9ef7912d1bf1c9a5fc85a9fb264",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/product/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/product/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/product/comment",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "添加虚拟评论"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/product/comment",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/trade/delivery/express/express-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/trade/delivery/express/express-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/trade/delivery/pick-up-store/pick-up-store",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/trade/delivery/pick-up-store/pick-up-store",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/trade/brokerage/brokerage-user",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/content/article/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/content/article/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/coupon/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/coupon/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/seckill/config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/seckill/config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-075-v1/summary.json",
+      "sha256": "641fcfe246af54e16edd3971f1b7f16a7e4714b1ce84caec38ed2b74cd778234",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/seckill/activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/seckill/activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/bargain/activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/bargain/activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/diy-template/diy-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/diy-template/diy-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/diy-template/diy-page",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/diy-template/diy-page",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/youhui/discount-activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": [
+        "新增活动"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/youhui/discount-activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mall/promotion/youhui/reward-activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mall/promotion/youhui/reward-activity",
+      "evidence": "phase-16/menu-scan/runs/t3-b-100-v1/summary.json",
+      "sha256": "fa9c2720e40426ddcef958e384b5eedb61329379933813aac13c7ed71aca7323",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/clue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/clue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/business",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/business",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/contract",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/contract",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/receivable",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/receivable",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/receivable-plan",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/receivable-plan",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/product",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/product",
+      "evidence": "phase-16/menu-scan/runs/t3-b-175-v1/summary.json",
+      "sha256": "27bc61066224bef7445492f20a01c99c421c8da00bcb01642605ad38a4a15717",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/config/customer-limit-config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/config/product/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/crm/config/product/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/crm/config/performance-config",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/purchase/in",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/purchase/in",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/purchase/return",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/purchase/return",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/sale/out",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/sale/out",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/sale/return",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/sale/return",
+      "evidence": "phase-16/menu-scan/runs/t3-b-200-v1/summary.json",
+      "sha256": "cbcfa807e85f660866d3bf72c05515392fc8b0bc93f4950e86d7ef626c7a9ce1",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/stock/out",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/stock/out",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/stock/move",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/stock/move",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/stock/check",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/stock/check",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/product/product-category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/product/product-category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/finance/payment",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/finance/payment",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/finance/receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/finance/receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/erp/finance/account",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增",
+        "编辑"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/erp/finance/account",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/shipment",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/shipment",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/movement",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/movement",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/check",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/md/warehouse",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/md/warehouse",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/md/item/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/md/item/category",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/md/item/brand",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/md/item/brand",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/md/item",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/md/item",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/wms/md/merchant",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/wms/md/merchant",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/item",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/item",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/item-type",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/item-type",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/unit-measure",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/unit-measure",
+      "evidence": "phase-16/menu-scan/runs/t3-b-225-v1/summary.json",
+      "sha256": "9eaf712d7ac116711ff49795134247ca9d500e40a5bad8f674d5016e21ce1952",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/client",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/client",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/vendor",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/vendor",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/workstation/workshop",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/workstation/workshop",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/workstation",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/workstation",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/md/auto-code",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/md/auto-code",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/warehouse",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/warehouse",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/item-receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/item-receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/arrival-notice",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/arrival-notice",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/return-vendor",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/return-vendor",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/product-issue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/product-issue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/return-issue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/return-issue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/product-receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/product-receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/sales-notice",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/sales-notice",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/product-sales",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/product-sales",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/transfer",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/transfer",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/stock-taking/task",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/stock-taking/task",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/packages",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/packages",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/misc-receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/misc-receipt",
+      "evidence": "phase-16/menu-scan/runs/t3-b-250-v1/summary.json",
+      "sha256": "3b40763d0c1a99dd4d0727970d96be45739e075c5be18f1bc6843fc0062a46c2",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/wm/misc-issue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/wm/misc-issue",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/dv/machinery/type",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/dv/machinery/type",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/dv/machinery",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/dv/machinery",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/dv/subject",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/dv/subject",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/dv/checkplan",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/dv/checkplan",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/dv/check-record",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/dv/check-record",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/dv/mainten-record",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/dv/mainten-record",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/dv/repair",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/dv/repair",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/tm/tool/type",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/tm/tool/type",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/tm/tool",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/tm/tool",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/pro/work-order",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/pro/work-order",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/pro/process",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/pro/process",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/pro/route",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/pro/route",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/pro/card",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/pro/card",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/qc/indicator",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/qc/indicator",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/qc/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/qc/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/qc/iqc",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/qc/iqc",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/qc/ipqc",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/qc/ipqc",
+      "evidence": "phase-16/menu-scan/runs/t3-b-275-v1/summary.json",
+      "sha256": "7c1b5c7252af60e7112688ea42f8b1f5809509ab7f8a22c94bd91a4ec3ead33a",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/qc/oqc",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/qc/oqc",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mes/cal/team",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mes/cal/team",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/announcement/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/announcement/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/task/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/task/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/schedule/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/schedule/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/schedule/calendar",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/schedule/calendar",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/plan/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/plan/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/work-report/my",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/work-report/my",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/contact",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/contact",
+      "evidence": "phase-16/menu-scan/runs/t3-b-300-v1/summary.json",
+      "sha256": "24ea08b1c0ef16eabf2a50d501e695379c60839832e05972e071a81bcd76c8d3",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/mail/account",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/file",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新建文件夹"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/file",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/process/overtime",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/process/overtime",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/process/leave",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/process/leave",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/process/regular",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/process/regular",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/process/resign",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/process/resign",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/process/reimbursement",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/process/reimbursement",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/seal/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/seal/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/seal/apply",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/seal/apply",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/vehicle/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/vehicle/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/vehicle/apply",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/vehicle/apply",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/vehicle/return",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/meetingroom/booking",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/meetingroom/booking",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/officialdoc/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/officialdoc/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/officialdoc/send",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/officialdoc/send",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/oa/officialdoc/receive",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/oa/officialdoc/receive",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/home",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "添加备忘录"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/team-home",
+      "evidence": "phase-16/menu-scan/runs/t3-b-325-v1/summary.json",
+      "sha256": "432dc6cf6cc164b30ffe42e4212520843d712cbe0daaf4055f4622c81c70e216",
+      "controls": [
+        "添加备忘录"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/recruit/candidate",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/recruit/candidate",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/recruit/post",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/recruit/post",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/recruit/settings/channel",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/recruit/settings/channel",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/attendance/config/group",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/attendance/config/group",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/attendance/config/holiday",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/insurance/month-record",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新建首月社保表"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/insurance/config/scheme",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新建参保方案"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/insurance/config/scheme",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/salary/config/group",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/salary/config/tax-rule",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增计税规则"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/salary/config/tax-rule",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/salary/config/change-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/salary/config/change-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-350-v1/summary.json",
+      "sha256": "7cf7ed30d8bc8d7485d9a483aada456eee24b63a5829ea9e16c9209287140532",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/performance/config/assessment-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-375-v1/summary.json",
+      "sha256": "993da36d5a29739b5a6bcd1f7b25094fef58aa59270e77fb21463f20d5cf5678",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/performance/config/assessment-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-375-v1/summary.json",
+      "sha256": "993da36d5a29739b5a6bcd1f7b25094fef58aa59270e77fb21463f20d5cf5678",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/hrm/performance/config/result-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-375-v1/summary.json",
+      "sha256": "993da36d5a29739b5a6bcd1f7b25094fef58aa59270e77fb21463f20d5cf5678",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/hrm/performance/config/result-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-375-v1/summary.json",
+      "sha256": "993da36d5a29739b5a6bcd1f7b25094fef58aa59270e77fb21463f20d5cf5678",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/fms/config/account-set",
+      "evidence": "phase-16/menu-scan/runs/t3-b-400-v3/summary.json",
+      "sha256": "d95fbe1a5406d66171395638b60b1736312064f6f79f589d0103104525b31505",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/fms/config/account-set",
+      "evidence": "phase-16/menu-scan/runs/t3-b-400-v3/summary.json",
+      "sha256": "d95fbe1a5406d66171395638b60b1736312064f6f79f589d0103104525b31505",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/pms/pm/project/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-400-v3/summary.json",
+      "sha256": "d95fbe1a5406d66171395638b60b1736312064f6f79f589d0103104525b31505",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/pms/pm/project/template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-400-v3/summary.json",
+      "sha256": "d95fbe1a5406d66171395638b60b1736312064f6f79f589d0103104525b31505",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/pms/kb/library-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-400-v3/summary.json",
+      "sha256": "d95fbe1a5406d66171395638b60b1736312064f6f79f589d0103104525b31505",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/pms/kb/library-template",
+      "evidence": "phase-16/menu-scan/runs/t3-b-400-v3/summary.json",
+      "sha256": "d95fbe1a5406d66171395638b60b1736312064f6f79f589d0103104525b31505",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/ai/knowledge",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/ai/knowledge",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/ai/console/api-key",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/ai/console/api-key",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/ai/console/model",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/ai/console/chat-role",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/ai/console/chat-role",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/ai/console/tool",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/ai/console/tool",
+      "evidence": "phase-16/menu-scan/runs/t3-b-425-v3/summary.json",
+      "sha256": "db134d305ac9ed6369865bcf79e075bf84d52660745864a31dbc7560dfe24c1c",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/im/sensitive-word",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "form_entry",
+      "route": "/im/face/pack",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/im/face/pack",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/im/channel/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/im/channel/list",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/im/channel/material",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": [
+        "新增素材"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/im/channel/material",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": []
+    },
+    {
+      "kind": "form_entry",
+      "route": "/mp/account",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": [
+        "新增"
+      ]
+    },
+    {
+      "kind": "fields",
+      "route": "/mp/account",
+      "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
+      "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
+      "controls": []
     }
   ],
   "generated": {
