@@ -528,7 +528,8 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("total=5（符合条件的总数），本次读了 5 行（已读完所有页）", text)
         self.assertIn("totalPrice（5 行）: 合计 140100.5，最大 45000，最小 100；最大的有 2 行:\n" + BEGIN + "\n"
                       '{"id": 1, "name": "商机1", "totalPrice": 45000.0}；{"id": 3, "name": "商机3", "totalPrice": 45000.0}'
-                      "\n" + END + "\n各行:\n" + BEGIN + '\n{"id": 1,', text)
+                      "\n" + END, text)
+        self.assertIn("各行:\n" + BEGIN + '\n{"id": 1,', text)
         self.assertIn('{"id": 5, "name": "商机5", "totalPrice": 100.0}', text)
         self.assertNotIn("remark", text)
         self.assertNotIn("ownerUserId（", text)   # an identifier is not a quantity
@@ -778,6 +779,44 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("全表的 total 和自动分组不代表这批记录", SYSTEM)
         self.assertIn("完整分页只证明读全了该次接口查询范围", VERIFY_SYSTEM)
 
+    def test_code_named_cohort_withholds_unfiltered_list_evidence(self):
+        docs = json.loads(json.dumps(DOCS))
+        docs["paths"]["/admin-api/orders/page"]["get"]["parameters"].append(
+            {"name": "name", "in": "query", "schema": {"type": "string"}})
+
+        class CohortClient(Client):
+            def get(self, path, **params):
+                if path == "orders/page":
+                    self.calls.append((path, params))
+                    records = [{"id": 1, "name": "Q24 商品 001", "price": 100},
+                               {"id": 2, "name": "Q24 商品 002", "price": 90},
+                               {"id": 3, "name": "基础商品", "price": 500}]
+                    if params.get("name"):
+                        records = [row for row in records if params["name"] in row["name"]]
+                    size, page = params["pageSize"], params["pageNo"]
+                    return {"total": len(records), "list": records[(page - 1) * size:page * size]}
+                return super().get(path, **params)
+
+        know = ActorKnowledge(CohortClient(), lambda: docs)
+        token = _CURRENT_REQUEST.set("Q24 商品 里价格最高的两个是哪几个？")
+        try:
+            broad = know.call_api("orders/page", {"pageNo": 1, "pageSize": 3}, ["name", "price"])
+            self.assertIn('name="Q24 商品"', broad)
+            self.assertNotIn("total=", broad)
+            self.assertNotIn("按数值降序", broad)
+            self.assertNotIn("基础商品", broad)
+            self.assertEqual(know.last_read["declared_total"], 3)
+            first_page = know.call_api("orders/page", {"pageNo": 1, "pageSize": 2})
+            self.assertNotIn("total=", first_page)
+            self.assertNotIn("Q24 商品 001", first_page)
+            filtered = know.call_api("orders/page", {"pageNo": 1, "pageSize": 3,
+                                                      "name": "Q24 商品"}, ["name", "price"])
+            self.assertIn("total=2（符合条件的总数）", filtered)
+            self.assertIn("第 1 名，price=100", filtered)
+            self.assertNotIn("基础商品", filtered)
+        finally:
+            _CURRENT_REQUEST.reset(token)
+
     def test_a_read_of_one_page_names_its_codes_too_and_goes_without_names_it_cannot_read(self):
         know = ActorKnowledge(self.client, lambda: DOCS, codes=lambda path: LEDGER_NAMES)
         self.assertIn("bizType: 50=销售出库", know.call_api("ledger/page", {"pageNo": 1, "pageSize": 2}))
@@ -803,6 +842,30 @@ class KnowledgeTests(unittest.TestCase):
         text = ActorKnowledge(OneKindClient(), lambda: DOCS).call_api(
             "ledger/page", {"pageNo": 1, "pageSize": 3}, ["bizType", "count"])
         self.assertIn("按 bizType 分组（1 种）:\n" + BEGIN + "\n50: 3 行，count 合计 6", text)
+
+    def test_top_three_includes_the_whole_tied_price_band(self):
+        class RankedClient(Client):
+            def get(self, path, **params):
+                if path == "deals/page":
+                    records = [{"id": n, "name": f"商品{n}", "totalPrice": price}
+                               for n, price in enumerate([100, *([90] * 19), 70], start=1)]
+                    size, page = params["pageSize"], params["pageNo"]
+                    return {"total": len(records), "list": records[(page - 1) * size:page * size]}
+                return super().get(path, **params)
+
+        know = ActorKnowledge(RankedClient(), lambda: DOCS)
+        complete = know.call_api("deals/page", {"pageNo": 1, "pageSize": 2},
+                                 ["name", "totalPrice"])
+        ranking = complete.split("totalPrice 按数值降序覆盖前 3 名", 1)[1].split("各行:", 1)[0]
+        self.assertIn("第 1 名，totalPrice=100，1 行", ranking)
+        self.assertIn("第 2–20 名并列，totalPrice=90，19 行", ranking)
+        self.assertIn('"name": "商品7"', ranking)
+        self.assertNotIn('"name": "商品8"', ranking)
+        self.assertIn("该并列档另有 13 行未列出", ranking)
+        self.assertNotIn("totalPrice=70", ranking)
+        partial = know.call_api("deals/page", {"pageNo": 2, "pageSize": 2},
+                                ["name", "totalPrice"])
+        self.assertNotIn("按数值降序覆盖前 3 名", partial)
 
     def test_without_chosen_columns_only_the_page_asked_for_is_read(self):
         text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 2})

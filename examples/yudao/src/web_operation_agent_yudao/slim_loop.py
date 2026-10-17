@@ -81,6 +81,18 @@ _TIME_KEY = re.compile(r"(?:Time|Date)$", re.I)
 #: Numbers that name or classify a row; a sum or a highest value of them means nothing.
 _NOT_A_QUANTITY = re.compile(r"(?:^|[a-z])(?:Id|No|Status|State|Type|Sort|Level|Sex|Code|Enable|Flag)$"
                               r"|^(?:id|no|status|state|type|sort|level|sex|code|enable|flag)$")
+_CODE_COHORT = re.compile(r"(?<![A-Za-z0-9_-])([A-Za-z0-9_-]{3,24}(?:\s+[\u4e00-\u9fff]{1,8})?)\s*(?=里|中|下|按)")
+
+
+def _code_cohort_name(request: str) -> str:
+    """A single literal code-like name prefix in the user's current request.
+
+    This is a narrow safety signal, not a general language parser. It can withhold an
+    unscoped read, but must never rewrite the user's query or choose a record.
+    """
+    names = {match.group(1).strip() for match in _CODE_COHORT.finditer(request)
+             if any(char.isdigit() for char in match.group(1).split()[0])}
+    return next(iter(names)) if len(names) == 1 else ""
 
 
 # -- what the application already publishes: the actor's menu and its API description ------
@@ -568,6 +580,20 @@ class ActorKnowledge:
             if exc.permission_denied or exc.read_failed:
                 raise
             return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
+        anchor = _code_cohort_name(_CURRENT_REQUEST.get())
+        if (rows is not None and anchor and "name" in published
+                and str(params.get("name", "")).strip().casefold() != anchor.casefold()
+                and any(isinstance(row, dict) and isinstance(row.get("name"), str)
+                        and anchor.casefold() in row["name"].casefold() for row in rows)):
+            # A broad page may contain the named cohort and unrelated records. Do not
+            # offer its total or computed ranks for a request about that cohort.
+            self.last_read = {"count": len(rows), "scope": self._by_path[path]["tag"],
+                              "complete": whole, "declared_total": declared_total}
+            return redacted(
+                f"本轮用户点名的名称片段“{anchor}”出现在本次列表，但 name 查询条件并非该片段。"
+                "这次结果不提供 total、合计、极值、排名或行内容，不能用来回答该名称范围。"
+                f"请带 name={json.dumps(anchor, ensure_ascii=False)} 重新读取；若应用筛选含义不匹配，"
+                "须逐行核实或说明无法完整核实。", self.handoffs)
         candidates = self.money_review.fields_for(relative) if self.money_review is not None else {}
         read_rows = rows if rows is not None else [data]
         certified = {key: spec for key, spec in candidates.items()
@@ -686,6 +712,22 @@ class ActorKnowledge:
                        f"最小 {_amount(min(values))}{signs}；最大的有 {len(highest)} 行:")
             data_lines.add(len(out))
             out.append("；".join(json.dumps(self._row(r, fields), ensure_ascii=False) for r in highest[:6]))
+            if len(values) > 1:
+                out.append(f"{key} 按数值降序覆盖前 3 名（同值并列全部计入名次）:")
+                rank = 1
+                for value in sorted(set(values), reverse=True):
+                    if rank > 3:
+                        break
+                    members = [r for r in rows if r.get(key) == value]
+                    last = rank + len(members) - 1
+                    place = f"第 {rank} 名" if last == rank else f"第 {rank}–{last} 名并列"
+                    out.append(f"{place}，{key}={_amount(value)}，{len(members)} 行:")
+                    data_lines.add(len(out))
+                    out.append("；".join(json.dumps(self._row(r, fields), ensure_ascii=False)
+                                        for r in members[:6]))
+                    if len(members) > 6:
+                        out.append(f"该并列档另有 {len(members) - 6} 行未列出；不能从中任取几行称为唯一名次。")
+                    rank = last + 1
         # Rows of a few kinds (a type, a status) counted and summed per kind: the program's
         # work, not one more read per kind.
         grouped = 0
@@ -860,7 +902,8 @@ TOOLS = [
         "params": {"type": "string", "maxLength": 8000, "description": "查询参数的 JSON 对象字符串，例如 {\"pageNo\":1,\"pageSize\":20}"},
         "fields": {"type": "array", "items": {"type": "string"}, "description":
                    "只取这些列（列名是返回行里的键）。给了 fields，分页接口从 pageNo 起最多读 5000 行；"
-                   "只有确认从第 1 页读完且页数一致，才计算全量合计、最大、最小、分组和月份行数。统计、比较、找最大最小、按日期数个数时必须用。"}},
+                   "只有确认从第 1 页读完且页数一致，才计算全量合计、最大、最小、覆盖前三名的并列档、分组和月份行数。"
+                   "统计、比较、找最大最小或前几名、按日期数个数时必须用；找前几名要同时指定名称/编号和数值列。"}},
         ["path"]),
     _tool("highlight", "把当前页面中已确认属于目标记录的业务按钮标出来，交给用户自己点（例如删除、审核、启停或表单确定）。不会点击或完成该业务动作。", {
         "index": {"type": "integer"},
@@ -918,6 +961,7 @@ SYSTEM_INTRO = """你是嵌入在企业管理后台里的助手，替当前登�
 SYSTEM_READ = """1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
    - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序最多跟读 5000 行；只有结果写明已读完所有页时，给出的数值合计、极值、按月行数和分组合计才代表全量。未读完时缩小筛选范围，仍不能读全就说明这项无法完整核实，不要把已读行当全集。
    - 用户用名称、前缀或其它条件圈定一批记录时，统计前先把该条件传入接口已声明的筛选参数，或在完整读取后逐行按条件筛选再计算；全表的 total 和自动分组不代表这批记录。答复前核对工具结果写明的“本次接口查询范围”是否覆盖了用户的每个条件，不吻合就继续查询或说明无法核实。
+   - 用户问数值最高的前几个时，fields 同时取名称/编号和数值列；完整读取后工具给出覆盖前三名的并列档及各档行数。同值并列跨过要求的名次时，说明并列范围，不要擅自挑几条当唯一的第二、第三名，也不要另报用户没问的“前三个不同价位”。工具只给前三名；更多名次须有应用可核验的排序读取，否则说明无法完整核实。
    - “超过 / 不少于 / 低于”等比较条件，只有接口明确声明相应比较参数时才传给接口；等值金额参数不能代替比较条件。接口没有比较参数时，用 fields 读完有关列，按每行的值判断。筛选读到 0 行而较宽查询读到记录时，先核对参数和已读记录，不要反复换一组猜测参数。
    - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
