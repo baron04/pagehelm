@@ -2435,7 +2435,7 @@ class WriteTurnTests(unittest.TestCase):
             instructions=system_text(user="u", date="2026-10-13", tz="Asia/Shanghai"),
             prepare=lambda request, context: "", verification_messages=None,
             draft_steps=None, mutation_prefill=None)
-        executor.debug_dir = None
+        executor.turn_traces, executor._trace = False, None
         def fresh(s, action, args, **kwargs):
             before = s.obs
             s.obs = observation(epoch=before.epoch+1)

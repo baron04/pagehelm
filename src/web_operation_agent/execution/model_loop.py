@@ -24,6 +24,7 @@ from ..privacy import SessionHandoffPolicy
 from ..panel_view import describe_step, step_facts
 from ..modeling.egress import AuditedChat
 from .receipt import MeasuredChat
+from .turn_trace import TurnTrace
 from .model_loop_contracts import ModelLoopProfile, PageProcedureContext
 import time
 from pathlib import Path
@@ -111,14 +112,15 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         return self.config.source.runtime_source
 
     def __init__(self, *, profile: ModelLoopProfile, model_steps=24, verify=True,
-                 skill_knowledge=True, debug_dir=None, **kwargs):
+                 skill_knowledge=True, turn_traces=False, **kwargs):
         super().__init__(**kwargs)
         if not isinstance(profile, ModelLoopProfile):
             raise TypeError("model-driven turns require an application profile")
         if type(model_steps) is not int or not 2 <= model_steps <= 64:
             raise ValueError("model_steps must be between 2 and 64")
         self.profile, self.model_steps, self.verify = profile, model_steps, bool(verify)
-        self.skill_knowledge, self.debug_dir = bool(skill_knowledge), debug_dir
+        self.skill_knowledge, self.turn_traces = bool(skill_knowledge), bool(turn_traces)
+        self._trace, self._trace_steps = None, []
         self._messages, self._earlier_words, self._carried_skills = [], [], ()
 
     def _procedure_context(self, s, name, *, page_actions=True, operation_context=None):
@@ -142,6 +144,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                     s.ledger.append, s.receipt.stage)
 
     def _run(self, s):
+        self._trace = None
         s.approvals.start_turn(int((s.started_at + self.config.wall_budget_s) * 1000))
         try:
             s.writes.begin_control()
@@ -149,7 +152,13 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         except Exception as exc:
             s.terminal_reason, s.detail = "control_plane_error", type(exc).__name__
             return "无法开始这次操作。"
-        s.chat = MeasuredChat(AuditedChat(self.chat, s.ledger), s.receipt,
+        # The record sits behind the egress check, so it only keeps what passed it.
+        self._trace = (TurnTrace(Path(self.config.ledger_path).parent / "turns",
+                                 SessionHandoffPolicy.extending(
+                                     self.application.ports.routes.session_handoff_query_keys))
+                       if self.turn_traces else None)
+        chat = self.chat if self._trace is None else self._trace.chat(self.chat)
+        s.chat = MeasuredChat(AuditedChat(chat, s.ledger), s.receipt,
             remaining_s=s.budget.remaining, budget=s.budget, stopped=s.model_stop.is_set)
         if s.obs is not None:
             s.ledger.append("observation", epoch=s.obs.epoch, url=s.obs.url,
@@ -189,11 +198,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 carried.append(self._skill_text(s, writes, writes.load(skill_id, step=s.step)))
             except ValueError:
                 pass
-        turn = {"reads": [], "marked": "", "trace": [], "touched": [], "shown": [],
+        turn = {"reads": [], "marked": "", "trace": [], "touched": [],
                 "done": set(), "stalled": 0, "writes": writes, "written": [], "corrections": 0,
                 "final": "", "skills": set(), "observation_cache": None,
                 "sources": sources, "prepared": s.obs is not None, "runtime_used": False,
                 "issued_targets": [], "read_sequence": 0}
+        self._trace_steps = turn["trace"]
         prompt = s.message.text
         self._messages.append({"role": "user", "_user_text": prompt, "_observation": True,
             "content": prompt + ("\n" + found if found else "")
@@ -203,12 +213,24 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             return self._loop(s, prompt, turn, verified=not self.verify)
         finally:
             self._carried_skills = tuple(sorted(turn["skills"]))
-            if self.debug_dir:
-                directory = Path(self.debug_dir)
-                directory.mkdir(parents=True, exist_ok=True)
-                (directory / f"{s.run_id}.json").write_text(json.dumps(
-                    {"messages": self._messages, "trace": turn["trace"], "shown": turn["shown"]},
-                    ensure_ascii=False, indent=1))
+
+    def _settle(self, s, current, text):
+        execution = super()._settle(s, current, text)
+        trace, self._trace = self._trace, None
+        if trace is not None:
+            principal = s.approvals.principal
+            identity = principal.audit_projection() if principal is not None else {}
+            try:
+                trace.write(run_id=s.run_id, turn_id=s.message.message_id, prompt=s.message.text,
+                            start_route=urlsplit(current.observation.url).path if current is not None else "",
+                            terminal_reason=execution.terminal_reason,
+                            wall_seconds=execution.agent.wall_seconds, answer=execution.user_answer,
+                            steps=self._trace_steps,
+                            actor={key: identity[key] for key in ("application_id", "tenant_digest", "actor_digest")
+                                   if key in identity})
+            except OSError as exc:
+                s.ledger.append("turn_trace_failed", error_type=type(exc).__name__)
+        return execution
 
     def _note(self, s, **facts):
         text = describe_step(facts)
@@ -222,10 +244,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     def _page(self, s, turn):
         if s.obs is None:
             return "浏览器尚未提供观察。页面和业务状态未知；源码工具可独立使用。"
-        text = self.profile.render_page(PageObservation.from_json(s.obs.to_json()), turn["marked"])[:12000]
-        if self.debug_dir:
-            turn["shown"].append(text)
-        return text
+        return self.profile.render_page(PageObservation.from_json(s.obs.to_json()), turn["marked"])[:12000]
 
     @staticmethod
     def _page_reference(s):

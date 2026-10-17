@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from dataclasses import replace
@@ -138,6 +140,27 @@ class NativeHostTests(unittest.TestCase):
         policy = self.chat.call_args.kwargs["egress_policy"]
         self.assertTrue({k.casefold() for k in SESSION_HANDOFF_KEYS} <= policy.handoffs.query_keys)
         self.chat.return_value.complete.assert_not_called()
+
+    def test_turn_records_are_on_by_default_bounded_and_pruned_at_start(self):
+        self.assertEqual(14, self.config.turn_trace_days)
+        for value in (-1, 91, True, "14", 1.5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                replace(self.config, turn_trace_days=value)
+        session = Path(self.tmp.name) / "runs" / "20261001-000000-abcdef12-000000"
+        (session / "turns").mkdir(parents=True)
+        old, audit = session / "turns" / "0001.json", session / "audit.jsonl"
+        for path in (old, audit):
+            path.write_text("{}")
+            os.utime(path, (time.time() - 15 * 86400,) * 2)
+        host = self.host()
+        self.assertEqual((False, True), (old.exists(), audit.exists()))
+        host.bootstrap("synthetic-a", "1", "tab")
+        self.assertTrue(host._sessions[("1", "1")].session.runner.executor.turn_traces)
+        host.close()
+        self.config = replace(self.config, turn_trace_days=0)
+        off = self.host()
+        off.bootstrap("synthetic-b", "1", "tab")
+        self.assertFalse(off._sessions[("1", "2")].session.runner.executor.turn_traces)
 
     def test_native_writes_require_explicit_host_enablement_and_keep_browser_submission_disabled(self):
         self.assertFalse(self.config.native_writes)

@@ -32,7 +32,6 @@ from dataclasses import replace
 from types import SimpleNamespace
 import hashlib
 import json
-import os
 import re
 import threading
 from urllib.parse import urlsplit
@@ -59,9 +58,6 @@ MODEL_STEPS = 24
 _PENDING_MS, _LOOK_MS = 400, 150
 #: Looks a page that keeps changing is given before it is taken as it is.
 _STILL_LOOKS = 2
-#: Development only: a directory to which each turn's conversation is written as the model
-#: saw it. Unset in any deployment; what a page shows does not belong in a log.
-_DEBUG_DIR = os.environ.get("WOA_SLIM_DEBUG_DIR")
 _CURRENT_REQUEST = ContextVar("yudao_slim_current_request", default="")
 _WRITE_INTENT = ContextVar("yudao_slim_write_intent", default=None)
 _MARK = re.compile(r"^\s*\*?\[(\d+)\]")
@@ -2385,7 +2381,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
             owner.verification_messages, draft_steps, mutation_prefill)
-        super().__init__(profile=profile, debug_dir=_DEBUG_DIR, **kwargs)
+        super().__init__(profile=profile, **kwargs)
 
 
 

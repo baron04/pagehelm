@@ -123,6 +123,9 @@ class YudaoHostConfig:
     slim_skill_knowledge: bool = True
     #: Internal cold-start test switch; production CLI always warms actor metadata.
     warm_index: bool = True
+    #: Days each turn's record of what the model was given and answered is kept beside
+    #: the session's audit (`runs/<session>/turns/`); 0 writes none.
+    turn_trace_days: int = 14
 
     def __post_init__(self):
         if not isinstance(self.native_writes, bool):
@@ -131,6 +134,9 @@ class YudaoHostConfig:
             raise ValueError("slim_skill_knowledge is on or off")
         if not isinstance(self.warm_index, bool):
             raise ValueError("warm_index is on or off")
+        if (isinstance(self.turn_trace_days, bool) or not isinstance(self.turn_trace_days, int)
+                or not 0 <= self.turn_trace_days <= 90):
+            raise ValueError("turn_trace_days must be a whole number of days from 0 to 90")
 
 
 @dataclass
@@ -188,6 +194,8 @@ class YudaoHost:
         self.allowance = DailyAllowance(config.daily_allowance_cny, utc_offset_minutes=8 * 60)
         self.allowance.load(self.ledger)
         self._lock = threading.RLock()
+        self._traces_pruned_at = 0.0
+        self.prune_turn_traces()
 
     # -- bootstrap ------------------------------------------------------------------------
     def _fenced_gets(self, policy: dict) -> frozenset:
@@ -301,6 +309,14 @@ class YudaoHost:
                                     if self.config.native_writes else None)
         return app
 
+    def prune_turn_traces(self) -> None:
+        """Delete turn records past their retention; at most once an hour."""
+        if not self.config.turn_trace_days or time.time() - self._traces_pruned_at < 3600:
+            return
+        self._traces_pruned_at = time.time()
+        from web_operation_agent.execution.turn_trace import prune_turn_traces
+        prune_turn_traces(self.config.state_dir / "runs", self.config.turn_trace_days)
+
     def _open(self, app: YudaoApplication, principal, key):
         bound = bind_application(app)
         stable = hashlib.sha256("\0".join(key).encode()).hexdigest()[:40]
@@ -311,6 +327,7 @@ class YudaoHost:
         run_dir = (self.config.state_dir / "runs"
                    / (time.strftime("%Y%m%d-%H%M%S") + "-" + stable[:8] + "-" + uuid.uuid4().hex[:6]))
         run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.prune_turn_traces()
         # All of a person's tabs draw on one allowance, keyed by an opaque digest of who
         # they are, never their name.
         person = hashlib.sha256("\0".join(key).encode()).hexdigest()[:24]
@@ -368,7 +385,8 @@ class YudaoHost:
                                          money_review=self.money_review),
                 conventions=load_conventions(REFERENCE_CONVENTIONS),
                 time_zone=app.goal_data.time_zone(),
-                skill_knowledge=self.config.slim_skill_knowledge)
+                skill_knowledge=self.config.slim_skill_knowledge,
+                turn_traces=self.config.turn_trace_days > 0)
             return LiveConversationRunner(channel, executor=executor)
 
         session = self.server.create_session(
@@ -494,6 +512,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,
                     default=YudaoHostConfig.daily_allowance_cny)
+    ap.add_argument("--turn-trace-days", type=int, default=YudaoHostConfig.turn_trace_days,
+                    help="days to keep each turn's record of what the model was given and answered; 0 keeps none")
     a = ap.parse_args(argv)
     commits = tuple(tuple(value.split("=", 1)) for value in a.source_commit)
     if any(len(item) != 2 for item in commits):
@@ -510,7 +530,8 @@ def main(argv=None) -> int:
             native_money_policy=a.native_money_policy, native_guard_port=a.native_guard_port,
             native_writes=a.native_writes,
             max_sessions=a.max_sessions,
-            daily_allowance_cny=a.daily_allowance_cny)
+            daily_allowance_cny=a.daily_allowance_cny,
+            turn_trace_days=a.turn_trace_days)
         from .deployment_validation import validate_native_deployment
         validate_native_deployment(config)
     except ValueError as exc:

@@ -1,4 +1,5 @@
 """Real actor REST reads through the same core decision loop as the native adapter."""
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,7 +20,8 @@ from web_operation_agent.tests.support.business import _Chat
 
 
 class ContactsModelLoopTests(unittest.TestCase):
-    def execute(self, app, actor_id, replies, *, source=None, observation=True):
+    def execute(self, app, actor_id, replies, *, source=None, observation=True, turn_traces=False,
+                inspect=None):
         actor = ACTORS_BY_ID[actor_id]
         adapter = MinimalContactsAdapter(app.origin, api_token=actor.token)
         identity = adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}")
@@ -34,10 +36,12 @@ class ContactsModelLoopTests(unittest.TestCase):
                     **({"source": source} if source is not None else {})),
                 chat=chat, application=bind_application(adapter), goal_port=port,
                 profile=contacts_profile(adapter, port), control=ReadOnlyControl(),
-                run_id_factory=lambda _: "contacts-model-run")
+                run_id_factory=lambda _: "contacts-model-run", turn_traces=turn_traces)
             with patch.object(goal_executor, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.execute({"message_id": "contact-model-turn", "text": "Grace Hopper email?",
                                            "page_url": app.origin + "/contacts"})
+            if inspect is not None:
+                inspect(Path(tmp))
         return result, chat, executor
 
     def test_source_only_uses_same_loop_without_browser_or_business_reads(self):
@@ -114,6 +118,39 @@ class ContactsModelLoopTests(unittest.TestCase):
             self.assertIsNone(result.entry_observation_id)
             self.assertEqual(ModelDrivenTurnExecutor, type(executor))
             self.assertEqual(0, app.write_requests)
+
+    def test_turn_record_keeps_what_the_model_saw_without_the_actor_credentials(self):
+        records = []
+        def inspect(directory):
+            records.extend(sorted((directory / "turns").glob("*.json")))
+            records[:] = [json.loads(path.read_text()) for path in records]
+        with MinimalContactsApplication() as app:
+            actor = ACTORS_BY_ID["ada-lovelace"]
+            result, chat, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"name_contains": "Grace Hopper"}),
+                ("finish", {"status": "done", "answer": "grace@example.test"})],
+                turn_traces=True, inspect=inspect)
+        self.assertEqual(AgentTurnStatus.FINISHED, result.status)
+        self.assertEqual(1, len(records))
+        record = records[0]
+        self.assertEqual(("Grace Hopper email?", "/contacts", "agent_finished", "contacts-model-run"),
+                         (record["prompt"], record["start_route"], record["terminal_reason"],
+                          record["run_id"]))
+        self.assertEqual(len(chat.messages), len(record["calls"]))
+        self.assertIn("grace@example.test", json.dumps(record["messages"]))
+        self.assertEqual("list_contacts",
+                         record["calls"][0]["reply"]["tool_calls"][0]["function"]["name"])
+        self.assertEqual({"application_id", "tenant_digest", "actor_digest"}, set(record["actor"]))
+        text = json.dumps(record)
+        self.assertNotIn(actor.token, text)
+        self.assertNotIn(actor.session, text)
+
+    def test_turns_write_no_record_unless_the_host_turns_it_on(self):
+        found = []
+        with MinimalContactsApplication() as app:
+            self.execute(app, "ada-lovelace", [("finish", {"status": "done", "answer": "x"})],
+                         inspect=lambda directory: found.extend((directory / "turns").glob("*")))
+        self.assertEqual([], found)
 
     def test_actor_scoped_real_reads_reach_the_next_model_decision(self):
         with MinimalContactsApplication() as app:
