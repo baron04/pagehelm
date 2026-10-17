@@ -49,6 +49,11 @@ public class DemoController {
     public CommonResult<PageResult<Item>> conflictPage(@Valid ConflictPageReqVO req) {
         return success(demoService.conflict(req));
     }
+
+    @GetMapping("/stats/page")
+    public CommonResult<PageResult<Item>> statsPage(@Valid StatsPageReqVO req) {
+        return success(demoService.stats(req));
+    }
 }
 ''',
     _BASE + "controller/admin/vo/DemoPageReqVO.java": '''
@@ -90,6 +95,14 @@ public class ContactLikePageReqVO extends PageParam {
 package demo.controller.admin.vo;
 public class ConflictPageReqVO extends PageParam {
     private Integer code;
+}
+''',
+    _BASE + "controller/admin/vo/StatsPageReqVO.java": '''
+package demo.controller.admin.vo;
+public class StatsPageReqVO extends PageParam {
+    private List<Long> ids;
+    private BigDecimal minPrice;
+    private String noPrefix;
 }
 ''',
     _BASE + "dal/mysql/DemoMapper.java": '''
@@ -159,6 +172,19 @@ public interface ConflictMapper extends BaseMapperX<ConflictDO> {
     default PageResult<ConflictDO> selectPageAlt(ConflictPageReqVO reqVO) {
         return selectPage(reqVO, new LambdaQueryWrapperX<ConflictDO>()
                 .inIfPresent(ConflictDO::getCode, reqVO.getCode()));
+    }
+}
+''',
+    _BASE + "dal/mysql/StatsMapper.java": '''
+package demo.dal.mysql;
+@Mapper
+public interface StatsMapper extends BaseMapperX<StatsDO> {
+    default PageResult<StatsDO> selectPage(StatsPageReqVO reqVO) {
+        return selectPage(reqVO, new LambdaQueryWrapperX<StatsDO>()
+                .inIfPresent(StatsDO::getId, reqVO.getIds())
+                .geIfPresent(StatsDO::getPrice, reqVO.getMinPrice())
+                .likeRightIfPresent(StatsDO::getNo, reqVO.getNoPrefix())
+                .orderByDesc(StatsDO::getId));
     }
 }
 ''',
@@ -288,6 +314,18 @@ class CompileTests(unittest.TestCase):
         self.assertEqual(apis["/admin-api/demo/item/conflict/page"], {
             "req_vo": "ConflictPageReqVO", "params": {}, "unknown": ["code"]})
 
+    def test_membership_comparison_and_prefix_conditions_keep_their_own_codes(self):
+        apis = filter_policy(_Tree(_SOURCES), "v-test")["apis"]
+        self.assertEqual(apis["/admin-api/demo/item/stats/page"], {
+            "req_vo": "StatsPageReqVO",
+            "params": {"ids": "in", "minPrice": "ge", "noPrefix": "likeRight"},
+            "unknown": []})
+        found = FilterSemantics.load(
+            {"schema_version": SCHEMA, "release": "v-test", "source_digest": "digest",
+             "labels": LABELS, "apis": apis}, release="v-test")
+        self.assertEqual(found.params_for("/admin-api/demo/item/stats/page"),
+                         {"ids": "属于", "minPrice": "大于等于", "noPrefix": "前缀匹配"})
+
     def test_handlers_without_a_request_vo_and_exports_are_not_compiled(self):
         apis = filter_policy(_Tree(_SOURCES), "v-test")["apis"]
         self.assertNotIn("/admin-api/demo/item/get", apis)
@@ -331,6 +369,56 @@ class LoadTests(unittest.TestCase):
             with self.subTest(document=document):
                 with self.assertRaises(ValueError):
                     FilterSemantics.load(document, **kwargs)
+
+
+class DeploymentWiringTests(unittest.TestCase):
+    """Startup binds the filter policy to the same source the method fence was read from."""
+
+    FENCE = {"schema_version": 2, "release": "v-test", "mode": "method-fence",
+             "writing_gets": [], "scan": {"source_digest": "digest"}}
+    PAGES = {"schema_version": 1, "release": "v-test", "review": "v-test",
+             "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
+                           "evidence": "v-test", "sha256": "a" * 64}]}
+
+    def _validate(self, root, filters_document):
+        from types import SimpleNamespace as NS
+        from web_operation_agent_yudao.deployment_validation import validate_native_deployment
+        fence, pages = root / "fence.json", root / "pages.json"
+        fence.write_text(json.dumps(self.FENCE))
+        pages.write_text(json.dumps(self.PAGES))
+        filters = root / "filters.json"
+        filters.write_text(json.dumps(filters_document))
+        return validate_native_deployment(NS(
+            native_read_policy=fence, native_page_policy=pages, native_money_policy=None,
+            native_filter_semantics=filters, source_release="v-test", ui_source=None))
+
+    def test_a_filter_policy_of_another_source_stops_startup(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            for document in (_doc(source_digest="other"), _doc(release="v-other")):
+                with self.subTest(document=document):
+                    with self.assertRaises(ValueError):
+                        self._validate(Path(directory), document)
+
+    def test_a_matching_filter_policy_loads_with_the_validated_deployment(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            validated = self._validate(Path(directory), _doc())
+            self.assertEqual(validated.filter_semantics.params_for("/admin-api/x/page"),
+                             {"name": "包含匹配"})
+
+    def test_the_filter_policy_stays_optional(self):
+        import tempfile
+        from types import SimpleNamespace as NS
+        from web_operation_agent_yudao.deployment_validation import validate_native_deployment
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "fence.json").write_text(json.dumps(self.FENCE))
+            (root / "pages.json").write_text(json.dumps(self.PAGES))
+            validated = validate_native_deployment(NS(
+                native_read_policy=root / "fence.json", native_page_policy=root / "pages.json",
+                native_money_policy=None, source_release="v-test", ui_source=None))
+            self.assertIsNone(validated.filter_semantics)
 
 
 class DeployedPolicyTests(unittest.TestCase):
