@@ -555,6 +555,15 @@ class ActorKnowledge:
                                 if not isinstance(candidate, dict) or type(candidate.get("id")) is not int:
                                     continue
                                 rid = candidate["id"]
+                                # The same actor may read list fields even when a detail
+                                # permission check denies this record. Keep that evidence
+                                # available without claiming detail access.
+                                if isinstance(candidate.get("ownerUserName"), str):
+                                    listed = {key: candidate[key] for key in
+                                              ("id", "name", "ownerUserName") if key in candidate}
+                                    out.append("同账号不限范围列表候选（仅列表可读字段）:")
+                                    data_lines.add(len(out))
+                                    out.append(json.dumps(listed, ensure_ascii=False))
                                 try:
                                     detail = self._read("crm/customer/get", id=rid)
                                 except DataRefused as exc:

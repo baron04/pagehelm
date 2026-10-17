@@ -676,6 +676,30 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn(BEGIN + "\n别人的、别人的", text)
         self.assertNotIn("这是没有权限", text)
 
+    def test_list_readable_owner_survives_detail_permission_denial(self):
+        docs = json.loads(json.dumps(DOCS))
+        docs["paths"]["/admin-api/crm/customer/page"] = json.loads(json.dumps(
+            docs["paths"]["/admin-api/leads/page"]))
+
+        class CustomerClient(Client):
+            def get(self, path, **params):
+                if path == "crm/customer/page":
+                    self.calls.append((path, params))
+                    records = [] if params.get("sceneType") else [
+                        {"id": 42, "name": "Q24 外部客户", "ownerUserName": "列表可见负责人"}]
+                    return {"total": len(records), "list": records}
+                if path == "crm/customer/get":
+                    raise DataRefused("detail denied", permission_denied=True)
+                return super().get(path, **params)
+
+        know = ActorKnowledge(CustomerClient(), lambda: docs)
+        text = know.call_api("crm/customer/page", {"pageNo": 1, "pageSize": 10,
+                                                  "name": "Q24 外部客户"}, ["name", "ownerUserName"])
+        self.assertIn("total=0（当前账号可见的全部", text)
+        self.assertIn('"ownerUserName": "列表可见负责人"', text)
+        self.assertIn("编号 42 的详情：明确拒绝", text)
+        self.assertIn("仅列表可读字段", text)
+
     def test_credentials_in_a_read_are_blanked_before_the_model_is_told(self):
         text = self.know.call_api("channels/page", {"pageNo": 1})
         self.assertNotIn("s3cr3t", text)
