@@ -117,6 +117,10 @@ class Handler(BaseHTTPRequestHandler):
         headers = {k: v for k, v in self.headers.items()
                    if k.lower() not in {"host", "connection", "content-length", "accept-encoding"}}
         headers["Accept-Encoding"] = "identity"
+        if (path == "/woa-agent-boot/bootstrap" or path.startswith("/woa-agent/")) and not self.headers.get("Origin"):
+            # As the site's nginx does: a same-origin GET carries no Origin header, and the
+            # assistant's gateway requires one. A request naming another origin keeps it.
+            headers["Origin"] = cfg.ORIGIN
         body = self.rfile.read(size)
         if len(body) != size:
             self.reply(400, b'{"error":"incomplete_body"}')

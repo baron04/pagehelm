@@ -161,6 +161,14 @@ class FrontTests(unittest.TestCase):
             def log_message(self, *_): pass
 
             def do_GET(self):
+                if self.path.endswith("/origin") or self.path == "/bootstrap":
+                    body = json.dumps({"origin": self.headers.get("Origin")}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 if self.path == "/stream":
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
@@ -213,6 +221,16 @@ class FrontTests(unittest.TestCase):
         with self.opener.open(self.origin + "/woa-agent/stream", timeout=1) as response:
             self.assertEqual(b"data: first\n", response.readline())
         self.assertFalse(self.finish_stream.is_set())
+
+    def test_assistant_requests_without_origin_get_the_site_origin_as_on_the_server(self):
+        def seen(path, origin=None):
+            request = urllib.request.Request(self.origin + path, headers={"Origin": origin} if origin else {})
+            with self.opener.open(request, timeout=2) as response:
+                return json.load(response)["origin"]
+        self.assertEqual(cfg.ORIGIN, seen("/woa-agent/v1/sessions/s/origin"))
+        self.assertEqual(cfg.ORIGIN, seen("/woa-agent-boot/bootstrap"))
+        self.assertEqual("https://elsewhere.test", seen("/woa-agent/v1/origin", "https://elsewhere.test"))
+        self.assertIsNone(seen("/admin-api/origin"))
 
     def test_asset_traversal_is_refused(self):
         with self.assertRaises(urllib.error.HTTPError) as error:
