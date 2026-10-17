@@ -85,7 +85,7 @@ class NativeHostTests(unittest.TestCase):
         from web_operation_agent_yudao.ui_source import UiSource
         root = Path(self.tmp.name) / "source"
         root.mkdir()
-        self.config = replace(self.config, source_root=root, warm_index=False)
+        self.config = replace(self.config, source_root=root, warm_index=False, runtime_source=True)
         path = self.config.source_root / "ui/src/utils/refund.ts"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("export const batchLimit = 125;\n")
@@ -115,6 +115,28 @@ class NativeHostTests(unittest.TestCase):
         self.assertIsNone(session.channel.latest_observation_envelope)
         self.documents.assert_not_called()
         self.assertIn("125", result.user_answer)
+
+    def test_user_facing_source_reading_is_off_by_default_and_explicitly_flagged_on(self):
+        # D3：--source-root 服务构建期用途；用户态源码工具默认关闭，关闭时提示词
+        # 要求实现类问题用固定答复说明本部署不提供源码说明。
+        root = Path(self.tmp.name) / "source"
+        (root / "ui/src/utils").mkdir(parents=True)
+        (root / "ui/src/utils/refund.ts").write_text("export const batchLimit = 125;\n")
+        for value in (1, "true", None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                replace(self.config, runtime_source=value)
+        self.config = replace(self.config, source_root=root, warm_index=False)
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "tab")
+        executor = next(iter(host._sessions.values())).session.runner.executor
+        self.assertFalse(executor.config.source.runtime_source)
+        self.assertIn("本部署不提供源码说明", executor.profile.instructions)
+        self.config = replace(self.config, runtime_source=True)
+        flagged = self.host()
+        flagged.bootstrap("synthetic-b", "1", "tab")
+        enabled = next(iter(flagged._sessions.values())).session.runner.executor
+        self.assertTrue(enabled.config.source.runtime_source)
+        self.assertNotIn("本部署不提供源码说明", enabled.profile.instructions)
 
     def test_tabs_share_the_actor_s_session_and_renew_only_its_token(self):
         host = self.host()
@@ -606,10 +628,45 @@ class NativeCliTests(unittest.TestCase):
                 self.assertEqual(0, native.main(args))
             self.assertTrue(host.config.warm_index)
             self.assertFalse(host.config.native_writes)
+            self.assertFalse(host.config.runtime_source)   # D3：用户态源码工具默认关闭
             host.server.start.assert_called_once()
             host._warm_api_docs.assert_called_once()
             http.return_value.shutdown.assert_called_once()
             host.close.assert_called_once()
+
+    def test_the_runtime_source_flag_reaches_the_host_config(self):
+        from types import SimpleNamespace as NS
+        from unittest.mock import Mock
+        from web_operation_agent_yudao import native_server as native
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fence = root / "fence.json"
+            fence.write_text(json.dumps({"schema_version": 2, "release": "synthetic", "mode": "method-fence",
+                                         "writing_gets": [], "scan": {}}))
+            pages = root / "pages.json"
+            pages.write_text(json.dumps({"schema_version": 1, "release": "synthetic", "review": "synthetic",
+                "handlers": [{"kind": "navigation", "route": "/contacts", "controls": [],
+                              "evidence": "synthetic", "sha256": "a"*64}]}))
+            host = Mock()
+            host.server.base_url = "http://synthetic.invalid"
+            def compose(config):
+                host.config = config
+                return host
+            def thread(**kwargs):
+                return NS(start=lambda: kwargs["target"]())
+            args = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
+                    "--state-dir", directory, "--source-release", "synthetic", "--native-read-policy", str(fence),
+                    "--native-page-policy", str(pages), "--runtime-source"]
+            with patch.dict(native.os.environ, {"AGENT_OPENAI_API_KEY": "synthetic-unused",
+                    "AGENT_OPENAI_MODEL": "scripted/no-model"}, clear=True), \
+                    patch.object(native, "YudaoHost", side_effect=compose), \
+                    patch("web_operation_agent.modeling.spend.price_for", return_value={}), \
+                    patch.object(native, "ThreadingHTTPServer") as http, \
+                    patch.object(native.threading, "Thread", side_effect=thread), \
+                    patch.object(native.threading, "Event") as event, patch.object(native.signal, "signal"):
+                event.return_value.wait.side_effect = KeyboardInterrupt
+                self.assertEqual(0, native.main(args))
+            self.assertTrue(host.config.runtime_source)
 
 
 if __name__ == "__main__":

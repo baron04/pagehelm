@@ -120,6 +120,23 @@ class RepositoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 repository_source(Path(tmp) / "missing", "synthetic-1")
 
+    def test_runtime_off_keeps_the_release_validated_and_offers_no_user_lookup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "ui/src/refund.ts"
+            path.parent.mkdir(parents=True)
+            path.write_text("export const refundLimit = 100;\n")
+            source = repository_source(root, "synthetic-1", runtime=False)
+            self.assertFalse(source.runtime_source)
+            self.assertIsNone(source.lookup)
+            self.assertIsNone(source.history_lookup())
+            # The deployment's release binding is still checked at startup, and the
+            # runtime switch never stands in for the build-time scanners' own root.
+            with self.assertRaises(ValueError):
+                repository_source(root / "missing", "synthetic-1", runtime=False)
+            with self.assertRaises(ValueError):
+                repository_source(root, "", runtime=False)
+
 
 if __name__ == "__main__":
     unittest.main()

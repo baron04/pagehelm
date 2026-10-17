@@ -166,7 +166,12 @@ deployed snapshot. `repository.py` indexes the code and documentation allowlist 
 `policies/repository.json` once at startup and returns bounded exact-byte citations.
 It does not compile `YudaoSource` or require a SourceMap. Repository access is optional:
 without these flags the ordinary read tools still work. An explicitly missing root or
-release fails startup. Static ownership requires a declaration in code or documentation;
+release fails startup. User-facing source lookup and reading additionally require
+`--runtime-source`; without that flag the host still validates the release binding but
+offers no source tools, and the turn prompt tells the model to answer implementation
+questions with the fixed statement that this deployment does not describe its source.
+Build-time scanners read the release tree through their own CLIs, never through this
+flag. Static ownership requires a declaration in code or documentation;
 business record owners are not engineering owners. Snapshot-only deployments explicitly
 refuse Git-history questions rather than substitute application operation logs.
 `SourceFormReader` is an adapter-owned, on-demand raw Vue template reader for scalar
