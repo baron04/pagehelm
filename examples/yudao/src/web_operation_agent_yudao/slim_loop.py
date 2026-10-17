@@ -470,6 +470,7 @@ class ActorKnowledge:
         self._validate_params(path, params)
         params = dict(params)
         fields = tuple(str(f) for f in fields or () if isinstance(f, str) and f)[:12]
+        filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
         published = {q.get("name") for q in self._by_path[path]["op"].get("parameters") or []
                      if q.get("in") == "query"}
         # A list the application divides by whose records they are (mine, ones I take part
@@ -583,6 +584,15 @@ class ActorKnowledge:
             data = present(data)
         else:
             rows = [present(row) for row in rows]
+            if fields:
+                scope_lines = (["本次接口查询范围：业务筛选参数如下（本次调用所提交的条件）：",
+                                json.dumps(filters, ensure_ascii=False)] if filters else
+                               ["本次接口查询范围：未带业务筛选条件；以下 total、合计和分组覆盖当前账号可见的此接口全表，"
+                                "不能当作用户点名的子集。"])
+                data_lines = {index + len(scope_lines) for index in data_lines}
+                if filters:
+                    data_lines.add(1)
+                out[:0] = scope_lines
         self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
                           "complete": whole if rows is not None else None,
                           "declared_total": declared_total}
@@ -687,7 +697,7 @@ class ActorKnowledge:
                 if isinstance(row, dict) and row.get(key) not in (None, "") and not isinstance(row.get(key), (dict, list)):
                     groups.setdefault(str(row[key]), []).append(row)
             # A column every row has its own value of (a name, a number) is no kind.
-            if not 2 <= len(groups) <= _GROUPS or len(groups) == len(rows):
+            if not 1 <= len(groups) <= _GROUPS or len(groups) == len(rows):
                 continue
             grouped += 1
             label = dict(coded.get(key, ()))
@@ -907,6 +917,7 @@ SYSTEM_INTRO = """你是嵌入在企业管理后台里的助手，替当前登�
 """
 SYSTEM_READ = """1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
    - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序最多跟读 5000 行；只有结果写明已读完所有页时，给出的数值合计、极值、按月行数和分组合计才代表全量。未读完时缩小筛选范围，仍不能读全就说明这项无法完整核实，不要把已读行当全集。
+   - 用户用名称、前缀或其它条件圈定一批记录时，统计前先把该条件传入接口已声明的筛选参数，或在完整读取后逐行按条件筛选再计算；全表的 total 和自动分组不代表这批记录。答复前核对工具结果写明的“本次接口查询范围”是否覆盖了用户的每个条件，不吻合就继续查询或说明无法核实。
    - “超过 / 不少于 / 低于”等比较条件，只有接口明确声明相应比较参数时才传给接口；等值金额参数不能代替比较条件。接口没有比较参数时，用 fields 读完有关列，按每行的值判断。筛选读到 0 行而较宽查询读到记录时，先核对参数和已读记录，不要反复换一组猜测参数。
    - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - CRM 这类按“我负责的 / 我参与的 / 下属负责的”分范围的列表：接口不带 sceneType 时，程序会把当前账号可见的这几个范围合并去重后返回，没有限定范围的问题（“本月新建了几个客户”“金额最高的商机”）就用它；用户明说“我负责的”才带 sceneType=1。列表页默认页签只显示“我负责的”，条数比合并后的少是正常的。
@@ -963,6 +974,7 @@ VERIFY_SYSTEM = """你是验收员。下面是用户的原话、助手的答复�
 - 要求填表的：用户给的每个值是否出现在对应字段（要求清空的字段应当是空的）；是否标出了提交按钮；助手有没有动用户没要求的字段。最后这一项只看“助手本轮填写/选择过的控件”这份程序记录：表单里其它字段的值是表单打开时就有的（记录原值、应用默认值或联动带出的值），不算助手改动，不要要求恢复。
 - 用户说的是“帮我新增/创建一个…”，却一个具体的值都没给、也没指明关联对象，助手没有追问而以完成结束：算问题，应当用 need_input 问用户要填什么。用户只是要求“打开新增表单”则不算。
 - 要求回答的：答复里是否有具体值；这个值是否能在“助手本轮读过的接口”结果或页面状态里找到；有矛盾才算问题。只提问、没要求打开页面的请求，不需要页面有任何变化。不要用你自己对字段名、列名含义的理解去否定助手选的列或算法：答复里的数在接口结果或页面上能找到、且页面显示的数与它一致，就不算问题。接口结果在这里只截取了开头，没看到的行不等于助手没读到。
+- 核对读取范围：用户限定了名称、前缀、负责人或其它条件时，接口的业务筛选参数或已读行的逐行计算必须落实这些条件。未筛选全表的 total、合计或分组即使与答复数字一致，也不能证明用户所问子集的数字；这种范围不符算问题。完整分页只证明读全了该次接口查询范围，不证明范围选对了。
 - 助手说“已完成”的事，状态里有没有证据。
 - 用户指的是单独一条记录（“那张”“这个”“它”或直接给名称），而操作轨迹里把这个名称或条件作为查询参数查到多条（带着该参数时 total 大于 1；没带这个条件的列表总数不算），助手却自己挑了一条打开或修改：算问题，应当列出候选让用户选。
 - 答复里的金额、单价与页面状态里显示的数字不一致，或只来自未获逐字段核验的接口原始值而页面上没有出现：算问题。

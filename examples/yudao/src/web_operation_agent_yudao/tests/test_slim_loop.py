@@ -761,6 +761,23 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("其它入库", text)
         self.assertNotIn("bizType（", text)
 
+    def test_aggregate_read_names_the_query_scope_before_its_numbers(self):
+        all_rows = self.know.call_api("ledger/page", {"pageNo": 1, "pageSize": 5}, ["bizType"])
+        self.assertTrue(all_rows.startswith("本次接口查询范围：未带业务筛选条件"))
+        self.assertIn("不能当作用户点名的子集", all_rows)
+        filtered = self.know.call_api("orders/page", {"pageNo": 1, "pageSize": 5,
+                                                      "customerId": "7"}, ["no"])
+        self.assertTrue(filtered.startswith("本次接口查询范围：业务筛选参数如下"))
+        self.assertIn(BEGIN + '\n{"customerId": "7"}\n' + END, filtered)
+        scoped = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10,
+                                                   "name": "别人"}, ["name"])
+        self.assertIn(BEGIN + '\n别人的、别人的', scoped)
+        self.assertIn('别人的\n' + END, scoped)
+
+    def test_model_and_checker_must_match_named_subset_to_read_scope(self):
+        self.assertIn("全表的 total 和自动分组不代表这批记录", SYSTEM)
+        self.assertIn("完整分页只证明读全了该次接口查询范围", VERIFY_SYSTEM)
+
     def test_a_read_of_one_page_names_its_codes_too_and_goes_without_names_it_cannot_read(self):
         know = ActorKnowledge(self.client, lambda: DOCS, codes=lambda path: LEDGER_NAMES)
         self.assertIn("bizType: 50=销售出库", know.call_api("ledger/page", {"pageNo": 1, "pageSize": 2}))
@@ -774,6 +791,18 @@ class KnowledgeTests(unittest.TestCase):
     def test_a_column_every_row_has_its_own_value_of_is_not_grouped(self):
         text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 5}, ["name", "totalPrice"])
         self.assertNotIn("按 name 分组", text)
+
+    def test_a_complete_named_cohort_with_one_kind_is_grouped(self):
+        class OneKindClient(Client):
+            def get(self, path, **params):
+                if path == "ledger/page":
+                    return {"total": 3, "list": [{"id": n, "bizType": 50, "count": n}
+                                                  for n in (1, 2, 3)]}
+                return super().get(path, **params)
+
+        text = ActorKnowledge(OneKindClient(), lambda: DOCS).call_api(
+            "ledger/page", {"pageNo": 1, "pageSize": 3}, ["bizType", "count"])
+        self.assertIn("按 bizType 分组（1 种）:\n" + BEGIN + "\n50: 3 行，count 合计 6", text)
 
     def test_without_chosen_columns_only_the_page_asked_for_is_read(self):
         text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 2})
