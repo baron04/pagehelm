@@ -4573,6 +4573,10 @@
       [
         "/pms/kb/library",
         "paging"
+      ],
+      [
+        "/ai/chat",
+        "form_entry"
       ]
     ],
     "menu_sha256": "4f8968d354dd8995800328327d71cab8297df87342fe2c4971cbdeddfd38baac",
