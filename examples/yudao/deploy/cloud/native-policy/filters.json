@@ -1,0 +1,4960 @@
+{
+  "schema_version": 1,
+  "release": "v2026.09",
+  "source_digest": "1908a58c7d075519d8dddbf9858676e71456ba3d7a3bbafedca227ae9f1b3bed",
+  "labels": {
+    "like": "包含匹配",
+    "likeRight": "前缀匹配",
+    "eq": "等于",
+    "ne": "不等于",
+    "in": "属于",
+    "between": "区间",
+    "ge": "大于等于",
+    "gt": "大于",
+    "le": "小于等于",
+    "lt": "小于"
+  },
+  "apis": {
+    "/admin-api/ai/api-key/page": {
+      "req_vo": "AiApiKeyPageReqVO",
+      "params": {
+        "name": "like",
+        "platform": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/chat-role/my-page": {
+      "req_vo": "AiChatRolePageReqVO",
+      "params": {
+        "category": "eq",
+        "name": "like",
+        "publicStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/chat-role/page": {
+      "req_vo": "AiChatRolePageReqVO",
+      "params": {
+        "category": "eq",
+        "name": "like",
+        "publicStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/chat/conversation/page": {
+      "req_vo": "AiChatConversationPageReqVO",
+      "params": {
+        "createTime": "between",
+        "title": "like",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/chat/message/page": {
+      "req_vo": "AiChatMessagePageReqVO",
+      "params": {
+        "content": "like",
+        "conversationId": "eq",
+        "createTime": "between",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/image/my-page": {
+      "req_vo": "AiImagePageReqVO",
+      "params": {
+        "publicStatus": "eq"
+      },
+      "unknown": [
+        "createTime",
+        "platform",
+        "prompt",
+        "status",
+        "userId"
+      ]
+    },
+    "/admin-api/ai/image/page": {
+      "req_vo": "AiImagePageReqVO",
+      "params": {
+        "publicStatus": "eq"
+      },
+      "unknown": [
+        "createTime",
+        "platform",
+        "prompt",
+        "status",
+        "userId"
+      ]
+    },
+    "/admin-api/ai/image/public-page": {
+      "req_vo": "AiImagePublicPageReqVO",
+      "params": {
+        "prompt": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/knowledge/document/page": {
+      "req_vo": "AiKnowledgeDocumentPageReqVO",
+      "params": {
+        "knowledgeId": "eq",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/knowledge/page": {
+      "req_vo": "AiKnowledgePageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/knowledge/segment/page": {
+      "req_vo": "AiKnowledgeSegmentPageReqVO",
+      "params": {
+        "content": "like",
+        "documentId": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/mind-map/page": {
+      "req_vo": "AiMindMapPageReqVO",
+      "params": {
+        "createTime": "between",
+        "prompt": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/model/page": {
+      "req_vo": "AiModelPageReqVO",
+      "params": {
+        "model": "eq",
+        "name": "like",
+        "platform": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/music/my-page": {
+      "req_vo": "AiMusicPageReqVO",
+      "params": {
+        "publicStatus": "eq"
+      },
+      "unknown": [
+        "createTime",
+        "generateMode",
+        "status",
+        "title",
+        "userId"
+      ]
+    },
+    "/admin-api/ai/music/page": {
+      "req_vo": "AiMusicPageReqVO",
+      "params": {
+        "publicStatus": "eq"
+      },
+      "unknown": [
+        "createTime",
+        "generateMode",
+        "status",
+        "title",
+        "userId"
+      ]
+    },
+    "/admin-api/ai/tool/page": {
+      "req_vo": "AiToolPageReqVO",
+      "params": {
+        "createTime": "between",
+        "description": "eq",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/workflow/page": {
+      "req_vo": "AiWorkflowPageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/ai/write/page": {
+      "req_vo": "AiWritePageReqVO",
+      "params": {
+        "createTime": "between",
+        "platform": "eq",
+        "type": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/bpm/category/page": {
+      "req_vo": "BpmCategoryPageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/bpm/form/page": {
+      "req_vo": "BpmFormPageReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/bpm/oa/leave/page": {
+      "req_vo": "BpmOALeavePageReqVO",
+      "params": {
+        "createTime": "between",
+        "reason": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/bpm/process-definition/page": {
+      "req_vo": "BpmProcessDefinitionPageReqVO",
+      "params": {},
+      "unknown": [
+        "key"
+      ]
+    },
+    "/admin-api/bpm/process-expression/page": {
+      "req_vo": "BpmProcessExpressionPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/bpm/process-instance/copy/page": {
+      "req_vo": "BpmProcessInstanceCopyPageReqVO",
+      "params": {
+        "createTime": "between",
+        "processInstanceName": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/bpm/process-instance/manager-page": {
+      "req_vo": "BpmProcessInstancePageReqVO",
+      "params": {},
+      "unknown": [
+        "category",
+        "createTime",
+        "endTime",
+        "formFieldsParams",
+        "name",
+        "processDefinitionKey",
+        "startUserId",
+        "status"
+      ]
+    },
+    "/admin-api/bpm/process-instance/my-page": {
+      "req_vo": "BpmProcessInstancePageReqVO",
+      "params": {},
+      "unknown": [
+        "category",
+        "createTime",
+        "endTime",
+        "formFieldsParams",
+        "name",
+        "processDefinitionKey",
+        "startUserId",
+        "status"
+      ]
+    },
+    "/admin-api/bpm/process-listener/page": {
+      "req_vo": "BpmProcessListenerPageReqVO",
+      "params": {
+        "event": "eq",
+        "name": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/bpm/task/done-page": {
+      "req_vo": "BpmTaskPageReqVO",
+      "params": {},
+      "unknown": [
+        "category",
+        "createTime",
+        "name",
+        "processDefinitionKey",
+        "status"
+      ]
+    },
+    "/admin-api/bpm/task/manager-page": {
+      "req_vo": "BpmTaskPageReqVO",
+      "params": {},
+      "unknown": [
+        "category",
+        "createTime",
+        "name",
+        "processDefinitionKey",
+        "status"
+      ]
+    },
+    "/admin-api/bpm/task/todo-page": {
+      "req_vo": "BpmTaskPageReqVO",
+      "params": {},
+      "unknown": [
+        "category",
+        "createTime",
+        "name",
+        "processDefinitionKey",
+        "status"
+      ]
+    },
+    "/admin-api/bpm/user-group/page": {
+      "req_vo": "BpmUserGroupPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": [
+        "id"
+      ]
+    },
+    "/admin-api/crm/business/page": {
+      "req_vo": "CrmBusinessPageReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": [
+        "contactId",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/business/page-by-contact": {
+      "req_vo": "CrmBusinessPageReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": [
+        "contactId",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/business/page-by-customer": {
+      "req_vo": "CrmBusinessPageReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": [
+        "contactId",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/clue/page": {
+      "req_vo": "CrmCluePageReqVO",
+      "params": {
+        "createTime": "between",
+        "followUpStatus": "eq",
+        "industryId": "eq",
+        "level": "eq",
+        "mobile": "like",
+        "name": "like",
+        "source": "eq",
+        "telephone": "like",
+        "transformStatus": "eq"
+      },
+      "unknown": [
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/contact/page": {
+      "req_vo": "CrmContactPageReqVO",
+      "params": {
+        "email": "eq",
+        "mobile": "eq",
+        "name": "like",
+        "qq": "eq",
+        "telephone": "eq",
+        "wechat": "eq"
+      },
+      "unknown": [
+        "businessId",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/contact/page-by-business": {
+      "req_vo": "CrmContactPageReqVO",
+      "params": {
+        "email": "eq",
+        "mobile": "eq",
+        "name": "like",
+        "qq": "eq",
+        "telephone": "eq",
+        "wechat": "eq"
+      },
+      "unknown": [
+        "businessId",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/contact/page-by-customer": {
+      "req_vo": "CrmContactPageReqVO",
+      "params": {
+        "email": "eq",
+        "mobile": "eq",
+        "name": "like",
+        "qq": "eq",
+        "telephone": "eq",
+        "wechat": "eq"
+      },
+      "unknown": [
+        "businessId",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/contract/page": {
+      "req_vo": "CrmContractPageReqVO",
+      "params": {
+        "businessId": "eq",
+        "customerId": "eq",
+        "name": "like",
+        "no": "like"
+      },
+      "unknown": [
+        "auditStatus",
+        "expiryType",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/contract/page-by-business": {
+      "req_vo": "CrmContractPageReqVO",
+      "params": {
+        "businessId": "eq",
+        "customerId": "eq",
+        "name": "like",
+        "no": "like"
+      },
+      "unknown": [
+        "auditStatus",
+        "expiryType",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/contract/page-by-customer": {
+      "req_vo": "CrmContractPageReqVO",
+      "params": {
+        "businessId": "eq",
+        "customerId": "eq",
+        "name": "like",
+        "no": "like"
+      },
+      "unknown": [
+        "auditStatus",
+        "expiryType",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/customer-limit-config/page": {
+      "req_vo": "CrmCustomerLimitConfigPageReqVO",
+      "params": {
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/crm/customer/page": {
+      "req_vo": "CrmCustomerPageReqVO",
+      "params": {
+        "followUpStatus": "eq",
+        "industryId": "eq",
+        "level": "eq",
+        "mobile": "eq",
+        "name": "like",
+        "source": "eq"
+      },
+      "unknown": [
+        "contactStatus",
+        "pool",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/customer/put-pool-remind-page": {
+      "req_vo": "CrmCustomerPageReqVO",
+      "params": {
+        "followUpStatus": "eq",
+        "industryId": "eq",
+        "level": "eq",
+        "mobile": "eq",
+        "name": "like",
+        "source": "eq"
+      },
+      "unknown": [
+        "contactStatus",
+        "pool",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/follow-up-record/page": {
+      "req_vo": "CrmFollowUpRecordPageReqVO",
+      "params": {
+        "bizId": "eq",
+        "bizType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/crm/operate-log/page": {
+      "req_vo": "CrmOperateLogPageReqVO",
+      "params": {},
+      "unknown": [
+        "bizId",
+        "bizType"
+      ]
+    },
+    "/admin-api/crm/performance-config/page": {
+      "req_vo": "CrmPerformanceConfigPageReqVO",
+      "params": {
+        "bizType": "eq",
+        "objectId": "eq",
+        "objectType": "eq",
+        "year": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/crm/product-category/list": {
+      "req_vo": "CrmProductCategoryListReqVO",
+      "params": {
+        "name": "like",
+        "parentId": "eq"
+      },
+      "unknown": [
+        "createTime"
+      ]
+    },
+    "/admin-api/crm/product/page": {
+      "req_vo": "CrmProductPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/crm/receivable-plan/page": {
+      "req_vo": "CrmReceivablePlanPageReqVO",
+      "params": {
+        "contractId": "eq",
+        "contractNo": "like",
+        "customerId": "eq"
+      },
+      "unknown": [
+        "remindType",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/receivable-plan/page-by-customer": {
+      "req_vo": "CrmReceivablePlanPageReqVO",
+      "params": {
+        "contractId": "eq",
+        "contractNo": "like",
+        "customerId": "eq"
+      },
+      "unknown": [
+        "remindType",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/receivable/page": {
+      "req_vo": "CrmReceivablePageReqVO",
+      "params": {
+        "contractId": "eq",
+        "no": "eq",
+        "planId": "eq"
+      },
+      "unknown": [
+        "auditStatus",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/crm/receivable/page-by-customer": {
+      "req_vo": "CrmReceivablePageReqVO",
+      "params": {
+        "contractId": "eq",
+        "no": "eq",
+        "planId": "eq"
+      },
+      "unknown": [
+        "auditStatus",
+        "customerId",
+        "sceneType"
+      ]
+    },
+    "/admin-api/erp/account/page": {
+      "req_vo": "ErpAccountPageReqVO",
+      "params": {
+        "name": "like",
+        "no": "like",
+        "remark": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/customer/page": {
+      "req_vo": "ErpCustomerPageReqVO",
+      "params": {
+        "mobile": "eq",
+        "name": "like",
+        "telephone": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/finance-payment/page": {
+      "req_vo": "ErpFinancePaymentPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "bizNo": "eq",
+        "creator": "eq",
+        "financeUserId": "eq",
+        "no": "like",
+        "paymentTime": "between",
+        "remark": "like",
+        "status": "eq",
+        "supplierId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/finance-receipt/page": {
+      "req_vo": "ErpFinanceReceiptPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "bizNo": "eq",
+        "creator": "eq",
+        "customerId": "eq",
+        "financeUserId": "eq",
+        "no": "like",
+        "receiptTime": "between",
+        "remark": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/product-category/list": {
+      "req_vo": "ErpProductCategoryListReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/product-unit/page": {
+      "req_vo": "ErpProductUnitPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/product/page": {
+      "req_vo": "ErpProductPageReqVO",
+      "params": {
+        "categoryId": "eq",
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/purchase-in/page": {
+      "req_vo": "ErpPurchaseInPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "creator": "eq",
+        "inTime": "between",
+        "no": "like",
+        "orderNo": "like",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq",
+        "supplierId": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": [
+        "paymentEnable",
+        "paymentStatus"
+      ]
+    },
+    "/admin-api/erp/purchase-order/page": {
+      "req_vo": "ErpPurchaseOrderPageReqVO",
+      "params": {
+        "creator": "eq",
+        "no": "like",
+        "orderTime": "between",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq",
+        "supplierId": "eq"
+      },
+      "unknown": [
+        "inEnable",
+        "inStatus",
+        "returnEnable",
+        "returnStatus"
+      ]
+    },
+    "/admin-api/erp/purchase-return/page": {
+      "req_vo": "ErpPurchaseReturnPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "creator": "eq",
+        "no": "like",
+        "orderNo": "like",
+        "productId": "eq",
+        "remark": "like",
+        "returnTime": "between",
+        "status": "eq",
+        "supplierId": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": [
+        "refundEnable",
+        "refundStatus"
+      ]
+    },
+    "/admin-api/erp/sale-order/page": {
+      "req_vo": "ErpSaleOrderPageReqVO",
+      "params": {
+        "creator": "eq",
+        "customerId": "eq",
+        "no": "like",
+        "orderTime": "between",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq"
+      },
+      "unknown": [
+        "outEnable",
+        "outStatus",
+        "returnEnable",
+        "returnStatus"
+      ]
+    },
+    "/admin-api/erp/sale-out/page": {
+      "req_vo": "ErpSaleOutPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "creator": "eq",
+        "customerId": "eq",
+        "no": "like",
+        "orderNo": "like",
+        "outTime": "between",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": [
+        "receiptEnable",
+        "receiptStatus"
+      ]
+    },
+    "/admin-api/erp/sale-return/page": {
+      "req_vo": "ErpSaleReturnPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "creator": "eq",
+        "customerId": "eq",
+        "no": "like",
+        "orderNo": "like",
+        "productId": "eq",
+        "remark": "like",
+        "returnTime": "between",
+        "status": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": [
+        "refundEnable",
+        "refundStatus"
+      ]
+    },
+    "/admin-api/erp/stock-check/page": {
+      "req_vo": "ErpStockCheckPageReqVO",
+      "params": {
+        "checkTime": "between",
+        "creator": "eq",
+        "no": "like",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/stock-in/page": {
+      "req_vo": "ErpStockInPageReqVO",
+      "params": {
+        "creator": "eq",
+        "inTime": "between",
+        "no": "like",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq",
+        "supplierId": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/stock-move/page": {
+      "req_vo": "ErpStockMovePageReqVO",
+      "params": {
+        "creator": "eq",
+        "fromWarehouseId": "eq",
+        "moveTime": "between",
+        "no": "like",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/stock-out/page": {
+      "req_vo": "ErpStockOutPageReqVO",
+      "params": {
+        "creator": "eq",
+        "customerId": "eq",
+        "no": "like",
+        "outTime": "between",
+        "productId": "eq",
+        "remark": "like",
+        "status": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/stock-record/page": {
+      "req_vo": "ErpStockRecordPageReqVO",
+      "params": {
+        "bizNo": "like",
+        "bizType": "eq",
+        "createTime": "between",
+        "productId": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/stock/page": {
+      "req_vo": "ErpStockPageReqVO",
+      "params": {
+        "productId": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/supplier/page": {
+      "req_vo": "ErpSupplierPageReqVO",
+      "params": {
+        "mobile": "like",
+        "name": "like",
+        "telephone": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/erp/warehouse/page": {
+      "req_vo": "ErpWarehousePageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/fms/config/auxiliary-item/page": {
+      "req_vo": "FmsAuxiliaryItemPageReqVO",
+      "params": {
+        "accountSetId": "eq",
+        "auxiliaryTypeId": "eq",
+        "search": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/fms/config/subject/list": {
+      "req_vo": "FmsSubjectListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "type"
+      ]
+    },
+    "/admin-api/fms/config/subject/simple-list": {
+      "req_vo": "FmsSubjectListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "type"
+      ]
+    },
+    "/admin-api/fms/ledger/auxiliary-balance/list": {
+      "req_vo": "FmsLedgerAuxiliaryListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "auxiliaryItemId",
+        "auxiliaryTypeId",
+        "endMonth",
+        "startMonth",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/auxiliary-detail/list": {
+      "req_vo": "FmsLedgerAuxiliaryListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "auxiliaryItemId",
+        "auxiliaryTypeId",
+        "endMonth",
+        "startMonth",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/detail/list": {
+      "req_vo": "FmsLedgerListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "endSubjectId",
+        "maxLevel",
+        "minLevel",
+        "startMonth",
+        "startSubjectId",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/detail/subject-list": {
+      "req_vo": "FmsLedgerListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "endSubjectId",
+        "maxLevel",
+        "minLevel",
+        "startMonth",
+        "startSubjectId",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/general/list": {
+      "req_vo": "FmsLedgerListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "endSubjectId",
+        "maxLevel",
+        "minLevel",
+        "startMonth",
+        "startSubjectId",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/multi-column/list": {
+      "req_vo": "FmsLedgerListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "endSubjectId",
+        "maxLevel",
+        "minLevel",
+        "startMonth",
+        "startSubjectId",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/quantity-detail/list": {
+      "req_vo": "FmsLedgerListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "endSubjectId",
+        "maxLevel",
+        "minLevel",
+        "startMonth",
+        "startSubjectId",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/quantity-general/list": {
+      "req_vo": "FmsLedgerListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "endSubjectId",
+        "maxLevel",
+        "minLevel",
+        "startMonth",
+        "startSubjectId",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/ledger/subject-balance/list": {
+      "req_vo": "FmsLedgerListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "endSubjectId",
+        "maxLevel",
+        "minLevel",
+        "startMonth",
+        "startSubjectId",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/report/balance-sheet/check": {
+      "req_vo": "FmsReportListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "startMonth"
+      ]
+    },
+    "/admin-api/fms/report/balance-sheet/get": {
+      "req_vo": "FmsReportListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "startMonth"
+      ]
+    },
+    "/admin-api/fms/report/cash-flow-statement/adjustment/list": {
+      "req_vo": "FmsReportListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "startMonth"
+      ]
+    },
+    "/admin-api/fms/report/cash-flow-statement/check": {
+      "req_vo": "FmsReportListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "startMonth"
+      ]
+    },
+    "/admin-api/fms/report/cash-flow-statement/get": {
+      "req_vo": "FmsReportListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "startMonth"
+      ]
+    },
+    "/admin-api/fms/report/income-statement/check": {
+      "req_vo": "FmsReportListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "startMonth"
+      ]
+    },
+    "/admin-api/fms/report/income-statement/get": {
+      "req_vo": "FmsReportListReqVO",
+      "params": {},
+      "unknown": [
+        "accountSetId",
+        "endMonth",
+        "startMonth"
+      ]
+    },
+    "/admin-api/fms/voucher/page": {
+      "req_vo": "FmsVoucherPageReqVO",
+      "params": {
+        "accountSetId": "eq",
+        "creatorUserId": "eq",
+        "ids": "in",
+        "status": "eq",
+        "voucherNumber": "eq",
+        "voucherTime": "between",
+        "voucherWordId": "eq"
+      },
+      "unknown": [
+        "digest",
+        "maxAmount",
+        "minAmount",
+        "subjectId"
+      ]
+    },
+    "/admin-api/fms/voucher/print-list": {
+      "req_vo": "FmsVoucherPageReqVO",
+      "params": {
+        "accountSetId": "eq",
+        "creatorUserId": "eq",
+        "ids": "in",
+        "status": "eq",
+        "voucherNumber": "eq",
+        "voucherTime": "between",
+        "voucherWordId": "eq"
+      },
+      "unknown": [
+        "digest",
+        "maxAmount",
+        "minAmount",
+        "subjectId"
+      ]
+    },
+    "/admin-api/hrm/attendance/clock/page": {
+      "req_vo": "HrmAttendanceClockPageReqVO",
+      "params": {},
+      "unknown": [
+        "address",
+        "attendanceTime",
+        "clockTime",
+        "deptIds",
+        "employeeId",
+        "employeeIds",
+        "search",
+        "sourceTypes",
+        "status",
+        "type"
+      ]
+    },
+    "/admin-api/hrm/attendance/group/page": {
+      "req_vo": "HrmAttendanceGroupPageReqVO",
+      "params": {
+        "defaultStatus": "eq",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/attendance/holiday/page": {
+      "req_vo": "HrmAttendanceHolidayPageReqVO",
+      "params": {
+        "date": "between",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/attendance/leave/page": {
+      "req_vo": "HrmAttendanceLeavePageReqVO",
+      "params": {
+        "approvalStatus": "eq",
+        "employeeIds": "in",
+        "startTime": "between",
+        "types": "in"
+      },
+      "unknown": [
+        "deptIds",
+        "employeeId",
+        "employeeKeyword"
+      ]
+    },
+    "/admin-api/hrm/attendance/statistics/month-daily-export-excel": {
+      "req_vo": "HrmAttendanceMonthRecordPageReqVO",
+      "params": {},
+      "unknown": [
+        "deptIds",
+        "employeeId",
+        "fullAttendance",
+        "month",
+        "search",
+        "year"
+      ]
+    },
+    "/admin-api/hrm/attendance/statistics/month-daily-page": {
+      "req_vo": "HrmAttendanceMonthRecordPageReqVO",
+      "params": {},
+      "unknown": [
+        "deptIds",
+        "employeeId",
+        "fullAttendance",
+        "month",
+        "search",
+        "year"
+      ]
+    },
+    "/admin-api/hrm/attendance/statistics/month-record-export-excel": {
+      "req_vo": "HrmAttendanceMonthRecordPageReqVO",
+      "params": {},
+      "unknown": [
+        "deptIds",
+        "employeeId",
+        "fullAttendance",
+        "month",
+        "search",
+        "year"
+      ]
+    },
+    "/admin-api/hrm/attendance/statistics/month-record-page": {
+      "req_vo": "HrmAttendanceMonthRecordPageReqVO",
+      "params": {},
+      "unknown": [
+        "deptIds",
+        "employeeId",
+        "fullAttendance",
+        "month",
+        "search",
+        "year"
+      ]
+    },
+    "/admin-api/hrm/employee/page": {
+      "req_vo": "HrmEmployeePageReqVO",
+      "params": {},
+      "unknown": [
+        "activeTime",
+        "channelId",
+        "deptId",
+        "deptIds",
+        "entryStatus",
+        "entryTime",
+        "excludeIds",
+        "ids",
+        "jobNumber",
+        "leaderEmployeeId",
+        "mobile",
+        "name",
+        "postName",
+        "regularTime",
+        "search",
+        "sex",
+        "status",
+        "statusCategory",
+        "surveyType",
+        "todoType",
+        "type",
+        "workAddress"
+      ]
+    },
+    "/admin-api/hrm/employee/simple-page": {
+      "req_vo": "HrmEmployeePageReqVO",
+      "params": {},
+      "unknown": [
+        "activeTime",
+        "channelId",
+        "deptId",
+        "deptIds",
+        "entryStatus",
+        "entryTime",
+        "excludeIds",
+        "ids",
+        "jobNumber",
+        "leaderEmployeeId",
+        "mobile",
+        "name",
+        "postName",
+        "regularTime",
+        "search",
+        "sex",
+        "status",
+        "statusCategory",
+        "surveyType",
+        "todoType",
+        "type",
+        "workAddress"
+      ]
+    },
+    "/admin-api/hrm/employee/status-count": {
+      "req_vo": "HrmEmployeePageReqVO",
+      "params": {},
+      "unknown": [
+        "activeTime",
+        "channelId",
+        "deptId",
+        "deptIds",
+        "entryStatus",
+        "entryTime",
+        "excludeIds",
+        "ids",
+        "jobNumber",
+        "leaderEmployeeId",
+        "mobile",
+        "name",
+        "postName",
+        "regularTime",
+        "search",
+        "sex",
+        "status",
+        "statusCategory",
+        "surveyType",
+        "todoType",
+        "type",
+        "workAddress"
+      ]
+    },
+    "/admin-api/hrm/insurance/month-employee-record/page": {
+      "req_vo": "HrmInsuranceMonthEmployeeRecordPageReqVO",
+      "params": {
+        "employeeId": "eq",
+        "monthRecordId": "eq",
+        "schemeId": "eq",
+        "status": "eq"
+      },
+      "unknown": [
+        "areaId",
+        "employeeName"
+      ]
+    },
+    "/admin-api/hrm/insurance/standard/project-list": {
+      "req_vo": "HrmInsuranceStandardProjectListReqVO",
+      "params": {},
+      "unknown": [
+        "areaId",
+        "typeCode"
+      ]
+    },
+    "/admin-api/hrm/insurance/standard/type-list": {
+      "req_vo": "HrmInsuranceStandardTypeListReqVO",
+      "params": {},
+      "unknown": [
+        "areaId"
+      ]
+    },
+    "/admin-api/hrm/operate-log/page": {
+      "req_vo": "HrmOperateLogPageReqVO",
+      "params": {},
+      "unknown": [
+        "bizId",
+        "bizType"
+      ]
+    },
+    "/admin-api/hrm/performance/assessment-template/page": {
+      "req_vo": "HrmPerformanceAssessmentTemplatePageReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/performance/assessment/archive-employee-page": {
+      "req_vo": "HrmPerformanceArchiveEmployeePageReqVO",
+      "params": {
+        "search": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/performance/assessment/archive-page": {
+      "req_vo": "HrmPerformanceArchivePageReqVO",
+      "params": {
+        "employeeId": "eq",
+        "employeeIds": "in",
+        "planId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/performance/assessment/page": {
+      "req_vo": "HrmPerformanceAssessmentPageReqVO",
+      "params": {
+        "appealStatus": "eq",
+        "employeeId": "eq",
+        "employeeIds": "in",
+        "planId": "eq",
+        "resultLevel": "eq",
+        "stageType": "eq",
+        "status": "eq"
+      },
+      "unknown": [
+        "deptId",
+        "employeeStatus",
+        "employeeType",
+        "resultLevelEmpty",
+        "search"
+      ]
+    },
+    "/admin-api/hrm/performance/plan/page": {
+      "req_vo": "HrmPerformancePlanPageReqVO",
+      "params": {},
+      "unknown": [
+        "name",
+        "stageType",
+        "status"
+      ]
+    },
+    "/admin-api/hrm/performance/plan/status-count": {
+      "req_vo": "HrmPerformancePlanPageReqVO",
+      "params": {},
+      "unknown": [
+        "name",
+        "stageType",
+        "status"
+      ]
+    },
+    "/admin-api/hrm/performance/result-template/page": {
+      "req_vo": "HrmPerformanceResultTemplatePageReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/portal/performance/assessment/appeal-task-page": {
+      "req_vo": "HrmPortalPerformanceTaskPageReqVO",
+      "params": {
+        "search": "like",
+        "stageStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/portal/performance/assessment/fill-quota-task-page": {
+      "req_vo": "HrmPortalPerformanceTaskPageReqVO",
+      "params": {
+        "search": "like",
+        "stageStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/portal/performance/assessment/page": {
+      "req_vo": "HrmPortalPerformanceAssessmentPageReqVO",
+      "params": {
+        "search": "like"
+      },
+      "unknown": [
+        "archived"
+      ]
+    },
+    "/admin-api/hrm/portal/performance/assessment/result-audit-task-page": {
+      "req_vo": "HrmPortalPerformanceTaskPageReqVO",
+      "params": {
+        "search": "like",
+        "stageStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/portal/performance/assessment/result-confirmation-task-page": {
+      "req_vo": "HrmPortalPerformanceTaskPageReqVO",
+      "params": {
+        "search": "like",
+        "stageStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/portal/performance/assessment/review-task-page": {
+      "req_vo": "HrmPortalPerformanceTaskPageReqVO",
+      "params": {
+        "search": "like",
+        "stageStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/portal/performance/assessment/target-confirmation-task-page": {
+      "req_vo": "HrmPortalPerformanceTaskPageReqVO",
+      "params": {
+        "search": "like",
+        "stageStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/portal/salary/slip/list": {
+      "req_vo": "HrmPortalSalarySlipListReqVO",
+      "params": {},
+      "unknown": [
+        "endMonth",
+        "order",
+        "orderType",
+        "startMonth"
+      ]
+    },
+    "/admin-api/hrm/recruit/candidate/page": {
+      "req_vo": "HrmRecruitCandidatePageReqVO",
+      "params": {},
+      "unknown": [
+        "channelId",
+        "createTime",
+        "creator",
+        "education",
+        "graduateSchool",
+        "interviewEmployeeId",
+        "interviewTime",
+        "latestWorkPlace",
+        "maxAge",
+        "maxWorkTime",
+        "minAge",
+        "minWorkTime",
+        "ownerEmployeeId",
+        "postId",
+        "search",
+        "sex",
+        "status"
+      ]
+    },
+    "/admin-api/hrm/recruit/candidate/status-count": {
+      "req_vo": "HrmRecruitCandidatePageReqVO",
+      "params": {},
+      "unknown": [
+        "channelId",
+        "createTime",
+        "creator",
+        "education",
+        "graduateSchool",
+        "interviewEmployeeId",
+        "interviewTime",
+        "latestWorkPlace",
+        "maxAge",
+        "maxWorkTime",
+        "minAge",
+        "minWorkTime",
+        "ownerEmployeeId",
+        "postId",
+        "search",
+        "sex",
+        "status"
+      ]
+    },
+    "/admin-api/hrm/recruit/channel/page": {
+      "req_vo": "HrmRecruitChannelPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/recruit/post/page": {
+      "req_vo": "HrmRecruitPostPageReqVO",
+      "params": {},
+      "unknown": [
+        "areaId",
+        "createTime",
+        "deptId",
+        "jobNature",
+        "ownerEmployeeId",
+        "postName",
+        "postTypeId",
+        "status"
+      ]
+    },
+    "/admin-api/hrm/recruit/post/status-count": {
+      "req_vo": "HrmRecruitPostPageReqVO",
+      "params": {},
+      "unknown": [
+        "areaId",
+        "createTime",
+        "deptId",
+        "jobNature",
+        "ownerEmployeeId",
+        "postName",
+        "postTypeId",
+        "status"
+      ]
+    },
+    "/admin-api/hrm/salary/employee-info/page": {
+      "req_vo": "HrmSalaryEmployeeInfoPageReqVO",
+      "params": {
+        "changeType": "eq",
+        "employeeId": "eq",
+        "employeeIds": "in"
+      },
+      "unknown": [
+        "deptId",
+        "entryStatus",
+        "postName",
+        "search",
+        "status",
+        "statusCategory"
+      ]
+    },
+    "/admin-api/hrm/salary/employee-info/status-count": {
+      "req_vo": "HrmSalaryEmployeeInfoPageReqVO",
+      "params": {
+        "changeType": "eq",
+        "employeeId": "eq",
+        "employeeIds": "in"
+      },
+      "unknown": [
+        "deptId",
+        "entryStatus",
+        "postName",
+        "search",
+        "status",
+        "statusCategory"
+      ]
+    },
+    "/admin-api/hrm/salary/group/page": {
+      "req_vo": "HrmSalaryGroupPageReqVO",
+      "params": {
+        "name": "like",
+        "taxRuleId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/salary/month-employee-record/change-count": {
+      "req_vo": "HrmSalaryMonthEmployeeRecordPageReqVO",
+      "params": {
+        "employeeId": "eq",
+        "employeeIds": "in",
+        "monthRecordId": "eq"
+      },
+      "unknown": [
+        "deptId",
+        "employeeChangeType",
+        "employeeName",
+        "jobNumber",
+        "salarySlipSent"
+      ]
+    },
+    "/admin-api/hrm/salary/month-employee-record/employee-page": {
+      "req_vo": "HrmSalaryEmployeeMonthRecordPageReqVO",
+      "params": {
+        "employeeId": "eq"
+      },
+      "unknown": [
+        "monthRecordStatus"
+      ]
+    },
+    "/admin-api/hrm/salary/month-employee-record/list": {
+      "req_vo": "HrmSalaryMonthEmployeeRecordListReqVO",
+      "params": {
+        "employeeId": "eq",
+        "employeeIds": "in",
+        "monthRecordId": "eq"
+      },
+      "unknown": [
+        "deptId",
+        "employeeChangeType",
+        "employeeName",
+        "jobNumber",
+        "salarySlipSent"
+      ]
+    },
+    "/admin-api/hrm/salary/month-employee-record/page": {
+      "req_vo": "HrmSalaryMonthEmployeeRecordPageReqVO",
+      "params": {
+        "employeeId": "eq",
+        "employeeIds": "in",
+        "monthRecordId": "eq"
+      },
+      "unknown": [
+        "deptId",
+        "employeeChangeType",
+        "employeeName",
+        "jobNumber",
+        "salarySlipSent"
+      ]
+    },
+    "/admin-api/hrm/salary/month-record/option-summary": {
+      "req_vo": "HrmSalaryMonthEmployeeRecordListReqVO",
+      "params": {
+        "employeeId": "eq",
+        "employeeIds": "in",
+        "monthRecordId": "eq"
+      },
+      "unknown": [
+        "deptId",
+        "employeeChangeType",
+        "employeeName",
+        "jobNumber",
+        "salarySlipSent"
+      ]
+    },
+    "/admin-api/hrm/salary/month-record/page": {
+      "req_vo": "HrmSalaryMonthRecordPageReqVO",
+      "params": {
+        "month": "eq",
+        "status": "eq",
+        "year": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/salary/slip-send-record/page": {
+      "req_vo": "HrmSalarySlipSendRecordPageReqVO",
+      "params": {
+        "month": "eq",
+        "year": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/hrm/salary/slip/page": {
+      "req_vo": "HrmSalarySlipPageReqVO",
+      "params": {
+        "employeeId": "eq",
+        "employeeIds": "in",
+        "readStatus": "eq",
+        "remark": "like",
+        "sendRecordId": "eq"
+      },
+      "unknown": [
+        "deptId",
+        "search"
+      ]
+    },
+    "/admin-api/im/manager/channel-material/page": {
+      "req_vo": "ImChannelMaterialPageReqVO",
+      "params": {
+        "channelId": "eq",
+        "createTime": "between",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/channel-message/page": {
+      "req_vo": "ImChannelMessagePageReqVO",
+      "params": {
+        "channelId": "eq",
+        "materialId": "eq",
+        "sendTime": "between"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/channel/page": {
+      "req_vo": "ImChannelPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/face-pack-item/page": {
+      "req_vo": "ImFacePackItemPageReqVO",
+      "params": {
+        "name": "like",
+        "packId": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/face-pack/page": {
+      "req_vo": "ImFacePackPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/face-user-item/page": {
+      "req_vo": "ImFaceUserItemManagerPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/friend-request/page": {
+      "req_vo": "ImFriendRequestManagerPageReqVO",
+      "params": {
+        "addSource": "eq",
+        "createTime": "between",
+        "fromUserId": "eq",
+        "handleResult": "eq",
+        "toUserId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/friend/page": {
+      "req_vo": "ImFriendManagerPageReqVO",
+      "params": {
+        "addTime": "between",
+        "friendUserId": "eq",
+        "silent": "eq",
+        "status": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/group-request/page": {
+      "req_vo": "ImGroupRequestManagerPageReqVO",
+      "params": {
+        "addSource": "eq",
+        "createTime": "between",
+        "groupId": "eq",
+        "handleResult": "eq",
+        "inviterUserId": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/group/page": {
+      "req_vo": "ImGroupManagerPageReqVO",
+      "params": {
+        "banned": "eq",
+        "createTime": "between",
+        "name": "like",
+        "ownerUserId": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/message/group/page": {
+      "req_vo": "ImGroupMessageManagerPageReqVO",
+      "params": {
+        "content": "like",
+        "groupId": "eq",
+        "sendTime": "between",
+        "senderId": "eq",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/message/private/page": {
+      "req_vo": "ImPrivateMessageManagerPageReqVO",
+      "params": {
+        "content": "like",
+        "receiverId": "eq",
+        "sendTime": "between",
+        "senderId": "eq",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/rtc/page": {
+      "req_vo": "ImRtcCallManagerPageReqVO",
+      "params": {
+        "conversationType": "eq",
+        "endReason": "eq",
+        "inviterUserId": "eq",
+        "mediaType": "eq",
+        "startTime": "between",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/manager/sensitive-word/page": {
+      "req_vo": "ImSensitiveWordPageReqVO",
+      "params": {
+        "createTime": "between",
+        "status": "eq",
+        "word": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/im/message/group/list": {
+      "req_vo": "ImGroupMessageListReqVO",
+      "params": {},
+      "unknown": [
+        "groupId",
+        "limit",
+        "maxId"
+      ]
+    },
+    "/admin-api/im/message/private/list": {
+      "req_vo": "ImPrivateMessageListReqVO",
+      "params": {},
+      "unknown": [
+        "limit",
+        "maxId",
+        "receiverId"
+      ]
+    },
+    "/admin-api/infra/api-access-log/page": {
+      "req_vo": "ApiAccessLogPageReqVO",
+      "params": {
+        "applicationName": "eq",
+        "beginTime": "between",
+        "duration": "ge",
+        "requestUrl": "like",
+        "resultCode": "eq",
+        "userId": "eq",
+        "userType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/api-error-log/page": {
+      "req_vo": "ApiErrorLogPageReqVO",
+      "params": {
+        "applicationName": "eq",
+        "exceptionTime": "between",
+        "processStatus": "eq",
+        "requestUrl": "like",
+        "userId": "eq",
+        "userType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/codegen/table/page": {
+      "req_vo": "CodegenTablePageReqVO",
+      "params": {
+        "className": "like",
+        "createTime": "between",
+        "tableComment": "like",
+        "tableName": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/config/page": {
+      "req_vo": "ConfigPageReqVO",
+      "params": {
+        "createTime": "between",
+        "key": "like",
+        "name": "like",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/demo01-contact/page": {
+      "req_vo": "Demo01ContactPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "sex": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/demo02-category/list": {
+      "req_vo": "Demo02CategoryListReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "parentId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/demo03-student-erp/page": {
+      "req_vo": "Demo03StudentErpPageReqVO",
+      "params": {
+        "createTime": "between",
+        "description": "eq",
+        "name": "like",
+        "sex": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/demo03-student-inner/page": {
+      "req_vo": "Demo03StudentInnerPageReqVO",
+      "params": {
+        "createTime": "between",
+        "description": "eq",
+        "name": "like",
+        "sex": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/demo03-student-normal/page": {
+      "req_vo": "Demo03StudentNormalPageReqVO",
+      "params": {
+        "createTime": "between",
+        "description": "eq",
+        "name": "like",
+        "sex": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/file-config/page": {
+      "req_vo": "FileConfigPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "storage": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/file/page": {
+      "req_vo": "FilePageReqVO",
+      "params": {
+        "createTime": "between",
+        "path": "like",
+        "type": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/job-log/page": {
+      "req_vo": "JobLogPageReqVO",
+      "params": {
+        "beginTime": "ge",
+        "endTime": "le",
+        "handlerName": "like",
+        "jobId": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/infra/job/page": {
+      "req_vo": "JobPageReqVO",
+      "params": {
+        "handlerName": "like",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/alert-config/page": {
+      "req_vo": "IotAlertConfigPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/alert-record/page": {
+      "req_vo": "IotAlertRecordPageReqVO",
+      "params": {
+        "configId": "eq",
+        "configLevel": "eq",
+        "createTime": "between",
+        "deviceId": "eq",
+        "processStatus": "eq",
+        "productId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/device-group/page": {
+      "req_vo": "IotDeviceGroupPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/device-modbus-point/page": {
+      "req_vo": "IotDeviceModbusPointPageReqVO",
+      "params": {
+        "deviceId": "eq",
+        "functionCode": "eq",
+        "identifier": "like",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/device/message/page": {
+      "req_vo": "IotDeviceMessagePageReqVO",
+      "params": {},
+      "unknown": [
+        "deviceId",
+        "identifier",
+        "method",
+        "reply",
+        "times",
+        "upstream"
+      ]
+    },
+    "/admin-api/iot/device/message/pair-page": {
+      "req_vo": "IotDeviceMessagePageReqVO",
+      "params": {},
+      "unknown": [
+        "deviceId",
+        "identifier",
+        "method",
+        "reply",
+        "times",
+        "upstream"
+      ]
+    },
+    "/admin-api/iot/device/page": {
+      "req_vo": "IotDevicePageReqVO",
+      "params": {
+        "deviceName": "like",
+        "nickname": "like",
+        "productId": "eq"
+      },
+      "unknown": [
+        "deviceType",
+        "gatewayId",
+        "groupId",
+        "status"
+      ]
+    },
+    "/admin-api/iot/device/property/history-list": {
+      "req_vo": "IotDevicePropertyHistoryListReqVO",
+      "params": {},
+      "unknown": [
+        "deviceId",
+        "identifier",
+        "times"
+      ]
+    },
+    "/admin-api/iot/device/unbound-sub-device-page": {
+      "req_vo": "IotDevicePageReqVO",
+      "params": {
+        "deviceName": "like",
+        "nickname": "like",
+        "productId": "eq"
+      },
+      "unknown": [
+        "deviceType",
+        "gatewayId",
+        "groupId",
+        "status"
+      ]
+    },
+    "/admin-api/iot/ota/firmware/page": {
+      "req_vo": "IotOtaFirmwarePageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "productId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/ota/task/page": {
+      "req_vo": "IotOtaTaskPageReqVO",
+      "params": {
+        "firmwareId": "eq",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/ota/task/record/page": {
+      "req_vo": "IotOtaTaskRecordPageReqVO",
+      "params": {
+        "status": "eq",
+        "taskId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/product-category/page": {
+      "req_vo": "IotProductCategoryPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/product/page": {
+      "req_vo": "IotProductPageReqVO",
+      "params": {
+        "name": "like",
+        "productKey": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/scene-rule/page": {
+      "req_vo": "IotSceneRulePageReqVO",
+      "params": {
+        "createTime": "between",
+        "description": "like",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/thing-model/list": {
+      "req_vo": "IotThingModelListReqVO",
+      "params": {
+        "identifier": "eq",
+        "name": "like",
+        "productId": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/iot/thing-model/page": {
+      "req_vo": "IotThingModelPageReqVO",
+      "params": {
+        "identifier": "eq",
+        "name": "like",
+        "productId": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/member/experience-record/page": {
+      "req_vo": "MemberExperienceRecordPageReqVO",
+      "params": {
+        "bizId": "eq",
+        "bizType": "eq",
+        "createTime": "between",
+        "title": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/member/group/page": {
+      "req_vo": "MemberGroupPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/member/level-record/page": {
+      "req_vo": "MemberLevelRecordPageReqVO",
+      "params": {
+        "createTime": "between",
+        "levelId": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/member/level/list": {
+      "req_vo": "MemberLevelListReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/member/point/record/page": {
+      "req_vo": "MemberPointRecordPageReqVO",
+      "params": {
+        "bizType": "eq",
+        "title": "like",
+        "userId": "eq"
+      },
+      "unknown": [
+        "nickname"
+      ]
+    },
+    "/admin-api/member/sign-in/record/page": {
+      "req_vo": "MemberSignInRecordPageReqVO",
+      "params": {
+        "createTime": "between",
+        "day": "eq",
+        "userId": "eq"
+      },
+      "unknown": [
+        "nickname"
+      ]
+    },
+    "/admin-api/member/tag/page": {
+      "req_vo": "MemberTagPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/member/user/page": {
+      "req_vo": "MemberUserPageReqVO",
+      "params": {
+        "createTime": "between",
+        "email": "like",
+        "groupId": "eq",
+        "levelId": "eq",
+        "loginDate": "between",
+        "mobile": "like",
+        "nickname": "like"
+      },
+      "unknown": [
+        "tagIds"
+      ]
+    },
+    "/admin-api/mes/cal/calendar/list": {
+      "req_vo": "MesCalCalendarListReqVO",
+      "params": {},
+      "unknown": [
+        "calendarType",
+        "endDay",
+        "queryType",
+        "startDay",
+        "teamId",
+        "userId"
+      ]
+    },
+    "/admin-api/mes/cal/plan-shift/page": {
+      "req_vo": "MesCalPlanShiftPageReqVO",
+      "params": {
+        "name": "like",
+        "planId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/cal/plan/page": {
+      "req_vo": "MesCalPlanPageReqVO",
+      "params": {
+        "calendarType": "eq",
+        "code": "like",
+        "endDate": "between",
+        "name": "like",
+        "shiftType": "eq",
+        "startDate": "between",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/cal/team-member/page": {
+      "req_vo": "MesCalTeamMemberPageReqVO",
+      "params": {
+        "teamId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/cal/team-shift/list": {
+      "req_vo": "MesCalTeamShiftListReqVO",
+      "params": {
+        "endDay": "le",
+        "planId": "eq",
+        "startDay": "ge",
+        "teamId": "eq",
+        "teamIds": "in"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/cal/team/page": {
+      "req_vo": "MesCalTeamPageReqVO",
+      "params": {
+        "calendarType": "eq",
+        "code": "like",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/check-plan/page": {
+      "req_vo": "MesDvCheckPlanPageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/check-record-line/page": {
+      "req_vo": "MesDvCheckRecordLinePageReqVO",
+      "params": {
+        "recordId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/check-record/page": {
+      "req_vo": "MesDvCheckRecordPageReqVO",
+      "params": {
+        "checkTime": "between",
+        "machineryId": "eq",
+        "planId": "eq",
+        "status": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/machinery-type/list": {
+      "req_vo": "MesDvMachineryTypeListReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/machinery/page": {
+      "req_vo": "MesDvMachineryPageReqVO",
+      "params": {
+        "brand": "like",
+        "code": "like",
+        "machineryTypeId": "eq",
+        "machineryTypeIds": "in",
+        "name": "like",
+        "status": "eq",
+        "workshopId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/mainten-record-line/page": {
+      "req_vo": "MesDvMaintenRecordLinePageReqVO",
+      "params": {
+        "recordId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/mainten-record/page": {
+      "req_vo": "MesDvMaintenRecordPageReqVO",
+      "params": {
+        "machineryId": "eq",
+        "maintenTime": "between",
+        "planId": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/repair-line/page": {
+      "req_vo": "MesDvRepairLinePageReqVO",
+      "params": {
+        "repairId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/repair/page": {
+      "req_vo": "MesDvRepairPageReqVO",
+      "params": {
+        "code": "like",
+        "machineryId": "eq",
+        "name": "like",
+        "requireDate": "between",
+        "result": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/dv/subject/page": {
+      "req_vo": "MesDvSubjectPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md-client/page": {
+      "req_vo": "MesMdClientPageReqVO",
+      "params": {
+        "code": "eq",
+        "englishName": "like",
+        "name": "like",
+        "nickname": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md-vendor/page": {
+      "req_vo": "MesMdVendorPageReqVO",
+      "params": {
+        "code": "eq",
+        "englishName": "like",
+        "name": "like",
+        "nickname": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md-workshop/page": {
+      "req_vo": "MesMdWorkshopPageReqVO",
+      "params": {
+        "code": "eq",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md-workstation/page": {
+      "req_vo": "MesMdWorkstationPageReqVO",
+      "params": {
+        "code": "eq",
+        "name": "like",
+        "processId": "eq",
+        "status": "eq",
+        "workshopId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md/auto-code-rule/page": {
+      "req_vo": "MesMdAutoCodeRulePageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md/item-type/list": {
+      "req_vo": "MesMdItemTypeListReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md/item/page": {
+      "req_vo": "MesMdItemPageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": [
+        "itemTypeId"
+      ]
+    },
+    "/admin-api/mes/md/product-bom/page": {
+      "req_vo": "MesMdProductBomPageReqVO",
+      "params": {
+        "itemId": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md/product-sip/page": {
+      "req_vo": "MesMdProductSipPageReqVO",
+      "params": {
+        "itemId": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md/product-sop/page": {
+      "req_vo": "MesMdProductSopPageReqVO",
+      "params": {
+        "itemId": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/md/unit-measure/page": {
+      "req_vo": "MesMdUnitMeasurePageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/andon-config/page": {
+      "req_vo": "MesProAndonConfigPageReqVO",
+      "params": {
+        "level": "eq",
+        "reason": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/andon-record/page": {
+      "req_vo": "MesProAndonRecordPageReqVO",
+      "params": {
+        "createTime": "between",
+        "handlerUserId": "eq",
+        "status": "eq",
+        "userId": "eq",
+        "workstationId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/card-process/page": {
+      "req_vo": "MesProCardProcessPageReqVO",
+      "params": {
+        "cardId": "eq",
+        "processId": "eq",
+        "userId": "eq",
+        "workstationId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/card/page": {
+      "req_vo": "MesProCardPageReqVO",
+      "params": {
+        "batchCode": "like",
+        "code": "like",
+        "itemId": "eq",
+        "workOrderId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/feedback/page": {
+      "req_vo": "MesProFeedbackPageReqVO",
+      "params": {
+        "code": "like",
+        "creator": "eq",
+        "feedbackTime": "between",
+        "feedbackUserId": "eq",
+        "itemId": "eq",
+        "status": "eq",
+        "type": "eq",
+        "workOrderId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/process/page": {
+      "req_vo": "MesProProcessPageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/route/page": {
+      "req_vo": "MesProRoutePageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/task-issue/page": {
+      "req_vo": "MesProTaskIssuePageReqVO",
+      "params": {
+        "createTime": "between",
+        "itemId": "eq",
+        "sourceDocType": "eq",
+        "taskId": "eq",
+        "workOrderId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/task/gantt-list": {
+      "req_vo": "MesProWorkOrderPageReqVO",
+      "params": {
+        "clientId": "eq",
+        "code": "like",
+        "name": "like",
+        "orderSourceCode": "like",
+        "productId": "eq",
+        "requestDate": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/task/page": {
+      "req_vo": "MesProTaskPageReqVO",
+      "params": {
+        "checkFlag": "eq",
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "processId": "eq",
+        "routeId": "eq",
+        "status": "eq",
+        "statuses": "in",
+        "workOrderId": "eq",
+        "workstationId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/work-order-bom/page": {
+      "req_vo": "MesProWorkOrderBomPageReqVO",
+      "params": {
+        "workOrderId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/work-order/page": {
+      "req_vo": "MesProWorkOrderPageReqVO",
+      "params": {
+        "clientId": "eq",
+        "code": "like",
+        "name": "like",
+        "orderSourceCode": "like",
+        "productId": "eq",
+        "requestDate": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/pro/workrecord/log/page": {
+      "req_vo": "MesProWorkRecordLogPageReqVO",
+      "params": {
+        "createTime": "between",
+        "type": "eq",
+        "userId": "eq",
+        "workstationId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/defect-record/page": {
+      "req_vo": "MesQcDefectRecordPageReqVO",
+      "params": {
+        "lineId": "eq",
+        "qcId": "eq",
+        "qcType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/defect/page": {
+      "req_vo": "MesQcDefectPageReqVO",
+      "params": {
+        "code": "like",
+        "level": "eq",
+        "name": "like",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/indicator-result/page": {
+      "req_vo": "MesQcIndicatorResultPageReqVO",
+      "params": {
+        "code": "like",
+        "itemId": "eq",
+        "qcId": "eq",
+        "qcType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/indicator/page": {
+      "req_vo": "MesQcIndicatorPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "resultType": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/ipqc/line/page": {
+      "req_vo": "MesQcIpqcLinePageReqVO",
+      "params": {
+        "ipqcId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/ipqc/page": {
+      "req_vo": "MesQcIpqcPageReqVO",
+      "params": {
+        "checkResult": "eq",
+        "code": "like",
+        "inspectorUserId": "eq",
+        "itemId": "eq",
+        "status": "eq",
+        "type": "eq",
+        "workOrderId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/iqc/line/page": {
+      "req_vo": "MesQcIqcLinePageReqVO",
+      "params": {
+        "iqcId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/iqc/page": {
+      "req_vo": "MesQcIqcPageReqVO",
+      "params": {
+        "checkResult": "eq",
+        "code": "like",
+        "inspectDate": "between",
+        "inspectorUserId": "eq",
+        "itemId": "eq",
+        "receiveDate": "between",
+        "vendorBatch": "like",
+        "vendorId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/oqc/line/page": {
+      "req_vo": "MesQcOqcLinePageReqVO",
+      "params": {
+        "oqcId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/oqc/page": {
+      "req_vo": "MesQcOqcPageReqVO",
+      "params": {
+        "batchCode": "like",
+        "checkResult": "eq",
+        "clientId": "eq",
+        "code": "like",
+        "itemId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/pending-inspect/page": {
+      "req_vo": "MesQcPendingInspectPageReqVO",
+      "params": {},
+      "unknown": [
+        "itemId",
+        "qcType",
+        "sourceDocCode"
+      ]
+    },
+    "/admin-api/mes/qc/rqc/line/page": {
+      "req_vo": "MesQcRqcLinePageReqVO",
+      "params": {
+        "rqcId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/rqc/page": {
+      "req_vo": "MesQcRqcPageReqVO",
+      "params": {
+        "batchCode": "like",
+        "checkResult": "eq",
+        "code": "like",
+        "inspectorUserId": "eq",
+        "itemId": "eq",
+        "sourceDocCode": "like",
+        "sourceDocType": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/template/indicator/page": {
+      "req_vo": "MesQcTemplateIndicatorPageReqVO",
+      "params": {
+        "templateId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/template/item/page": {
+      "req_vo": "MesQcTemplateItemPageReqVO",
+      "params": {
+        "templateId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/qc/template/page": {
+      "req_vo": "MesQcTemplatePageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": [
+        "type"
+      ]
+    },
+    "/admin-api/mes/tm/tool-type/page": {
+      "req_vo": "MesTmToolTypePageReqVO",
+      "params": {
+        "code": "like",
+        "maintenType": "eq",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/tm/tool/page": {
+      "req_vo": "MesTmToolPageReqVO",
+      "params": {
+        "brand": "like",
+        "code": "like",
+        "name": "like",
+        "specification": "like",
+        "status": "eq",
+        "toolTypeId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/arrival-notice-line/page": {
+      "req_vo": "MesWmArrivalNoticeLinePageReqVO",
+      "params": {
+        "noticeId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/arrival-notice/page": {
+      "req_vo": "MesWmArrivalNoticePageReqVO",
+      "params": {
+        "arrivalDate": "between",
+        "code": "like",
+        "name": "like",
+        "purchaseOrderCode": "like",
+        "status": "eq",
+        "vendorId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/barcode-config/page": {
+      "req_vo": "MesWmBarcodeConfigPageReqVO",
+      "params": {
+        "autoGenerateFlag": "eq",
+        "bizType": "eq",
+        "createTime": "between",
+        "format": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/barcode/page": {
+      "req_vo": "MesWmBarcodePageReqVO",
+      "params": {
+        "bizCode": "like",
+        "bizId": "eq",
+        "bizName": "like",
+        "bizType": "eq",
+        "configId": "eq",
+        "content": "like",
+        "createTime": "between",
+        "format": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/batch/page": {
+      "req_vo": "MesWmBatchPageReqVO",
+      "params": {
+        "clientId": "eq",
+        "code": "like",
+        "expireDate": "between",
+        "itemId": "eq",
+        "lotNumber": "like",
+        "moldId": "eq",
+        "produceDate": "between",
+        "purchaseOrderCode": "like",
+        "qualityStatus": "eq",
+        "receiptDate": "between",
+        "salesOrderCode": "like",
+        "taskId": "eq",
+        "toolId": "eq",
+        "vendorId": "eq",
+        "workOrderId": "eq",
+        "workstationId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/item-consume-line/page": {
+      "req_vo": "MesWmItemConsumeLinePageReqVO",
+      "params": {},
+      "unknown": [
+        "feedbackId"
+      ]
+    },
+    "/admin-api/mes/wm/item-receipt-line/page": {
+      "req_vo": "MesWmItemReceiptLinePageReqVO",
+      "params": {
+        "receiptId": "eq",
+        "receiptIds": "in"
+      },
+      "unknown": [
+        "vendorId"
+      ]
+    },
+    "/admin-api/mes/wm/item-receipt/page": {
+      "req_vo": "MesWmItemReceiptPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "receiptDate": "between",
+        "vendorId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/material-stock/page": {
+      "req_vo": "MesWmMaterialStockPageReqVO",
+      "params": {
+        "areaId": "eq",
+        "batchCode": "like",
+        "batchId": "eq",
+        "frozen": "eq",
+        "locationId": "eq",
+        "vendorId": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": [
+        "itemId",
+        "itemTypeId",
+        "virtualFilter"
+      ]
+    },
+    "/admin-api/mes/wm/misc-issue-line/page": {
+      "req_vo": "MesWmMiscIssueLinePageReqVO",
+      "params": {
+        "issueId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/misc-issue/page": {
+      "req_vo": "MesWmMiscIssuePageReqVO",
+      "params": {
+        "code": "like",
+        "issueDate": "between",
+        "name": "like",
+        "sourceDocCode": "like",
+        "sourceDocType": "eq",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/misc-receipt-line/page": {
+      "req_vo": "MesWmMiscReceiptLinePageReqVO",
+      "params": {
+        "receiptId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/misc-receipt/page": {
+      "req_vo": "MesWmMiscReceiptPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "receiptDate": "between",
+        "sourceDocCode": "like",
+        "sourceDocType": "eq",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/outsource-issue-line/page": {
+      "req_vo": "MesWmOutsourceIssueLinePageReqVO",
+      "params": {
+        "issueId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/outsource-issue/page": {
+      "req_vo": "MesWmOutsourceIssuePageReqVO",
+      "params": {
+        "code": "like",
+        "issueDate": "between",
+        "name": "like",
+        "vendorId": "eq",
+        "workOrderId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/outsource-receipt-line/page": {
+      "req_vo": "MesWmOutsourceReceiptLinePageReqVO",
+      "params": {
+        "itemId": "eq",
+        "receiptId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/outsource-receipt/page": {
+      "req_vo": "MesWmOutsourceReceiptPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "receiptDate": "between",
+        "status": "eq",
+        "vendorId": "eq"
+      },
+      "unknown": [
+        "workOrderCode"
+      ]
+    },
+    "/admin-api/mes/wm/package-line/page": {
+      "req_vo": "MesWmPackageLinePageReqVO",
+      "params": {},
+      "unknown": [
+        "packageId"
+      ]
+    },
+    "/admin-api/mes/wm/package/page": {
+      "req_vo": "MesWmPackagePageReqVO",
+      "params": {
+        "clientId": "eq",
+        "code": "like",
+        "inspectorUserId": "eq",
+        "parentId": "eq",
+        "salesOrderCode": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/product-issue-line/page": {
+      "req_vo": "MesWmProductIssueLinePageReqVO",
+      "params": {
+        "issueId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/product-issue/page": {
+      "req_vo": "MesWmProductIssuePageReqVO",
+      "params": {
+        "code": "like",
+        "issueDate": "between",
+        "name": "like",
+        "status": "eq",
+        "workOrderId": "eq",
+        "workstationId": "eq"
+      },
+      "unknown": [
+        "clientId",
+        "taskId"
+      ]
+    },
+    "/admin-api/mes/wm/product-produce-line/page": {
+      "req_vo": "MesWmProductProduceLinePageReqVO",
+      "params": {
+        "feedbackId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/product-receipt-line/page": {
+      "req_vo": "MesWmProductReceiptLinePageReqVO",
+      "params": {
+        "receiptId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/product-receipt/page": {
+      "req_vo": "MesWmProductReceiptPageReqVO",
+      "params": {
+        "code": "like",
+        "itemId": "eq",
+        "name": "like",
+        "workOrderId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/product-sales-line/page": {
+      "req_vo": "MesWmProductSalesLinePageReqVO",
+      "params": {
+        "salesId": "eq",
+        "salesIds": "in"
+      },
+      "unknown": [
+        "clientId"
+      ]
+    },
+    "/admin-api/mes/wm/product-sales/page": {
+      "req_vo": "MesWmProductSalesPageReqVO",
+      "params": {
+        "clientId": "eq",
+        "code": "like",
+        "name": "like",
+        "shipmentDate": "between",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/return-issue-line/page": {
+      "req_vo": "MesWmReturnIssueLinePageReqVO",
+      "params": {
+        "issueId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/return-issue/page": {
+      "req_vo": "MesWmReturnIssuePageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "type": "eq",
+        "workOrderId": "eq",
+        "workstationId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/return-sales-line/page": {
+      "req_vo": "MesWmReturnSalesLinePageReqVO",
+      "params": {
+        "itemId": "eq",
+        "returnId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/return-sales/page": {
+      "req_vo": "MesWmReturnSalesPageReqVO",
+      "params": {
+        "clientId": "eq",
+        "code": "like",
+        "name": "like",
+        "returnDate": "between",
+        "salesOrderCode": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/return-vendor-line/page": {
+      "req_vo": "MesWmReturnVendorLinePageReqVO",
+      "params": {
+        "returnId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/return-vendor/page": {
+      "req_vo": "MesWmReturnVendorPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "purchaseOrderCode": "like",
+        "vendorId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/sales-notice-line/page": {
+      "req_vo": "MesWmSalesNoticeLinePageReqVO",
+      "params": {
+        "noticeId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/sales-notice/page": {
+      "req_vo": "MesWmSalesNoticePageReqVO",
+      "params": {
+        "clientId": "eq",
+        "code": "like",
+        "name": "like",
+        "salesOrderCode": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/sn/group-export-excel": {
+      "req_vo": "MesWmSnPageReqVO",
+      "params": {
+        "batchCode": "like",
+        "code": "like",
+        "createTime": "between",
+        "itemId": "eq",
+        "uuid": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/sn/group-page": {
+      "req_vo": "MesWmSnPageReqVO",
+      "params": {
+        "batchCode": "like",
+        "code": "like",
+        "createTime": "between",
+        "itemId": "eq",
+        "uuid": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/stocktaking-plan-param/page": {
+      "req_vo": "MesWmStockTakingPlanParamPageReqVO",
+      "params": {
+        "planId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/stocktaking-plan/page": {
+      "req_vo": "MesWmStockTakingPlanPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/stocktaking-task-line/page": {
+      "req_vo": "MesWmStockTakingTaskLinePageReqVO",
+      "params": {
+        "taskId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/stocktaking-task-result/page": {
+      "req_vo": "MesWmStockTakingTaskResultPageReqVO",
+      "params": {
+        "areaId": "eq",
+        "itemId": "eq",
+        "locationId": "eq",
+        "taskId": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/stocktaking-task/page": {
+      "req_vo": "MesWmStockTakingTaskPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "planId": "eq",
+        "status": "eq",
+        "takingDate": "between",
+        "type": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/transfer/page": {
+      "req_vo": "MesWmTransferPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/warehouse-area/page": {
+      "req_vo": "MesWmWarehouseAreaPageReqVO",
+      "params": {
+        "code": "like",
+        "locationId": "eq",
+        "name": "like",
+        "positionX": "eq",
+        "positionY": "eq",
+        "positionZ": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/warehouse-location/page": {
+      "req_vo": "MesWmWarehouseLocationPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mes/wm/warehouse/page": {
+      "req_vo": "MesWmWarehousePageReqVO",
+      "params": {
+        "code": "like",
+        "frozen": "eq",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mp/account/page": {
+      "req_vo": "MpAccountPageReqVO",
+      "params": {
+        "account": "like",
+        "appId": "like",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mp/auto-reply/page": {
+      "req_vo": "MpMessagePageReqVO",
+      "params": {
+        "accountId": "eq",
+        "type": "eq"
+      },
+      "unknown": [
+        "createTime",
+        "openid",
+        "userId"
+      ]
+    },
+    "/admin-api/mp/draft/page": {
+      "req_vo": "MpDraftPageReqVO",
+      "params": {},
+      "unknown": [
+        "accountId"
+      ]
+    },
+    "/admin-api/mp/free-publish/page": {
+      "req_vo": "MpFreePublishPageReqVO",
+      "params": {},
+      "unknown": [
+        "accountId"
+      ]
+    },
+    "/admin-api/mp/material/page": {
+      "req_vo": "MpMaterialPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "permanent": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/mp/message-template/list": {
+      "req_vo": "MpMessageTemplateListReqVO",
+      "params": {},
+      "unknown": [
+        "accountId"
+      ]
+    },
+    "/admin-api/mp/message/page": {
+      "req_vo": "MpMessagePageReqVO",
+      "params": {
+        "accountId": "eq",
+        "type": "eq"
+      },
+      "unknown": [
+        "createTime",
+        "openid",
+        "userId"
+      ]
+    },
+    "/admin-api/mp/tag/page": {
+      "req_vo": "MpTagPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/mp/user/page": {
+      "req_vo": "MpUserPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "nickname": "like",
+        "openid": "like"
+      },
+      "unknown": [
+        "unionId"
+      ]
+    },
+    "/admin-api/oa/announcement/published-page": {
+      "req_vo": "OaAnnouncementPageReqVO",
+      "params": {
+        "createTime": "between",
+        "priority": "eq",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": [
+        "readStatus"
+      ]
+    },
+    "/admin-api/oa/announcement/received-page": {
+      "req_vo": "OaAnnouncementPageReqVO",
+      "params": {
+        "createTime": "between",
+        "priority": "eq",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": [
+        "readStatus"
+      ]
+    },
+    "/admin-api/oa/attendance/my-page": {
+      "req_vo": "OaAttendancePageReqVO",
+      "params": {
+        "attendanceTime": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": [
+        "userId"
+      ]
+    },
+    "/admin-api/oa/attendance/page": {
+      "req_vo": "OaAttendancePageReqVO",
+      "params": {
+        "attendanceTime": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": [
+        "userId"
+      ]
+    },
+    "/admin-api/oa/contact/my-page": {
+      "req_vo": "OaContactPageReqVO",
+      "params": {
+        "alphabet": "likeRight",
+        "keyword": "like"
+      },
+      "unknown": [
+        "categoryId",
+        "handleStatus"
+      ]
+    },
+    "/admin-api/oa/contact/received-page": {
+      "req_vo": "OaContactPageReqVO",
+      "params": {
+        "alphabet": "likeRight",
+        "keyword": "like"
+      },
+      "unknown": [
+        "categoryId",
+        "handleStatus"
+      ]
+    },
+    "/admin-api/oa/contact/shared-page": {
+      "req_vo": "OaContactPageReqVO",
+      "params": {
+        "alphabet": "likeRight",
+        "keyword": "like"
+      },
+      "unknown": [
+        "categoryId",
+        "handleStatus"
+      ]
+    },
+    "/admin-api/oa/discussion-reply/page": {
+      "req_vo": "OaDiscussionReplyPageReqVO",
+      "params": {
+        "discussionId": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/discussion/manage-page": {
+      "req_vo": "OaDiscussionPageReqVO",
+      "params": {
+        "createTime": "between",
+        "title": "like",
+        "type": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/discussion/page": {
+      "req_vo": "OaDiscussionPageReqVO",
+      "params": {
+        "createTime": "between",
+        "title": "like",
+        "type": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/file-node/page": {
+      "req_vo": "OaFileNodePageReqVO",
+      "params": {},
+      "unknown": [
+        "category",
+        "createTime",
+        "name",
+        "parentId",
+        "scope"
+      ]
+    },
+    "/admin-api/oa/leave-apply/page": {
+      "req_vo": "OaLeaveApplyPageReqVO",
+      "params": {
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/mail-message/page": {
+      "req_vo": "OaMailMessagePageReqVO",
+      "params": {
+        "accountId": "eq",
+        "hasAttach": "eq",
+        "keyword": "like",
+        "readStatus": "eq"
+      },
+      "unknown": [
+        "folderKey"
+      ]
+    },
+    "/admin-api/oa/meeting-room-booking/page": {
+      "req_vo": "OaMeetingRoomBookingPageReqVO",
+      "params": {
+        "createTime": "between",
+        "creator": "eq",
+        "deptId": "eq",
+        "endTime": "between",
+        "no": "like",
+        "startTime": "between",
+        "status": "eq",
+        "title": "like",
+        "useStatus": "eq"
+      },
+      "unknown": [
+        "moderatorName",
+        "roomName"
+      ]
+    },
+    "/admin-api/oa/meeting-room/bookable-page": {
+      "req_vo": "OaMeetingRoomPageReqVO",
+      "params": {
+        "location": "like",
+        "name": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": [
+        "managerName"
+      ]
+    },
+    "/admin-api/oa/meeting-room/page": {
+      "req_vo": "OaMeetingRoomPageReqVO",
+      "params": {
+        "location": "like",
+        "name": "like",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": [
+        "managerName"
+      ]
+    },
+    "/admin-api/oa/note/my-page": {
+      "req_vo": "OaNotePageReqVO",
+      "params": {
+        "categoryId": "eq",
+        "createTime": "between",
+        "favorite": "eq",
+        "priority": "eq",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/note/received-page": {
+      "req_vo": "OaNotePageReqVO",
+      "params": {
+        "categoryId": "eq",
+        "createTime": "between",
+        "favorite": "eq",
+        "priority": "eq",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/officialdoc-receive/page": {
+      "req_vo": "OaOfficialDocReceivePageReqVO",
+      "params": {
+        "documentNo": "like",
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/officialdoc-send/page": {
+      "req_vo": "OaOfficialDocSendPageReqVO",
+      "params": {
+        "documentNo": "like",
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/officialdoc-template/page": {
+      "req_vo": "OaOfficialDocTemplatePageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/overtime-apply/page": {
+      "req_vo": "OaOvertimeApplyPageReqVO",
+      "params": {
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/plan/page": {
+      "req_vo": "OaPlanPageReqVO",
+      "params": {
+        "createTime": "between",
+        "label": "like",
+        "status": "eq",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/plan/report-page": {
+      "req_vo": "OaPlanReportPageReqVO",
+      "params": {},
+      "unknown": [
+        "createTime",
+        "type",
+        "userName"
+      ]
+    },
+    "/admin-api/oa/regular-apply/page": {
+      "req_vo": "OaRegularApplyPageReqVO",
+      "params": {
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/reimbursement/page": {
+      "req_vo": "OaReimbursementPageReqVO",
+      "params": {
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/resign-apply/page": {
+      "req_vo": "OaResignApplyPageReqVO",
+      "params": {
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/schedule/my-page": {
+      "req_vo": "OaSchedulePageReqVO",
+      "params": {
+        "priority": "eq",
+        "startTime": "between",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": [
+        "includeMine",
+        "includeReceived",
+        "overlapTime"
+      ]
+    },
+    "/admin-api/oa/schedule/page": {
+      "req_vo": "OaSchedulePageReqVO",
+      "params": {
+        "priority": "eq",
+        "startTime": "between",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": [
+        "includeMine",
+        "includeReceived",
+        "overlapTime"
+      ]
+    },
+    "/admin-api/oa/schedule/received-page": {
+      "req_vo": "OaSchedulePageReqVO",
+      "params": {
+        "priority": "eq",
+        "startTime": "between",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": [
+        "includeMine",
+        "includeReceived",
+        "overlapTime"
+      ]
+    },
+    "/admin-api/oa/seal-apply/page": {
+      "req_vo": "OaSealApplyPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deptId": "eq",
+        "expectedUseTime": "between",
+        "mode": "eq",
+        "no": "like",
+        "sealId": "eq",
+        "sealName": "like",
+        "status": "eq",
+        "type": "eq",
+        "urgent": "eq",
+        "useStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/seal-apply/seal-page": {
+      "req_vo": "OaSealPageReqVO",
+      "params": {
+        "category": "eq",
+        "deptId": "eq",
+        "disableTime": "between",
+        "enableTime": "between",
+        "keeperUserId": "eq",
+        "name": "like",
+        "no": "like",
+        "purchaseTime": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/seal/page": {
+      "req_vo": "OaSealPageReqVO",
+      "params": {
+        "category": "eq",
+        "deptId": "eq",
+        "disableTime": "between",
+        "enableTime": "between",
+        "keeperUserId": "eq",
+        "name": "like",
+        "no": "like",
+        "purchaseTime": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/supply-apply/page": {
+      "req_vo": "OaSupplyApplyPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deptId": "eq",
+        "no": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/supply-issue/page": {
+      "req_vo": "OaSupplyIssuePageReqVO",
+      "params": {
+        "createTime": "between",
+        "itemName": "like",
+        "manageType": "eq",
+        "status": "eq",
+        "useType": "eq"
+      },
+      "unknown": [
+        "creatorName"
+      ]
+    },
+    "/admin-api/oa/supply-item/page": {
+      "req_vo": "OaSupplyItemPageReqVO",
+      "params": {
+        "category": "eq",
+        "manageType": "eq",
+        "name": "like",
+        "no": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/supply-item/select-page": {
+      "req_vo": "OaSupplyItemPageReqVO",
+      "params": {
+        "category": "eq",
+        "manageType": "eq",
+        "name": "like",
+        "no": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/task/published-page": {
+      "req_vo": "OaTaskPageReqVO",
+      "params": {
+        "canceled": "eq",
+        "publishTime": "between",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": [
+        "publisherUserId",
+        "status"
+      ]
+    },
+    "/admin-api/oa/task/received-page": {
+      "req_vo": "OaTaskPageReqVO",
+      "params": {
+        "canceled": "eq",
+        "publishTime": "between",
+        "title": "like",
+        "type": "eq"
+      },
+      "unknown": [
+        "publisherUserId",
+        "status"
+      ]
+    },
+    "/admin-api/oa/travel-apply/page": {
+      "req_vo": "OaTravelApplyPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deptId": "eq",
+        "no": "like",
+        "reimburseStatus": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/travel-reimbursement/page": {
+      "req_vo": "OaTravelReimbursementPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deptId": "eq",
+        "no": "like",
+        "payStatus": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/vehicle-apply/page": {
+      "req_vo": "OaVehicleApplyPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deptId": "eq",
+        "no": "like",
+        "returnStatus": "eq",
+        "status": "eq",
+        "vehicleNo": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/vehicle-apply/vehicle-page": {
+      "req_vo": "OaVehiclePageReqVO",
+      "params": {
+        "brandModel": "like",
+        "category": "eq",
+        "commercialInsuranceExpireTime": "between",
+        "compulsoryInsuranceExpireTime": "between",
+        "deptId": "eq",
+        "inspectionExpireTime": "between",
+        "name": "like",
+        "no": "like",
+        "status": "eq",
+        "type": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/vehicle-return/page": {
+      "req_vo": "OaVehicleReturnPageReqVO",
+      "params": {
+        "applyId": "eq",
+        "applyNo": "like",
+        "createTime": "between",
+        "deptId": "eq",
+        "no": "like",
+        "status": "eq",
+        "vehicleNo": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/vehicle/page": {
+      "req_vo": "OaVehiclePageReqVO",
+      "params": {
+        "brandModel": "like",
+        "category": "eq",
+        "commercialInsuranceExpireTime": "between",
+        "compulsoryInsuranceExpireTime": "between",
+        "deptId": "eq",
+        "inspectionExpireTime": "between",
+        "name": "like",
+        "no": "like",
+        "status": "eq",
+        "type": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/oa/work-report/page": {
+      "req_vo": "OaWorkReportPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deptId": "eq",
+        "endTime": "between",
+        "no": "like",
+        "periodTime": "between",
+        "startTime": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pay/app/page": {
+      "req_vo": "PayAppPageReqVO",
+      "params": {
+        "appKey": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pay/notify/page": {
+      "req_vo": "PayNotifyTaskPageReqVO",
+      "params": {
+        "appId": "eq",
+        "createTime": "between",
+        "dataId": "eq",
+        "merchantOrderId": "eq",
+        "merchantRefundId": "eq",
+        "merchantTransferId": "eq",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pay/order/page": {
+      "req_vo": "PayOrderPageReqVO",
+      "params": {
+        "appId": "eq",
+        "channelCode": "eq",
+        "channelOrderNo": "like",
+        "createTime": "between",
+        "merchantOrderId": "like",
+        "no": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pay/refund/page": {
+      "req_vo": "PayRefundPageReqVO",
+      "params": {
+        "appId": "eq",
+        "channelCode": "eq",
+        "channelOrderNo": "like",
+        "channelRefundNo": "like",
+        "createTime": "between",
+        "merchantOrderId": "like",
+        "merchantRefundId": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pay/transfer/page": {
+      "req_vo": "PayTransferPageReqVO",
+      "params": {
+        "appId": "eq",
+        "channelCode": "eq",
+        "channelTransferNo": "eq",
+        "createTime": "between",
+        "merchantOrderId": "eq",
+        "no": "eq",
+        "status": "eq",
+        "userAccount": "like",
+        "userName": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/pay/wallet-recharge-package/page": {
+      "req_vo": "WalletRechargePackagePageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pay/wallet-transaction/page": {
+      "req_vo": "PayWalletTransactionPageReqVO",
+      "params": {},
+      "unknown": [
+        "userId",
+        "userType",
+        "walletId"
+      ]
+    },
+    "/admin-api/pay/wallet/page": {
+      "req_vo": "PayWalletPageReqVO",
+      "params": {
+        "createTime": "between",
+        "userId": "eq",
+        "userType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pms/kb/document-label/document-page": {
+      "req_vo": "PmsKnowledgeDocumentLabelPageReqVO",
+      "params": {},
+      "unknown": [
+        "labelId"
+      ]
+    },
+    "/admin-api/pms/kb/document/search-page": {
+      "req_vo": "PmsKnowledgeDocumentSearchPageReqVO",
+      "params": {
+        "creatorUserId": "eq",
+        "keyword": "like",
+        "libraryId": "eq",
+        "updateTime": "between"
+      },
+      "unknown": []
+    },
+    "/admin-api/pms/kb/favorite/page": {
+      "req_vo": "PmsKnowledgeFavoritePageReqVO",
+      "params": {
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pms/kb/library-template/page": {
+      "req_vo": "PmsKnowledgeLibraryTemplatePageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pms/kb/library/page": {
+      "req_vo": "PmsKnowledgeLibraryPageReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": [
+        "groupId"
+      ]
+    },
+    "/admin-api/pms/pm/iteration/page": {
+      "req_vo": "PmsIterationPageReqVO",
+      "params": {
+        "name": "like",
+        "projectId": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pms/pm/project-template/page": {
+      "req_vo": "PmsProjectTemplatePageReqVO",
+      "params": {
+        "name": "like",
+        "projectType": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/pms/pm/project/page": {
+      "req_vo": "PmsProjectPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": [
+        "groupId",
+        "sceneType",
+        "sortType"
+      ]
+    },
+    "/admin-api/pms/pm/work-item/page": {
+      "req_vo": "PmsWorkItemPageReqVO",
+      "params": {
+        "assigneeUserId": "eq",
+        "assigneeUserIds": "in",
+        "iterationId": "eq",
+        "iterationIds": "in",
+        "lifecycleStatus": "eq",
+        "parentId": "eq",
+        "priorities": "in",
+        "priority": "eq",
+        "projectId": "eq",
+        "status": "eq",
+        "statusId": "eq",
+        "statuses": "in",
+        "type": "eq",
+        "types": "in"
+      },
+      "unknown": [
+        "excludedIterationIds",
+        "labelIds",
+        "name",
+        "planningOnly",
+        "rootOnly",
+        "unplannedOnly"
+      ]
+    },
+    "/admin-api/pms/pm/workbench/count": {
+      "req_vo": "PmsWorkbenchPageReqVO",
+      "params": {
+        "endTime": "between",
+        "iterationId": "eq",
+        "priority": "eq",
+        "projectId": "eq",
+        "status": "eq"
+      },
+      "unknown": [
+        "name",
+        "type"
+      ]
+    },
+    "/admin-api/pms/pm/workbench/iteration-page": {
+      "req_vo": "PmsWorkbenchPageReqVO",
+      "params": {
+        "endTime": "between",
+        "iterationId": "eq",
+        "priority": "eq",
+        "projectId": "eq",
+        "status": "eq"
+      },
+      "unknown": [
+        "name",
+        "type"
+      ]
+    },
+    "/admin-api/pms/pm/workbench/work-item-page": {
+      "req_vo": "PmsWorkbenchPageReqVO",
+      "params": {
+        "endTime": "between",
+        "iterationId": "eq",
+        "priority": "eq",
+        "projectId": "eq",
+        "status": "eq"
+      },
+      "unknown": [
+        "name",
+        "type"
+      ]
+    },
+    "/admin-api/product/brand/list": {
+      "req_vo": "ProductBrandListReqVO",
+      "params": {
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/product/brand/page": {
+      "req_vo": "ProductBrandPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/product/browse-history/page": {
+      "req_vo": "ProductBrowseHistoryPageReqVO",
+      "params": {
+        "createTime": "between",
+        "spuId": "eq",
+        "userDeleted": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/product/category/list": {
+      "req_vo": "ProductCategoryListReqVO",
+      "params": {
+        "name": "like",
+        "parentId": "eq",
+        "parentIds": "in",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/product/comment/page": {
+      "req_vo": "ProductCommentPageReqVO",
+      "params": {
+        "createTime": "between",
+        "orderId": "eq",
+        "replyStatus": "eq",
+        "scores": "eq",
+        "spuId": "eq",
+        "spuName": "like",
+        "userNickname": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/product/favorite/page": {
+      "req_vo": "ProductFavoritePageReqVO",
+      "params": {
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/product/property/page": {
+      "req_vo": "ProductPropertyPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": [
+        "status"
+      ]
+    },
+    "/admin-api/product/property/value/page": {
+      "req_vo": "ProductPropertyValuePageReqVO",
+      "params": {
+        "name": "like",
+        "propertyId": "eq"
+      },
+      "unknown": [
+        "status"
+      ]
+    },
+    "/admin-api/product/spu/get-count": {
+      "req_vo": "ProductSpuPageReqVO",
+      "params": {
+        "categoryId": "eq",
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": [
+        "tabType"
+      ]
+    },
+    "/admin-api/product/spu/page": {
+      "req_vo": "ProductSpuPageReqVO",
+      "params": {
+        "categoryId": "eq",
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": [
+        "tabType"
+      ]
+    },
+    "/admin-api/promotion/article-category/page": {
+      "req_vo": "ArticleCategoryPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/article/page": {
+      "req_vo": "ArticlePageReqVO",
+      "params": {
+        "author": "eq",
+        "categoryId": "eq",
+        "createTime": "between",
+        "recommendBanner": "eq",
+        "recommendHot": "eq",
+        "spuId": "eq",
+        "status": "eq",
+        "title": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/banner/page": {
+      "req_vo": "BannerPageReqVO",
+      "params": {
+        "createTime": "between",
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/bargain-activity/page": {
+      "req_vo": "BargainActivityPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/bargain-help/page": {
+      "req_vo": "BargainHelpPageReqVO",
+      "params": {
+        "recordId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/bargain-record/page": {
+      "req_vo": "BargainRecordPageReqVO",
+      "params": {
+        "createTime": "between",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/combination-activity/page": {
+      "req_vo": "CombinationActivityPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/coupon-template/page": {
+      "req_vo": "CouponTemplatePageReqVO",
+      "params": {
+        "createTime": "between",
+        "discountType": "eq",
+        "name": "like",
+        "productScope": "eq",
+        "status": "eq"
+      },
+      "unknown": [
+        "canTakeTypes",
+        "productScopeValue"
+      ]
+    },
+    "/admin-api/promotion/coupon/page": {
+      "req_vo": "CouponPageReqVO",
+      "params": {
+        "createTime": "between",
+        "status": "eq",
+        "templateId": "eq",
+        "userIds": "in"
+      },
+      "unknown": [
+        "nickname"
+      ]
+    },
+    "/admin-api/promotion/discount-activity/page": {
+      "req_vo": "DiscountActivityPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/diy-page/page": {
+      "req_vo": "DiyPagePageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/diy-template/page": {
+      "req_vo": "DiyTemplatePageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "used": "eq",
+        "usedTime": "between"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/kefu-message/list": {
+      "req_vo": "KeFuMessageListReqVO",
+      "params": {
+        "conversationId": "eq",
+        "createTime": "lt"
+      },
+      "unknown": [
+        "limit"
+      ]
+    },
+    "/admin-api/promotion/point-activity/page": {
+      "req_vo": "PointActivityPageReqVO",
+      "params": {
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/reward-activity/page": {
+      "req_vo": "RewardActivityPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/promotion/seckill-activity/page": {
+      "req_vo": "SeckillActivityPageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": [
+        "configId"
+      ]
+    },
+    "/admin-api/promotion/seckill-config/page": {
+      "req_vo": "SeckillConfigPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/dept/list": {
+      "req_vo": "DeptListReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/dict-type/page": {
+      "req_vo": "DictTypePageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "status": "eq",
+        "type": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/login-log/page": {
+      "req_vo": "LoginLogPageReqVO",
+      "params": {
+        "createTime": "between",
+        "userIp": "like",
+        "username": "like"
+      },
+      "unknown": [
+        "status"
+      ]
+    },
+    "/admin-api/system/mail-account/page": {
+      "req_vo": "MailAccountPageReqVO",
+      "params": {
+        "mail": "like",
+        "username": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/mail-log/page": {
+      "req_vo": "MailLogPageReqVO",
+      "params": {
+        "accountId": "eq",
+        "sendStatus": "eq",
+        "sendTime": "between",
+        "templateId": "eq",
+        "userId": "eq",
+        "userType": "eq"
+      },
+      "unknown": [
+        "toMail"
+      ]
+    },
+    "/admin-api/system/mail-template/page": {
+      "req_vo": "MailTemplatePageReqVO",
+      "params": {
+        "accountId": "eq",
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/menu/list": {
+      "req_vo": "MenuListReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/notice/page": {
+      "req_vo": "NoticePageReqVO",
+      "params": {
+        "status": "eq",
+        "title": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/notify-message/my-page": {
+      "req_vo": "NotifyMessageMyPageReqVO",
+      "params": {
+        "createTime": "between",
+        "readStatus": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/notify-message/page": {
+      "req_vo": "NotifyMessagePageReqVO",
+      "params": {
+        "createTime": "between",
+        "templateCode": "like",
+        "templateType": "eq",
+        "userId": "eq",
+        "userType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/notify-template/page": {
+      "req_vo": "NotifyTemplatePageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/oauth2-client/page": {
+      "req_vo": "OAuth2ClientPageReqVO",
+      "params": {
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/oauth2-token/page": {
+      "req_vo": "OAuth2AccessTokenPageReqVO",
+      "params": {
+        "clientId": "like",
+        "userId": "eq",
+        "userType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/operate-log/page": {
+      "req_vo": "OperateLogPageReqVO",
+      "params": {
+        "action": "like",
+        "bizId": "eq",
+        "createTime": "between",
+        "subType": "like",
+        "type": "like",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/post/page": {
+      "req_vo": "PostPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/role/page": {
+      "req_vo": "RolePageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/sms-channel/page": {
+      "req_vo": "SmsChannelPageReqVO",
+      "params": {
+        "createTime": "between",
+        "signature": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/sms-log/page": {
+      "req_vo": "SmsLogPageReqVO",
+      "params": {
+        "channelId": "eq",
+        "mobile": "like",
+        "receiveStatus": "eq",
+        "receiveTime": "between",
+        "sendStatus": "eq",
+        "sendTime": "between",
+        "templateId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/sms-template/page": {
+      "req_vo": "SmsTemplatePageReqVO",
+      "params": {
+        "apiTemplateId": "like",
+        "channelId": "eq",
+        "code": "like",
+        "content": "like",
+        "createTime": "between",
+        "status": "eq",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/social-client/page": {
+      "req_vo": "SocialClientPageReqVO",
+      "params": {
+        "clientId": "like",
+        "name": "like",
+        "socialType": "eq",
+        "status": "eq",
+        "userType": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/social-user/page": {
+      "req_vo": "SocialUserPageReqVO",
+      "params": {
+        "createTime": "between",
+        "nickname": "like",
+        "openid": "like",
+        "type": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/tenant-package/page": {
+      "req_vo": "TenantPackagePageReqVO",
+      "params": {
+        "createTime": "between",
+        "name": "like",
+        "remark": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/tenant/page": {
+      "req_vo": "TenantPageReqVO",
+      "params": {
+        "contactMobile": "like",
+        "contactName": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/system/user/page": {
+      "req_vo": "UserPageReqVO",
+      "params": {
+        "createTime": "between",
+        "mobile": "like",
+        "status": "eq",
+        "username": "like"
+      },
+      "unknown": [
+        "deptId",
+        "roleId"
+      ]
+    },
+    "/admin-api/trade/after-sale/page": {
+      "req_vo": "AfterSalePageReqVO",
+      "params": {
+        "createTime": "between",
+        "no": "like",
+        "orderNo": "like",
+        "spuName": "like",
+        "status": "eq",
+        "type": "eq",
+        "userId": "eq",
+        "way": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/trade/brokerage-record/page": {
+      "req_vo": "BrokerageRecordPageReqVO",
+      "params": {
+        "bizType": "eq",
+        "createTime": "between",
+        "sourceUserLevel": "eq",
+        "status": "eq",
+        "userId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/trade/brokerage-user/page": {
+      "req_vo": "BrokerageUserPageReqVO",
+      "params": {
+        "bindUserTime": "between",
+        "brokerageEnabled": "eq",
+        "createTime": "between"
+      },
+      "unknown": [
+        "bindUserId",
+        "level"
+      ]
+    },
+    "/admin-api/trade/brokerage-withdraw/page": {
+      "req_vo": "BrokerageWithdrawPageReqVO",
+      "params": {
+        "bankName": "like",
+        "createTime": "between",
+        "status": "eq",
+        "type": "eq",
+        "userAccount": "like",
+        "userId": "eq",
+        "userName": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/trade/delivery/express-template/page": {
+      "req_vo": "DeliveryExpressTemplatePageReqVO",
+      "params": {
+        "chargeMode": "eq",
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/trade/delivery/express/page": {
+      "req_vo": "DeliveryExpressPageReqVO",
+      "params": {
+        "code": "like",
+        "createTime": "between",
+        "name": "like",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/trade/delivery/pick-up-store/page": {
+      "req_vo": "DeliveryPickUpStorePageReqVO",
+      "params": {
+        "areaId": "eq",
+        "createTime": "between",
+        "name": "like",
+        "phone": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/trade/order/page": {
+      "req_vo": "TradeOrderPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deliveryType": "eq",
+        "logisticsId": "eq",
+        "no": "like",
+        "payChannelCode": "eq",
+        "pickUpStoreIds": "in",
+        "pickUpVerifyCode": "like",
+        "status": "eq",
+        "terminal": "eq",
+        "type": "eq",
+        "userId": "eq"
+      },
+      "unknown": [
+        "userMobile",
+        "userNickname"
+      ]
+    },
+    "/admin-api/trade/order/summary": {
+      "req_vo": "TradeOrderPageReqVO",
+      "params": {
+        "createTime": "between",
+        "deliveryType": "eq",
+        "logisticsId": "eq",
+        "no": "like",
+        "payChannelCode": "eq",
+        "pickUpStoreIds": "in",
+        "pickUpVerifyCode": "like",
+        "status": "eq",
+        "terminal": "eq",
+        "type": "eq",
+        "userId": "eq"
+      },
+      "unknown": [
+        "userMobile",
+        "userNickname"
+      ]
+    },
+    "/admin-api/wms/check-order/page": {
+      "req_vo": "WmsCheckOrderPageReqVO",
+      "params": {
+        "actualPriceMax": "le",
+        "actualPriceMin": "ge",
+        "createTime": "between",
+        "creator": "eq",
+        "no": "like",
+        "orderTime": "between",
+        "status": "eq",
+        "totalPriceMax": "le",
+        "totalPriceMin": "ge",
+        "totalQuantityMax": "le",
+        "totalQuantityMin": "ge",
+        "updateTime": "between",
+        "updater": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/inventory-history/page": {
+      "req_vo": "WmsInventoryHistoryPageReqVO",
+      "params": {
+        "createTime": "between",
+        "itemCode": "like",
+        "itemName": "like",
+        "orderNo": "eq",
+        "orderType": "eq",
+        "skuCode": "like",
+        "skuId": "eq",
+        "skuName": "like",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/inventory/list": {
+      "req_vo": "WmsInventoryListReqVO",
+      "params": {
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/inventory/page": {
+      "req_vo": "WmsInventoryPageReqVO",
+      "params": {
+        "itemCode": "like",
+        "itemName": "like",
+        "minQuantity": "ge",
+        "skuCode": "like",
+        "skuId": "eq",
+        "skuName": "like",
+        "warehouseId": "eq"
+      },
+      "unknown": [
+        "onlyPositiveQuantity",
+        "type"
+      ]
+    },
+    "/admin-api/wms/item-brand/page": {
+      "req_vo": "WmsItemBrandPageReqVO",
+      "params": {
+        "code": "like",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/item-category/list": {
+      "req_vo": "WmsItemCategoryListReqVO",
+      "params": {
+        "code": "like",
+        "name": "like",
+        "parentId": "eq",
+        "status": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/item-sku/page": {
+      "req_vo": "WmsItemSkuPageReqVO",
+      "params": {
+        "barCode": "like",
+        "brandId": "eq",
+        "categoryId": "eq",
+        "code": "like",
+        "itemCode": "like",
+        "itemName": "like",
+        "name": "like"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/item/page": {
+      "req_vo": "WmsItemPageReqVO",
+      "params": {
+        "brandId": "eq",
+        "code": "like",
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": [
+        "categoryId"
+      ]
+    },
+    "/admin-api/wms/item/simple-list": {
+      "req_vo": "WmsItemListReqVO",
+      "params": {
+        "brandId": "eq",
+        "code": "like",
+        "createTime": "between",
+        "name": "like"
+      },
+      "unknown": [
+        "categoryId"
+      ]
+    },
+    "/admin-api/wms/merchant/page": {
+      "req_vo": "WmsMerchantPageReqVO",
+      "params": {
+        "code": "eq",
+        "name": "like",
+        "type": "eq",
+        "types": "in"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/merchant/simple-list": {
+      "req_vo": "WmsMerchantListReqVO",
+      "params": {
+        "code": "eq",
+        "name": "like",
+        "type": "eq",
+        "types": "in"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/movement-order/page": {
+      "req_vo": "WmsMovementOrderPageReqVO",
+      "params": {
+        "createTime": "between",
+        "creator": "eq",
+        "no": "like",
+        "orderTime": "between",
+        "sourceWarehouseId": "eq",
+        "status": "eq",
+        "targetWarehouseId": "eq",
+        "totalPriceMax": "le",
+        "totalPriceMin": "ge",
+        "totalQuantityMax": "le",
+        "totalQuantityMin": "ge",
+        "updateTime": "between",
+        "updater": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/receipt-order/page": {
+      "req_vo": "WmsReceiptOrderPageReqVO",
+      "params": {
+        "bizOrderNo": "like",
+        "createTime": "between",
+        "creator": "eq",
+        "merchantId": "eq",
+        "no": "like",
+        "orderTime": "between",
+        "status": "eq",
+        "totalPriceMax": "le",
+        "totalPriceMin": "ge",
+        "totalQuantityMax": "le",
+        "totalQuantityMin": "ge",
+        "type": "eq",
+        "updateTime": "between",
+        "updater": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/shipment-order/page": {
+      "req_vo": "WmsShipmentOrderPageReqVO",
+      "params": {
+        "bizOrderNo": "like",
+        "createTime": "between",
+        "creator": "eq",
+        "merchantId": "eq",
+        "no": "like",
+        "orderTime": "between",
+        "status": "eq",
+        "totalPriceMax": "le",
+        "totalPriceMin": "ge",
+        "totalQuantityMax": "le",
+        "totalQuantityMin": "ge",
+        "type": "eq",
+        "updateTime": "between",
+        "updater": "eq",
+        "warehouseId": "eq"
+      },
+      "unknown": []
+    },
+    "/admin-api/wms/warehouse/page": {
+      "req_vo": "WmsWarehousePageReqVO",
+      "params": {
+        "code": "eq",
+        "name": "like"
+      },
+      "unknown": []
+    }
+  }
+}

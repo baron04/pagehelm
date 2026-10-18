@@ -242,6 +242,16 @@ numeric value and its unit. Other money fields still require a same-record page 
 The included policy describes 10 fields checked only in an isolated synthetic instance;
 the cloud example does not enable it until those fields are checked in that deployment.
 
+An optional `--native-filter-semantics <filters.json>` annotates what each published
+query parameter's condition means, compiled from the same allowlisted server source as
+the method fence (`python -m web_operation_agent_yudao.filter_semantics`) and bound to
+the release and the fence's source digest; a mismatch stops startup. `search_api` lines
+label each resolved parameter (包含匹配, 等于, 区间, …) and a filtered `call_api` read
+labels every submitted condition it resolved. Parameters whose mapper condition the
+scan cannot resolve stay unannotated. The labels describe how a read filters; they
+withhold no data and refuse no read. The cloud example and `./local` supply the file.
+This is not the removed legacy page-filtering `--native-filter-policy`.
+
 Without `--native-writes` it has no write path; with it, see the end of this section.
 What the model is shown leaves out the application's navigation menu and
 names the regions that scroll; only an element listed there may be acted on. A dropdown,

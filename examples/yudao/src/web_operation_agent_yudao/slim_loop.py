@@ -128,12 +128,15 @@ class ActorKnowledge:
     """The signed-in actor's menu pages and the application's read-only API, searchable."""
 
     def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai",
-                 codes=None, money_review=None):
+                 codes=None, money_review=None, filter_semantics=None):
         self.client, self._docs, self.writing_gets = client, api_docs, frozenset(writing_gets)
         #: `codes(list_path)`: the names of a list's coded values by field, when the
         #: application names them ({"bizType": {"50": "销售出库"}}).
         self._codes = codes
         self.money_review = money_review
+        #: What each published query parameter's condition means, compiled from the
+        #: deployed release's source. Annotation only; it refuses or hides no read.
+        self.filter_semantics = filter_semantics
         self._zone = ZoneInfo(time_zone)
         self._menu = self._ops = self._by_path = self._schemas = None
         #: The host may load this ahead of the first turn, on another thread.
@@ -206,8 +209,8 @@ class ActorKnowledge:
         lines = [self._api_line(op) for score, op in ranked[:8] if score > 2]
         return "\n".join(lines) or "没有匹配的只读接口。换一个业务词再试。"
 
-    @staticmethod
-    def _api_line(op) -> str:
+    def _api_line(self, op) -> str:
+        semantics = self.filter_semantics.params_for(op["path"]) if self.filter_semantics else {}
         params = []
         published = sorted(op["op"].get("parameters") or [], key=lambda p: p.get("required") is not True)
         for p in published:
@@ -216,7 +219,8 @@ class ActorKnowledge:
             desc = (p.get("description") or "").split("，")[0][:24]
             kind = (p.get("schema") or {}).get("type")
             params.append(f"{p['name']}{'*' if p.get('required') else ''}({desc}"
-                          + (f"; {kind}" if kind in {"string", "integer", "number", "boolean", "array"} else "") + ")")
+                          + (f"; {kind}" if kind in {"string", "integer", "number", "boolean", "array"} else "")
+                          + (f"; {semantics[p['name']]}" if p["name"] in semantics else "") + ")")
         return (f"GET {op['path']}  [{op['tag']}] {op['summary']}\n    参数: "
                 + (", ".join(params[:14]) or "无"))
 
@@ -599,6 +603,10 @@ class ActorKnowledge:
                                 json.dumps(filters, ensure_ascii=False)] if filters else
                                ["本次接口查询范围：未带业务筛选条件；以下 total、合计和分组覆盖当前账号可见的此接口全表，"
                                 "不能当作用户点名的子集。"])
+                if filters and self.filter_semantics is not None:
+                    conditions = self.filter_semantics.condition_line(path, filters)
+                    if conditions:
+                        scope_lines.append("各条件的语义（按部署版本源码编译）：" + conditions)
                 data_lines = {index + len(scope_lines) for index in data_lines}
                 if filters:
                     data_lines.add(1)

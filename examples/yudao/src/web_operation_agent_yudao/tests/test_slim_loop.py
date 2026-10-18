@@ -434,6 +434,30 @@ class KnowledgeTests(unittest.TestCase):
         self.assertNotIn("export", found)
         self.assertNotIn("create", found)
 
+    def test_compiled_condition_semantics_annotate_parameters_and_submitted_filters(self):
+        from web_operation_agent_yudao.filter_semantics import LABELS, FilterSemantics
+        semantics = FilterSemantics.load(
+            {"schema_version": 1, "release": "v-test", "source_digest": "d", "labels": LABELS,
+             "apis": {"/admin-api/orders/page": {"req_vo": "OrderPageReqVO",
+                                                 "params": {"customerId": "eq"}, "unknown": []},
+                      "/admin-api/leads/page": {"req_vo": "LeadPageReqVO",
+                                                "params": {"name": "like"}, "unknown": ["sceneType"]}}},
+            release="v-test")
+        know = ActorKnowledge(self.client, lambda: DOCS, filter_semantics=semantics)
+        self.assertIn("customerId(客户编号; 等于)", know.search_api("订单"))
+        text = know.call_api("leads/page", {"name": "甲", "sceneType": 1, "pageNo": 1}, fields=["name"])
+        self.assertIn("本次接口查询范围：业务筛选参数如下", text)
+        self.assertIn("各条件的语义（按部署版本源码编译）：name 包含匹配", text)
+        self.assertNotIn("sceneType ", text.split("各条件的语义")[1].splitlines()[0])
+        # An endpoint the policy resolved nothing for keeps its unannotated line.
+        self.assertNotIn("等于", know.search_api("库存明细"))
+
+    def test_without_the_policy_nothing_is_annotated(self):
+        self.assertNotIn("等于", self.know.search_api("订单"))
+        text = self.know.call_api("leads/page", {"name": "甲", "sceneType": 1, "pageNo": 1},
+                                  fields=["name"])
+        self.assertNotIn("各条件的语义", text)
+
     def test_parameter_correction_names_required_fields_and_never_supplied_values(self):
         from copy import deepcopy
         from web_operation_agent_yudao.slim_loop import QueryParametersError

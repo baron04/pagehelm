@@ -176,7 +176,8 @@ def main():
             bootstrap_host="127.0.0.1", bootstrap_port=cfg.PORTS[2],
             native_guard_port=cfg.PORTS[3], ui_source=cfg.CACHE / "ui",
             source_release=cfg.RELEASE, native_read_policy=cfg.POLICIES / "fence.json",
-            native_page_policy=cfg.POLICIES / "pages.json", native_writes=False,
+            native_page_policy=cfg.POLICIES / "pages.json",
+            native_filter_semantics=cfg.POLICIES / "filters.json", native_writes=False,
             model=env["AGENT_OPENAI_MODEL"], model_env=env, daily_allowance_cny=20.0))
         host.server.start()
         boot = ThreadingHTTPServer(("127.0.0.1", cfg.PORTS[2]), native._handler(host))
