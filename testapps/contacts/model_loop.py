@@ -99,6 +99,8 @@ class ContactsProcedure:
                 facts = result.content
                 projection = StructuredQueryAnswer(collection="contacts", fields=("name", "email"),
                     records=tuple((row["name"], row["email"]) for row in rows), source="Contacts REST collection",
+                    actor_digest=context.operation.principal.actor_authority_digest,
+                    record_ids=tuple(str(row["id"]) for row in rows),
                     scope=facts["scope"], observed_at=datetime.now(timezone.utc).isoformat(),
                     source_complete=facts["completeness"]["source_complete"],
                     result_truncated=facts["completeness"]["result_truncated"],

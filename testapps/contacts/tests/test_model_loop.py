@@ -83,16 +83,23 @@ class ContactsModelLoopTests(unittest.TestCase):
     def test_same_server_read_delivery_contract_uses_each_rest_actor_and_cannot_be_replaced_by_prose(self):
         for actor,email in (("ada-lovelace","grace@example.test"),("mary-jackson","grace.hopper@southwind.test")):
             with self.subTest(actor=actor), MinimalContactsApplication() as app:
+                traces = []
+                def inspect(directory):
+                    traces.extend(json.loads(path.read_text()) for path in (directory / "turns").glob("*.json"))
                 result,chat,_=self.execute(app,actor,[
                     ("list_contacts",{"name_contains":"Grace Hopper","deliver":True}),
                     ("finish",{"status":"done","answer":"All emails are listed above"}),
-                    ("finish",{"status":"done","answer":"","read_answer":"read-1"})])
+                    ("finish",{"status":"done","answer":"","read_answer":"read-1"})],
+                    turn_traces=True, inspect=inspect)
                 self.assertIn(email,result.user_answer)
                 other="grace.hopper@southwind.test" if actor=="ada-lovelace" else "grace@example.test"
                 self.assertNotIn(other,result.user_answer)
                 self.assertIn("Grace Hopper",result.user_answer)
                 self.assertNotIn("listed above",result.user_answer)
                 self.assertEqual("agent_finished",result.terminal_reason)
+                identity = traces[0]["server_deliveries"][0]["projection"]["identity"]
+                self.assertEqual(identity["actor_digest"], traces[0]["actor"]["actor_authority_digest"])
+                self.assertEqual(len(identity["record_ids"]), 1)
 
     def test_a_rest_read_can_finish_after_an_unsent_draft_without_publishing_that_draft(self):
         with MinimalContactsApplication() as app:

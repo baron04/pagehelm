@@ -855,11 +855,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             if (args["status"] != "done" or args["answer"].strip() or projection is None
                                     or not projection.complete):
                                 raise BusinessToolRequestError("a complete actor-read answer must be selected")
-                            if isinstance(projection, SummaryResult):
+                            if projection.actor_digest:
                                 principal = getattr(getattr(s, "approvals", None), "principal", None)
                                 if (principal is None or
                                         projection.actor_digest != principal.actor_authority_digest):
-                                    raise BusinessToolRequestError("summary belongs to a different actor")
+                                    raise BusinessToolRequestError("read answer belongs to a different actor")
                             renderer = render_summary if isinstance(projection, SummaryResult) else render_structured_query_answer
                             rendering = renderer(projection, user_text=prompt,
                                 max_chars=self._finish_tool(turn)["function"]["parameters"]["properties"]["answer"]["maxLength"])

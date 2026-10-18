@@ -532,6 +532,9 @@ class ActorKnowledge:
             if rows is None or any(not isinstance(row, dict) or any(key not in row for key in selected)
                                    for row in rows):
                 raise QueryParametersError("list delivery requires actual rows with every requested field")
+            if actor_digest and any(type(row.get("id")) not in {str, int} or row["id"] == ""
+                                    or row["id"] == REDACTED for row in rows):
+                raise QueryParametersError("actor-bound list delivery requires native identities on every row")
             def value(row, key):
                 item = self._cell(key, row[key])
                 # Numerical business values keep their existing page/unit proof.
@@ -553,7 +556,9 @@ class ActorKnowledge:
                     source_complete=whole, result_truncated=not whole,
                     matched_count=declared_total if declared_total is not None else len(rows),
                     source_total=declared_total, records_scanned=len(rows),
-                    incomplete_reason="" if whole else "未核验完整分页，不能作为完整列表交付")
+                    incomplete_reason="" if whole else "未核验完整分页，不能作为完整列表交付",
+                    actor_digest=actor_digest,
+                    record_ids=tuple(str(row["id"]) for row in rows) if actor_digest else None)
             except ValueError as exc:
                 raise QueryParametersError("these fields cannot form a bounded exact list delivery") from exc
             return self._told([
@@ -1784,8 +1789,9 @@ class YudaoLoopProcedures:
                     text = know.call_api(args["path"], params, args.get("fields", ()),
                                          row_offset=args.get("row_offset", 0),
                                          **({"deliver": True} if args.get("deliver") else {}),
-                                         **({"summary": args["summary"], "actor_digest": s.operation.principal.actor_authority_digest}
-                                            if "summary" in args else {}))
+                                         **({"summary": args["summary"]} if "summary" in args else {}),
+                                         **({"actor_digest": s.operation.principal.actor_authority_digest}
+                                            if "summary" in args or args.get("deliver") else {}))
                 except SummaryRefused as exc:
                     return LoopToolResult("程序汇总未能核实：" + exc.detail,
                         kind="read", state="unverified", error_code=exc.code)

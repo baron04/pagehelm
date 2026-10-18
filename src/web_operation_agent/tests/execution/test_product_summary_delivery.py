@@ -29,6 +29,17 @@ def summary(*, actor=None, count=0, complete=True):
 
 
 class SummaryDeliveryTests(unittest.TestCase):
+    def test_native_text_delivery_cannot_cross_actor_even_when_display_text_matches(self):
+        from web_operation_agent.answer.answering import StructuredQueryAnswer
+        projection = StructuredQueryAnswer(collection="items", fields=("name",), records=(("same",),),
+            source="native", scope="all", observed_at="now", source_complete=True,
+            result_truncated=False, matched_count=1, source_total=1, records_scanned=1,
+            actor_digest="f" * 64, record_ids=("actual-id",))
+        loop = self.fixture(projection)
+        answer = loop.run("List every name")
+        self.assertIn("could not be fully verified", answer)
+        self.assertFalse(any(event == "read_answer_selected" for event, _ in loop.events))
+
     def fixture(self, projection, *, finish=None):
         result = LoopToolResult("Summary prepared", kind="read", query_answer=projection)
         loop = LoopFixture([reply(call("summary")),

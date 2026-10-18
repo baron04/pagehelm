@@ -490,6 +490,9 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual(projection.fields,("name",))
         self.assertEqual(projection.records,tuple((r["name"],) for r in rows))
         self.assertNotIn("privateNote",str(projection.to_json()))
+        know.call_api("orders/page",{"pageNo":1,"pageSize":100},["name"],deliver=True,actor_digest="a"*64)
+        self.assertEqual(know.last_query_answer.record_ids,tuple(str(r["id"]) for r in rows))
+        self.assertEqual(know.last_query_answer.actor_digest,"a"*64)
         know.call_api("orders/page",{"pageNo":1,"pageSize":100},["name"])
         self.assertIsNone(know.last_query_answer)
 

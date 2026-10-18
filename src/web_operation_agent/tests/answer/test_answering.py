@@ -26,6 +26,22 @@ def _projection(*, complete: bool = True, records=None) -> StructuredQueryAnswer
 
 
 class StructuredQueryAnswerTests(unittest.TestCase):
+    def test_native_identity_is_optional_actor_bound_and_does_not_change_display(self):
+        from dataclasses import replace
+        original = _projection(records=(("same", "one"), ("same", "two")))
+        bound = replace(original, actor_digest="a" * 64, record_ids=("native-b", "native-a"))
+        self.assertNotIn("identity", original.to_json())
+        self.assertEqual(bound.to_json()["identity"]["record_ids"], ["native-b", "native-a"])
+        self.assertNotEqual(original.content_digest, bound.content_digest)
+        render = lambda p: render_structured_query_answer(p, user_text="List", max_chars=8000).text
+        self.assertEqual(render(original), render(bound))
+        for change in ({"actor_digest": ""}, {"record_ids": None}, {"record_ids": ["b", "a"]},
+                       {"record_ids": ("b", "b")}, {"record_ids": ("b",)},
+                       {"record_ids": (" b", "a")}, {"record_ids": (True, "a")}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                replace(bound, **change)
+        self.assertEqual(replace(_projection(records=()), actor_digest="a"*64, record_ids=()).record_ids, ())
+
     def test_record_values_are_literal_text_instead_of_inline_markup_or_links(self):
         projection=_projection(records=(("**name** [link](https://outside.test) `code`", "domain.test"),))
         text=render_structured_query_answer(projection,user_text="List companies",max_chars=4000).text

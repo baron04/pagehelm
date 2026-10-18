@@ -44,6 +44,8 @@ class StructuredQueryAnswer:
     source_total: int | None
     records_scanned: int | None
     incomplete_reason: str = ""
+    actor_digest: str = ""
+    record_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "collection", _bounded_text(
@@ -94,6 +96,15 @@ class StructuredQueryAnswer:
             raise ValueError("an incomplete source must mark the query result truncated")
         if not self.source_complete and not self.incomplete_reason:
             raise ValueError("an incomplete source requires a bounded reason")
+        if (self.record_ids is None) != (self.actor_digest == ""):
+            raise ValueError("native identities require an actor binding, and vice versa")
+        if self.record_ids is not None:
+            if (not isinstance(self.actor_digest, str) or not re.fullmatch(r"[a-f0-9]{64}", self.actor_digest)
+                    or not isinstance(self.record_ids, tuple) or len(self.record_ids) != len(self.records)
+                    or any(not isinstance(key, str) or not key or len(key) > 400
+                           or _CONTROL.search(key) or key != key.strip() for key in self.record_ids)
+                    or len(set(self.record_ids)) != len(self.record_ids)):
+                raise ValueError("native identities must be literal, unique, immutable and aligned with rows")
 
     @property
     def complete(self) -> bool:
@@ -121,6 +132,8 @@ class StructuredQueryAnswer:
                 "records_scanned": self.records_scanned,
                 "incomplete_reason": self.incomplete_reason,
             },
+            **({"identity": {"actor_digest": self.actor_digest, "record_ids": list(self.record_ids)}}
+               if self.record_ids is not None else {}),
         }
 
     @property
