@@ -1450,11 +1450,12 @@ class DraftChoiceTests(unittest.TestCase):
 class ActionFeedbackTests(unittest.TestCase):
     def test_unverified_native_choice_keeps_its_explanation_through_the_common_loop(self):
         from web_operation_agent.tests.execution.test_product_model_loop import LoopFixture, call, reply
+        from web_operation_agent.execution.model_loop_contracts import PageProcedureContext
         procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         procedures.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
         procedures._settled = lambda *_a, **_kw: None
         def handler(fixture, _name, _arguments):
-            return procedures._fill_fields(fixture.state,[{"label":"客户级别","value":"Z（不存在）"}],
+            return procedures._fill_fields(context,[{"label":"客户级别","value":"Z（不存在）"}],
                 "",{"touched":[],"trace":[]})
         fixture = LoopFixture([reply(call("fill_fields")),reply(call("finish",status="done",answer="done"))],handler)
         control = element(1,"combobox","客户级别","input",field_label="客户级别",form_scope="dialog:create",
@@ -1470,7 +1471,10 @@ class ActionFeedbackTests(unittest.TestCase):
             # A browser's no-effect attestation is not the application's successful
             # verification: preserve both error codes and stop without replaying.
             return PageActionOutcome("unverified","acknowledged","unverified",json.dumps(receipt.to_json()))
-        fixture.state.page = NS(execute=execute)
+        bridge = NS(execute=execute,observation=lambda:fixture.state.obs,
+                    stopped=lambda:bool(fixture.state.terminal_reason))
+        context = PageProcedureContext(None,bridge,lambda _facts:None,lambda **_facts:None,
+                                       lambda *_args:contextlib.nullcontext())
         answer = fixture.run()
         self.assertIn("客户级别：",answer)
         self.assertIn("未能确认当前表单",answer)

@@ -192,8 +192,8 @@ class LoopToolResult:
     #: A local action proof cannot settle an unresolved part of the user's request.
     #: Ask the existing completion reader before accepting a completed page handoff.
     review_completion: bool = False
-    #: A server-authored explanation of a refused page procedure. It cannot
-    #: replace write outcomes, permission failures, or successful completion.
+    #: A server-authored explanation if the loop has stopped a page procedure
+    #: as agent_refused. This field neither stops execution nor changes its reason.
     terminal_answer: str = ""
 
     def __post_init__(self):
@@ -228,7 +228,7 @@ class LoopToolResult:
                 or not isinstance(self.terminal_answer, str) or len(self.terminal_answer) > 4000
                 or self.terminal_answer and (self.kind != "page"
                     or self.state not in {"refused", "needs_input", "unavailable", "unverified"}
-                    or self.terminal_reason != "agent_refused" or self.write_outcome is not None
+                    or self.terminal_reason not in {"", "agent_refused"} or self.write_outcome is not None
                     or self.completion_command or self.review_completion)):
             raise ValueError("invalid model-loop result")
 

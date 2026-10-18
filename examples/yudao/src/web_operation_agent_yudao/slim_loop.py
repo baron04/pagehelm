@@ -1774,13 +1774,15 @@ class YudaoLoopProcedures:
         elif outcome.receipt is not None and outcome.receipt.error_code == "option_unavailable":
             feedback = ("下拉框没有请求的精确选项，且未能确认当前表单完全保持原样；"
                         "不会自动重发，请手工核对当前草稿。")
-        terminal = (getattr(s, "terminal_reason", "") == "agent_refused"
+        # Procedures only learn that execution stopped, not the executor's
+        # private reason. The common loop decides whether this explanation may
+        # be shown; cancellation, transport and permission outcomes still win.
+        terminal = (bool(getattr(s, "terminal_reason", ""))
                     and outcome.state in {"refused", "unverified"}
                     and (outcome.error_code == "option_unavailable" or outcome.receipt is not None
                          and outcome.receipt.error_code == "option_unavailable"))
         return LoopToolResult(feedback, kind="page", state=outcome.state,
                               dispatch=outcome.dispatch, error_code=outcome.error_code,
-                              terminal_reason="agent_refused" if terminal else "",
                               terminal_answer=(feedback[:3500] + " 后续操作已停止，没有点击提交按钮，请核对当前草稿。") if terminal else "")
 
     def _choice_label(self, s, element, value):

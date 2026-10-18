@@ -693,7 +693,7 @@ class ModelLoopTests(unittest.TestCase):
         def stop(fixture, _name, _arguments):
             fixture.state.terminal_reason = "agent_refused"
             return LoopToolResult("technical feedback", kind="page", state="unverified",
-                error_code="option_unavailable", terminal_reason="agent_refused",
+                error_code="option_unavailable",
                 terminal_answer="Priority has no matching option. Other fields were not processed; review the draft.")
         fixture = LoopFixture([reply(call("fill_contact")), reply(call("finish", status="done", answer="done"))], stop)
         self.assertIn("Other fields were not processed", fixture.run())
@@ -707,10 +707,19 @@ class ModelLoopTests(unittest.TestCase):
                 return result
             other = LoopFixture([reply(call("fill_contact"))], interrupted)
             self.assertNotIn("Other fields were not processed", other.run())
+        # An application explanation is not authority to terminate a live turn
+        # or replace the model's later answer.
+        continuing = LoopFixture([reply(call("fill_contact")),
+            reply(call("finish",status="cannot",answer="Please choose another option."))],
+            lambda *_args: LoopToolResult("No match",kind="page",state="refused",
+                terminal_answer="Draft was stopped."))
+        self.assertEqual("Please choose another option.",continuing.run())
+        self.assertEqual(2,len(continuing.state.chat.seen))
 
     def test_terminal_explanation_is_not_a_general_result_or_write_override(self):
         valid = LoopToolResult("internal", kind="page", state="refused",
             terminal_reason="agent_refused", terminal_answer="Draft stopped.")
+        self.assertEqual("", replace(valid, terminal_reason="").terminal_reason)
         for changes in ({"kind":"write"}, {"kind":"read"}, {"state":"completed"},
                         {"state":"indeterminate"}, {"terminal_reason":"permission_denied"},
                         {"completion_command":"cmd"}, {"terminal_answer":"x" * 4001}):
