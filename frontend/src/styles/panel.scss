@@ -76,6 +76,11 @@ button:disabled {
   border-radius: var(--woa-radius-control);
 }
 
+/* The card announces itself on arrival; only its keyboard-reached controls need a ring. */
+.woa-approval:focus {
+  outline: none;
+}
+
 /* The light is fixed to the viewport, outside the window's clipping and drawer layout.
    All descendants stay inert: no hit target, focus, scroll, native cursor or event changes. */
 .woa-screen-effects {
@@ -347,7 +352,6 @@ button:disabled {
 .woa-window[data-welcome] {
   background: radial-gradient(120% 60% at 0% 0%, var(--woa-canvas-glow) 0%, transparent 60%),
     radial-gradient(100% 50% at 100% 25%, var(--woa-canvas-glow-alt) 0%, transparent 55%), var(--woa-canvas-bg);
-  border-radius: var(--woa-radius-welcome);
 }
 @keyframes woa-window-in {
   from {
@@ -703,7 +707,10 @@ button:disabled {
   overflow-x: hidden;
   /* Prepending history is anchored explicitly to the visible turn. */
   overflow-anchor: none;
-  padding: 16px 12px 4px;
+  /* The right padding plus the panel's own 8px scrollbar below must land on the composer's
+     14px edge: the transcript's right edge then sits on the input's edge, with the bar
+     reserved in the gap between them. */
+  padding: 16px 6px 4px 14px;
 }
 /* The transcript remains keyboard-scrollable, but a saturated ring around the entire
    reading area looks like an application error. Use the same quiet boundary as the rest
@@ -717,9 +724,9 @@ button:disabled {
   flex-direction: column;
   min-height: 100%;
 }
-.woa-thread__content:not([data-empty]):not([data-approval])::after {
+.woa-thread__content:not([data-empty])::after {
   content: "";
-  flex: 0 0 100px;
+  flex: 0 0 60px;
 }
 /* With nothing said yet, the greeting starts at the top, under the title bar. */
 .woa-thread__content[data-empty] {
@@ -727,8 +734,9 @@ button:disabled {
 }
 
 /* Scrollbars are chrome, not content: thin, on the panel's own neutrals, and never a
-   dark overlay pill sitting on top of the composer. */
-.woa-thread,
+   dark overlay pill sitting on top of the composer. The transcript is the one exception:
+   it takes the panel's own 8px scrollbar below, so the gutter its right padding reserves
+   is an exact width and the transcript can stay aligned with the composer beside it. */
 .woa-field textarea,
 .woa-md__tablewrap,
 .woa-md__block pre,
@@ -1288,8 +1296,12 @@ button.woa-step__line:focus-visible {
   flex-direction: column;
   gap: 4px;
 }
+/* The transcript is itself a list, so the UA's nested-list style downgrades every answer
+   bullet to a hollow ring; the answer's unordered lists are pinned back to the solid disc. */
+ul.woa-md__list {
+  list-style-type: disc;
+}
 .woa-md__list li::marker {
-  color: var(--woa-ink-faint);
   font-variant-numeric: tabular-nums;
 }
 .woa-md blockquote {
@@ -1486,19 +1498,52 @@ button.woa-step__line:focus-visible {
 }
 .woa-answer-targets {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 12px;
-  margin: 10px 0 4px;
+  flex-direction: column;
+  gap: 6px;
+  margin: 16px 0 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--woa-line);
   font-size: var(--woa-font-size-small);
 }
 .woa-answer-targets > span {
   color: var(--woa-ink-muted);
+  font-size: var(--woa-font-size-meta);
+}
+.woa-answer-targets ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .woa-answer-targets a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 6px;
+  margin-left: -6px;
+  border-radius: var(--woa-radius-inline);
   color: var(--woa-accent);
+  text-decoration: none;
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-answer-targets a > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.woa-answer-targets a > svg {
+  flex: none;
+  color: var(--woa-ink-muted);
+}
+.woa-answer-targets a:hover {
+  background: var(--woa-accent-soft);
+}
+.woa-answer-targets a:hover > span {
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-underline-offset: 3px;
 }
 .woa-outcome h3 {
   margin: 0;
@@ -1514,7 +1559,7 @@ button.woa-step__line:focus-visible {
   padding: 5px;
   border-radius: 50%;
 }
-.woa-outcome p {
+.woa-outcome > .woa-md {
   margin: 0;
   color: var(--woa-ink-muted);
   font-size: var(--woa-font-size-small);
@@ -1716,7 +1761,7 @@ button.woa-step__line:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 12px 6px;
+  margin: 0 14px 6px;
   padding: 10px 12px;
   border-radius: var(--woa-radius-card);
   font-size: var(--woa-font-size-small);
@@ -1760,7 +1805,7 @@ button.woa-step__line:focus-visible {
 /* The composer sits on the window's own surface; the field is the one object in it. */
 .woa-composer {
   flex: none;
-  padding: 6px 12px 6px;
+  padding: 6px 14px;
   background: var(--woa-bg);
 }
 .woa-field {
@@ -1812,23 +1857,23 @@ button.woa-step__line:focus-visible {
   max-height: calc(2em * var(--woa-line-height));
 }
 
-/* Round and solid when there is something to send; quiet when there is not. Stopping is
-   the one other thing it can do: the same solid disc, told apart by its square. */
+/* One rounded control in both views: a gradient to send, a quiet empty state, and a
+   solid stop state distinguished by its square glyph. */
 .woa-send {
-  width: 30px;
-  height: 30px;
+  width: var(--woa-send-size);
+  height: var(--woa-send-size);
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  background: var(--woa-accent);
-  color: var(--woa-accent-ink);
+  border-radius: var(--woa-radius-control);
+  background: linear-gradient(135deg, var(--woa-welcome-send-start), var(--woa-welcome-send-end));
+  color: var(--woa-welcome-send-ink);
   transition: background var(--woa-motion-fast) var(--woa-motion-easing),
     transform var(--woa-motion-fast) var(--woa-motion-easing);
 }
 .woa-send:not([data-off]):hover {
-  background: var(--woa-accent-hover);
+  background: linear-gradient(135deg, var(--woa-welcome-send-hover-start), var(--woa-welcome-send-hover-end));
 }
 .woa-send:not([data-off]):active {
   transform: scale(0.94);
@@ -1836,6 +1881,7 @@ button.woa-step__line:focus-visible {
 .woa-send[data-off] {
   background: var(--woa-surface-muted);
   color: var(--woa-ink-faint);
+  box-shadow: none;
 }
 .woa-send[data-stop] {
   background: var(--woa-accent);
@@ -2042,32 +2088,7 @@ button.woa-step__line:focus-visible {
 .woa-empty .woa-field textarea {
   width: 100%;
 }
-.woa-empty .woa-send {
-  width: 36px;
-  height: 36px;
-  border-radius: var(--woa-radius-field);
-}
-.woa-empty .woa-send:not([data-stop]) {
-  color: var(--woa-welcome-send-ink);
-}
-/* The send disc is the one accent gradient in the panel; stopping is the plain disc, so the
-   two affordances are told apart at a glance as well as by their glyph. */
-.woa-empty .woa-send:not([data-stop]):not([data-off]) {
-  background: linear-gradient(135deg, var(--woa-welcome-send-start), var(--woa-welcome-send-end));
-  box-shadow: var(--woa-shadow-1);
-}
-.woa-empty .woa-send:not([data-stop]):not([data-off]):hover {
-  background: linear-gradient(135deg, var(--woa-welcome-send-hover-start), var(--woa-welcome-send-hover-end));
-}
-.woa-empty .woa-send[data-stop] {
-  background: var(--woa-accent);
-  color: var(--woa-accent-ink);
-}
-.woa-empty .woa-send[data-off] {
-  background: linear-gradient(135deg, var(--woa-welcome-send-start), var(--woa-welcome-send-end));
-  color: var(--woa-welcome-send-ink);
-  box-shadow: var(--woa-shadow-1);
-}
+/* The same send/stop control continues from the welcome screen into the conversation. */
 
 /* The ways in: four equal cards, each a category and one concrete request. */
 .woa-examples {

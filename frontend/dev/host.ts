@@ -48,7 +48,10 @@ function entry(kind: TimelineEntry['kind'], text: string,
   }
 }
 
-const ANSWER = `已扫完全部 12 条，命中 3 条。
+const ANSWER = `已扫完全部 12 条，命中 3 条：
+
+- 三条记录均处于 \`to invoice\` 状态，其中一张已超时未开票；
+- 没有发现被锁定的单据，无需人工解锁。
 
 | 单号 | 客户 | 金额 |
 | --- | --- | ---: |
@@ -99,9 +102,7 @@ export function createDevHost(): DevHost {
     })
     window.setTimeout(() => {
       if (mine !== live || state.pendingApproval?.approval_id !== request.approval_id) return
-      // Nothing is said: a timeout interrupts the message, and the server projects its
-      // ending with no text.
-      push(entry('result', '', {
+      push(entry('result', DEFAULT_CONFIGURATION.notices.approval_expired!, {
         tone: 'neutral', panel_state: 'cancelled', authored: 'server',
       }))
       commit({
