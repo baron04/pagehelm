@@ -29,6 +29,7 @@ HANDLERS = frozenset({"navigation", "tabs", "query", "paging", "form_entry", "fi
 # handler entries produced by that scan. Record detail templates keep arriving
 # through their router-evidence handler entries.
 MENU_GRANTED = frozenset({"navigation", "tabs", "query", "paging"})
+DEPLOYMENT_OPTIONAL_HANDLERS = frozenset({"query", "paging", "fields", "lines"})
 
 
 def _matches_route(template, path):
@@ -73,6 +74,15 @@ class NativePageReview:
     menu_digest: str = ""
     fence_digest: str = ""
     column_labels: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    disabled_handlers: frozenset[str] = frozenset()
+    allow_edit_prefill: bool = True
+
+    def __post_init__(self):
+        if (not isinstance(self.disabled_handlers, frozenset)
+                or not self.disabled_handlers <= DEPLOYMENT_OPTIONAL_HANDLERS):
+            raise ValueError("disabled native page handlers must be an immutable optional-handler set")
+        if type(self.allow_edit_prefill) is not bool:
+            raise ValueError("allow_edit_prefill must be explicit")
 
     @classmethod
     def load(cls, document, release):
@@ -153,6 +163,8 @@ class NativePageReview:
                        for route, fields in generated["columns"].items()))
 
     def permits(self, kind, path, control=None):
+        if kind in self.disabled_handlers:
+            return False
         if any(family == kind and _matches_route(route, path) for route, family in self.excluded):
             return False
         # A menu address grants the read-shaped families (D2). Page-load effects of
@@ -181,7 +193,7 @@ class NativePageReview:
     def digest(self):
         return hashlib.sha256(json.dumps([self.release, self.reference, self.scopes,
             self.menu_routes, self.excluded, self.menu_digest, self.fence_digest,
-            self.column_labels]).encode()).hexdigest()
+            self.column_labels, sorted(self.disabled_handlers), self.allow_edit_prefill]).encode()).hexdigest()
 
     def labels_on(self, route):
         return dict(next((fields for page, fields in self.column_labels if page == route), ()))
@@ -191,6 +203,7 @@ class NativePageReview:
         installed = {kind for kind, *_ in self.scopes}
         if self.menu_routes:
             installed |= MENU_GRANTED
+        installed -= self.disabled_handlers
         return frozenset({"handoffs"} | {name for kind, name in (
             ("tabs", "sections"), ("query", "facets"), ("paging", "paging"),
             ("fields", "fill"), ("lines", "lines")) if kind in installed})
@@ -472,6 +485,15 @@ class NativeDraftSteps:
     def _target(intent):
         return next(e for e in intent.observation.elements if e.ref == intent.arguments["ref"])
 
+    @staticmethod
+    def _form_binding(observation, scope, instance):
+        controls = [e for e in observation.elements if e.attrs.get("form_scope") == scope
+                    and e.attrs.get("form_instance") == instance]
+        if not controls or any("form_mode" not in e.attrs or "form_record_id" not in e.attrs for e in controls):
+            return None
+        bindings = {(e.attrs["form_mode"], e.attrs["form_record_id"]) for e in controls}
+        return next(iter(bindings)) if len(bindings) == 1 else None
+
     def handles(self, intent):
         if intent.action not in self.actions:
             return False
@@ -504,6 +526,11 @@ class NativeDraftSteps:
                     "instance": instance, "label": label, "mark": mark, "ref": element.ref,
                     "lifetime": attrs.get("form_lifetime", "")}
         values = ()
+        if scope.startswith("dialog") and not self.review.allow_edit_prefill:
+            binding = self._form_binding(before, scope, instance)
+            if binding != ("create", ""):
+                raise ActionAdmissionRefused("unreviewed")
+            prepared["form_binding"] = binding
         if intent.action in {"fill", "select"}:
             line = re.fullmatch(r"明细第([1-9][0-9]*)行·(.+)", attrs.get("title", ""))
             from .slim_loop import _date_pair, _commits
@@ -584,6 +611,9 @@ class NativeDraftSteps:
             forms = {(e.attrs.get("form_scope"), e.attrs.get("form_instance")) for e in observation.elements
                      if str(e.attrs.get("form_scope", "")).startswith("dialog") and e.attrs.get("form_instance")}
             return len(forms) == 1
+        if "form_binding" in expected and self._form_binding(
+                observation, expected["scope"], expected["instance"]) != expected["form_binding"]:
+            return False
         controls = [e for e in observation.elements if e.attrs.get("form_scope") == expected["scope"]
                     and e.attrs.get("form_instance") == expected["instance"]]
         if not controls and expected["step"] != "add_line":
@@ -627,6 +657,9 @@ class NativeDraftSteps:
                 or observation.url != intent.observation.url
                 or observation.page_route != expected["route"]):
             return False
+        if "form_binding" in expected and self._form_binding(
+                observation, expected["scope"], expected["instance"]) != expected["form_binding"]:
+            return False
         from web_operation_agent.execution.draft_handoff import draft_fields, field_identity, field_value
         def state(obs):
             fields = [e for e in draft_fields(obs) if e.attrs.get("form_scope") == expected["scope"]]
@@ -642,4 +675,6 @@ class NativeDraftSteps:
         return bool(expected and self.data._client.read_generation == expected["generation"]
                     and not self.forms._evidence.since(expected["mark"])
                     and observation.url == intent.observation.url
-                    and observation.page_route == expected["route"])
+                    and observation.page_route == expected["route"]
+                    and ("form_binding" not in expected or self._form_binding(
+                        observation, expected["scope"], expected["instance"]) == expected["form_binding"]))

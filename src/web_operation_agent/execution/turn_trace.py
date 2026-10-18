@@ -33,6 +33,19 @@ class TurnTrace:
         self._messages: list[dict] = []
         self._positions: dict[str, int] = {}
         self.calls: list[dict] = []
+        self._deliveries: list[dict] = []
+
+    def record_delivery(self, *, reference: str, projection: dict, rendered_text: str,
+                        presented_records: int, presentation_complete: bool) -> None:
+        """Private server facts, never model assertions or ordinary audit payloads.
+
+        A selected result may later fail completion review. Consumers must bind this
+        receipt to the settled answer as well as the actor and turn before scoring it.
+        """
+        self._deliveries.append({"reference": reference, "projection": projection,
+            "rendered_text": rendered_text, "presented_records": presented_records,
+            "presentation_complete": presentation_complete})
+        self._deliveries[:] = self._deliveries[-4:]
 
     def chat(self, delegate):
         return _TracedChat(delegate, self)
@@ -67,6 +80,8 @@ class TurnTrace:
                   "actor": actor or {}, "answer": self._clean(answer),
                   "steps": [self._clean(step) for step in steps],
                   "messages": self._messages, "calls": self.calls}
+        if self._deliveries:
+            record["server_deliveries"] = self._deliveries
         if (self.handoffs.has_unredacted(record, url_decode_depth=3)
                 or has_unredacted_sensitive_assignment(record, url_decode_depth=3)):
             record = {**outcome, "withheld": "credential_form"}

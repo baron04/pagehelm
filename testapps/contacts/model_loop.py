@@ -2,10 +2,12 @@
 import json
 from datetime import datetime, timezone
 from web_operation_agent.answer.answering import StructuredQueryAnswer
+from web_operation_agent.execution.read_summary import (Missing, RelationValue, SummaryColumn,
+    SummaryRead, SummaryRefused, SummaryRow, SummarySpec, compute_summary, summary_schema)
 
 from web_operation_agent.execution.model_loop_contracts import (
     AnswerTarget, LoopProcedure, LoopToolResult, ModelLoopProfile)
-from web_operation_agent.privacy import redact_sensitive_assignments
+from web_operation_agent.privacy import SessionHandoffPolicy, redact_sensitive_assignments
 
 
 def tool(name, description, properties, required=()):
@@ -36,8 +38,11 @@ class ContactsProcedure:
         context.page.checkpoint()
         permissions = self.goal_port._require_actor(context.operation)
         if self.name == "list_contacts":
+            if arguments.get("deliver") and "summary" in arguments:
+                return LoopToolResult("Choose summary or text delivery.", kind="read", state="refused",
+                                      error_code="invalid_arguments")
             result = self.adapter.business_tools._executor.execute(self.name,
-                {key: value for key, value in arguments.items() if key != "deliver"}, context=context.operation)
+                {key: value for key, value in arguments.items() if key not in {"deliver", "summary"}}, context=context.operation)
             context.page.checkpoint()
             text = "BEGIN_UNTRUSTED_APPLICATION_DATA\n" + redact_sensitive_assignments(result.render()) \
                 + "\nEND_UNTRUSTED_APPLICATION_DATA"
@@ -62,7 +67,35 @@ class ContactsProcedure:
                     targets.append(AnswerTarget("record", exact[0]["ui_path"],
                                                 row["name"], f"contacts:{row['id']}"))
             projection = None
-            if arguments.get("deliver"):
+            if "summary" in arguments:
+                facts = result.content
+                try:
+                    spec = SummarySpec.from_dict(arguments["summary"])
+                    used = {*spec.columns, *spec.group_by, *(condition.column for condition in spec.where),
+                            *(measure.column for measure in spec.measures if measure.column)} or {"id"}
+                    selected = tuple(column for column in (SummaryColumn("id", "relation"),
+                        SummaryColumn("name", "text"), SummaryColumn("email", "text")) if column.name in used)
+                    handoffs = SessionHandoffPolicy.extending(self.adapter.ports.routes.session_handoff_query_keys)
+                    for row in rows:
+                        values = {"id": row["id"], **{column.name: row.get(column.name)
+                            for column in selected if column.name != "id"}}
+                        if redact_sensitive_assignments(handoffs.redact(values)) != values:
+                            raise SummaryRefused("redacted_value", "summary cannot compute or deliver redacted field values")
+                    projection = compute_summary(SummaryRead(
+                        origin=result.evidence[0].origin,
+                        actor_digest=context.operation.principal.actor_authority_digest,
+                        columns=selected,
+                        rows=tuple(SummaryRow(str(row["id"]), tuple(
+                            RelationValue(str(row["id"]), str(row["id"])) if column.name == "id"
+                            else row.get(column.name, Missing.MISSING) for column in selected)) for row in rows),
+                        matched_count=facts["matched_count"], records_scanned=facts["source_total"],
+                        complete=facts["completeness"]["source_complete"] and not facts["completeness"]["result_truncated"],
+                        consistency="Single authenticated REST collection read."), spec)
+                except SummaryRefused as exc:
+                    return LoopToolResult("Summary unavailable: " + exc.detail,
+                        kind="read", state="unverified", error_code=exc.code)
+                text = "Program summary prepared. Select its read_answer; other user obligations still apply."
+            elif arguments.get("deliver"):
                 facts = result.content
                 projection = StructuredQueryAnswer(collection="contacts", fields=("name", "email"),
                     records=tuple((row["name"], row["email"]) for row in rows), source="Contacts REST collection",
@@ -147,7 +180,8 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
     schemas = (
         (tool("list_contacts", "Read actor-visible contacts from the REST collection.",
               {"name_contains": {"type": "string", "maxLength": 120},
-               "deliver": {"type": "boolean", "description": "Prepare exact server delivery; select finish.read_answer."}}), "read", frozenset()),
+               "deliver": {"type": "boolean", "description": "Prepare exact server delivery; select finish.read_answer."},
+               "summary": summary_schema()}), "read", frozenset()),
         (tool("goto", "Open a reviewed page route.", {"path": {"type": "string", "maxLength": 200},
               "open": {"type": "string", "maxLength": 200},
               "answer": {"type": "string", "maxLength": 2000}}, ("path",)), "page", frozenset()),
@@ -206,6 +240,8 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
     from .draft_steps import ContactsDraftSteps
     from .mutation_prefill import ContactsMutationPrefill
     return ModelLoopProfile("Answer from current REST reads. Clarify ambiguous names; never choose one silently. "
+        "For counts, groups or lists, list_contacts accepts summary over id, name and email. "
+        "The server calculates and renders the selected read_answer; keep finish.answer empty. "
         "This application offers reviewed navigation and visible-control handoff. " +
         ("It offers two local date fields, priority, and temporary note lines for manual saving. "
          "Use goto(open=\"New contact\") to open the form, then fill_fields with then_highlight=\"Save contact\" "

@@ -1064,3 +1064,34 @@ describe('the application opens its own page through its router, in this documen
     expect(lost.calls).toEqual(['drop kept pages', 'push /redirect/system/post'])
   })
 })
+
+describe('native editor mode is current application state', () => {
+  it('requires the mounted native form model and rendered action to agree, including teleported dialogs', () => {
+    const state=mountedPage('/system/user','SystemUser')
+    const dialog=document.createElement('div');dialog.setAttribute('role','dialog')
+    dialog.innerHTML='<div class="el-dialog__header">新增</div><form class="el-form"><input></form>'
+    document.body.append(dialog)
+    const form=dialog.querySelector('form')!,input=form.querySelector('input')!
+    form.getBoundingClientRect=()=>({width:500,height:300} as DOMRect)
+    const model:{id?:number}={}
+    const native={...state.instance,type:{name:'ElForm'},props:{model},
+      subTree:{type:'form',el:form},vnode:{ctx:state.instance}}
+    state.instance.subTree.children=[{component:native}] as unknown as NativeVNode[]
+    expect(readElementPageControl(input)).toEqual({kind:'form',mode:'create',recordId:null})
+    model.id=42
+    expect(readElementPageControl(input)).toBeUndefined()
+    dialog.querySelector('.el-dialog__header')!.textContent='编辑'
+    expect(readElementPageControl(input)).toEqual({kind:'form',mode:'update',recordId:'42'})
+    delete model.id
+    expect(readElementPageControl(input)).toBeUndefined()
+    model.id=42;native.isDeactivated=true
+    expect(readElementPageControl(input)).toBeUndefined()
+    native.isDeactivated=false
+    const duplicate={...native}
+    state.instance.subTree.children=[{component:native},{component:duplicate}] as unknown as NativeVNode[]
+    expect(readElementPageControl(input)).toBeUndefined()
+    state.instance.subTree.children=[]
+    expect(readElementPageControl(input)).toBeUndefined() // DOM title/id alone do not attest an editor.
+    dialog.remove()
+  })
+})

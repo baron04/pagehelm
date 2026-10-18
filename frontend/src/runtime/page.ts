@@ -221,10 +221,27 @@ export class Page {
   fingerprint(ref: unknown): string {
     try {
       const fingerprint = actionElementFingerprint(this.element(ref)), navigation = this.navigation(ref)
-      return navigation ? JSON.stringify([fingerprint, navigation]) : fingerprint
+      const form = this.formContext(ref)
+      const contextual = form ? JSON.stringify([fingerprint, form]) : fingerprint
+      return navigation ? JSON.stringify([contextual, navigation]) : contextual
     } catch {
       return 'missing'
     }
+  }
+
+  private formContext(ref: unknown): {mode: 'create' | 'update'; recordId: string | null} | undefined {
+    try {
+      const element = this.element(ref)
+      if (!(element instanceof HTMLElement) || !element.isConnected ||
+          !formControlScope(element) || !formInstance(element) || isSensitiveFormControl(element, this.redactor)) return undefined
+      const fact = this.readElementPageControl?.(element) as {kind?: unknown; mode?: unknown; recordId?: unknown} | undefined
+      if (fact?.kind !== 'form') return undefined
+      if (fact.mode === 'create' && fact.recordId === null) return {mode: 'create', recordId: null}
+      if (fact.mode === 'update' && typeof fact.recordId === 'string' &&
+          /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(fact.recordId) &&
+          this.redactor.redactString(fact.recordId) === fact.recordId) return {mode: 'update', recordId: fact.recordId}
+    } catch { /* Missing live context grants no mode; it never falls back to summary text. */ }
+    return undefined
   }
 
   private navigation(ref: unknown): {kind: 'branch' | 'page'; path: string; expanded?: boolean} | undefined {
@@ -760,11 +777,20 @@ export class Page {
     this.redactor), map, this.lookup), map, this.lookup)
     const fingerprints = new Map<string, string>()
     for (const item of elements) {
+      // Mode is policy-critical observation data, never parsed controller prose.
+      delete item.attrs.form_mode
+      delete item.attrs.form_record_id
       try {
         const element = this.element(item.ref)
         if (!(element instanceof HTMLElement) || !element.isConnected) continue
         const fact = this.readElementPageControl?.(element) as
-          {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown; queryValue?: unknown} | undefined
+          {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown; queryValue?: unknown;
+            mode?: unknown; recordId?: unknown} | undefined
+        const form = this.formContext(item.ref)
+        if (form && item.attrs.form_scope && item.attrs.form_instance) {
+          item.attrs.form_mode = form.mode
+          item.attrs.form_record_id = form.recordId === null ? '' : form.recordId
+        }
         if (fact?.kind === 'pagination' && Number.isSafeInteger(fact.page) &&
             Number(fact.page) > 0 && Number.isSafeInteger(fact.pageSize) && Number(fact.pageSize) > 0) {
           item.attrs.page_control = 'pagination'

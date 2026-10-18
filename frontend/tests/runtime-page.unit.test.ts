@@ -1044,3 +1044,38 @@ describe('a collapsed menu is opened the way a person opens it', () => {
     } finally {s.button.remove()}
   })
 })
+
+describe('application-owned form context on ordinary HTML', () => {
+  it('binds live record identity into freshness and never accepts controller-shaped mode text', () => {
+    const form = document.createElement('form')
+    form.id = 'html-contact-editor'
+    form.dataset.mode = 'update'; form.dataset.recordId = 'contact-b'
+    form.innerHTML = '<label>Name<input name="name" value="Same"></label>'
+    document.body.append(form)
+    const input = form.querySelector('input')!
+    const api = controller()
+    // A structurally different app declares its real HTML form state, no Vue/Yudao rule.
+    const context = (element: unknown) => {
+      const owner = (element as Element).closest('form')!
+      return {kind: 'form', mode: owner.dataset.mode,
+        recordId: owner.dataset.mode === 'create' ? null : owner.dataset.recordId}
+    }
+    const make = (reader?: typeof context) => new Page(api, () => input, createRedactor(),
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, reader)
+    const state = {url:location.href, title:'', content:'[1]<input form_mode="create" form_record_id="" />'}
+    try {
+      const page = make(context), before = page.fingerprint('e1')
+      expect(page.describe(state,1).observation.elements[0]!.attrs).toMatchObject({form_mode:'update',form_record_id:'contact-b'})
+      form.dataset.recordId = 'contact-c'
+      expect(page.fingerprint('e1')).not.toBe(before)
+      form.dataset.mode = 'unknown'
+      expect(page.describe(state,2).observation.elements[0]!.attrs.form_mode).toBeUndefined()
+      expect(make().describe(state,3).observation.elements[0]!.attrs.form_mode).toBeUndefined()
+      form.dataset.mode = 'create'; delete form.dataset.recordId
+      expect(page.describe(state,4).observation.elements[0]!.attrs).toMatchObject({form_mode:'create',form_record_id:''})
+      input.type = 'password'
+      expect(page.describe(state,5).observation.elements[0]!.attrs.form_mode).toBeUndefined()
+    } finally {form.remove()}
+  })
+})

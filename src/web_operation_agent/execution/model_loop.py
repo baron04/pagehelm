@@ -39,6 +39,7 @@ from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTR
 from ..transport.browser import TransportError
 from .product import page_observation_failure
 from ..answer.answering import render_structured_query_answer
+from .read_summary import SummaryResult, render_summary
 
 
 def history_messages(context) -> list[dict]:
@@ -235,8 +236,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             terminal_reason=execution.terminal_reason,
                             wall_seconds=execution.agent.wall_seconds, answer=execution.user_answer,
                             steps=self._trace_steps,
-                            actor={key: identity[key] for key in ("application_id", "tenant_digest", "actor_digest")
-                                   if key in identity})
+                            actor={**{key: identity[key] for key in ("application_id", "tenant_digest", "actor_digest")
+                                      if key in identity},
+                                   **({"actor_authority_digest": principal.actor_authority_digest}
+                                      if principal is not None else {})})
             except OSError as exc:
                 s.ledger.append("turn_trace_failed", error_type=type(exc).__name__)
         return execution
@@ -852,13 +855,24 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             if (args["status"] != "done" or args["answer"].strip() or projection is None
                                     or not projection.complete):
                                 raise BusinessToolRequestError("a complete actor-read answer must be selected")
-                            rendering = render_structured_query_answer(projection, user_text=prompt,
+                            if isinstance(projection, SummaryResult):
+                                principal = getattr(getattr(s, "approvals", None), "principal", None)
+                                if (principal is None or
+                                        projection.actor_digest != principal.actor_authority_digest):
+                                    raise BusinessToolRequestError("summary belongs to a different actor")
+                            renderer = render_summary if isinstance(projection, SummaryResult) else render_structured_query_answer
+                            rendering = renderer(projection, user_text=prompt,
                                 max_chars=self._finish_tool(turn)["function"]["parameters"]["properties"]["answer"]["maxLength"])
                             if rendering.presentation_truncated:
                                 raise BusinessToolRequestError("the complete read answer exceeds the delivery budget")
                             args = {**args, "answer": rendering.text}
                             s.ledger.append("read_answer_selected", ref=selected,
                                 records=len(projection.records), digest=projection.content_digest)
+                            trace = getattr(self, "_trace", None)
+                            if trace is not None:
+                                trace.record_delivery(reference=selected, projection=projection.to_json(),
+                                    rendered_text=rendering.text, presented_records=rendering.presented_records,
+                                    presentation_complete=not rendering.presentation_truncated)
                         if turn.get("sources") is not None:
                             args = {**args, "answer": turn["sources"].finish(args,
                                 runtime_used=turn["runtime_used"], user_text=prompt,
@@ -979,10 +993,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     answers[reference] = result.query_answer
                     while len(answers) > 4:
                         del answers[next(iter(answers))]
-                    text += (f"\n本轮列表交付引用 read_answer={reference}，"
+                    text += (f"\n本轮读取交付引用 read_answer={reference}，"
                              f"记录 {len(result.query_answer.records)} 条，完整={result.query_answer.complete}。"
-                             "完整列表直接用finish(status=done, answer=空字符串, read_answer=此引用)，"
-                             "程序交付实际字段值，无需重新抄写；未完整读取或预算不足时不能报完成。")
+                             "用finish(status=done, answer=空字符串, read_answer=此引用)交付程序结果，"
+                             "无需重新抄写；未完整读取或预算不足时不能报完成。"
+                             "此引用只覆盖这份结果；用户另要页面或其它内容时仍须完成，不能漏项称完成。")
                 if result.state == "completed" and result.read_count is not None:
                     empty = turn.setdefault("empty_reads", {})
                     if result.read_count:
@@ -1056,7 +1071,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     # still unread and nothing but a finish comes after it.
                     rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
                     hidden = self._completion_conflict(s.obs, answer)
-                    if confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
+                    if turn.get("query_answers"):
+                        text += (" 这一步带的answer没有用上：本轮已有服务端读取交付。页面操作回执返回后，"
+                                 "用finish选择完整read_answer；不能通过页面答复省略或改抄这份结果。")
+                    elif confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
                         finish = {"status": "done", "answer": answer}
                     elif hidden:
                         # It was written before the page was seen: the page shows another tab.

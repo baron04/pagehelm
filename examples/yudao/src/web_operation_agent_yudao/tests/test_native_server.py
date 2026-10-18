@@ -163,6 +163,24 @@ class NativeHostTests(unittest.TestCase):
         self.assertTrue({k.casefold() for k in SESSION_HANDOFF_KEYS} <= policy.handoffs.query_keys)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_explicit_page_scope_reaches_host_review_goal_contract_and_model_tools(self):
+        self.config = replace(self.config,
+            native_page_disabled_handlers=frozenset({'query', 'paging', 'fields', 'lines'}),
+            native_edit_prefill=False)
+        host = self.host()
+        host.bootstrap('synthetic-a', '1', 'scoped-tab')
+        executor = host._sessions[('1', '1')].session.runner.executor
+        self.assertEqual(host.page_review.disabled_handlers, self.config.native_page_disabled_handlers)
+        self.assertIs(executor.goal_port.review, host.page_review)
+        self.assertFalse(host.page_review.allow_edit_prefill)
+        self.assertFalse(executor.goal_port.capabilities() & {'facets', 'paging', 'fill', 'lines'})
+        procedures = {p.schema['function']['name']: p for p in executor.profile.procedures}
+        self.assertFalse(procedures.keys() & {'input', 'select', 'fill_fields'})
+        self.assertIn('call_api', procedures)
+        self.assertFalse(procedures['call_api'].required_capabilities)
+        self.assertIn('本部署关闭', executor.profile.instructions)
+        self.chat.return_value.complete.assert_not_called()
+
     def test_the_slim_profile_carries_the_closing_number_check(self):
         from web_operation_agent_yudao.answer_numbers import untraced
         host = self.host()

@@ -42,6 +42,7 @@ from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, history_messages
 from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
                                                                VerificationResult, ModelLoopProfile, LoopProcedure)
+from web_operation_agent.execution.read_summary import SummaryRefused, SummarySpec, summary_schema
 from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
 from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 from web_operation_agent.business.tools.contracts import form_control_unavailable
@@ -410,8 +411,23 @@ class ActorKnowledge:
                 visited.update(next_ids)
         return data, rows, total, first_page == 1 and len(rows) == total, requests
 
-    def call_api(self, path: str, params: dict, fields=(), *, row_offset: int = 0, deliver: bool = False) -> str:
+    def call_api(self, path: str, params: dict, fields=(), *, row_offset: int = 0, deliver: bool = False,
+                 summary=None, actor_digest: str = "") -> str:
         self.last_query_answer = None
+        if summary is not None:
+            if (not isinstance(fields, (tuple, list)) or len(fields) > 12
+                    or any(not isinstance(key, str) or not key for key in fields)
+                    or len(set(fields)) != len(fields) or row_offset or deliver):
+                raise QueryParametersError("summary不能与deliver或row_offset同时使用；fields若提供须为最多12个不同列名")
+            summary = SummarySpec.from_dict(summary)
+            # A closed declaration already names every required column. Requiring the
+            # model to repeat it in fields caused repeated structural refusals in two
+            # different tasks; derive the read projection without guessing intent.
+            used = (*summary.group_by, *summary.columns, *(condition.column for condition in summary.where),
+                    *(measure.column for measure in summary.measures if measure.column))
+            fields = tuple(dict.fromkeys((*fields, *used))) or ("id",)
+            if len(fields) > 12:
+                raise QueryParametersError("summary引用列超过12个，请减少fields或汇总声明中的列")
         fields = tuple(str(f) for f in fields or () if isinstance(f, str) and f)[:12]
         if type(row_offset) is not int or not 0 <= row_offset <= _ALL_ROWS or row_offset and not fields:
             raise QueryParametersError("row_offset must be an integer from 0 to 5000; nonzero requires fields")
@@ -450,6 +466,29 @@ class ActorKnowledge:
             if exc.permission_denied or exc.read_failed:
                 raise
             return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
+        if summary is not None:
+            from .read_summary import summarize
+            # A native detail GET already identifies one real record. Reuse the
+            # same typed projection; no list search or invented row is needed.
+            if rows is None and isinstance(data, dict) and "id" in data:
+                if "id" in filters and str(filters["id"]) != str(data["id"]):
+                    raise SummaryRefused("record_identity_mismatch", "detail response does not identify the requested native record")
+                rows, total, whole = [data], 1, True
+                declared_total = 1
+            self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
+                              "complete": whole if rows is not None else None, "declared_total": declared_total}
+            self.last_keys = tuple(dict.fromkeys(key for row in rows or () if isinstance(row, dict) for key in row))
+            self.last_query_answer = summarize(path=relative, filters=filters, fields=fields, props=props,
+                deref=self._deref, rows=rows, total=total, whole=whole, requests=requests,
+                actor_digest=actor_digest, zone=self._zone, money_review=self.money_review, spec=summary)
+            result = self.last_query_answer
+            return self._told([
+                "已按当前账号的真实读取准备程序汇总；数值和名单保存在本轮服务端，选择read_answer交付。",
+                "实际接口条件：" + json.dumps(filters, ensure_ascii=False),
+                "实际汇总声明：" + json.dumps(result.spec.to_json(), ensure_ascii=False),
+                f"读取 {result.source_count} 行，命中 {result.matched_count} 行，完整={result.complete}。",
+                "输出列与已核验单位：" + json.dumps([(column.name, column.unit) for column in result.columns], ensure_ascii=False),
+                result.incomplete_reason or "这份结果只覆盖上述条件；用户的其它义务仍须完成。"], {1, 2, 4})
         candidates = self.money_review.fields_for(relative) if self.money_review is not None else {}
         read_rows = rows if rows is not None else [data]
         certified = {key: spec for key, spec in candidates.items()
@@ -830,14 +869,15 @@ TOOLS = [
         "fields": {"type": "array", "items": {"type": "string"}, "description":
                    "只取这些列（列名是返回行里的键）。给了 fields，分页接口从 pageNo 起最多读 5000 行；"
                    "只有确认从第 1 页读完且页数一致，才计算全量合计、最大、最小、覆盖前三名的并列档、分组和月份行数。"
-                   "统计、比较、找最大最小或前几名、完整名单、按日期数个数时必须用；找前几名要同时指定名称/编号和数值列。"},
+                   "普通分析读取时指定；带summary时程序自动并入其引用列，无须重复声明。"},
         "row_offset": {"type": "integer", "minimum": 0, "maximum": _ALL_ROWS, "description":
                        "fields 行展示的起点，默认0；工具给出 next_row_offset 时保持其它参数不变、以该值续读。"
                        "不是应用分页参数；每次重读应用，没有跨调用快照。"},
         "deliver": {"type": "boolean", "description":
                     "用户要求逐条列出文本记录/全部姓名时必须为true，并用fields只选用户要求的文本列。"
                     "服务端根据实际读取的字段生成列表交付引用，再用finish.read_answer选择；不要手抄、推算名字或按规律压缩。"
-                    "数值/金额、统计和比较继续用普通fields及原有核验，不用deliver。要求row_offset=0。"}},
+                    "数值/金额、统计和比较使用summary及原有单位核验，不用deliver。要求row_offset=0。"},
+        "summary": summary_schema()},
         ["path"]),
     _tool("highlight", "把当前页面中已确认属于目标记录的业务按钮标出来，交给用户自己点（例如删除、审核、启停或表单确定）。不会点击或完成该业务动作。", {
         "index": {"type": "integer"},
@@ -893,12 +933,12 @@ SYSTEM_INTRO = """你是嵌入在企业管理后台里的助手，替当前登�
 你能做三类事，一句话里可能同时包含几类，每一类都要做完：
 """
 SYSTEM_READ = """1. 回答业务数据问题。先用 search_api 找到接口，再用 call_api 读真实数据。
-   - 数量、合计必须来自接口的 total 或把全部行读完后计算，不能只数页面上的一页。要读很多行来统计、比较、找最大最小或按日期数个数时，给 call_api 加 fields 只取要用的列：程序最多跟读 5000 行；只有结果写明已读完所有页时，给出的数值合计、极值、按月行数和分组合计才代表全量。未读完时缩小筛选范围，仍不能读全就说明这项无法完整核实，不要把已读行当全集。
-   - 用户用名称、前缀或其它条件圈定一批记录时，统计前先把该条件传入接口已声明的筛选参数，或在完整读取后逐行按条件筛选再计算；全表的 total 和自动分组不代表这批记录。答复前核对工具结果写明的“本次接口查询范围”是否覆盖了用户的每个条件，不吻合就继续查询或说明无法核实。
-   - 用户问数值最高的前几个时，fields 同时取名称/编号和数值列；完整读取后工具给出覆盖前三名的并列档及各档行数。同值并列跨过要求的名次时，说明并列范围，不要擅自挑几条当唯一的第二、第三名，也不要另报用户没问的“前三个不同价位”。工具只给前三名；更多名次须有应用可核验的排序读取，否则说明无法完整核实。
-   - 按关联对象统计时，fields 取对象编号（如 deptId）来分组，名称只用于展示，不能把同名但不同编号的对象合并。完整读取后工具给出各组准确行数及缺值行数，采用这些数字，不重新目测计数；取前三个分组时同样保留临界并列。缺少编号的行不能分给某个已命名对象。
+   - 单字段用summary.columns交付实际值，列表和详情GET均可；数量可用接口total。筛选、统计、比较或排名用summary，程序从声明选列，读全最多5000行后计算，不必重复fields，不能自己重数。未读全须缩范围或如实说明。
+   - 用户的每个条件须落在接口已声明的params或summary.where中；where按AND组合，文本原样匹配，日期选用户动词对应的实际列（创建、签约、入库等），时间阈值写带时区的ISO值。全表total、自动分组或恰好相同的数字都不能证明子集正确。
+   - summary用measures声明count/count_distinct/sum/min/max，可用group_by按最多两列分组。关联对象按编号（如deptId）分组，名称只展示，同名不同编号不得合并。缺值与0分开；不可计算值不跳过冒充完整。
+   - 排名前N用top.by指定measure别名，n最多50；第N个位置同值并列全部保留。逐记录排名用group_by=["id"]、数值max作为measure、columns取名称。相同组里的展示列须恒定。不能任取并列行，也不把N个不同价位当N条记录。
    - 用户要逐条记录或完整名单：call_api用fields只取用户要求交付的列，并设置deliver=true。工具给出read_answer后，以finish(status=done,answer="",read_answer=该引用)交付服务端保存的实际值；无需手抄、按规律展开或再次生成名单，同名行保留。未完整读取或交付预算不足时用cannot说明，不能称完整。普通分析读取若有next_row_offset，可保持其它参数不变续读；跨调用不保证同一时点快照。
-   - “超过 / 不少于 / 低于”等比较条件，只有接口明确声明相应比较参数时才传给接口；等值金额参数不能代替比较条件。接口没有比较参数时，用 fields 读完有关列，按每行的值判断。筛选读到 0 行而较宽查询读到记录时，先核对参数和已读记录，不要反复换一组猜测参数。
+   - 接口没有声明比较参数时，用summary.where声明比较，不能把等值参数当范围。纯名单可用summary.columns；文本全名单仍可用deliver=true。summary和deliver不同时使用。汇总给出read_answer后，answer留空选择该引用，程序交付实际结果与范围；不能改抄数值。引用只覆盖这份结果，用户另要页面或其它内容仍须落实，交付不了全部义务时用cannot说明。
    - 按时间统计时选哪一列，看用户用的动词：“创建/新建/新增/录入了几…”数的是创建时间（createTime）；用户说的是业务动作（下单、入库、签约、成交、回款）才用那个业务时间列。只给一个数，不要两种口径各报一个。
    - 接口查询参数按应用原义执行，不自动添加或替换范围条件。CRM 的“我负责的 / 我参与的 / 下属负责的”页签带各自 sceneType；用户问全部可读记录时不加该条件。列表页默认范围和普通接口未限定范围可以不同：答复写清本次范围，不能把当前页签空结果说成所有记录都不存在。列表可读字段不等于有编辑权限，修改仍核对该记录权限。
    - 先把名称解析成记录：用名称参数查列表，确认只有一条匹配；匹配多条就 need_input 列出候选，没有匹配就 cannot，不要换成名字相近的另一条。
@@ -952,6 +992,43 @@ SYSTEM_RULES = """
 - 值显示为 [redacted] 的字段是凭据（密码、密钥、令牌），程序已经隐去。用户问到时如实说这类值不提供，不要去别的接口或页面找它。
 - 全部做完且尚未通过 goto、click、highlight 或 fill_fields 的 answer 结束时，调用 finish。用中文简洁答复：单个结果一两句，多条记录用列表，多列比较用 Markdown 表格，关键结果可用 **粗体**；不要为短答案堆标题，也不要把整段 Markdown 包在代码围栏里。写出查到的具体值和页面/表单现在的状态；Markdown 直接写在结束工具的 answer 字段里，不带工具调用的回复用户收不到，只会让这一轮多等一次。"""
 SYSTEM = "".join((SYSTEM_INTRO, SYSTEM_READ, SYSTEM_PAGE, SYSTEM_FORM, SYSTEM_RULES))
+
+
+def scoped_page_tools(review=None):
+    """Reflect the deployment's page scope without removing its API read tools."""
+    disabled = getattr(review, "disabled_handlers", frozenset())
+    if not disabled:
+        return TOOLS
+    available = {"query", "paging", "fields", "lines"} - disabled
+    offered = []
+    for original in TOOLS:
+        name = original["function"]["name"]
+        if name in {"input", "select", "fill_fields"} and not available:
+            continue
+        schema = json.loads(json.dumps(original, ensure_ascii=False))
+        if name == "fill_fields":
+            properties = schema["function"]["parameters"]["properties"]
+            for handler, argument in (("lines", "add_lines"), ("query", "then_click")):
+                if handler in disabled:
+                    properties.pop(argument, None)
+            if {"fields", "lines"} <= disabled:
+                properties.pop("then_highlight", None)
+            labels = {"query": "页面查询条件", "paging": "页面分页", "fields": "表单字段", "lines": "表单明细"}
+            schema["function"]["description"] = (
+                "按最新观察中的字段名填写；本部署仅提供：" + "、".join(labels[k] for k in labels if k in available)
+                + "。逐项执行并回读核验，不自动提交。")
+        offered.append(schema)
+    return offered
+
+
+def page_scope_notice(review=None):
+    disabled = getattr(review, "disabled_handlers", frozenset())
+    labels = {"query": "页面筛选", "paging": "页面分页", "fields": "表单字段预填", "lines": "表单明细预填"}
+    text = ("\n本部署关闭：" + "、".join(labels[k] for k in labels if k in disabled)
+            + "。只读接口问答仍可用；未完成的页面或填写要求须如实说明。" if disabled else "")
+    if not getattr(review, "allow_edit_prefill", True) and not {"fields", "lines"} <= disabled:
+        text += "\n本部署仅允许有实时新建模式证明的表单预填；编辑或模式未知的表单只打开并列出建议值，由用户手动填写，不得声称已填好。"
+    return text
 
 #: D3: a deployment that offers no user-facing source reading tells the model the
 #: fixed reply for implementation questions, instead of leaving them to memory.
@@ -1706,7 +1783,12 @@ class YudaoLoopProcedures:
                 try:
                     text = know.call_api(args["path"], params, args.get("fields", ()),
                                          row_offset=args.get("row_offset", 0),
-                                         **({"deliver": True} if args.get("deliver") else {}))
+                                         **({"deliver": True} if args.get("deliver") else {}),
+                                         **({"summary": args["summary"], "actor_digest": s.operation.principal.actor_authority_digest}
+                                            if "summary" in args else {}))
+                except SummaryRefused as exc:
+                    return LoopToolResult("程序汇总未能核实：" + exc.detail,
+                        kind="read", state="unverified", error_code=exc.code)
                 except QueryParametersError as exc:
                     return LoopToolResult(("未能准备完整列表：" if args.get("deliver") else "未执行：") + str(exc), kind="read", state="refused",
                                           error_code="invalid_arguments")
@@ -1754,7 +1836,8 @@ class YudaoLoopProcedures:
             if know.last_read:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
             return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused",
-                                  query_answer=getattr(know, "last_query_answer", None) if args.get("deliver") else None,
+                                  query_answer=getattr(know, "last_query_answer", None)
+                                  if args.get("deliver") or "summary" in args else None,
                                   read_key=called_path
                                   if know.last_read else "",
                                   read_count=know.last_read["count"] if know.last_read else None)
@@ -2298,7 +2381,10 @@ def _requirements(name, arguments, observation, review=None):
     if name == "highlight":
         return frozenset({"handoffs"})
     if name == "goto" and arguments.get("open"):
-        return frozenset({"fill"})
+        # An approved entry may still be opened for manual completion when this
+        # deployment closes field entry. The application review checks the opener.
+        return (frozenset() if {"fields", "lines"} <= getattr(review, "disabled_handlers", frozenset())
+                else frozenset({"fill"}))
     if name == "fill_fields":
         return frozenset({"paging" if item["label"] in _PAGING else
             "lines" if _LINE.match(item["label"]) else
@@ -2440,12 +2526,14 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page",
             "yudao.read", frozenset({"handoffs"}) if schema["function"]["name"] == "highlight" else frozenset(),
             lambda arguments, observation, name=schema["function"]["name"]:
-                _requirements(name, arguments, observation, getattr(goal_port, "review", None))) for schema in TOOLS if schema["function"]["name"] != "finish")
+                _requirements(name, arguments, observation, getattr(goal_port, "review", None)))
+                for schema in scoped_page_tools(getattr(goal_port, "review", None)) if schema["function"]["name"] != "finish")
         profile = ModelLoopProfile(
             system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
                         conventions=conventions,
                         runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
-                                                    "runtime_source", False))), procedures,
+                                                    "runtime_source", False)))
+                + page_scope_notice(getattr(goal_port, "review", None)), procedures,
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
             owner.verification_messages, draft_steps, mutation_prefill,

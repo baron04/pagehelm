@@ -942,7 +942,8 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn('"别人的"}\n' + END, scoped)
 
     def test_model_and_checker_must_match_named_subset_to_read_scope(self):
-        self.assertIn("全表的 total 和自动分组不代表这批记录", SYSTEM)
+        self.assertIn("每个条件须落在接口已声明的params或summary.where中", SYSTEM)
+        self.assertIn("恰好相同的数字都不能证明子集正确", SYSTEM)
         self.assertIn("完整分页只证明读全了该次接口查询范围", VERIFY_SYSTEM)
 
     def test_subset_comparison_can_read_both_filtered_and_whole_lists(self):

@@ -736,7 +736,7 @@ test.describe('copying an answer', () => {
       Object.defineProperty(window, 'isSecureContext', {value: false})
     })
     await panel.page.locator('.woa-launcher').click()
-    await panel.page.getByRole('button', {name: labels.copyAnswer}).click({force: true})
+    await panel.page.getByRole('button', {name: labels.copyAnswer}).click()
     expect(await clipboard(panel.page))
       .toBe(`已扫完全部 12 条，命中 2 条。\n\n${TABLE}\n\n这两张都处于 待开票 状态。`)
     expect(panel.errors).toEqual([])

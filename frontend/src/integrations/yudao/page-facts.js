@@ -652,7 +652,7 @@ function currentPageComponent() {
 }
 
 /** Bind a real framework root to the active page's mounted VNode tree. */
-function pageComponentForRoot(root, name) {
+function pageComponentForRoot(root, name, allowDialog = false) {
   const owner = currentPageComponent()
   if (!owner) return undefined
   let ancestor = owner.parent, appView
@@ -662,12 +662,13 @@ function pageComponentForRoot(root, name) {
   const roots = appView?.subTree?.type === 'section' ? [appView.subTree]
     : Array.isArray(appView?.subTree?.children) ? appView.subTree.children : []
   const sections = roots.filter(node => node?.type === 'section' && node.el?.isConnected)
-  if (sections.length !== 1 || !sections[0].el.contains(root)) return undefined
+  if (sections.length !== 1 || !sections[0].el.contains(root)
+      && !(allowDialog && root.closest('[role="dialog"],dialog'))) return undefined
   const live = item => item?.isMounted === true && item.isUnmounted === false && item.isDeactivated === false
   const stack = [owner.subTree], seen = new Set()
   let instance
   const owned = []
-  while (stack.length && seen.size < 8192) {
+  while (stack.length && seen.size < (allowDialog ? 65536 : 8192)) {
     const node = stack.pop()
     if (!node || seen.has(node)) continue
     seen.add(node)
@@ -690,9 +691,36 @@ function pageComponentForRoot(root, name) {
   return stack.length || !instance ? undefined : {owner, instance, owned}
 }
 
+/** The native editor's rendered action and actual model must agree. This is a
+ * current observation, never a grant to fill or submit. Unknown/custom modes
+ * remain absent; no prompt, button intent or cached route supplies a mode.
+ */
+function nativeFormContext(element) {
+  const dialog = element.closest('[role="dialog"],dialog')
+  if (!dialog) return undefined
+  const forms = Array.from(dialog.querySelectorAll('form.el-form')).filter(form =>
+    form.getBoundingClientRect().width && form.getBoundingClientRect().height)
+  if (forms.length !== 1 || Array.from(dialog.querySelectorAll('.el-loading-mask')).some(mask =>
+    mask.getBoundingClientRect().width && mask.getBoundingClientRect().height)) return undefined
+  const form = forms[0], bound = pageComponentForRoot(form, 'ElForm', true)
+  const model = bound?.instance.props?.model
+  if (!model || typeof model !== 'object' || Array.isArray(model)) return undefined
+  const title = dialog.querySelector('.el-dialog__header')?.textContent?.trim()
+  const id = model.id
+  if (title === '新增' && (id === undefined || id === null || id === '')) {
+    return {kind: 'form', mode: 'create', recordId: null}
+  }
+  if (title === '编辑' && (typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+      || typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id))) {
+    return {kind: 'form', mode: 'update', recordId: String(id)}
+  }
+  return undefined
+}
+
 /** Local binding facts only; application effect review still owns action authority. */
 export function readElementPageControl(element) {
-  if (!(element instanceof HTMLElement) || !element.isConnected || element.closest('[role="dialog"],dialog')) return undefined
+  if (!(element instanceof HTMLElement) || !element.isConnected) return undefined
+  if (element.closest('[role="dialog"],dialog')) return nativeFormContext(element)
   const nodeRoot = element.closest('.el-tree-node[role="treeitem"]')
   const hit = nodeRoot?.querySelector(':scope > .el-tree-node__content')
   if (nodeRoot && (element === nodeRoot || element === hit)) {

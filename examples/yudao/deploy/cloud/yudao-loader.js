@@ -106,7 +106,7 @@
     script.dataset.woaBootstrap = BOOTSTRAP;
     // Ways into a new conversation, one per kind, in this application's own words.
     script.dataset.woaExamples = JSON.stringify([
-      {kind: "query", text: "我负责的客户有哪些？"},
+      {kind: "query", text: "CRM 联系人一共有多少个？"},
       {kind: "find", text: "回款计划在哪里看？"},
       {kind: "operate", text: "打开合同管理页面"},
     ]);

@@ -21,6 +21,65 @@ from web_operation_agent.tests.support.business import _Chat
 
 
 class ContactsModelLoopTests(unittest.TestCase):
+    def test_summary_contract_delivers_only_the_current_rest_actors_actual_values(self):
+        for actor, email in (("ada-lovelace", "grace@example.test"),
+                             ("mary-jackson", "grace.hopper@southwind.test")):
+            with self.subTest(actor=actor), MinimalContactsApplication() as app:
+                records = []
+                def inspect(directory):
+                    records.extend(json.loads(path.read_text()) for path in (directory / "turns").glob("*.json"))
+                result, chat, _ = self.execute(app, actor, [
+                    ("list_contacts", {"name_contains": "Grace Hopper", "summary": {
+                        "columns": ["name", "email"], "measures": [{"op": "count", "as": "count"}]}}),
+                    ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})],
+                    prompt="Show Grace Hopper's email and the number of exact matches.", turn_traces=True, inspect=inspect)
+                self.assertEqual(result.terminal_reason, "agent_finished")
+                self.assertIn(email, result.user_answer)
+                other = "grace.hopper@southwind.test" if actor == "ada-lovelace" else "grace@example.test"
+                self.assertNotIn(other, result.user_answer)
+                delivery = records[0]["server_deliveries"][0]
+                self.assertEqual(delivery["rendered_text"], result.user_answer)
+                self.assertEqual(delivery["projection"]["matched_count"], 1)
+                self.assertIn("Grace Hopper", delivery["projection"]["origin"]["scope"])
+
+    def test_empty_rest_subset_is_complete_without_claiming_the_whole_source_is_empty(self):
+        with MinimalContactsApplication() as app:
+            result, _, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"name_contains": "Absent synthetic name", "summary": {
+                    "measures": [{"op": "count", "as": "count"}]}}),
+                ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})],
+                prompt="How many contacts match Absent synthetic name?")
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertIn("| 0 |", result.user_answer)
+            self.assertIn("Absent synthetic name", result.user_answer)
+
+    def test_rest_adapter_refuses_unsupported_numeric_semantics_without_issuing_a_delivery_reference(self):
+        with MinimalContactsApplication() as app:
+            result, chat, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"summary": {"measures": [{"op": "sum", "column": "email", "as": "total"}]}}),
+                ("finish", {"status": "cannot", "answer": "Email is not an additive number."})],
+                prompt="Total the email column.")
+            self.assertEqual(result.terminal_reason, "agent_refused")
+            self.assertNotIn("read_answer=read-1", str(chat.messages))
+
+    def test_redaction_does_not_collapse_distinct_rest_names_or_block_an_unrelated_count(self):
+        rows = [{"id": "first", "name": "token=alpha123", "email": "a@example.test"},
+                {"id": "second", "name": "token=beta456", "email": "b@example.test"}]
+        with MinimalContactsApplication(contacts=rows) as app:
+            result, chat, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"summary": {"measures": [{"op": "count_distinct", "column": "name", "as": "count"}]}}),
+                ("finish", {"status": "cannot", "answer": "Those names cannot be delivered exactly."})],
+                prompt="How many distinct names are there?")
+            self.assertEqual(result.terminal_reason, "agent_refused")
+            self.assertIn("redacted_value", str(chat.messages))
+            self.assertNotIn("alpha123", str(chat.messages))
+            count, _, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"summary": {"measures": [{"op": "count", "as": "count"}]}}),
+                ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})],
+                prompt="How many contacts are there?")
+            self.assertEqual(count.terminal_reason, "agent_finished")
+            self.assertIn("| 2 |", count.user_answer)
+
     def test_same_server_read_delivery_contract_uses_each_rest_actor_and_cannot_be_replaced_by_prose(self):
         for actor,email in (("ada-lovelace","grace@example.test"),("mary-jackson","grace.hopper@southwind.test")):
             with self.subTest(actor=actor), MinimalContactsApplication() as app:
@@ -70,7 +129,7 @@ class ContactsModelLoopTests(unittest.TestCase):
             self.assertNotIn("Already answered", result.user_answer)
 
     def execute(self, app, actor_id, replies, *, source=None, observation=True, turn_traces=False,
-                inspect=None, number_check=None):
+                inspect=None, number_check=None, prompt="Grace Hopper email?"):
         actor = ACTORS_BY_ID[actor_id]
         adapter = MinimalContactsAdapter(app.origin, api_token=actor.token)
         identity = adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}")
@@ -88,7 +147,7 @@ class ContactsModelLoopTests(unittest.TestCase):
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _: "contacts-model-run", turn_traces=turn_traces)
             with patch.object(goal_executor, "RemoteBrowserClient", _RemoteBrowser):
-                result = executor.execute({"message_id": "contact-model-turn", "text": "Grace Hopper email?",
+                result = executor.execute({"message_id": "contact-model-turn", "text": prompt,
                                            "page_url": app.origin + "/contacts"})
             if inspect is not None:
                 inspect(Path(tmp))
@@ -220,7 +279,9 @@ class ContactsModelLoopTests(unittest.TestCase):
         self.assertIn("grace@example.test", json.dumps(record["messages"]))
         self.assertEqual("list_contacts",
                          record["calls"][0]["reply"]["tool_calls"][0]["function"]["name"])
-        self.assertEqual({"application_id", "tenant_digest", "actor_digest"}, set(record["actor"]))
+        self.assertEqual({"application_id", "tenant_digest", "actor_digest", "actor_authority_digest"},
+                         set(record["actor"]))
+        self.assertRegex(record["actor"]["actor_authority_digest"], r"^[0-9a-f]{64}$")
         text = json.dumps(record)
         self.assertNotIn(actor.token, text)
         self.assertNotIn(actor.session, text)

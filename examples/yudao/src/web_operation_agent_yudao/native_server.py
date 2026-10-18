@@ -114,6 +114,9 @@ class YudaoHostConfig:
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
     native_page_policy: Path | None = None
+    #: Explicit deployment scope; it overrides generated menu and exact handler grants.
+    native_page_disabled_handlers: frozenset[str] = frozenset()
+    native_edit_prefill: bool = True
     native_money_policy: Path | None = None
     #: What each published query parameter's condition means, compiled from this release.
     #: Not the removed page-filtering `--native-filter-policy` of the declaration layer.
@@ -135,6 +138,12 @@ class YudaoHostConfig:
     runtime_source: bool = False
 
     def __post_init__(self):
+        from .model_page_policy import DEPLOYMENT_OPTIONAL_HANDLERS
+        if (not isinstance(self.native_page_disabled_handlers, frozenset)
+                or not self.native_page_disabled_handlers <= DEPLOYMENT_OPTIONAL_HANDLERS):
+            raise ValueError("native_page_disabled_handlers must be an immutable optional-handler set")
+        if type(self.native_edit_prefill) is not bool:
+            raise ValueError("native_edit_prefill must be explicit")
         if not isinstance(self.native_writes, bool):
             raise ValueError("native writes must be explicitly enabled")
         if not isinstance(self.slim_skill_knowledge, bool):
@@ -161,7 +170,9 @@ class YudaoHost:
     def __init__(self, config: YudaoHostConfig):
         from .deployment_validation import validate_native_deployment
         validated = validate_native_deployment(config)
-        self.page_review = validated.page_review
+        self.page_review = (replace(validated.page_review,
+            disabled_handlers=config.native_page_disabled_handlers,
+            allow_edit_prefill=config.native_edit_prefill) if validated.page_review is not None else None)
         self.money_review = validated.money_review
         self.filter_semantics = validated.filter_semantics
         self.config = config
@@ -519,6 +530,11 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-page-policy", type=Path,
                     help="release-reviewed model page handlers; required for slim")
+    ap.add_argument("--native-page-disable", action="append", default=[],
+                    choices=("query", "paging", "fields", "lines"),
+                    help="repeat to disable an optional page handler before menu/exact grants; API reads remain available")
+    ap.add_argument("--no-native-edit-prefill", action="store_false", dest="native_edit_prefill", default=True,
+                    help="allow only forms with fresh native create-mode evidence to be prefilled; existing/unknown modes remain manual")
     ap.add_argument("--native-money-policy", type=Path,
                     help="optional release-bound fields verified against same-actor page values")
     ap.add_argument("--native-filter-semantics", type=Path,
@@ -546,6 +562,8 @@ def main(argv=None) -> int:
             source_release=a.source_release, source_commits=commits, gateway_port=a.gateway_port,
             bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
             native_read_policy=a.native_read_policy, native_page_policy=a.native_page_policy,
+            native_page_disabled_handlers=frozenset(a.native_page_disable),
+            native_edit_prefill=a.native_edit_prefill,
             native_money_policy=a.native_money_policy,
             native_filter_semantics=a.native_filter_semantics,
             native_guard_port=a.native_guard_port,

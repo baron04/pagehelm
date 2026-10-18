@@ -25,13 +25,22 @@ def validate_input(schema: dict, value, path="input") -> None:
     Fail at installation for unsupported keywords rather than silently treating them
     as validation. This is not a general JSON-schema interpreter.
     """
+    if "anyOf" in schema:
+        for branch in schema["anyOf"]:
+            try:
+                validate_input(branch, value, path)
+                return
+            except BusinessToolRequestError:
+                pass
+        raise BusinessToolRequestError(f"{path} does not match an allowed input shape")
     kind = schema["type"]
     valid = {"object": lambda: isinstance(value, dict),
              "array": lambda: isinstance(value, list),
              "string": lambda: isinstance(value, str),
              "integer": lambda: type(value) is int,
              "number": lambda: type(value) in (int, float) and math.isfinite(value),
-             "boolean": lambda: type(value) is bool}[kind]()
+             "boolean": lambda: type(value) is bool,
+             "null": lambda: value is None}[kind]()
     if not valid:
         raise BusinessToolRequestError(f"{path} must be {kind}")
     if "enum" in schema and value not in schema["enum"]:
@@ -63,11 +72,18 @@ def validate_input(schema: dict, value, path="input") -> None:
 
 
 def _validate_schema(schema):
+    if isinstance(schema, dict) and "anyOf" in schema:
+        if (set(schema) != {"anyOf"} or not isinstance(schema["anyOf"], list)
+                or not 2 <= len(schema["anyOf"]) <= 6):
+            raise ValueError("typed-tool alternatives must have 2–6 explicit branches")
+        for branch in schema["anyOf"]:
+            _validate_schema(branch)
+        return
     keywords = {"type", "description", "properties", "required", "additionalProperties",
                 "items", "minItems", "maxItems", "minLength", "maxLength",
                 "minimum", "maximum", "enum"}
     if not isinstance(schema, dict) or set(schema) - keywords or schema.get("type") not in {
-            "object", "array", "string", "integer", "number", "boolean"}:
+            "object", "array", "string", "integer", "number", "boolean", "null"}:
         raise ValueError("unsupported typed-tool input schema")
     if "description" in schema and (not isinstance(schema["description"], str) or len(schema["description"]) > 4000):
         raise ValueError("invalid typed-tool schema description")
