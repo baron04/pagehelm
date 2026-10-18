@@ -29,12 +29,18 @@ def repository_tree(root: Path, release: str) -> SourceTree:
 
 
 def repository_source(root: Path | None, release: str, *,
-                      commits: tuple[tuple[str, str], ...] = ()) -> SourceCapability:
+                      commits: tuple[tuple[str, str], ...] = (),
+                      runtime: bool = True) -> SourceCapability:
     if root is None:
         if commits:
             raise ValueError("source commits require a configured repository source root")
         return SourceCapability.none()
     tree = repository_tree(root, release)
+    if not runtime:
+        # The release binding stays validated for this deployment; no user-facing
+        # source reading is offered over it. Build-time scanners take the tree
+        # through their own CLIs and never pass through here.
+        return SourceCapability.none()
     lookup = RepositorySourceLookup(tree, line_limit=24, char_limit=1800, overlap=4)
     history = None
     if commits:

@@ -129,6 +129,10 @@ class YudaoHostConfig:
     #: Days each turn's record of what the model was given and answered is kept beside
     #: the session's audit (`runs/<session>/turns/`); 0 writes none.
     turn_trace_days: int = 14
+    #: User-facing source lookup and reading over the configured release. Off for the
+    #: deployment (D3): implementation questions get the prompt's fixed reply, and the
+    #: build-time scanners use the release tree through their own CLIs, not this switch.
+    runtime_source: bool = False
 
     def __post_init__(self):
         if not isinstance(self.native_writes, bool):
@@ -137,6 +141,8 @@ class YudaoHostConfig:
             raise ValueError("slim_skill_knowledge is on or off")
         if not isinstance(self.warm_index, bool):
             raise ValueError("warm_index is on or off")
+        if not isinstance(self.runtime_source, bool):
+            raise ValueError("runtime_source is on or off")
         if (isinstance(self.turn_trace_days, bool) or not isinstance(self.turn_trace_days, int)
                 or not 0 <= self.turn_trace_days <= 90):
             raise ValueError("turn_trace_days must be a whole number of days from 0 to 90")
@@ -164,7 +170,8 @@ class YudaoHost:
         self._documents_lock = threading.Lock()
         self.ui = UiSource.read(config.ui_source) if config.ui_source else None
         self.source = repository_source(config.source_root, config.source_release,
-                                        commits=config.source_commits)
+                                        commits=config.source_commits,
+                                        runtime=config.runtime_source)
         self.native_proxy = None
         self.live_forms = False
         self._fenced = frozenset()
@@ -502,6 +509,9 @@ def main(argv=None) -> int:
     ap.add_argument("--source-release", default="")
     ap.add_argument("--source-commit", action="append", default=[], metavar="REPOSITORY=FULL_COMMIT",
                     help="repeat for ui/server repositories, or use root for a single Git repository")
+    ap.add_argument("--runtime-source", action="store_true",
+                    help="offer user-facing source lookup and reading over --source-root; off by "
+                         "default (D3), and build-time scanners never read this flag")
     ap.add_argument("--gateway-port", type=int, default=48091)
     ap.add_argument("--bootstrap-port", type=int, default=48092)
     ap.add_argument("--native-read-policy", type=Path)
@@ -540,7 +550,8 @@ def main(argv=None) -> int:
             native_writes=a.native_writes,
             max_sessions=a.max_sessions,
             daily_allowance_cny=a.daily_allowance_cny,
-            turn_trace_days=a.turn_trace_days)
+            turn_trace_days=a.turn_trace_days,
+            runtime_source=a.runtime_source)
         from .deployment_validation import validate_native_deployment
         validate_native_deployment(config)
     except ValueError as exc:

@@ -963,6 +963,7 @@ SYSTEM_READ = """1. 回答业务数据问题。先用 search_api 找到接口，
    - 后续追问说“其中那张”“它”时，上一轮答复中的单号或唯一标识可用于定位。用它重新读取当前记录；金额按下面的逐字段核验规则处理，历史答复里的值不能直接当作当前值。优先按该标识筛选或打开详情，不要靠反复滚动列表找记录。
    - 用户只是提问、没要求打开或查看页面时，接口读到答案就结束，不要再去打开、筛选页面来核对或展示（金额、单价例外，见下一条）。
    - 金额、单价这类值：只有 call_api 明确标注“已按部署前端源码和同记录非零页面样本逐字段核验”的字段，其返回数值才是已换算的页面显示值，可用于纯查询；其它字段的接口原始数和说明单位（分/元）不一定准确。回答其它字段前必须打开对应列表或详情页，以同一记录、同一列显示的数字为准。若目标列没有显示或页面操作被拒绝，不要用相邻列或原始接口值猜答案。
+   - 说某条记录或某类数据“无权限”“读不到”，只能来自指向它本身的确切读取被拒。带条件的查询被拒只说明该次查询不可读：换其它已发布接口或列表页再读；指向该记录的确切读取都被拒时才说明无权限，并写明是哪项读取被拒。已读到的结果能回答用户问题时照常作答，只在末尾说明哪项数据未能读取。
 """
 SYSTEM_PAGE = """2. 把页面带到用户要的状态：打开某个列表或详情、切换页签、筛选、翻页、改每页条数。
    - 用 search_menu 找页面，goto 打开；同一个业务词常常在几个模块里都有页面，先看全部结果再选最贴合用户说法的那个，并在答复里说明用的是哪个模块的页面。
@@ -1007,6 +1008,12 @@ SYSTEM_RULES = """
 - 全部做完且尚未通过 goto、click、highlight 或 fill_fields 的 answer 结束时，调用 finish。答复用一两句中文，写出查到的具体值和页面/表单现在的状态；给用户的话写在结束工具的 answer 里。不带工具调用的回复用户收不到，只会让这一轮多等一次。"""
 SYSTEM = "".join((SYSTEM_INTRO, SYSTEM_READ, SYSTEM_PAGE, SYSTEM_FORM, SYSTEM_RULES))
 
+#: D3: a deployment that offers no user-facing source reading tells the model the
+#: fixed reply for implementation questions, instead of leaving them to memory.
+SYSTEM_NO_SOURCE = """
+
+本部署不提供源码或实现说明。用户问某功能的代码实现、内部逻辑、源码规则或提交历史时，用固定答复说明：本部署不提供源码说明；不要凭记忆或猜测描述实现细节。请求里能用应用数据回答的部分，照常读取接口作答。"""
+
 VERIFY_SYSTEM = """你是验收员。下面是用户的原话、助手的答复，以及页面此刻的真实状态（由程序读取，不是助手自述）。
 逐项核对用户原话里的每一个要求是否真的满足：
 - 要求打开/筛选/翻页/切页签的：页面路径、弹窗、页签、页面生效的查询是否就是用户要的那个对象和条件；打开的记录名称是否与用户说的完全一致。
@@ -1040,13 +1047,19 @@ def skills_text(catalog, *, knowledge: bool = True) -> str:
     return "\n" + "\n".join(lines)
 
 
-def system_text(*, user: str, date: str, tz: str, conventions=(), catalog=(), knowledge: bool = True) -> str:
+def system_text(*, user: str, date: str, tz: str, conventions=(), catalog=(), knowledge: bool = True,
+                runtime_source: bool = True) -> str:
     """What the model is told once a conversation. The part about writes is there only when
-    this actor is offered an operation; without it the text is the read-only turn's."""
+    this actor is offered an operation; without it the text is the read-only turn's.
+    Without runtime source reading the fixed reply about implementation questions is
+    told here, because the common loop appends the source instructions only when the
+    deployment offers the tools (D3)."""
     text = SYSTEM.format(user=user, date=date, tz=tz)
     if catalog:
         text = text.replace("你能做三类事", "你能做四类事", 1).replace(
             "\n\n通用规则：", WRITE_RULES + skills_text(catalog, knowledge=knowledge) + "\n\n通用规则：", 1)
+    if not runtime_source:
+        text += SYSTEM_NO_SOURCE
     return text + conventions_text(conventions)
 
 
@@ -1588,8 +1601,12 @@ class YudaoLoopProcedures:
                 return LoopToolResult("查询动作已核验。", kind="page", dispatch=outcome.dispatch,
                                       completion_command=outcome.receipt.command_id)
             return None
-        reasons = {"unreviewed": "该页面或动作不在本部署的支持范围内；不要换其它入口重试同一动作，也不要据此判断账号无权限。",
-                   "invalid_target": "当前页面状态或目标地址未通过校验；不能据此断定菜单未审核或账号无权限。",
+        reasons = {"unreviewed": "该页面或动作不在本部署的支持范围内（应用尚未审核这个动作的效果）；"
+                                 "不要换其它入口重试同一动作，也不要重复点击同一控件，不要据此判断账号无权限。"
+                                 "这次拒绝只作用于本次页面动作，已读到的接口和页面结果不受影响；"
+                                 "它们能回答用户问题时直接作答。",
+                   "invalid_target": "当前页面状态或目标地址未通过校验；不能据此断定菜单未审核或账号无权限。"
+                                     "已读到的结果不受影响；它们能回答用户问题时直接作答。",
                    "stale_binding": "页面已变化，请根据最新观察重新选择。",
                    "permission_denied": "当前账号没有执行这项操作的权限。",
                    "expired": "本次动作授权已过期。"}
@@ -1678,10 +1695,10 @@ class YudaoLoopProcedures:
                     s.audit("yudao_api_read_refused", path=called_path,
                             reason="permission_denied")
                     return LoopToolResult(
-                        "此只读接口明确拒绝了当前账号。本次路径没有返回数据；"
-                        "不能据此断定其它接口或整个问题都无权限。"
-                        "请依据已发布的只读接口和当前账号范围寻找可用证据；"
-                        "若没有，请明确说明哪项数据未能读取。",
+                        "此只读接口明确拒绝了当前账号。这次拒绝只说明该接口本次不可读，"
+                        "不影响其它已读到的结果；不能据此断定其它接口、整类数据或整个问题都无权限。"
+                        "已有的成功读取能回答用户问题时照常作答，只说明这个接口未能读取；"
+                        "还需要补充证据时，依据已发布的只读接口和当前账号范围寻找。",
                         kind="read", state="refused", error_code="permission_denied")
             if know.last_read:
                 # Audit the chosen API and the query vocabulary, never filter values.
@@ -2388,7 +2405,9 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                 _requirements(name, arguments, observation, getattr(goal_port, "review", None))) for schema in TOOLS if schema["function"]["name"] != "finish")
         profile = ModelLoopProfile(
             system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
-                        conventions=conventions), procedures,
+                        conventions=conventions,
+                        runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
+                                                    "runtime_source", False))), procedures,
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
             owner.verification_messages, draft_steps, mutation_prefill,
