@@ -37,6 +37,7 @@ class VerifiedMoneyReviewTests(unittest.TestCase):
             ui = SimpleNamespace(views={"demo/items": SimpleNamespace(endpoint="/demo/items/page")})
             review = VerifiedMoneyReview.load(path, ui_source=source, release="synthetic-v1", ui=ui)
             self.assertEqual(review.fields_for("/demo/items/page")["price"].display_value(12345), 123.45)
+            self.assertEqual(review.fields_for("demo/items/page")["price"].display_value(12345), 123.45)
             self.assertEqual(review.fields_for("/demo/items/page")["price"].display_value(0), 0)
             self.assertFalse(review.fields_for("/other/page"))
             with self.assertRaisesRegex(ValueError, "deployment release"):

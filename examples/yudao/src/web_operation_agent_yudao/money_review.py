@@ -75,7 +75,7 @@ class VerifiedMoneyReview:
     def __init__(self, fields: tuple[VerifiedMoneyField, ...]):
         self._by_endpoint = {}
         for item in fields:
-            self._by_endpoint.setdefault(item.endpoint, {})[item.field] = item
+            self._by_endpoint.setdefault("/" + item.endpoint.lstrip("/"), {})[item.field] = item
 
     @classmethod
     def load(cls, path: Path, *, ui_source: Path, release: str, ui):
@@ -148,4 +148,6 @@ class VerifiedMoneyReview:
         return cls(tuple(fields))
 
     def fields_for(self, endpoint: str) -> dict[str, VerifiedMoneyField]:
-        return self._by_endpoint.get(endpoint, {})
+        # The review document uses absolute native paths; authenticated API
+        # procedures use paths relative to /admin-api/. They name the same read.
+        return self._by_endpoint.get("/" + endpoint.lstrip("/"), {})

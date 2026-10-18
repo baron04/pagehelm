@@ -19,9 +19,10 @@ function ready(facts: ReturnType<typeof createPageFacts>) {
 }
 
 describe('native Yudao record and read completion facts', () => {
-  it.each(['hrm/employee', 'crm/contact'])('binds %s detail reads and excludes editor tabs', (entity) => {
+  it.each(['hrm/employee', 'crm/contact', 'crm/clue', 'crm/product'])('binds %s detail reads and excludes editor tabs', (entity) => {
     window.history.replaceState({}, '', `/${entity}/detail/6`)
     const facts = createPageFacts()
+    expect(facts.readPageBlocker()).toBe('pending')
     expect(facts.readPageRecordRoute()).toBeUndefined()
     facts.begin(`/admin-api/${entity}/get?id=6`)!(200, {code: 0, data: {id: 6, name: 'Synthetic Customer'}})
     expect(facts.readPageRecordRoute()).toBe(`/${entity}/detail/6`)
@@ -1078,10 +1079,22 @@ describe('native editor mode is current application state', () => {
       subTree:{type:'form',el:form},vnode:{ctx:state.instance}}
     state.instance.subTree.children=[{component:native}] as unknown as NativeVNode[]
     expect(readElementPageControl(input)).toEqual({kind:'form',mode:'create',recordId:null})
+    const lines=document.createElement('form');lines.className='el-form'
+    const quantity=document.createElement('input');lines.append(quantity);form.append(lines)
+    lines.getBoundingClientRect=()=>({width:400,height:100} as DOMRect)
+    const lineForm={...native,props:{model:[]},subTree:{type:'form',el:lines}}
+    native.subTree={type:'form',el:form,children:[{component:lineForm}]} as typeof native.subTree
+    expect(readElementPageControl(quantity)).toEqual({kind:'form',mode:'create',recordId:null})
     model.id=42
     expect(readElementPageControl(input)).toBeUndefined()
+    expect(readElementPageControl(quantity)).toBeUndefined()
     dialog.querySelector('.el-dialog__header')!.textContent='编辑'
     expect(readElementPageControl(input)).toEqual({kind:'form',mode:'update',recordId:'42'})
+    expect(readElementPageControl(quantity)).toEqual({kind:'form',mode:'update',recordId:'42'})
+    const sibling=document.createElement('form');sibling.className='el-form';dialog.append(sibling)
+    sibling.getBoundingClientRect=()=>({width:400,height:100} as DOMRect)
+    expect(readElementPageControl(quantity)).toBeUndefined() // Two independent editors remain ambiguous.
+    sibling.remove();lines.remove()
     delete model.id
     expect(readElementPageControl(input)).toBeUndefined()
     model.id=42;native.isDeactivated=true

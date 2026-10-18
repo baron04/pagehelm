@@ -9,6 +9,7 @@ const PAGE_LAYERS = '.el-overlay, .el-image-viewer__wrapper'
 // Only layers carried across an assistant navigation block its destination. A form
 // opened on the destination itself must remain observable for prefill and handoff.
 const carriedLayers = new WeakMap()
+const recordDetailRoute = route => /^\/(crm\/(?:customer|contract|business|contact|clue|product)|hrm\/employee)\/detail\/([0-9]+)$/.exec(route)
 function carriedLayerBlocks(doc) {
   const layers = carriedLayers.get(doc)
   if (!layers) return false
@@ -188,7 +189,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
       appliedQuery = null
       query = {path: url.pathname, parameters: Object.fromEntries(url.searchParams)}
     }
-    const detail = /^\/(crm\/(?:customer|contract|business|contact)|hrm\/employee)\/detail\/([0-9]+)$/.exec(route)
+    const detail = recordDetailRoute(route)
     const isRecord = Boolean(detail && url.pathname === `/admin-api/${detail[1]}/get`)
     const ids = url.searchParams.getAll('id')
     const matchesRecord = !isRecord || ids.length === 1 && ids[0] === detail[2]
@@ -264,7 +265,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).some(visible)) return true
     if (relevant.some(s => s.pending)) return 'pending'
     const loading = Array.from(doc.querySelectorAll('.el-loading-mask,.el-loading-spinner,[aria-busy="true"]')).some(visible)
-    if (!/^\/(?:crm\/(?:customer|contract|business|contact)|hrm\/employee)\/detail\/[0-9]+$/.test(route)) return loading ? 'pending' : false
+    if (!recordDetailRoute(route)) return loading ? 'pending' : false
     const titles = Array.from(doc.querySelectorAll('.text-xl.font-bold')).filter(visible)
     if (titles.length > 1 || record && titles.length === 1 && titles[0].textContent?.trim()
         && titles[0].textContent.trim() !== record.name) return true
@@ -700,9 +701,12 @@ function nativeFormContext(element) {
   if (!dialog) return undefined
   const forms = Array.from(dialog.querySelectorAll('form.el-form')).filter(form =>
     form.getBoundingClientRect().width && form.getBoundingClientRect().height)
-  if (forms.length !== 1 || Array.from(dialog.querySelectorAll('.el-loading-mask')).some(mask =>
+  // Native line editors may contain their own ElForm. The enclosing editor's
+  // record owns the mode; a nested lines array is not another business record.
+  const roots = forms.filter(form => !forms.some(other => other !== form && other.contains(form)))
+  if (forms.length > 32 || roots.length !== 1 || Array.from(dialog.querySelectorAll('.el-loading-mask')).some(mask =>
     mask.getBoundingClientRect().width && mask.getBoundingClientRect().height)) return undefined
-  const form = forms[0], bound = pageComponentForRoot(form, 'ElForm', true)
+  const form = roots[0], bound = pageComponentForRoot(form, 'ElForm', true)
   const model = bound?.instance.props?.model
   if (!model || typeof model !== 'object' || Array.isArray(model)) return undefined
   const title = dialog.querySelector('.el-dialog__header')?.textContent?.trim()

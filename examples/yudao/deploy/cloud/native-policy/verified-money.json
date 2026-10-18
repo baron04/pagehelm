@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "release": "v2026.09",
-  "review": "P15 isolated same-actor nonzero API and page matches; see local verification report",
+  "review": "P15/P16 isolated same-actor nonzero API/page matches on this release",
   "source_functions": {
     "src/utils/index.ts": "1ad3646317483155c32feab45d7f4d6a92fdd47e7e0ce0dd48f1d0cd528dece3",
     "src/utils/formatter.ts": "463fdebf43306e6960df55006470eb15ee557ad086d6f4a38f44977083281ded"
@@ -106,6 +106,26 @@
       "component": "erp/sale/out/index",
       "component_sha256": "3da4ffee4b52ef13f39eb7e522210df390b2bb52d6d17d5b3b91255c255f1ae5",
       "nonzero_samples": 6
+    },
+    {
+      "route": "/crm/business",
+      "endpoint": "/crm/business/page",
+      "field": "totalPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "crm/business/index",
+      "component_sha256": "93f447337fc53cbb69210230e1a2b0d7468cc92d1a065efffb488151bf65fbdc",
+      "nonzero_samples": 10
+    },
+    {
+      "route": "/crm/contract",
+      "endpoint": "/crm/contract/page",
+      "field": "totalPrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "crm/contract/index",
+      "component_sha256": "84b0154e61afd5951f05a0e846285ab807866ea524c3243f527fd8362e8d5f1d",
+      "nonzero_samples": 10
     }
   ]
 }
