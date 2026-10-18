@@ -28,7 +28,7 @@ starts from those and reads the page and the data again.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import replace
 from types import SimpleNamespace
 import hashlib
@@ -129,11 +129,12 @@ class ActorKnowledge:
     """The signed-in actor's menu pages and the application's read-only API, searchable."""
 
     def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai",
-                 codes=None, money_review=None, filter_semantics=None):
+                 codes=None, money_review=None, filter_semantics=None, columns=None):
         self.client, self._docs, self.writing_gets = client, api_docs, frozenset(writing_gets)
         #: `codes(list_path)`: the names of a list's coded values by field, when the
         #: application names them ({"bizType": {"50": "销售出库"}}).
         self._codes = codes
+        self._columns = columns
         self.money_review = money_review
         #: What each published query parameter's condition means, compiled from the
         #: deployed release's source. Annotation only; it refuses or hides no read.
@@ -466,6 +467,11 @@ class ActorKnowledge:
             if exc.permission_denied or exc.read_failed:
                 raise
             return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
+        metadata_keys = tuple(dict.fromkeys((*fields, *filters,
+            *(rows[0] if rows and isinstance(rows[0], dict)
+              else data if rows is None and isinstance(data, dict) else props))))
+        native_names = self._names(relative)
+        metadata = self._read_vocabulary(relative, metadata_keys, props, native_names)
         if summary is not None:
             from .read_summary import summarize
             # A native detail GET already identifies one real record. Reuse the
@@ -488,7 +494,7 @@ class ActorKnowledge:
                 "实际汇总声明：" + json.dumps(result.spec.to_json(), ensure_ascii=False),
                 f"读取 {result.source_count} 行，命中 {result.matched_count} 行，完整={result.complete}。",
                 "输出列与已核验单位：" + json.dumps([(column.name, column.unit) for column in result.columns], ensure_ascii=False),
-                result.incomplete_reason or "这份结果只覆盖上述条件；用户的其它义务仍须完成。"], {1, 2, 4})
+                result.incomplete_reason or "这份结果只覆盖上述条件；用户的其它义务仍须完成。"], {1, 2, 4}) + metadata
         candidates = self.money_review.fields_for(relative) if self.money_review is not None else {}
         read_rows = rows if rows is not None else [data]
         certified = {key: spec for key, spec in candidates.items()
@@ -587,6 +593,8 @@ class ActorKnowledge:
                        "以下数值是页面显示值，可直接用于本次纯查询，无需再次开页面："
                        + "；".join(f"{key}（{certified[key].display_unit}）"
                                   for key in dict.fromkeys(verified_keys)))
+        if metadata:
+            out.append(metadata)
         notes = [f"{k}={(self._deref(props[k]).get('description') or '')[:40]}"
                  for k in (fields or keys) if k in props and self._deref(props[k]).get("description")
                  and k not in blanked and k not in certified]
@@ -594,7 +602,7 @@ class ActorKnowledge:
             out.append("字段说明: " + "; ".join(notes[:30]))
         # A coded column (a type, a status) is read as numbers; what each one is called is
         # what the page shows and what a question says ("出库", "已审核").
-        names, read = self._names(relative), (rows if rows is not None else [data])
+        names, read = native_names, (rows if rows is not None else [data])
         coded = {}
         for key in (fields or keys):
             seen = dict.fromkeys(str(row.get(key)) for row in read
@@ -803,6 +811,28 @@ class ActorKnowledge:
             return self._codes(path) or {}
         except (DataRefused, LookupError, ValueError):
             return {}
+
+    def _read_vocabulary(self, path, keys, props, names):
+        """Bounded deployment metadata, including choices absent from an empty result.
+
+        This annotates the exact API read; it neither broadens its scope nor
+        declares a page open. Runtime observations remain the fresher evidence.
+        """
+        try:
+            labels = (self._columns(path) or {}) if self._columns is not None else {}
+        except (DataRefused, LookupError, ValueError):
+            labels = {}  # Optional metadata must not discard a successful native read.
+        fields = [key for key in keys if key in props][:24]
+        shown = {key: str(labels[key])[:80] for key in fields if key in labels}
+        choices = {key: {str(code)[:40]: str(label)[:80]
+                         for code, label in list(names[key].items())[:12]}
+                   for key in fields if key in names and names[key]}
+        choices = dict(list(choices.items())[:8])
+        if not shown and not choices:
+            return ""
+        return "\n" + self._told([
+            "该实体的部署列表列名与应用字典（不是当前页面就绪证明；空结果也不改变这些代码的含义）：",
+            json.dumps({"read_path": path, "columns": shown, "choices": choices}, ensure_ascii=False)], {1})
 
     def _told(self, out: list, data_lines: set) -> str:
         """A read as the model is told it: what the program says about it in the open, the
@@ -1081,7 +1111,15 @@ def system_text(*, user: str, date: str, tz: str, conventions=(), catalog=(), kn
     Without runtime source reading the fixed reply about implementation questions is
     told here, because the common loop appends the source instructions only when the
     deployment offers the tools (D3)."""
-    text = SYSTEM.format(user=user, date=date, tz=tz)
+    calendar = ""
+    try:
+        day = datetime.fromisoformat(date).date()
+    except ValueError:
+        pass
+    else:
+        monday = day - timedelta(days=day.weekday())
+        calendar = f" 周{'一二三四五六日'[day.weekday()]}；ISO周[{monday},{monday + timedelta(days=7)})"
+    text = SYSTEM.format(user=user, date=date + calendar, tz=tz)
     if catalog:
         text = text.replace("你能做三类事", "你能做四类事", 1).replace(
             "\n\n通用规则：", WRITE_RULES + skills_text(catalog, knowledge=knowledge) + "\n\n通用规则：", 1)

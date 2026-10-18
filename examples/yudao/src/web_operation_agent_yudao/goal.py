@@ -920,16 +920,44 @@ class YudaoGoalData:
         return template.format(id=id) if template else page
 
     def code_names(self, list_path: str) -> dict[str, dict[str, str]]:
-        """The names of the coded values ("50" -> "销售出库") of the list this API path reads,
-        by field; empty for a path that is no entity's list."""
+        """Coded values of the exact entity's list or detail API, by field.
+
+        Unknown paths do not inherit another entity's dictionary.
+        """
+        if not list_path.strip("/"):
+            return {}
         schema = self._known()
         with self._lock:
-            key = next((k for k, spec in self._entities.items()
-                        if spec.list_path.strip("/") == list_path.strip("/")), "")
-        entity = schema.entity(key) if key else None
+            keys = [k for k, spec in self._entities.items()
+                    if list_path.strip("/") in {spec.list_path.strip("/"),
+                                                spec.get_path.strip("/") if spec.get_path else ""}]
+        entity = schema.entity(keys[0]) if len(keys) == 1 else None
         if entity is None:
             return {}
         return {f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}
+
+    def column_names(self, read_path: str) -> dict[str, str]:
+        """Installed list labels for this actor's exact entity read, never page readiness.
+
+        A detail and its list describe the same entity fields. Conflicting labels
+        across list components are omitted rather than choosing one arbitrarily.
+        The optional UI source may be absent; ordinary API reads still work.
+        """
+        if not read_path.strip("/"):
+            return {}
+        self._known()
+        labels: dict[str, set[str]] = {}
+        with self._lock:
+            for spec in self._entities.values():
+                if read_path.strip("/") not in {spec.list_path.strip("/"),
+                                               spec.get_path.strip("/") if spec.get_path else ""}:
+                    continue
+                if (spec.view is not None
+                        and spec.view.endpoint.strip("/") == spec.list_path.strip("/")):
+                    for key, label in spec.view.column_labels:
+                        if key in spec.props:
+                            labels.setdefault(key, set()).add(label)
+        return {key: next(iter(names)) for key, names in labels.items() if len(names) == 1}
 
     def query_scope(self, entity: str, parameters: dict, *, label: str, ttl_s: float = 60) -> Native:
         """Server-side query binding, not a model tool or proof of current page state.

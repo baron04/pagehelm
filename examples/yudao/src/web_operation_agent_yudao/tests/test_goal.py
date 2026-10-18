@@ -460,7 +460,18 @@ class YudaoGoalDataTests(unittest.TestCase):
         names = self.data.code_names("crm/contract/page")
         self.assertEqual(list(names["auditStatus"].values()), ["未提交", "审核通过"])
         self.assertNotIn("totalPrice", names)
+        self.assertEqual(self.data.code_names("crm/contract/get"), names)
         self.assertEqual(self.data.code_names("no/such/page"), {})
+
+    def test_column_metadata_binds_the_exact_entity_and_keeps_unknown_reads_empty(self):
+        ui = UiSource(views={"crm/contract/index": ListView(endpoint="/crm/contract/page",
+            column_labels=(("totalPrice", "含税金额"), ("notPublished", "不可用")))})
+        data = YudaoGoalData(_Client(), DOCS, ui=ui)
+        expected = {"totalPrice": "含税金额"}
+        self.assertEqual(data.column_names("crm/contract/page"), expected)
+        self.assertEqual(data.column_names("/crm/contract/get"), expected)
+        self.assertEqual(data.column_names("other/contract/page"), {})
+        self.assertEqual(YudaoGoalData(_Client(), DOCS).column_names("crm/contract/page"), {})
 
     def test_a_crm_list_is_read_under_every_scene_and_merged(self):
         rows = self.data.rows("crm/contract", all_of(), fields=("name",))

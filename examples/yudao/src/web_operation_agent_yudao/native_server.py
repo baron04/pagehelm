@@ -406,6 +406,7 @@ class YudaoHost:
                 knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                          time_zone=app.goal_data.time_zone(),
                                          codes=app.goal_data.code_names,
+                                         columns=app.goal_data.column_names,
                                          money_review=self.money_review,
                                          filter_semantics=self.filter_semantics),
                 conventions=load_conventions(REFERENCE_CONVENTIONS),
