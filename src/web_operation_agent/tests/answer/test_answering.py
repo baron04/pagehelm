@@ -26,6 +26,22 @@ def _projection(*, complete: bool = True, records=None) -> StructuredQueryAnswer
 
 
 class StructuredQueryAnswerTests(unittest.TestCase):
+    def test_record_values_are_literal_text_instead_of_inline_markup_or_links(self):
+        projection=_projection(records=(("**name** [link](https://outside.test) `code`", "domain.test"),))
+        text=render_structured_query_answer(projection,user_text="List companies",max_chars=4000).text
+        self.assertIn(r"\*\*name\*\* \[link\](https://outside.test) \`code\`",text)
+        self.assertNotIn("| **name**",text)
+
+    def test_large_collections_are_bounded_and_keep_application_field_names(self):
+        from dataclasses import replace
+        projection=replace(_projection(records=tuple((str(i),"domain") for i in range(253))),
+                           fields=("displayName","domain"))
+        self.assertEqual(len(projection.records),253)
+        with self.assertRaises(ValueError):
+            _projection(records=tuple((str(i),"domain") for i in range(5001)))
+        with self.assertRaises(ValueError):
+            _projection(records=tuple(("x"*1000,"y"*1000) for _ in range(51)))
+
     def test_projection_is_immutable_bounded_and_self_describing(self):
         projection = _projection()
         public = projection.to_json()

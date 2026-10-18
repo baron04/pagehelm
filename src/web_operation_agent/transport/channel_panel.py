@@ -27,6 +27,7 @@ class ChannelPanel:
             "progress_states": _copy_json(contract["progress_states"]),
             "terminal_error_codes": list(contract["terminal_error_codes"]),
             "terminal_panel_state_by_code": dict(contract["terminal_panel_state_by_code"]),
+            "nonterminal_error_states": dict(contract["nonterminal_error_states"]),
             "lapse_codes": list(contract["lapse_codes"]),
             "session_expires_at": self.expires_at,
             "principal_expires_at": (self.principal.expires_at

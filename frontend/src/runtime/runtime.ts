@@ -390,7 +390,11 @@ export class EmbeddedWebRuntime {
       },
       newConversation: () => {
         detach('new conversation', this._post('/conversation', {action: 'new'})
-          .then(() => this._refreshTimeline())
+          .then(() => {
+            this.panelHost?.clearTimeline()
+            this.panelHost?.clearNotice()
+            return this._refreshTimeline()
+          })
           .catch(error => this._raise(error)))
       },
       loadOlder: before => {
@@ -808,7 +812,10 @@ export class EmbeddedWebRuntime {
 
   private _finishTurn(turnId: string): void {
     const guard = this.config?.pageWriteGuard
-    if (guard) detach('close page write guard', closeWriteGuard(guard))
+    if (guard && this.writeGuardUntil > 0 && this.stored.activeMessageId === turnId) {
+      this.writeGuardUntil = 0
+      detach('close page write guard', closeWriteGuard(guard))
+    }
     this.stored.taskInFlight = false
     this.stored.activeMessageId = ''
     this.stored.cancellationPending = false
@@ -997,11 +1004,14 @@ export class EmbeddedWebRuntime {
   }
 
   /**
-   * An application that names a page write guard gets no page action without the guard
+   * An application that names a page write guard gets no page interaction without the guard
    * open: the action is refused, before anything is written ahead or claimed, rather than
    * run on a session that could still change data.
    */
   private async _rejectWithoutWriteGuard(action: ActionEnvelope): Promise<boolean> {
+    // Observation only reads the controller's projection. Opening a write window for it
+    // made a successful API query fail whenever that unrelated endpoint was unavailable.
+    if (action.command.action === 'observe') return false
     const path = this.config?.pageWriteGuard
     if (path === undefined || path === '') return false
     this.writeGuardUntil = 0
@@ -1082,7 +1092,8 @@ export class EmbeddedWebRuntime {
       return {ok: false, code: 'deadline_expired',
         detail: 'the action deadline expired before page dispatch'}
     }
-    if (this.config?.pageWriteGuard && !(this.writeGuardUntil > Date.now())) {
+    if (action.command.action !== 'observe' && this.config?.pageWriteGuard
+        && !(this.writeGuardUntil > Date.now())) {
       return {ok: false, code: 'capability_refused',
         detail: 'page_write_guard_unavailable: the confirmed window expired before page dispatch'}
     }

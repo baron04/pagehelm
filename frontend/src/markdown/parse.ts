@@ -27,7 +27,7 @@ export type Block =
   | {type: 'rule'}
 
 const FENCE = /^```([A-Za-z0-9_+-]{0,24})\s*$/
-const HEADING = /^(#{2,3})\s+(.*)$/
+const HEADING = /^(#{1,6})\s+(.*)$/
 const BULLET = /^\s{0,3}[-*]\s+(.*)$/
 const ORDERED = /^\s{0,3}\d{1,3}[.)]\s+(.*)$/
 const QUOTE = /^\s{0,3}>\s?(.*)$/
@@ -154,7 +154,7 @@ export function parseMarkdown(source: string): Block[] {
       flushParagraph()
       blocks.push({
         type: 'heading',
-        depth: (heading[1] ?? '##').length === 2 ? 2 : 3,
+        depth: (heading[1] ?? '##').length <= 2 ? 2 : 3,
         children: parseInline(heading[2] ?? ''),
       })
       index += 1

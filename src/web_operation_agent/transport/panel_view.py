@@ -46,6 +46,10 @@ def _validate_contract(contract: dict) -> None:
             raise ValueError(f"terminal code {code} maps to an unknown panel state")
         if code not in contract["terminal_error_codes"]:
             raise ValueError(f"terminal code {code} is not listed as terminal")
+    for code, state in contract["nonterminal_error_states"].items():
+        if (state not in states or code in contract["terminal_error_codes"]
+                or code not in contract["notices"]):
+            raise ValueError(f"nonterminal code {code} needs a valid state and guidance")
     if not all(isinstance(code, str) and code for code in contract["lapse_codes"]):
         raise ValueError("lapse codes must be non-empty strings")
     if not set(contract["notices"]) >= set(contract["terminal_error_codes"]):
@@ -327,14 +331,14 @@ def session_ended_message(reason: str) -> str:
     return _SESSION_ENDED.get(reason, "助手会话已结束")
 
 
-#: Turns that end without a word on the panel. A card nobody answered in time interrupts the
-#: message and says nothing about it (owner ruling, 2026-09-25): the turn shows as stopped,
-#: and the sentence kept for the conversation's own history is not shown.
-_UNSPOKEN_ENDINGS = frozenset({"approval_expired"})
-
-
-def _unspoken(payload: dict) -> bool:
-    return str(payload.get("terminal_reason") or "") in _UNSPOKEN_ENDINGS
+def _ending_text(payload: dict, text: str) -> str:
+    # Keep prior verified effects and the reason supplied by the executor. Expiry also
+    # needs an explanation and a next step, live and when older records are replayed.
+    if payload.get("terminal_reason") == "approval_expired":
+        guidance = panel_contract()["notices"]["approval_expired"]
+        return _clip("\n\n".join(dict.fromkeys(part for part in (guidance, text) if part)),
+                     panel_limits()["result_max_chars"])
+    return text
 
 
 #: Steps that say only that something is under way. Between two things the assistant did,
@@ -386,11 +390,10 @@ def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> d
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
                 "text": _clip(payload.get("text"), limits["goal_max_chars"])}
-    if mapping["terminal"] and _unspoken(payload):
-        return {**base, "kind": "result", "tone": mapping["tone"], "text": "",
-                "panel_state": mapping["panel_state"]}
     text = (_clip(payload.get("message"), limits["result_max_chars"])
             or progress_message(state))
+    if mapping["terminal"]:
+        text = _ending_text(payload, text)
     if not text:
         text = "正在执行" if not mapping["terminal"] else "任务结束"
     node = payload.get("step")
@@ -426,11 +429,10 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     if state == "message_accepted":
         return {**base, "kind": "goal", "tone": "neutral",
                 "text": _clip(payload.get("text"), limits["goal_max_chars"])}
-    if mapping["terminal"] and _unspoken(payload):
-        return {**base, "kind": "result", "tone": mapping["tone"], "text": "",
-                "panel_state": mapping["panel_state"]}
     text = (_clip(payload.get("message"), limits["result_max_chars"])
             or progress_message(state))
+    if mapping["terminal"]:
+        text = _ending_text(payload, text)
     if not text:
         return None
     targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []

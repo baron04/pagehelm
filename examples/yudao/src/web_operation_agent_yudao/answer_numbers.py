@@ -2,7 +2,7 @@
 
 A closing check the adapter offers the common loop through its profile: every
 amount, count or percentage the answer states must appear in the turn's tool
-results or in the person's own words, after unifying thousand separators,
+results, starting page or the person's own words, after unifying thousand separators,
 trailing decimal zeros and signs. Dates, times, record numbers, addresses and
 list markers are not stated business values and stay out of the extraction; a
 missed fabrication is cheaper here than a false alarm on a right answer.
@@ -33,7 +33,8 @@ _DATES = re.compile(
     r"|\d{1,2}\s*点(?:\s*\d{1,2}\s*分|半)?")
 #: Ordinals and list markers position records; they state nothing about them.
 _STRUCTURAL = re.compile(
-    r"第\s*\d+(?:\.\d+)?\s*[页行条名位步层章节期届号班排组]?|(?m:^\s*\d+\s*[.、)）](?=\s))|[（(]\d{1,2}[)）]")
+    r"第\s*\d+(?:\.\d+)?(?:\s*[-–—~～至到]\s*\d+(?:\.\d+)?)?\s*[页行条名位步层章节期届号班排组]?"
+    r"|(?m:^\s*\d+\s*[.、)）](?=\s))|[（(]\d{1,2}[)）]")
 _NON_VALUES = (_ADDRESSES, _MIXED_IDS, _PHONES, _LABELED, _DATES, _STRUCTURAL)
 
 _NUMBER = re.compile(r"[+\-−]?\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?%?|[+\-−]?\d+(?:\.\d+)?%?")

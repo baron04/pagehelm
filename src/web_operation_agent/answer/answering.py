@@ -8,7 +8,7 @@ import unicodedata
 from dataclasses import dataclass
 
 
-_FIELD = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_FIELD = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
 _HAN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -61,15 +61,19 @@ class StructuredQueryAnswer:
                 or any(not isinstance(field, str) or not _FIELD.fullmatch(field)
                        for field in self.fields)):
             raise ValueError("query answer fields are invalid")
-        if not isinstance(self.records, tuple) or len(self.records) > 100:
+        if not isinstance(self.records, tuple) or len(self.records) > 5000:
             raise ValueError("query answer records are invalid")
         normalized_records: list[tuple[str, ...]] = []
+        characters = 0
         for record in self.records:
             if not isinstance(record, tuple) or len(record) != len(self.fields):
                 raise ValueError("query answer record does not match its fields")
             normalized_records.append(tuple(
                 _bounded_text(value, "query answer value", 1_000, allow_empty=True)
                 for value in record))
+            characters += sum(len(value) for value in normalized_records[-1])
+            if characters > 100_000:
+                raise ValueError("query answer values exceed the bounded collection budget")
         object.__setattr__(self, "records", tuple(normalized_records))
         if not isinstance(self.source_complete, bool) or not isinstance(
                 self.result_truncated, bool):
@@ -136,6 +140,11 @@ class StructuredAnswerRendering:
 _NUMERIC = re.compile(r"^-?[\d,]*\d(?:\.\d+)?%?$")
 
 
+def _literal(value: str) -> str:
+    """Application values are visible text, not Markdown commands or links."""
+    return re.sub(r"([\\`*\[\]<>])", r"\\\1", value)
+
+
 def _alignment(values: list[str]) -> str:
     """Right-align a column only when every value in it reads as a number."""
     shown = [value for value in values if value]
@@ -156,16 +165,16 @@ def _markdown_table(fields: tuple[str, ...],
     if any("|" in value for record in records for value in record):
         return None
     columns = [[record[index] for record in records] for index in range(len(fields))]
-    header = "| " + " | ".join(fields) + " |"
+    header = "| " + " | ".join(_literal(field) for field in fields) + " |"
     delimiter = "| " + " | ".join(_alignment(column) for column in columns) + " |"
-    rows = ["| " + " | ".join(value or "—" for value in record) + " |"
+    rows = ["| " + " | ".join(_literal(value) if value else "—" for value in record) + " |"
             for record in records]
     return header, delimiter, rows
 
 
 def _labelled_rows(fields: tuple[str, ...],
                    records: tuple[tuple[str, ...], ...]) -> list[str]:
-    return [f"{index}. " + "; ".join(f"{field}: {value or '—'}"
+    return [f"{index}. " + "; ".join(f"{_literal(field)}: {_literal(value) if value else '—'}"
                                      for field, value in zip(fields, record))
             for index, record in enumerate(records, 1)]
 
@@ -189,7 +198,7 @@ def render_structured_query_answer(
     known_total = (str(projection.source_total)
                    if projection.source_total is not None else ("未知" if chinese else "unknown"))
     if chinese:
-        head = [f"## 查询结果：{projection.collection}（{total} 条）"]
+        head = [f"## 查询结果：{_literal(projection.collection)}（{total} 条）"]
         if not projection.complete:
             limit = ("源扫描已完成，但返回结果受限" if projection.source_complete
                      else "结果可能不完整")
@@ -198,14 +207,14 @@ def render_structured_query_answer(
                 f"来源总数 {known_total}；扫描记录数 "
                 f"{projection.records_scanned if projection.records_scanned is not None else '未知'}。")
             if projection.incomplete_reason:
-                head.append(f"原因：{projection.incomplete_reason}。")
-        footer = (f"> 数据来源：{projection.source} · 范围：{projection.scope}"
-                  f" · 采集时间：{projection.observed_at}")
+                head.append(f"原因：{_literal(projection.incomplete_reason)}。")
+        footer = (f"> 数据来源：{_literal(projection.source)} · 范围：{_literal(projection.scope)}"
+                  f" · 采集时间：{_literal(projection.observed_at)}")
         suffix_template = "显示限制：本答案列出 {shown}/{total} 条工具返回记录。"
         empty_note = "（无记录）"
     else:
         record_word = "record" if total == 1 else "records"
-        head = [f"## Query result: {projection.collection} ({total} {record_word})"]
+        head = [f"## Query result: {_literal(projection.collection)} ({total} {record_word})"]
         if not projection.complete:
             limit = ("The source scan completed, but the returned result is limited"
                      if projection.source_complete else "The result may be incomplete")
@@ -214,9 +223,9 @@ def render_structured_query_answer(
                 f"source total {known_total}; scanned "
                 f"{projection.records_scanned if projection.records_scanned is not None else 'unknown'} records.")
             if projection.incomplete_reason:
-                head.append(f"Reason: {projection.incomplete_reason}.")
-        footer = (f"> Source: {projection.source} · scope: {projection.scope}"
-                  f" · observed: {projection.observed_at}")
+                head.append(f"Reason: {_literal(projection.incomplete_reason)}.")
+        footer = (f"> Source: {_literal(projection.source)} · scope: {_literal(projection.scope)}"
+                  f" · observed: {_literal(projection.observed_at)}")
         suffix_template = "Display limit: this answer lists {shown}/{total} tool-returned records."
         empty_note = "(no records)"
 

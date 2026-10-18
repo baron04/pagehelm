@@ -23,7 +23,7 @@ from ..answer.answering import render_structured_query_answer
 from ..answer.answer_view import render_payload
 from ..business.runtime import BusinessToolResult
 from ..schemas import BROWSER_ACTIONS, POTENTIALLY_WRITING_ACTIONS, PageObservation
-from ..transport.panel_view import panel_limits
+from ..transport.panel_view import panel_contract, panel_limits
 from ..transport.protocol import RemoteProtocolError, ensure_safe_browser_payload
 from .session import RunResult
 from .page_context import DEFAULT_KEEP_OBSERVATIONS
@@ -330,11 +330,19 @@ def _fallback(status: AgentTurnStatus, text: str) -> str:
     return chinese if re.search(r"[\u3400-\u9fff]", text) else english
 
 
+def page_observation_failure(*, chinese: bool) -> str:
+    return ("读取页面状态失败，本次请求未完成。请刷新页面后重新发送需求。" if chinese else
+            "The page state could not be read and this request did not complete. "
+            "Refresh the page and send your request again.")
+
+
 def render_neutral_user_answer(context: AgentAnswerContext) -> str:
     """Prefer model prose and otherwise describe the terminal state without a success claim."""
     status = _status_for(context.agent.terminal_reason)
     if status is AgentTurnStatus.INDETERMINATE:
         return _fallback(status, context.message.text)
+    if context.agent.terminal_reason == "page_observation_failed":
+        return page_observation_failure(chinese=bool(re.search(r"[\u3400-\u9fff]", context.message.text)))
     if context.agent.terminal_reason == "provider_error":
         chinese = bool(re.search(r"[\u3400-\u9fff]", context.message.text))
         code = context.agent.provider_error_code or "provider_error"
@@ -426,9 +434,9 @@ def render_neutral_user_answer(context: AgentAnswerContext) -> str:
         return ("This confirmation expired or no longer matched the current action, so no "
                 "write was performed. Review the target and submit it again.")
     if context.agent.terminal_reason == "approval_expired":
-        # A card nobody answered in time ends the turn as a stop does, with nothing more to
-        # say: the owner's ruling is that a timeout interrupts the message, not explains it.
-        return _fallback(AgentTurnStatus.CANCELLED, context.message.text)
+        if re.search(r"[\u3400-\u9fff]", context.message.text):
+            return panel_contract()["notices"]["approval_expired"]
+        return "Confirmation timed out. The pending operation was not executed. Send your request again."
     if context.agent.terminal_reason == "operation_not_confirmed":
         if re.search(r"[\u3400-\u9fff]", context.message.text):
             return "已取消，助手没有动这个页面。"

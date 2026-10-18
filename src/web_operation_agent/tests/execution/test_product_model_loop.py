@@ -9,6 +9,7 @@ from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
 from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
                                                                 VerificationResult)
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
+from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.execution.receipt import TurnReceipt
@@ -206,6 +207,169 @@ class DispatchDiagnosticsTests(unittest.TestCase):
 
 
 class ModelLoopTests(unittest.TestCase):
+    @staticmethod
+    def read_projection(*, count=253, complete=True):
+        return StructuredQueryAnswer(collection="records", fields=("displayName",),
+            records=tuple(("same name" if i < 2 else f"Actual name {i}",) for i in range(count)),
+            source="actor-scoped API", scope="current actor", observed_at="now",
+            source_complete=complete, result_truncated=not complete, matched_count=count,
+            source_total=count, records_scanned=count, incomplete_reason="" if complete else "bounded scan")
+
+    def test_a_selected_read_answer_delivers_actual_rows_without_model_transcription(self):
+        projection = self.read_projection()
+        fixture = LoopFixture([reply(call("records")),
+            reply(call("finish", status="done", answer="", read_answer="read-1"))],
+            lambda *_: LoopToolResult("Read complete", kind="read", query_answer=projection))
+        fixture.config = NS(max_user_answer_chars=8000)
+        answer = fixture.run("列出全部名字")
+        self.assertEqual(answer.count("| same name |"), 2)
+        self.assertIn("| Actual name 252 |", answer)
+        self.assertNotIn("显示限制", answer)
+        self.assertIn("read-1", str(fixture.state.chat.seen[1]))
+        self.assertEqual(fixture._finish_tool(fixture.turn)["function"]["parameters"]["properties"]
+                         ["read_answer"]["enum"], ["read-1"])
+
+    def test_requested_read_delivery_cannot_be_replaced_by_a_summary_or_unknown_reference(self):
+        for bad in ({"answer": "All names follow a pattern"},
+                    {"answer": "", "read_answer": "from-a-previous-turn"},
+                    {"answer": "invented names", "read_answer": "read-1"}):
+            fixture = LoopFixture([reply(call("records")), reply(call("finish", status="done", **bad)),
+                reply(call("finish", status="done", answer="", read_answer="read-1"))],
+                lambda *_: LoopToolResult("Read complete", kind="read", query_answer=self.read_projection(count=3)))
+            answer = fixture.run()
+            self.assertIn("Actual name 2", answer)
+            self.assertNotIn("pattern", answer)
+            self.assertEqual(len(fixture.state.chat.seen), 3)
+
+    def test_incomplete_or_display_limited_read_cannot_be_reported_as_delivered(self):
+        for projection in (self.read_projection(complete=False), self.read_projection(count=253)):
+            fixture = LoopFixture([reply(call("records")),
+                reply(call("finish", status="done", answer="", read_answer="read-1")),
+                reply(call("finish", status="cannot", answer="The complete list could not be delivered"))],
+                lambda *_: LoopToolResult("Read result", kind="read", query_answer=projection))
+            fixture.config = NS(max_user_answer_chars=512)
+            self.assertEqual(fixture.run(), "The complete list could not be delivered")
+            self.assertFalse(any(e == "read_answer_selected" for e, _ in fixture.events))
+
+    def test_read_delivery_is_an_immutable_completed_read_only_contract(self):
+        for kwargs in ({"query_answer": {}}, {"kind": "page"}, {"state": "refused"}):
+            values = {"query_answer": self.read_projection(), **kwargs}
+            with self.assertRaises(ValueError):
+                LoopToolResult("result", **values)
+
+    def test_an_unsent_plain_response_is_not_a_prior_delivered_answer(self):
+        draft = "UNDELIVERED private draft\n" * 100
+        fixture = LoopFixture([{"content": draft},
+            reply(call("finish", status="done", answer="Complete final result"))], lambda *_: None)
+        self.assertEqual(fixture.run(), "Complete final result")
+        following = fixture.state.chat.seen[1]
+        self.assertNotIn(draft, str(following))
+        self.assertIn("没有发送给用户", following[-1]["content"])
+        self.assertEqual([facts["chars"] for event, facts in fixture.events
+                          if event == "model_answer_not_delivered"], [len(draft)])
+        self.assertNotIn("private draft", str(fixture.events))
+
+    def test_plain_response_exhaustion_cannot_deliver_an_unchecked_draft(self):
+        fixture = LoopFixture([{"content": "unchecked private draft"}] * 3, lambda *_: None)
+        self.assertNotIn("unchecked private draft", fixture.run())
+        self.assertEqual(fixture.state.terminal_reason, "agent_refused")
+        self.assertEqual(fixture.state.detail, "answer protocol unresolved")
+
+    def test_unsent_draft_completion_is_reviewed_against_the_delivered_body_with_one_correction(self):
+        for repaired in (True, False):
+            with self.subTest(repaired=repaired):
+                fixture = LoopFixture([{"content": "All names were written in an unsent draft"},
+                    reply(call("finish", status="done", answer="Already listed above")),
+                    reply(call("finish", status="done", answer="Ada; Grace" if repaired else "See above"))],
+                    lambda *_: None)
+                fixture.profile = NS(verification_messages=lambda *_: [])
+                reviewed = []
+                def verify(s, prompt, answer, turn):
+                    reviewed.append(answer)
+                    return VerificationResult("passed") if answer == "Ada; Grace" else \
+                        VerificationResult("disputed", ("The requested names are missing from the final answer.",))
+                fixture._verify = verify
+                answer = fixture.run("List all names")
+                self.assertEqual(len(reviewed), 2)
+                self.assertEqual(fixture.turn["completion_reviews"], 2)
+                if repaired:
+                    self.assertEqual(answer, "Ada; Grace")
+                else:
+                    self.assertEqual(fixture.state.terminal_reason, "agent_refused")
+                    self.assertNotIn("See above", answer)
+
+    def test_unsent_draft_cannot_bypass_an_unavailable_configured_review(self):
+        fixture = LoopFixture([{"content": "unsent draft"},
+            reply(call("finish", status="done", answer="Claimed complete"))], lambda *_: None)
+        fixture.profile = NS(verification_messages=lambda *_: [])
+        fixture._verify = lambda *_: VerificationResult("unavailable")
+        self.assertNotIn("Claimed complete", fixture.run())
+        self.assertEqual(fixture.state.terminal_reason, "agent_refused")
+
+    def test_finish_declares_only_the_text_length_the_composed_turn_can_deliver(self):
+        fixture = LoopFixture([], lambda *_: None)
+        fixture.config = NS(max_user_answer_chars=5200)
+        for turn in ({}, {"sources": NS()}):
+            schema = fixture._finish_tool(turn)["function"]["parameters"]
+            self.assertEqual(schema["properties"]["answer"]["maxLength"], 5200)
+        larger = LoopFixture([], lambda *_: None)
+        self.assertGreater(larger._finish_tool({})["function"]["parameters"]["properties"]["answer"]["maxLength"], 5200)
+
+    def test_a_long_answer_uses_the_composed_chat_output_budget_without_a_hidden_smaller_override(self):
+        answer = "\n".join(f"record {number}: supplied full name" for number in range(220))
+        fixture = LoopFixture([reply(call("finish", status="done", answer=answer))], lambda *_: None)
+        requested = []
+        original = fixture.state.chat.complete_cancellable
+        def complete(*args, **kwargs):
+            requested.append(kwargs.get("max_tokens"))
+            return original(*args, **kwargs)
+        fixture.state.chat.complete_cancellable = complete
+        self.assertEqual(fixture.run("List every record name"), answer)
+        self.assertEqual(requested, [None])
+
+    def test_an_application_can_require_complete_request_review_after_a_local_page_proof(self):
+        fixture = LoopFixture([reply(call("click", index=1)),
+            reply(call("finish", status="done", answer="Current tab selected"))],
+            lambda *_: LoopToolResult("selected", kind="page", review_completion=True))
+        reviewed = []
+        fixture._verify = lambda s, prompt, answer, turn: (reviewed.append((prompt, answer))
+            or VerificationResult("passed"))
+        self.assertEqual(fixture.run("Open the other record's tab"), "Current tab selected")
+        self.assertEqual(reviewed, [("Open the other record's tab", "Current tab selected")])
+
+    def test_unresolved_page_target_has_one_correction_and_cannot_finish_on_a_second_dispute(self):
+        for repaired in (True, False):
+            with self.subTest(repaired=repaired):
+                def handler(fixture, name, arguments):
+                    if name == "goto" and repaired:
+                        fixture.state.obs = page(2, route="/records/2")
+                    return LoopToolResult("page result", kind="page", review_completion=True)
+                fixture = LoopFixture([reply(call("click", index=1)),
+                    reply(call("finish", status="done", answer="Wrong record")),
+                    reply(call("goto", path="/records/2")),
+                    reply(call("finish", status="done", answer="Requested record"))], handler)
+                fixture._verify = lambda s, *_: VerificationResult("passed") if s.obs.page_route == "/records/2" \
+                    else VerificationResult("disputed", ("The selected tab belongs to record 1, not record 2.",))
+                answer = fixture.run("Open record 2")
+                self.assertEqual(fixture.turn["completion_reviews"], 2)
+                if repaired:
+                    self.assertEqual(answer, "Requested record")
+                    self.assertEqual(fixture.state.terminal_reason, "")
+                else:
+                    self.assertNotIn("Requested record", answer)
+                    self.assertEqual(fixture.state.terminal_reason, "agent_refused")
+
+    def test_unavailable_required_review_refuses_completion_and_invalid_flags_are_rejected(self):
+        fixture = LoopFixture([reply(call("click", index=1)),
+            reply(call("finish", status="done", answer="Claimed done"))],
+            lambda *_: LoopToolResult("selected", kind="page", review_completion=True))
+        fixture._verify = lambda *_: VerificationResult("unavailable")
+        self.assertNotIn("Claimed done", fixture.run())
+        self.assertEqual(fixture.state.terminal_reason, "agent_refused")
+        for kwargs in ({"review_completion": 1}, {"review_completion": True},
+                       {"kind": "page", "state": "refused", "review_completion": True}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                LoopToolResult("result", **kwargs)
     def test_manual_handoff_copy_requires_a_current_verified_runtime_handoff(self):
         for mode in ("combined", "separate_finish", "refused", "invented", "changed", "need_input"):
             with self.subTest(mode=mode):
@@ -560,6 +724,26 @@ class ModelLoopTests(unittest.TestCase):
                                reply(call("finish", status="done", answer="Mira is ambiguous"))], read)
         self.assertEqual(fixture.run(), "Mira is ambiguous")
         self.assertEqual(fixture.state.answer_targets, ())
+
+    def test_verified_form_handoff_omits_links_but_other_answers_keep_their_read_targets(self):
+        target = AnswerTarget("record", "/contacts/7", "Mira", "contacts:7")
+        answer = "**Mira**\n\n- Note: ready"
+        for same_page in (True, False):
+            with self.subTest(same_page=same_page):
+                def read(fixture, _name, _arguments):
+                    fingerprint = fixture._page_fingerprint(fixture.state.obs)
+                    fixture.turn["handoff"] = (fingerprint if same_page else ("old page",), "Save")
+                    return LoopToolResult("Mira is contact 7", kind="read", answer_targets=(target,))
+                fixture = LoopFixture([reply(call("list_contacts")),
+                    reply(call("finish", status="done", answer=answer))], read)
+                result = fixture.run()
+                self.assertTrue(result.startswith(answer))  # Markdown survives settlement.
+                if same_page:
+                    self.assertEqual(fixture.state.answer_targets, ())
+                    self.assertIn("手动点击「Save」", result)
+                else:
+                    self.assertEqual(len(fixture.state.answer_targets), 1)
+                    self.assertNotIn("手动点击", result)
 
     def test_actor_menu_metadata_can_issue_a_page_link(self):
         target = AnswerTarget("page", "/contacts", "Contacts", "menu:/contacts")

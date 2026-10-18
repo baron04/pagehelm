@@ -345,7 +345,7 @@ class YudaoHost:
         meter = SpendMeter(ledger=self.ledger, batch_id=f"yudao-native-{run_dir.name}",
                            allowance=self.allowance, allowance_key=person)
         chat = ChatModel(meter, env=dict(self.config.model_env), model=self.config.model,
-                         max_completion_tokens=1024, timeout=self.config.turn_timeout_s,
+                         max_completion_tokens=8192, timeout=self.config.turn_timeout_s,
                          egress_policy=ProviderEgressPolicy(
                              session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
 
@@ -374,6 +374,7 @@ class YudaoHost:
             # the turn's leave, the write watch and the application's own window; with
             # native writes it may also propose a loaded Skill's typed operations.
             from web_operation_agent.goal.conventions import load_conventions
+            from web_operation_agent.execution.model_loop import FINISH_TOOL
             from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
             from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
             model_goal = ModelPageGoalPort(app.goal_port, self.page_review)
@@ -384,7 +385,8 @@ class YudaoHost:
             if self.config.native_writes and self.live_forms:
                 from .mutation_prefill import YudaoMutationPrefill
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
-            turn_config = replace(turn_config, action_policy=action_policy, click_policy=None)
+            turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
+                max_user_answer_chars=FINISH_TOOL["function"]["parameters"]["properties"]["answer"]["maxLength"])
             executor = SlimTurnExecutor(
                 **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
                 goal_port=model_goal, draft_steps=draft_steps,

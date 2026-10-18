@@ -2,7 +2,7 @@
 import {PageController as GenericPageController, getElementByIndex as controllerElement,
   scrollIntoViewIfNeeded} from './page-controller.js'
 import {lineControls, nativeControlElement, nativeRangeDateCell, nativeRangeDateStep,
-  withLineControls, withObservedRowColumns} from './page-facts.js'
+  withLineControls, withTreeQueryControls, withUserStatusControls, withObservedRowColumns} from './page-facts.js'
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 let pressed = null
@@ -53,15 +53,24 @@ export async function inputTextElement(element, text) {
 export class PageController extends GenericPageController {
   async updateTree() {
     const html = await super.updateTree()
-    const next = withObservedRowColumns(
-      withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()), document, this.selectorMap)
-    if (next === this.simplifiedHTML) return html
-    this.simplifiedHTML = next
-    for (const line of next.split('\n')) {
-      const mark = /^\s*\*?\[(\d+)\]</.exec(line)
-      if (mark && !this.elementTextMap.has(Number(mark[1]))) this.elementTextMap.set(Number(mark[1]), line.trim())
+    // The generic controller has already emitted afterUpdate. Sample application
+    // extensions under the same synchronous lifecycle so our panel's hit targets
+    // remain excluded here too, and restore them even if an extension fails.
+    this.dispatchEvent(new Event('beforeUpdate'))
+    try {
+      const next = withObservedRowColumns(withUserStatusControls(this.selectorMap,
+        withTreeQueryControls(this.selectorMap,
+          withLineControls(this.selectorMap, this.simplifiedHTML, lineControls()))), document, this.selectorMap)
+      if (next === this.simplifiedHTML) return html
+      this.simplifiedHTML = next
+      for (const line of next.split('\n')) {
+        const mark = /^\s*\*?\[(\d+)\]</.exec(line)
+        if (mark && !this.elementTextMap.has(Number(mark[1]))) this.elementTextMap.set(Number(mark[1]), line.trim())
+      }
+      return next
+    } finally {
+      this.dispatchEvent(new Event('afterUpdate'))
     }
-    return next
   }
 
 

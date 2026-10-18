@@ -636,12 +636,12 @@ class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
         self.assertEqual(summary["application_state"]["post_requests"], 0)
         self.assertEqual(summary["application_state"]["records_created"], 0)
         self.assertEqual(summary["turns"][0]["terminal_reason"], "approval_expired")
-        # A card nobody answered ends the turn as a stop does, and says nothing more about
-        # the timeout (owner ruling, 2026-09-25); the panel shows no line for it at all.
-        self.assertEqual(summary["turns"][0]["answer"], "The requested action was cancelled.")
+        # Expiry stays fail-closed and explains the outcome in the conversation,
+        # including when the expired card no longer exposes actionable controls.
+        self.assertEqual(summary["turns"][0]["answer"],
+                         "Confirmation timed out. The pending operation was not executed. Send your request again.")
         self.assertEqual(summary["mutation_journal"][0]["state"], "prepared")
-        # Nothing was pressed: past the deadline the card is gone, controls and all, which is
-        # what keeps a person out of the dead-end this used to leave them in (P7.5 CR-38).
+        # Nothing was pressed, and expired approval controls cannot dispatch a write.
         self.assertEqual(summary["approvals"][0]["controls_after_expiry"], 0)
 
     def test_browser_replay_of_the_same_approval_is_idempotent(self):

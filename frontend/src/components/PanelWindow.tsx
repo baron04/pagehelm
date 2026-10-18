@@ -88,14 +88,19 @@ export function PanelWindow({host, allowedOrigins}: {
     setOpenState(value)
     host.panelVisibility?.(value)
   }, [host])
+  const initiallyOpen = useRef(open)
+  useEffect(() => {
+    // A restored window asks the host for its history just as pressing the launcher does.
+    if (initiallyOpen.current) call(() => host.panelVisibility?.(true))
+  }, [call, host])
 
   const pending = snapshot.pendingApproval
   const effectStatus = effectPhase(snapshot, effectConfirmation)
   useEffect(() => {
     if (effectStatus === 'off') setEffectConfirmation(null)
   }, [effectStatus, effectConfirmation])
-  // A card past its deadline is gone at once, with nothing said about it: the server ends
-  // the turn as a stop at the same moment, and until that lands the person can type again.
+  // Expired cards cannot be answered. Show the server's expiry guidance immediately while
+  // the terminal timeline entry is still travelling back; that entry keeps the explanation.
   const [approvalLive, setApprovalLive] = useState(true)
   useEffect(() => {
     if (!pending) {
@@ -285,8 +290,9 @@ export function PanelWindow({host, allowedOrigins}: {
                                 onDecide={decide} onRefused={() => undefined} />
                 )} />
 
-        {(snapshot.notice ?? panelFailure) && (
-          <InlineError notice={(snapshot.notice ?? panelFailure)!} configuration={host.configuration}
+        {(snapshot.notice ?? panelFailure ?? (pending && !approvalLive)) && (
+          <InlineError notice={snapshot.notice ?? panelFailure ?? {code: 'approval_expired', retryable: false}}
+                       configuration={host.configuration}
                        labels={labels} limits={limits} onRetry={reload}
                        offline={!snapshot.connection.online} />
         )}

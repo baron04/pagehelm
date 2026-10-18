@@ -230,6 +230,34 @@ class QueryTests(unittest.TestCase):
             {"page_control": "query", "query_field": "name", "form_scope": "form:query", "form_instance": "live",
              "field_label": "名称", "value": value})
 
+    def test_tree_filter_requires_explicit_field_review_selection_and_exact_applied_get(self):
+        document = review_document()
+        next(h for h in document["handlers"] if h["kind"] == "query")["controls"] = ["deptId"]
+        self.policy.page_review = NativePageReview.load(document, "synthetic-v1")
+        def node(epoch, selected):
+            return ElementRef("e1", "treeitem", "研发部门", "div", epoch,
+                {"page_control":"query", "query_field":"deptId", "query_value":"103",
+                 "aria-selected":str(selected).lower()})
+        before = replace(self.page(path="/crm/customer",elements=(node(1,False),)), page_read=self.proof)
+        digest=_json_digest(["103"])
+        after=replace(before,epoch=2,elements=[node(2,True)],page_read={**self.proof,
+            "revision":2,"query_fields":{"deptId":digest}})
+        self.transact(before,after,"click",{"ref":"e1"})
+        self.assertTrue(self.runtime.query_verified(after,command_id="command"))
+        for broken in (replace(after,elements=[node(2,False)]),
+                       replace(after,page_read={**after.page_read,"revision":1}),
+                       replace(after,page_read={**after.page_read,"query_fields":{"deptId":_json_digest(["104"])}}),
+                       replace(after,page_read={**after.page_read,"query_fields":{"deptId":digest,"status":_json_digest(["1"])}})):
+            self.runtime = ActionAdmission(self.policy, "yudao")
+            with self.subTest(broken=broken),self.assertRaises(ActionAdmissionRefused):
+                self.transact(before,broken,"click",{"ref":"e1"})
+        cleared=replace(after,epoch=3,elements=[node(3,False)],page_read={**after.page_read,"revision":3,"query_fields":{}})
+        self.runtime = ActionAdmission(self.policy, "yudao")
+        self.transact(after,cleared,"click",{"ref":"e1"})
+        self.policy.page_review=NativePageReview.load(review_document(),"synthetic-v1")
+        with self.assertRaises(ActionAdmissionRefused):
+            self.runtime.prepare("click",{"ref":"e1"},before,context=self.context,checkpoint=lambda:None)
+
     def test_record_navigation_reads_exact_detail_without_compiling_line_tables(self):
         self.policy.record_routes = {"/crm/customer":"/crm/customer/detail/{id}"}
         data = self.policy.data

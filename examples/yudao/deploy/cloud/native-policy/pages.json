@@ -4766,6 +4766,15 @@
       "evidence": "phase-16/menu-scan/runs/t3-b-450-v3/summary.json",
       "sha256": "c47517cce3702ddb507e1090949d9c3ae7e7512b52444e2ed3c94d1ef6b379b6",
       "controls": []
+    },
+    {
+      "kind": "query",
+      "route": "/system/user",
+      "evidence": "examples/yudao/deploy/cloud/native-policy/v2026.09-page-handlers.md#system-user-department-tree",
+      "sha256": "ed5b10ed4195e2d63a0cd49da99982ebeb8579127b27d1688233d7ab089904b2",
+      "controls": [
+        "deptId"
+      ]
     }
   ],
   "generated": {

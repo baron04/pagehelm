@@ -471,7 +471,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // What a text field currently shows, so the server can check a value it entered
       // before handing the form to the person. Redacted like any other observed text,
       // bounded, and never for a field whose name marks it sensitive.
-      if (item.role !== 'select' && typeof element?.value === 'string' && element.value) {
+      if (item.role !== 'select' && typeof element?.value === 'string') {
         item.attrs.value = redactor.redactString(element.value).slice(0, 120)
       }
       if (group) {

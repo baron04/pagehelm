@@ -94,19 +94,15 @@ class PanelContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no panel projection"):
             project_event(_event("progress", {"state": "invented"}), at=0)
 
-    def test_a_card_nobody_answered_ends_the_turn_without_a_word(self):
-        """A timeout interrupts the message and says nothing (owner ruling, 2026-09-25).
-
-        The turn still ends, stopped, live and after a restart; the sentence the conversation
-        keeps for its own history is not shown. A stop the person asked for keeps its line.
-        """
+    def test_an_expired_confirmation_explains_why_the_turn_stopped_live_and_after_restart(self):
         unanswered = {"state": "cancelled", "terminal_reason": "approval_expired",
                       "message": "已取消。"}
         for entry in (project_event(_event("progress", unanswered), at=0),
                       project_history_record({"kind": "progress", "payload": unanswered},
                                              index=1)):
             self.assertEqual(entry["kind"], "result")
-            self.assertEqual(entry["text"], "")
+            self.assertIn(panel_contract()["notices"]["approval_expired"], entry["text"])
+            self.assertIn("已取消。", entry["text"])
             self.assertEqual(entry["panel_state"], "cancelled")
         stopped = {**unanswered, "terminal_reason": "user_cancelled"}
         self.assertEqual(project_event(_event("progress", stopped), at=0)["text"], "已取消。")
@@ -300,6 +296,7 @@ class PanelContractTests(unittest.TestCase):
         self.assertEqual(configuration["progress_states"], contract["progress_states"])
         self.assertEqual(configuration["terminal_error_codes"],
                          contract["terminal_error_codes"])
+        self.assertEqual(configuration["nonterminal_error_states"], contract["nonterminal_error_states"])
 
     def test_the_frontend_reads_the_same_file_rather_than_copying_it(self):
         """The panel's types are a view over the contract, not a second declaration."""

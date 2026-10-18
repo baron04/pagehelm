@@ -102,7 +102,7 @@ function actingRuntime(pageWriteGuard?: string) {
     page_epoch: 2, caused_by_action_id: actionId, observation: {url, elements: []}})
   state._actionFreshness = () => ({fresh: true, reason: ''})
   const executed: string[] = []
-  state._execute = async () => { executed.push('click'); return {success: true} }
+  state._execute = async (command: {action: string}) => { executed.push(command.action); return {success: true} }
   const posts: Posted[] = []
   state._post = async (path: string, body: Record<string, unknown>) => {
     posts.push({path, body})
@@ -118,6 +118,18 @@ function actingRuntime(pageWriteGuard?: string) {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('a page action in an application that names a write guard', () => {
+  it('can observe without opening a write window, even when that endpoint is unavailable', async () => {
+    const fetcher = vi.fn(async () => reply(503, {}))
+    vi.stubGlobal('fetch', fetcher)
+    const {runtime, executed, posts, action} = actingRuntime('/woa/page-guard')
+    action.command.action = 'observe'
+    await runtime._handleAction(action as never)
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(executed).toEqual(['observe'])
+    expect(posts.map(row => row.path)).toEqual(['/claims', '/results'])
+    expect(posts[1]?.body.status).toBe('completed')
+    expect((posts[1]?.body.receipt as Record<string, unknown>).ok).toBe(true)
+  })
   it('is refused, before anything is claimed, when the guard cannot be opened', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => reply(404, {})))
     const {runtime, executed, posts, action} = actingRuntime('/woa/page-guard')

@@ -1,6 +1,7 @@
 import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {
-  AlertTriangle, ArrowDown, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
+  AlertTriangle, ArrowDown, ArrowUpRight, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
+  FileText, PanelTop,
 } from 'lucide-react'
 import type {AnswerTarget, Labels, PanelLimits, TimelineEntry} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
@@ -304,8 +305,8 @@ function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget}: {
       {entry.answer_targets?.length ? (
         <nav className="woa-answer-targets" aria-label={labels.relatedLinks}>
           <span>{labels.relatedLinks}</span>
-          {entry.answer_targets.map(target => (
-            <a key={`${target.read_ref}:${target.identity}`} href={target.address}
+          <ul>{entry.answer_targets.map(target => (
+            <li key={`${target.read_ref}:${target.identity}`}><a href={target.address}
                target="_blank" rel="noreferrer noopener"
                onClick={event => {
                  if (event.button === 0 && !event.metaKey && !event.ctrlKey
@@ -313,9 +314,11 @@ function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget}: {
                    event.preventDefault()
                  }
                }}>
-              {target.label}
-            </a>
-          ))}
+              {target.kind === 'record' ? <FileText {...iconProps(14)} /> : <PanelTop {...iconProps(14)} />}
+              <span>{target.label}</span>
+              <ArrowUpRight {...iconProps(12)} />
+            </a></li>
+          ))}</ul>
         </nav>
       ) : null}
       <div className="woa-answer-actions">
@@ -337,7 +340,9 @@ function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget}: {
     <section className="woa-outcome" data-entry-id={entry.id} data-kind={kind}>
       <h3><Icon {...iconProps(14)} />
         {kind === 'indeterminate' ? labels.statusIndeterminate : labels.statusRefused}</h3>
-      <p>{entry.text.slice(0, limits.result_max_chars)}</p>
+      <Answer text={entry.text.slice(0, limits.result_max_chars)}
+              authored={entry.authored ?? 'server'} live={false}
+              labels={labels} allowedOrigins={allowedOrigins} />
     </section>
   )
 }
@@ -596,8 +601,7 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                   <WorkProcess turn={turn} labels={labels}
                                stopping={turn.running && snapshot.connection.stopping} />
                 )}
-                {/* An ending the server leaves unspoken -- a card nobody answered in time --
-                    still ends the turn and marks it stopped, and adds no line of its own. */}
+                {/* The server supplies the outcome, including why a confirmation expired. */}
                 {turn.outcome?.text && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
                            live={!turn.outcome.replayed && !settledAtMount.current?.has(turn.outcome.id)}

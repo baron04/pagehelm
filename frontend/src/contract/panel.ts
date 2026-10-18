@@ -113,6 +113,7 @@ export interface PanelConfiguration {
   progress_states: Record<string, {panel_state: PanelState; tone: Tone; terminal: boolean}>
   terminal_error_codes: string[]
   terminal_panel_state_by_code: Record<string, PanelState>
+  nonterminal_error_states: Record<string, PanelState>
   /** Why a session ended with nothing wrong; it comes back on the next message, unannounced. */
   lapse_codes: string[]
   session_expires_at: number
@@ -131,6 +132,7 @@ export const DEFAULT_CONFIGURATION: PanelConfiguration = {
   progress_states: raw.progress_states as PanelConfiguration['progress_states'],
   terminal_error_codes: [...raw.terminal_error_codes],
   terminal_panel_state_by_code: raw.terminal_panel_state_by_code as Record<string, PanelState>,
+  nonterminal_error_states: raw.nonterminal_error_states as Record<string, PanelState>,
   lapse_codes: [...raw.lapse_codes],
   session_expires_at: 0,
   principal_expires_at: 0,

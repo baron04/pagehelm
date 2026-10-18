@@ -44,7 +44,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
     // fold -- unreadable, and below the ratio the visibility gate asks for. Bring the whole
     // card into view if it fits, the least amount that does it.
     card.current?.scrollIntoView({block: 'nearest'})
-    ;(canDecline ? cancel : confirm).current?.focus()
+    card.current?.focus({preventScroll: true})
     return () => gate.attach(null)
     // A new approval re-arms the gate and takes focus; the same one must not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,7 +89,10 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
     }
     const root = card.current?.getRootNode() as ShadowRoot | Document | undefined
     const active = (root as ShadowRoot | undefined)?.activeElement ?? document.activeElement
-    if (event.shiftKey && active === cancel.current) {
+    if (active === card.current) {
+      event.preventDefault()
+      ;(event.shiftKey ? confirm : cancel).current?.focus()
+    } else if (event.shiftKey && active === cancel.current) {
       event.preventDefault()
       confirm.current?.focus()
     } else if (!event.shiftKey && active === confirm.current) {
@@ -104,7 +107,7 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const hintId = `${titleId}-hint`
 
   return (
-    <section className="woa-approval" ref={card} role="alertdialog" aria-modal="false"
+    <section className="woa-approval" ref={card} role="alertdialog" aria-modal="false" tabIndex={-1}
              data-kind={approval.kind ?? 'write'}
              data-approval-id={approval.approval_id}
              aria-labelledby={titleId}

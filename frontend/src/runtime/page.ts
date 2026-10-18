@@ -671,7 +671,9 @@ export class Page {
       priority: element.style.getPropertyPriority(property),
     }))
     element.style.setProperty('outline', '3px solid Highlight', 'important')
-    element.style.setProperty('outline-offset', '3px', 'important')
+    // Keep the ring inside compact controls: table cells commonly clip overflow just
+    // outside a link button. This does not change layout, hit testing or the app's CSS.
+    element.style.setProperty('outline-offset', '-3px', 'important')
     const applied = new Map(original.map(saved => [
       saved.property, element.style.getPropertyValue(saved.property),
     ]))

@@ -16,12 +16,44 @@ import {
 } from './harness'
 
 test.describe('the launcher', () => {
+  test('refused and uncertain outcomes render the same safe Markdown as successful answers', async ({open}) => {
+    const panel = await open(snapshot({entries: [
+      entry('goal', 'goal', '定位业务操作'),
+      entry('result', 'result', '**尚未执行。**\n\n- 已定位目标\n- 请自行确认', {panel_state: 'refused'}),
+    ]}))
+    await panel.page.locator('.woa-launcher').click()
+    const card = panel.page.locator('.woa-outcome')
+    await expect(card.locator('strong')).toHaveText('尚未执行。')
+    await expect(card.locator('li')).toHaveCount(2)
+    await expect(card).not.toContainText('**')
+    await panel.set({entries: [
+      entry('goal', 'goal', '定位业务操作'),
+      entry('result', 'result', '**结果待核实。**\n\n- 请核对当前记录', {panel_state: 'indeterminate'}),
+    ]})
+    await expect(card).toHaveAttribute('data-kind', 'indeterminate')
+    await expect(card.locator('strong')).toHaveText('结果待核实。')
+    expect(panel.errors).toEqual([])
+  })
+  test('keeps the open or collapsed choice through a page refresh', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.page.locator('.woa-launcher').click()
+    await expect(panel.page.locator('.woa-window')).toBeVisible()
+    await panel.page.reload()
+    await expect(panel.page.locator('.woa-window')).toBeVisible()
+    expect(await panel.page.evaluate(() => (window as unknown as {__visibility: boolean[]}).__visibility))
+      .toEqual([true])
+    await panel.page.getByRole('button', {name: labels.collapse}).click()
+    await panel.page.reload()
+    await expect(panel.page.locator('.woa-launcher')).toBeVisible()
+    await expect(panel.page.locator('.woa-window')).toHaveCount(0)
+    expect(panel.errors).toEqual([])
+  })
   test('an explicitly offered form handoff requires the same visible card gate as saving', async ({open}) => {
     const panel = await open(snapshot())
     await panel.raiseApproval({offer_prefill: true})
     await expect(panel.page.getByTestId('woa-prefill')).toHaveText(labels.prefillChoice)
     await expect(panel.page.getByTestId('woa-approve')).toHaveText(labels.saveChoice)
-    expect((await panel.active()).testid).toBe('woa-deny')
+    await expect(panel.page.getByRole('alertdialog')).toBeFocused()
     await panel.page.waitForTimeout(presentation.approval_visibility.min_visible_ms + 250)
     await panel.page.getByTestId('woa-prefill').click()
     expect(await panel.calls()).toContainEqual(['decide', 'a-1', 'prefill'])
@@ -184,6 +216,26 @@ test.describe('structured answer links', () => {
 })
 
 test.describe('the default state', () => {
+  test('uses the same send control in the welcome and conversation views', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.page.locator('.woa-launcher').click()
+    const composer = panel.page.locator('#woa-composer-input')
+    await composer.fill('列出联系人')
+    const style = () => panel.page.locator('.woa-send').evaluate(node => {
+      const css = getComputedStyle(node)
+      return [css.width, css.height, css.borderRadius, css.backgroundImage, css.color]
+    })
+    const welcomeStyle = await style()
+    await panel.settle()
+    const buttonBox = await panel.page.locator('.woa-send').boundingBox()
+    expect(buttonBox!.width).toBeGreaterThanOrEqual(28)
+    expect(buttonBox!.width).toBeLessThanOrEqual(32)
+    await panel.set({entries: [entry('e1', 'goal', '上一条需求'),
+      entry('e2', 'result', '已完成。', {panel_state: 'success'})]})
+    await expect(panel.page.locator('.woa-empty')).toHaveCount(0)
+    expect(await style()).toEqual(welcomeStyle)
+    expect(panel.errors).toEqual([])
+  })
   test('a conversation being fetched shows nothing at first, then a skeleton, never the greeting', async ({open}) => {
     // A tab that already has a conversation fetches it when the panel opens. A quick fetch
     // shows nothing in between; a slow one shows three lines -- long, short, medium -- after
@@ -387,6 +439,8 @@ test.describe('a confirmation', () => {
     await expect(panel.page.locator('.woa-approval')).toContainText('S00002')
     // A change is guarded: the write card's title carries the shield.
     await expect(panel.page.locator('.woa-approval h2 svg.lucide-shield-alert')).toHaveCount(1)
+    await expect(panel.page.getByRole('alertdialog')).toBeFocused()
+    await panel.page.keyboard.press('Tab')
     expect((await panel.active()).text).toBe(labels.deny)
     // Tab is trapped between the two answers; nothing else is reachable from the card.
     await panel.page.keyboard.press('Tab')
@@ -415,8 +469,15 @@ test.describe('a confirmation', () => {
     await expect(panel.page.getByTestId('woa-deny')).toHaveText(labels.deny)
     await expect(panel.page.getByTestId('woa-approve')).toHaveText(labels.operateConfirm)
     await expect(panel.page.locator('#woa-composer-input')).toBeDisabled()
-    // Focus starts on the answer that does nothing, and Escape gives it.
-    expect((await panel.active()).testid).toBe('woa-deny')
+    // The card announces itself without putting a focus ring on either answer.
+    await expect(card).toBeFocused()
+    await expect(panel.page.getByTestId('woa-deny')).not.toBeFocused()
+    expect(await panel.page.getByTestId('woa-deny').evaluate(
+      node => getComputedStyle(node).outlineStyle)).toBe('none')
+    await panel.page.keyboard.press('Tab')
+    await expect(panel.page.getByTestId('woa-deny')).toBeFocused()
+    expect(await panel.page.getByTestId('woa-deny').evaluate(
+      node => getComputedStyle(node).outlineStyle)).toBe('solid')
     await panel.page.keyboard.press('Escape')
     const calls = await panel.calls()
     expect(calls.map(call => call[0])).toEqual(['decide'])
@@ -463,11 +524,7 @@ test.describe('a confirmation', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('an expired one goes at once, says nothing, and frees the composer', async ({open}) => {
-    // Past the deadline the server takes no answer and ends the turn as a stop, so the card
-    // goes without a word. A card left up to be pressed once made the runtime treat the 409
-    // as "another page took this session over" (P7.5 CR-38); a notice about the timeout was
-    // ruled out by the owner: a timeout interrupts the message, it does not explain itself.
+  test('an expired one explains the timeout and frees the composer', async ({open}) => {
     const panel = await open(snapshot())
     await panel.raiseApproval()
     const composer = panel.page.locator('textarea')
@@ -477,24 +534,24 @@ test.describe('a confirmation', () => {
     await panel.page.waitForTimeout(1200)
 
     await expect(panel.page.locator('.woa-approval')).toHaveCount(0)
-    await expect(panel.page.locator('.woa-notice, .woa-inline-error')).toHaveCount(0)
+    await expect(panel.page.locator('.woa-inline-error')).toContainText(notices.approval_expired!)
     await expect(composer, 'the person can type again').toBeEnabled()
   })
 
-  test('a turn a card timed out on ends stopped, with no line of its own', async ({open}) => {
+  test('a turn a card timed out on retains the server explanation in history', async ({open}) => {
     const panel = await open(snapshot({entries: [
       entry('e1', 'goal', '打开 Azure Interior 的客户页面'),
       entry('e2', 'progress', '正在思考'),
       entry('e3', 'progress', '已读取 1 条：客户 Azure Interior'),
       entry('e4', 'approval', '需要确认后才能操作页面', {tone: 'warning'}),
-      entry('e5', 'result', '', {panel_state: 'cancelled'}),
+      entry('e5', 'result', notices.approval_expired!, {panel_state: 'cancelled'}),
     ]}))
     await panel.page.locator('.woa-launcher').click()
     await panel.page.locator('.woa-turn').waitFor()
     await expect(panel.page.locator('.woa-turn .woa-work__summary svg.lucide-circle-slash'))
       .toHaveCount(1)
-    await expect(panel.page.locator('.woa-turn .woa-outcome')).toHaveCount(0)
-    await expect(panel.page.locator('.woa-turn .woa-answer-actions')).toHaveCount(0)
+    await expect(panel.page.locator('.woa-turn')).toContainText(notices.approval_expired!)
+    await expect(panel.page.locator('.woa-turn .woa-answer-actions')).toHaveCount(1)
     expect(panel.errors).toEqual([])
   })
 
@@ -558,9 +615,10 @@ test.describe('answers', () => {
   })
 
   test('markdown renders tables and never links a foreign origin', async ({open}) => {
-    const answer = '3 张销售订单待开票：\n\n' +
+    const answer = '# 查询结果\n\n**3 张**销售订单待开票：\n\n' +
       '| 单号 | 客户 | 金额 |\n| --- | --- | ---: |\n' +
       '| S00007 | Deco Addict | 1,231.00 |\n\n' +
+      '- 第一条\n- 第二条\n\n' +
       '见 [本地记录](/odoo/sales) 与 [外部站点](https://evil.example/steal)。\n\n' +
       "```python\nprint('hello')\n```\n"
     const panel = await open(snapshot({entries: [
@@ -569,6 +627,9 @@ test.describe('answers', () => {
     ]}))
     await panel.page.locator('.woa-launcher').click()
     await panel.page.locator('.woa-md table').waitFor()
+    await expect(panel.page.locator('.woa-md h2')).toHaveText('查询结果')
+    await expect(panel.page.locator('.woa-md strong')).toHaveText('3 张')
+    await expect(panel.page.locator('.woa-md li')).toHaveCount(2)
     await expect(panel.page.locator('.woa-md table td')).toHaveCount(3)
     await expect(panel.page.locator('.woa-md table td').nth(2)).toHaveAttribute('data-align', 'right')
     // Untrusted output cannot mint a clickable link out of this session's origins.
@@ -1173,9 +1234,12 @@ test.describe('the work process', () => {
     await expect(thread).toHaveAttribute('data-smooth-jump', 'true')
     await expect.poll(() => thread.evaluate(
       node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(28)
-    const turn = await panel.page.locator('.woa-turn').last().boundingBox()
-    const composer = await panel.page.locator('.woa-composer').boundingBox()
-    expect(composer!.y - (turn!.y + turn!.height)).toBeGreaterThanOrEqual(85)
+    // Entering the 28px near-bottom band need not mean the smooth scroll has finished.
+    await expect.poll(async () => {
+      const turn = await panel.page.locator('.woa-turn').last().boundingBox()
+      const composer = await panel.page.locator('.woa-composer').boundingBox()
+      return composer!.y - (turn!.y + turn!.height)
+    }).toBeGreaterThanOrEqual(55)
     expect(panel.errors).toEqual([])
   })
 
@@ -2099,7 +2163,9 @@ test.describe('U07', () => {
     const panel = await open(snapshot())
     const page = panel.page
     await panel.raiseApproval()
-    expect((await focused(page))!.testid, 'the safe answer takes focus first').toBe('woa-deny')
+    await expect(page.getByRole('alertdialog')).toBeFocused()
+    await page.keyboard.press('Tab')
+    expect((await focused(page))!.testid, 'Tab reaches the safe answer first').toBe('woa-deny')
     await page.keyboard.press('Shift+Tab')
     expect((await focused(page))!.testid,
            'Shift+Tab from the first answer wraps to the second').toBe('woa-approve')

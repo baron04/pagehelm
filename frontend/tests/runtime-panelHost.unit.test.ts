@@ -19,6 +19,11 @@ function entry(overrides: Partial<TimelineEntry> = {}): TimelineEntry {
 }
 
 describe('classifyTransportError reads the server own table, once', () => {
+  it('uses the server state for a request conflict without ending the session', () => {
+    const configured = {...DEFAULT_CONFIGURATION, nonterminal_error_states: {turn_in_flight: 'ready' as const}}
+    expect(classifyTransportError({code: 'turn_in_flight', status: 409}, configured))
+      .toMatchObject({terminal: false, state: 'ready', retryable: false})
+  })
   it('never retries an approval the server can no longer accept a decision for', () => {
     const verdict = classifyTransportError({code: 'approval_expired'}, DEFAULT_CONFIGURATION)
     expect(verdict).toMatchObject({terminal: false, state: 'ready', approvalClosed: true})

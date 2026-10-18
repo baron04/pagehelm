@@ -26,9 +26,8 @@ def _answer(reason: str, text: str) -> str:
 
 class TheFallbackSpeaksTheReadersLanguage(unittest.TestCase):
     REASONS = {"user_cancelled": "已取消。", "approval_denied": "已取消。",
-               # A card nobody answered in time ends the turn as a stop does, with nothing
-               # more said about the timeout (owner ruling, 2026-09-25).
-               "approval_expired": "已取消。",
+               "approval_expired": product.panel_contract()["notices"]["approval_expired"],
+               "page_observation_failed": "读取页面状态失败，本次请求未完成。请刷新页面后重新发送需求。",
                "operation_not_confirmed": "已取消，助手没有动这个页面。",
                "indeterminate_write": "这次操作的结果不确定，没有自动重试。",
                "step_budget": "任务在完成前就结束了。",

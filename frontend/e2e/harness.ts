@@ -33,6 +33,7 @@ export const CONFIGURATION = {
   progress_states: contract.progress_states,
   terminal_error_codes: contract.terminal_error_codes,
   terminal_panel_state_by_code: contract.terminal_panel_state_by_code,
+  nonterminal_error_states: contract.nonterminal_error_states,
   lapse_codes: contract.lapse_codes,
   session_expires_at: 0,
   principal_expires_at: 0,
@@ -66,6 +67,7 @@ const examples = JSON.parse(document.getElementById('examples').textContent)
 let snapshot = JSON.parse(document.getElementById('snapshot').textContent)
 const listeners = new Set()
 window.__calls = []
+window.__visibility = []
 
 // A class, and every method reads \`this\` -- because the real \`PanelHost\` is a class and
 // every one of its methods reads \`this\`. The double used to be an object literal of
@@ -82,9 +84,9 @@ class ScriptedHost {
   submit(text) { this.note('submit', text) }
   retrySubmit() { this.note('retrySubmit') }
   cancel() { this.note('cancel') }
+  panelVisibility(open) { window.__visibility.push(open) }
   decide(id, decision) { this.note('decide', id, decision) }
-  // The real store clears the view here before it tells the server. A double that only
-  // recorded the call would let the panel pass a test the product would fail.
+  // This scripted server accepts immediately; the real host clears only after acceptance.
   newConversation() {
     this.note('newConversation')
     window.__setSnapshot({entries: [], pendingApproval: null, notice: null, optimistic: null,

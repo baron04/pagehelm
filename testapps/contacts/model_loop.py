@@ -1,5 +1,7 @@
 """Contacts REST/plain-HTML composition of the common model-driven turn."""
 import json
+from datetime import datetime, timezone
+from web_operation_agent.answer.answering import StructuredQueryAnswer
 
 from web_operation_agent.execution.model_loop_contracts import (
     AnswerTarget, LoopProcedure, LoopToolResult, ModelLoopProfile)
@@ -34,7 +36,8 @@ class ContactsProcedure:
         context.page.checkpoint()
         permissions = self.goal_port._require_actor(context.operation)
         if self.name == "list_contacts":
-            result = self.adapter.business_tools._executor.execute(self.name, arguments, context=context.operation)
+            result = self.adapter.business_tools._executor.execute(self.name,
+                {key: value for key, value in arguments.items() if key != "deliver"}, context=context.operation)
             context.page.checkpoint()
             text = "BEGIN_UNTRUSTED_APPLICATION_DATA\n" + redact_sensitive_assignments(result.render()) \
                 + "\nEND_UNTRUSTED_APPLICATION_DATA"
@@ -58,7 +61,18 @@ class ContactsProcedure:
                         and exact[0].get("ui_path") == f"/contacts/{row['id']}"):
                     targets.append(AnswerTarget("record", exact[0]["ui_path"],
                                                 row["name"], f"contacts:{row['id']}"))
-            return LoopToolResult(text, kind="read", read_summary=(self.name, text[:1500]),
+            projection = None
+            if arguments.get("deliver"):
+                facts = result.content
+                projection = StructuredQueryAnswer(collection="contacts", fields=("name", "email"),
+                    records=tuple((row["name"], row["email"]) for row in rows), source="Contacts REST collection",
+                    scope=facts["scope"], observed_at=datetime.now(timezone.utc).isoformat(),
+                    source_complete=facts["completeness"]["source_complete"],
+                    result_truncated=facts["completeness"]["result_truncated"],
+                    matched_count=facts["matched_count"], source_total=facts["source_total"],
+                    records_scanned=facts["source_total"],
+                    incomplete_reason=facts["completeness"]["incomplete_reason"])
+            return LoopToolResult(text, kind="read", read_summary=(self.name, text[:1500]), query_answer=projection,
                                   answer_targets=tuple(targets))
         if self.name == "goto":
             outcome = context.page.execute("goto", {"url": self.adapter.descriptor.origin + arguments["path"]},
@@ -132,7 +146,8 @@ class ContactsProcedure:
 def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
     schemas = (
         (tool("list_contacts", "Read actor-visible contacts from the REST collection.",
-              {"name_contains": {"type": "string", "maxLength": 120}}), "read", frozenset()),
+              {"name_contains": {"type": "string", "maxLength": 120},
+               "deliver": {"type": "boolean", "description": "Prepare exact server delivery; select finish.read_answer."}}), "read", frozenset()),
         (tool("goto", "Open a reviewed page route.", {"path": {"type": "string", "maxLength": 200},
               "open": {"type": "string", "maxLength": 200},
               "answer": {"type": "string", "maxLength": 2000}}, ("path",)), "page", frozenset()),

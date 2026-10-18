@@ -1094,6 +1094,23 @@ class ChannelTests(unittest.TestCase):
                                      "page_url": ORIGIN + "/start"}, lease_id=second)
         self.assertFalse(self.channel.message_cancelled("m-first"))
 
+    def test_new_conversation_on_another_page_keeps_the_running_turn_and_both_leases(self):
+        second = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="runtime-document-2", client_id="browser-tab-2"))["lease_id"]
+        self.channel.accept_message({"message_id": "m-first", "text": "one",
+                                     "page_url": ORIGIN + "/start"}, lease_id=self.lease)
+        self.channel.wait_for_message(timeout_s=1)
+        with self.assertRaises(RemoteProtocolError) as refused:
+            self.channel.request_new_conversation(lease_id=second)
+        self.assertEqual((refused.exception.code, refused.exception.status), ("turn_in_flight", 409))
+        self.assertFalse(self.channel.message_cancelled("m-first"))
+        self.assertFalse(self.channel.take_new_conversation())
+        self.channel.validate_lease(self.lease)
+        self.channel.validate_lease(second)
+        self.channel.complete_message("m-first")
+        self.assertEqual(self.channel.request_new_conversation(lease_id=second), {"accepted": True})
+        self.assertTrue(self.channel.take_new_conversation())
+
     def test_a_page_long_gone_makes_room_for_a_new_one(self):
         registry = RemoteSessionRegistry(limits=RemoteSessionLimits(max_runtime_instances=2))
         grant, channel = registry.create(allowed_origins=[ORIGIN], session_id="small")

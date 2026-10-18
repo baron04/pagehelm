@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import re
 import tempfile
 import threading
 import time
@@ -81,6 +82,59 @@ def observation(epoch: int = 1, customer: str = "Acme", **kw) -> PageObservation
 
 
 class BusinessHandoffTests(unittest.TestCase):
+    def test_user_status_handoff_binds_a_unique_actor_read_record_and_current_query(self):
+        procedure=YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        procedure.goal_port=NS(data=NS(_client=NS()))
+        procedure.knowledge=NS(_load=lambda:None,_validate_params=lambda *a:None)
+        record={"id":7,"username":"account7","nickname":"合成用户","status":0}
+        matches=[NS(id="7",name="合成用户")]
+        digest=hashlib.sha256(b'["account7"]').hexdigest()
+        control=element(12,"switch","状态开关：合成用户（account7）",id="woa-user-status-7",
+                        **{"aria-checked":"true"})
+        field=element(13,"textbox","用户名称","input",page_control="query",query_field="username",value="account7")
+        read={"path":"/admin-api/system/user/page","query_digest":"a"*64,"query_fields":{"username":digest},
+              "page":1,"page_size":10,"rows":1,"total":1,"revision":2}
+        obs=replace(observation(),url="https://synthetic.test/system/user",page_route="/system/user",
+                    render_state="ready",elements=[control,field],page_read=read,
+                    page_query={"path":read["path"],"parameters":{}})
+        state=NS(obs=obs,operation=None,page=NS(checkpoint=lambda:None))
+        listed={"total":1,"list":[record]}
+        bound=NS(_invoke=lambda *a,**k:listed if a[1]=="system/user/page" else record,
+                 find=lambda *a,**k:matches)
+        procedure.goal_port.data._client.get=lambda *a,**k:record
+        with patch("web_operation_agent_yudao.bound_data_reads.BoundDataReads",return_value=bound):
+            self.assertTrue(procedure._user_status_target(state,control,"停用合成用户"))
+            self.assertFalse(_business_handoff_ready(obs,control,"停用合成用户"))
+            self.assertTrue(_business_handoff_ready(obs,control,"停用合成用户",status_target=True))
+            self.assertFalse(procedure._user_status_target(state,control,"停用另一个用户"))
+            matches.append(NS(id="8",name="合成用户"))
+            self.assertFalse(procedure._user_status_target(state,control,"停用合成用户"))
+            self.assertTrue(procedure._user_status_target(state,control,"停用用户编号7"))
+            phone="13600000007"
+            mobile=replace(field,attrs={**field.attrs,"query_field":"mobile","value":phone})
+            phone_digest=hashlib.sha256(json.dumps([phone]).encode()).hexdigest()
+            state.obs=replace(obs,elements=[control,mobile],page_read={**read,"query_fields":{"mobile":phone_digest}})
+            self.assertTrue(procedure._user_status_target(state,control,"停用用户编号7"))
+            empty=replace(field,ref="e14",attrs={**field.attrs,"value":""})
+            empty_digest=hashlib.sha256(b'[""]').hexdigest()
+            state.obs=replace(obs,elements=[control,mobile,empty],page_read={**read,"query_fields":{
+                "mobile":phone_digest,"username":empty_digest}})
+            self.assertTrue(procedure._user_status_target(state,control,"停用用户编号7"))
+            state.obs=replace(state.obs,elements=[control,mobile])
+            self.assertFalse(procedure._user_status_target(state,control,"停用用户编号7"))
+            state.obs=replace(obs,elements=[control,mobile],page_read={**read,"query_fields":{"mobile":phone_digest}})
+            listed["list"]=[{**record,"id":8}]
+            self.assertFalse(procedure._user_status_target(state,control,"停用用户编号7"))
+            listed["list"]=[record]
+            state.obs=replace(obs,page_read={**read,"total":2,"rows":2})
+            self.assertFalse(procedure._user_status_target(state,control,"停用用户编号7"))
+            state.obs=replace(obs,page_read={**read,"query_fields":{"username":"b"*64}})
+            self.assertFalse(procedure._user_status_target(state,control,"停用用户编号7"))
+            state.obs=obs;record["status"]=1
+            self.assertFalse(procedure._user_status_target(state,control,"启用用户编号7"))
+            off=replace(control,attrs={**control.attrs,"aria-checked":"false"})
+            self.assertTrue(procedure._user_status_target(state,off,"启用用户编号7"))
+
     def test_list_button_requires_a_verified_single_row_and_unique_control(self):
         button = element(12, "button", "删除", "button")
         target = "目标供应商"
@@ -159,6 +213,25 @@ class BusinessHandoffTests(unittest.TestCase):
 
 
 class PageTextTests(unittest.TestCase):
+    def test_applied_query_values_require_matching_read_digests_and_keep_selected_tabs(self):
+        value = "梁"
+        digest = hashlib.sha256(json.dumps([value], ensure_ascii=False,
+                                          separators=(",", ":")).encode()).hexdigest()
+        read = {"path": "/admin-api/crm/contact/page", "query_digest": "a" * 64,
+                "query_fields": {"name": digest}, "revision": 2,
+                "page": 1, "page_size": 10, "total": 0, "rows": 0}
+        controls = [element(12, "textbox", "姓名", "input", page_control="query",
+                            query_field="name", field_label="姓名", value=value),
+                    element(13, "tab", "我负责的", **{"aria-selected": "true"}),
+                    element(14, "tab", "我参与的", **{"aria-selected": "false"})]
+        obs = replace(observation(), elements=controls, page_read=read,
+                      page_query={"path": read["path"], "parameters": {}})
+        text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()))
+        self.assertIn("已核验的列表查询条件: 姓名=梁", text)
+        self.assertIn("选中的页签/视图: 我负责的", text)
+        changed = replace(obs, page_read={**read, "query_fields": {"name": "b" * 64}})
+        self.assertNotIn("已核验的列表查询条件:", page_text(changed, handoffs=SessionHandoffPolicy.extending(())))
+
     def test_hydrated_button_names_survive_removing_the_only_text_child(self):
         for name in ("新增", "展开", "password=hidden"):
             obs = observation()
@@ -403,9 +476,84 @@ LEDGER_NAMES = {"bizType": {"10": "其它入库", "50": "销售出库", "60": "�
 
 
 class KnowledgeTests(unittest.TestCase):
+    def test_explicit_list_delivery_keeps_all_actual_requested_values_including_long_and_duplicate_names(self):
+        rows=[{"id":i,"name":"同名" if i<2 else "真实记录名称"*20+str(i),"privateNote":"not requested"}
+              for i in range(253)]
+        def get(path, **params):
+            if path=="system/auth/get-permission-info": return Client().get(path,**params)
+            start=(params["pageNo"]-1)*params["pageSize"]
+            return {"total":len(rows),"list":rows[start:start+params["pageSize"]]}
+        know=ActorKnowledge(NS(get=get),lambda:DOCS)
+        know.call_api("orders/page",{"pageNo":1,"pageSize":100},["name"],deliver=True)
+        projection=know.last_query_answer
+        self.assertTrue(projection.complete)
+        self.assertEqual(projection.fields,("name",))
+        self.assertEqual(projection.records,tuple((r["name"],) for r in rows))
+        self.assertNotIn("privateNote",str(projection.to_json()))
+        know.call_api("orders/page",{"pageNo":1,"pageSize":100},["name"])
+        self.assertIsNone(know.last_query_answer)
+
+    def test_explicit_list_delivery_marks_incomplete_reads_and_refuses_missing_or_nested_values(self):
+        from web_operation_agent_yudao.slim_loop import QueryParametersError
+        know=ActorKnowledge(Client(),lambda:DOCS)
+        for fields,offset in (([],0),(["name"],1)):
+            with self.assertRaises(QueryParametersError):
+                know.call_api("orders/page",{"pageNo":1,"pageSize":2},fields,row_offset=offset,deliver=True)
+        def get(path,**params):
+            if path=="system/auth/get-permission-info":return Client().get(path,**params)
+            return {"total":10,"list":[{"id":1,"name":"Only observed row"}]}
+        know=ActorKnowledge(NS(get=get),lambda:DOCS)
+        know.call_api("orders/page",{"pageNo":1,"pageSize":2},["name"],deliver=True)
+        self.assertFalse(know.last_query_answer.complete)
+        with self.assertRaises(QueryParametersError):
+            know.call_api("orders/page",{"pageNo":1,"pageSize":2},["unreadField"],deliver=True)
+        for supplied in (100, "100.00", {"nested":"value"}, " value with changed whitespace "):
+            def read(path,**params):
+                if path=="system/auth/get-permission-info":return Client().get(path,**params)
+                return {"total":1,"list":[{"id":1,"name":supplied}]}
+            candidate=ActorKnowledge(NS(get=read),lambda:DOCS)
+            with self.assertRaises(QueryParametersError):
+                candidate.call_api("orders/page",{"pageNo":1,"pageSize":2},["name"],deliver=True)
+
     def setUp(self):
         self.client = Client()
         self.know = ActorKnowledge(self.client, lambda: DOCS, {"/admin-api/wallet/get"})
+
+    def test_long_projected_lists_can_be_read_in_exact_bounded_windows_without_guessing_filters(self):
+        rows = [{"id": i, "name": "合成业务名称" * 10 + str(i)} for i in range(1, 361)]
+        for path in ("orders/page", "leads/page"):
+            with self.subTest(path=path):
+                calls = []
+                def get(route, **params):
+                    if route == "system/auth/get-permission-info":
+                        return Client().get(route, **params)
+                    calls.append((route, params))
+                    start = (params["pageNo"] - 1) * params["pageSize"]
+                    return {"total": len(rows), "list": rows[start:start + params["pageSize"]]}
+                know = ActorKnowledge(NS(get=get), lambda: DOCS)
+                offset, found = 0, []
+                for _ in range(10):
+                    text = know.call_api(path, {"pageNo": 1, "pageSize": 100}, ["name"], row_offset=offset)
+                    found.extend(json.loads(line)[0] for line in text.splitlines() if re.match(r"\[[0-9]", line))
+                    self.assertIn("已读完所有页", text)
+                    continuation = re.search(r"next_row_offset=(\d+)", text)
+                    if continuation is None:
+                        break
+                    next_offset = int(continuation[1])
+                    self.assertGreater(next_offset, offset)
+                    offset = next_offset
+                self.assertEqual(found, [row["id"] for row in rows])
+                self.assertTrue(all("row_offset" not in params and "name" not in params for _, params in calls))
+                self.assertLess(len(text), 12_000)
+
+    def test_row_window_arguments_are_validated_before_reading(self):
+        from web_operation_agent_yudao.slim_loop import QueryParametersError
+        for offset, fields in ((-1, ["name"]), (True, ["name"]), (1.5, ["name"]),
+                               (5001, ["name"]), (1, [])):
+            with self.subTest(offset=offset, fields=fields):
+                with self.assertRaises(QueryParametersError):
+                    self.know.call_api("orders/page", {"pageNo": 1}, fields, row_offset=offset)
+        self.assertEqual(self.client.calls, [])
 
     def test_the_menu_lists_the_actor_s_visible_pages_with_their_paths(self):
         found = self.know.search_menu("订单")
@@ -599,110 +747,62 @@ class KnowledgeTests(unittest.TestCase):
         self.assertEqual((result.state, result.read_key, result.read_count),
                          ("completed", "/admin-api/leads/page", 0))
 
-    def test_a_list_divided_by_whose_records_they_are_is_read_as_everything_the_actor_sees(self):
+    def test_native_scope_parameters_are_preserved_without_an_invented_union(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
-        self.assertEqual([c[1]["sceneType"] for c in self.client.calls if c[0] == "leads/page"], [1, 2, 3])
-        self.assertIn("total=3（当前账号可见的全部", text)
-        self.assertNotIn("别人的", text)
-        self.assertEqual(text.count('"name": "乙"'), 1)
+        calls = [params for path, params in self.client.calls if path == "leads/page"]
+        self.assertEqual(calls, [{"pageNo": 1, "pageSize": 10}])
+        self.assertIn("total=8", text)
+        self.assertIn('"name": "别人的"', text)
+        mine = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "sceneType": 1})
+        self.assertIn("total=2", mine)
+        self.assertNotIn("别人的", mine)
 
-    def test_a_large_scope_union_counts_ids_without_exposing_partial_rows(self):
+    def test_native_total_does_not_require_scanning_or_merging_large_ranges(self):
         class LargeClient(Client):
             def get(self, path, **params):
                 if path != "leads/page":
                     return super().get(path, **params)
                 self.calls.append((path, params))
-                scene = params["sceneType"]
-                records = (range(1, 5003) if scene == 1 else
-                           range(5002, 5022) if scene == 2 else ())
-                page, size = params["pageNo"], params["pageSize"]
-                offset = (page - 1) * size
+                records = range(1, 5201)
+                start = (params["pageNo"] - 1) * params["pageSize"]
                 return {"total": len(records), "list": [
                     {"id": n, "name": f"Synthetic {n}"}
-                    for n in list(records)[offset:offset + size]]}
-
+                    for n in list(records)[start:start + params["pageSize"]]]}
         client = LargeClient()
         knowledge = ActorKnowledge(client, lambda: DOCS)
-        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
-        self.assertEqual(knowledge.last_read, {"count": 5022, "scope": "线索",
-                                               "complete": True, "declared_total": 5021})
-        self.assertIn("total=5021", text)
-        self.assertIn("只核对记录数", text)
-        self.assertIn("没有提供同一时点快照", text)
-        self.assertNotIn("5020", text)
-        self.assertNotIn("Synthetic", text)
-        page_calls = [params for path, params in client.calls if path == "leads/page"]
-        self.assertLessEqual(len(page_calls), 35,
-                             "a large count must not first read 5,000 full rows and then rescan IDs")
-        self.assertTrue(any(params["pageSize"] == 200 for params in page_calls))
+        count = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
+        self.assertIn("total=5200", count)
+        self.assertEqual(len([p for p, _ in client.calls if p == "leads/page"]), 1)
+        projected = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 100}, ["name"])
+        self.assertFalse(knowledge.last_read["complete"])
+        self.assertEqual(knowledge.last_read["declared_total"], 5200)
+        self.assertIn("没有读完", projected)
+        self.assertNotIn("已读完所有页", projected)
+        self.assertTrue(all("sceneType" not in params for path, params in client.calls if path == "leads/page"))
 
-    def test_a_scope_union_beyond_the_count_limit_withholds_partial_numbers(self):
-        class OversizeClient(Client):
-            def get(self, path, **params):
-                if path != "leads/page":
-                    return super().get(path, **params)
-                total = 20_001 if params["sceneType"] == 1 else 0
-                start = (params["pageNo"] - 1) * params["pageSize"]
-                return {"total": total, "list": [
-                    {"id": n + 1, "name": f"Synthetic {n}"}
-                    for n in range(start, min(start + params["pageSize"], total))]}
-
-        knowledge = ActorKnowledge(OversizeClient(), lambda: DOCS)
-        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
-        self.assertEqual(knowledge.last_read, {"count": 5000, "scope": "线索",
-                                               "complete": False, "declared_total": None})
-        self.assertIn("范围合并读取未完成", text)
-        self.assertNotIn("5000", text)
-        self.assertNotIn("total=", text)
-        self.assertNotIn("Synthetic", text)
-
-    def test_overlapping_scopes_under_the_field_bound_keep_list_rows(self):
-        class OverlapClient(Client):
-            def get(self, path, **params):
-                if path != "leads/page":
-                    return super().get(path, **params)
-                records = range(1, 1701)
-                offset = (params["pageNo"] - 1) * params["pageSize"]
-                return {"total": len(records), "list": [
-                    {"id": n, "name": f"Synthetic {n}"}
-                    for n in list(records)[offset:offset + params["pageSize"]]]}
-
-        knowledge = ActorKnowledge(OverlapClient(), lambda: DOCS)
-        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
-        self.assertEqual(knowledge.last_read, {"count": 1700, "scope": "线索",
-                                               "complete": True, "declared_total": 1700})
-        self.assertIn("total=1700（当前账号可见的全部", text)
-        self.assertIn("Synthetic 1", text)
-
-    def test_a_repeated_page_does_not_prove_a_scope_union_count(self):
+    def test_repeated_native_pages_never_prove_a_complete_roster(self):
         class RepeatingClient(Client):
             def get(self, path, **params):
                 if path != "leads/page":
                     return super().get(path, **params)
-                if params["sceneType"] != 1:
-                    return {"total": 0, "list": []}
-                return {"total": 5001, "list": [
-                    {"id": n, "name": f"Synthetic {n}"} for n in range(1, 101)]}
-
+                return {"total": 201, "list": [{"id": n, "name": f"Synthetic {n}"} for n in range(1, 101)]}
         knowledge = ActorKnowledge(RepeatingClient(), lambda: DOCS)
-        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 10})
+        text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 100}, ["name"])
         self.assertFalse(knowledge.last_read["complete"])
-        self.assertIsNone(knowledge.last_read["declared_total"])
-        self.assertNotIn("total=", text)
-        self.assertNotIn("Synthetic", text)
+        self.assertIn("没有读完", text)
+        self.assertNotIn("已读完所有页", text)
 
-    def test_a_record_that_exists_outside_the_actor_s_scopes_is_not_reported_as_absent(self):
-        text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "别人"})
-        self.assertIn("total=0（当前账号可见的全部", text)
-        self.assertIn("不限范围时同样条件有 8 条候选记录", text)
-        self.assertIn("不能判断详情权限", text)
-        absent = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "没有这个"})
-        self.assertNotIn("不限范围", absent)
+    def test_empty_explicit_scope_never_triggers_a_wider_read(self):
+        text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "sceneType": 1, "name": "别人"})
+        self.assertIn("total=0", text)
+        calls = [params for path, params in self.client.calls if path == "leads/page"]
+        self.assertEqual(calls, [{"pageNo": 1, "pageSize": 10, "sceneType": 1, "name": "别人"}])
+        self.assertNotIn("别人的", text)
 
-    def test_the_names_of_records_outside_the_actor_s_scopes_are_told_as_data(self):
+    def test_names_read_from_the_native_scope_remain_untrusted_data(self):
         text = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10, "name": "别人"})
-        self.assertIn(BEGIN + "\n别人的、别人的", text)
-        self.assertNotIn("这是没有权限", text)
+        self.assertIn(BEGIN + '\n{"id": 1, "name": "别人的"}', text)
+        self.assertIn('"别人的"}\n' + END, text)
 
     def test_list_readable_owner_survives_detail_permission_denial(self):
         docs = json.loads(json.dumps(DOCS))
@@ -728,19 +828,19 @@ class KnowledgeTests(unittest.TestCase):
         know = ActorKnowledge(CustomerClient(), lambda: docs)
         text = know.call_api("crm/customer/page", {"pageNo": 1, "pageSize": 10,
                                                   "name": "Q24 外部客户"}, ["name", "ownerUserName"])
-        self.assertIn("total=0（当前账号可见的全部", text)
+        self.assertIn("total=1（符合条件的总数）", text)
         self.assertIn('"ownerUserName": "列表可见负责人"', text)
-        self.assertIn("编号 42 的详情：明确拒绝", text)
-        self.assertIn("仅列表可读字段", text)
+        self.assertFalse(any(path == "crm/customer/get" for path, _ in know.client.calls))
         partial = know.call_api("crm/customer/page", {"pageNo": 1, "pageSize": 10,
                                                      "name": "Q24"}, ["name", "ownerUserName"])
-        self.assertNotIn('"ownerUserName": "列表可见负责人"', partial)
+        self.assertIn('"ownerUserName": "列表可见负责人"', partial)
         for count in (1, 2):
             with self.subTest(declared_total=count):
                 know.client.matches, know.client.total = 2, count
                 ambiguous = know.call_api("crm/customer/page", {"pageNo": 1, "pageSize": 10,
                     "name": "Q24 外部客户"}, ["name", "ownerUserName"])
-                self.assertNotIn('"ownerUserName": "列表可见负责人"', ambiguous)
+                self.assertIn('"ownerUserName": "列表可见负责人"', ambiguous)
+                self.assertEqual(know.last_read["complete"], count == 2)
 
     def test_credentials_in_a_read_are_blanked_before_the_model_is_told(self):
         text = self.know.call_api("channels/page", {"pageNo": 1})
@@ -838,8 +938,8 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn(BEGIN + '\n{"customerId": "7"}\n' + END, filtered)
         scoped = self.know.call_api("leads/page", {"pageNo": 1, "pageSize": 10,
                                                    "name": "别人"}, ["name"])
-        self.assertIn(BEGIN + '\n别人的、别人的', scoped)
-        self.assertIn('别人的\n' + END, scoped)
+        self.assertIn(BEGIN + '\n{"id": 1, "name": "别人的"}', scoped)
+        self.assertIn('"别人的"}\n' + END, scoped)
 
     def test_model_and_checker_must_match_named_subset_to_read_scope(self):
         self.assertIn("全表的 total 和自动分组不代表这批记录", SYSTEM)
@@ -952,6 +1052,37 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("total=5（符合条件的总数），本次读了 2 行", text)
         self.assertNotIn("已读完所有页", text)
 
+    def test_relation_groups_over_twelve_are_counted_by_identity_with_missing_rows(self):
+        rows = [{"id": group * 10 + n, "deptId": group, "deptName": "同名部门"}
+                for group in range(1, 20) for n in range(10 if group <= 12 else 2)]
+        rows += [{"id": 9990 + n} for n in range(3)]
+        class GroupClient(Client):
+            def get(self, path, **params):
+                if path == "deals/page":
+                    page, size = params.get("pageNo", 1), params.get("pageSize", 100)
+                    return {"total": len(rows), "list": rows[(page-1)*size:page*size]}
+                return super().get(path, **params)
+        know = ActorKnowledge(GroupClient(), lambda: DOCS)
+        text = know.call_api("deals/page", {"pageNo": 1, "pageSize": 100}, ["deptId"])
+        grouping = text.split("按 deptId 分组（19 种）:")[1].split("各行:")[0]
+        self.assertIn("缺值 3 行", grouping)
+        self.assertIn("同名不能合并", grouping)
+        for group in range(1, 20):
+            self.assertIn(f"{group}: {10 if group <= 12 else 2} 行", grouping)
+        partial = know.call_api("deals/page", {"pageNo": 2, "pageSize": 100}, ["deptId"])
+        self.assertNotIn("按 deptId 分组", partial)
+
+    def test_very_many_tied_relation_groups_report_the_unshown_boundary(self):
+        rows = [{"id": group, "deptId": group} for group in range(1, 41)]
+        class GroupClient(Client):
+            def get(self, path, **params):
+                return {"total": len(rows), "list": rows} if path == "deals/page" else super().get(path, **params)
+        text = ActorKnowledge(GroupClient(), lambda: DOCS).call_api(
+            "deals/page", {"pageNo": 1, "pageSize": 100}, ["deptId"])
+        self.assertIn("按 deptId 分组（40 种）", text)
+        self.assertIn("仅展示 32 组", text)
+        self.assertIn("另有 8 组同属临界并列但未展示", text)
+
     def test_an_instant_is_shown_as_the_application_s_clock_has_it(self):
         text = self.know.call_api("deals/page", {"pageNo": 1, "pageSize": 5}, ["createTime"])
         self.assertIn('{"id": 1, "createTime": "2026-10-02 08:00:00"}', text)
@@ -981,7 +1112,7 @@ class KnowledgeTests(unittest.TestCase):
         finally:
             del DEALS[5:]
         self.assertLess(len(long), 10_600)
-        self.assertRegex(long, r"只列出了前 \d+ 行，其余 \d+ 行未列出")
+        self.assertRegex(long, r"next_row_offset=\d+；其余 \d+ 行尚未展示")
 
     def test_more_than_five_thousand_rows_never_gets_a_partial_aggregate(self):
         class LargeClient(Client):
@@ -1229,6 +1360,21 @@ class DraftChoiceTests(unittest.TestCase):
 
 
 class ActionFeedbackTests(unittest.TestCase):
+    def test_a_record_tab_only_uses_the_fast_ending_with_a_verified_request_target(self):
+        procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        procedures.knowledge = None
+        tab = element(12, "tab", "联系人", "div", id="tab-contacts", **{"aria-selected":"false"})
+        current = replace(observation(), url="https://synthetic.test/customers/1",
+            page_route="/customers/1", record_route="/customers/1", elements=[tab],
+            content='[12]<div role=tab>联系人 />')
+        context = NS(obs=current)
+        procedures._act = lambda *_a, **_k: None
+        procedures._settled = lambda *_a, **_k: None
+        for target_bound in (False, True):
+            procedures._detail_handoff_target = lambda *_a: target_bound
+            result = procedures._tool(context, "click", {"index":12,"answer":"已切换"}, {})
+            self.assertEqual(not target_bound, result.review_completion)
+
     def test_refusal_reaches_agent_without_a_settlement_or_false_permission_claim(self):
         procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         procedures.knowledge = None
@@ -1682,7 +1828,9 @@ class LoopTests(unittest.TestCase):
 
     def test_a_model_that_stops_calling_tools_is_reminded_then_refused(self):
         _executor, state, text = self.loop(*[reply(content="我想想") for _ in range(3)])
-        self.assertEqual((text, state.terminal_reason), ("我想想", "agent_refused"))
+        self.assertEqual(state.terminal_reason, "agent_refused")
+        self.assertNotIn("我想想", text)
+        self.assertIn("没有完成", text)
 
     def test_nothing_named_after_finish_in_the_same_reply_is_run(self):
         self.loop(reply(call("finish", status="cannot", answer="做不到"), call("click", index=10)))

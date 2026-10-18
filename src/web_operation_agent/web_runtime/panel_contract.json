@@ -158,7 +158,7 @@
     "invalid_lease": "页面身份已变化，正在重新连接。",
     "principal_mismatch": "页面身份已变化，正在重新连接。",
     "origin_refused": "这个页面的来源不被助手接受，助手不会在这里运行。",
-    "approval_expired": "确认已超时，请重新发送。",
+    "approval_expired": "确认已超时，待确认的操作未执行。请重新发送需求，再次确认后继续。",
     "approval_not_pending": "这次确认已经不再等待答复。",
     "approval_conflict": "这次确认已经有过一次答复。",
     "unknown_approval": "这次确认已经不存在了。",
@@ -173,6 +173,7 @@
     "invalid_message": "这次请求助手无法处理，没有执行任何操作。",
     "stale_observation": "页面已经变了，这一步没有执行。请重试。",
     "action_in_flight": "上一步还在执行，请等它结束。",
+    "turn_in_flight": "当前会话在另一页面或本页仍有任务进行中，请等待结束后再新建会话。",
     "deadline_expired": "这一步等待超时，没有执行。请重试。",
     "payload_too_large": "内容太长，助手无法处理。请缩短后重试。",
     "unknown_action": "助手请求了一个不存在的操作，这一步没有执行。",
@@ -209,6 +210,9 @@
     "principal_expired",
     "session_expired"
   ],
+  "nonterminal_error_states": {
+    "turn_in_flight": "ready"
+  },
   "terminal_panel_state_by_code": {
     "session_closed": "ended",
     "unknown_session": "ended",

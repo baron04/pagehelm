@@ -5,6 +5,22 @@
  * A navigation fact additionally requires the deployed AppView's live Vue mount.
  * This is observation, never the application's API write fence.
  */
+const PAGE_LAYERS = '.el-overlay, .el-image-viewer__wrapper'
+// Only layers carried across an assistant navigation block its destination. A form
+// opened on the destination itself must remain observable for prefill and handoff.
+const carriedLayers = new WeakMap()
+function carriedLayerBlocks(doc) {
+  const layers = carriedLayers.get(doc)
+  if (!layers) return false
+  for (const element of layers) {
+    const box = element.getBoundingClientRect()
+    if (!element.isConnected || !box.width || !box.height ||
+        element.closest('[hidden],[aria-hidden="true"]')) layers.delete(element)
+  }
+  if (!layers.size) carriedLayers.delete(doc)
+  return layers.size > 0
+}
+
 function ledgerQuery(url) {
   // Application-owned projection, not a schema or permission in the core.
   const patterns = {accountSetId: /^[1-9][0-9]{0,19}$/, startMonth: /^\d{4}-(0[1-9]|1[0-2])$/,
@@ -240,13 +256,14 @@ export function createPageFacts({view = window, doc = document} = {}) {
   function readPageBlocker() {
     current()
     if (disposed) return true
+    if (carriedLayerBlocks(doc)) return true
     const selected = Array.from(doc.querySelectorAll('[role="tab"][aria-selected="true"]')).filter(e => visible(e) && !e.closest('[role="dialog"],dialog'))
     const panel = selected[0]?.getAttribute('aria-controls') || ''
     const relevant = Array.from(reads.values()).filter(s => s.panel === '*' || !s.panel || s.panel === panel)
     if (relevant.some(s => s.failed || s.conflicts)) return true
     if (Array.from(doc.querySelectorAll('.el-message--error, .el-notification--error')).some(visible)) return true
     if (relevant.some(s => s.pending)) return 'pending'
-    const loading = Array.from(doc.querySelectorAll('.el-loading-mask,[aria-busy="true"]')).some(visible)
+    const loading = Array.from(doc.querySelectorAll('.el-loading-mask,.el-loading-spinner,[aria-busy="true"]')).some(visible)
     if (!/^\/(?:crm\/(?:customer|contract|business|contact)|hrm\/employee)\/detail\/[0-9]+$/.test(route)) return loading ? 'pending' : false
     const titles = Array.from(doc.querySelectorAll('.text-xl.font-bold')).filter(visible)
     if (titles.length > 1 || record && titles.length === 1 && titles[0].textContent?.trim()
@@ -500,10 +517,6 @@ export const disposeInstalledPageFacts = () => installed?.dispose()
  * time the Runtime allows an application before it loads the page itself. */
 const OPEN_WAIT_MS = 3000
 const MOUNT_WAIT_MS = 2500
-/** What the component library puts over a page: dialogs, drawers and message boxes share
- * the first, the image viewer has its own. A dropdown's popper is not one of them. */
-const OPEN_OVER_THE_PAGE = '.el-overlay, .el-image-viewer__wrapper'
-
 /**
  * Open one of the application's own pages through its router, in this document.
  *
@@ -521,10 +534,10 @@ const OPEN_OVER_THE_PAGE = '.el-overlay, .el-image-viewer__wrapper'
  * uses: a read the page being left starts on the way out belongs to the address in
  * between, and is never the destination's.
  *
- * One thing a loaded document cleared cannot be cleared from here: a dialog, drawer or
- * message box left open over the page. Some belong to the layout and outlive the page
- * that raised them (the finance pages' account guide does), and would sit over the next
- * page. While one is open the page is not opened here, and the document is loaded.
+ * Page-owned dialogs and drawers leave with the component that owns them. Do not turn
+ * their presence into a document reload. A layout-owned overlay can outlive this route;
+ * leave it alone, and let the fresh observation report that the destination is blocked.
+ * Opening an address is not proof that its page state is ready or unobscured.
  *
  * The address changes before the page is there: a route's component is fetched when it is
  * first entered. A loaded document was looked at seconds after its address; here the page
@@ -533,7 +546,7 @@ const OPEN_OVER_THE_PAGE = '.el-overlay, .el-image-viewer__wrapper'
  *
  * True only when the application now shows the wanted address, and it is another than
  * before. Everything else -- no router or tab store to ask, the address already shown, a
- * fragment, something open over the page, a navigation the router refused or took
+ * fragment, a navigation the router refused or took
  * elsewhere -- is false, and the caller loads the document.
  */
 export async function openPage(url, {view = window, doc = document,
@@ -552,8 +565,10 @@ export async function openPage(url, {view = window, doc = document,
     between = router.resolve({path: '/redirect' + wanted.path, query: wanted.query})
   } catch { return false }
   if (!wanted?.matched?.length || wanted.fullPath === shown() || between?.name !== 'Redirect') return false
-  if (Array.from(doc.querySelectorAll(OPEN_OVER_THE_PAGE)).some(element =>
-    element.getBoundingClientRect().width && element.getBoundingClientRect().height)) return false
+  const layers = Array.from(doc.querySelectorAll(PAGE_LAYERS)).filter(element => {
+    const box = element.getBoundingClientRect()
+    return box.width && box.height
+  })
   try {
     tabs.delAllViews()
     await new Promise(resolve => view.setTimeout(resolve, 0))
@@ -565,6 +580,7 @@ export async function openPage(url, {view = window, doc = document,
     }
   } catch { return false }
   if (view.location.pathname + view.location.search === before) return false
+  if (layers.length) carriedLayers.set(doc, new Set([...(carriedLayers.get(doc) || []), ...layers]))
   const built = Date.now() + MOUNT_WAIT_MS
   try {
     while (shown() === wanted.fullPath && !mounted() && Date.now() < built) {
@@ -677,6 +693,29 @@ function pageComponentForRoot(root, name) {
 /** Local binding facts only; application effect review still owns action authority. */
 export function readElementPageControl(element) {
   if (!(element instanceof HTMLElement) || !element.isConnected || element.closest('[role="dialog"],dialog')) return undefined
+  const nodeRoot = element.closest('.el-tree-node[role="treeitem"]')
+  const hit = nodeRoot?.querySelector(':scope > .el-tree-node__content')
+  if (nodeRoot && (element === nodeRoot || element === hit)) {
+    const treeRoot = nodeRoot.closest('.el-tree[role="tree"]')
+    const tree = treeRoot && pageComponentForRoot(treeRoot, 'ElTree')
+    const node = pageComponentForRoot(nodeRoot, 'ElTreeNode')
+    const wrapper = tree?.instance.vnode?.ctx
+    const data = node?.instance.props?.node?.data
+    // Only this application's reviewed department selector, rendered by the active
+    // page. DOM data-key/text alone cannot turn another tree into a query control.
+    if (tree && node && tree.owner === node.owner && wrapper?.type?.name === 'DeptTreeSelect'
+        && wrapper.vnode?.ctx === tree.owner && wrapper.isMounted === true
+        && wrapper.isUnmounted === false && wrapper.isDeactivated === false
+        && tree.instance.props?.nodeKey === 'id' && tree.instance.props?.showCheckbox === false
+        && tree.instance.props?.draggable === false && Number.isSafeInteger(data?.id) && data.id > 0
+        && typeof data.name === 'string' && data.name.trim()
+        && hit?.querySelector('.el-tree-node__label')?.textContent?.trim() === data.name.trim()
+        && String(data.id) === nodeRoot.getAttribute('data-key')) {
+      return {kind: 'query', field: 'deptId', queryValue: String(data.id),
+        selected: node.instance.props.node.isCurrent === true}
+    }
+    return undefined
+  }
   const form = element.closest('form')
   if (form) {
     const binding = pageComponentForRoot(form, 'ElForm')
@@ -721,6 +760,86 @@ export function readElementPageControl(element) {
   const page = target.matches('.btn-prev') ? currentPage - 1 : target.matches('.btn-next') ? currentPage + 1 : Number(target.textContent.trim())
   if (!Number.isSafeInteger(page) || page < 1 || page > Math.ceil(total / pageSize) || page === currentPage) return undefined
   return {kind: 'pagination', page, pageSize}
+}
+
+/** Visible tree hit areas omitted by the generic controller. Never index a branch's
+ * whole subtree: clicking its centre can hit a different descendant. */
+export function withTreeQueryControls(selectorMap, html, root = document) {
+  const lines = []
+  const counts = new Map()
+  for (const label of root.querySelectorAll('.el-tree-node__content > .el-tree-node__label')) {
+    const name = label.textContent?.trim()
+    if (name) counts.set(name, (counts.get(name) || 0) + 1)
+  }
+  let top = Math.max(0, ...selectorMap.keys())
+  for (const area of root.querySelectorAll('.el-tree-node > .el-tree-node__content')) {
+    const rect = area.getBoundingClientRect()
+    if (!rect.width || !rect.height || rect.bottom <= 0 || rect.top >= window.innerHeight ||
+        area.closest('[hidden],[aria-hidden="true"]') || area.closest('.el-tree-node')?.closest('[role="dialog"],dialog')) continue
+    const x = Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2))
+    const y = Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2))
+    const at = root.elementFromPoint?.(x, y)
+    if (at && at !== area && !area.contains(at)) continue
+    const fact = readElementPageControl(area)
+    if (!fact || lines.length >= 32) continue
+    let label = area.querySelector('.el-tree-node__label')?.textContent?.trim()
+    if (!label || label.length > 120 || /[<>\r\n]/.test(label)) continue
+    if (counts.get(label) > 1) {
+      const path = [label]
+      let parent = area.parentElement?.parentElement?.closest('.el-tree-node')
+      while (parent && path.length < 8) {
+        const name = parent.querySelector(':scope > .el-tree-node__content .el-tree-node__label')?.textContent?.trim()
+        if (!name || /[<>\r\n]/.test(name)) break
+        path.unshift(name)
+        parent = parent.parentElement?.closest('.el-tree-node')
+      }
+      label = path.join(' / ').slice(0, 300)
+    }
+    const existing = [...selectorMap].find(([, node]) => node.ref === area)
+    const index = existing?.[0] ?? ++top
+    if (existing) continue
+    selectorMap.set(index, {ref: area, tagName: 'div', isInteractive: true, highlightIndex: index})
+    lines.push(`[${index}]<div role=treeitem aria-selected=${fact.selected}>${label} />`)
+  }
+  return lines.length ? lines.join('\n') + '\n' + html : html
+}
+
+/** Observe the native user table's status switches, whose hidden input the generic
+ * controller omits. This supplies a highlight target; it grants no click authority. */
+export function withUserStatusControls(selectorMap, html, root = document) {
+  const lines = []
+  let top = Math.max(0, ...selectorMap.keys())
+  for (const area of root.querySelectorAll('.el-table .el-switch')) {
+    if (lines.length >= 32) break
+    const rect = area.getBoundingClientRect()
+    if (!rect.width || !rect.height || rect.bottom <= 0 || rect.top >= window.innerHeight ||
+        area.closest('[hidden],[aria-hidden="true"],[role="dialog"],dialog')) continue
+    const at = root.elementFromPoint?.(Math.max(0, Math.min(window.innerWidth - 1, rect.left + rect.width / 2)),
+      Math.max(0, Math.min(window.innerHeight - 1, rect.top + rect.height / 2)))
+    if (at && at !== area && !area.contains(at)) continue
+    const binding = pageComponentForRoot(area, 'ElSwitch')
+    const tableRoot = area.closest('.el-table'), table = pageComponentForRoot(tableRoot, 'ElTable')
+    if (!binding || !table || binding.owner !== table.owner ||
+        (binding.owner.type?.name || binding.owner.type?.__name) !== 'SystemUser') continue
+    const rows = Array.from(tableRoot.querySelectorAll('.el-table__body-wrapper tbody > tr'))
+    const tr = area.closest('tr'), position = rows.indexOf(tr), records = table.instance.props?.data
+    const record = Array.isArray(records) && records.length === rows.length && records[position]
+    const props = binding.instance.props, input = area.querySelector('input[role="switch"]')
+    if (!record || !Number.isSafeInteger(record.id) || record.id <= 0 ||
+        ![0, 1].includes(record.status) || props?.modelValue !== record.status ||
+        props.activeValue !== 0 || props.inactiveValue !== 1 || props.disabled ||
+        !input || input.getAttribute('aria-checked') !== String(record.status === 0) ||
+        tr.querySelectorAll('.el-switch').length !== 1 ||
+        tr.cells[1]?.textContent?.trim() !== String(record.id) ||
+        tr.cells[2]?.textContent?.trim() !== record.username ||
+        tr.cells[3]?.textContent?.trim() !== record.nickname) continue
+    const label = `状态开关：${record.nickname}（${record.username}）`
+    if (!record.nickname || !record.username || label.length > 120 || /[<>\r\n]/.test(label)) continue
+    const index = ++top
+    selectorMap.set(index, {ref: area, tagName: 'div', isInteractive: true, highlightIndex: index})
+    lines.push(`[${index}]<div role=switch id=woa-user-status-${record.id} aria-checked=${record.status === 0}>${label} />`)
+  }
+  return lines.length ? lines.join('\n') + '\n' + html : html
 }
 
 /** Map one Element Plus select hit area to its own accessible form input. */

@@ -137,7 +137,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
             <button type="submit" className="woa-send" aria-label={labels.send}
                     data-off={disabled || !draft.trim() ? 'true' : undefined}
                     disabled={disabled || !draft.trim()}>
-              <ArrowUp {...iconProps(16, 1.5)} />
+              <ArrowUp {...iconProps(14, 1.2)} />
             </button>
           )}
       </div>

@@ -302,6 +302,27 @@ class NativeModelReadActions(NativeReadActions):
                             option=args.get("option_label", ""))
         elif intent.action == "click":
             if family == "query":
+                if element.role == "treeitem":
+                    field, value = attrs.get("query_field", ""), attrs.get("query_value", "")
+                    selected = attrs.get("aria-selected")
+                    if (not self.page_review.reviewed_control("query", path, field)
+                            or not re.fullmatch(r"[1-9][0-9]{0,19}", value)
+                            or selected not in {"true", "false"}):
+                        raise ActionAdmissionRefused("unreviewed")
+                    fields = dict(before.page_read["query_fields"])
+                    digest = hashlib.sha256(json.dumps([value], separators=(",", ":")).encode()).hexdigest()
+                    if selected == "true":
+                        if fields.get(field) != digest:
+                            raise ActionAdmissionRefused("invalid_target")
+                        fields.pop(field)
+                    else:
+                        fields[field] = digest
+                    expected.update(tree_field=field, tree_value=value, tree_selected=selected == "false",
+                                    page=before.page_read["page"], fields=fields)
+                    self._queries[intent.binding_digest] = expected
+                    digest = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+                    return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY,
+                                        self.page_review.reference, digest)
                 if (element.tag != "button" or _unsafe_button(element) or _entry_button(element)
                         or not attrs.get("form_instance")):
                     raise ActionAdmissionRefused("unreviewed")
@@ -385,6 +406,13 @@ class NativeModelReadActions(NativeReadActions):
         if expected.get("open_paging"):
             return any(e.role == "option" for e in observation.elements)
         read = observation.page_read
+        if "tree_field" in expected:
+            nodes = [e for e in observation.elements if e.role == "treeitem"
+                     and e.attrs.get("page_control") == "query"
+                     and e.attrs.get("query_field") == expected["tree_field"]
+                     and e.attrs.get("query_value") == expected["tree_value"]]
+            if (len(nodes) != 1 or nodes[0].attrs.get("aria-selected") != str(expected["tree_selected"]).lower()):
+                return False
         if expected.get("reset"):
             if (read is None or read["path"] != expected["read"]["path"]
                     or read["revision"] <= expected["read"]["revision"]
@@ -424,6 +452,7 @@ class NativeModelReadActions(NativeReadActions):
         return (read is not None and read["path"] == expected["read"]["path"]
                 and read["revision"] > expected["read"]["revision"]
                 and read["page"] == expected.get("page", 1)
+                and ("tree_field" not in expected or read["page_size"] == expected["read"]["page_size"])
                 and set(read["query_fields"]) == set(expected.get("fields", expected["read"]["query_fields"]))
                 and all(read["query_fields"][key] in (values if isinstance(values, tuple) else (values,))
                     for key, values in expected.get("fields", expected["read"]["query_fields"]).items())

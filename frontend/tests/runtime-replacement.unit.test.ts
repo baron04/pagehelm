@@ -21,6 +21,19 @@ afterEach(() => {
 })
 
 describe('sending a preserved draft replaces an unanswered turn', () => {
+  it('does not close another page\'s write window when observing its finished turn', async () => {
+    const runtime = busyRuntime()
+    Object.assign(runtime.config, {pageWriteGuard: '/woa/page-guard'})
+    runtime.stored.activeMessageId = ''
+    runtime.stored.taskInFlight = false
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    try {
+      await runtime._handleEvent({kind: 'progress', turn_id: 'other-page-turn', payload: {state: 'finished'}})
+      expect(fetcher).not.toHaveBeenCalled()
+      expect(runtime.stopped).toBe(false)
+    } finally { vi.unstubAllGlobals() }
+  })
   it('cancels first and submits only after terminal cancellation arrives', async () => {
     const runtime = busyRuntime()
     const cancel = vi.spyOn(runtime, 'cancelTask').mockResolvedValue()

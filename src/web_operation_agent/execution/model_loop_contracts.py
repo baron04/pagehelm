@@ -9,6 +9,7 @@ from ..business.tools.registry import _validate_schema
 from ..goal.ports import OPTIONAL
 from ..schemas import PageObservation, ActionReceipt
 from ..state.identity import OperationContext
+from ..answer.answering import StructuredQueryAnswer
 from ..business.draft_steps import ApplicationDraftStepPort
 from ..business.prefill_conversion import MutationPrefillPort
 
@@ -184,6 +185,12 @@ class LoopToolResult:
     marked: str = ""
     completion_command: str = ""
     answer_targets: tuple[AnswerTarget, ...] = ()
+    #: An explicitly requested, actor-read collection for exact server delivery.
+    #: The model selects its turn-local reference; it never supplies these values.
+    query_answer: StructuredQueryAnswer | None = None
+    #: A local action proof cannot settle an unresolved part of the user's request.
+    #: Ask the existing completion reader before accepting a completed page handoff.
+    review_completion: bool = False
 
     def __post_init__(self):
         if (not isinstance(self.feedback, str) or len(self.feedback) > 32000
@@ -208,7 +215,12 @@ class LoopToolResult:
                 or not isinstance(self.answer_targets, tuple) or len(self.answer_targets) > 8
                 or any(not isinstance(target, AnswerTarget) for target in self.answer_targets)
                 or self.answer_targets and (self.kind not in {"read", "metadata"}
-                                            or self.state != "completed")):
+                                            or self.state != "completed")
+                or self.query_answer is not None and (
+                    not isinstance(self.query_answer, StructuredQueryAnswer)
+                    or self.kind != "read" or self.state != "completed")
+                or type(self.review_completion) is not bool
+                or self.review_completion and (self.kind != "page" or self.state != "completed")):
             raise ValueError("invalid model-loop result")
 
 

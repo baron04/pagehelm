@@ -2,6 +2,10 @@ import {describe, expect, it} from 'vitest'
 import {countCharacters, parseInline, parseMarkdown} from '../src/markdown/parse'
 
 describe('the markdown grammar is closed', () => {
+  it('accepts standard heading levels within the panel heading scale', () => {
+    const headings = parseMarkdown('# 结果\n\n## 客户\n\n### 明细\n\n###### 备注')
+    expect(headings.map(block => block.type === 'heading' && block.depth)).toEqual([2, 2, 3, 3])
+  })
   it('renders escaped evidence values literally without making links or emphasis', () => {
     const input = String.raw`amount\_total \[name\]\(https://example.test\) \*literal\*`
     expect(parseInline(input)).toEqual([{type: 'text',

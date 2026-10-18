@@ -21,6 +21,13 @@ class ExtractionTests(unittest.TestCase):
     def test_structural_ordinals_and_list_markers_are_not_values(self):
         self.assertEqual(answer_numbers("第 2 页如下：\n1. 甲\n2. 乙\n3. 丙\n第3名是乙"), [])
 
+    def test_ordinal_ranges_exclude_both_positions_but_keep_business_counts_and_bounds(self):
+        for separator in ("-", "–", "—", "~", "～", "至", "到"):
+            with self.subTest(separator=separator):
+                self.assertEqual(answer_numbers(f"第 11 {separator} 20 条，共10条，金额100至200元"),
+                                 ["10", "100", "200"])
+        self.assertEqual(untraced("第2页显示第11–20条，共10条", ("第2页，每页10条，本页10行，共385条",)), ())
+
     def test_separators_trailing_zeros_and_signs_normalize_to_one_form(self):
         self.assertEqual(answer_numbers("¥2,440.80 和 +5 与 −3 以及 -0.50"),
                          ["2440.8", "5", "-3", "-0.5"])

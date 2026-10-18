@@ -23,6 +23,30 @@ function setup() {
 afterEach(() => { for (const runtime of runtimes.splice(0)) runtime.stop() })
 
 describe('restoring a conversation before exposing an empty greeting', () => {
+  it('retains history when another page has a turn and new conversation is refused', async () => {
+    const {runtime, host} = setup()
+    runtime._attachPanel()
+    host.applyTimeline({entries: [{id: 'e1', sequence: 1, turn_id: 't1', at: 1,
+      kind: 'goal', tone: 'neutral', text: 'previous question'}]})
+    vi.mocked(runtime._post).mockRejectedValue({code: 'turn_in_flight', status: 409})
+    host.newConversation()
+    await vi.waitFor(() => expect(host.snapshot().notice).not.toBeNull())
+    expect(host.snapshot().entries[0]?.text).toBe('previous question')
+  })
+
+  it('clears history only after the server accepts new conversation', async () => {
+    const {runtime, host} = setup()
+    runtime._attachPanel()
+    host.applyTimeline({entries: [{id: 'e1', sequence: 1, turn_id: 't1', at: 1,
+      kind: 'goal', tone: 'neutral', text: 'previous question'}]})
+    let accepted!: (value: unknown) => void
+    vi.mocked(runtime._post).mockImplementation(() => new Promise(done => {accepted = done}))
+    vi.spyOn(runtime, '_timeline').mockResolvedValue({entries: []} as never)
+    host.newConversation()
+    expect(host.snapshot().entries).toHaveLength(1)
+    accepted({})
+    await vi.waitFor(() => expect(host.snapshot().entries).toHaveLength(0))
+  })
   it('keeps connecting through a delayed timeline and shows history before ready', async () => {
     const {runtime, host} = setup()
     let resolve!: (value: never) => void

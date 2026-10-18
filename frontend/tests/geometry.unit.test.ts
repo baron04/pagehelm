@@ -16,13 +16,22 @@ function withViewport(width: number, height: number, run: () => void) {
   }
 }
 
-describe('the open window survives only a same-document Runtime replacement', () => {
+describe('the open window survives a refresh in the same tab', () => {
   it('remembers the state in module memory', () => {
     rememberOpen(false)
     expect(loadOpen()).toBe(false)
     rememberOpen(true)
     expect(loadOpen()).toBe(true)
     rememberOpen(false)
+  })
+  it('restores the last choice after evaluating a fresh document', async () => {
+    rememberOpen(true)
+    vi.resetModules()
+    const fresh = await import('../src/state/geometry')
+    expect(fresh.loadOpen()).toBe(true)
+    fresh.rememberOpen(false)
+    vi.resetModules()
+    expect((await import('../src/state/geometry')).loadOpen()).toBe(false)
   })
 })
 

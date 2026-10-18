@@ -8,6 +8,7 @@
   ],
   "scale": {
     "space": "4px",
+    "send-size": "28px",
     "font-size": "14px",
     "font-size-small": "13px",
     "font-size-title": "16px",
@@ -30,7 +31,6 @@
     "radius-field": "16px",
     "radius-tile": "20px",
     "radius-composer": "24px",
-    "radius-welcome": "30px",
     "radius-pill": "999px",
     "border-width": "1px",
     "motion-fast": "120ms",

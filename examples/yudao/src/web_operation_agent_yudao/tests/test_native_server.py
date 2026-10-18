@@ -170,6 +170,15 @@ class NativeHostTests(unittest.TestCase):
         executor = host._sessions[("1", "1")].session.runner.executor
         self.assertIs(executor.profile.untraced_numbers, untraced)
 
+    def test_native_slim_can_deliver_a_complete_long_roster_without_a_smaller_hidden_text_cap(self):
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "tab")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        long_answer = "\n".join(f"{i}. Synthetic contact full name {i:03d}" for i in range(180))
+        declared = executor._finish_tool({})["function"]["parameters"]["properties"]["answer"]["maxLength"]
+        self.assertLessEqual(len(long_answer), declared)
+        self.assertEqual(declared, executor.config.max_user_answer_chars)
+
     def test_turn_records_are_on_by_default_bounded_and_pruned_at_start(self):
         self.assertEqual(14, self.config.turn_trace_days)
         for value in (-1, 91, True, "14", 1.5):

@@ -122,11 +122,13 @@ and not of the empty layout.
 
 The page is loaded as a document, as before, when the application cannot be asked (no
 mounted router, no tab store, no `/redirect` route), when the address is the one already
-shown or carries a fragment, when a dialog, drawer or message box is open over the page
-(some belong to the layout and outlive the page that raised them -- the finance pages'
-account guide does -- and only a document load clears those), when the router refuses or
+shown or carries a fragment, when the router refuses or
 takes the navigation elsewhere, or when the application does not answer within six
 seconds.
+
+An open dialog or drawer does not itself cause a document reload. Page-owned overlays
+leave with their component; layout-owned overlays are left alone. The next observation
+must still prove the requested page state, including whether an overlay blocks it.
 
 - CRM list endpoints apply record permissions only for the `sceneType` they are given (1 owned, 2 involved, 3 subordinates'). Without it a non-admin account reads every record: `evaluator` sees 15 contracts without `sceneType` and 2 with `sceneType=1`. The UI always sends it.
 - springdoc names schemas by simple class name, so same-named nested classes overwrite each other: the published line-item schema of ERP orders is a MES class. Line-item shapes must come from the source.

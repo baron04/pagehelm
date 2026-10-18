@@ -77,13 +77,17 @@ export function isRetryableFailure(code: string, status: number): boolean {
 export function classifyTransportError(
   error: TransportFailure | null | undefined,
   configuration: Pick<PanelConfiguration,
-    'terminal_error_codes' | 'terminal_panel_state_by_code'> | null | undefined,
+    'terminal_error_codes' | 'terminal_panel_state_by_code' | 'nonterminal_error_states'> | null | undefined,
 ): TransportVerdict {
   const code = String(error?.code || '')
   if (APPROVAL_CLOSED.has(code)) {
     // The session is fine; only this one card can no longer be answered. The hand-written
     // runtime said `'idle'` here, a state the contract has never had.
     return {terminal: false, code, state: 'ready', retryable: false, approvalClosed: true}
+  }
+  const nonterminalState = configuration?.nonterminal_error_states[code]
+  if (nonterminalState) {
+    return {terminal: false, code, state: nonterminalState, retryable: false}
   }
   const status = Number(error?.status || 0)
   const terminalCodes = configuration?.terminal_error_codes ?? []
@@ -402,8 +406,6 @@ export class PanelHost implements PanelHostContract {
   }
 
   newConversation(): void {
-    this.clearTimeline()
-    this.clearNotice()
     this.verbs.newConversation()
   }
 

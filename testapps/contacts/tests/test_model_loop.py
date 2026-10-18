@@ -1,5 +1,6 @@
 """Real actor REST reads through the same core decision loop as the native adapter."""
 import json
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,8 +21,56 @@ from web_operation_agent.tests.support.business import _Chat
 
 
 class ContactsModelLoopTests(unittest.TestCase):
+    def test_same_server_read_delivery_contract_uses_each_rest_actor_and_cannot_be_replaced_by_prose(self):
+        for actor,email in (("ada-lovelace","grace@example.test"),("mary-jackson","grace.hopper@southwind.test")):
+            with self.subTest(actor=actor), MinimalContactsApplication() as app:
+                result,chat,_=self.execute(app,actor,[
+                    ("list_contacts",{"name_contains":"Grace Hopper","deliver":True}),
+                    ("finish",{"status":"done","answer":"All emails are listed above"}),
+                    ("finish",{"status":"done","answer":"","read_answer":"read-1"})])
+                self.assertIn(email,result.user_answer)
+                other="grace.hopper@southwind.test" if actor=="ada-lovelace" else "grace@example.test"
+                self.assertNotIn(other,result.user_answer)
+                self.assertIn("Grace Hopper",result.user_answer)
+                self.assertNotIn("listed above",result.user_answer)
+                self.assertEqual("agent_finished",result.terminal_reason)
+
+    def test_a_rest_read_can_finish_after_an_unsent_draft_without_publishing_that_draft(self):
+        with MinimalContactsApplication() as app:
+            result, chat, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"name_contains": "Grace Hopper"}),
+                (None, {"content": "Unsent draft with an invented address: never-publish@example.invalid"}),
+                ("finish", {"status": "done", "answer": "Grace Hopper: grace@example.test"})])
+            self.assertIn("grace@example.test", result.user_answer)
+            self.assertNotIn("never-publish", result.user_answer)
+            self.assertNotIn("never-publish", str(chat.messages[-1]))
+            self.assertEqual("agent_finished", result.terminal_reason)
+
+    def test_a_configured_reader_rejects_a_reference_to_an_undelivered_rest_answer(self):
+        real_profile = contacts_profile
+        reviewed = []
+        def profile(*args, **kwargs):
+            return replace(real_profile(*args, **kwargs), verification_messages=
+                lambda prompt, answer, turn, obs, said: [{"role": "user", "content": answer}])
+        class Reader(_Chat):
+            def complete(self, messages, tools, *args, **kwargs):
+                if tools is None:
+                    answer = messages[-1]["content"]
+                    reviewed.append(answer)
+                    return {"content": json.dumps({"ok": False, "problems": ["The final answer omits the email."]})}
+                return super().complete(messages, tools, *args, **kwargs)
+        with MinimalContactsApplication() as app, patch(__name__ + ".contacts_profile", side_effect=profile):
+            result, _, _ = self.execute(app, "ada-lovelace", Reader([
+                ("list_contacts", {"name_contains": "Grace Hopper"}),
+                (None, {"content": "The email appears only in this unsent draft."}),
+                ("finish", {"status": "done", "answer": "See above"}),
+                ("finish", {"status": "done", "answer": "Already answered"})]))
+            self.assertEqual(reviewed, ["See above", "Already answered"])
+            self.assertEqual(result.terminal_reason, "agent_refused")
+            self.assertNotIn("Already answered", result.user_answer)
+
     def execute(self, app, actor_id, replies, *, source=None, observation=True, turn_traces=False,
-                inspect=None):
+                inspect=None, number_check=None):
         actor = ACTORS_BY_ID[actor_id]
         adapter = MinimalContactsAdapter(app.origin, api_token=actor.token)
         identity = adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}")
@@ -35,7 +84,8 @@ class ContactsModelLoopTests(unittest.TestCase):
                     require_identity=True, ledger_path=Path(tmp) / "audit.jsonl",
                     **({"source": source} if source is not None else {})),
                 chat=chat, application=bind_application(adapter), goal_port=port,
-                profile=contacts_profile(adapter, port), control=ReadOnlyControl(),
+                profile=replace(contacts_profile(adapter, port), untraced_numbers=number_check),
+                control=ReadOnlyControl(),
                 run_id_factory=lambda _: "contacts-model-run", turn_traces=turn_traces)
             with patch.object(goal_executor, "RemoteBrowserClient", _RemoteBrowser):
                 result = executor.execute({"message_id": "contact-model-turn", "text": "Grace Hopper email?",
@@ -43,6 +93,36 @@ class ContactsModelLoopTests(unittest.TestCase):
             if inspect is not None:
                 inspect(Path(tmp))
         return result, chat, executor
+
+    def test_number_check_includes_the_starting_page_the_model_was_shown(self):
+        seen = []
+        def check(answer, sources):
+            seen.append(sources)
+            return ()
+        with MinimalContactsApplication() as app:
+            result, chat, _ = self.execute(app, "ada-lovelace", [
+                ("finish", {"status": "done", "answer": "The contacts page is open."})],
+                number_check=check)
+        self.assertEqual("agent_finished", result.terminal_reason)
+        starting_page = chat.messages[0][-1]["content"].rsplit("\n", 1)[1]
+        self.assertTrue(json.loads(starting_page)["url"].endswith("/contacts"))
+        self.assertIn(starting_page, seen[0])
+
+    def test_failed_fresh_observation_keeps_the_receipt_code_and_explains_recovery(self):
+        execute = _RemoteBrowser.execute
+        events = []
+        def refused(browser, action, *args, **kwargs):
+            receipt = execute(browser, action, *args, **kwargs)
+            return replace(receipt, ok=False, error_code="capability_refused")
+        def inspect(directory):
+            events.extend(json.loads(line) for line in (directory / "audit.jsonl").read_text().splitlines())
+        with MinimalContactsApplication() as app, patch.object(_RemoteBrowser, "execute", refused):
+            result, chat, _ = self.execute(app, "ada-lovelace", [("list_contacts", {})], inspect=inspect)
+        self.assertEqual("page_observation_failed", result.terminal_reason)
+        self.assertIn("Refresh the page", result.user_answer)
+        self.assertEqual(1, len(chat.messages))
+        self.assertTrue(any(event.get("event") == "page_observation_failed"
+                            and event.get("error_code") == "capability_refused" for event in events))
 
     def test_source_only_uses_same_loop_without_browser_or_business_reads(self):
         from web_operation_agent.tests.execution.test_repository_source_turn import RepositorySourceTurns
@@ -282,10 +362,23 @@ class ModelBrowserTests(unittest.TestCase):
         from playwright.sync_api import sync_playwright
         from testapps.contacts.server import NativeContactsHost, NativeServerConfig
         from testapps.contacts.tests.test_native_server import _CONNECTED, _SUBMIT, _allow_operation
-        for blocked in (False, True):
-            with self.subTest(blocked=blocked):
+        real_profile, real_procedure = contacts_profile, ContactsProcedure.execute
+        for blocked, required_review in ((False, False), (True, False), (False, True)):
+            with self.subTest(blocked=blocked, required_review=required_review):
+                def profile(*args, **kwargs):
+                    original = real_profile(*args, **kwargs)
+                    return replace(original, verification_messages=lambda prompt, answer, turn, obs, said:
+                        [{"role":"user", "content":json.dumps({"request":prompt,"route":obs.page_route,
+                                                                "answer":answer})}]) if required_review else original
+                def procedure(self, arguments, *, context):
+                    result = real_procedure(self, arguments, context=context)
+                    return replace(result, review_completion=True) if required_review and self.name == "click" \
+                        and result.state == "completed" else result
                 class PickSection(_Chat):
                     def complete(self, messages, *args, **kwargs):
+                        if required_review and args[0] is None:
+                            self.messages.append([dict(m) for m in messages])
+                            return {"content":json.dumps({"ok":True,"problems":[]})}
                         if len(self.messages) == 1:
                             content = messages[-1]['content']
                             observed = json.loads(content[content.index('{"url":'):])
@@ -295,6 +388,8 @@ class ModelBrowserTests(unittest.TestCase):
                 chat = PickSection([('goto', {'path': '/contacts/workflows/partner'}),
                     ('click', {}), ('finish', {'status': 'cannot', 'answer': 'Selection could not be verified.'})])
                 with tempfile.TemporaryDirectory() as directory, patch('testapps.contacts.server._chat', return_value=(chat, None)), \
+                        patch('testapps.contacts.model_loop.contacts_profile', side_effect=profile), \
+                        patch.object(ContactsProcedure, 'execute', procedure), \
                         NativeContactsHost(NativeServerConfig(Path(directory), port=0, model_loop=True)) as host, \
                         sync_playwright() as playwright:
                     browser = playwright.chromium.launch(headless=True)
@@ -312,7 +407,7 @@ class ModelBrowserTests(unittest.TestCase):
                         self.assertIsNotNone(outcome)
                         self.assertFalse(outcome.error, outcome.error)
                         self.assertEqual('agent_refused' if blocked else 'agent_finished', outcome.result.terminal_reason)
-                        self.assertEqual(3 if blocked else 2, len(chat.messages))
+                        self.assertEqual(3 if blocked or required_review else 2, len(chat.messages))
                         self.assertEqual('false' if blocked else 'true', page.locator('#workflow-terms').get_attribute('aria-selected'))
                         self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
                     finally:

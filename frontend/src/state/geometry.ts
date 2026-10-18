@@ -53,29 +53,23 @@ export interface Geometry {
   height: number
 }
 
-/**
- * A page that loads starts with the panel closed.
- *
- * It used to reopen wherever it had been left, so that a page the assistant itself
- * navigated came back with its panel. The cost fell on every other load: a person who
- * refreshed their own page got the assistant reopened over their work, having asked for
- * nothing. What actually needs attention says so on its own -- the launcher carries the
- * working and awaiting states, and a confirmation opens the window by itself.
- */
+// Visibility follows this tab across refreshes and page navigation. A different tab starts
+// with its own choice; no conversation, capability or approval is stored here.
+const OPEN_KEY = 'woa.panel.open.v1'
 let openInThisDocument = false
 
 export function loadOpen(): boolean {
+  try {
+    const saved = window.sessionStorage.getItem(OPEN_KEY)
+    if (saved === 'true' || saved === 'false') openInThisDocument = saved === 'true'
+  } catch { /* same-document memory remains usable when site storage is blocked */ }
   return openInThisDocument
 }
 
-/** Remember a person's choice only while this document lives.
-
-An Agent restart replaces the Runtime inside the same Odoo document and should restore the
-window the person was using. A browser refresh evaluates this module again and deliberately
-returns to closed, preserving the ordinary page-load behaviour described above.
-*/
 export function rememberOpen(value: boolean): void {
   openInThisDocument = Boolean(value)
+  try { window.sessionStorage.setItem(OPEN_KEY, String(openInThisDocument)) }
+  catch { /* preserve the in-memory choice if storage is unavailable */ }
 }
 
 function viewport(): {width: number; height: number} {

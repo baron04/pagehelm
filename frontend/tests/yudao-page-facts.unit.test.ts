@@ -2,7 +2,7 @@ import {afterAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createHash} from 'node:crypto'
 import {tryOpenAnswerInPlace} from '../src/runtime/answerNavigation'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage, withTreeQueryControls, withUserStatusControls} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -440,6 +440,63 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
 }
 
 describe('native Yudao mounted navigation identity', () => {
+  it('keeps a list pending while a native spinner remains paintable after its mask collapses', () => {
+    mountedPage('/system/user','SystemUser')
+    const spinner=document.createElement('div');spinner.className='el-loading-spinner'
+    spinner.getBoundingClientRect=()=>({width:30,height:30} as DOMRect)
+    document.querySelector('#app')!.append(spinner)
+    const facts=createPageFacts()
+    expect(facts.readPageBlocker()).toBe('pending')
+    spinner.remove()
+    expect(facts.readPageBlocker()).toBe(false)
+  })
+  it('observes only a native page-owned status switch whose row and component values agree', () => {
+    const state=mountedPage('/system/user','SystemUser')
+    state.element.innerHTML='<div class="el-table"><div class="el-table__body-wrapper"><table><tbody>'
+      + '<tr><td></td><td>7</td><td>account7</td><td>合成用户</td><td><div class="el-switch">'
+      + '<input role="switch" aria-checked="true"></div></td></tr></tbody></table></div></div>'
+    const root=state.element.firstElementChild!,area=root.querySelector('.el-switch')!
+    area.getBoundingClientRect=()=>({left:10,top:10,bottom:30,width:50,height:20} as DOMRect)
+    const record={id:7,username:'account7',nickname:'合成用户',status:0}
+    const props={modelValue:0,activeValue:0,inactiveValue:1,disabled:false}
+    const control={...state.instance,type:{name:'ElSwitch'},props,subTree:{type:'div',el:area}}
+    const table={...state.instance,type:{name:'ElTable'},props:{data:[record]},
+      subTree:{type:'div',el:root,children:[{component:control}]}}
+    state.instance.subTree.children=[{component:table}] as unknown as NativeVNode[]
+    const map=new Map()
+    expect(withUserStatusControls(map,'existing')).toContain('role=switch id=woa-user-status-7 aria-checked=true>状态开关：合成用户（account7）')
+    expect(map.get(1).ref).toBe(area)
+    props.modelValue=1
+    expect(withUserStatusControls(new Map(),'existing')).toBe('existing')
+    props.modelValue=0;record.id=8
+    expect(withUserStatusControls(new Map(),'existing')).toBe('existing')
+    record.id=7;props.disabled=true
+    expect(withUserStatusControls(new Map(),'existing')).toBe('existing')
+  })
+  it('indexes only the live page-owned department node hit area and follows selection', () => {
+    const state=mountedPage('/system/user','SystemUser')
+    state.element.innerHTML='<div class="el-tree" role="tree"><div class="el-tree-node" role="treeitem" data-key="103">'
+      + '<div class="el-tree-node__content"><span class="el-tree-node__label">研发部门</span></div></div></div>'
+    const root=state.element.firstElementChild!,node=root.firstElementChild!,area=node.firstElementChild!
+    for(const e of [root,node,area])e.getBoundingClientRect=()=>({left:10,top:10,bottom:30,width:100,height:20} as DOMRect)
+    const wrapper={...state.instance,type:{name:'DeptTreeSelect'},vnode:{ctx:state.instance}}
+    const nativeNode={data:{id:103,name:'研发部门'},isCurrent:false}
+    const item={...state.instance,type:{name:'ElTreeNode'},props:{node:nativeNode},subTree:{type:'div',el:node}}
+    const tree={...state.instance,type:{name:'ElTree'},vnode:{ctx:wrapper},
+      props:{nodeKey:'id',showCheckbox:false,draggable:false},subTree:{type:'div',el:root,children:[{component:item}]}}
+    state.instance.subTree.children=[{component:tree}] as unknown as NativeVNode[]
+    expect(readElementPageControl(area)).toEqual({kind:'query',field:'deptId',queryValue:'103',selected:false})
+    const map=new Map()
+    expect(withTreeQueryControls(map,'existing')).toContain('role=treeitem aria-selected=false>研发部门')
+    expect(map.get(1).ref).toBe(area)
+    nativeNode.isCurrent=true
+    expect(withTreeQueryControls(new Map(),'existing')).toContain('aria-selected=true')
+    wrapper.vnode.ctx={...state.instance} // A child/editor/cache is not the active source owner.
+    expect(readElementPageControl(area)).toBeUndefined()
+    wrapper.vnode.ctx=state.instance
+    node.setAttribute('data-key','104') // DOM labels and IDs alone cannot forge the native node.
+    expect(readElementPageControl(area)).toBeUndefined()
+  })
   it('proves the active keyed page after query replacement clears the route instance table', () => {
     const state = mountedPage('/pms/pm/project/list', 'ProjectList')
     delete state.matched.instances
@@ -910,7 +967,7 @@ describe('the application opens its own page through its router, in this documen
       },
     }
     const store = tabs ? {delAllViews: () => { calls.push('drop kept pages') }} : undefined
-    const doc = {querySelectorAll: () => over,
+    const doc = {querySelectorAll: (selector: string) => selector === '.el-overlay, .el-image-viewer__wrapper' ? over : [],
       getElementById: (id: string) => id === 'app' ? {__vue_app__: {config: {globalProperties: {
         $router: router, $pinia: {_s: new Map(store ? [['tagsView', store]] : [])}}}}} : null}
     return {calls, location, options: {view: {location, setTimeout}, doc, mounted: () => true}}
@@ -949,8 +1006,6 @@ describe('the application opens its own page through its router, in this documen
       ['https://synthetic.test/crm/customer', {}],                 // already shown: only a load rebuilds it provably
       ['https://synthetic.test/system/post#part', {}],             // the redirect route carries no fragment
       ['https://elsewhere.invalid/system/post', {}],
-      // A dialog left open over the page would sit over the next one: only a load clears it.
-      ['https://synthetic.test/system/post', {over: [{getBoundingClientRect: () => ({width: 1440, height: 900})}]}],
     ] as const) {
       const app = application(options)
       await expect(openPage(url, app.options)).resolves.toBe(false)
@@ -961,6 +1016,24 @@ describe('the application opens its own page through its router, in this documen
   it('a closed dialog still in the document does not stop it', async () => {
     const app = application({over: [{getBoundingClientRect: () => ({width: 0, height: 0})}]})
     await expect(openPage('https://synthetic.test/system/post', app.options)).resolves.toBe(true)
+  })
+  it('uses the native router with an open dialog, leaving overlay readiness to fresh observations', async () => {
+    const overlay = document.createElement('div')
+    overlay.getBoundingClientRect = () => ({width: 1440, height: 900} as DOMRect)
+    document.body.append(overlay)
+    try {
+      const app = application({over: [overlay]})
+      await expect(openPage('https://synthetic.test/system/post', app.options)).resolves.toBe(true)
+      expect(app.calls).toEqual(['drop kept pages', 'push /redirect/system/post'])
+      // Routing does not click or save in the surviving overlay, or prove readiness.
+      const facts = createPageFacts(app.options)
+      expect(facts.readPageBlocker()).toBe(true)
+      overlay.setAttribute('hidden', '')
+      expect(facts.readPageBlocker()).toBe(false)
+      // Once dismissed, a new display of that component is not a carried layer.
+      overlay.removeAttribute('hidden')
+      expect(facts.readPageBlocker()).toBe(false)
+    } finally {overlay.remove()}
   })
   it('waits, within a bound, for the page itself and not only for its address', async () => {
     const app = application()

@@ -354,6 +354,21 @@ describe('Page.describe bounds an observation before it crosses the browser boun
       }
     } finally { element.remove() }
   })
+  it('preserves a live cleared query value instead of retaining a stale value or omitting its proof', () => {
+    const input = document.createElement('input')
+    document.body.append(input)
+    try {
+      const page = new Page(controller(), () => input, createRedactor(), undefined, undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined, () => ({kind: 'query', field: 'username'}))
+      const read = () => page.describe({url: 'https://app.test/users', title: '',
+        content: '[1]<input value=previous />'}, 1).observation.elements[0]?.attrs
+      input.value = 'account7'
+      expect(read()).toMatchObject({page_control: 'query', query_field: 'username', value: 'account7'})
+      input.value = ''
+      expect(read()).toMatchObject({page_control: 'query', query_field: 'username', value: ''})
+    } finally { input.remove() }
+  })
   it('projects an application query only with page identity and intact bounded nonsecret values', () => {
     const query = {path: '/api/contacts', parameters: {domain: 'example.test'}}
     const read = (value: unknown, path: string | undefined = '/contacts') => new Page(controller(), () => null,
@@ -817,6 +832,7 @@ describe('Page refuses controls that are not writable at execution time', () => 
       const marker = page.highlight('e1')
       expect(marker.active()).toBe(true)
       expect(button.style.outline).toContain('Highlight')
+      expect(button.style.outlineOffset).toBe('-3px')
       expect(button.scrollIntoView).toHaveBeenCalledOnce()
       expect(api.clickElement).not.toHaveBeenCalled()
       marker.clear()
