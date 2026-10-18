@@ -689,6 +689,34 @@ class ModelLoopTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             VerificationResult("passed", ("not passed",))
 
+    def test_refused_page_explanation_survives_the_real_loop_without_a_retry(self):
+        def stop(fixture, _name, _arguments):
+            fixture.state.terminal_reason = "agent_refused"
+            return LoopToolResult("technical feedback", kind="page", state="unverified",
+                error_code="option_unavailable", terminal_reason="agent_refused",
+                terminal_answer="Priority has no matching option. Other fields were not processed; review the draft.")
+        fixture = LoopFixture([reply(call("fill_contact")), reply(call("finish", status="done", answer="done"))], stop)
+        self.assertIn("Other fields were not processed", fixture.run())
+        self.assertEqual("agent_refused", fixture.state.terminal_reason)
+        self.assertEqual(1, len(fixture.state.chat.seen))
+        self.assertEqual([], fixture.actions)
+        for reason in ("permission_denied", "transport_error"):
+            def interrupted(fixture, name, arguments):
+                result = stop(fixture, name, arguments)
+                fixture.state.terminal_reason = reason
+                return result
+            other = LoopFixture([reply(call("fill_contact"))], interrupted)
+            self.assertNotIn("Other fields were not processed", other.run())
+
+    def test_terminal_explanation_is_not_a_general_result_or_write_override(self):
+        valid = LoopToolResult("internal", kind="page", state="refused",
+            terminal_reason="agent_refused", terminal_answer="Draft stopped.")
+        for changes in ({"kind":"write"}, {"kind":"read"}, {"state":"completed"},
+                        {"state":"indeterminate"}, {"terminal_reason":"permission_denied"},
+                        {"completion_command":"cmd"}, {"terminal_answer":"x" * 4001}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                replace(valid, **changes)
+
     def test_answer_target_is_a_bounded_relative_application_read(self):
         target = AnswerTarget("record", "/contacts/7", "Mira", "contacts:7")
         self.assertEqual(LoopToolResult("Mira", kind="read", answer_targets=(target,)).answer_targets,

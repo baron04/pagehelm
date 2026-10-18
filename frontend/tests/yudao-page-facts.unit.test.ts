@@ -1079,6 +1079,25 @@ describe('native editor mode is current application state', () => {
       subTree:{type:'form',el:form},vnode:{ctx:state.instance}}
     state.instance.subTree.children=[{component:native}] as unknown as NativeVNode[]
     expect(readElementPageControl(input)).toEqual({kind:'form',mode:'create',recordId:null})
+    const dateRoot=document.createElement('div');dateRoot.className='el-date-editor'
+    const dateInput=document.createElement('input');dateRoot.append(dateInput);form.append(dateRoot)
+    const picker={...state.instance,type:{name:'ElDatePicker'},props:{type:'datetime',format:undefined as string|undefined},
+      parent:native,subTree:{type:Symbol('fragment'),el:document.createComment('fragment')}}
+    const dateControl={...state.instance,type:{name:'ElInput'},props:{type:'text'},
+      parent:picker,subTree:{type:'div',el:dateRoot}}
+    native.subTree={type:'form',el:form,children:[{component:dateControl}]} as typeof native.subTree
+    expect(readElementPageControl(dateInput)).toEqual({kind:'form',mode:'create',recordId:null,inputKind:'datetime'})
+    picker.props.type='date'
+    expect(readElementPageControl(dateInput)).toMatchObject({inputKind:'date'})
+    picker.props.format='DD/MM/YYYY'
+    expect(readElementPageControl(dateInput)).not.toHaveProperty('inputKind')
+    picker.props.format=undefined;picker.props.type='datetimerange'
+    expect(readElementPageControl(dateInput)).not.toHaveProperty('inputKind')
+    picker.props.type='datetime';picker.isDeactivated=true
+    expect(readElementPageControl(dateInput)).not.toHaveProperty('inputKind')
+    picker.isDeactivated=false;dateControl.parent=native as unknown as typeof picker
+    expect(readElementPageControl(dateInput)).not.toHaveProperty('inputKind') // CSS alone supplies no precision.
+    dateRoot.remove()
     const lines=document.createElement('form');lines.className='el-form'
     const quantity=document.createElement('input');lines.append(quantity);form.append(lines)
     lines.getBoundingClientRect=()=>({width:400,height:100} as DOMRect)

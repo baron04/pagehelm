@@ -1333,6 +1333,17 @@ def _control_kind(element) -> str:
     return ""
 
 
+def _native_input_text(element, value: str) -> str:
+    """Supply a day's start only when this live editor declares time precision."""
+    if element.attrs.get("form_input_kind") == "datetime" and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        try:
+            day = datetime.fromisoformat(value)
+        except ValueError:
+            return value
+        return day.isoformat(sep=" ", timespec="seconds")
+    return value
+
+
 def _commits(element, elements) -> bool:
     """Whether a typed value is committed at once. The first box of a date range is not:
     the component takes the pair when its second box is left, and a first box committed
@@ -1763,8 +1774,12 @@ class YudaoLoopProcedures:
         elif outcome.receipt is not None and outcome.receipt.error_code == "option_unavailable":
             feedback = ("下拉框没有请求的精确选项，且未能确认当前表单完全保持原样；"
                         "不会自动重发，请手工核对当前草稿。")
+        terminal = (getattr(s, "terminal_reason", "") == "agent_refused"
+                    and outcome.error_code == "option_unavailable" and outcome.state in {"refused", "unverified"})
         return LoopToolResult(feedback, kind="page", state=outcome.state,
-                              dispatch=outcome.dispatch, error_code=outcome.error_code)
+                              dispatch=outcome.dispatch, error_code=outcome.error_code,
+                              terminal_reason="agent_refused" if terminal else "",
+                              terminal_answer=(feedback[:3500] + " 后续操作已停止，没有点击提交按钮，请核对当前草稿。") if terminal else "")
 
     def _choice_label(self, s, element, value):
         # Only the actor's declared dictionary may resolve enum typography. Linked
@@ -1988,6 +2003,8 @@ class YudaoLoopProcedures:
                                           + "、".join(unrequested) + "。请只填用户指定的字段。",
                                           kind="page", state="refused",
                                           error_code="unrequested_draft_field")
+            if name == "input":
+                value = _native_input_text(element, value)
             command = {"ref": element.ref, "value": value}
             if name == "input":
                 command["commit"] = _commits(element, s.obs.elements)
@@ -2167,6 +2184,7 @@ class YudaoLoopProcedures:
                                                 kind="page", state="refused", error_code="stale_binding")
                         break
                     element = current[at]
+                text = _native_input_text(element, text)
                 if kind in ("〔下拉〕", "〔单选〕") and text.strip():
                     text = self._choice_label(s, element, text)
                     failed = self._select(s, element, text)
@@ -2181,8 +2199,9 @@ class YudaoLoopProcedures:
                 detail = "；".join(said)
                 detail += ("；" if detail else "") + f"{label}：" + (
                     failed.feedback if failed else "本次处理已停止，当前字段结果未确认。")
-                detail += " 后续字段未继续处理，没有点击提交按钮，请核对当前草稿。"
-                return (replace(failed, feedback=detail) if failed else LoopToolResult(
+                detail = detail[:3500] + " 后续字段未继续处理，没有点击提交按钮，请核对当前草稿。"
+                return (replace(failed, feedback=detail,
+                                terminal_answer=detail if failed.terminal_answer else "") if failed else LoopToolResult(
                     detail, kind="page", state="unverified", dispatch="uncertain", error_code="interrupted"))
             if failed:
                 incomplete = True

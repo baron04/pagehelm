@@ -673,7 +673,7 @@ function pageComponentForRoot(root, name, allowDialog = false) {
     const node = stack.pop()
     if (!node || seen.has(node)) continue
     seen.add(node)
-    if (name !== 'ElForm' && node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root)) continue
+    if (!allowDialog && name !== 'ElForm' && node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root)) continue
     if (node.component && live(node.component)) {
       if ((node.component.type?.name || node.component.type?.__name) === name &&
           node.component.appContext === owner.appContext) {
@@ -711,12 +711,29 @@ function nativeFormContext(element) {
   if (!model || typeof model !== 'object' || Array.isArray(model)) return undefined
   const title = dialog.querySelector('.el-dialog__header')?.textContent?.trim()
   const id = model.id
+  const dateRoot = element instanceof HTMLInputElement && element.closest('.el-date-editor')
+  const input = dateRoot && form.contains(dateRoot) && pageComponentForRoot(dateRoot, 'ElInput', true)
+  // ElDatePicker's root is a fragment. Start with its actual mounted ElInput
+  // and follow framework ownership, never DOM classes as a precision claim.
+  let picker, parent = input?.owner === bound.owner ? input.instance.parent : undefined
+  for (let depth = 0; parent && depth < 12; depth++, parent = parent.parent) {
+    if (parent.appContext !== bound.owner.appContext || parent.isMounted !== true ||
+        parent.isUnmounted !== false || parent.isDeactivated !== false) break
+    const name = parent.type?.name || parent.type?.__name
+    if (name === 'ElForm') break
+    if (name === 'ElDatePicker') {picker = parent; break}
+  }
+  // Precision comes from the mounted picker, not a placeholder or CSS class.
+  // Custom display formats and ranges require their own native contract.
+  const type = picker?.props?.type
+  const precision = picker && ['date', 'datetime'].includes(type) && !picker.props.format
+    ? {inputKind: type} : {}
   if (title === '新增' && (id === undefined || id === null || id === '')) {
-    return {kind: 'form', mode: 'create', recordId: null}
+    return {kind: 'form', mode: 'create', recordId: null, ...precision}
   }
   if (title === '编辑' && (typeof id === 'number' && Number.isSafeInteger(id) && id > 0
       || typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id))) {
-    return {kind: 'form', mode: 'update', recordId: String(id)}
+    return {kind: 'form', mode: 'update', recordId: String(id), ...precision}
   }
   return undefined
 }

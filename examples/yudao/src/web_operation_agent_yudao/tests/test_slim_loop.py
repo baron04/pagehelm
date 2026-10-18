@@ -1402,7 +1402,8 @@ class DraftChoiceTests(unittest.TestCase):
         def failed(s, _action, _args, **_kw):
             s.terminal_reason = "agent_refused"
             return LoopToolResult("选项未确认，不会自动重发。", kind="page", state="unverified",
-                                  dispatch="acknowledged", error_code="unverified")
+                                  dispatch="acknowledged", error_code="unverified",
+                                  terminal_reason="agent_refused", terminal_answer="选项未确认，不会自动重发。")
         self.procedures._act = failed
         result = self.procedures._fill_fields(self.state, [{"label":"产品","value":"缺少的精确型号"}],
             "", {"touched":[],"trace":[]})
@@ -1411,6 +1412,22 @@ class DraftChoiceTests(unittest.TestCase):
         self.assertIn("产品：选项未确认", result.feedback)
         self.assertIn("后续字段未继续处理", result.feedback)
         self.assertNotEqual(result.feedback, "操作没有完成。")
+        self.assertEqual(result.feedback, result.terminal_answer)
+
+    def test_live_datetime_precision_normalizes_a_day_before_dispatch_and_readback(self):
+        from web_operation_agent_yudao.slim_loop import _native_input_text
+        for precision, wanted in (("datetime","2026-10-22 00:00:00"),("date","2026-10-22"),("","2026-10-22")):
+            with self.subTest(precision=precision):
+                date = element(1,"combobox","下次联系时间","input",form_input_kind=precision,
+                    field_label="下次联系时间",**{"aria-haspopup":"dialog"})
+                self.state.obs = replace(self.state.obs,elements=[date],content="[1]<input />")
+                self.state.terminal_reason = ""
+                self.sent.clear()
+                self.procedures._fill_fields(self.state,[{"label":"下次联系时间","value":"2026-10-22"}],
+                    "",{"touched":[],"trace":[]})
+                self.assertEqual(wanted,self.sent[0][1]["value"])
+                self.assertEqual("2026-02-30",_native_input_text(date,"2026-02-30"))
+                self.assertEqual("2026-10-22 15:30:00",_native_input_text(date,"2026-10-22 15:30:00"))
 
     def test_prior_viewport_options_do_not_replace_runtime_owned_selection(self):
         option = self.changed[1]

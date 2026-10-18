@@ -1058,15 +1058,25 @@ describe('application-owned form context on ordinary HTML', () => {
     const context = (element: unknown) => {
       const owner = (element as Element).closest('form')!
       return {kind: 'form', mode: owner.dataset.mode,
-        recordId: owner.dataset.mode === 'create' ? null : owner.dataset.recordId}
+        recordId: owner.dataset.mode === 'create' ? null : owner.dataset.recordId,
+        inputKind: owner.dataset.inputKind}
     }
     const make = (reader?: typeof context) => new Page(api, () => input, createRedactor(),
       undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, reader)
-    const state = {url:location.href, title:'', content:'[1]<input form_mode="create" form_record_id="" />'}
+    const state = {url:location.href, title:'', content:'[1]<input form_mode="create" form_record_id="" form_input_kind="datetime" />'}
     try {
       const page = make(context), before = page.fingerprint('e1')
       expect(page.describe(state,1).observation.elements[0]!.attrs).toMatchObject({form_mode:'update',form_record_id:'contact-b'})
+      expect(page.describe(state,1).observation.elements[0]!.attrs.form_input_kind).toBeUndefined()
+      form.dataset.inputKind = 'datetime'
+      const dated = page.fingerprint('e1')
+      expect(dated).not.toBe(before)
+      expect(page.describe(state,1).observation.elements[0]!.attrs.form_input_kind).toBe('datetime')
+      form.dataset.inputKind = 'date'
+      expect(page.fingerprint('e1')).not.toBe(dated)
+      form.dataset.inputKind = 'untrusted'
+      expect(page.describe(state,1).observation.elements[0]!.attrs.form_input_kind).toBeUndefined()
       form.dataset.recordId = 'contact-c'
       expect(page.fingerprint('e1')).not.toBe(before)
       form.dataset.mode = 'unknown'

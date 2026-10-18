@@ -23,6 +23,14 @@ def control(ref, role, name, epoch, label="", **attrs):
 
 
 class LiveFormTests(unittest.TestCase):
+    def test_live_native_date_precision_is_preferred_to_requested_text(self):
+        # No source hints or inferred time suffix can change the live editor type.
+        self.port._bound = type("Bound", (), {"request":None})()
+        for precision in ("date", "datetime"):
+            field = self.port._field(control("e1","combobox","Next",1,
+                form_input_kind=precision),"Next","next","2026-10-22")
+            self.assertEqual(precision, field.kind)
+
     def setUp(self):
         self.guard = NativePageGuard(frozenset(), writing_gets=frozenset())
         self.guard.begin(ACTOR, OWNER)

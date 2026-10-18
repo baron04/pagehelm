@@ -1104,6 +1104,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 if s.terminal_reason:
                     if s.terminal_reason == "page_observation_failed":
                         return page_observation_failure(chinese=s.chinese)
+                    if s.terminal_reason == "agent_refused" and result.terminal_answer:
+                        return result.terminal_answer
                     return turn.get("final") or (text + "本次没有完成。"
                         if s.terminal_reason == "permission_denied" else "操作没有完成。")
             if finish is None:

@@ -343,6 +343,9 @@ class LiveFormPort:
 
     def _field(self, element, label: str, key: str, value: str | None):
         hint = self._hints.field(self._bound.request, label, key) if self._hints else None
+        precision = element.attrs.get("form_input_kind")
+        if precision in {"date", "datetime"} and element.role in {"textbox", "combobox"}:
+            return ApplicationFormField(key, label, kind=precision, controls=(element.role,), binding="label")
         if element.role == "spinbutton":
             return ApplicationFormField(key, label, kind="number", controls=("spinbutton",), binding="label")
         if element.role in {"combobox", "select", "radiogroup"}:

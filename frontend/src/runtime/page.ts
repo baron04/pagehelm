@@ -229,17 +229,21 @@ export class Page {
     }
   }
 
-  private formContext(ref: unknown): {mode: 'create' | 'update'; recordId: string | null} | undefined {
+  private formContext(ref: unknown): {mode: 'create' | 'update'; recordId: string | null;
+    inputKind?: 'date' | 'datetime'} | undefined {
     try {
       const element = this.element(ref)
       if (!(element instanceof HTMLElement) || !element.isConnected ||
           !formControlScope(element) || !formInstance(element) || isSensitiveFormControl(element, this.redactor)) return undefined
-      const fact = this.readElementPageControl?.(element) as {kind?: unknown; mode?: unknown; recordId?: unknown} | undefined
+      const fact = this.readElementPageControl?.(element) as
+        {kind?: unknown; mode?: unknown; recordId?: unknown; inputKind?: unknown} | undefined
       if (fact?.kind !== 'form') return undefined
-      if (fact.mode === 'create' && fact.recordId === null) return {mode: 'create', recordId: null}
+      const precision: {inputKind?: 'date' | 'datetime'} =
+        fact.inputKind === 'date' || fact.inputKind === 'datetime' ? {inputKind: fact.inputKind} : {}
+      if (fact.mode === 'create' && fact.recordId === null) return {mode: 'create', recordId: null, ...precision}
       if (fact.mode === 'update' && typeof fact.recordId === 'string' &&
           /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(fact.recordId) &&
-          this.redactor.redactString(fact.recordId) === fact.recordId) return {mode: 'update', recordId: fact.recordId}
+          this.redactor.redactString(fact.recordId) === fact.recordId) return {mode: 'update', recordId: fact.recordId, ...precision}
     } catch { /* Missing live context grants no mode; it never falls back to summary text. */ }
     return undefined
   }
@@ -791,6 +795,7 @@ export class Page {
       // Mode is policy-critical observation data, never parsed controller prose.
       delete item.attrs.form_mode
       delete item.attrs.form_record_id
+      delete item.attrs.form_input_kind
       try {
         const element = this.element(item.ref)
         if (!(element instanceof HTMLElement) || !element.isConnected) continue
@@ -801,6 +806,7 @@ export class Page {
         if (form && item.attrs.form_scope && item.attrs.form_instance) {
           item.attrs.form_mode = form.mode
           item.attrs.form_record_id = form.recordId === null ? '' : form.recordId
+          if (form.inputKind) item.attrs.form_input_kind = form.inputKind
         }
         if (fact?.kind === 'pagination' && Number.isSafeInteger(fact.page) &&
             Number(fact.page) > 0 && Number.isSafeInteger(fact.pageSize) && Number(fact.pageSize) > 0) {
