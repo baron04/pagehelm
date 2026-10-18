@@ -52,6 +52,22 @@ export interface TransportVerdict {
 const APPROVAL_CLOSED = new Set([
   'approval_expired', 'approval_not_pending', 'unknown_approval', 'approval_conflict'])
 
+/** Statuses where repeating the request can succeed; any other status repeats the same refusal. */
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504])
+/** Named transient failures the server reports without a numeric status. */
+const RETRYABLE_CODES = new Set([
+  'rate_limited', 'timeout', 'request_timeout', 'service_unavailable',
+  'bad_gateway', 'gateway_timeout', 'submit_failed', 'cancel_failed'])
+
+/** Whether offering the person a resend can help: transient faults yes, decided refusals no. */
+export function isRetryableFailure(code: string, status: number): boolean {
+  if (RETRYABLE_STATUS.has(status)) return true
+  if (status >= 400) return false
+  if (RETRYABLE_CODES.has(code)) return true
+  // No code and no status: the transport itself failed before any server answered.
+  return code === ''
+}
+
 /**
  * How one failed request ends: is the session over, and what should the panel show?
  *
@@ -89,7 +105,8 @@ export function classifyTransportError(
   if (status === 403) {
     return {terminal: true, code: code || 'origin_refused', state: 'error', retryable: false}
   }
-  return {terminal: false, code: code || 'submit_failed', state: 'reconnecting', retryable: true}
+  return {terminal: false, code: code || 'submit_failed', state: 'reconnecting',
+    retryable: isRetryableFailure(code, status)}
 }
 
 export function backoffAfter(previous: number): number {

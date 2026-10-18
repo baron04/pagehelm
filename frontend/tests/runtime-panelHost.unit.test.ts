@@ -47,6 +47,28 @@ describe('classifyTransportError reads the server own table, once', () => {
   })
 })
 
+describe('retryable only offers a resend when repeating can help', () => {
+  it('hides retry for refused credentials and decided refusals without a status', () => {
+    expect(classifyTransportError({code: 'unauthorized'}, DEFAULT_CONFIGURATION).retryable).toBe(false)
+    expect(classifyTransportError({code: 'unreviewed'}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: false, retryable: false})
+    expect(classifyTransportError({status: 400}, DEFAULT_CONFIGURATION).retryable).toBe(false)
+  })
+
+  it('offers retry for rate limits, exhausted servers and transient statuses', () => {
+    expect(classifyTransportError({status: 429}, DEFAULT_CONFIGURATION))
+      .toMatchObject({terminal: false, retryable: true})
+    expect(classifyTransportError({status: 503}, DEFAULT_CONFIGURATION).retryable).toBe(true)
+    expect(classifyTransportError({status: 502}, DEFAULT_CONFIGURATION).retryable).toBe(true)
+    expect(classifyTransportError({code: 'rate_limited'}, DEFAULT_CONFIGURATION).retryable).toBe(true)
+  })
+
+  it('keeps retry for a transport fault that never reached a server answer', () => {
+    expect(classifyTransportError({code: 'submit_failed'}, DEFAULT_CONFIGURATION).retryable).toBe(true)
+    expect(classifyTransportError({}, DEFAULT_CONFIGURATION).retryable).toBe(true)
+  })
+})
+
 describe('backoffAfter grows with jitter and stays bounded', () => {
   it('never returns 0 and never exceeds the ceiling by more than the jitter band', () => {
     let previous = 0

@@ -272,7 +272,7 @@ export class EmbeddedWebRuntime {
       this.panelHost?.raise(verdict.code, {retryable: false})
     } else {
       this._panelState(verdict.state)
-      this.panelHost?.raise(String(failure?.code || fallback), {retryable: true})
+      this.panelHost?.raise(String(failure?.code || fallback), {retryable: verdict.retryable})
     }
     return verdict
   }
