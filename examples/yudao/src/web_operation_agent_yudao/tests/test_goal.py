@@ -473,6 +473,28 @@ class YudaoGoalDataTests(unittest.TestCase):
         self.assertEqual(data.column_names("other/contract/page"), {})
         self.assertEqual(YudaoGoalData(_Client(), DOCS).column_names("crm/contract/page"), {})
 
+    def test_enum_bracket_typography_uses_only_the_named_actor_field(self):
+        data = YudaoGoalData(_Client(), DOCS, ui=UiSource(views={
+            "crm/customer/index": ListView(endpoint="/crm/customer/page",
+                column_labels=(("level", "客户级别"),))}))
+        self.assertEqual(data.choice_label("/crm/customer", "客户级别", "A（重点客户）"), "A （重点客户）")
+        for route, label, value in (("/other", "客户级别", "A（重点客户）"),
+                ("/crm/customer", "客户名称", "A（重点客户）"),
+                ("/crm/customer", "客户级别", "A 重点客户"),
+                ("/crm/contract", "客户", "杭州 云帆")):
+            with self.subTest(route=route, label=label):
+                self.assertEqual(data.choice_label(route, label, value), value)
+
+    def test_ambiguous_enum_typography_is_not_resolved_to_one_code(self):
+        class Ambiguous(_Client):
+            def get(self, path, **params):
+                if path == "system/dict-data/simple-list":
+                    return [*DICTS, {"dictType": "crm_customer_level", "value": "2", "label": "A（重点客户）"}]
+                return super().get(path, **params)
+        data = YudaoGoalData(Ambiguous(), DOCS, ui=UiSource(views={
+            "crm/customer/index": ListView(endpoint="/crm/customer/page", column_labels=(("level", "客户级别"),))}))
+        self.assertEqual(data.choice_label("/crm/customer", "客户级别", "A(重点客户)"), "A(重点客户)")
+
     def test_a_crm_list_is_read_under_every_scene_and_merged(self):
         rows = self.data.rows("crm/contract", all_of(), fields=("name",))
         self.assertEqual(sorted(r.display for r in rows), ["云帆企业版合同", "瑞达实施服务合同"])

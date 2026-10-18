@@ -17,6 +17,25 @@ _FORMATTER = re.compile(r':formatter="([A-Za-z][A-Za-z0-9_]*)"')
 _DIRECT_DIVIDE = re.compile(r"\b(?:scope\.)?row\.([A-Za-z][A-Za-z0-9_]*)\s*/\s*100(?:\.0)?\b")
 _DIRECT_FEN = re.compile(r"\bfenToYuan\s*\(\s*(?:scope\.)?row\.([A-Za-z][A-Za-z0-9_]*)\s*\)")
 _ROW_FIELD = re.compile(r"\b(?:scope\.)?row\.([A-Za-z][A-Za-z0-9_]*)\b")
+_UNIT = re.compile(r"元(?:/[A-Za-z\u4e00-\u9fff]{1,12}){0,3}")
+_FORM_ITEM = re.compile(r"<el-form-item\b([^>]*)>(.*?)</el-form-item>", re.S)
+
+
+def _compiled_unit(component_text: str, field: str) -> str | None:
+    """One literal native field's own unit, not another field or a guessed currency."""
+    from .ui_source import _COLUMN_PROP
+    units = []
+    for attrs, body in _FORM_ITEM.findall(component_text):
+        prop = _COLUMN_PROP.search(attrs)
+        if prop is None or prop[1] != field or ":prop" in attrs:
+            continue
+        models = re.findall(r'(?<![:\w-])v-model="formData\.([A-Za-z]\w*)"', body)
+        placeholders = re.findall(r'(?<![:\w-])placeholder="([^"]*)"', body)
+        declared = [match[1] for text in placeholders
+                    if (match := re.search(r"单位\s*[:：]\s*(\S+)$", text))]
+        units.append(declared[0] if models == [field] and len(declared) == 1
+                     and _UNIT.fullmatch(declared[0]) else None)
+    return units[0] if len(units) == 1 else None
 
 
 def _sha(path: Path) -> str:
@@ -111,13 +130,16 @@ class VerifiedMoneyReview:
         keys = set()
         for item in document["fields"]:
             if (not isinstance(item, dict)
-                    or set(item) != {"route", "endpoint", "field", "factor", "display_unit",
-                                    "component", "component_sha256", "nonzero_samples"}
+                    or set(item) not in ({"route", "endpoint", "field", "factor", "display_unit",
+                                         "component", "component_sha256", "nonzero_samples"},
+                                        {"route", "endpoint", "field", "factor", "display_unit",
+                                         "component", "component_sha256", "nonzero_samples", "unit_source"})
                     or not isinstance(item["route"], str) or not _ENDPOINT.fullmatch(item["route"])
                     or not isinstance(item["endpoint"], str) or not _ENDPOINT.fullmatch(item["endpoint"])
                     or not isinstance(item["field"], str) or not _FIELD.fullmatch(item["field"])
                     or not isinstance(item["factor"], str) or item["factor"] not in {"1", "0.01"}
-                    or item["display_unit"] != "元"
+                    or not isinstance(item["display_unit"], str) or not _UNIT.fullmatch(item["display_unit"])
+                    or item["display_unit"] != "元" and "unit_source" not in item
                     or not isinstance(item["component"], str) or not _COMPONENT.fullmatch(item["component"])
                     or item["component"].startswith("/") or "//" in item["component"]
                     or not isinstance(item["component_sha256"], str)
@@ -143,6 +165,25 @@ class VerifiedMoneyReview:
             view = ui.views.get(item["component"])
             if view is None or view.endpoint != item["endpoint"]:
                 raise ValueError("verified money policy endpoint no longer matches the page")
+            if "unit_source" in item:
+                proof = item["unit_source"]
+                if (not isinstance(proof, dict) or set(proof) != {"component", "sha256"}
+                        or not isinstance(proof["component"], str) or not _COMPONENT.fullmatch(proof["component"])
+                        or proof["component"].startswith("/") or "//" in proof["component"]
+                        or not isinstance(proof["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", proof["sha256"])):
+                    raise ValueError("verified money policy has an invalid unit source")
+                unit_source = root / "src/views" / (proof["component"] + ".vue")
+                if not unit_source.resolve().is_relative_to(root / "src/views"):
+                    raise ValueError("verified money policy unit source escapes the UI tree")
+                try:
+                    unit_bytes = unit_source.read_bytes()
+                    unit_text = unit_bytes.decode("utf-8")
+                except (OSError, UnicodeError) as exc:
+                    raise ValueError("verified money policy unit source is unavailable") from exc
+                if hashlib.sha256(unit_bytes).hexdigest() != proof["sha256"]:
+                    raise ValueError("verified money policy unit source changed")
+                if _compiled_unit(unit_text, item["field"]) != item["display_unit"]:
+                    raise ValueError("verified money policy unit no longer matches the native field")
             fields.append(VerifiedMoneyField(item["route"], item["endpoint"], item["field"],
                                              Decimal(item["factor"]), item["display_unit"]))
         return cls(tuple(fields))

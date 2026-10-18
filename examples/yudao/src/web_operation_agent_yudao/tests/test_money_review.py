@@ -14,6 +14,58 @@ def sha(path):
 
 
 class VerifiedMoneyReviewTests(unittest.TestCase):
+    def test_compound_rate_requires_its_exact_native_field_unit_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            sources = {
+                "src/utils/index.ts": "formatter",
+                "src/utils/formatter.ts": "formatter",
+                "src/views/demo/rates.vue": '<el-table-column label="日租费" prop="price" :formatter="erpPriceTableColumnFormatter" />',
+                "src/views/demo/RateForm.vue": '<el-form-item label="日租费" prop="price"><el-input-number '
+                    'v-model="formData.price" placeholder="请输入日租费，单位：元/天/KG" /></el-form-item>',
+            }
+            for name, text in sources.items():
+                file = root / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(text)
+            item = {"route":"/demo/rates","endpoint":"/demo/rates/page","field":"price","factor":"1",
+                "display_unit":"元/天/KG","component":"demo/rates",
+                "component_sha256":sha(root / "src/views/demo/rates.vue"),"nonzero_samples":3,
+                "unit_source":{"component":"demo/RateForm","sha256":sha(root / "src/views/demo/RateForm.vue")}}
+            document = {"schema_version":1,"release":"synthetic-v1","review":"same actor",
+                "source_functions":{name:sha(root/name) for name in ("src/utils/index.ts","src/utils/formatter.ts")},
+                "fields":[item]}
+            path = root / "policy.json"
+            ui = SimpleNamespace(views={"demo/rates":SimpleNamespace(endpoint="/demo/rates/page")})
+            def load():
+                path.write_text(json.dumps(document))
+                return VerifiedMoneyReview.load(path,ui_source=root,release="synthetic-v1",ui=ui)
+            field = load().fields_for("demo/rates/page")["price"]
+            self.assertEqual((field.display_value(10),field.display_unit),(10,"元/天/KG"))
+            # Omitting the denominator is not an acceptable currency default.
+            item["display_unit"] = "元"
+            with self.assertRaisesRegex(ValueError,"unit no longer matches"):
+                load()
+            item["display_unit"] = "元/天/KG"
+            proof = item.pop("unit_source")
+            with self.assertRaisesRegex(ValueError,"invalid field"):
+                load()
+            item["unit_source"] = proof
+            unit_file = root / "src/views/demo/RateForm.vue"
+            unit_file.write_text(sources["src/views/demo/RateForm.vue"].replace('prop="price"','prop="otherPrice"'))
+            with self.assertRaisesRegex(ValueError,"unit source changed"):
+                load()
+            proof["sha256"] = sha(unit_file)
+            with self.assertRaisesRegex(ValueError,"unit no longer matches"):
+                load()
+            unit_file.write_text(sources["src/views/demo/RateForm.vue"] * 2)
+            proof["sha256"] = sha(unit_file)
+            with self.assertRaisesRegex(ValueError,"unit no longer matches"):
+                load()
+            proof["component"] = "../escape"
+            with self.assertRaises(ValueError):
+                load()
+
     def test_exact_release_source_endpoint_and_nonzero_attestation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

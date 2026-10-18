@@ -34,7 +34,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
-from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _WRITE_INTENT, _draft_only_request, _unrequested_draft_fields, _read_only_status_question, _tabs_not_shown,
+from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _EARLIER_REQUESTS, _WRITE_INTENT, _draft_only_request, _unrequested_draft_fields, _read_only_status_question, _tabs_not_shown,
                                                  _business_handoff_ready, _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.write_intent import WriteIntent
@@ -1379,6 +1379,39 @@ class DraftChoiceTests(unittest.TestCase):
         self.assertEqual([("select", {"ref":"e1", "value":"PLC 控制器 P5",
                                      "option_label":"PLC 控制器 P5"})], self.sent)
 
+    def test_actor_enum_label_reaches_selection_and_handoff_with_its_exact_typography(self):
+        self.control = replace(self.control, attrs={**self.attrs, "field_label":"客户级别"})
+        self.state.obs = replace(self.state.obs, elements=[self.control], content="[1]<input />")
+        self.state.terminal_reason = ""
+        self.procedures.goal_port = NS(data=NS(choice_label=lambda route, label, value:
+            "A （重点客户）" if label == "客户级别" else value))
+        expected = []
+        def handoff(_state, _before, fields, _button):
+            expected.extend(fields)
+            return LoopToolResult("已交接", kind="page", marked="确定")
+        with patch("web_operation_agent.execution.draft_handoff.handoff_draft", handoff):
+            self.procedures._fill_fields(self.state, [{"label":"客户级别", "value":"A（重点客户）"}],
+                "", {"touched":[],"trace":[]}, then_highlight="确定")
+        self.assertEqual(self.sent, [("select", {"ref":"e1", "value":"A （重点客户）",
+                                               "option_label":"A （重点客户）"})])
+        self.assertEqual(expected[0][1], "A （重点客户）")
+
+    def test_partial_form_failure_keeps_typed_dispatch_and_names_the_unverified_field(self):
+        self.state.obs = replace(self.state.obs, elements=[self.control], content="[1]<input />")
+        self.state.terminal_reason = ""
+        def failed(s, _action, _args, **_kw):
+            s.terminal_reason = "agent_refused"
+            return LoopToolResult("选项未确认，不会自动重发。", kind="page", state="unverified",
+                                  dispatch="acknowledged", error_code="unverified")
+        self.procedures._act = failed
+        result = self.procedures._fill_fields(self.state, [{"label":"产品","value":"缺少的精确型号"}],
+            "", {"touched":[],"trace":[]})
+        self.assertEqual((result.state,result.dispatch,result.error_code),
+                         ("unverified","acknowledged","unverified"))
+        self.assertIn("产品：选项未确认", result.feedback)
+        self.assertIn("后续字段未继续处理", result.feedback)
+        self.assertNotEqual(result.feedback, "操作没有完成。")
+
     def test_prior_viewport_options_do_not_replace_runtime_owned_selection(self):
         option = self.changed[1]
         for options in ([replace(option, attrs={"listbox_owner":"foreign"})],
@@ -1990,7 +2023,8 @@ class LoopTests(unittest.TestCase):
 
     def test_draft_copy_refuses_extra_field_before_touching_the_form(self):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
-        executor._earlier_words = ["ERP客户天津滨海港务服务有限公司的联系人现在是谁？"]
+        history_token = _EARLIER_REQUESTS.set(("ERP客户天津滨海港务服务有限公司的联系人现在是谁？",))
+        self.addCleanup(_EARLIER_REQUESTS.reset, history_token)
         executor._act = lambda *_args, **_kwargs: self.fail("extra field reached the page")
         state, turn = State(), {"touched": [], "trace": []}
         state.obs = PageObservation(1, 1, "https://synthetic.test/customer", "Customer", [], [
@@ -2021,7 +2055,8 @@ class LoopTests(unittest.TestCase):
     def test_single_field_cannot_inherit_history_when_current_request_names_another(self):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         executor.knowledge = None
-        executor._earlier_words = ["这个客户的联系人和手机号分别是什么？"]
+        history_token = _EARLIER_REQUESTS.set(("这个客户的联系人和手机号分别是什么？",))
+        self.addCleanup(_EARLIER_REQUESTS.reset, history_token)
         executor._act = lambda *_args, **_kwargs: self.fail("extra field reached the page")
         state = State()
         state.obs = PageObservation(1, 1, "https://synthetic.test/customer", "Customer", [], [
@@ -2041,6 +2076,50 @@ class LoopTests(unittest.TestCase):
         finally:
             _WRITE_INTENT.reset(intent_token)
             _CURRENT_REQUEST.reset(request_token)
+
+    def test_unit_decoration_does_not_turn_a_requested_copy_field_into_an_extra(self):
+        fields = [{"label":"税率(%)", "value":"13"}]
+        self.assertEqual(_unrequested_draft_fields(fields, "参照这个客户复制税率", ()), [])
+        self.assertEqual(_unrequested_draft_fields(fields, "这次只复制联系人", ("复制税率",), other_labels=["联系人"]), ["税率(%)"])
+        self.assertEqual(_unrequested_draft_fields(fields, "复制税率", (), other_labels=["税率(元)"]), ["税率(%)"])
+        self.assertEqual(_unrequested_draft_fields([{ "label":"名称（英文）", "value":"Other"}],
+            "只复制名称", ()), ["名称（英文）"])
+
+    def test_real_slim_turn_binds_user_history_to_its_separate_procedure_and_clears_it(self):
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge = NS(client=object())
+        executor.conversation_state = ConversationState()
+        executor.conversation_state.record(message_id="old", user_text="参照甲客户复制联系人、手机号、税率，先不保存",
+            assistant_text="只填了一部分", status="refused")
+        owner = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        sent = []
+        owner._settled = lambda *_args, **_kw: None
+        owner._act = lambda _s, action, args, **_kw: sent.append((action, args))
+        state = NS(message=NS(text="再补一个乙客户的草稿，同样只预填不保存"), terminal_reason="",
+            obs=PageObservation(1, 1, "https://synthetic.test/customer", "Customer", [], [
+                element(i, "textbox", "", "input", field_label=label, form_scope="dialog:create")
+                for i, label in enumerate(("联系人", "手机号码", "税率(%)"), 1)],
+                content="[1]<input />\n[2]<input />\n[3]<input />"))
+        fields = [{"label":label,"value":value} for label,value in
+                  (("联系人","原生联系人"),("手机号码","13300001234"),("税率(%)","13"))]
+        def procedure(_executor, s):
+            # The real core and this application procedure are separate objects.
+            self.assertFalse(hasattr(owner, "_earlier_words"))
+            return owner._fill_fields(s, fields, "", {"touched":[],"trace":[]})
+        with patch("web_operation_agent_yudao.bound_data_reads.turn_actor_reads", lambda _client: contextlib.nullcontext()), \
+                patch.object(ModelDrivenTurnExecutor, "_run", procedure):
+            self.assertEqual(executor._run(state).state, "completed")
+            self.assertEqual(len(sent), 3)
+            self.assertEqual(_EARLIER_REQUESTS.get(), ())
+            sent.clear()
+            state.message.text = "这次只复制联系人，先不保存"
+            self.assertEqual(executor._run(state).error_code, "unrequested_draft_field")
+            self.assertFalse(sent)
+            executor.conversation_state.clear()
+            state.message.text = "再补一个乙客户的草稿，同样只预填不保存"
+            self.assertEqual(executor._run(state).error_code, "unrequested_draft_field")
+            self.assertFalse(sent)
+        self.assertEqual(_EARLIER_REQUESTS.get(), ())
 
     def test_a_named_range_uses_its_unlabelled_end_from_the_fresh_observation(self):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
@@ -2325,6 +2404,16 @@ class PagingTests(unittest.TestCase):
 
 
 class FindRecordTests(unittest.TestCase):
+    def test_api_discovery_distinguishes_native_id_from_business_number_even_when_descriptions_collide(self):
+        knowledge = ActorKnowledge(Client(), lambda: DOCS)
+        text = knowledge._api_line({"path":"/admin-api/demo/get","tag":"Demo","summary":"Read",
+            "op":{"parameters":[{"in":"query","name":"id","required":True,"description":"单据编号",
+                                   "schema":{"type":"integer"}},
+                                  {"in":"query","name":"no","description":"单据编号",
+                                   "schema":{"type":"string"}}]}})
+        self.assertIn("id*(原生记录ID；接口说明：单据编号; integer)", text)
+        self.assertIn("no(单据编号; string)", text)
+
     class Port:
         def __init__(self, hits=(), refuse=False, parts=None):
             """`hits` are (entity, display) for one record each, or (entity, records) with
@@ -2426,17 +2515,18 @@ class FindRecordTests(unittest.TestCase):
         told = self.find(self.Port(), "恒昌五金", "供应商")
         self.assertIn("在名称里有“供应商”的模块（ERP 供应商）里，按名称“恒昌五金”和它的一部分（“恒昌”“五金”）查列表，"
                       "都没有名称是或包含“恒昌五金”的记录。", told)
-        self.assertIn("如实说明这些模块里没有它（cannot），不要再换名字查", told)
+        self.assertIn("这些模块没有该名称（cannot），不要再换名字查", told)
+        self.assertIn("不证明原生ID或业务编号不存在", told)
         self.assertIn("不带 kind 再查一次", told)
 
     def test_new_draft_name_miss_points_to_create_form_instead_of_cannot(self):
         told = self.find(self.Port(), "星澜物资", "供应商",
                          request="星澜物资的供应商资料先填上联系人王岚")
         self.assertIn("打开对应页面的新增表单", told)
-        self.assertNotIn("没有它（cannot）", told)
+        self.assertNotIn("没有该名称（cannot）", told)
         existing = self.find(self.Port(), "星澜物资", "供应商",
                              request="先在编辑表单里把星澜物资的联系人改成王岚")
-        self.assertIn("没有它（cannot）", existing)
+        self.assertIn("没有该名称（cannot）", existing)
 
     def test_a_list_of_the_named_kind_is_shown_with_what_was_not_found_in_it(self):
         told = self.find(self.Port(), "松原设备", "订单")
@@ -2455,6 +2545,16 @@ class FindRecordTests(unittest.TestCase):
         port = self.Port()
         self.assertNotIn("一部分", self.find(port, "XSTH20260929000005", "销售退货单"))
         self.assertEqual(port.asked, ["XSTH20260929000005"])
+
+    def test_numeric_names_are_not_silently_treated_as_ids_and_name_misses_have_limited_scope(self):
+        port = self.Port(hits=(("orders", (("7", "48291", ""),)),))
+        self.assertIn("48291（编号 7）", self.find(port, "48291", "订单"))
+        self.assertEqual(port.asked, ["48291"])
+        for kind in ("订单", ""):
+            told = self.find(self.Port(), "48291", kind)
+            self.assertIn("名称", told)
+            self.assertIn("原生ID或业务编号", told)
+            self.assertNotIn("这些模块里没有它", told)
 
     def test_a_scoped_miss_checks_application_visibility_before_claiming_absence(self):
         from copy import deepcopy

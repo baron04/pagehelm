@@ -126,6 +126,34 @@
       "component": "crm/contract/index",
       "component_sha256": "84b0154e61afd5951f05a0e846285ab807866ea524c3243f527fd8362e8d5f1d",
       "nonzero_samples": 10
+    },
+    {
+      "route": "/erp/stock/warehouse",
+      "endpoint": "/erp/warehouse/page",
+      "field": "warehousePrice",
+      "factor": "1",
+      "display_unit": "元/天/KG",
+      "component": "erp/stock/warehouse/index",
+      "component_sha256": "b0209253e1f744c4d9101e1472da4e5894c3863a6009c9c20e804fb3a214f6cd",
+      "nonzero_samples": 3,
+      "unit_source": {
+        "component": "erp/stock/warehouse/WarehouseForm",
+        "sha256": "fea275118000f3883d0e86a4f96c31360ffc23a57e2ceb3ea05abe1fc2742bb3"
+      }
+    },
+    {
+      "route": "/erp/stock/warehouse",
+      "endpoint": "/erp/warehouse/page",
+      "field": "truckagePrice",
+      "factor": "1",
+      "display_unit": "元",
+      "component": "erp/stock/warehouse/index",
+      "component_sha256": "b0209253e1f744c4d9101e1472da4e5894c3863a6009c9c20e804fb3a214f6cd",
+      "nonzero_samples": 3,
+      "unit_source": {
+        "component": "erp/stock/warehouse/WarehouseForm",
+        "sha256": "fea275118000f3883d0e86a4f96c31360ffc23a57e2ceb3ea05abe1fc2742bb3"
+      }
     }
   ]
 }

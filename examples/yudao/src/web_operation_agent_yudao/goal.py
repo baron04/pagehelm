@@ -959,6 +959,33 @@ class YudaoGoalData:
                             labels.setdefault(key, set()).add(label)
         return {key: next(iter(names)) for key, names in labels.items() if len(names) == 1}
 
+    def choice_label(self, route: str, label: str, value: str) -> str:
+        """Resolve bracket spacing only in this actor's native enum, never record names.
+
+        This supplies a label, not permission or proof that the current widget offers
+        it. The fixed browser tool must still select one exact live option.
+        """
+        schema = self._known()
+        pages = [page for page in schema.pages if page.key == route and page.entity]
+        if len(pages) != 1:
+            return value
+        entity = schema.entity(pages[0].entity)
+        with self._lock:
+            spec = self._entities.get(pages[0].entity)
+        if entity is None or spec is None:
+            return value
+        labels = self.column_names(spec.list_path)
+        fields = [field for field in entity.fields if field.kind == "choice"
+                  and label in {field.label, labels.get(field.key)}]
+        if len(fields) != 1:
+            return value
+        def typography(text):
+            text = str(text).replace("（", "(").replace("）", ")")
+            return re.sub(r"\s*([()])\s*", r"\1", text).strip()
+        matches = [choice.label for choice in fields[0].choices
+                   if typography(choice.label) == typography(value)]
+        return matches[0] if len(matches) == 1 else value
+
     def query_scope(self, entity: str, parameters: dict, *, label: str, ttl_s: float = 60) -> Native:
         """Server-side query binding, not a model tool or proof of current page state.
 

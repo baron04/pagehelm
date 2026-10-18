@@ -61,6 +61,7 @@ _PENDING_MS, _LOOK_MS = 400, 150
 #: Looks a page that keeps changing is given before it is taken as it is.
 _STILL_LOOKS = 2
 _CURRENT_REQUEST = ContextVar("yudao_slim_current_request", default="")
+_EARLIER_REQUESTS = ContextVar("yudao_slim_earlier_requests", default=())
 _WRITE_INTENT = ContextVar("yudao_slim_write_intent", default=None)
 _MARK = re.compile(r"^\s*\*?\[(\d+)\]")
 _BUSINESS_BUTTON = re.compile(r"删除|审核|审批|确认|提交|启用|停用")
@@ -219,6 +220,8 @@ class ActorKnowledge:
             if p.get("in") != "query":
                 continue
             desc = (p.get("description") or "").split("，")[0][:24]
+            if p.get("name") == "id":
+                desc = "原生记录ID" + (f"；接口说明：{desc}" if desc else "")
             kind = (p.get("schema") or {}).get("type")
             params.append(f"{p['name']}{'*' if p.get('required') else ''}({desc}"
                           + (f"; {kind}" if kind in {"string", "integer", "number", "boolean", "array"} else "")
@@ -854,7 +857,7 @@ TOOLS = [
     _tool("find_record", "按名称查这条记录在哪些模块里（客户、合同、商机、产品、订单……）。"
           "用户给了记录名却没说它是什么，或者你不确定它属于哪个模块时，先用它。"
           "新增表单里类型已明确的关联字段直接填写用户给的名称，不用此工具预查下拉名称。", {
-        "name": {"type": "string", "description": "记录的名称或编号，照用户的原话"},
+        "name": {"type": "string", "description": "记录名称，照用户原话；编号查询用call_api已发布的编号参数"},
         "kind": {"type": "string", "description":
                  "用户说了这是哪一类记录（员工、供应商、销售退货单……）时，照用户的说法填这个词：只在名称里有这个词的模块中查，"
                  "快得多。用户没说就不给"}}, ["name"]),
@@ -1017,7 +1020,7 @@ SYSTEM_RULES = """
 - 一次回复里可以连着调用几个工具，按顺序执行。页面变化之后，同一次回复里按序号的操作（click、input、select、highlight）不会执行，按路径或字段名的（goto、fill_fields、call_api）照常执行：能一次说清的就一次说完，例如 goto 之后接着 fill_fields 筛选。
 - 最后一步是 goto 打开页面、click 切换页签、highlight 标出按钮，或 fill_fields 完成表单交接、已核验筛选、分页时，把给用户的答复写在这一步的 answer 里，不用再单独调用 finish。程序确认通过才结束，没有成功就把结果交给你。goto 带 open 时要先读表单观察，不带 answer；用户还要求切页签、筛选或填写时，goto 只是中间步骤，绝不能带 answer 提前结束。先读新页面并完成用户指定状态，再在最后一步带 answer。用户要打开的是某一条记录时，到列表还不算打开它。answer 里不要写你还没看到的页面内容（条数、某一行的值）。其它工具结果必须先看到，再 finish。
 - 用户给了记录名却没说它是什么，或者你拿不准它在哪个模块时，先用 find_record 查它在哪些模块里，不要凭名字里的字眼猜。用户说了它是哪一类（员工、供应商、客户……），find_record 一定带上 kind。
-- find_record 带 kind 查过、说这些模块里没有的，就是没有：直接 cannot，说明查了哪些模块；不要再用 call_api、search_menu、goto 换名字或换模块去确认。
+- find_record 只按名称查找。名称无匹配不证明原生ID或业务编号不存在；编号用已发布接口的对应参数读取。确切名称查空后说明已查范围，不更名或穷举模块。
 - 全局 find_record 未命中不等于覆盖了所有应用模块。用它附带的已发布接口候选，按用户名称查询最贴合的模块；成功完整读取且无匹配后立即 cannot 说明该范围没有记录，不再缩短名称重查、读无条件列表或打开列表确认；不要反复做全局查找，也不要把其它模块逐个穷举。只有用户给出新的对象线索才扩大范围。不要点击与用户名称不同的记录来确认不存在。
 - 同一个名字在几个模块里都有记录时（例如 CRM 客户和进销存客户同名）：不要先查到哪个就用哪个。按“本部署的用语约定”选默认的那一个，并在答复里说明用的是哪个模块的记录；约定没有覆盖、又分不清时用 need_input 问。
 - 不编造任何值。读不到、找不到、没有权限就如实说（cannot）。记录存在但不属于当前账号的可见范围，是没有权限，不要说成不存在。
@@ -1757,11 +1760,27 @@ class YudaoLoopProcedures:
             labels = outcome.receipt.candidate_labels if outcome.receipt is not None else ()
             feedback = ("未选择：应用已核验这个下拉操作没有改变表单。请从它的选项中核对精确名称；保留空格，不会自动替换。\n"
                         + fenced(redacted("\n".join(labels), self.knowledge.handoffs)))
+        elif outcome.receipt is not None and outcome.receipt.error_code == "option_unavailable":
+            feedback = ("下拉框没有请求的精确选项，且未能确认当前表单完全保持原样；"
+                        "不会自动重发，请手工核对当前草稿。")
         return LoopToolResult(feedback, kind="page", state=outcome.state,
                               dispatch=outcome.dispatch, error_code=outcome.error_code)
 
+    def _choice_label(self, s, element, value):
+        # Only the actor's declared dictionary may resolve enum typography. Linked
+        # record names never pass through this mapping; the Runtime still matches
+        # the returned native label exactly against the current owned listbox.
+        resolve = getattr(getattr(getattr(self, "goal_port", None), "data", None), "choice_label", None)
+        if element.role == "combobox" and callable(resolve):
+            try:
+                value = resolve(urlsplit(s.obs.url).path, _control_name(element), value)
+            except DataRefused:
+                pass  # Optional metadata is not a prerequisite for literal selection.
+        return value
+
     def _select(self, s, element, value):
         """Select directly; the fixed Runtime owns the exact-label choice process."""
+        value = self._choice_label(s, element, value)
         attrs = element.attrs
         if (element.role == "combobox" and attrs.get("aria-haspopup") == "listbox"
                 and str(attrs.get("form_scope", "")).startswith("dialog")
@@ -1961,7 +1980,7 @@ class YudaoLoopProcedures:
                     and element.attrs.get("page_control") != "query"):
                 unrequested = _unrequested_draft_fields(
                     [{"label": _control_name(element), "value": value}],
-                    _CURRENT_REQUEST.get(), getattr(self, "_earlier_words", ()),
+                    _CURRENT_REQUEST.get(), _EARLIER_REQUESTS.get(),
                     other_labels=[str(e.attrs.get("field_label") or "") for e in s.obs.elements
                                   if e.attrs.get("form_scope") == scope])
                 if unrequested:
@@ -1973,6 +1992,7 @@ class YudaoLoopProcedures:
             if name == "input":
                 command["commit"] = _commits(element, s.obs.elements)
             else:
+                value = self._choice_label(s, element, value)
                 command["option_label"] = value
             failed = (self._act(s, "fill", command) if name == "input"
                       else self._select(s, element, value))
@@ -2075,7 +2095,7 @@ class YudaoLoopProcedures:
             for e in getattr(s.obs, "elements", ()))
         if isinstance(intent, WriteIntent) and intent.mode == "draft" and not then_click and form_batch:
             unrequested = _unrequested_draft_fields(
-                fields[:12], _CURRENT_REQUEST.get(), getattr(self, "_earlier_words", ()),
+                fields[:12], _CURRENT_REQUEST.get(), _EARLIER_REQUESTS.get(),
                 other_labels=[str(e.attrs.get("field_label") or "") for e in s.obs.elements
                               if str(e.attrs.get("form_scope") or "").startswith(("dialog:", "form:"))
                               and e.attrs.get("page_control") != "query"])
@@ -2148,6 +2168,7 @@ class YudaoLoopProcedures:
                         break
                     element = current[at]
                 if kind in ("〔下拉〕", "〔单选〕") and text.strip():
+                    text = self._choice_label(s, element, text)
                     failed = self._select(s, element, text)
                 else:
                     failed = self._act(s, "fill", {"ref": element.ref, "value": text,
@@ -2157,7 +2178,12 @@ class YudaoLoopProcedures:
                 expected.append((field_identity(element), text))
                 self._settled(s, waits=2)
             if s.terminal_reason:
-                return LoopToolResult("操作没有完成。", kind="page", state="unverified")
+                detail = "；".join(said)
+                detail += ("；" if detail else "") + f"{label}：" + (
+                    failed.feedback if failed else "本次处理已停止，当前字段结果未确认。")
+                detail += " 后续字段未继续处理，没有点击提交按钮，请核对当前草稿。"
+                return (replace(failed, feedback=detail) if failed else LoopToolResult(
+                    detail, kind="page", state="unverified", dispatch="uncertain", error_code="interrupted"))
             if failed:
                 incomplete = True
                 failure = failure or failed
@@ -2296,7 +2322,8 @@ class YudaoLoopProcedures:
                 told.append("这是已有记录的查找结果，不是新增草稿的可行性判断。用户本轮要先填新资料；"
                             "不要因为没有同名旧记录而拒绝。现在打开对应页面的新增表单，填入用户给出的值并交接提交。")
             else:
-                told.append("用户说的就是这一类记录时，这就是结果：如实说明这些模块里没有它（cannot），不要再换名字查；"
+                told.append("以上只核对了名称，不证明原生ID或业务编号不存在；编号需用已发布接口的对应参数读取。"
+                            "用户给的是确切名称时，如实说明这些模块没有该名称（cannot），不要再换名字查；"
                             "用户没说清是哪一类，它也可能在别的模块里，那样就不带 kind 再查一次。")
             return redacted("\n".join(told), self.knowledge.handoffs)
         if not hits:
@@ -2307,8 +2334,8 @@ class YudaoLoopProcedures:
                 return ("这是已有记录的查找结果；用户本轮要先填新资料，不应因为查不到旧记录而拒绝。"
                         "现在打开对应页面的新增表单，填入用户给出的值并交接提交。")
             return redacted(f"索引已涵盖的模块里，没有名称是（或以它开头的）“{name}”的记录。"
-                    "这不是全部应用模块的不存在证明；不要缩短名称反复做全局查找。"
-                    "下面只是按文字检索的接口候选，不是记录事实。选最贴合用户对象的模块按名称查一次，"
+                    "这不是全部应用模块的不存在证明，也未核对原生ID或业务编号；不要缩短名称反复做全局查找。"
+                    "下面只是按文字检索的接口候选，不是记录事实。用户给的是确切名称时，选最贴合对象的模块按名称查一次，"
                     "该模块成功完整读取且无匹配后，立即 cannot 并说明查过的范围，不要再换关键词重查、读无条件列表或打开列表来确认。不存在的记录无需打开页面；不要穷举其它模块或点击不同名称的记录。\n"
                     + self.knowledge.search_api(name), self.knowledge.handoffs)
         told, lists, several = [], [], False
@@ -2475,14 +2502,22 @@ def _unrequested_draft_fields(fields: list[dict], current: str,
               str(item.get("value", ""))) for item in fields]
     labels = ({label for label, _ in items if label and label not in _PAGING}
               | {label for label in other_labels if label})
-    named_now = {label for label in labels if _draft_field_named(label, current)}
+    named_now = {label for label in labels if _draft_field_named(label, current, labels=labels)}
     return [label for label, value in items if label in labels
             and label not in named_now
             and not (value and re.sub(r"\s+", "", value) in current)
-            and (named_now or not _draft_field_named(label, history))]
+            and (named_now or not _draft_field_named(label, history, labels=labels))]
 
 
-def _draft_field_named(label: str, text: str) -> bool:
+def _draft_field_named(label: str, text: str, *, labels=()) -> bool:
+    # Units decorate a field label; they are not a second field requested by the
+    # person. Keep business qualifiers intact (e.g. 名称（英文）), and leave the
+    # actual control/value binding to the application's live form admission.
+    def base(value):
+        return re.sub(r"\s*[（(]\s*(?:%|％|元|万元|千元|KG|kg|吨|千克|公斤|件|个)\s*[）)]$", "", value)
+    plain = base(label)
+    if plain != label and not any(other != label and base(other) == plain for other in labels):
+        label = plain
     aliases = {"手机号码": ("手机号码", "手机号", "手机"),
                "联系电话": ("联系电话", "固定电话", "电话"),
                "下次联系时间": ("下次联系时间", "下次联系日期")}
@@ -2510,9 +2545,12 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
     def _run(self, state):
         from .bound_data_reads import turn_actor_reads
         token = _CURRENT_REQUEST.set(state.message.text)
+        context = self.conversation_state.model_context() or {}
+        history_token = _EARLIER_REQUESTS.set(tuple(
+            str(turn["user"]) for turn in context.get("prior_turns", ())))
         from .write_intent import preceding_draft_handoff
         prior_draft = preceding_draft_handoff(
-            (self.conversation_state.model_context() or {}).get("prior_turns"))
+            context.get("prior_turns"))
         intent_token = _WRITE_INTENT.set(classify_write_intent(state.message.text,
                                                                prior_draft=prior_draft))
         try:
@@ -2520,6 +2558,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                 return super()._run(state)
         finally:
             _WRITE_INTENT.reset(intent_token)
+            _EARLIER_REQUESTS.reset(history_token)
             _CURRENT_REQUEST.reset(token)
 
     def _tools(self, turn):
