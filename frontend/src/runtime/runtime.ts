@@ -38,7 +38,7 @@ import * as results from './results'
 import {ChoiceUnavailable} from './combobox'
 import {renderState, type PendingView} from './renderState'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
-import {SessionClient, sseBatches} from './transport'
+import {IdleHandshakeClosed, SessionClient, TransportError, sseBatches} from './transport'
 import {closeWriteGuard, openWriteGuard, releaseWriteGuard} from './writeGuard'
 import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
 import {activityPoint} from './activityPoint'
@@ -302,7 +302,20 @@ export class EmbeddedWebRuntime {
   }
 
   async _startConnectedRuntime(): Promise<this> {
-    await this._hello()
+    try {
+      await this._hello()
+    } catch (error) {
+      // A fresh document may be the one that exhausts the old session's bounded
+      // runtime registry. Only an idle, pre-hello failure can ask the supervisor
+      // for another session: never discard an in-flight task or cached receipt.
+      if (error instanceof TransportError && error.status === 410
+          && !this.stored.taskInFlight && !this.stored.activeMessageId
+          && !this.stored.inFlight && !this.stored.cachedResult
+          && !this.stored.cancellationPending && !Object.keys(this.stored.approvals).length) {
+        throw new IdleHandshakeClosed(error.message, error.code, error.status)
+      }
+      throw error
+    }
     // The panel takes this session's intents as soon as the server has spoken, before the
     // steps below: a failed startup step then becomes a panel state and a notice instead of
     // an assistant that is simply not there.

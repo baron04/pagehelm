@@ -6,6 +6,7 @@ import {
 } from '../src/runtime/boot'
 import type {StartFailure, StartStatus} from '../src/runtime/startStatus'
 import type {RuntimeConfig} from '../src/runtime/types'
+import {IdleHandshakeClosed, TransportError} from '../src/runtime/transport'
 
 function config(sessionId = 's1'): RuntimeConfig {
   return {endpoint: 'https://agent.test', sessionId, clientToken: 't', sessionGeneration: 'g'}
@@ -65,7 +66,7 @@ function source(outcomes: Outcome[], renewable = true): SessionSource & {calls: 
   }
 }
 
-function harness(src: SessionSource, runtimes: Array<FakeRuntime | null> = [], eager = true) {
+function harness(src: SessionSource, runtimes: Array<FakeRuntime | null | Error> = [], eager = true) {
   const status = new FakeStatus()
   const started: FakeRuntime[] = []
   const running: Supervised[] = []
@@ -75,6 +76,7 @@ function harness(src: SessionSource, runtimes: Array<FakeRuntime | null> = [], e
     eager: () => eager,
     start: async () => {
       const next = runtimes.length ? runtimes.shift() : new FakeRuntime()
+      if (next instanceof Error) throw next
       if (next) started.push(next)
       return next ?? null
     },
@@ -120,6 +122,41 @@ describe('starting', () => {
 })
 
 describe('failing', () => {
+  it('obtains one fresh session for an idle closed handshake even without an active turn', async () => {
+    const src = source([{config: config('old')}, {config: config('new')}])
+    const h = harness(src, [new IdleHandshakeClosed('closed', 'session_closed', 410), new FakeRuntime()], false)
+    h.supervisor.start(); await flush()
+    expect(src.calls).toBe(2)
+    expect(h.supervisor.state.kind).toBe('running')
+    expect(h.running).toHaveLength(1)
+    expect(h.status.log).toEqual(['connecting', 'started'])
+  })
+
+  it('does not loop when the replacement handshake is also closed', async () => {
+    const src = source([{config: config()}])
+    const h = harness(src, [new IdleHandshakeClosed('first', 'session_closed', 410),
+      new IdleHandshakeClosed('second', 'session_closed', 410)], false)
+    h.supervisor.start(); await flush(); await vi.advanceTimersByTimeAsync(60_000)
+    expect(src.calls).toBe(2)
+    expect(h.supervisor.state.kind).toBe('unavailable')
+  })
+
+  it('cannot renew an inline capability after a closed handshake', async () => {
+    const src = source([{config: config()}], false)
+    const h = harness(src, [new IdleHandshakeClosed('closed', 'session_closed', 410)], false)
+    h.supervisor.start(); await flush()
+    expect(src.calls).toBe(1)
+    expect(h.supervisor.state.kind).toBe('unavailable')
+  })
+
+  it.each([401, 409, 410])('does not treat an ordinary %s failure as an idle handshake closure', async status => {
+    const src = source([{config: config()}])
+    const h = harness(src, [new TransportError('capacity exhausted', 'server_error', status)], false)
+    h.supervisor.start(); await flush()
+    expect(src.calls).toBe(1)
+    expect(h.supervisor.state.kind).toBe('unavailable')
+  })
+
   it('climbs a capped ladder and keeps retrying for the life of the page', async () => {
     const src = source([new BootFailure('down', 503)])
     const h = harness(src)

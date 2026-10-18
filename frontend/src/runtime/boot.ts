@@ -18,6 +18,7 @@ import {detach, later, listen, report, type Cancel} from './contain'
 import {engagementRecord} from './engagement'
 import {examplesFromPage, watchForExamples} from './examples'
 import {startEmbeddedRuntime} from './runtime'
+import {IdleHandshakeClosed} from './transport'
 import {createShell} from './shell'
 import {START_TEXT, panelStartStatus, type StartStatus} from './startStatus'
 import type {RuntimeConfig} from './types'
@@ -216,7 +217,16 @@ export class Supervisor {
     let bootstrap: Bootstrap
     try {
       bootstrap = await this.deps.source.obtain()
-      runtime = await this.deps.start(bootstrap.config)
+      try {
+        runtime = await this.deps.start(bootstrap.config)
+      } catch (error) {
+        if (!(error instanceof IdleHandshakeClosed) || !this.deps.source.renewable) throw error
+        // The server may close its bounded runtime registry at hello. The failed
+        // Runtime has been torn down; obtain a fresh capability once, without
+        // sending or replaying a message, approval, action, or cached result.
+        bootstrap = await this.deps.source.obtain()
+        runtime = await this.deps.start(bootstrap.config)
+      }
     } catch (error) {
       this.failed(BootFailure.from(error), attempt)
       return

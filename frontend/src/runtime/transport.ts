@@ -19,6 +19,9 @@ export class TransportError extends Error {
   }
 }
 
+/** The first hello found a closed session before this document had any work to recover. */
+export class IdleHandshakeClosed extends TransportError {}
+
 async function failure(response: Response, what: string): Promise<TransportError> {
   const payload = await response.json().catch(() => ({})) as {error?: unknown; code?: unknown}
   return new TransportError(

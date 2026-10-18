@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest'
 import {DEFAULT_CONFIGURATION} from '../src/contract/panel'
 import {PanelHost} from '../src/runtime/panelHost'
 import {EmbeddedWebRuntime} from '../src/runtime/runtime'
+import {IdleHandshakeClosed, TransportError} from '../src/runtime/transport'
 
 const runtimes: EmbeddedWebRuntime[] = []
 function setup() {
@@ -23,6 +24,27 @@ function setup() {
 afterEach(() => { for (const runtime of runtimes.splice(0)) runtime.stop() })
 
 describe('restoring a conversation before exposing an empty greeting', () => {
+  it('marks only an idle first-hello410 as eligible for a fresh bootstrap', async () => {
+    const {runtime} = setup()
+    vi.mocked(runtime._hello).mockRejectedValue(new TransportError('closed', 'session_closed', 410))
+    await expect(runtime._startConnectedRuntime()).rejects.toBeInstanceOf(IdleHandshakeClosed)
+    expect(runtime._post).not.toHaveBeenCalled()
+    expect(runtime._recoverAfterNavigation).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {taskInFlight: true}, {activeMessageId: 'accepted-message'}, {cancellationPending: true},
+    {approvals: {decision: 'approved'}}, {inFlight: {action_id: 'held-action'} as never},
+    {cachedResult: {action_id: 'acknowledged-action'} as never},
+  ])('does not replace a handshake while recovery state is held: %j', async held => {
+    const {runtime} = setup(), error = new TransportError('closed', 'session_closed', 410)
+    Object.assign(runtime.stored, held)
+    vi.mocked(runtime._hello).mockRejectedValue(error)
+    await expect(runtime._startConnectedRuntime()).rejects.toBe(error)
+    expect(runtime._post).not.toHaveBeenCalled()
+    expect(runtime._recoverAfterNavigation).not.toHaveBeenCalled()
+  })
+
   it('retains history when another page has a turn and new conversation is refused', async () => {
     const {runtime, host} = setup()
     runtime._attachPanel()
