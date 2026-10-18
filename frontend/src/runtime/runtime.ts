@@ -1247,7 +1247,8 @@ export class EmbeddedWebRuntime {
   private _executePageCommand(command: ActionCommand): Promise<unknown> {
     if (command.action === 'highlight') {
       this._clearHighlight()
-      this.highlightHandle = this.page.highlight(command.args?.ref)
+      this.highlightHandle = this.page.highlight(command.args?.ref,
+        this.stored?.inFlight?.turn_id ?? this.stored?.activeMessageId ?? '')
       return Promise.resolve({success: true, message: 'control highlighted for the person'})
     }
     if (command.action === 'handoff_form') {

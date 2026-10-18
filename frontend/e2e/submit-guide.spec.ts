@@ -99,6 +99,34 @@ test('submit guide handles assistant occlusion, other overlays, disabled and hid
   expect(panel.errors).toEqual([])
 })
 
+test('business control handoff warns about assistant occlusion and follows moving the panel without clicking', async ({open}) => {
+  const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
+  await setup(panel)
+  await panel.page.evaluate(() => {
+    const state = window as unknown as {__guide:{clear():void};__runtime:{page:{highlight(ref:string,turn:string):{clear():void}}}}
+    state.__guide.clear()
+    document.querySelector('#submit-room')!.textContent = '停用'
+    const form = document.querySelector('#synthetic-room') as HTMLElement
+    const p = document.querySelector('#woa-assistant')!.shadowRoot!.querySelector('.woa-window')!.getBoundingClientRect()
+    form.style.left = p.left-260+'px'; form.style.top = p.top+20+'px'
+    state.__guide = state.__runtime.page.highlight('e1','turn-1')
+  })
+  const guide = panel.page.locator('.woa-submit-guide')
+  await expect(guide).toHaveAttribute('data-state','assistant')
+  await expect(guide.locator('[role=status]')).toContainText('操作位置被助手遮挡')
+  await expect(guide.locator('svg')).toBeHidden()
+  await panel.page.evaluate(() => {
+    const form = document.querySelector('#synthetic-room') as HTMLElement
+    form.style.left='40px';form.style.top='100px'
+  })
+  await expect(guide.locator('svg')).toBeVisible()
+  expect(await panel.page.evaluate(() => (window as unknown as {__submitCount:number}).__submitCount)).toBe(0)
+  await panel.page.evaluate(() => {document.querySelector('#submit-room')!.textContent='另一条记录的停用'})
+  await expect(guide).toHaveCount(0)
+  expect(await panel.page.locator('#submit-room').evaluate(node=>node.style.outline)).toBe('')
+  expect(panel.errors).toEqual([])
+})
+
 test('submit guide disappears on manual submit and target replacement', async ({open}) => {
   const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
   await setup(panel)

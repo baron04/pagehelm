@@ -1,19 +1,13 @@
-/** One local, short-lived guide to the exact button verified by handoff_form. */
+/** One browser-local guide to an exact handoff target; it never operates it. */
 import {contained, listen} from '../runtime/contain'
 import {clippedBox, targetView, type Box, type Direction} from './visibility'
 
-export interface SubmitGuide {
+export interface ControlGuide {
   clear(): void
   active(): boolean
   readonly preserveOnInteraction: true
 }
 const SVG_NS = 'http://www.w3.org/2000/svg'
-const directions: Record<Direction, string> = {above: '↑ 提交按钮在上方', below: '↓ 提交按钮在下方',
-  left: '← 提交按钮在左侧', right: '→ 提交按钮在右侧'}
-const messages = {hidden: '提交按钮暂未显示，请检查表单所在区域。',
-  disabled: '提交按钮暂不可用，请检查表单必填项和校验提示。',
-  assistant: '提交按钮被助手遮挡，请移开或收起助手。',
-  covered: '提交按钮被其他内容遮挡，请先处理遮挡。'}
 const middle = (b: Box) => ({x: (b.left+b.right)/2, y: (b.top+b.bottom)/2})
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, Math.max(lo, hi)))
 function attr(node: Element, name: string, value: string) {
@@ -25,9 +19,17 @@ function position(node: HTMLElement, x: number, y: number, width?: number) {
     if (node.style.getPropertyValue(key) !== value) node.style.setProperty(key, value)
 }
 
-export function createSubmitGuide(options: {target: HTMLElement; container: HTMLElement;
-  turnId: string; current: () => boolean}): SubmitGuide | null {
+export function createControlGuide(options: {target: HTMLElement; container: HTMLElement;
+  turnId: string; current: () => boolean; purpose: 'submit' | 'action'}): ControlGuide | null {
   const {target, container, turnId, current} = options
+  const name = options.purpose === 'submit' ? '提交按钮' : '操作位置'
+  const directions: Record<Direction, string> = {above: `↑ ${name}在上方`, below: `↓ ${name}在下方`,
+    left: `← ${name}在左侧`, right: `→ ${name}在右侧`}
+  const messages = {hidden: `${name}暂未显示，请检查所在区域。`,
+    disabled: options.purpose === 'submit' ? '提交按钮暂不可用，请检查表单必填项和校验提示。'
+      : '操作位置暂不可用，请检查页面状态。',
+    assistant: `${name}被助手遮挡，请移开或收起助手。`,
+    covered: `${name}被其他内容遮挡，请先处理遮挡。`}
   // A containing page cannot draw accurate lines in another document's coordinates.
   if (target.ownerDocument !== container.ownerDocument) return null
   const host = container.querySelector<HTMLElement>('#woa-assistant')

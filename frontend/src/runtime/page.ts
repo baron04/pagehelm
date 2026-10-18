@@ -23,7 +23,7 @@ import {ChoiceUnavailable, listboxCombobox, ownedListbox, optionText, selectedOp
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
 import {suspendPanelHitTargets} from './panelObservation'
-import {createSubmitGuide} from '../handoff/guide'
+import {createControlGuide, type ControlGuide} from '../handoff/guide'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
@@ -660,7 +660,7 @@ export class Page {
     const owner = element.closest('[role="dialog"],dialog,form') ?? element.parentElement
     if (this.panelContainer) {
       try {
-        const guide = createSubmitGuide({target: element, container: this.panelContainer, turnId,
+        const guide = createControlGuide({target: element, container: this.panelContainer, turnId, purpose: 'submit',
           current: () => formControlScope(element) === scope && element.textContent === label
             && (element.closest('[role="dialog"],dialog,form') ?? element.parentElement) === owner})
         if (guide) return guide
@@ -670,7 +670,7 @@ export class Page {
   }
 
   /** Mark one observed control without focusing, clicking, or covering its hit target. */
-  highlight(ref: unknown): PageHighlight {
+  highlight(ref: unknown, turnId = ''): PageHighlight {
     const element = this.element(ref)
     if (!(element instanceof HTMLElement || element instanceof SVGElement) ||
         !element.isConnected) {
@@ -694,10 +694,17 @@ export class Page {
     const applied = new Map(original.map(saved => [
       saved.property, element.style.getPropertyValue(saved.property),
     ]))
+    const owner = element.closest('tr,[role="row"],[role="dialog"],form') ?? element.parentElement
+    const ownerText = owner?.textContent, label = element.textContent
+    const current = () => element.isConnected &&
+      (element.closest('tr,[role="row"],[role="dialog"],form') ?? element.parentElement) === owner &&
+      owner?.textContent === ownerText && element.textContent === label
     let active = true
+    let guide: ControlGuide | null = null
     const clear = () => {
       if (!active) return
       active = false
+      guide?.clear()
       observer.disconnect()
       for (const saved of original) {
         // An application that changed this style after handoff owns its new value.
@@ -711,10 +718,14 @@ export class Page {
       }
     }
     const observer = new MutationObserver(() => {
-      if (!element.isConnected) clear()
+      if (!current()) clear()
     })
-    observer.observe(document.documentElement, {childList: true, subtree: true})
-    return {clear, active: () => active && element.isConnected && original.every(saved =>
+    observer.observe(document.documentElement, {childList: true, characterData: true, subtree: true})
+    if (this.panelContainer && element instanceof HTMLElement) {
+      try {guide = createControlGuide({target: element, container: this.panelContainer,
+        turnId, purpose: 'action', current})} catch { /* Keep the original marker if presentation fails. */ }
+    }
+    return {clear, active: () => active && current() && original.every(saved =>
       element.style.getPropertyPriority(saved.property) === 'important' &&
       element.style.getPropertyValue(saved.property) === applied.get(saved.property))}
   }
