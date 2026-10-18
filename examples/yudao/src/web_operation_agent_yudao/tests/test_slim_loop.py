@@ -1448,6 +1448,37 @@ class DraftChoiceTests(unittest.TestCase):
 
 
 class ActionFeedbackTests(unittest.TestCase):
+    def test_unverified_native_choice_keeps_its_explanation_through_the_common_loop(self):
+        from web_operation_agent.tests.execution.test_product_model_loop import LoopFixture, call, reply
+        procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        procedures.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
+        procedures._settled = lambda *_a, **_kw: None
+        def handler(fixture, _name, _arguments):
+            return procedures._fill_fields(fixture.state,[{"label":"客户级别","value":"Z（不存在）"}],
+                "",{"touched":[],"trace":[]})
+        fixture = LoopFixture([reply(call("fill_fields")),reply(call("finish",status="done",answer="done"))],handler)
+        control = element(1,"combobox","客户级别","input",field_label="客户级别",form_scope="dialog:create",
+            form_instance="live",**{"aria-haspopup":"listbox","aria-controls":"owned"})
+        fixture.state.obs = replace(observation(),elements=[control],content="[1]<input />")
+        sent = []
+        def execute(action, args, **_kwargs):
+            sent.append(action)
+            receipt = ActionReceipt(1,"choice-cmd",action,args,False,error_code="option_unavailable",
+                no_effect=True,write_guard_held=True,observation=fixture.state.obs)
+            fixture._tool_receipts.append(receipt)
+            fixture.state.terminal_reason = "agent_refused"
+            # A browser's no-effect attestation is not the application's successful
+            # verification: preserve both error codes and stop without replaying.
+            return PageActionOutcome("unverified","acknowledged","unverified",json.dumps(receipt.to_json()))
+        fixture.state.page = NS(execute=execute)
+        answer = fixture.run()
+        self.assertIn("客户级别：",answer)
+        self.assertIn("未能确认当前表单",answer)
+        self.assertIn("不会自动重发",answer)
+        self.assertIn("没有点击提交按钮",answer)
+        self.assertEqual(["select"],sent)
+        self.assertEqual(1,len(fixture.state.chat.seen))
+
     def test_a_record_tab_only_uses_the_fast_ending_with_a_verified_request_target(self):
         procedures = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         procedures.knowledge = None

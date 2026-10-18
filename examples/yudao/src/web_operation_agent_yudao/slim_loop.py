@@ -1775,7 +1775,9 @@ class YudaoLoopProcedures:
             feedback = ("下拉框没有请求的精确选项，且未能确认当前表单完全保持原样；"
                         "不会自动重发，请手工核对当前草稿。")
         terminal = (getattr(s, "terminal_reason", "") == "agent_refused"
-                    and outcome.error_code == "option_unavailable" and outcome.state in {"refused", "unverified"})
+                    and outcome.state in {"refused", "unverified"}
+                    and (outcome.error_code == "option_unavailable" or outcome.receipt is not None
+                         and outcome.receipt.error_code == "option_unavailable"))
         return LoopToolResult(feedback, kind="page", state=outcome.state,
                               dispatch=outcome.dispatch, error_code=outcome.error_code,
                               terminal_reason="agent_refused" if terminal else "",
