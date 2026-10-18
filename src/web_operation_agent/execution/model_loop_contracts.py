@@ -119,6 +119,10 @@ class ModelLoopProfile:
     verification_messages: Callable | None = None
     draft_steps: ApplicationDraftStepPort | None = None
     mutation_prefill: MutationPrefillPort | None = None
+    #: Optional closing reading of a finished answer against the turn's own sources,
+    #: as (answer, sources) and the stated values the sources do not show. The loop
+    #: sends the list back once and audits it; it never withholds data or ends the turn.
+    untraced_numbers: Callable[[str, tuple[str, ...]], tuple[str, ...]] | None = None
 
     def __post_init__(self):
         names = [p.schema["function"]["name"] for p in self.procedures]
@@ -127,6 +131,8 @@ class ModelLoopProfile:
                 or len(set(names)) != len(names) or "finish" in names
                 or any(not callable(f) for f in (self.render_page, self.prepare, self.completion_conflict))):
             raise ValueError("invalid model loop profile")
+        if self.untraced_numbers is not None and not callable(self.untraced_numbers):
+            raise ValueError("model loop untraced numbers needs a callable reading")
         if self.draft_steps is not None and not isinstance(self.draft_steps, ApplicationDraftStepPort):
             raise ValueError("model loop draft steps need an application form port")
         if (self.mutation_prefill is not None
