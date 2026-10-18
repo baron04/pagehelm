@@ -298,8 +298,8 @@ class AgentTurnExecutor:
                       else "Work the page to do this for you")
             # The request is the message right above the card; the card says only what
             # leave to work the page lets the assistant do.
-            targets = (("会打开页面、点击、填写和选择；本次提问只询问一次",) if chinese
-                       else ("Opens pages, clicks, fills and chooses; asked once for this request",))
+            targets = (("会打开页面、点击、填写和选择",) if chinese
+                       else ("Opens pages, clicks, fills and chooses",))
             try:
                 return approval_gate.decide_plan(
                     plan, effect=effect, targets=targets,

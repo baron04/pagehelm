@@ -920,8 +920,8 @@ class GoalTurnExecutor:
             chinese = bool(_CJK.search(turn_message.text))
             effect = ("在页面上帮你完成这件事" if chinese
                       else "Work the page to do this for you")
-            targets = (("会打开页面、点击、填写和选择；本次提问只询问一次",) if chinese
-                       else ("Opens pages, clicks, fills and chooses; asked once for this request",))
+            targets = (("会打开页面、点击、填写和选择",) if chinese
+                       else ("Opens pages, clicks, fills and chooses",))
             try:
                 return gate.decide_plan(plan, effect=effect, targets=targets,
                                         ttl_s=self.config.operation_approval_ttl_s,
