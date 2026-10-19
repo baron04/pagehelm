@@ -275,7 +275,7 @@ class ModelLoopTests(unittest.TestCase):
         self.assertEqual(fixture.state.terminal_reason, "agent_refused")
         self.assertEqual(fixture.state.detail, "answer protocol unresolved")
 
-    def test_unsent_draft_completion_is_reviewed_against_the_delivered_body_with_one_correction(self):
+    def test_application_required_review_survives_an_unsent_draft_with_one_correction(self):
         for repaired in (True, False):
             with self.subTest(repaired=repaired):
                 fixture = LoopFixture([{"content": "All names were written in an unsent draft"},
@@ -283,6 +283,7 @@ class ModelLoopTests(unittest.TestCase):
                     reply(call("finish", status="done", answer="Ada; Grace" if repaired else "See above"))],
                     lambda *_: None)
                 fixture.profile = NS(verification_messages=lambda *_: [])
+                fixture.turn["review_completion"] = True
                 reviewed = []
                 def verify(s, prompt, answer, turn):
                     reviewed.append(answer)
@@ -298,13 +299,26 @@ class ModelLoopTests(unittest.TestCase):
                     self.assertEqual(fixture.state.terminal_reason, "agent_refused")
                     self.assertNotIn("See above", answer)
 
-    def test_unsent_draft_cannot_bypass_an_unavailable_configured_review(self):
+    def test_unsent_draft_cannot_bypass_an_unavailable_application_required_review(self):
         fixture = LoopFixture([{"content": "unsent draft"},
             reply(call("finish", status="done", answer="Claimed complete"))], lambda *_: None)
         fixture.profile = NS(verification_messages=lambda *_: [])
+        fixture.turn["review_completion"] = True
         fixture._verify = lambda *_: VerificationResult("unavailable")
         self.assertNotIn("Claimed complete", fixture.run())
         self.assertEqual(fixture.state.terminal_reason, "agent_refused")
+
+    def test_plain_intermediate_text_does_not_require_review_of_a_complete_program_read(self):
+        fixture = LoopFixture([
+            reply(call("records")), {"content": "These are the requested names"},
+            reply(call("finish", status="done", answer="", read_answer="read-1"))],
+            lambda *_: LoopToolResult("Read result", kind="read", query_answer=self.read_projection()))
+        fixture.profile = NS(verification_messages=lambda *_: [])
+        fixture._verify = lambda *_: self.fail("delivery correction must not add a business completion review")
+        answer = fixture.run("List every name")
+        self.assertIn("Actual name 252", answer)
+        self.assertEqual(fixture.state.terminal_reason, "")
+        self.assertNotIn("completion_reviews", fixture.turn)
 
     def test_finish_declares_only_the_text_length_the_composed_turn_can_deliver(self):
         fixture = LoopFixture([], lambda *_: None)
@@ -846,6 +860,23 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
         executor.run("有几条？")
         self.assertIn("有几条？", seen[0])
         self.assertTrue(any("total=12" in text for text in seen[0]))
+
+    def test_an_earlier_assistant_claim_is_not_a_source_without_a_current_read(self):
+        seen = []
+        def hook(answer, sources):
+            seen.append(tuple(sources))
+            return ("999",) if "999" in answer and not any("total=999" in s for s in sources) else ()
+        executor = self.fixture(hook,
+            reply(call("finish", status="done", answer="共 999 条")),
+            reply(call("call_api", path="/orders/page")),
+            reply(call("finish", status="done", answer="共 12 条")))
+        executor._messages = [{"role": "assistant", "content": "Earlier invented total=999"}]
+        executor._earlier_words = ["请查订单总数"]
+        self.assertEqual(executor.run("再核对一下"), "共 12 条")
+        self.assertTrue(all("Earlier invented total=999" not in s for values in seen for s in values))
+        self.assertTrue(any("total=12" in s for s in seen[-1]))
+        self.assertEqual([facts for event, facts in executor.events if event == "untraced_numbers"],
+                         [{"numbers": ["999"], "sent_back": True}])
 
     def test_a_question_back_is_not_number_checked(self):
         executor = self.fixture(lambda answer, sources: ("999",),

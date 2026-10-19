@@ -30,6 +30,61 @@ class ReadSummaryTests(unittest.TestCase):
             function(*args, **kwargs)
         self.assertEqual(code, caught.exception.code)
 
+    def test_display_dictionary_never_changes_numeric_comparison_order_or_group_identity(self):
+        column = SummaryColumn("status", "number", display_name="状态", labels=(("2", "相同"), ("10", "相同")))
+        source = replace(read([("status", "number")], [(10,), (2,), (0,), (None,), ("",)]), columns=(column,))
+        result = summarize(source, columns=["status"], order_by=[{"column":"status","direction":"asc"}])
+        self.assertEqual((("0",), ("2",), ("10",), (None,), ("",)), result.rows)
+        self.assertEqual("number", result.columns[0].kind)
+        text = render_summary(result, max_chars=4000, user_text="状态列表").text
+        self.assertIn("| 状态 |", text)
+        self.assertIn("0（字典中无此代码）", text)
+        self.assertIn("2（相同）", text)
+        self.assertIn("10（相同）", text)
+        self.assertNotIn("None（", text)
+        grouped = summarize(source, group_by=["status"], measures=[{"op":"count","as":"n"}])
+        self.assertEqual((("10",), ("2",), ("0",), (None,), ("",)), grouped.group_keys)
+        selected = summarize(source, columns=["status"], where=[{"column":"status","op":">","value":2}])
+        self.assertEqual((("10",),), selected.rows)
+        self.assertEqual([list(item) for item in column.labels], result.to_json()["columns"][0]["labels"])
+        self.assertNotEqual(result.content_digest, replace(result,
+            columns=(replace(column,display_name="Status"),),
+            source_columns=(replace(column,display_name="Status"),)).content_digest)
+
+    def test_dictionary_extrema_retain_codes_but_sum_and_counts_are_not_dictionary_codes(self):
+        column = SummaryColumn("status", "number", labels=(("0", "关闭"), ("2", "开启")))
+        source = replace(read([("status", "number")], [(0,), (2,)]), columns=(column,))
+        result = summarize(source, measures=[{"op":op,"column":"status","as":op} for op in ("sum","min","max")])
+        self.assertEqual((("2","0","2"),), result.rows)
+        text = render_summary(result, max_chars=4000, user_text="计算结果").text
+        self.assertIn("| 2 | 0（关闭） | 2（开启） |", text)
+        self.assertIsNone(result.columns[0].labels)
+        self.assertRefused("invalid_result", replace, result, columns=(replace(result.columns[0], labels=column.labels), *result.columns[1:]))
+
+    def test_display_metadata_is_bounded_immutable_and_labels_cannot_change_relation_semantics(self):
+        for fields in ({"labels":{"0":"x"}}, {"labels":(("0","x"),("0.0","y"))},
+                       {"labels":(("0", "x\n"),)}, {"labels":(("0","x"),)*257}, {"display_name":"x"*201}):
+            self.assertRefused("invalid_input", SummaryColumn, "status", "number", **fields)
+        self.assertRefused("invalid_input", SummaryColumn, "owner", "relation", labels=(("1","same"),))
+        column = SummaryColumn("owner", "relation", display_name="负责人")
+        source = replace(read([("owner","relation")], [(RelationValue("1","同名"),), (RelationValue("2","同名"),)]), columns=(column,))
+        result = summarize(source, group_by=["owner"], measures=[{"op":"count","as":"n"}])
+        self.assertEqual((("1",),("2",)), result.group_keys)
+        self.assertIn("负责人", render_summary(result,max_chars=4000,user_text="负责人").text)
+        with self.assertRaises(FrozenInstanceError):
+            column.display_name = "changed"
+
+    def test_display_labels_are_escaped_and_count_against_complete_delivery_budget(self):
+        source = replace(read([("code","text")], [("a",)]*10), columns=(SummaryColumn("code","text",
+            labels=(("a", "label|"+"x"*190),)),))
+        result = summarize(source,columns=["code"])
+        shown = render_summary(result,max_chars=4000)
+        self.assertIn("1. code:",shown.text)
+        self.assertNotIn("| ---",shown.text)
+        limited = render_summary(result,max_chars=512)
+        self.assertTrue(limited.presentation_truncated)
+        self.assertEqual(0,limited.presented_records)
+
     def test_complete_ordering_keeps_more_than_fifty_rows_and_native_identities(self):
         source = read([("name", "text"), ("amount", "number")],
                       [("same name", Decimal(i)) for i in range(75)])

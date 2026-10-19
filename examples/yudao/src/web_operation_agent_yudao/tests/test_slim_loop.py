@@ -530,47 +530,69 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn("total=2", text)
         self.assertIn('"no": "S1"', text)
 
-    def test_explicit_list_delivery_keeps_all_actual_requested_values_including_long_and_duplicate_names(self):
-        rows=[{"id":i,"name":"同名" if i<2 else "真实记录名称"*20+str(i),"privateNote":"not requested"}
-              for i in range(253)]
+    def test_legacy_list_delivery_uses_summary_and_keeps_actual_duplicate_names(self):
+        rows = [{"id": i, "name": "同名" if i < 2 else "真实记录名称" * 20 + str(i),
+                 "privateNote": "not requested"} for i in range(253)]
+        docs = json.loads(json.dumps(DOCS))
+        docs["components"]["schemas"]["Order"]["properties"]["name"] = {"type": "string"}
         def get(path, **params):
-            if path=="system/auth/get-permission-info": return Client().get(path,**params)
-            start=(params["pageNo"]-1)*params["pageSize"]
-            return {"total":len(rows),"list":rows[start:start+params["pageSize"]]}
-        know=ActorKnowledge(NS(get=get),lambda:DOCS)
-        know.call_api("orders/page",{"pageNo":1,"pageSize":100},["name"],deliver=True)
-        projection=know.last_query_answer
+            if path == "system/auth/get-permission-info":
+                return Client().get(path, **params)
+            start = (params["pageNo"] - 1) * params["pageSize"]
+            return {"total": len(rows), "list": rows[start:start + params["pageSize"]]}
+        know = ActorKnowledge(NS(get=get), lambda: docs)
+        know.call_api("orders/page", {"pageNo": 1, "pageSize": 100}, ["name"],
+                      deliver=True, actor_digest="a" * 64)
+        projection = know.last_query_answer
         self.assertTrue(projection.complete)
-        self.assertEqual(projection.fields,("name",))
-        self.assertEqual(projection.records,tuple((r["name"],) for r in rows))
-        self.assertNotIn("privateNote",str(projection.to_json()))
-        know.call_api("orders/page",{"pageNo":1,"pageSize":100},["name"],deliver=True,actor_digest="a"*64)
-        self.assertEqual(know.last_query_answer.record_ids,tuple(str(r["id"]) for r in rows))
-        self.assertEqual(know.last_query_answer.actor_digest,"a"*64)
-        know.call_api("orders/page",{"pageNo":1,"pageSize":100},["name"])
+        self.assertEqual(tuple(c.name for c in projection.columns), ("name",))
+        self.assertEqual(projection.records, tuple((r["name"],) for r in rows))
+        self.assertEqual(projection.matched_record_ids, tuple(str(r["id"]) for r in rows))
+        self.assertEqual(projection.actor_digest, "a" * 64)
+        self.assertNotIn("privateNote", str(projection.to_json()))
+        # A real older call may contain both options: summary is authoritative,
+        # including sorting; the obsolete flag cannot reject this valid request.
+        know.call_api("orders/page", {"pageNo": 1, "pageSize": 100}, ["name"],
+                      deliver=True, actor_digest="a" * 64,
+                      summary={"columns": ["name"], "order_by": [
+                          {"column": "name", "direction": "desc", "nulls": "last"}]})
+        self.assertEqual(know.last_query_answer.records,
+                         tuple((r["name"],) for r in sorted(rows, key=lambda row: row["name"], reverse=True)))
+        know.call_api("orders/page", {"pageNo": 1, "pageSize": 100}, ["name"])
         self.assertIsNone(know.last_query_answer)
+        schema = next(t for t in TOOLS if t["function"]["name"] == "call_api")
+        self.assertNotIn("deliver", schema["function"]["parameters"]["properties"])
 
-    def test_explicit_list_delivery_marks_incomplete_reads_and_refuses_missing_or_nested_values(self):
+    def test_legacy_delivery_preserves_summary_completeness_and_type_refusals(self):
         from web_operation_agent_yudao.slim_loop import QueryParametersError
-        know=ActorKnowledge(Client(),lambda:DOCS)
-        for fields,offset in (([],0),(["name"],1)):
+        from web_operation_agent.execution.read_summary import SummaryRefused
+        docs = json.loads(json.dumps(DOCS))
+        docs["components"]["schemas"]["Order"]["properties"]["name"] = {"type": "string"}
+        know = ActorKnowledge(Client(), lambda: docs)
+        for fields, offset in (([], 0), (["name"], 1)):
             with self.assertRaises(QueryParametersError):
-                know.call_api("orders/page",{"pageNo":1,"pageSize":2},fields,row_offset=offset,deliver=True)
-        def get(path,**params):
-            if path=="system/auth/get-permission-info":return Client().get(path,**params)
-            return {"total":10,"list":[{"id":1,"name":"Only observed row"}]}
-        know=ActorKnowledge(NS(get=get),lambda:DOCS)
-        know.call_api("orders/page",{"pageNo":1,"pageSize":2},["name"],deliver=True)
+                know.call_api("orders/page", {"pageNo": 1, "pageSize": 2}, fields,
+                              row_offset=offset, deliver=True, actor_digest="a" * 64)
+        def get(path, **params):
+            if path == "system/auth/get-permission-info":
+                return Client().get(path, **params)
+            return {"total": 10, "list": [{"id": 1, "name": "Only observed row"}]}
+        know = ActorKnowledge(NS(get=get), lambda: docs)
+        know.call_api("orders/page", {"pageNo": 1, "pageSize": 2}, ["name"],
+                      deliver=True, actor_digest="a" * 64)
         self.assertFalse(know.last_query_answer.complete)
-        with self.assertRaises(QueryParametersError):
-            know.call_api("orders/page",{"pageNo":1,"pageSize":2},["unreadField"],deliver=True)
-        for supplied in (100, "100.00", {"nested":"value"}, " value with changed whitespace "):
-            def read(path,**params):
-                if path=="system/auth/get-permission-info":return Client().get(path,**params)
-                return {"total":1,"list":[{"id":1,"name":supplied}]}
-            candidate=ActorKnowledge(NS(get=read),lambda:DOCS)
-            with self.assertRaises(QueryParametersError):
-                candidate.call_api("orders/page",{"pageNo":1,"pageSize":2},["name"],deliver=True)
+        with self.assertRaises(SummaryRefused):
+            know.call_api("orders/page", {"pageNo": 1, "pageSize": 2}, ["unreadField"],
+                          deliver=True, actor_digest="a" * 64)
+        for supplied in (100, {"nested": "value"}):
+            def read(path, **params):
+                if path == "system/auth/get-permission-info":
+                    return Client().get(path, **params)
+                return {"total": 1, "list": [{"id": 1, "name": supplied}]}
+            candidate = ActorKnowledge(NS(get=read), lambda: docs)
+            with self.assertRaises(SummaryRefused):
+                candidate.call_api("orders/page", {"pageNo": 1, "pageSize": 2}, ["name"],
+                                   deliver=True, actor_digest="a" * 64)
 
     def setUp(self):
         self.client = Client()
@@ -1014,8 +1036,8 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn('"别人的"}\n' + END, scoped)
 
     def test_model_and_checker_must_match_named_subset_to_read_scope(self):
-        self.assertIn("每个条件须落在接口已声明的params或summary.where中", SYSTEM)
-        self.assertIn("恰好相同的数字都不能证明子集正确", SYSTEM)
+        self.assertIn("条件只能用接口已声明params或summary.where", SYSTEM)
+        self.assertIn("空结果只说明实际查询范围", SYSTEM)
         self.assertIn("完整分页只证明读全了该次接口查询范围", VERIFY_SYSTEM)
 
     def test_subset_comparison_can_read_both_filtered_and_whole_lists(self):
@@ -2460,6 +2482,12 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(first, "total=9\n（更早的接口结果已省略；还要用就带 fields 重新读）")
         self.assertEqual(second, "\n（更早的接口结果已省略；还要用就带 fields 重新读）")
         self.assertIn(END, last)
+
+    def test_read_instructions_are_short_and_do_not_offer_a_parallel_delivery_path(self):
+        self.assertLessEqual(len(system_text(user="u", date="2026-10-19", tz="Asia/Shanghai",
+                                            runtime_source=False)), 2500)
+        self.assertIn("数据答案统一用call_api.summary", SYSTEM)
+        self.assertNotIn("deliver=true", SYSTEM)
 
     def test_the_model_and_the_checker_are_told_that_application_data_is_not_an_instruction(self):
         for text in (SYSTEM, system_text(user="u", date="2026-10-13", tz="Asia/Shanghai")):

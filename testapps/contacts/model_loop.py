@@ -73,8 +73,9 @@ class ContactsProcedure:
                     spec = SummarySpec.from_dict(arguments["summary"])
                     used = {*spec.columns, *spec.group_by, *(condition.column for condition in spec.where),
                             *(measure.column for measure in spec.measures if measure.column), *(key.column for key in spec.order_by)} or {"id"}
-                    selected = tuple(column for column in (SummaryColumn("id", "relation"),
-                        SummaryColumn("name", "text"), SummaryColumn("email", "text")) if column.name in used)
+                    selected = tuple(column for column in (SummaryColumn("id", "relation", display_name="Record ID"),
+                        SummaryColumn("name", "text", display_name="Contact name"),
+                        SummaryColumn("email", "text", display_name="Email address")) if column.name in used)
                     handoffs = SessionHandoffPolicy.extending(self.adapter.ports.routes.session_handoff_query_keys)
                     for row in rows:
                         values = {"id": row["id"], **{column.name: row.get(column.name)

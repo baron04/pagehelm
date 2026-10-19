@@ -36,6 +36,9 @@ class ContactsModelLoopTests(unittest.TestCase):
             self.assertEqual(sorted((r[0] for r in projection["rows"]),reverse=True),[r[0] for r in projection["rows"]])
             self.assertEqual(projection["matched_count"],len(projection["row_record_ids"]))
             self.assertEqual(len(projection["rows"]),len(projection["row_record_ids"]))
+            self.assertIn("| Contact name | Email address |", result.user_answer)
+            self.assertEqual(["Contact name", "Email address"], [column["display_name"] for column in projection["columns"]])
+            self.assertEqual(["text", "text"], [column["kind"] for column in projection["columns"]])
 
     def test_summary_contract_delivers_only_the_current_rest_actors_actual_values(self):
         for actor, email in (("ada-lovelace", "grace@example.test"),
@@ -128,7 +131,7 @@ class ContactsModelLoopTests(unittest.TestCase):
             self.assertNotIn("never-publish", str(chat.messages[-1]))
             self.assertEqual("agent_finished", result.terminal_reason)
 
-    def test_a_configured_reader_rejects_a_reference_to_an_undelivered_rest_answer(self):
+    def test_program_delivery_rejects_undelivered_text_without_an_extra_model_review(self):
         real_profile = contacts_profile
         reviewed = []
         def profile(*args, **kwargs):
@@ -143,12 +146,15 @@ class ContactsModelLoopTests(unittest.TestCase):
                 return super().complete(messages, tools, *args, **kwargs)
         with MinimalContactsApplication() as app, patch(__name__ + ".contacts_profile", side_effect=profile):
             result, _, _ = self.execute(app, "ada-lovelace", Reader([
-                ("list_contacts", {"name_contains": "Grace Hopper"}),
+                ("list_contacts", {"name_contains": "Grace Hopper", "summary": {"columns": ["email"]}}),
                 (None, {"content": "The email appears only in this unsent draft."}),
                 ("finish", {"status": "done", "answer": "See above"}),
-                ("finish", {"status": "done", "answer": "Already answered"})]))
-            self.assertEqual(reviewed, ["See above", "Already answered"])
-            self.assertEqual(result.terminal_reason, "agent_refused")
+                ("finish", {"status": "done", "answer": "Already answered"}),
+                ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})]))
+            self.assertEqual(reviewed, [])
+            self.assertEqual(result.terminal_reason, "agent_finished")
+            self.assertIn("grace@example.test", result.user_answer)
+            self.assertNotIn("See above", result.user_answer)
             self.assertNotIn("Already answered", result.user_answer)
 
     def execute(self, app, actor_id, replies, *, source=None, observation=True, turn_traces=False,

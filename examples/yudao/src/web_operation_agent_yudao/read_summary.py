@@ -32,7 +32,7 @@ def _instant(value, zone):
 
 
 def summarize(*, path, filters, fields, props, deref, rows, total, whole,
-              requests, actor_digest, zone, money_review, spec):
+              requests, actor_digest, zone, money_review, spec, columns=None, names=None):
     """Use only the data this call fetched; no extra lookup or guessed type conversion."""
     declared = spec if isinstance(spec, SummarySpec) else SummarySpec.from_dict(spec)
     if rows is None or any(not isinstance(row, dict) for row in rows):
@@ -40,6 +40,10 @@ def summarize(*, path, filters, fields, props, deref, rows, total, whole,
     if not fields or len(fields) > 12 or len(set(fields)) != len(fields):
         raise SummaryRefused("invalid_columns", "summary requires 1–12 distinct fields")
     policy = money_review.fields_for(path) if money_review is not None else {}
+    display_names = columns if columns is not None else {}
+    dictionaries = names if names is not None else {}
+    if not isinstance(display_names, dict) or not isinstance(dictionaries, dict):
+        raise SummaryRefused("invalid_input", "native display metadata must be field-bound mappings")
     columns = []
     converters = []
     for key in fields:
@@ -125,7 +129,13 @@ def summarize(*, path, filters, fields, props, deref, rows, total, whole,
                 return value
         else:
             raise SummaryRefused("unproven_type", "summary requires an explicit supported scalar field type")
-        columns.append(SummaryColumn(key, kind, unit))
+        labels = dictionaries.get(key) if kind in {"number", "text", "boolean"} else None
+        if labels is not None and not isinstance(labels, dict):
+            raise SummaryRefused("invalid_input", "native dictionary display metadata requires code-label pairs")
+        if labels is not None and any(isinstance(label, str) and REDACTED in label for label in labels.values()):
+            raise SummaryRefused("redacted_value", "a redacted dictionary label cannot be delivered exactly")
+        columns.append(SummaryColumn(key, kind, unit, display_names.get(key, ""),
+            tuple((str(code), label) for code, label in labels.items()) if labels is not None else None))
         converters.append(convert)
     actual = []
     for row in rows:

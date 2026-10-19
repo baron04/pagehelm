@@ -65,9 +65,9 @@ def classify_write_intent(text: str, *, prior_draft: bool = False) -> WriteInten
                     prefix.endswith(("已", "未", "没"))
                     or re.match(r"(?:的|状态|了?(?:几|多少|哪些))", suffix))
                 or match.group() in {"新建", "新增", "创建"} and (
-                    prefix.endswith("打开") or re.match(r"了?(?:几|多少|哪些|什么)", suffix))
+                    prefix.endswith("打开") or re.match(r"时间|日期|了?(?:几|多少|哪些|什么)", suffix))
                 or match.group() in {"审核", "审批", "关闭", "启用", "停用"}
-                   and (prefix.endswith("未") or re.match(r"(?:的|状态|中|[（(]草稿[)）]|了?吗|了?么|了吗|吗|么)", suffix))):
+                   and (prefix.endswith(("已", "已经", "未", "尚未")) or re.match(r"(?:的|状态|中|[（(]草稿[)）]|了?吗|了?么|了吗|吗|么)", suffix))):
             continue
         return WriteIntent("save", match.group())
     return WriteIntent("neutral")

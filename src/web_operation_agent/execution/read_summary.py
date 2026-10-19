@@ -66,6 +66,8 @@ class SummaryColumn:
     name: str
     kind: str
     unit: str = ""
+    display_name: str = ""
+    labels: tuple[tuple[str, str], ...] | None = None
 
     def __post_init__(self):
         _name(self.name)
@@ -74,6 +76,42 @@ class SummaryColumn:
         _text(self.unit, "column unit", 80, empty=True)
         if self.unit and self.kind != "number":
             _fail("invalid_input", "only numeric columns carry display units")
+        _text(self.display_name, "column display name", 200, empty=True)
+        if self.labels is not None:
+            if (self.kind not in {"number", "text", "boolean"} or not isinstance(self.labels, tuple)
+                    or len(self.labels) > 256 or any(not isinstance(item, tuple) or len(item) != 2 for item in self.labels)):
+                _fail("invalid_input", "code labels must be bounded immutable scalar display metadata")
+            keys = []
+            for code, label in self.labels:
+                _text(code, "dictionary code", 200)
+                _text(label, "dictionary label", 200)
+                keys.append(_label_key(self.kind, code))
+            if len(set(keys)) != len(keys):
+                _fail("invalid_input", "dictionary codes must be unique under the column type")
+
+    def to_json(self):
+        value = {"name": self.name, "kind": self.kind, "unit": self.unit}
+        if self.display_name:
+            value["display_name"] = self.display_name
+        if self.labels is not None:
+            value["labels"] = [list(item) for item in self.labels]
+        return value
+
+
+def _label_key(kind, value):
+    if kind == "number":
+        try:
+            number = Decimal(value)
+        except InvalidOperation:
+            _fail("invalid_input", "numeric dictionary codes must be finite numbers")
+        if not _bounded_number(number):
+            _fail("invalid_input", "numeric dictionary codes must be finite bounded numbers")
+        with localcontext() as context:
+            context.prec = 512
+            return format(number.normalize(), "f") if number else "0"
+    if kind == "boolean" and value not in {"true", "false"}:
+        _fail("invalid_input", "boolean dictionary codes must be true or false")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,6 +642,10 @@ class SummaryResult:
                 source = source_columns[measure.column]
                 if column.kind != source.kind or column.unit != source.unit:
                     _fail("invalid_result", "computed column must retain its proven source type and unit")
+            expected_labels = (source_columns[measure.column].labels
+                if measure is not None and measure.op in {"min", "max"} else None)
+            if measure is not None and column.labels != expected_labels:
+                _fail("invalid_result", "only extrema retain source code labels; totals are not codes")
         if (not isinstance(self.rows, tuple) or len(self.rows) > MAX_ROWS
                 or any(not isinstance(row, tuple) or len(row) != len(self.columns) for row in self.rows)
                 or any(value is not None and not isinstance(value, str) for row in self.rows for value in row)):
@@ -745,8 +787,8 @@ class SummaryResult:
             "actor_digest": self.actor_digest, "spec": self.spec.to_json(),
             "source_count": self.source_count, "source_matched_count": self.source_matched_count,
             "source_scanned": self.source_scanned, "matched_count": self.matched_count,
-            "columns": [{"name": c.name, "kind": c.kind, "unit": c.unit} for c in self.columns],
-            "source_columns": [{"name": c.name, "kind": c.kind, "unit": c.unit} for c in self.source_columns],
+            "columns": [c.to_json() for c in self.columns],
+            "source_columns": [c.to_json() for c in self.source_columns],
             "rows": [list(row) for row in self.rows], "matched_record_ids": list(self.matched_record_ids),
             "group_keys": [list(key) for key in self.group_keys],
             "row_record_ids": [list(members) for members in self.row_record_ids],
@@ -808,7 +850,8 @@ def compute_summary(read: SummaryRead, spec: SummarySpec):
     names = tuple(dict.fromkeys((*spec.group_by, *spec.columns)))
     output_columns = tuple(read.columns[lookup[name]] for name in names) + tuple(
         SummaryColumn(m.alias, "number" if m.op in {"count", "count_distinct", "sum"} else read.columns[lookup[m.column]].kind,
-            read.columns[lookup[m.column]].unit if m.op in {"sum", "min", "max"} else "") for m in spec.measures)
+            read.columns[lookup[m.column]].unit if m.op in {"sum", "min", "max"} else "",
+            labels=read.columns[lookup[m.column]].labels if m.op in {"min", "max"} else None) for m in spec.measures)
     selected = tuple(row for row in read.rows if all(_matches(read.columns[lookup[c.column]], row.values[lookup[c.column]], c)
         for c in spec.where)) if read.complete else ()
     # Stable sorts from the least significant key preserve every native member,
@@ -902,11 +945,25 @@ def _shown_operand(value):
     return str(value)
 
 
-def _measure_label(measure, chinese):
+def _measure_label(measure, chinese, columns=None):
     labels = {"count": ("记录数", "Record count"), "count_distinct": ("去重数量", "distinct count"),
               "sum": ("合计", "sum"), "min": ("最小值", "minimum"), "max": ("最大值", "maximum")}
     label = labels[measure.op][0 if chinese else 1]
-    return measure.column + (" " if measure.column else "") + label
+    source = (columns or {}).get(measure.column)
+    name = (source.display_name or source.name) if source is not None else measure.column
+    return name + (" " if name else "") + label
+
+
+def _present(column, value, chinese, labels=None):
+    """Decorate certified scalar values only here; never feed labels to computation."""
+    if value is None or value == "" or column.labels is None:
+        return value
+    key = _label_key(column.kind, value)
+    labels = labels if labels is not None else {_label_key(column.kind, code): label for code, label in column.labels}
+    label = labels.get(key)
+    if label is None:
+        label = "字典中无此代码" if chinese else "code absent from dictionary"
+    return f"{value}（{label}）" if chinese else f"{value} ({label})"
 
 
 def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""):
@@ -929,39 +986,45 @@ def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""
                  "empty": "为空", "not_empty": "非空"}
     for condition in result.spec.where:
         source = source_columns[condition.column]
-        shown = condition.column + (f" ({source.unit})" if source.unit else "") + " " + (operators[condition.op] if chinese else condition.op)
+        shown = (source.display_name or source.name) + (f" ({source.unit})" if source.unit else "") + " " + (operators[condition.op] if chinese else condition.op)
         if condition.op not in {"empty", "not_empty"}:
-            shown += " " + _shown_operand(condition.value)
+            operands = condition.value if isinstance(condition.value, tuple) else (condition.value,)
+            shown += " " + ", ".join("null" if value is None else _present(source, _display(value), chinese) for value in operands)
         conditions.append(shown)
     lines.append(("计算条件：" if chinese else "Calculation conditions: ") + _escape(
         ("；" if chinese else "; ").join(conditions) if conditions else ("不再附加筛选" if chinese else "no additional filter")))
     if result.spec.group_by:
-        lines.append(("分组：" if chinese else "Grouped by: ") + _escape(", ".join(result.spec.group_by)))
+        lines.append(("分组：" if chinese else "Grouped by: ") + _escape(", ".join(
+            source_columns[name].display_name or name for name in result.spec.group_by)))
     if result.spec.measures:
         lines.append(("统计：" if chinese else "Measures: ") + _escape(
-            "; ".join(_measure_label(measure, chinese) for measure in result.spec.measures)))
+            "; ".join(_measure_label(measure, chinese, source_columns) for measure in result.spec.measures)))
     if result.spec.order_by:
-        keys = [key.column + " " + (("降序" if key.direction == "desc" else "升序") if chinese else key.direction)
+        keys = [(source_columns[key.column].display_name or key.column) + " " + (("降序" if key.direction == "desc" else "升序") if chinese else key.direction)
                 + (("（空值在前）" if key.nulls == "first" else "（空值在后）") if chinese else " (nulls " + key.nulls + ")")
                 for key in result.spec.order_by]
         lines.append(("完整排序：" if chinese else "Complete ordering: ") + _escape("; ".join(keys)))
     if result.spec.top:
         measure = next(measure for measure in result.spec.measures if measure.alias == result.spec.top.by)
         direction = ("降序" if result.spec.top.direction == "desc" else "升序") if chinese else result.spec.top.direction
-        lines.append((f"名次：按 {_measure_label(measure, chinese)} {direction}取前 {result.spec.top.n} 个位置，保留临界值全部并列。"
-            if chinese else f"Ranking: {_measure_label(measure, chinese)} {direction}, first {result.spec.top.n} positions including all cutoff ties."))
+        lines.append((f"名次：按 {_measure_label(measure, chinese, source_columns)} {direction}取前 {result.spec.top.n} 个位置，保留临界值全部并列。"
+            if chinese else f"Ranking: {_measure_label(measure, chinese, source_columns)} {direction}, first {result.spec.top.n} positions including all cutoff ties."))
     lines.append("")
-    measure_labels = {measure.alias: _measure_label(measure, chinese) for measure in result.spec.measures}
-    headings = tuple(measure_labels.get(column.name, column.name) + (f" ({column.unit})" if column.unit else "") for column in result.columns)
+    measure_labels = {measure.alias: _measure_label(measure, chinese, source_columns) for measure in result.spec.measures}
+    headings = tuple(measure_labels.get(column.name, column.display_name or column.name) + (f" ({column.unit})" if column.unit else "") for column in result.columns)
+    dictionaries = {column.name: {_label_key(column.kind, code): label for code, label in column.labels}
+                    for column in result.columns if column.labels is not None}
+    rows = tuple(tuple(_present(column, value, chinese, dictionaries.get(column.name))
+        for column, value in zip(result.columns, row, strict=True)) for row in result.rows)
     table = not any("|" in value for value in headings) and not any(
-        value is not None and "|" in value for row in result.rows for value in row)
-    if result.rows and table:
+        value is not None and "|" in value for row in rows for value in row)
+    if rows and table:
         lines += ["| " + " | ".join(_escape(name) for name in headings) + " |",
                   "| " + " | ".join("---:" if c.kind == "number" else "---" for c in result.columns) + " |"]
-        lines += ["| " + " | ".join(_escape(value) if value is not None else "—" for value in row) + " |" for row in result.rows]
-    elif result.rows:
+        lines += ["| " + " | ".join(_escape(value) if value is not None else "—" for value in row) + " |" for row in rows]
+    elif rows:
         lines += [f"{i}. " + "; ".join(_escape(name) + ": " + (_escape(value) if value is not None else "—")
-            for name, value in zip(headings, row, strict=True)) for i, row in enumerate(result.rows, 1)]
+            for name, value in zip(headings, row, strict=True)) for i, row in enumerate(rows, 1)]
     else:
         lines.append("（无结果行）" if chinese else "(no result rows)")
     missing = [(name, missing, dict(result.null_counts)[name], dict(result.empty_counts)[name])

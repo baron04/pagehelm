@@ -793,9 +793,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 # exhaustion; it can contain invented or duplicated read values.
                 keep["content"] = "（本次普通中间输出未向用户交付，也不作为工具结果。）"
                 s.ledger.append("model_answer_not_delivered", chars=len(message.get("content") or ""))
-                if (self.verify and getattr(getattr(self, "profile", None), "verification_messages", None)
-                        is not None):
-                    turn["review_completion"] = True
+                # Correcting the delivery protocol is not evidence of an unfinished
+                # page or form request. Application/tool completion requirements
+                # remain in force; ordinary data answers need no extra review here.
                 nudges += 1
                 if nudges > 2:
                     s.terminal_reason = "agent_refused"

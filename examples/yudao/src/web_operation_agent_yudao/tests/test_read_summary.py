@@ -4,7 +4,7 @@ from decimal import Decimal
 import unittest
 from types import SimpleNamespace as NS
 
-from web_operation_agent.execution.read_summary import SummaryRefused
+from web_operation_agent.execution.read_summary import SummaryRefused, render_summary
 from web_operation_agent.state.identity import actor_authority_digest
 from web_operation_agent.tests.execution.test_product_model_loop import LoopFixture, call, reply
 from web_operation_agent.tests.goal.test_data_read_tools import context
@@ -58,6 +58,36 @@ class NativeSummaryTests(unittest.TestCase):
         know.call_api("orders/page", {"pageNo": 1, "pageSize": 2}, fields,
             summary=spec, actor_digest=actor_authority_digest("app", "tenant", "actor"), **kwargs)
         return know.last_query_answer
+
+    def test_native_dictionary_display_keeps_raw_numeric_codes_and_unknowns(self):
+        know = knowledge([{"id":1,"status":10}, {"id":2,"status":2}, {"id":3,"status":0}, {"id":4,"status":None}])
+        know._columns = lambda path: {"status":"状态"}
+        know._codes = lambda path: {"status":{"2":"同名状态", "10":"同名状态"}}
+        result = self.read(know, [], {"columns":["status"], "order_by":[{"column":"status","direction":"asc"}]})
+        self.assertEqual((("0",),("2",),("10",),(None,)), result.rows)
+        self.assertEqual("number", result.columns[0].kind)
+        self.assertEqual("状态",result.columns[0].display_name)
+        rendered = render_summary(result,max_chars=5000,user_text="查看状态").text
+        self.assertIn("0（字典中无此代码）",rendered)
+        self.assertIn("2（同名状态）",rendered)
+        self.assertIn("10（同名状态）",rendered)
+        self.assertEqual({"status":1},dict(result.null_counts))
+        self.assertEqual([["2","同名状态"],["10","同名状态"]], result.to_json()["columns"][0]["labels"])
+        grouped = self.read(know,[],{"group_by":["status"],**COUNT})
+        self.assertEqual((("10",),("2",),("0",),(None,)),grouped.group_keys)
+        filtered = self.read(know,[],{"columns":["status"],"where":[{"column":"status","op":">","value":2}]})
+        self.assertEqual((("10",),),filtered.rows)
+        total = self.read(know,[],{"measures":[{"op":"sum","column":"status","as":"n"}]})
+        self.assertEqual((("12",),),total.rows)
+        self.assertIsNone(total.columns[0].labels)
+
+    def test_native_display_without_dictionary_does_not_invent_unknown_codes(self):
+        know = knowledge([{"id":1,"status":0,"deptId":10,"deptName":"部门"}])
+        result = self.read(know,[],{"columns":["status","deptId"]})
+        self.assertIsNone(result.columns[0].labels)
+        self.assertEqual("relation",result.columns[1].kind)
+        self.assertEqual((("0","部门 (10)"),),result.rows)
+        self.assertNotIn("字典中无此代码",render_summary(result,max_chars=4000,user_text="状态").text)
 
     def test_complete_native_record_sorting_preserves_all_pages_and_hidden_sort_column(self):
         know = knowledge([{"id":i+1,"name":f"Record {i}","quantity":i} for i in range(75)])
@@ -197,12 +227,13 @@ class NativeSummaryTests(unittest.TestCase):
                 "measures": [{"op": "count_distinct", "column": "name", "as": "distinct"}]})
         self.assertEqual(caught.exception.code, "redacted_value")
 
-    def test_invalid_argument_combinations_are_refused_before_reading(self):
-        for extra in ({"deliver": True}, {"row_offset": 1}):
-            know = knowledge([])
-            with self.assertRaises(QueryParametersError):
-                self.read(know, ["name"], COUNT, **extra)
-            self.assertEqual(know.client.calls, [])
+    def test_old_delivery_flag_does_not_conflict_with_explicit_summary_and_offsets_remain_refused(self):
+        know = knowledge([])
+        self.assertEqual((("0",),),self.read(know,["name"],COUNT,deliver=True).rows)
+        know = knowledge([])
+        with self.assertRaises(QueryParametersError):
+            self.read(know, ["name"], COUNT, row_offset=1)
+        self.assertEqual(know.client.calls, [])
 
     def test_native_procedure_preserves_actor_bound_result_for_common_finish_delivery(self):
         procedure = YudaoLoopProcedures(knowledge([{"id": 1, "name": "实际名称"}]), None, "https://synthetic.test")
