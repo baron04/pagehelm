@@ -130,12 +130,13 @@ class ActorKnowledge:
     """The signed-in actor's menu pages and the application's read-only API, searchable."""
 
     def __init__(self, client, api_docs, writing_gets=frozenset(), time_zone: str = "Asia/Shanghai",
-                 codes=None, money_review=None, filter_semantics=None, columns=None):
+                 codes=None, money_review=None, filter_semantics=None, columns=None, query_choices=None):
         self.client, self._docs, self.writing_gets = client, api_docs, frozenset(writing_gets)
         #: `codes(list_path)`: the names of a list's coded values by field, when the
         #: application names them ({"bizType": {"50": "销售出库"}}).
         self._codes = codes
         self._columns = columns
+        self._query_choices = query_choices
         self.money_review = money_review
         #: What each published query parameter's condition means, compiled from the
         #: deployed release's source. Annotation only; it refuses or hides no read.
@@ -226,8 +227,22 @@ class ActorKnowledge:
             params.append(f"{p['name']}{'*' if p.get('required') else ''}({desc}"
                           + (f"; {kind}" if kind in {"string", "integer", "number", "boolean", "array"} else "")
                           + (f"; {semantics[p['name']]}" if p["name"] in semantics else "") + ")")
-        return (f"GET {op['path']}  [{op['tag']}] {op['summary']}\n    参数: "
+        line = (f"GET {op['path']}  [{op['tag']}] {op['summary']}\n    参数: "
                 + (", ".join(params[:14]) or "无"))
+        if self._query_choices is not None:
+            try:
+                offered = self._query_choices(op["path"].removeprefix("/admin-api/"))
+                names = {p["name"] for p in published if p.get("in") == "query"}
+                choices = {key: values for key, values in offered.items() if key in names
+                    and isinstance(values, dict) and 0 < len(values) <= 50
+                    and all(isinstance(k, str) and 0 < len(k) <= 120 and isinstance(v, str)
+                            and 0 < len(v) <= 160 for k, v in values.items())}
+            except (DataRefused, ValueError, TypeError, AttributeError):
+                choices = {}
+            if choices:
+                line += "\n原生查询选项（代码=显示名；不是页面就绪或权限证明）：\n" + fenced(
+                    redacted(json.dumps(choices, ensure_ascii=False), self.handoffs))
+        return line
 
     def page_path(self, breadcrumb: str) -> str:
         """The path of the menu page the application's navigation shows under these names."""
@@ -428,7 +443,7 @@ class ActorKnowledge:
             # model to repeat it in fields caused repeated structural refusals in two
             # different tasks; derive the read projection without guessing intent.
             used = (*summary.group_by, *summary.columns, *(condition.column for condition in summary.where),
-                    *(measure.column for measure in summary.measures if measure.column))
+                    *(measure.column for measure in summary.measures if measure.column), *(key.column for key in summary.order_by))
             fields = tuple(dict.fromkeys((*fields, *used))) or ("id",)
             if len(fields) > 12:
                 raise QueryParametersError("summary引用列超过12个，请减少fields或汇总声明中的列")
@@ -974,6 +989,7 @@ SYSTEM_READ = """1. 回答业务数据问题。先用 search_api 找到接口，
    - 单字段用summary.columns交付实际值，列表和详情GET均可；数量可用接口total。筛选、统计、比较或排名用summary，程序从声明选列，读全最多5000行后计算，不必重复fields，不能自己重数。未读全须缩范围或如实说明。
    - 用户的每个条件须落在接口已声明的params或summary.where中；where按AND组合，文本原样匹配，日期选用户动词对应的实际列（创建、签约、入库等），时间阈值写带时区的ISO值。全表total、自动分组或恰好相同的数字都不能证明子集正确。
    - summary用measures声明count/count_distinct/sum/min/max，可用group_by按最多两列分组。关联对象按编号（如deptId）分组，名称只展示，同名不同编号不得合并。缺值与0分开；不可计算值不跳过冒充完整。
+   - 完整排序名单用summary.columns和order_by声明排序列、asc/desc及nulls(first/last)，不设top，不手工排序或改写；程序保留全部命中记录并交付。
    - 排名前N用top.by指定measure别名，n最多50；第N个位置同值并列全部保留。逐记录排名用group_by=["id"]、数值max作为measure、columns取名称。相同组里的展示列须恒定。不能任取并列行，也不把N个不同价位当N条记录。
    - 用户要逐条记录或完整名单：call_api用fields只取用户要求交付的列，并设置deliver=true。工具给出read_answer后，以finish(status=done,answer="",read_answer=该引用)交付服务端保存的实际值；无需手抄、按规律展开或再次生成名单，同名行保留。未完整读取或交付预算不足时用cannot说明，不能称完整。普通分析读取若有next_row_offset，可保持其它参数不变续读；跨调用不保证同一时点快照。
    - 接口没有声明比较参数时，用summary.where声明比较，不能把等值参数当范围。纯名单可用summary.columns；文本全名单仍可用deliver=true。summary和deliver不同时使用。汇总给出read_answer后，answer留空选择该引用，程序交付实际结果与范围；不能改抄数值。引用只覆盖这份结果，用户另要页面或其它内容仍须落实，交付不了全部义务时用cannot说明。
@@ -1432,14 +1448,20 @@ def _of_kind(index, kind: str) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _tabs_not_shown(observation, answer: str) -> list[str]:
-    """Tabs of the page an answer names that are not the one selected."""
-    names = []
-    for e in observation.elements:
-        name = (e.name or "").strip().splitlines()[0] if (e.name or "").strip() else ""
-        if e.role == "tab" and name and e.attrs.get("aria-selected") != "true" and name in answer:
-            names.append(name)
-    return names
+def _tabs_not_shown(observation, answer: str, *, request: str | None = None) -> list[str]:
+    """Unselected live tabs claimed in the answer or explicitly requested now."""
+    request = _CURRENT_REQUEST.get() if request is None else request
+    tabs = [(e, (e.name or "").strip().splitlines()[0]) for e in observation.elements
+            if e.role == "tab" and (e.name or "").strip()]
+    requested = []
+    for _element, name in tabs:
+        pattern = r"(?:切换到|切到|查看|看看|看|打开|进入)\s*[「“\"]?" + re.escape(name) + r"(?=[」”\"]|页签|标签|[，。！？,.!?\s]|$)"
+        for match in re.finditer(pattern, request):
+            if not re.search(r"(?:不要|不用|无需|不必|不需要|不|别)\s*$", request[:match.start()]):
+                requested.append((match.end(), name))
+    final_requested = max(requested)[1] if requested else ""
+    return list(dict.fromkeys(name for e, name in tabs if e.attrs.get("aria-selected") != "true"
+                              and (name in answer or name == final_requested)))
 
 
 #: Field names that mean the list's own paging rather than a field of the page.

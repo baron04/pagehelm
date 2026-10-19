@@ -643,6 +643,21 @@ class KnowledgeTests(unittest.TestCase):
                                   fields=["name"])
         self.assertNotIn("各条件的语义", text)
 
+    def test_api_search_names_native_query_options_without_adding_parameters(self):
+        know = ActorKnowledge(self.client, DOCS, query_choices=lambda path:
+            {"customerId": {"0": "None", "2": "All"}, "notPublished": {"9": "Hidden"}}
+            if path == "orders/page" else {})
+        text = know.search_api("订单")
+        self.assertIn('"customerId": {"0": "None", "2": "All"}', text)
+        self.assertNotIn('notPublished', text)
+        self.assertIn(BEGIN, text)
+        self.assertNotIn('"customerId"', know.search_api("库存明细"))
+        def unavailable(_path):
+            raise DataRefused("optional source unavailable")
+        text = ActorKnowledge(self.client, DOCS, query_choices=unavailable).search_api("订单")
+        self.assertIn("/admin-api/orders/page", text)
+        self.assertNotIn("原生查询选项", text)
+
     def test_parameter_correction_names_required_fields_and_never_supplied_values(self):
         from copy import deepcopy
         from web_operation_agent_yudao.slim_loop import QueryParametersError
@@ -1768,6 +1783,30 @@ class LoopTests(unittest.TestCase):
         _executor, state, text = self.loop(reply(call("highlight", index=10, answer="已填好")), tool=self.said)
         self.assertEqual((text, state.terminal_reason, len(state.chat.seen)), ("已填好", "", 1))
 
+    def test_navigation_answer_waits_for_the_tab_named_by_the_user(self):
+        token = _CURRENT_REQUEST.set("打开这条记录，我要看详细资料。")
+        try:
+            def opened(s, name, args, turn):
+                turn["confirmed"] = True
+                return "已打开。", True
+            executor, _state, text = self.loop(
+                reply(call("goto", path="/records/8", answer="已打开记录。")),
+                reply(call("finish", status="cannot", answer="尚未切到详细资料。")), tool=opened,
+                tabs=(("跟进记录", "true"), ("详细资料", "false")))
+            self.assertEqual(text, "尚未切到详细资料。")
+            told = [m["content"] for m in executor._messages if m["role"] == "tool"]
+            self.assertIn("“详细资料”页签现在没有选中", told[0])
+        finally:
+            _CURRENT_REQUEST.reset(token)
+
+    def test_requested_live_tab_cannot_be_omitted_from_an_early_navigation_answer(self):
+        obs = NS(elements=[element(20, "tab", "Activity", **{"aria-selected":"true"}),
+                           element(21, "tab", "Details", **{"aria-selected":"false"})])
+        self.assertEqual(_tabs_not_shown(obs, "已打开记录。", request="打开这个记录，我要看Details。"), ["Details"])
+        self.assertEqual(_tabs_not_shown(obs, "已打开记录。", request="不要打开Details，打开记录即可。"), [])
+        self.assertEqual(_tabs_not_shown(obs, "已打开记录。", request="打开Details公司这个客户。"), [])
+        self.assertEqual(_tabs_not_shown(obs, "已打开记录。", request="先看Details，再看Activity。"), [])
+
     def test_an_answer_that_names_a_tab_the_page_does_not_show_does_not_end_the_turn(self):
         def opened(s, name, args, turn):
             turn["confirmed"] = True
@@ -1778,7 +1817,7 @@ class LoopTests(unittest.TestCase):
             tabs=(("岗位信息", "true"), ("基本信息", "false")))
         self.assertEqual((text, len(state.chat.seen)), ("已切到基本信息。", 2))
         told = [m["content"] for m in executor._messages if m["role"] == "tool"]
-        self.assertIn("答复里说的“基本信息”页签现在没有选中", told[0])
+        self.assertIn("“基本信息”页签现在没有选中", told[0])
         # The tab shown may be named.
         _executor, state, text = self.loop(
             reply(call("goto", path="/hrm/employee/detail/8", answer="已打开周明的档案，当前在岗位信息页签。")),

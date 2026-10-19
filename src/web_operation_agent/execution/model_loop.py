@@ -861,8 +861,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                         projection.actor_digest != principal.actor_authority_digest):
                                     raise BusinessToolRequestError("read answer belongs to a different actor")
                             renderer = render_summary if isinstance(projection, SummaryResult) else render_structured_query_answer
+                            # The model's free-text limit is independent of the configured
+                            # server-rendered delivery budget; both remain bounded.
                             rendering = renderer(projection, user_text=prompt,
-                                max_chars=self._finish_tool(turn)["function"]["parameters"]["properties"]["answer"]["maxLength"])
+                                max_chars=getattr(getattr(self, "config", None), "max_user_answer_chars",
+                                    FINISH_TOOL["function"]["parameters"]["properties"]["answer"]["maxLength"]))
                             if rendering.presentation_truncated:
                                 raise BusinessToolRequestError("the complete read answer exceeds the delivery budget")
                             args = {**args, "answer": rendering.text}
@@ -1084,7 +1087,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     elif hidden:
                         # It was written before the page was seen: the page shows another tab.
                         unseen = unseen or name
-                        text += (f" 这一步带的 answer 没有用上：答复里说的“{hidden[0]}”页签现在没有选中，"
+                        text += (f" 这一步带的 answer 没有用上：“{hidden[0]}”页签现在没有选中，"
                                  "先切到它，再结束。")
                     else:
                         text += " 这一步带的 answer 没有用上，本轮还没有结束。"

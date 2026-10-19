@@ -32,6 +32,19 @@ describe('restoring a conversation before exposing an empty greeting', () => {
     expect(runtime._recoverAfterNavigation).not.toHaveBeenCalled()
   })
 
+  it('retires settled approval decisions before a later idle handshake expires', async () => {
+    const {runtime} = setup()
+    Object.assign(runtime.stored, {taskInFlight: true, activeMessageId: 'completed-turn',
+      approvals: {consumed: 'approved'}})
+    await runtime._handleEvent({kind: 'progress', turn_id: 'other-turn', payload: {state: 'finished'}})
+    expect(runtime.stored.approvals).toEqual({consumed: 'approved'})
+    await runtime._handleEvent({kind: 'progress', turn_id: 'completed-turn', payload: {state: 'finished'}})
+    expect(runtime.stored.approvals).toEqual({})
+    expect(runtime.stored.taskInFlight).toBe(false)
+    vi.mocked(runtime._hello).mockRejectedValue(new TransportError('closed', 'session_closed', 410))
+    await expect(runtime._startConnectedRuntime()).rejects.toBeInstanceOf(IdleHandshakeClosed)
+  })
+
   it.each([
     {taskInFlight: true}, {activeMessageId: 'accepted-message'}, {cancellationPending: true},
     {approvals: {decision: 'approved'}}, {inFlight: {action_id: 'held-action'} as never},

@@ -74,6 +74,19 @@ class SummaryDeliveryTests(unittest.TestCase):
             self.assertNotIn("999", answer)
             self.assertEqual(len(loop.state.chat.seen), 3)
 
+    def test_server_rendered_roster_uses_the_configured_budget_without_raising_model_text_limit(self):
+        rows=tuple(SummaryRow(str(i),(f"Item {i:03d} " + "x"*90,)) for i in range(100))
+        projection=compute_summary(SummaryRead(Origin("typed","native list","now","all"),
+            context().principal.actor_authority_digest,(SummaryColumn("name","text"),),rows,100,100,True),
+            SummarySpec.from_dict({"columns":["name"],"order_by":[{"column":"name","direction":"asc"}]}))
+        loop=self.fixture(projection)
+        loop.config=NS(max_user_answer_chars=12000)
+        self.assertEqual(8000,loop._finish_tool({})["function"]["parameters"]["properties"]["answer"]["maxLength"])
+        answer=loop.run("List all names")
+        self.assertGreater(len(answer),8000)
+        self.assertIn("Item 099",answer)
+        self.assertTrue(any(event=="read_answer_selected" for event,_ in loop.events))
+
     def test_over_budget_result_is_not_replaced_by_a_partial_table(self):
         loop = self.fixture(summary(count=3))
         loop.config = NS(max_user_answer_chars=512)

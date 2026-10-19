@@ -30,6 +30,48 @@ class ReadSummaryTests(unittest.TestCase):
             function(*args, **kwargs)
         self.assertEqual(code, caught.exception.code)
 
+    def test_complete_ordering_keeps_more_than_fifty_rows_and_native_identities(self):
+        source = read([("name", "text"), ("amount", "number")],
+                      [("same name", Decimal(i)) for i in range(75)])
+        result = summarize(source, columns=["name", "amount"],
+                           order_by=[{"column":"amount", "direction":"desc"}])
+        self.assertEqual(75, len(result.rows))
+        self.assertEqual([str(i) for i in range(74, -1, -1)], [r[1] for r in result.rows])
+        self.assertEqual(tuple((str(i),) for i in range(74, -1, -1)), result.row_record_ids)
+        self.assertIsNone(result.tie_cutoff)
+        self.assertEqual(SummarySpec.from_dict(result.spec.to_json()), result.spec)
+        rendered = render_summary(result, max_chars=20000)
+        self.assertFalse(rendered.presentation_truncated)
+        self.assertEqual(75, rendered.presented_records)
+
+    def test_ordering_uses_typed_hidden_keys_and_preserves_nulls_and_equal_keys(self):
+        source = read([("name", "text"), ("amount", "number"), ("day", "date")],
+                      [("a", Decimal(2), date(2026,1,2)), ("b", Decimal(10), date(2026,1,1)),
+                       ("c", Decimal(2), date(2026,1,1)), ("d", None, None), ("e", "", None),
+                       ("f", Decimal(2), date(2026,1,1))])
+        result = summarize(source, columns=["name"], order_by=[
+            {"column":"amount","direction":"desc","nulls":"last"},
+            {"column":"day","direction":"asc"}])
+        self.assertEqual((("b",),("c",),("f",),("a",),("d",),("e",)), result.rows)
+        self.assertEqual({"name":0,"amount":1,"day":2}, dict(result.null_counts))
+        first = summarize(source, columns=["name"],order_by=[{"column":"amount","direction":"asc","nulls":"first"}])
+        self.assertEqual((("d",),("e",)), first.rows[:2])
+
+    def test_ordering_refuses_unread_or_unknown_keys_and_incomplete_reads_do_not_sort_partial_values(self):
+        source = read([("name","text"),("amount","number")],[("a",Missing.MISSING)])
+        self.assertRefused("missing_column",summarize,source,columns=["name"],order_by=[{"column":"amount","direction":"asc"}])
+        self.assertRefused("unknown_column",summarize,source,columns=["name"],order_by=[{"column":"other","direction":"asc"}])
+        partial = summarize(replace(source,complete=False,matched_count=2),columns=["name"],order_by=[{"column":"amount","direction":"asc"}])
+        self.assertFalse(partial.complete)
+        self.assertEqual((), partial.rows)
+        for spec in [
+            {"columns":["name"],"order_by":[{"column":"name","direction":[]}]},
+            {"columns":["name"],"order_by":[{"column":"name","direction":"asc","nulls":{}}]},
+            {"columns":["name"],"order_by":[{"column":"name","direction":"asc"}]*2},
+            {"measures":[{"op":"count","as":"n"}],"order_by":[{"column":"n","direction":"asc"}]},
+        ]:
+            self.assertRefused("invalid_spec",SummarySpec.from_dict,spec)
+
     def test_decimal_sum_is_exact_and_retains_display_unit(self):
         source = read([("amount", "number", "元")], [(Decimal("0.10"),), (Decimal("0.20"),)])
         result = summarize(source, measures=[{"op": "sum", "column": "amount", "as": "total"}])
@@ -251,7 +293,7 @@ class ReadSummaryTests(unittest.TestCase):
     def test_schema_is_closed_and_does_not_expose_rows_or_actor(self):
         schema = summary_schema()
         self.assertFalse(schema["additionalProperties"])
-        self.assertEqual({"where", "group_by", "measures", "columns", "top"}, set(schema["properties"]))
+        self.assertEqual({"where", "group_by", "measures", "columns", "top", "order_by"}, set(schema["properties"]))
         self.assertEqual(50, schema["properties"]["top"]["properties"]["n"]["maximum"])
         self.assertNotIn("pattern", schema["properties"]["columns"]["items"])
         json.dumps(schema)

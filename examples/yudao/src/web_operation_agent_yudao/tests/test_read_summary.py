@@ -59,6 +59,16 @@ class NativeSummaryTests(unittest.TestCase):
             summary=spec, actor_digest=actor_authority_digest("app", "tenant", "actor"), **kwargs)
         return know.last_query_answer
 
+    def test_complete_native_record_sorting_preserves_all_pages_and_hidden_sort_column(self):
+        know = knowledge([{"id":i+1,"name":f"Record {i}","quantity":i} for i in range(75)])
+        result = self.read(know, [], {"columns":["name"],"order_by":[{"column":"quantity","direction":"desc"}]})
+        self.assertTrue(result.complete)
+        self.assertEqual(75,len(result.rows))
+        self.assertEqual((("Record 74",),("Record 73",)),result.rows[:2])
+        self.assertEqual(("Record 0",),result.rows[-1])
+        self.assertEqual(("75",),result.row_record_ids[0])
+        self.assertEqual(("name",),tuple(c.name for c in result.columns))
+
     def test_prefix_and_status_are_both_applied_to_exact_decimals(self):
         know = knowledge([
             {"id": 1, "name": "测试甲", "status": 0, "quantity": 0.1},

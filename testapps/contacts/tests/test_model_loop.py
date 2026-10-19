@@ -21,6 +21,22 @@ from web_operation_agent.tests.support.business import _Chat
 
 
 class ContactsModelLoopTests(unittest.TestCase):
+    def test_complete_sorted_rest_list_is_delivered_by_the_same_shared_contract(self):
+        with MinimalContactsApplication() as app:
+            records=[]
+            def inspect(directory):
+                records.extend(json.loads(path.read_text()) for path in (directory / "turns").glob("*.json"))
+            result, _, _ = self.execute(app, "ada-lovelace", [
+                ("list_contacts", {"summary":{"columns":["name","email"],"order_by":[{"column":"name","direction":"desc"}]}}),
+                ("finish", {"status":"done","answer":"","read_answer":"read-1"})],
+                prompt="List every visible contact in descending name order.",turn_traces=True,inspect=inspect)
+            self.assertEqual("agent_finished",result.terminal_reason)
+            projection=records[0]["server_deliveries"][0]["projection"]
+            self.assertGreater(len(projection["rows"]),1)
+            self.assertEqual(sorted((r[0] for r in projection["rows"]),reverse=True),[r[0] for r in projection["rows"]])
+            self.assertEqual(projection["matched_count"],len(projection["row_record_ids"]))
+            self.assertEqual(len(projection["rows"]),len(projection["row_record_ids"]))
+
     def test_summary_contract_delivers_only_the_current_rest_actors_actual_values(self):
         for actor, email in (("ada-lovelace", "grace@example.test"),
                              ("mary-jackson", "grace.hopper@southwind.test")):

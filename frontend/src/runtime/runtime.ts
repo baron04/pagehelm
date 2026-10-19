@@ -832,6 +832,10 @@ export class EmbeddedWebRuntime {
     this.stored.taskInFlight = false
     this.stored.activeMessageId = ''
     this.stored.cancellationPending = false
+    // A terminal receipt settles this turn's decisions too. Keeping consumed
+    // approvals would make every later closed handshake look like live recovery.
+    // Unfinished turns retain their decisions until the server settles them.
+    this.stored.approvals = {}
     this._save()
     this.panelHost?.setConnection({busy: false, stopping: false})
     this.panelHost?.clearOptimisticOnce(turnId)

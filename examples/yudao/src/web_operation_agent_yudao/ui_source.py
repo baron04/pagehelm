@@ -55,6 +55,9 @@ class ListView:
     column_labels: tuple[tuple[str, str], ...] = ()
     #: field -> the unit its column's label states, where the column shows the value as read.
     column_units: tuple[tuple[str, str], ...] = ()
+    #: Literal single-choice search options and native dictionary bindings.
+    query_choices: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    query_dicts: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -98,7 +101,8 @@ class UiSource:
     @staticmethod
     def read(root) -> "UiSource":
         src = Path(root) / "src"
-        consts = dict(_DICT_CONST.findall((src / "utils" / "dict.ts").read_text(encoding="utf-8")))
+        dictionary = (src / "utils" / "dict.ts").read_text(encoding="utf-8")
+        consts = dict(_DICT_CONST.findall(dictionary))
         views, tables, table_dicts = {}, {}, {}
         for path in sorted((src / "views").rglob("*.vue")):
             text = path.read_text(encoding="utf-8")
@@ -116,6 +120,7 @@ class UiSource:
             units = _shown_units(text)
             dicts = {row: consts[name] for name, row in _DICT_TAG.findall(text) if name in consts}
             endpoint, fixed_params = _list_endpoint(src, text)
+            query_choices, query_dicts = _query_choices(text, dictionary)
             if not endpoint:
                 # A wrapper may hold one record-list component (a tab's table). More
                 # than one is ambiguous, so leave those pages to their own adapter.
@@ -126,6 +131,7 @@ class UiSource:
                         child_text = child.read_text(encoding="utf-8")
                         endpoint, fixed_params = _list_endpoint(src, child_text)
                         if endpoint:
+                            query_choices, query_dicts = _query_choices(child_text, dictionary)
                             columns = tuple(dict.fromkeys(_COLUMN.findall(child_text))) or columns
                             labels = _literal_column_labels(child_text)
                             units = _shown_units(child_text)
@@ -135,10 +141,44 @@ class UiSource:
                 key = path.relative_to(src / "views").with_suffix("").as_posix()
                 views[key] = ListView(columns=columns, dicts=dicts, endpoint=endpoint,
                                       fixed_params=fixed_params, column_labels=labels,
-                                      column_units=units)
+                                      column_units=units, query_choices=query_choices, query_dicts=query_dicts)
         router = (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")
         return UiSource(views=views, records=_record_routes(router), tables=tables,
                         record_sections=_record_sections(src, router), table_dicts=table_dicts)
+
+
+def _query_choices(text: str, dictionary: str):
+    # Reuse the form compiler; only one literal queryParams form owns these choices.
+    from .source_forms import _Template, _walk, _select_choices
+    parser = _Template()
+    try:
+        parser.feed(text); parser.close()
+    except (ValueError, RecursionError):
+        return (), ()
+    templates = [n for n in parser.roots if n.tag == "template"]
+    if not parser.valid or parser.stack or len(templates) != 1:
+        return (), ()
+    forms = [n for n, _ in _walk(templates[0]) if n.tag == "el-form" and n.attrs.get(":model") == "queryParams"]
+    if len(forms) != 1:
+        return (), ()
+    choices, dicts, seen = {}, {}, set()
+    for item, _ in _walk(forms[0]):
+        key = item.attrs.get("prop")
+        if item.tag != "el-form-item" or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key or ""):
+            continue
+        if key in seen:
+            choices.pop(key, None); dicts.pop(key, None)
+            continue
+        seen.add(key)
+        controls = [n for n, _ in _walk(item) if n.tag == "el-select"]
+        if len(controls) != 1 or controls[0].attrs.get("v-model") != "queryParams." + key:
+            continue
+        compiled = _select_choices(controls[0], text, dictionary)
+        if compiled and compiled[1] == "literal":
+            choices[key] = compiled[0]
+        elif compiled and compiled[1] == "dictionary":
+            dicts[key] = compiled[2]
+    return tuple(choices.items()), tuple(dicts.items())
 
 
 def _row_dictionaries(page: str, consts: dict) -> dict:

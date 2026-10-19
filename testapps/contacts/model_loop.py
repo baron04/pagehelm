@@ -72,7 +72,7 @@ class ContactsProcedure:
                 try:
                     spec = SummarySpec.from_dict(arguments["summary"])
                     used = {*spec.columns, *spec.group_by, *(condition.column for condition in spec.where),
-                            *(measure.column for measure in spec.measures if measure.column)} or {"id"}
+                            *(measure.column for measure in spec.measures if measure.column), *(key.column for key in spec.order_by)} or {"id"}
                     selected = tuple(column for column in (SummaryColumn("id", "relation"),
                         SummaryColumn("name", "text"), SummaryColumn("email", "text")) if column.name in used)
                     handoffs = SessionHandoffPolicy.extending(self.adapter.ports.routes.session_handoff_query_keys)
@@ -242,7 +242,7 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
     from .draft_steps import ContactsDraftSteps
     from .mutation_prefill import ContactsMutationPrefill
     return ModelLoopProfile("Answer from current REST reads. Clarify ambiguous names; never choose one silently. "
-        "For counts, groups or lists, list_contacts accepts summary over id, name and email. "
+        "For counts, groups or lists, list_contacts accepts summary over id, name and email. Use columns and order_by for a complete sorted list without top or hand-copying. "
         "The server calculates and renders the selected read_answer; keep finish.answer empty. "
         "This application offers reviewed navigation and visible-control handoff. " +
         ("It offers two local date fields, priority, and temporary note lines for manual saving. "

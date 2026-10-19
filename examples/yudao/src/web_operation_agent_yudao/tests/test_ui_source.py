@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent_yudao.ui_source import UiSource, _literal_column_labels, _shown_units
+from web_operation_agent_yudao.ui_source import UiSource, _literal_column_labels, _shown_units, _query_choices
 
 _PAGE = """<template>
   <el-table-column label="流程名称" prop="name" />
@@ -46,6 +46,17 @@ export const getProcessInstanceMyPage = async (params: any) => {
 
 
 class UiSourceTests(unittest.TestCase):
+    def test_search_options_are_owned_by_the_exact_form_field(self):
+        form = '<el-form :model="queryParams"><el-form-item prop="stage"><el-select v-model="queryParams.stage"><el-option label="Not received" value="0" /><el-option label="Received" :value="2" /></el-select></el-form-item></el-form>'
+        self.assertEqual(_query_choices('<template>' + form + '</template>', ''),
+                         ((("stage", (("0", "Not received"), ("2", "Received"))),), ()))
+        for invalid in (form.replace('queryParams.stage','formData.stage'),
+                        form.replace('label="Received"','label="Received" v-if="allowed"'),
+                        form.replace('value="0"','value="2"'), form + form):
+            self.assertEqual(_query_choices('<template>' + invalid + '</template>', ''), ((), ()))
+        unrelated = '<el-select v-model="queryParams.other"><el-option label="Wrong" value="9" /></el-select>'
+        self.assertEqual(_query_choices('<template>' + unrelated + '</template>', ''), ((), ()))
+
     def test_line_dictionaries_are_column_bound_and_conflicts_remain_unresolved(self):
         table = '<el-table-column label="单位"><dict-tag :type="DICT_TYPE.UNIT" :value="row.measure" /></el-table-column>'
         status = '<el-table-column label="状态"><dict-tag :type="DICT_TYPE.STATUS" :value="scope.row.status" /></el-table-column>'

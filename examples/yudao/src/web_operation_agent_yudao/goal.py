@@ -936,6 +936,23 @@ class YudaoGoalData:
             return {}
         return {f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}
 
+    def query_choices(self, read_path: str) -> dict[str, dict[str, str]]:
+        """Choices of this actor's exact list search form; optional source facts only."""
+        self._known()
+        found = {}
+        with self._lock:
+            for spec in self._entities.values():
+                view = spec.view
+                if (view is None or spec.list_path.strip("/") != read_path.strip("/")
+                        or view.endpoint.strip("/") != spec.list_path.strip("/")):
+                    continue
+                pairs = list(view.query_choices)
+                pairs += [(key, tuple(self._dicts.get(dictionary, ()))) for key, dictionary in view.query_dicts]
+                for key, values in pairs:
+                    found.setdefault(key, set()).add(tuple(sorted(values)))
+        return {key: dict(next(iter(values))) for key, values in found.items()
+                if len(values) == 1 and next(iter(values))}
+
     def column_names(self, read_path: str) -> dict[str, str]:
         """Installed list labels for this actor's exact entity read, never page readiness.
 

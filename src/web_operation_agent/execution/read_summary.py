@@ -185,6 +185,19 @@ class _Top:
     direction: str
 
 
+@dataclass(frozen=True, slots=True)
+class _Order:
+    column: str
+    direction: str
+    nulls: str
+
+    def __post_init__(self):
+        _name(self.column)
+        if (not isinstance(self.direction, str) or self.direction not in {"asc", "desc"}
+                or not isinstance(self.nulls, str) or self.nulls not in {"first", "last"}):
+            _fail("invalid_spec", "invalid full-list order")
+
+
 def _operand(value):
     if value is None or isinstance(value, (str, bool)) or type(value) is int and _bounded_number(value):
         if isinstance(value, str):
@@ -216,12 +229,14 @@ class SummarySpec:
     measures: tuple[_Measure, ...] = ()
     columns: tuple[str, ...] = ()
     top: _Top | None = None
+    order_by: tuple[_Order, ...] = ()
 
     def __post_init__(self):
-        if (not all(isinstance(value, tuple) for value in (self.where, self.group_by, self.measures, self.columns))
+        if (not all(isinstance(value, tuple) for value in (self.where, self.group_by, self.measures, self.columns, self.order_by))
                 or any(not isinstance(value, _Condition) for value in self.where)
                 or any(not isinstance(value, _Measure) for value in self.measures)
-                or self.top is not None and not isinstance(self.top, _Top)):
+                or self.top is not None and not isinstance(self.top, _Top)
+                or any(not isinstance(value, _Order) for value in self.order_by)):
             _fail("invalid_spec", "spec components must be validated immutable values")
         if (len(self.where) > 32 or len(self.group_by) > 2 or len(self.columns) > 20 or len(self.measures) > 12
                 or any(not isinstance(value, str) for value in (*self.group_by, *self.columns))
@@ -256,9 +271,17 @@ class SummarySpec:
                 or self.top.by not in aliases or self.top.direction not in {"asc", "desc"}):
             _fail("invalid_spec", "invalid top definition")
 
+        if (len(self.order_by) > 3 or len({key.column for key in self.order_by}) != len(self.order_by)
+                or self.order_by and (self.measures or self.group_by or self.top)):
+            _fail("invalid_spec", "full ordering requires distinct keys on a plain record list")
+        for key in self.order_by:
+            _name(key.column)
+            if key.direction not in {"asc", "desc"} or key.nulls not in {"first", "last"}:
+                _fail("invalid_spec", "invalid full-list order")
+
     @classmethod
     def from_dict(cls, value):
-        if not isinstance(value, dict) or set(value) - {"where", "group_by", "measures", "columns", "top"}:
+        if not isinstance(value, dict) or set(value) - {"where", "group_by", "measures", "columns", "top", "order_by"}:
             _fail("invalid_spec", "summary requires a closed object")
         def entries(key, maximum):
             result = value.get(key, [])
@@ -310,7 +333,13 @@ class SummarySpec:
                     or item["by"] not in {m.alias for m in measures}):
                 _fail("invalid_spec", "top must name a measure, direction, and bounded position")
             top = _Top(item["by"], item["n"], item["direction"])
-        return cls(tuple(conditions), grouping, tuple(measures), columns, top)
+        order = []
+        for item in entries("order_by", 3):
+            if (not isinstance(item, dict) or set(item) - {"column", "direction", "nulls"}
+                    or not {"column", "direction"} <= set(item)):
+                _fail("invalid_spec", "order keys require a column and direction")
+            order.append(_Order(_name(item["column"]), item["direction"], item.get("nulls", "last")))
+        return cls(tuple(conditions), grouping, tuple(measures), columns, top, tuple(order))
 
     def to_json(self):
         result = {"where": [{"column": c.column, "op": c.op,
@@ -320,6 +349,9 @@ class SummarySpec:
             "columns": list(self.columns)}
         if self.top:
             result["top"] = {"by": self.top.by, "n": self.top.n, "direction": self.top.direction}
+        if self.order_by:
+            result["order_by"] = [{"column": key.column, "direction": key.direction, "nulls": key.nulls}
+                                  for key in self.order_by]
         return result
 
 
@@ -339,6 +371,11 @@ def summary_schema():
         "measures": {"type": "array", "maxItems": 12, "items": {"type": "object", "additionalProperties": False,
             "properties": {"op": {"type": "string", "enum": list(_MEASURES)}, "column": name, "as": name},
             "required": ["op", "as"]}},
+        "order_by": {"type": "array", "maxItems": 3,
+            "description": "Sort the complete record list without truncation. Use columns without measures/group_by/top. Keys may name other published read columns. Null and empty values default to last; unread values are refused. Equal keys preserve source order.",
+            "items": {"type": "object", "additionalProperties": False, "properties": {
+                "column": name, "direction": {"type": "string", "enum": ["asc", "desc"]},
+                "nulls": {"type": "string", "enum": ["first", "last"]}}, "required": ["column", "direction"]}},
         "top": {"type": "object", "additionalProperties": False, "properties": {
             "by": name, "n": {"type": "integer", "minimum": 1, "maximum": 50},
             "direction": {"type": "string", "enum": ["asc", "desc"]}}, "required": ["by", "n", "direction"]}}}
@@ -758,7 +795,7 @@ def compute_summary(read: SummaryRead, spec: SummarySpec):
         _fail("invalid_input", "summary needs validated read and spec objects")
     lookup = {column.name: index for index, column in enumerate(read.columns)}
     referenced = {*spec.group_by, *spec.columns, *(c.column for c in spec.where),
-                  *(m.column for m in spec.measures if m.column)}
+                  *(m.column for m in spec.measures if m.column), *(key.column for key in spec.order_by)}
     if referenced - lookup.keys():
         _fail("unknown_column", "summary references a column outside this published read")
     for condition in spec.where:
@@ -774,6 +811,16 @@ def compute_summary(read: SummaryRead, spec: SummarySpec):
             read.columns[lookup[m.column]].unit if m.op in {"sum", "min", "max"} else "") for m in spec.measures)
     selected = tuple(row for row in read.rows if all(_matches(read.columns[lookup[c.column]], row.values[lookup[c.column]], c)
         for c in spec.where)) if read.complete else ()
+    # Stable sorts from the least significant key preserve every native member,
+    # including tied values and known blanks. Ordering never imposes a row limit.
+    for key in reversed(spec.order_by):
+        column, index = read.columns[lookup[key.column]], lookup[key.column]
+        if any(row.values[index] is Missing.MISSING for row in selected):
+            _fail("missing_column", "an unread value cannot be silently ordered")
+        blanks = [row for row in selected if _empty(row.values[index])]
+        values = sorted((row for row in selected if not _empty(row.values[index])),
+                        key=lambda row: _comparable(column, row.values[index]), reverse=key.direction == "desc")
+        selected = tuple(blanks + values if key.nulls == "first" else values + blanks)
     stats = _counts(selected, read.columns)
     groups = {}
     if spec.measures:
@@ -893,6 +940,11 @@ def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""
     if result.spec.measures:
         lines.append(("统计：" if chinese else "Measures: ") + _escape(
             "; ".join(_measure_label(measure, chinese) for measure in result.spec.measures)))
+    if result.spec.order_by:
+        keys = [key.column + " " + (("降序" if key.direction == "desc" else "升序") if chinese else key.direction)
+                + (("（空值在前）" if key.nulls == "first" else "（空值在后）") if chinese else " (nulls " + key.nulls + ")")
+                for key in result.spec.order_by]
+        lines.append(("完整排序：" if chinese else "Complete ordering: ") + _escape("; ".join(keys)))
     if result.spec.top:
         measure = next(measure for measure in result.spec.measures if measure.alias == result.spec.top.by)
         direction = ("降序" if result.spec.top.direction == "desc" else "升序") if chinese else result.spec.top.direction

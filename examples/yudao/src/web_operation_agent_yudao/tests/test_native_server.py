@@ -195,7 +195,9 @@ class NativeHostTests(unittest.TestCase):
         long_answer = "\n".join(f"{i}. Synthetic contact full name {i:03d}" for i in range(180))
         declared = executor._finish_tool({})["function"]["parameters"]["properties"]["answer"]["maxLength"]
         self.assertLessEqual(len(long_answer), declared)
-        self.assertEqual(declared, executor.config.max_user_answer_chars)
+        from web_operation_agent.transport.panel_view import panel_limits
+        self.assertEqual(panel_limits()["result_max_chars"], executor.config.max_user_answer_chars)
+        self.assertLess(declared, executor.config.max_user_answer_chars)
 
     def test_turn_records_are_on_by_default_bounded_and_pruned_at_start(self):
         self.assertEqual(14, self.config.turn_trace_days)

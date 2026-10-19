@@ -385,7 +385,7 @@ class YudaoHost:
             # the turn's leave, the write watch and the application's own window; with
             # native writes it may also propose a loaded Skill's typed operations.
             from web_operation_agent.goal.conventions import load_conventions
-            from web_operation_agent.execution.model_loop import FINISH_TOOL
+            from web_operation_agent.transport.panel_view import panel_limits
             from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
             from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
             model_goal = ModelPageGoalPort(app.goal_port, self.page_review)
@@ -397,7 +397,7 @@ class YudaoHost:
                 from .mutation_prefill import YudaoMutationPrefill
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
-                max_user_answer_chars=FINISH_TOOL["function"]["parameters"]["properties"]["answer"]["maxLength"])
+                max_user_answer_chars=panel_limits()["result_max_chars"])
             executor = SlimTurnExecutor(
                 **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
                 goal_port=model_goal, draft_steps=draft_steps,
@@ -407,6 +407,7 @@ class YudaoHost:
                                          time_zone=app.goal_data.time_zone(),
                                          codes=app.goal_data.code_names,
                                          columns=app.goal_data.column_names,
+                                         query_choices=app.goal_data.query_choices,
                                          money_review=self.money_review,
                                          filter_semantics=self.filter_semantics),
                 conventions=load_conventions(REFERENCE_CONVENTIONS),

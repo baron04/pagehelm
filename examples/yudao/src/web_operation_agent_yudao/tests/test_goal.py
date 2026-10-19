@@ -463,6 +463,22 @@ class YudaoGoalDataTests(unittest.TestCase):
         self.assertEqual(self.data.code_names("crm/contract/get"), names)
         self.assertEqual(self.data.code_names("no/such/page"), {})
 
+    def test_search_choices_do_not_inherit_other_endpoint_or_row_dictionaries(self):
+        view = ListView(endpoint="/crm/contract/page", query_choices=(("stage", (("0", "None"), ("2", "All"))),))
+        data = YudaoGoalData(_Client(), DOCS, ui=UiSource(views={"crm/contract/index": view}))
+        self.assertEqual(data.query_choices("/crm/contract/page"), {"stage": {"0": "None", "2": "All"}})
+        self.assertEqual(data.query_choices("/crm/contract/get"), {})
+        self.assertEqual(data.query_choices("/other/page"), {})
+        self.assertEqual(YudaoGoalData(_Client(), DOCS).query_choices("/crm/contract/page"), {})
+
+    def test_api_discovery_passes_relative_path_to_the_native_query_choice_provider(self):
+        from web_operation_agent_yudao.slim_loop import ActorKnowledge
+        view = ListView(endpoint="/crm/contract/page", query_choices=(("auditStatus", (("0", "Draft"), ("20", "Approved"))),))
+        data = YudaoGoalData(_Client(), DOCS, ui=UiSource(views={"crm/contract/index": view}))
+        knowledge = ActorKnowledge(_Client(), DOCS, query_choices=data.query_choices)
+        text = knowledge.search_api("合同")
+        self.assertIn('"auditStatus": {"0": "Draft", "20": "Approved"}', text)
+
     def test_column_metadata_binds_the_exact_entity_and_keeps_unknown_reads_empty(self):
         ui = UiSource(views={"crm/contract/index": ListView(endpoint="/crm/contract/page",
             column_labels=(("totalPrice", "含税金额"), ("notPublished", "不可用")))})
