@@ -51,9 +51,37 @@ class TracingTests(unittest.TestCase):
         self.assertEqual(untraced("退货 -500 元", ("500",)), ())
         self.assertEqual(untraced("金额 500 元", ("-500",)), ())
 
-    def test_dates_ids_and_addresses_in_the_answer_are_never_reported(self):
+    def test_dates_numeric_ids_and_addresses_in_the_answer_are_not_reported(self):
         self.assertEqual(
-            untraced("2026-10-17 创建，编号 CG99991，详情 /crm/customer/detail/77", ("total=1",)), ())
+            untraced("2026-10-17 创建，编号 99991，详情 /crm/customer/detail/77", ("total=1",)), ())
+
+    def test_mixed_identifiers_preserve_leading_zeros_and_case_without_quantity_normalization(self):
+        sources = ('{"no":"PO202610000085","supplierName":"示例供应商"}',)
+        self.assertEqual(untraced("PO202610000085的供应商是示例供应商", sources), ())
+        for changed in ("PO2026100085", "po202610000085", "PO2026100000850"):
+            with self.subTest(changed=changed):
+                self.assertEqual(untraced(f"{changed}的供应商是示例供应商", sources), (changed,))
+
+    def test_codes_in_two_entities_require_whole_ascii_tokens_and_exact_separators(self):
+        sources = ('{"orderNo":"PO-000017","sku":"SKU_0042-A"}',)
+        self.assertEqual(untraced("订单PO-000017，产品SKU_0042-A", sources), ())
+        for changed in ("PO-00001", "XPO-000017", "PO_000017", "SKU_42-A", "SKU_0042"):
+            with self.subTest(changed=changed):
+                self.assertEqual(untraced(changed, sources), (changed,))
+
+    def test_person_supplied_codes_are_literal_sources_and_urls_are_not_stated_codes(self):
+        self.assertEqual(untraced("已查询AB-0002，见https://test.invalid/AB-0003及/orders/CD0004", ("查询AB-0002",)), ())
+        self.assertEqual(untraced("型号L30合计2,440.80元", ("型号L30，总价2440.8",)), ())
+
+    def test_iso_timestamps_are_not_identifiers(self):
+        for stamp in ("2026-10-19T10:00:00", "2026-10-19T10:00:00.123Z", "2026-10-19T10:00:00+08:00"):
+            with self.subTest(stamp=stamp):
+                self.assertEqual(untraced(stamp, ()), ())
+
+    def test_terminal_period_does_not_hide_a_changed_code_or_split_an_embedded_period(self):
+        self.assertEqual(untraced("PO0002.", ("PO000002",)), ("PO0002",))
+        self.assertEqual(untraced("SKU.0002.", ("SKU.0002",)), ())
+        self.assertEqual(untraced("SKU.0002", ("SKU.00020",)), ("SKU.0002",))
 
     def test_an_answer_without_numbers_passes_without_sources(self):
         self.assertEqual(untraced("已打开订单页。", ()), ())

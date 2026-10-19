@@ -813,10 +813,11 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
                                 reply(call("finish", status="done", answer="共 12 条")))
         self.assertEqual((executor.run("有几条？"), executor.state.terminal_reason), ("共 12 条", ""))
         sent = [m for m in executor._messages
-                if m["role"] == "user" and "以下数值在本轮读取中找不到" in m.get("content", "")]
+                if m["role"] == "user" and "以下值在本轮读取中找不到" in m.get("content", "")]
         self.assertEqual(len(sent), 1)
         self.assertIn("999", sent[0]["content"])
-        self.assertIn("请改用读到的值，或说明它是计算得到的或无法核实", sent[0]["content"])
+        self.assertIn("请改用读到的值", sent[0]["content"])
+        self.assertIn("编号必须逐字保留", sent[0]["content"])
         self.assertIn(("untraced_numbers", {"numbers": ["999"], "sent_back": True}), executor.events)
 
     def test_the_second_answer_ends_as_it_is_and_the_audit_keeps_what_stayed_untraced(self):

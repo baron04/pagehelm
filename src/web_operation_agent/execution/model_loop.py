@@ -1129,8 +1129,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         turn["numbers_sent_back"] = True
                         s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=True)
                         self._messages.append({"role": "user", "content":
-                            "以下数值在本轮读取中找不到：" + "、".join(untraced)
-                            + "；请改用读到的值，或说明它是计算得到的或无法核实，然后重新调用 finish。"})
+                            "以下值在本轮读取中找不到：" + "、".join(untraced)
+                            + "；请改用读到的值。编号必须逐字保留；其它数值可说明计算依据或无法核实，然后重新调用 finish。"})
                         return self._loop(s, prompt, turn, verified=verified)
                     s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=False)
             if status == "done" and turn.get("review_completion"):

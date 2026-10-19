@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -28,6 +29,17 @@ def load(name):
 
 command = load("command")
 manifest = load("manifest")
+
+
+class CloudReadonlyTests(unittest.TestCase):
+    def test_shipped_agent_command_disables_writes_edit_prefill_and_runtime_source(self):
+        compose = (CLOUD.parent / "compose.cloud.yaml").read_text()
+        agent = compose.split("\n  agent:", 1)[1]
+        args = json.loads(re.search(r"command:\s*(\[[\s\S]*?\])", agent).group(1))
+        self.assertNotIn("--native-writes", args)
+        self.assertNotIn("--runtime-source", args)
+        self.assertIn("--no-native-edit-prefill", args)
+        self.assertIn("--source-root", args)
 
 
 class EntryTests(unittest.TestCase):

@@ -8,6 +8,8 @@
 
 日常发布无需参数，也无需设置 `YUDAO_CACHE`。本地配置只做一次。
 
+随仓库提供的云端配置关闭原生持久写入、编辑表单预填及用户态源码工具。新增表单仍可按已审核页面预填后交给用户提交；源码目录保留供版本核验和应用元数据使用。已有站点须重新发布后才应用这些配置。
+
 ## 一次性配置
 
 本机需要 Python 3.12 的 `.venv`、符合 `frontend/package.json` 的 Node.js、npm、uv、Git、SSH、rsync、unzip 和 OpenSSL。按根目录 README 创建 Python 环境；安装 uv 后确保命令在 `PATH` 中。

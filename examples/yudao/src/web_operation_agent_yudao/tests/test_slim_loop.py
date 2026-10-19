@@ -34,6 +34,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
+from web_operation_agent_yudao.answer_numbers import untraced
 from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _EARLIER_REQUESTS, _WRITE_INTENT, _draft_only_request, _unrequested_draft_fields, _read_only_status_question, _tabs_not_shown,
                                                  _business_handoff_ready, _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
@@ -1660,12 +1661,14 @@ class SettledTests(unittest.TestCase):
 
 
 class LoopTests(unittest.TestCase):
-    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=(), slim=False):
+    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=(), slim=False, trace_values=False):
         """`page` is what each step on the page in turn changes of it; a step past the
         end of it leaves the page as it was. `tabs` are (name, aria-selected) of the
         page's tabs."""
         executor = (SlimTurnExecutor if slim else ModelDrivenTurnExecutor).__new__(SlimTurnExecutor if slim else ModelDrivenTurnExecutor)
         executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
+        if trace_values:
+            executor.profile = NS(untraced_numbers=untraced)
         executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
         self.ran, self.checked = [], []
@@ -1734,6 +1737,22 @@ class LoopTests(unittest.TestCase):
         self.turn = turn = {"reads": [], "marked": "", "trace": [], "touched": list(touched),
                             "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0}
         return executor, state, executor._loop(state, asked, turn, verified=False)
+
+    def test_an_altered_record_code_returns_to_the_same_conversation_for_one_correction(self):
+        source = '{"no":"PO-000017","supplierName":"示例供应商"}'
+        executor, state, answer = self.loop(
+            reply(call("call_api", path="orders/page", params='{"no":"PO-000017"}')),
+            reply(call("finish", status="done", answer="PO-0017的供应商是示例供应商")),
+            reply(call("finish", status="done", answer="PO-000017的供应商是示例供应商")),
+            tool=lambda *_: LoopToolResult(source, kind="read"), trace_values=True,
+            asked="采购单PO-000017的供应商？")
+        self.assertEqual(answer, "PO-000017的供应商是示例供应商")
+        corrections = [m["content"] for m in executor._messages
+                       if m["role"] == "user" and "以下值在本轮读取中找不到" in m.get("content", "")]
+        self.assertEqual(len(corrections), 1)
+        self.assertIn("PO-0017", corrections[0])
+        self.assertIn("编号必须逐字保留", corrections[0])
+        self.assertEqual(len(state.chat.seen), 3)
 
     def test_readonly_business_request_cannot_end_on_a_verified_list_navigation_alone(self):
         token = _WRITE_INTENT.set(WriteIntent("save", "审批"))
