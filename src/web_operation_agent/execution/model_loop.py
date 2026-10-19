@@ -872,7 +872,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             if trace is not None:
                                 trace.record_delivery(reference=selected, projection=projection.to_json(),
                                     rendered_text=rendering.text, presented_records=rendering.presented_records,
-                                    presentation_complete=not rendering.presentation_truncated)
+                                    presentation_complete=not rendering.presentation_truncated,
+                                    source_reference=turn.get("query_answer_sources", {}).get(selected, ""))
                         if turn.get("sources") is not None:
                             args = {**args, "answer": turn["sources"].finish(args,
                                 runtime_used=turn["runtime_used"], user_text=prompt,
@@ -991,8 +992,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     reference = f"read-{sequence}"
                     answers = turn.setdefault("query_answers", {})
                     answers[reference] = result.query_answer
+                    sources = turn.setdefault("query_answer_sources", {})
+                    sources[reference] = result.read_key
                     while len(answers) > 4:
-                        del answers[next(iter(answers))]
+                        expired = next(iter(answers))
+                        del answers[expired]
+                        sources.pop(expired, None)
                     text += (f"\n本轮读取交付引用 read_answer={reference}，"
                              f"记录 {len(result.query_answer.records)} 条，完整={result.query_answer.complete}。"
                              "用finish(status=done, answer=空字符串, read_answer=此引用)交付程序结果，"

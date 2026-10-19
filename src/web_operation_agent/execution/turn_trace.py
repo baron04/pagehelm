@@ -36,15 +36,19 @@ class TurnTrace:
         self._deliveries: list[dict] = []
 
     def record_delivery(self, *, reference: str, projection: dict, rendered_text: str,
-                        presented_records: int, presentation_complete: bool) -> None:
+                        presented_records: int, presentation_complete: bool,
+                        source_reference: str = "") -> None:
         """Private server facts, never model assertions or ordinary audit payloads.
 
         A selected result may later fail completion review. Consumers must bind this
         receipt to the settled answer as well as the actor and turn before scoring it.
         """
-        self._deliveries.append({"reference": reference, "projection": projection,
+        delivery = {"reference": reference, "projection": projection,
             "rendered_text": rendered_text, "presented_records": presented_records,
-            "presentation_complete": presentation_complete})
+            "presentation_complete": presentation_complete}
+        if source_reference:
+            delivery["source_reference"] = source_reference
+        self._deliveries.append(delivery)
         self._deliveries[:] = self._deliveries[-4:]
 
     def chat(self, delegate):

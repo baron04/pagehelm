@@ -126,6 +126,35 @@ class SummaryDeliveryTests(unittest.TestCase):
         self.assertEqual(record["withheld"], "credential_form")
         self.assertNotIn("private-secret", json.dumps(record))
 
+    def test_selected_source_is_bound_to_its_read_not_the_latest_read(self):
+        projection = summary(count=3)
+        def handler(loop, name, arguments):
+            return LoopToolResult("Prepared", kind="read", query_answer=projection,
+                                  read_key="/native/first" if name == "first" else "/native/later")
+        loop = LoopFixture([reply(call("first")), reply(call("later")),
+            reply(call("finish", status="done", answer="", read_answer="read-1"))], handler)
+        loop.state.approvals = NS(principal=context().principal)
+        loop.config = NS(max_user_answer_chars=8000)
+        with TemporaryDirectory() as tmp:
+            trace = TurnTrace(Path(tmp), SessionHandoffPolicy.extending(()))
+            loop._trace = trace
+            answer = loop.run()
+            record = json.loads(trace.write(run_id="r", turn_id="t", prompt="q", start_route="/",
+                terminal_reason="agent_finished", wall_seconds=1, answer=answer).read_text())
+        self.assertEqual(record["server_deliveries"][0]["source_reference"], "/native/first")
+        self.assertNotIn("source_reference", {k for _, facts in loop.events for k in facts})
+
+    def test_credential_in_private_source_reference_withholds_entire_record(self):
+        with TemporaryDirectory() as tmp:
+            trace = TurnTrace(Path(tmp), SessionHandoffPolicy.extending(()))
+            trace.record_delivery(reference="read-1", projection={}, rendered_text="safe",
+                presented_records=0, presentation_complete=True,
+                source_reference="/native?password=private-secret")
+            record = json.loads(trace.write(run_id="r", turn_id="t", prompt="q", start_route="/",
+                terminal_reason="agent_finished", wall_seconds=1, answer="safe").read_text())
+        self.assertEqual(record["withheld"], "credential_form")
+        self.assertNotIn("private-secret", json.dumps(record))
+
 
 if __name__ == "__main__":
     unittest.main()
