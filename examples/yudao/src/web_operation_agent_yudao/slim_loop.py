@@ -44,13 +44,13 @@ from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, Lo
                                                                VerificationResult, ModelLoopProfile, LoopProcedure)
 from web_operation_agent.execution.read_summary import (SummaryRefused, parse_summary_spec,
                                                        summary_schema)
-from web_operation_agent.execution.answer_references import ReferenceTable
 from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
 from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 from web_operation_agent.business.tools.contracts import form_control_unavailable
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
 
+from .answer_numbers import untraced as untraced_answer_numbers
 from .api_content import REDACTED, composed, fenced, program_lines, redacted
 from .write_intent import WriteIntent, classify_write_intent
 
@@ -528,7 +528,7 @@ class ActorKnowledge:
                 columns=column_names, names=native_names, relation_names=named)
             result = self.last_query_answer
             unverified = [column.name for column in result.columns if column.unverified_unit]
-            told, data = ["已按当前账号的真实读取完成程序汇总。"], set()
+            told, data = ["已按当前账号的真实读取准备程序汇总；数值和名单保存在本轮服务端，选择read_answer交付。"], set()
             if rewritten:
                 told.append("程序对汇总声明的理解：" + "；".join(rewritten) + "。")
             for line, is_data in (("实际接口条件：" + json.dumps(filters, ensure_ascii=False), True),
@@ -547,9 +547,6 @@ class ActorKnowledge:
                 told.append(line)
             told.append(result.incomplete_reason or "这份结果只覆盖上述条件；用户的其它义务仍须完成。")
             return self._told(told, data) + metadata
-        self.last_query_answer = self._reference_projection(
-            relative, filters, fields, props, rows, data, total, whole, requests, actor_digest,
-            column_names, native_names, named)
         candidates = self.money_review.fields_for(relative) if self.money_review is not None else {}
         read_rows = rows if rows is not None else [data]
         certified = {key: spec for key, spec in candidates.items()
@@ -790,34 +787,6 @@ class ActorKnowledge:
                       ("；".join(f"{identity}={name}" for identity, name in sorted(names.items())[:40]), True)]
         return named, lines
 
-    def _reference_projection(self, path, filters, fields, props, rows, data, total, whole, requests,
-                              actor_digest, column_names, names, named):
-        """The cells of a plain read as an answer may cite them, typed exactly as a summary
-        would type them; None when the read has no cells that can be (it is still told)."""
-        from .read_summary import summarize
-        if not actor_digest:
-            return None
-        if rows is None:
-            if not (isinstance(data, dict) and "id" in data):
-                return None
-            rows, total, whole = [data], 1, True
-        if any(not isinstance(row, dict) for row in rows) or not rows and not whole:
-            return None
-        # A complete read with no rows still has a count to cite.
-        keys = [key for key in dict.fromkeys(("id", *(fields or (rows[0].keys() if rows else props))))
-                if key in props and self._deref(props[key]).get("type") in {"integer", "number", "string", "boolean"}
-                and not any(isinstance(row.get(key), str) and REDACTED in row[key] for row in rows)][:12]
-        if not keys:
-            return None
-        try:
-            return summarize(path=path, filters=filters, fields=tuple(keys), props=props, deref=self._deref,
-                rows=rows, total=total, whole=whole, requests=requests, actor_digest=actor_digest,
-                zone=self._zone, money_review=self.money_review, spec={"columns": keys},
-                columns=column_names, names=names, relation_names=named)
-        except (SummaryRefused, ValueError, TypeError):
-            # Citation is optional: a read that cannot be typed exactly is still told.
-            return None
-
     def _validate_params(self, path, params):
         """Validate only the query vocabulary the installed API publishes.
 
@@ -1036,9 +1005,9 @@ SYSTEM_INTRO = """你是企业后台助手，替当前登录用户完成请求�
 你能做三类事；混合请求每项都须落实：
 """
 SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call_api 按同账号读取；find_record 按确切名称找记录，带kind限定类型。业务编号用已发布接口对应参数查，不能当名称。目标多条用need_input让用户选；完整查询无匹配即cannot说明范围，不缩短名称、穷举模块或反复切页签。
-- 统计、排序和名单用call_api.summary，单条记录的字段可用fields读取：名单用columns；统计用measures(count/count_distinct/sum/min/max)，条件用where(AND)，排序用order_by(asc/desc,nulls)，排名用top。声明用户所有条件和列，程序自动并入读取列，最多读5000行；未读全不称完整。条件只能用接口已声明params或summary.where，等值不是范围。
+- 数据答案统一用call_api.summary：单字段/名单用columns；统计用measures(count/count_distinct/sum/min/max)，条件用where(AND)，排序用order_by(asc/desc,nulls)，排名用top。声明用户所有条件和列，程序自动并入读取列，最多读5000行；未读全不称完整。条件只能用接口已声明params或summary.where，等值不是范围。
 - 关联分组用编号，名称只展示，同名不同编号不合并。日期按用户动词选实际列；“创建”用createTime，业务日期不能代替；未约定术语先澄清。时间阈值带时区。逐记录排名用group_by=["id"]及数值measure；第N个位置并列全保留，不取N个不同价位。
-- 读取结果带编号（r1…），答复按引用写数据，不手抄或重算；引用只覆盖该次条件和数据，不能代替用户另要的页面、表单或交接。
+- 收到read_answer后用finish(status=done,answer="",read_answer=引用)交付服务端正文；不手抄事实、名单或重算。它只覆盖该次条件和数据，不能代替用户另要的页面、表单或交接。
 - CRM sceneType只在用户限定负责/参与/下属范围时按接口定义使用；全范围与当前页签不同，空结果只说明实际查询范围。后续指代需重新读取，历史助手文字不是当前事实。
 - “查看某字段/数量/名单”直接交付；“查看某记录/详情/页面”进入相应位置。纯查询不额外操作页面。金额由程序按已核验单位填入，未核验的标“单位未核验”，不自行换算或补单位。
 - 无权限结论只能来自指向它本身的确切读取被拒。某次查询被拒不等于整类不可读；已读结果能回答时照常作答。
@@ -1887,19 +1856,13 @@ class YudaoLoopProcedures:
         if name == "find_record":
             self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
             targets: list[AnswerTarget] = []
-            found: list = []
             try:
                 text = self._find_record(s, args["name"].strip(), args.get("kind", "").strip(),
-                                         answer_targets=targets, found=found)
+                                         answer_targets=targets)
             except QueryParametersError as exc:
                 return LoopToolResult("查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
                                       kind="read", state="refused", error_code="invalid_arguments")
-            table = None
-            if found:
-                table = ReferenceTable((("module", "模块"), ("id", "编号"), ("name", "名称"), ("address", "详情页")),
-                    tuple((module, str(rid), str(display), address or None) for module, rid, display, address in found[:20]),
-                    len(found[:20]), True)
-            return LoopToolResult(text, kind="read", answer_targets=tuple(targets), reference=table)
+            return LoopToolResult(text, kind="read", answer_targets=tuple(targets))
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
             params = json.loads(args.get("params", "{}"))
@@ -1912,8 +1875,8 @@ class YudaoLoopProcedures:
                                          row_offset=args.get("row_offset", 0),
                                          **({"deliver": True} if args.get("deliver") else {}),
                                          **({"summary": args["summary"]} if "summary" in args else {}),
-                                         actor_digest=getattr(getattr(getattr(s, "operation", None), "principal", None),
-                                                              "actor_authority_digest", ""))
+                                         **({"actor_digest": s.operation.principal.actor_authority_digest}
+                                            if "summary" in args or args.get("deliver") else {}))
                 except SummaryRefused as exc:
                     return LoopToolResult("程序汇总未能核实：" + exc.detail,
                         kind="read", state="unverified", error_code=exc.code)
@@ -1963,11 +1926,9 @@ class YudaoLoopProcedures:
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
                 self._note(s, stage="read_done", tool=name, **know.last_read)
-            projection = getattr(know, "last_query_answer", None) if know.last_read else None
-            requested = "summary" in args or bool(args.get("deliver"))
             return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused",
-                                  query_answer=projection if requested else None,
-                                  reference=None if requested else projection,
+                                  query_answer=getattr(know, "last_query_answer", None)
+                                  if args.get("deliver") or "summary" in args else None,
                                   read_key=called_path
                                   if know.last_read else "",
                                   read_count=know.last_read["count"] if know.last_read else None)
@@ -2302,7 +2263,7 @@ class YudaoLoopProcedures:
                 LoopToolResult(text, kind="page", state="unverified" if incomplete else "completed"))
 
     def _find_record(self, s, name: str, kind: str = "", *,
-                     answer_targets: list[AnswerTarget] | None = None, found: list | None = None) -> str:
+                     answer_targets: list[AnswerTarget] | None = None) -> str:
         """Where the application has a record of this name, through the goal port's own
         "records found by name": every entity a page shows, read as the actor. With the
         person's word for the kind of record, only the entities whose name, other names or
@@ -2416,9 +2377,6 @@ class YudaoLoopProcedures:
         for entity, records in hits:
             page = pages.get(entity, "")
             path = self.knowledge.page_path(page) if page else ""
-            if found is not None:
-                found += [(labels.get(entity, entity), rid, display, address if _record_page(address, rid, path) else "")
-                          for rid, display, address in records]
             head = f"{labels.get(entity, entity)}（{entity}；页面：{page or '无'}{' ' + path if path else ''}）"
             if len(records) == 1:
                 rid, display, address = records[0]
@@ -2649,7 +2607,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             r"打开|进入|跳转|切到|切换.{0,20}(?:页签|视图)|翻页|翻到|标出|高亮|"
             r"(?:查看|看看|看一下).{0,30}(?:页面|详情)|"
             r"(?:在|把).{0,30}(?:页面|列表).{0,20}(?:筛选|过滤)", _CURRENT_REQUEST.get())
-        if (turn.get("writes") is None and not turn.get("read_only") and (page_request and turn.get("requested_refs") or
+        if (turn.get("writes") is None and not turn.get("read_only") and (page_request and turn.get("query_answers") or
                 isinstance(intent, WriteIntent) and intent.mode in {"draft", "save"})):
             # A page receipt proves that action, not the complete form or business
             # request. Select the shared loop's existing bounded completion review;
@@ -2721,7 +2679,8 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                 + page_scope_notice(getattr(goal_port, "review", None)), procedures,
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
-            owner.verification_messages, draft_steps, mutation_prefill)
+            owner.verification_messages, draft_steps, mutation_prefill,
+            untraced_numbers=untraced_answer_numbers)
         super().__init__(profile=profile, **kwargs)
 
 

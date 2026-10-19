@@ -34,6 +34,7 @@ from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent_yudao.native_server import YudaoHostConfig
 from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
+from web_operation_agent_yudao.answer_numbers import untraced
 from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _EARLIER_REQUESTS, _WRITE_INTENT, _draft_only_request, _unrequested_draft_fields, _read_only_status_question, _tabs_not_shown,
                                                  _business_handoff_ready, _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
@@ -1684,12 +1685,14 @@ class SettledTests(unittest.TestCase):
 
 
 class LoopTests(unittest.TestCase):
-    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=(), slim=False):
+    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=(), slim=False, trace_values=False):
         """`page` is what each step on the page in turn changes of it; a step past the
         end of it leaves the page as it was. `tabs` are (name, aria-selected) of the
         page's tabs."""
         executor = (SlimTurnExecutor if slim else ModelDrivenTurnExecutor).__new__(SlimTurnExecutor if slim else ModelDrivenTurnExecutor)
         executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
+        if trace_values:
+            executor.profile = NS(untraced_numbers=untraced)
         executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
         self.ran, self.checked = [], []
@@ -1765,12 +1768,14 @@ class LoopTests(unittest.TestCase):
             reply(call("call_api", path="orders/page", params='{"no":"PO-000017"}')),
             reply(call("finish", status="done", answer="PO-0017的供应商是示例供应商")),
             reply(call("finish", status="done", answer="PO-000017的供应商是示例供应商")),
-            tool=lambda *_: LoopToolResult(source, kind="read"),
+            tool=lambda *_: LoopToolResult(source, kind="read"), trace_values=True,
             asked="采购单PO-000017的供应商？")
         self.assertEqual(answer, "PO-000017的供应商是示例供应商")
-        corrections = [m["content"] for m in executor._messages if "没有引用来源" in str(m.get("content"))]
+        corrections = [m["content"] for m in executor._messages
+                       if m["role"] == "user" and "以下值在本轮读取中找不到" in m.get("content", "")]
         self.assertEqual(len(corrections), 1)
-        self.assertIn("0017", corrections[0])
+        self.assertIn("PO-0017", corrections[0])
+        self.assertIn("编号必须逐字保留", corrections[0])
         self.assertEqual(len(state.chat.seen), 3)
 
     def test_readonly_business_request_cannot_end_on_a_verified_list_navigation_alone(self):
@@ -1802,13 +1807,13 @@ class LoopTests(unittest.TestCase):
     def test_plain_read_in_slim_keeps_the_existing_no_extra_review_path(self):
         token = _WRITE_INTENT.set(WriteIntent("neutral"))
         self.addCleanup(_WRITE_INTENT.reset, token)
-        self.loop(reply(call("finish",status="done",answer="已读到记录")),slim=True,asked="总共有多少条")
+        self.loop(reply(call("finish",status="done",answer="共3条")),slim=True,asked="总共有多少条")
         self.assertEqual(self.checked,[])
 
     def test_done_ends_the_turn_finished_with_the_model_s_answer(self):
         _executor, state, text = self.loop(reply(call("search_menu", keyword="订单")),
-                                           reply(call("finish", status="done", answer="已读到记录")))
-        self.assertEqual((text, state.terminal_reason), ("已读到记录", ""))
+                                           reply(call("finish", status="done", answer="共 3 条")))
+        self.assertEqual((text, state.terminal_reason), ("共 3 条", ""))
         # Nothing was typed or chosen on the page: the model's own word ends the turn.
         self.assertEqual((self.ran, self.checked, self.channel.steps()), (["search_menu"], [], []))
 
@@ -1820,10 +1825,10 @@ class LoopTests(unittest.TestCase):
 
     def test_a_turn_that_entered_a_value_the_person_did_not_say_is_read_a_second_time(self):
         _executor, state, text = self.loop(
-            reply(call("finish", status="done", answer="已填好日期")),
+            reply(call("finish", status="done", answer="已填好 10 月 20 日")),
             asked="交货日期填 10 月 20 日", touched=[("交货日期", "2026-10-20")])
-        self.assertEqual((text, state.terminal_reason), ("已填好日期", ""))
-        self.assertEqual((self.checked, self.channel.steps()), (["已填好日期"], ["正在核对结果"]))
+        self.assertEqual((text, state.terminal_reason), ("已填好 10 月 20 日", ""))
+        self.assertEqual((self.checked, self.channel.steps()), (["已填好 10 月 20 日"], ["正在核对结果"]))
 
     def test_what_the_person_said_in_an_earlier_turn_counts_as_said(self):
         executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
@@ -1919,10 +1924,10 @@ class LoopTests(unittest.TestCase):
         self.assertEqual((text, len(state.chat.seen)), ("已打开周明的档案，当前在岗位信息页签。", 1))
 
     def test_an_answer_on_a_step_is_checked_as_any_claim_of_completion_is(self):
-        _executor, state, text = self.loop(reply(call("highlight", index=10, answer="已填好日期")),
+        _executor, state, text = self.loop(reply(call("highlight", index=10, answer="已填好 10 月 20 日")),
                                            tool=self.said, asked="交货日期填 10 月 20 日",
                                            touched=[("交货日期", "2026-10-20")])
-        self.assertEqual((text, self.checked), ("已填好日期", ["已填好日期"]))
+        self.assertEqual((text, self.checked), ("已填好 10 月 20 日", ["已填好 10 月 20 日"]))
 
     def test_a_turn_may_end_in_the_reply_that_opened_the_page_it_was_asked_for(self):
         _executor, state, text = self.loop(
@@ -1940,13 +1945,13 @@ class LoopTests(unittest.TestCase):
         self.assertIn("answer 没有用上", told[0])
 
     def test_an_answer_written_before_an_earlier_result_or_ahead_of_a_later_step_does_not_end_the_turn(self):
-        for calls in ((call("call_api", path="/admin-api/orders/page"), call("goto", path="/orders", answer="未读就答")),
+        for calls in ((call("call_api", path="/admin-api/orders/page"), call("goto", path="/orders", answer="共 9 条")),
                       (call("goto", path="/orders", answer="已筛好"), call("fill_fields", fields=[{"label": "客户",
                                                                                                 "value": "Acme"}]))):
             with self.subTest(calls=[c["function"]["name"] for c in calls]):
-                _executor, state, text = self.loop(reply(*calls), reply(call("finish", status="done", answer="已读到记录")),
+                _executor, state, text = self.loop(reply(*calls), reply(call("finish", status="done", answer="共 3 条")),
                                                    tool=self.said)
-                self.assertEqual((text, len(state.chat.seen)), ("已读到记录", 2))
+                self.assertEqual((text, len(state.chat.seen)), ("共 3 条", 2))
 
     def test_a_finish_after_a_step_that_was_skipped_does_not_end_the_turn(self):
         # The page changed under the highlight, so it never ran: the goto alone did not do
@@ -1964,9 +1969,9 @@ class LoopTests(unittest.TestCase):
         for step in (call("call_api", path="/admin-api/orders/page"), call("click", index=10)):
             with self.subTest(step=step["function"]["name"]):
                 executor, state, text = self.loop(
-                    reply(step, call("finish", status="done", answer="未读就答")),
-                    reply(call("finish", status="done", answer="已读到记录")), tool=self.said)
-                self.assertEqual((text, len(state.chat.seen)), ("已读到记录", 2))
+                    reply(step, call("finish", status="done", answer="共 9 条")),
+                    reply(call("finish", status="done", answer="共 3 条")), tool=self.said)
+                self.assertEqual((text, len(state.chat.seen)), ("共 3 条", 2))
                 held = [m["content"] for m in executor._messages if m["role"] == "tool" and m["content"].startswith("没有结束")]
                 self.assertEqual(len(held), 1)
                 self.assertIn(step["function"]["name"], held[0])
@@ -2015,9 +2020,9 @@ class LoopTests(unittest.TestCase):
         queries = [reply(call("call_api", path="/admin-api/orders/page",
                               params={"pageNo": 1, "name": str(n)})) for n in range(4)]
         executor, state, text = self.loop(*queries,
-            reply(call("finish", status="cannot", answer="此前读到一些记录，但金额条件未核实。")),
+            reply(call("finish", status="cannot", answer="此前读到 12 条，但金额条件未核实。")),
             steps=12, tool=empty)
-        self.assertEqual(text, "此前读到一些记录，但金额条件未核实。")
+        self.assertEqual(text, "此前读到 12 条，但金额条件未核实。")
         self.assertEqual(self.ran, ["call_api"] * 4)
         self.assertEqual([tool["function"]["name"] for tool in state.chat.offered[-1]], ["finish"])
         self.assertEqual(self.turn["forced_summary_kind"], "read")
@@ -2077,7 +2082,7 @@ class LoopTests(unittest.TestCase):
     def test_before_its_last_steps_the_turn_is_told_to_report_what_it_has(self):
         executor, _state, _text = self.loop(
             *[reply(call("search_menu", keyword="x")) for _ in range(3)],
-            reply(call("finish", status="cannot", answer="查到记录，页面没筛出来")), steps=5)
+            reply(call("finish", status="cannot", answer="查到 3 张，页面没筛出来")), steps=5)
         told = [n for n, m in enumerate(executor._messages) if m["role"] == "user" and m["content"].startswith("只剩最后两步")]
         self.assertEqual(len(told), 1)
         self.assertEqual(len([m for m in executor._messages[:told[0]] if m["role"] == "assistant"]), 3)
@@ -2124,7 +2129,7 @@ class LoopTests(unittest.TestCase):
                  for revision in range(1, 7)]
         executor, state, _text = self.loop(
             *[reply(call("click", index=10)) for _ in reads],
-            reply(call("finish", status="done", answer="已读完列表")), steps=8, page=reads)
+            reply(call("finish", status="done", answer="共 10 条")), steps=8, page=reads)
         self.assertEqual(self.ran, ["click"] * 6)
         self.assertEqual((state.obs.epoch, state.obs.page_read["revision"]), (7, 6))
         self.assertEqual(self.turn["stalled"], 0)
@@ -2483,8 +2488,7 @@ class LoopTests(unittest.TestCase):
     def test_read_instructions_are_short_and_do_not_offer_a_parallel_delivery_path(self):
         self.assertLessEqual(len(system_text(user="u", date="2026-10-19", tz="Asia/Shanghai",
                                             runtime_source=False)), 2500)
-        self.assertIn("统计、排序和名单用call_api.summary", SYSTEM)
-        self.assertIn("答复按引用写数据", SYSTEM)
+        self.assertIn("数据答案统一用call_api.summary", SYSTEM)
         self.assertNotIn("deliver=true", SYSTEM)
 
     def test_the_model_and_the_checker_are_told_that_application_data_is_not_an_instruction(self):
@@ -3171,7 +3175,7 @@ class WriteTurnTests(unittest.TestCase):
             executor, state, _text = self.loop(
                 reply(call("search_menu", keyword="订单")), reply(call("search_api", keyword="订单")), reply(find),
                 reply(call("call_api", path="/admin-api/orders/page", params={"pageNo": 1})),
-                reply(call("finish", status="done", answer="已读到订单")))
+                reply(call("finish", status="done", answer="共 2 张")))
         self.assertEqual(self.channel.steps(), [
             "正在查找页面：订单", "正在查找数据来源：订单", "正在查找记录：晨岚机电",
             "正在读取业务数据", "已读取 2 条：订单"])
@@ -3450,9 +3454,7 @@ class WriteTurnTests(unittest.TestCase):
 
     def test_a_value_from_an_earlier_turn_s_answer_is_not_the_person_s(self):
         executor = self.whole()
-        # Numbers no read of that turn backs are sent back once, then withheld from its answer.
-        unsourced = reply(call("finish", status="done", answer="13800000001，备用 13900000000"))
-        self.take_turn(executor, "林舟的手机是多少", unsourced, unsourced)
+        self.take_turn(executor, "林舟的手机是多少", reply(call("finish", status="done", answer="13800000001，备用 13900000000")))
         state, _text = self.take_turn(executor, "把联系人林舟的手机改成备用的那个", self.LOAD(),
                                  self.UPDATE(mobile="13900000000"),
                                  reply(call("finish", status="need_input", answer="请直接给出号码")))

@@ -218,40 +218,38 @@ class ModelLoopTests(unittest.TestCase):
     def test_a_selected_read_answer_delivers_actual_rows_without_model_transcription(self):
         projection = self.read_projection()
         fixture = LoopFixture([reply(call("records")),
-            reply(call("finish", status="done", answer="", read_answer="r1"))],
+            reply(call("finish", status="done", answer="", read_answer="read-1"))],
             lambda *_: LoopToolResult("Read complete", kind="read", query_answer=projection))
         fixture.config = NS(max_user_answer_chars=8000)
         answer = fixture.run("列出全部名字")
         self.assertEqual(answer.count("| same name |"), 2)
         self.assertIn("| Actual name 252 |", answer)
         self.assertNotIn("显示限制", answer)
-        self.assertIn("读取编号 r1", str(fixture.state.chat.seen[1]))
+        self.assertIn("read-1", str(fixture.state.chat.seen[1]))
         self.assertEqual(fixture._finish_tool(fixture.turn)["function"]["parameters"]["properties"]
-                         ["read_answer"]["enum"], ["r1"])
+                         ["read_answer"]["enum"], ["read-1"])
 
-    def test_an_unknown_reference_or_an_invented_count_is_sent_back_before_the_read_is_delivered(self):
-        for bad in ({"answer": "{r9.displayName}"},
+    def test_requested_read_delivery_cannot_be_replaced_by_a_summary_or_unknown_reference(self):
+        for bad in ({"answer": "All names follow a pattern"},
                     {"answer": "", "read_answer": "from-a-previous-turn"},
-                    {"answer": "共 7 条：invented names"}):
-            with self.subTest(bad=bad):
-                fixture = LoopFixture([reply(call("records")), reply(call("finish", status="done", **bad)),
-                    reply(call("finish", status="done", answer="共 {r1.total} 条：", read_answer="r1"))],
-                    lambda *_: LoopToolResult("Read complete", kind="read", query_answer=self.read_projection(count=3)))
-                answer = fixture.run()
-                self.assertTrue(answer.startswith("共 3 条："))
-                self.assertIn("Actual name 2", answer)
-                self.assertNotIn("invented", answer)
-                self.assertEqual(len(fixture.state.chat.seen), 3)
+                    {"answer": "invented names", "read_answer": "read-1"}):
+            fixture = LoopFixture([reply(call("records")), reply(call("finish", status="done", **bad)),
+                reply(call("finish", status="done", answer="", read_answer="read-1"))],
+                lambda *_: LoopToolResult("Read complete", kind="read", query_answer=self.read_projection(count=3)))
+            answer = fixture.run()
+            self.assertIn("Actual name 2", answer)
+            self.assertNotIn("pattern", answer)
+            self.assertEqual(len(fixture.state.chat.seen), 3)
 
     def test_incomplete_or_display_limited_read_cannot_be_reported_as_delivered(self):
         for projection in (self.read_projection(complete=False), self.read_projection(count=253)):
             fixture = LoopFixture([reply(call("records")),
-                reply(call("finish", status="done", answer="", read_answer="r1")),
+                reply(call("finish", status="done", answer="", read_answer="read-1")),
                 reply(call("finish", status="cannot", answer="The complete list could not be delivered"))],
                 lambda *_: LoopToolResult("Read result", kind="read", query_answer=projection))
             fixture.config = NS(max_user_answer_chars=512)
             self.assertEqual(fixture.run(), "The complete list could not be delivered")
-            self.assertFalse(any(e == "answer_references_used" for e, _ in fixture.events))
+            self.assertFalse(any(e == "read_answer_selected" for e, _ in fixture.events))
 
     def test_read_delivery_is_an_immutable_completed_read_only_contract(self):
         for kwargs in ({"query_answer": {}}, {"kind": "page"}, {"state": "refused"}):
@@ -313,7 +311,7 @@ class ModelLoopTests(unittest.TestCase):
     def test_plain_intermediate_text_does_not_require_review_of_a_complete_program_read(self):
         fixture = LoopFixture([
             reply(call("records")), {"content": "These are the requested names"},
-            reply(call("finish", status="done", answer="", read_answer="r1"))],
+            reply(call("finish", status="done", answer="", read_answer="read-1"))],
             lambda *_: LoopToolResult("Read result", kind="read", query_answer=self.read_projection()))
         fixture.profile = NS(verification_messages=lambda *_: [])
         fixture._verify = lambda *_: self.fail("delivery correction must not add a business completion review")
@@ -332,8 +330,7 @@ class ModelLoopTests(unittest.TestCase):
         self.assertGreater(larger._finish_tool({})["function"]["parameters"]["properties"]["answer"]["maxLength"], 5200)
 
     def test_a_long_answer_uses_the_composed_chat_output_budget_without_a_hidden_smaller_override(self):
-        # Long, but nothing in it states a value the turn read.
-        answer = "\n".join("record: supplied full name" for _ in range(220))
+        answer = "\n".join(f"record {number}: supplied full name" for number in range(220))
         fixture = LoopFixture([reply(call("finish", status="done", answer=answer))], lambda *_: None)
         requested = []
         original = fixture.state.chat.complete_cancellable
@@ -483,9 +480,9 @@ class ModelLoopTests(unittest.TestCase):
     def test_read_result_and_fresh_page_precede_next_decision(self):
         fixture = LoopFixture([
             reply(call("read_records"), call("finish", status="done", answer="unread")),
-            reply(call("finish", status="done", answer="three records"))],
+            reply(call("finish", status="done", answer="3 records"))],
             lambda *_: LoopToolResult("total=3", kind="read"))
-        self.assertEqual("three records", fixture.run())
+        self.assertEqual("3 records", fixture.run())
         self.assertEqual(["observe"], fixture.actions)
         next_messages = fixture.state.chat.seen[1]
         result = next(m for m in next_messages if m["role"] == "tool" and m["tool_call_id"] == "read_records-call")
@@ -494,9 +491,9 @@ class ModelLoopTests(unittest.TestCase):
     def test_consecutive_reads_share_one_fresh_observation(self):
         fixture = LoopFixture([
             reply(call("search_records"), call("read_records")),
-            reply(call("finish", status="done", answer="three records"))],
+            reply(call("finish", status="done", answer="3 records"))],
             lambda *_: LoopToolResult("total=3", kind="read"))
-        self.assertEqual("three records", fixture.run())
+        self.assertEqual("3 records", fixture.run())
         self.assertEqual(["observe"], fixture.actions)
         first = next(m for m in fixture.state.chat.seen[1]
                      if m.get("tool_call_id") == "search_records-call")
@@ -510,10 +507,10 @@ class ModelLoopTests(unittest.TestCase):
         fixture = LoopFixture([
             reply(call("read_one")),
             reply(call("read_two")),
-            reply(call("finish", status="done", answer="three records"))],
+            reply(call("finish", status="done", answer="3 records"))],
             lambda *_: LoopToolResult("total=3", kind="read"))
         fixture.channel = NS(latest_observation_envelope=NS(observation=page()))
-        self.assertEqual("three records", fixture.run())
+        self.assertEqual("3 records", fixture.run())
         self.assertEqual(["observe"], fixture.actions)
         second = next(m for m in fixture.state.chat.seen[2]
                       if m.get("tool_call_id") == "read_two-call")
@@ -523,7 +520,7 @@ class ModelLoopTests(unittest.TestCase):
         fixture = LoopFixture([
             reply(call("read_one")),
             reply(call("read_two")),
-            reply(call("finish", status="done", answer="three records"))],
+            reply(call("finish", status="done", answer="3 records"))],
             lambda *_: LoopToolResult("total=3", kind="read"))
         fixture.channel = NS(latest_observation_envelope=NS(observation=page()))
         original = fixture.state.chat.complete_cancellable
@@ -538,7 +535,7 @@ class ModelLoopTests(unittest.TestCase):
             return original(messages, tools, run_id, **kwargs)
 
         fixture.state.chat.complete_cancellable = complete
-        self.assertEqual("three records", fixture.run())
+        self.assertEqual("3 records", fixture.run())
         self.assertEqual(["observe", "observe"], fixture.actions)
         second = next(m for m in fixture.state.chat.seen[2]
                       if m.get("tool_call_id") == "read_two-call")
@@ -554,8 +551,8 @@ class ModelLoopTests(unittest.TestCase):
 
         fixture = LoopFixture([
             reply(call("search_records"), call("goto", path="/list"), call("read_records")),
-            reply(call("finish", status="done", answer="three records"))], handler)
-        self.assertEqual("three records", fixture.run())
+            reply(call("finish", status="done", answer="3 records"))], handler)
+        self.assertEqual("3 records", fixture.run())
         self.assertEqual(["observe", "goto"], fixture.actions)
         read = next(m for m in fixture.state.chat.seen[1]
                     if m.get("tool_call_id") == "read_records-call")
@@ -564,9 +561,9 @@ class ModelLoopTests(unittest.TestCase):
     def test_reused_observation_does_not_hide_the_full_page_from_history_trim(self):
         fixture = LoopFixture([
             reply(call("read_one"), call("read_two"), call("read_three")),
-            reply(call("finish", status="done", answer="three records"))],
+            reply(call("finish", status="done", answer="3 records"))],
             lambda *_: LoopToolResult("total=3", kind="read"))
-        self.assertEqual("three records", fixture.run())
+        self.assertEqual("3 records", fixture.run())
         next_messages = fixture.state.chat.seen[1]
         full = next(m for m in next_messages if m.get("tool_call_id") == "read_one-call")
         self.assertIn("epoch=2", full["content"])
@@ -759,8 +756,8 @@ class ModelLoopTests(unittest.TestCase):
         def read(_fixture, _name, _arguments):
             return LoopToolResult("Mira is contact 7", kind="read", answer_targets=(target,))
         done = LoopFixture([reply(call("list_contacts")),
-                            reply(call("finish", status="done", answer="Mira is the contact"))], read)
-        self.assertEqual(done.run(), "Mira is the contact")
+                            reply(call("finish", status="done", answer="Mira is contact 7"))], read)
+        self.assertEqual(done.run(), "Mira is contact 7")
         self.assertEqual([item.to_json() for item in done.state.answer_targets], [{
             "kind": "record", "address": "/contacts/7", "label": "Mira",
             "identity": "contacts:7", "read_ref": "read#1"}])
@@ -811,88 +808,91 @@ class ModelLoopTests(unittest.TestCase):
             "identity": "menu:/contacts", "read_ref": "read#1"}])
 
 
-class AnswerReferenceTests(unittest.TestCase):
-    """Facts in an answer are filled in from this turn's reads; no model reads the answer."""
+class UntracedNumberFeedbackTests(unittest.TestCase):
+    """The closing number check: one send-back with the list, never a gate."""
 
-    @staticmethod
-    def names(count=12):
-        return StructuredQueryAnswer(collection="orders", fields=("displayName",),
-            records=tuple((f"Order name {i}",) for i in range(1, count + 1)),
-            source="actor-scoped API", scope="current actor", observed_at="now",
-            source_complete=True, result_truncated=False, matched_count=count,
-            source_total=count, records_scanned=count)
-
-    def fixture(self, *replies, projection=None):
+    def fixture(self, hook, *replies):
         def read(_fixture, _name, _arguments):
-            return LoopToolResult("read", kind="read", query_answer=projection or self.names())
+            return LoopToolResult("total=12", kind="read")
         executor = LoopFixture(list(replies), read)
-        executor.config = NS(max_user_answer_chars=8000)
+        executor.profile = NS(untraced_numbers=hook)
         return executor
 
-    def sent_back(self, executor):
-        return [m["content"] for m in executor._messages
-                if m["role"] in {"tool", "user"} and "没有结束：" in str(m.get("content"))
-                or m["role"] == "user" and "还不能发出" in str(m.get("content"))]
+    def test_an_untraced_answer_goes_back_to_the_model_once_and_the_second_answer_ends(self):
+        def hook(answer, sources):
+            return () if "共 12 条" in answer else ("999",)
+        executor = self.fixture(hook,
+                                reply(call("call_api", path="/orders/page")),
+                                reply(call("finish", status="done", answer="共 999 条")),
+                                reply(call("finish", status="done", answer="共 12 条")))
+        self.assertEqual((executor.run("有几条？"), executor.state.terminal_reason), ("共 12 条", ""))
+        sent = [m for m in executor._messages
+                if m["role"] == "user" and "以下值在本轮读取中找不到" in m.get("content", "")]
+        self.assertEqual(len(sent), 1)
+        self.assertIn("999", sent[0]["content"])
+        self.assertIn("请改用读到的值", sent[0]["content"])
+        self.assertIn("编号必须逐字保留", sent[0]["content"])
+        self.assertIn(("untraced_numbers", {"numbers": ["999"], "sent_back": True}), executor.events)
 
-    def test_references_are_filled_from_the_read(self):
-        executor = self.fixture(reply(call("records")), reply(call("finish", status="done",
-            answer="共 {r1.total} 条，第二条是 {r1#2.displayName}。")))
-        self.assertEqual(executor.run("有几条？"), "共 12 条，第二条是 Order name 2。")
-        self.assertIn(("answer_references_used", {"references": ["r1"]}), executor.events)
-
-    def test_an_unsourced_number_goes_back_once_and_then_the_program_answers_with_the_read(self):
-        executor = self.fixture(reply(call("records")),
+    def test_the_second_answer_ends_as_it_is_and_the_audit_keeps_what_stayed_untraced(self):
+        executor = self.fixture(lambda answer, sources: ("999",),
                                 reply(call("finish", status="done", answer="共 999 条")),
                                 reply(call("finish", status="done", answer="就是 999 条")))
-        answer = executor.run("有几条？")
-        self.assertTrue(answer.startswith("以下是本轮实际读取的结果"))
-        self.assertIn("Order name 12", answer)
-        self.assertNotIn("999", answer)
-        self.assertEqual(executor.state.terminal_reason, "")
-        self.assertIn("999", self.sent_back(executor)[0])
-        audits = [facts for event, facts in executor.events if event == "answer_references_unbound"]
-        self.assertEqual([facts["sent_back"] for facts in audits], [True, False])
+        self.assertEqual((executor.run(), executor.state.terminal_reason), ("就是 999 条", ""))
+        audits = [facts for event, facts in executor.events if event == "untraced_numbers"]
+        self.assertEqual(audits, [{"numbers": ["999"], "sent_back": True},
+                                  {"numbers": ["999"], "sent_back": False}])
 
-    def test_a_copied_read_value_must_be_a_reference(self):
-        executor = self.fixture(reply(call("records")),
-                                reply(call("finish", status="done", answer="第二条是 Order name 2")),
-                                reply(call("finish", status="done", answer="第二条是 {r1#2.displayName}")))
-        self.assertEqual(executor.run("第二条是什么"), "第二条是 Order name 2")
-        self.assertIn("写成引用", self.sent_back(executor)[0])
+    def test_a_fully_traced_answer_ends_without_a_second_reading(self):
+        executor = self.fixture(lambda answer, sources: (),
+                                reply(call("finish", status="done", answer="共 12 条")))
+        self.assertEqual((executor.run(), executor.state.terminal_reason), ("共 12 条", ""))
+        self.assertNotIn("untraced_numbers", [event for event, _ in executor.events])
 
-    def test_the_person_s_numbers_today_s_date_and_list_markers_need_no_reference(self):
-        from web_operation_agent.execution.model_loop import _today_words
-        executor = self.fixture(reply(call("records")), reply(call("finish", status="done",
-            answer=f"截至{_today_words()[0]}，最近7天的前3条：\n1. {{r1#1.displayName}}\n2. {{r1#2.displayName}}")))
-        answer = executor.run("最近7天的前3条")
-        self.assertIn("1. Order name 1", answer)
-        self.assertNotIn("answer_references_unbound", [event for event, _ in executor.events])
+    def test_the_check_reads_this_turn_s_tool_results_and_the_person_s_words(self):
+        seen = []
+        def hook(answer, sources):
+            seen.append(sources)
+            return ()
+        executor = self.fixture(hook,
+                                reply(call("call_api", path="/orders/page")),
+                                reply(call("finish", status="done", answer="共 12 条")))
+        executor.run("有几条？")
+        self.assertIn("有几条？", seen[0])
+        self.assertTrue(any("total=12" in text for text in seen[0]))
 
-    def test_an_earlier_assistant_claim_is_not_a_source(self):
-        executor = self.fixture(reply(call("finish", status="done", answer="共 999 条")),
-                                reply(call("records")),
-                                reply(call("finish", status="done", answer="共 {r1.total} 条")))
+    def test_an_earlier_assistant_claim_is_not_a_source_without_a_current_read(self):
+        seen = []
+        def hook(answer, sources):
+            seen.append(tuple(sources))
+            return ("999",) if "999" in answer and not any("total=999" in s for s in sources) else ()
+        executor = self.fixture(hook,
+            reply(call("finish", status="done", answer="共 999 条")),
+            reply(call("call_api", path="/orders/page")),
+            reply(call("finish", status="done", answer="共 12 条")))
         executor._messages = [{"role": "assistant", "content": "Earlier invented total=999"}]
         executor._earlier_words = ["请查订单总数"]
         self.assertEqual(executor.run("再核对一下"), "共 12 条")
+        self.assertTrue(all("Earlier invented total=999" not in s for values in seen for s in values))
+        self.assertTrue(any("total=12" in s for s in seen[-1]))
+        self.assertEqual([facts for event, facts in executor.events if event == "untraced_numbers"],
+                         [{"numbers": ["999"], "sent_back": True}])
 
-    def test_without_any_read_the_unsourced_numbers_are_withheld(self):
-        executor = LoopFixture([reply(call("finish", status="done", answer="列表共 123 条")),
-                                reply(call("finish", status="done", answer="列表共 123 条"))],
-                               lambda *_: None)
-        self.assertEqual(executor.run("打开列表"), "列表共 （未核实） 条")
-
-    def test_a_question_back_cites_its_candidates(self):
-        executor = self.fixture(reply(call("records")), reply(call("finish", status="need_input",
-            answer="是 {r1#1.displayName} 还是 {r1#2.displayName}？")))
-        executor.run("打开那条订单")
+    def test_a_question_back_is_not_number_checked(self):
+        executor = self.fixture(lambda answer, sources: ("999",),
+                                reply(call("finish", status="need_input", answer="是 999 还是 1000？")))
+        executor.run()
         self.assertEqual(executor.state.terminal_reason, "needs_clarification")
-        self.assertEqual(executor.state.clarification["question"], "是 Order name 1 还是 Order name 2？")
+        self.assertNotIn("untraced_numbers", [event for event, _ in executor.events])
+
+    def test_a_deployment_without_the_check_ends_on_the_first_answer(self):
+        executor = LoopFixture([reply(call("finish", status="done", answer="共 999 条"))],
+                               lambda _fixture, _name, _arguments: LoopToolResult("ok", kind="read"))
+        self.assertEqual((executor.run(), executor.state.terminal_reason), ("共 999 条", ""))
+        self.assertNotIn("untraced_numbers", [event for event, _ in executor.events])
 
 
 class ReadOnlyTurnTests(unittest.TestCase):
-    """Without business writes, program checks help the answer and never end the turn."""
-
     def test_a_read_only_turn_never_asks_a_model_to_review_its_answer(self):
         executor = LoopFixture([reply(call("finish", status="done", answer="已打开"))], lambda *_: None)
         executor.turn.update(read_only=True, review_completion=True, touched=[("搜索", "写错的值")])
@@ -921,6 +921,41 @@ class ReadOnlyTurnTests(unittest.TestCase):
         self.assertEqual((executor.state.terminal_reason, executor.state.detail),
                          ("agent_refused", "a failed read was repeated unchanged"))
         self.assertIn("程序不会再执行", str(executor._messages))
+
+    def test_repeated_failure_delivers_only_a_complete_actor_bound_summary_in_budget(self):
+        from web_operation_agent.tests.execution.test_product_summary_delivery import summary
+        valid = summary(count=3)
+        for projection, budget, delivered in ((valid, 8000, True),
+                (summary(count=3, complete=False), 8000, False),
+                (summary(count=3, actor="f" * 64), 8000, False),
+                (valid, 512, False)):
+            with self.subTest(complete=projection.complete, budget=budget, delivered=delivered):
+                same = call("records", query="same")
+                def handler(_fixture, name, arguments):
+                    if name == "summary":
+                        return LoopToolResult("prepared", kind="read", query_answer=projection)
+                    return LoopToolResult("invalid spec", kind="read", state="unverified", error_code="invalid_spec")
+                executor = LoopFixture([reply(call("summary")), reply(same), reply(same), reply(same)], handler)
+                executor.profile = NS(procedures=(NS(kind="read", schema={"function": {"name": "records"}}),))
+                executor.state.approvals = NS(principal=context().principal)
+                executor.config = NS(max_user_answer_chars=budget)
+                executor.turn.update(read_only=True, not_executed=[("打开", "目标", "unreviewed")])
+                answer = executor.run()
+                self.assertEqual("|" in answer, delivered)
+                self.assertIn("未执行的页面操作", answer)
+                self.assertLessEqual(len(answer), budget)
+                self.assertEqual(executor.state.terminal_reason, "agent_refused")
+
+
+    def test_repeat_failure_status_without_a_table_fits_the_smallest_budget(self):
+        executor = LoopFixture([], lambda *_: None)
+        executor.state.chinese = False
+        executor.config = NS(max_user_answer_chars=512)
+        turn = {"not_executed": [("goto", "x" * 79, "unreviewed")] * 4}
+        answer = executor._repeat_fallback(executor.state, "Open it", turn, "records", "invalid_spec")
+        self.assertLessEqual(len(answer), 512)
+        self.assertIn("Page steps not performed", answer)
+        self.assertIn("No result can be delivered in full", answer)
 
 
 if __name__ == "__main__":

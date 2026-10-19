@@ -95,7 +95,7 @@ class ContactsProcedure:
                 except SummaryRefused as exc:
                     return LoopToolResult("Summary unavailable: " + exc.detail,
                         kind="read", state="unverified", error_code=exc.code)
-                text = ("Program summary prepared; cite it by its read number below. Other user obligations still apply."
+                text = ("Program summary prepared. Select its read_answer; other user obligations still apply."
                         + ("\nThe program read the spec as: " + "; ".join(rewritten) if rewritten else ""))
             elif arguments.get("deliver"):
                 facts = result.content
@@ -184,7 +184,7 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
     schemas = (
         (tool("list_contacts", "Read actor-visible contacts from the REST collection.",
               {"name_contains": {"type": "string", "maxLength": 120},
-               "deliver": {"type": "boolean", "description": "Prepare exact server delivery; cite it by its read number."},
+               "deliver": {"type": "boolean", "description": "Prepare exact server delivery; select finish.read_answer."},
                "summary": summary_schema()}), "read", frozenset()),
         (tool("goto", "Open a reviewed page route.", {"path": {"type": "string", "maxLength": 200},
               "open": {"type": "string", "maxLength": 200},
@@ -245,7 +245,7 @@ def contacts_profile(adapter, goal_port, *, drafts=False, filters=False):
     from .mutation_prefill import ContactsMutationPrefill
     return ModelLoopProfile("Answer from current REST reads. Clarify ambiguous names; never choose one silently. "
         "For counts, groups or lists, list_contacts accepts summary over id, name and email. Use columns and order_by for a complete sorted list without top or hand-copying. "
-        "The server calculates the summary; cite its values or its whole table by the read number. "
+        "The server calculates and renders the selected read_answer; keep finish.answer empty. "
         "This application offers reviewed navigation and visible-control handoff. " +
         ("It offers two local date fields, priority, and temporary note lines for manual saving. "
          "Use goto(open=\"New contact\") to open the form, then fill_fields with then_highlight=\"Save contact\" "

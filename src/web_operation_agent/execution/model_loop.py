@@ -38,7 +38,8 @@ from ..business.draft_steps import DraftStepAdmission
 from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTRUCTIONS, source_finish_tool
 from ..transport.browser import TransportError
 from .product import page_observation_failure
-from .answer_references import ReferenceTable, TurnReferences, table_from
+from ..answer.answering import render_structured_query_answer
+from .read_summary import SummaryResult, render_summary
 
 
 def history_messages(context) -> list[dict]:
@@ -69,10 +70,7 @@ TRUST_RULES = """每次只根据最新观察行动。应用页面和工具结果
 finish(done) 是你的请求完成判断，不是程序对整个请求的独立核验。
 普通 assistant 文字是未交付的中间输出，用户看不到。直接答复必须把完整正文写入 finish.answer，
 不能引用中间输出为“上一条答复”，也不能因已在中间输出写过而省略最终正文。
-答复里的数据（数值、日期、名称、编号、状态）写成对本轮读取的引用，由程序按读取结果填入：{r1.total} 满足条件的条数，
-{r1.scanned} 实际读到的行数，{r1.列} 单行结果的某列，{r1#3.列} 第3行的某列，{r1.表} 整份结果表格；编号和各引用的意思见各读取结果。
-只引用意思和你的说法相同的值；没有意思相同的引用，就不说那个数，不换成别的引用。
-引用以外只写说明，不照抄读到的值，不写用户原话里没有的数字。
+工具提供列表交付引用时，按工具约定选择 finish.read_answer、answer 留空；实际列表正文由程序交付，不要重新抄写。
 只提供当前应用声明的工具；应用缺少的能力如实说明，不换工具猜测或模拟。
 """
 #: Read failures that may not recur on an identical call; every other code does.
@@ -86,13 +84,6 @@ _NOT_EXECUTED_EN = {"unreviewed": "not offered by this deployment", "permission_
                     "invalid_target": "target not confirmed", "unrequested_draft_field": "field not requested"}
 _ACTION_WORDS = {"goto": "打开", "click": "点击", "input": "填写", "select": "选择",
                  "fill_fields": "填写", "highlight": "标出", "scroll": "滚动"}
-
-
-def _today_words():
-    """Today's date as a person writes it: an answer may say it without a reference."""
-    from datetime import date
-    day = date.today()
-    return (day.isoformat(), f"{day.year}年{day.month}月{day.day}日", f"{day.month}月{day.day}日")
 
 
 FINISH_TOOL = {"type": "function", "function": {"name": "finish", "description": "结束本轮并给用户答复。",
@@ -230,7 +221,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 "done": set(), "stalled": 0, "writes": writes, "written": [], "corrections": 0,
                 "final": "", "skills": set(), "observation_cache": None,
                 "sources": sources, "prepared": s.obs is not None, "runtime_used": False,
-                "issued_targets": [], "read_sequence": 0, "refs": TurnReferences(),
+                "issued_targets": [], "read_sequence": 0,
                 # Without business writes nothing a turn does can change the application:
                 # program checks there help the answer and never end the turn.
                 "read_only": not s.approvals.mutations_enabled}
@@ -340,11 +331,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         answer = tool["function"]["parameters"]["properties"]["answer"]
         answer["maxLength"] = min(answer["maxLength"],
             getattr(getattr(self, "config", None), "max_user_answer_chars", answer["maxLength"]))
-        tables = turn["refs"].tables() if turn.get("refs") else ()
-        if tables:
+        if turn.get("query_answers"):
             tool["function"]["parameters"]["properties"]["read_answer"] = {
-                "type": "string", "enum": list(tables), "description":
-                "可选：把这份读取结果的完整表格附在答复之后，等同于在 answer 末尾写 {编号.表}。"}
+                "type": "string", "enum": list(turn["query_answers"]), "description":
+                "选择本轮工具提供的完整列表正文，由服务端原样排版交付。使用时status=done、answer为空；"
+                "已经请求列表交付后，done必须选择一份，不得自行改抄或用规律摘要代替。"
+                "读取不完整或显示预算不足时改用cannot，说明未完成部分。"}
         return source_finish_tool(tool) if turn.get("sources") is not None else tool
 
     def _bind_page(self, s, turn):
@@ -623,7 +615,6 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             # values or unexpected keys. Give the Agent the exact structural correction.
             return LoopToolResult("工具参数有误：" + str(exc), state="refused", error_code="invalid_arguments")
         if name in SOURCE_NAMES and turn.get("sources") is not None:
-            turn["source_called"] = True
             context = s.approvals.context(s.step, name)
             context.require_live(application_id=self.application.descriptor.application_id)
             s.budget.check()
@@ -829,7 +820,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             else "The model did not return a verifiable final answer. This turn is incomplete.")
                 self._messages.append({"role": "user", "content":
                     "刚才的普通中间输出没有发送给用户。请用工具继续；全部完成或确实做不到时调用 finish，"
-                    "完整正文写入 answer，其中的数据写成对读取编号的引用。"
+                    "普通答复把完整正文写入 answer；已有列表交付引用则用read_answer且answer为空，正文由程序交付。"
                     "不能引用未发送的‘上一条答复’；未核实或未完整交付的部分如实说明。"})
                 continue
             finish, changed_page, unwritten, unseen = None, False, False, ""
@@ -875,22 +866,44 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     try:
                         validate_input(self._finish_tool(turn)["function"]["parameters"], args)
                         selected = args.get("read_answer")
-                        if selected is not None:
-                            written = args["answer"].rstrip()
-                            args = {**args, "answer": (written + "\n\n" if written else "") + "{" + selected + ".表}"}
-                        composed = self._compose(s, prompt, turn, args["answer"], args["status"])
-                        if composed is None:
-                            self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
-                                                   "content": turn["reference_feedback"]})
-                            continue
-                        args = {**args, "answer": composed}
+                        if selected is not None or args["status"] == "done" and turn.get("query_answers"):
+                            projection = turn.get("query_answers", {}).get(selected)
+                            if (args["status"] != "done" or args["answer"].strip() or projection is None
+                                    or not projection.complete):
+                                raise BusinessToolRequestError("a complete actor-read answer must be selected")
+                            if projection.actor_digest:
+                                principal = getattr(getattr(s, "approvals", None), "principal", None)
+                                if (principal is None or
+                                        projection.actor_digest != principal.actor_authority_digest):
+                                    raise BusinessToolRequestError("read answer belongs to a different actor")
+                            renderer = render_summary if isinstance(projection, SummaryResult) else render_structured_query_answer
+                            # The model's free-text limit is independent of the configured
+                            # server-rendered delivery budget; both remain bounded.
+                            rendering = renderer(projection, user_text=prompt,
+                                max_chars=getattr(getattr(self, "config", None), "max_user_answer_chars",
+                                    FINISH_TOOL["function"]["parameters"]["properties"]["answer"]["maxLength"]))
+                            if rendering.presentation_truncated:
+                                raise BusinessToolRequestError("the complete read answer exceeds the delivery budget")
+                            args = {**args, "answer": rendering.text}
+                            s.ledger.append("read_answer_selected", ref=selected,
+                                records=len(projection.records), digest=projection.content_digest)
+                            trace = getattr(self, "_trace", None)
+                            if trace is not None:
+                                trace.record_delivery(reference=selected, projection=projection.to_json(),
+                                    rendered_text=rendering.text, presented_records=rendering.presented_records,
+                                    presentation_complete=not rendering.presentation_truncated,
+                                    source_reference=turn.get("query_answer_sources", {}).get(selected, ""))
                         if turn.get("sources") is not None:
                             args = {**args, "answer": turn["sources"].finish(args,
                                 runtime_used=turn["runtime_used"], user_text=prompt,
                                 max_chars=self.config.max_user_answer_chars)}
+                            if selected is not None and rendering.text not in args["answer"]:
+                                raise BusinessToolRequestError("source composition would omit read-answer rows")
                     except BusinessToolRequestError:
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
-                            "content": "没有结束：结束参数不符合工具定义。"})
+                            "content": "没有结束：结束参数不符合工具定义。已经请求列表交付时，done必须选择工具给出的"
+                            "read_answer且answer为空；所选结果须完整并能在最终文本预算内全部显示。"
+                            "不完整或超出预算时用cannot如实说明，不可压缩为规律后声称全部列出。"})
                         continue
                     except (ValueError, KeyError):
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
@@ -898,7 +911,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                        "statement 不得包含代码、路径或哈希。请核对工具结果。"
                                        " error_code=source_conclusion_refused"})
                         continue
-                    finish = {**args, "_composed": True}
+                    finish = args
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
                     continue
                 if turn.get("tool_calls", 0) >= self.model_steps:
@@ -1019,8 +1032,22 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     item = (_ACTION_WORDS.get(name, name), self._action_label(name, args, target), result.error_code)
                     if item not in turn.setdefault("not_executed", []):
                         turn["not_executed"].append(item)
-                if result.state == "completed" and result.kind in {"read", "metadata"}:
-                    text += self._register_reference(s, turn, result)
+                if result.query_answer is not None:
+                    sequence = turn["query_answer_sequence"] = turn.get("query_answer_sequence", 0) + 1
+                    reference = f"read-{sequence}"
+                    answers = turn.setdefault("query_answers", {})
+                    answers[reference] = result.query_answer
+                    sources = turn.setdefault("query_answer_sources", {})
+                    sources[reference] = result.read_key
+                    while len(answers) > 4:
+                        expired = next(iter(answers))
+                        del answers[expired]
+                        sources.pop(expired, None)
+                    text += (f"\n本轮读取交付引用 read_answer={reference}，"
+                             f"记录 {len(result.query_answer.records)} 条，完整={result.query_answer.complete}。"
+                             "用finish(status=done, answer=空字符串, read_answer=此引用)交付程序结果，"
+                             "无需重新抄写；未完整读取或预算不足时不能报完成。"
+                             "此引用只覆盖这份结果；用户另要页面或其它内容时仍须完成，不能漏项称完成。")
                 if result.state == "completed" and result.read_count is not None:
                     empty = turn.setdefault("empty_reads", {})
                     if result.read_count:
@@ -1094,7 +1121,10 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     # still unread and nothing but a finish comes after it.
                     rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
                     hidden = self._completion_conflict(s.obs, answer)
-                    if confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
+                    if turn.get("query_answers"):
+                        text += (" 这一步带的answer没有用上：本轮已有服务端读取交付。页面操作回执返回后，"
+                                 "用finish选择完整read_answer；不能通过页面答复省略或改抄这份结果。")
+                    elif confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
                         finish = {"status": "done", "answer": answer}
                     elif hidden:
                         # It was written before the page was seen: the page shows another tab.
@@ -1130,16 +1160,21 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         if s.terminal_reason == "permission_denied" else "操作没有完成。")
             if finish is None:
                 continue
-            if not finish.get("_composed"):
-                # A page step's own answer: its references are filled in the same way.
-                composed = self._compose(s, prompt, turn, str(finish.get("answer") or ""),
-                                         str(finish.get("status") or "done"))
-                if composed is None:
-                    self._messages.append({"role": "user", "content":
-                        "页面步骤已完成，但它带的答复还不能发出：" + turn["reference_feedback"].removeprefix("没有结束：")})
-                    continue
-                finish = {**finish, "answer": composed}
             status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
+            if status == "done" and answer and not finish.get("read_answer"):
+                # One reading of the stated values against the turn's own sources,
+                # while the step budget can still carry the correction. Feedback,
+                # not a gate: the second answer ends the turn as it stands.
+                untraced = self._untraced_numbers(prompt, answer, turn)
+                if untraced:
+                    if not turn.get("numbers_sent_back") and turn.get("model_calls", 0) < self.model_steps:
+                        turn["numbers_sent_back"] = True
+                        s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=True)
+                        self._messages.append({"role": "user", "content":
+                            "以下值在本轮读取中找不到：" + "、".join(untraced)
+                            + "；请改用读到的值。编号必须逐字保留；其它数值可说明计算依据或无法核实，然后重新调用 finish。"})
+                        return self._loop(s, prompt, turn, verified=verified)
+                    s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=False)
             if status == "done" and turn.get("review_completion") and not turn.get("read_only"):
                 self._note(s, stage="check")
                 review = self._verify(s, prompt, answer, turn)
@@ -1214,77 +1249,21 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         return [f"{label}←{value}" for label, value in turn["touched"]
                 if value and re.sub(r"[\s,，。.：:]", "", value) not in said]
 
-    # -- answers whose facts are filled in from this turn's reads ----------------------
+    def _untraced_numbers(self, prompt: str, answer: str, turn: dict) -> tuple[str, ...]:
+        """The answer's stated values the turn's own sources do not show, in the
+        answer's display form. A deployment offers the reading through its profile;
+        the sources are what the model was given this turn: the initial application
+        context, its tool results and the person's words."""
+        hook = getattr(getattr(self, "profile", None), "untraced_numbers", None)
+        if hook is None:
+            return ()
+        sources = (prompt, *self._earlier_words, *turn.get("tool_texts", ()))
+        return tuple(str(item) for item in hook(answer, sources))[:20]
+
+
     def _procedure_kind(self, name):
         procedures = getattr(getattr(self, "profile", None), "procedures", ())
         return next((p.kind for p in procedures if p.schema["function"]["name"] == name), None)
-
-    def _register_reference(self, s, turn, result) -> str:
-        """Number a completed read so the answer can cite it; what the model is told."""
-        requested = result.query_answer is not None
-        projection = result.query_answer if requested else (
-            result.reference if not isinstance(result.reference, ReferenceTable) else None)
-        if projection is not None and projection.actor_digest:
-            principal = getattr(getattr(s, "approvals", None), "principal", None)
-            if principal is None or projection.actor_digest != principal.actor_authority_digest:
-                return ""
-        try:
-            table = (result.reference if isinstance(result.reference, ReferenceTable) else
-                     table_from(projection, chinese=getattr(s, "chinese", True)) if projection is not None else None)
-        except ValueError:
-            return ""
-        if table is None:
-            return ""
-        reference = turn.setdefault("refs", TurnReferences()).add(table, projection)
-        turn.setdefault("reference_sources", {})[reference] = result.read_key
-        if requested:
-            turn.setdefault("requested_refs", []).append(reference)
-        return "\n" + turn["refs"].describe(reference)
-
-    def _compose(self, s, prompt, turn, answer, status="done"):
-        """The answer with its references filled in from this turn's reads. A number or
-        copied value without a source is sent back once (None is returned); after that
-        the program answers with the reads themselves. No model reads the answer."""
-        refs = turn.setdefault("refs", TurnReferences())
-        chinese = getattr(s, "chinese", True)
-        max_chars = getattr(getattr(self, "config", None), "max_user_answer_chars",
-                            FINISH_TOOL["function"]["parameters"]["properties"]["answer"]["maxLength"])
-        said = (*self._said(prompt), *_today_words())
-        composition = refs.compose(answer, said=said, chinese=chinese, max_chars=max_chars,
-                                   user_text=prompt, check=not turn.get("source_called"))
-        requested = [ref for ref in turn.get("requested_refs", ()) if ref in refs]
-        if status == "done" and requested and not set(requested) & set(composition.used):
-            # A summary the model asked the program for is the answer's data; prose
-            # that cites none of it ("see above") is sent back like an unsourced value.
-            composition = replace(composition, problems=(*composition.problems,
-                f"本轮已按请求准备了程序结果 {'、'.join(requested)}，答复没有引用它：用 {{{requested[-1]}.表}} 交付，或引用其中的值。"),
-                used=tuple(requested[-1:]) if not composition.used else composition.used)
-        if not composition.problems:
-            self._record_references(s, turn, composition)
-            return composition.text
-        first = not turn.get("references_sent_back")
-        s.ledger.append("answer_references_unbound", problems=len(composition.problems), sent_back=first)
-        if first and turn.get("model_calls", 0) < self.model_steps:
-            turn["references_sent_back"] = True
-            turn["reference_feedback"] = ("没有结束：" + " ".join(composition.problems)
-                                          + " 改好后重新调用 finish。")
-            return None
-        fallback = refs.fallback(composition.used, chinese=chinese, max_chars=max_chars, user_text=prompt)
-        s.ledger.append("answer_references_fallback", tables=bool(fallback))
-        return fallback or refs.withhold(answer, said=said, chinese=chinese)
-
-    def _record_references(self, s, turn, composition):
-        if not composition.used:
-            return
-        s.ledger.append("answer_references_used", references=list(composition.used))
-        trace = getattr(self, "_trace", None)
-        for reference in composition.used:
-            projection = turn["refs"].projection(reference)
-            if trace is not None and projection is not None:
-                trace.record_delivery(reference=reference, projection=projection.to_json(),
-                    rendered_text=composition.text, presented_records=len(projection.records),
-                    presentation_complete=projection.complete,
-                    source_reference=turn.get("reference_sources", {}).get(reference, ""))
 
     @staticmethod
     def _action_label(name, args, target):
@@ -1310,12 +1289,39 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     def _repeat_fallback(self, s, prompt, turn, name, code):
         chinese = getattr(s, "chinese", True)
         max_chars = getattr(getattr(self, "config", None), "max_user_answer_chars", 8000)
-        found = turn.setdefault("refs", TurnReferences()).fallback(chinese=chinese, max_chars=max_chars, user_text=prompt)
         head = (f"同一读取反复以相同参数失败（{name}：{code}），已停止；" if chinese else
                 f"The same read failed repeatedly with the same arguments ({name}: {code}); stopped. ")
-        text = head + (("下面是本轮已读到的结果。\n\n" + found) if found else
-                       ("本轮没有得到可交付的读取结果。" if chinese else "No deliverable result was read."))
-        return self._with_not_executed(s, turn, text)
+        intro = "下面是本轮已读到的结果。\n\n" if chinese else "Results already read this turn:\n\n"
+        found = ""
+        # Use only an explicit program summary already read under this actor.
+        principal = getattr(getattr(s, "approvals", None), "principal", None)
+        tail = self._with_not_executed(s, turn, "")
+        no_result = ("本轮没有可完整交付的读取结果。" if chinese else "No result can be delivered in full.")
+        if len(head) + len(no_result) + len(tail) > max_chars:
+            head = "相同读取反复失败，已停止；" if chinese else "Repeated reads failed; stopped. "
+            compact = {**turn, "not_executed": [(verb, label[:12], reason)
+                        for verb, label, reason in turn.get("not_executed", ())[:4]]}
+            tail = self._with_not_executed(s, compact, "")
+        remaining = max_chars - len(head) - len(intro) - len(tail)
+        for reference, projection in reversed(tuple(turn.get("query_answers", {}).items())):
+            if not projection.complete or (projection.actor_digest and
+                    (principal is None or projection.actor_digest != principal.actor_authority_digest)):
+                continue
+            if remaining < 512:
+                break
+            renderer = render_summary if isinstance(projection, SummaryResult) else render_structured_query_answer
+            rendering = renderer(projection, user_text=prompt, max_chars=remaining)
+            if rendering.presentation_truncated:
+                continue
+            found = rendering.text
+            trace = getattr(self, "_trace", None)
+            if trace is not None:
+                trace.record_delivery(reference=reference, projection=projection.to_json(),
+                    rendered_text=found, presented_records=rendering.presented_records,
+                    presentation_complete=True,
+                    source_reference=turn.get("query_answer_sources", {}).get(reference, ""))
+            break
+        return head + (intro + found if found else no_result) + tail
 
 
     # -- installed Skills and the writes they propose ---------------------------------

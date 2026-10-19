@@ -1032,31 +1032,6 @@ def _present(column, value, chinese, labels=None):
     return f"{value}（{label}）" if chinese else f"{value} ({label})"
 
 
-def summary_conditions(result: SummaryResult, chinese: bool = True) -> list[str]:
-    """The summary's own conditions in words, as its rendering states them."""
-    conditions = []
-    source_columns = {column.name: column for column in result.source_columns}
-    operators = {"=": "为", "!=": "不为", "contains": "包含", "prefix": "前缀为", "in": "属于",
-                 ">": "大于", ">=": "不少于", "<": "小于", "<=": "不超过", "between": "范围为",
-                 "empty": "为空", "not_empty": "非空"}
-    for condition in result.spec.where:
-        source = source_columns[condition.column]
-        shown = (source.display_name or source.name) + (f" ({source.unit})" if source.unit else "") + " " + (operators[condition.op] if chinese else condition.op)
-        if condition.op not in {"empty", "not_empty"}:
-            operands = condition.value if isinstance(condition.value, tuple) else (condition.value,)
-            shown += " " + ", ".join("null" if value is None else _present(source, _display(value), chinese) for value in operands)
-        conditions.append(shown)
-    return conditions
-
-
-def summary_ordering(result: SummaryResult, chinese: bool = True) -> list[str]:
-    """The summary's complete ordering in words; empty when its rows have no declared order."""
-    source_columns = {column.name: column for column in result.source_columns}
-    return [(source_columns[key.column].display_name or key.column) + " " + (("降序" if key.direction == "desc" else "升序") if chinese else key.direction)
-            + (("（空值在前）" if key.nulls == "first" else "（空值在后）") if chinese else " (nulls " + key.nulls + ")")
-            for key in result.spec.order_by]
-
-
 def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""):
     from ..answer.answering import StructuredAnswerRendering
     if not isinstance(result, SummaryResult) or type(max_chars) is not int or max_chars < 512:
@@ -1070,8 +1045,18 @@ def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""
         lines.append("未完整交付。" if chinese else "The result was not completely delivered.")
     if result.incomplete_reason:
         lines.append(_escape(result.incomplete_reason))
-    conditions = summary_conditions(result, chinese)
+    conditions = []
     source_columns = {column.name: column for column in result.source_columns}
+    operators = {"=": "为", "!=": "不为", "contains": "包含", "prefix": "前缀为", "in": "属于",
+                 ">": "大于", ">=": "不少于", "<": "小于", "<=": "不超过", "between": "范围为",
+                 "empty": "为空", "not_empty": "非空"}
+    for condition in result.spec.where:
+        source = source_columns[condition.column]
+        shown = (source.display_name or source.name) + (f" ({source.unit})" if source.unit else "") + " " + (operators[condition.op] if chinese else condition.op)
+        if condition.op not in {"empty", "not_empty"}:
+            operands = condition.value if isinstance(condition.value, tuple) else (condition.value,)
+            shown += " " + ", ".join("null" if value is None else _present(source, _display(value), chinese) for value in operands)
+        conditions.append(shown)
     lines.append(("计算条件：" if chinese else "Calculation conditions: ") + _escape(
         ("；" if chinese else "; ").join(conditions) if conditions else ("不再附加筛选" if chinese else "no additional filter")))
     if result.spec.group_by:
@@ -1081,7 +1066,9 @@ def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""
         lines.append(("统计：" if chinese else "Measures: ") + _escape(
             "; ".join(_measure_label(measure, chinese, source_columns) for measure in result.spec.measures)))
     if result.spec.order_by:
-        keys = summary_ordering(result, chinese)
+        keys = [(source_columns[key.column].display_name or key.column) + " " + (("降序" if key.direction == "desc" else "升序") if chinese else key.direction)
+                + (("（空值在前）" if key.nulls == "first" else "（空值在后）") if chinese else " (nulls " + key.nulls + ")")
+                for key in result.spec.order_by]
         lines.append(("完整排序：" if chinese else "Complete ordering: ") + _escape("; ".join(keys)))
     if result.spec.top:
         measure = next(measure for measure in result.spec.measures if measure.alias == result.spec.top.by)

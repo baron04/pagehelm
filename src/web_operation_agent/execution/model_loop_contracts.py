@@ -11,7 +11,6 @@ from ..schemas import PageObservation, ActionReceipt
 from ..state.identity import OperationContext
 from ..answer.answering import StructuredQueryAnswer
 from .read_summary import SummaryResult
-from .answer_references import ReferenceTable
 from ..business.draft_steps import ApplicationDraftStepPort
 from ..business.prefill_conversion import MutationPrefillPort
 
@@ -122,6 +121,10 @@ class ModelLoopProfile:
     verification_messages: Callable | None = None
     draft_steps: ApplicationDraftStepPort | None = None
     mutation_prefill: MutationPrefillPort | None = None
+    #: Optional closing reading of a finished answer against the turn's own sources,
+    #: as (answer, sources) and the stated values the sources do not show. The loop
+    #: sends the list back once and audits it; it never withholds data or ends the turn.
+    untraced_numbers: Callable[[str, tuple[str, ...]], tuple[str, ...]] | None = None
 
     def __post_init__(self):
         names = [p.schema["function"]["name"] for p in self.procedures]
@@ -130,6 +133,8 @@ class ModelLoopProfile:
                 or len(set(names)) != len(names) or "finish" in names
                 or any(not callable(f) for f in (self.render_page, self.prepare, self.completion_conflict))):
             raise ValueError("invalid model loop profile")
+        if self.untraced_numbers is not None and not callable(self.untraced_numbers):
+            raise ValueError("model loop untraced numbers needs a callable reading")
         if self.draft_steps is not None and not isinstance(self.draft_steps, ApplicationDraftStepPort):
             raise ValueError("model loop draft steps need an application form port")
         if (self.mutation_prefill is not None
@@ -184,9 +189,6 @@ class LoopToolResult:
     #: An explicitly requested, actor-read collection for exact server delivery.
     #: The model selects its turn-local reference; it never supplies these values.
     query_answer: StructuredQueryAnswer | SummaryResult | None = None
-    #: A read the answer may cite but nobody asked to deliver: the typed cells of a
-    #: plain read, or records found by name. A requested summary is `query_answer`.
-    reference: ReferenceTable | SummaryResult | None = None
     #: A local action proof cannot settle an unresolved part of the user's request.
     #: Ask the existing completion reader before accepting a completed page handoff.
     review_completion: bool = False
@@ -221,10 +223,6 @@ class LoopToolResult:
                 or self.query_answer is not None and (
                     not isinstance(self.query_answer, (StructuredQueryAnswer, SummaryResult))
                     or self.kind != "read" or self.state != "completed")
-                or self.reference is not None and (
-                    not isinstance(self.reference, (ReferenceTable, SummaryResult))
-                    or self.query_answer is not None
-                    or self.kind not in {"read", "metadata"} or self.state != "completed")
                 or type(self.review_completion) is not bool
                 or self.review_completion and (self.kind != "page" or self.state != "completed")
                 or not isinstance(self.terminal_answer, str) or len(self.terminal_answer) > 4000

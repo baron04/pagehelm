@@ -4,7 +4,6 @@ from decimal import Decimal
 import unittest
 from types import SimpleNamespace as NS
 
-from web_operation_agent.execution.answer_references import table_from
 from web_operation_agent.execution.read_summary import SummaryRefused, render_summary
 from web_operation_agent.state.identity import actor_authority_digest
 from web_operation_agent.tests.execution.test_product_model_loop import LoopFixture, call, reply
@@ -252,7 +251,7 @@ class NativeSummaryTests(unittest.TestCase):
             "path": "orders/page", "params": '{"pageNo":1,"pageSize":20}',
             "fields": ["name"], "summary": {"columns": ["name"]}}, {"reads": []})
         self.assertEqual(result.query_answer.actor_digest, state.operation.principal.actor_authority_digest)
-        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="", read_answer="r1"))],
+        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="", read_answer="read-1"))],
             lambda *_: result)
         loop.state.approvals = NS(principal=state.operation.principal)
         self.assertIn("实际名称", loop.run())
@@ -282,36 +281,8 @@ def departments():
     return ActorKnowledge(Departments(), docs)
 
 
-class CitableReadTests(unittest.TestCase):
+class ReadDeclarationTests(unittest.TestCase):
     actor = actor_authority_digest("app", "tenant", "actor")
-
-    def test_a_plain_read_is_citable_but_not_a_requested_delivery(self):
-        procedure = YudaoLoopProcedures(knowledge([{"id": 1, "name": "实际名称", "status": 20}]), None,
-                                        "https://synthetic.test")
-        state = State()
-        state.operation = context()
-        result = procedure._tool(state, "call_api", {"path": "orders/page", "params": '{"pageNo":1,"pageSize":20}',
-                                                     "fields": ["name", "status"]}, {"reads": []})
-        self.assertIsNone(result.query_answer)
-        self.assertEqual((result.reference.complete, result.reference.rows), (True, (("1", "实际名称", "20"),)))
-        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="名称是{r1.name}"))],
-                           lambda *_: result)
-        loop.state.approvals = NS(principal=state.operation.principal)
-        self.assertEqual(loop.run("名称是什么"), "名称是实际名称")
-
-    def test_a_complete_read_with_no_rows_has_a_citable_count(self):
-        # The recorded Q121 answer said 0 matches but had no read to cite it from.
-        procedure = YudaoLoopProcedures(knowledge([]), None, "https://synthetic.test")
-        state = State()
-        state.operation = context()
-        result = procedure._tool(state, "call_api", {"path": "orders/page", "params": '{"pageNo":1,"pageSize":20}',
-                                                     "fields": ["name"]}, {"reads": []})
-        table = table_from(result.reference)
-        self.assertEqual((table.total, table.complete, table.rows), (0, True, ()))
-        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="共{r1.total}条"))],
-                           lambda *_: result)
-        loop.state.approvals = NS(principal=state.operation.principal)
-        self.assertEqual(loop.run("有几条"), "共0条")
 
     def test_the_recorded_count_declarations_compute_and_say_how_they_were_read(self):
         # Q029 sent `count` with `column: id` and a Chinese alias 22 times; Q039 a Chinese alias.

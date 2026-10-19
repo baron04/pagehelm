@@ -76,7 +76,6 @@ class WriteIntentTests(unittest.TestCase):
 
     def test_read_queries_do_not_select_business_review_but_mixed_obligations_do(self):
         from unittest.mock import patch
-        from web_operation_agent.execution.answer_references import ReferenceTable, TurnReferences
         from web_operation_agent_yudao.slim_loop import _CURRENT_REQUEST
         parent = SlimTurnExecutor.__mro__[1]
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
@@ -98,9 +97,7 @@ class WriteIntentTests(unittest.TestCase):
             with self.subTest(request=request), patch.object(parent, "_tools", return_value=[]):
                 current = _CURRENT_REQUEST.set(request)
                 intent = _WRITE_INTENT.set(classify_write_intent(request))
-                refs = TurnReferences()
-                refs.add(ReferenceTable((("name", "名称"),), (("甲",),), 1, True))
-                turn = {"writes": None, "refs": refs, "requested_refs": ["r1"]}
+                turn = {"writes": None, "query_answers": {"read_1": object()}}
                 try:
                     executor._tools(turn)
                     self.assertEqual(expected, bool(turn.get("review_completion")))
