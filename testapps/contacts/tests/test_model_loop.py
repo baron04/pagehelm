@@ -28,7 +28,7 @@ class ContactsModelLoopTests(unittest.TestCase):
                 records.extend(json.loads(path.read_text()) for path in (directory / "turns").glob("*.json"))
             result, _, _ = self.execute(app, "ada-lovelace", [
                 ("list_contacts", {"summary":{"columns":["name","email"],"order_by":[{"column":"name","direction":"desc"}]}}),
-                ("finish", {"status":"done","answer":"","read_answer":"read-1"})],
+                ("finish", {"status":"done","answer":"","read_answer":"r1"})],
                 prompt="List every visible contact in descending name order.",turn_traces=True,inspect=inspect)
             self.assertEqual("agent_finished",result.terminal_reason)
             projection=records[0]["server_deliveries"][0]["projection"]
@@ -50,7 +50,7 @@ class ContactsModelLoopTests(unittest.TestCase):
                 result, chat, _ = self.execute(app, actor, [
                     ("list_contacts", {"name_contains": "Grace Hopper", "summary": {
                         "columns": ["name", "email"], "measures": [{"op": "count", "as": "count"}]}}),
-                    ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})],
+                    ("finish", {"status": "done", "answer": "", "read_answer": "r1"})],
                     prompt="Show Grace Hopper's email and the number of exact matches.", turn_traces=True, inspect=inspect)
                 self.assertEqual(result.terminal_reason, "agent_finished")
                 self.assertIn(email, result.user_answer)
@@ -66,7 +66,7 @@ class ContactsModelLoopTests(unittest.TestCase):
             result, _, _ = self.execute(app, "ada-lovelace", [
                 ("list_contacts", {"name_contains": "Absent synthetic name", "summary": {
                     "measures": [{"op": "count", "as": "count"}]}}),
-                ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})],
+                ("finish", {"status": "done", "answer": "", "read_answer": "r1"})],
                 prompt="How many contacts match Absent synthetic name?")
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertIn("| 0 |", result.user_answer)
@@ -79,7 +79,7 @@ class ContactsModelLoopTests(unittest.TestCase):
                 ("finish", {"status": "cannot", "answer": "Email is not an additive number."})],
                 prompt="Total the email column.")
             self.assertEqual(result.terminal_reason, "agent_refused")
-            self.assertNotIn("read_answer=read-1", str(chat.messages))
+            self.assertNotIn("读取编号 r1", str(chat.messages))
 
     def test_redaction_does_not_collapse_distinct_rest_names_or_block_an_unrelated_count(self):
         rows = [{"id": "first", "name": "token=alpha123", "email": "a@example.test"},
@@ -94,7 +94,7 @@ class ContactsModelLoopTests(unittest.TestCase):
             self.assertNotIn("alpha123", str(chat.messages))
             count, _, _ = self.execute(app, "ada-lovelace", [
                 ("list_contacts", {"summary": {"measures": [{"op": "count", "as": "count"}]}}),
-                ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})],
+                ("finish", {"status": "done", "answer": "", "read_answer": "r1"})],
                 prompt="How many contacts are there?")
             self.assertEqual(count.terminal_reason, "agent_finished")
             self.assertIn("| 2 |", count.user_answer)
@@ -108,7 +108,7 @@ class ContactsModelLoopTests(unittest.TestCase):
                 result,chat,_=self.execute(app,actor,[
                     ("list_contacts",{"name_contains":"Grace Hopper","deliver":True}),
                     ("finish",{"status":"done","answer":"All emails are listed above"}),
-                    ("finish",{"status":"done","answer":"","read_answer":"read-1"})],
+                    ("finish",{"status":"done","answer":"","read_answer":"r1"})],
                     turn_traces=True, inspect=inspect)
                 self.assertIn(email,result.user_answer)
                 other="grace.hopper@southwind.test" if actor=="ada-lovelace" else "grace@example.test"
@@ -149,8 +149,8 @@ class ContactsModelLoopTests(unittest.TestCase):
                 ("list_contacts", {"name_contains": "Grace Hopper", "summary": {"columns": ["email"]}}),
                 (None, {"content": "The email appears only in this unsent draft."}),
                 ("finish", {"status": "done", "answer": "See above"}),
-                ("finish", {"status": "done", "answer": "Already answered"}),
-                ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})]))
+                ("finish", {"status": "done", "answer": "Already answered"})]))
+            # The second uncited answer is not sent: the program delivers the summary itself.
             self.assertEqual(reviewed, [])
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertIn("grace@example.test", result.user_answer)
@@ -158,7 +158,7 @@ class ContactsModelLoopTests(unittest.TestCase):
             self.assertNotIn("Already answered", result.user_answer)
 
     def execute(self, app, actor_id, replies, *, source=None, observation=True, turn_traces=False,
-                inspect=None, number_check=None, prompt="Grace Hopper email?"):
+                inspect=None, prompt="Grace Hopper email?"):
         actor = ACTORS_BY_ID[actor_id]
         adapter = MinimalContactsAdapter(app.origin, api_token=actor.token)
         identity = adapter.identity.page_identity(f"{DEMO_SESSION_COOKIE}={actor.session}")
@@ -172,7 +172,7 @@ class ContactsModelLoopTests(unittest.TestCase):
                     require_identity=True, ledger_path=Path(tmp) / "audit.jsonl",
                     **({"source": source} if source is not None else {})),
                 chat=chat, application=bind_application(adapter), goal_port=port,
-                profile=replace(contacts_profile(adapter, port), untraced_numbers=number_check),
+                profile=contacts_profile(adapter, port),
                 control=ReadOnlyControl(),
                 run_id_factory=lambda _: "contacts-model-run", turn_traces=turn_traces)
             with patch.object(goal_executor, "RemoteBrowserClient", _RemoteBrowser):
@@ -182,19 +182,15 @@ class ContactsModelLoopTests(unittest.TestCase):
                 inspect(Path(tmp))
         return result, chat, executor
 
-    def test_number_check_includes_the_starting_page_the_model_was_shown(self):
-        seen = []
-        def check(answer, sources):
-            seen.append(sources)
-            return ()
+    def test_a_summary_value_is_cited_and_a_copied_one_is_sent_back(self):
         with MinimalContactsApplication() as app:
             result, chat, _ = self.execute(app, "ada-lovelace", [
-                ("finish", {"status": "done", "answer": "The contacts page is open."})],
-                number_check=check)
+                ("list_contacts", {"name_contains": "Grace Hopper", "summary": {"columns": ["email"]}}),
+                ("finish", {"status": "done", "answer": "Grace Hopper: grace@example.test"}),
+                ("finish", {"status": "done", "answer": "Grace Hopper: {r1.email}"})])
         self.assertEqual("agent_finished", result.terminal_reason)
-        starting_page = chat.messages[0][-1]["content"].rsplit("\n", 1)[1]
-        self.assertTrue(json.loads(starting_page)["url"].endswith("/contacts"))
-        self.assertIn(starting_page, seen[0])
+        self.assertEqual("Grace Hopper: grace@example.test", result.user_answer)
+        self.assertIn("写成引用", str(chat.messages[-1]))
 
     def test_failed_fresh_observation_keeps_the_receipt_code_and_explains_recovery(self):
         execute = _RemoteBrowser.execute
@@ -497,7 +493,8 @@ class ModelBrowserTests(unittest.TestCase):
                         self.assertIsNotNone(outcome)
                         self.assertFalse(outcome.error, outcome.error)
                         self.assertEqual('agent_refused' if blocked else 'agent_finished', outcome.result.terminal_reason)
-                        self.assertEqual(3 if blocked or required_review else 2, len(chat.messages))
+                        # A read-only deployment asks no model to review a verified page step.
+                        self.assertEqual(3 if blocked else 2, len(chat.messages))
                         self.assertEqual('false' if blocked else 'true', page.locator('#workflow-terms').get_attribute('aria-selected'))
                         self.assertEqual((0, 0), (host.application.write_requests, host.application.records_created))
                     finally:

@@ -68,6 +68,9 @@ class SummaryColumn:
     unit: str = ""
     display_name: str = ""
     labels: tuple[tuple[str, str], ...] | None = None
+    #: A money-like number whose display unit no review has proven: its raw value is
+    #: shown as it is, marked, never converted or given a unit.
+    unverified_unit: bool = False
 
     def __post_init__(self):
         _name(self.name)
@@ -76,6 +79,8 @@ class SummaryColumn:
         _text(self.unit, "column unit", 80, empty=True)
         if self.unit and self.kind != "number":
             _fail("invalid_input", "only numeric columns carry display units")
+        if type(self.unverified_unit) is not bool or self.unverified_unit and (self.kind != "number" or self.unit):
+            _fail("invalid_input", "only a unitless number can be marked as having an unverified unit")
         _text(self.display_name, "column display name", 200, empty=True)
         if self.labels is not None:
             if (self.kind not in {"number", "text", "boolean"} or not isinstance(self.labels, tuple)
@@ -95,6 +100,8 @@ class SummaryColumn:
             value["display_name"] = self.display_name
         if self.labels is not None:
             value["labels"] = [list(item) for item in self.labels]
+        if self.unverified_unit:
+            value["unverified_unit"] = True
         return value
 
 
@@ -286,7 +293,7 @@ class SummarySpec:
         aliases = []
         for measure in self.measures:
             _name(measure.alias)
-            if measure.op not in _MEASURES or (measure.op == "count") != (measure.column == ""):
+            if measure.op not in _MEASURES or measure.op != "count" and not measure.column:
                 _fail("invalid_spec", "invalid measure")
             if measure.column:
                 _name(measure.column)
@@ -353,9 +360,13 @@ class SummarySpec:
             if (not isinstance(item, dict) or set(item) - {"op", "column", "as"}
                     or not {"op", "as"} <= set(item) or item["op"] not in _MEASURES):
                 _fail("invalid_spec", "invalid summary measure")
-            if item["op"] == "count" and "column" in item or item["op"] != "count" and "column" not in item:
-                _fail("invalid_spec", "count has no column; other measures require one")
-            measures.append(_Measure(item["op"], _name(item["column"]) if "column" in item else "", _name(item["as"])))
+            if item["op"] != "count" and "column" not in item:
+                _fail("invalid_spec", "sum, min, max and count_distinct name a column")
+            # count over the record identity is the record count; over another column it
+            # counts that column's nonempty values.
+            column = item.get("column", "")
+            measures.append(_Measure(item["op"], "" if item["op"] == "count" and column == "id"
+                                     else _name(column) if column else "", _name(item["as"])))
         if (len(set(grouping)) != len(grouping) or len(set(columns)) != len(columns)
                 or not measures and (not columns or grouping)
                 or len({m.alias for m in measures}) != len(measures)
@@ -391,6 +402,45 @@ class SummarySpec:
             result["order_by"] = [{"column": key.column, "direction": key.direction, "nulls": key.nulls}
                                   for key in self.order_by]
         return result
+
+
+_OPERATOR_SPELLINGS = {"==": "=", "eq": "=", "<>": "!=", "≠": "!=", "ne": "!=", "gt": ">", "gte": ">=",
+                       "ge": ">=", "≥": ">=", "lt": "<", "lte": "<=", "le": "<=", "≤": "<="}
+
+
+def parse_summary_spec(value):
+    """A model's spec with its harmless variants rewritten, and notes of each rewrite.
+
+    A rewrite never changes what is selected or computed: an operator spelled another
+    way, or a measure alias that is not an identifier. Everything else is parsed as
+    written, so an invalid spec is still refused by `SummarySpec.from_dict`."""
+    if not isinstance(value, dict):
+        return SummarySpec.from_dict(value), ()
+    value = json.loads(json.dumps(value, ensure_ascii=False))
+    notes = []
+    where = value.get("where")
+    for item in where if isinstance(where, list) else ():
+        spelled = item.get("op") if isinstance(item, dict) else None
+        if isinstance(spelled, str) and spelled.strip().lower() in _OPERATOR_SPELLINGS:
+            item["op"] = _OPERATOR_SPELLINGS[spelled.strip().lower()]
+            notes.append(f"条件运算符“{spelled}”按“{item['op']}”理解")
+    measures = value.get("measures")
+    if isinstance(measures, list):
+        taken = {name for key in ("group_by", "columns") if isinstance(value.get(key), list)
+                 for name in value[key] if isinstance(name, str)}
+        taken |= {m["as"] for m in measures if isinstance(m, dict) and isinstance(m.get("as"), str)}
+        renamed = {}
+        for item in measures:
+            alias = item.get("as") if isinstance(item, dict) else None
+            if isinstance(alias, str) and not _NAME.fullmatch(alias):
+                fresh = next(f"m{n}" for n in range(1, 100) if f"m{n}" not in taken)
+                taken.add(fresh)
+                renamed[alias] = item["as"] = fresh
+                notes.append(f"统计别名“{alias[:40]}”不是英文标识符，已改为 {fresh}")
+        top = value.get("top")
+        if isinstance(top, dict) and isinstance(top.get("by"), str) and top["by"] in renamed:
+            top["by"] = renamed[top["by"]]
+    return SummarySpec.from_dict(value), tuple(notes)
 
 
 def summary_schema():
@@ -441,6 +491,9 @@ def _display(value):
 
 def _comparable(column, value):
     if column.kind == "number":
+        if isinstance(value, str) and re.fullmatch(r"[+-]?[0-9]{1,30}(?:\.[0-9]{1,30})?", value.strip()):
+            # "20" and 20 name the same code or amount; only exact numerals are read.
+            value = Decimal(value.strip())
         if type(value) is not int and not isinstance(value, Decimal):
             _fail("type_mismatch", f"{column.name} requires a numeric operand")
         return Decimal(value)
@@ -449,7 +502,13 @@ def _comparable(column, value):
             return value.key
         if isinstance(value, str):
             return value
+        if type(value) is int:
+            return str(value)
         _fail("type_mismatch", "relation operands must use the exact key")
+    if column.kind == "text" and type(value) is int:
+        return str(value)
+    if column.kind == "boolean" and value in {"true", "false"}:
+        return value == "true"
     if column.kind == "date":
         try:
             if type(value) is date:
@@ -640,7 +699,8 @@ class SummaryResult:
                     _fail("invalid_result", "displayed source column semantics changed")
             elif measure.op not in {"count", "count_distinct"}:
                 source = source_columns[measure.column]
-                if column.kind != source.kind or column.unit != source.unit:
+                if (column.kind != source.kind or column.unit != source.unit
+                        or column.unverified_unit != source.unverified_unit):
                     _fail("invalid_result", "computed column must retain its proven source type and unit")
             expected_labels = (source_columns[measure.column].labels
                 if measure is not None and measure.op in {"min", "max"} else None)
@@ -806,11 +866,13 @@ class SummaryResult:
 
 
 def _measure(column, rows, index, measure):
-    if measure.op == "count":
+    if measure.op == "count" and not measure.column:
         return len(rows)
     values = [row.values[index] for row in rows]
     if any(v is Missing.MISSING for v in values):
         _fail("missing_column", f"{measure.column} was not read for every matching record")
+    if measure.op == "count":
+        return sum(not _empty(value) for value in values)
     if measure.op == "count_distinct":
         return len({_identity(v) for v in values if v is not None})
     if column.kind != "number" and measure.op == "sum":
@@ -851,7 +913,9 @@ def compute_summary(read: SummaryRead, spec: SummarySpec):
     output_columns = tuple(read.columns[lookup[name]] for name in names) + tuple(
         SummaryColumn(m.alias, "number" if m.op in {"count", "count_distinct", "sum"} else read.columns[lookup[m.column]].kind,
             read.columns[lookup[m.column]].unit if m.op in {"sum", "min", "max"} else "",
-            labels=read.columns[lookup[m.column]].labels if m.op in {"min", "max"} else None) for m in spec.measures)
+            labels=read.columns[lookup[m.column]].labels if m.op in {"min", "max"} else None,
+            unverified_unit=read.columns[lookup[m.column]].unverified_unit if m.op in {"sum", "min", "max"} else False)
+        for m in spec.measures)
     selected = tuple(row for row in read.rows if all(_matches(read.columns[lookup[c.column]], row.values[lookup[c.column]], c)
         for c in spec.where)) if read.complete else ()
     # Stable sorts from the least significant key preserve every native member,
@@ -949,6 +1013,8 @@ def _measure_label(measure, chinese, columns=None):
     labels = {"count": ("记录数", "Record count"), "count_distinct": ("去重数量", "distinct count"),
               "sum": ("合计", "sum"), "min": ("最小值", "minimum"), "max": ("最大值", "maximum")}
     label = labels[measure.op][0 if chinese else 1]
+    if measure.op == "count" and measure.column:
+        label = "非空记录数" if chinese else "nonempty count"
     source = (columns or {}).get(measure.column)
     name = (source.display_name or source.name) if source is not None else measure.column
     return name + (" " if name else "") + label
@@ -966,6 +1032,31 @@ def _present(column, value, chinese, labels=None):
     return f"{value}（{label}）" if chinese else f"{value} ({label})"
 
 
+def summary_conditions(result: SummaryResult, chinese: bool = True) -> list[str]:
+    """The summary's own conditions in words, as its rendering states them."""
+    conditions = []
+    source_columns = {column.name: column for column in result.source_columns}
+    operators = {"=": "为", "!=": "不为", "contains": "包含", "prefix": "前缀为", "in": "属于",
+                 ">": "大于", ">=": "不少于", "<": "小于", "<=": "不超过", "between": "范围为",
+                 "empty": "为空", "not_empty": "非空"}
+    for condition in result.spec.where:
+        source = source_columns[condition.column]
+        shown = (source.display_name or source.name) + (f" ({source.unit})" if source.unit else "") + " " + (operators[condition.op] if chinese else condition.op)
+        if condition.op not in {"empty", "not_empty"}:
+            operands = condition.value if isinstance(condition.value, tuple) else (condition.value,)
+            shown += " " + ", ".join("null" if value is None else _present(source, _display(value), chinese) for value in operands)
+        conditions.append(shown)
+    return conditions
+
+
+def summary_ordering(result: SummaryResult, chinese: bool = True) -> list[str]:
+    """The summary's complete ordering in words; empty when its rows have no declared order."""
+    source_columns = {column.name: column for column in result.source_columns}
+    return [(source_columns[key.column].display_name or key.column) + " " + (("降序" if key.direction == "desc" else "升序") if chinese else key.direction)
+            + (("（空值在前）" if key.nulls == "first" else "（空值在后）") if chinese else " (nulls " + key.nulls + ")")
+            for key in result.spec.order_by]
+
+
 def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""):
     from ..answer.answering import StructuredAnswerRendering
     if not isinstance(result, SummaryResult) or type(max_chars) is not int or max_chars < 512:
@@ -979,18 +1070,8 @@ def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""
         lines.append("未完整交付。" if chinese else "The result was not completely delivered.")
     if result.incomplete_reason:
         lines.append(_escape(result.incomplete_reason))
-    conditions = []
+    conditions = summary_conditions(result, chinese)
     source_columns = {column.name: column for column in result.source_columns}
-    operators = {"=": "为", "!=": "不为", "contains": "包含", "prefix": "前缀为", "in": "属于",
-                 ">": "大于", ">=": "不少于", "<": "小于", "<=": "不超过", "between": "范围为",
-                 "empty": "为空", "not_empty": "非空"}
-    for condition in result.spec.where:
-        source = source_columns[condition.column]
-        shown = (source.display_name or source.name) + (f" ({source.unit})" if source.unit else "") + " " + (operators[condition.op] if chinese else condition.op)
-        if condition.op not in {"empty", "not_empty"}:
-            operands = condition.value if isinstance(condition.value, tuple) else (condition.value,)
-            shown += " " + ", ".join("null" if value is None else _present(source, _display(value), chinese) for value in operands)
-        conditions.append(shown)
     lines.append(("计算条件：" if chinese else "Calculation conditions: ") + _escape(
         ("；" if chinese else "; ").join(conditions) if conditions else ("不再附加筛选" if chinese else "no additional filter")))
     if result.spec.group_by:
@@ -1000,9 +1081,7 @@ def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""
         lines.append(("统计：" if chinese else "Measures: ") + _escape(
             "; ".join(_measure_label(measure, chinese, source_columns) for measure in result.spec.measures)))
     if result.spec.order_by:
-        keys = [(source_columns[key.column].display_name or key.column) + " " + (("降序" if key.direction == "desc" else "升序") if chinese else key.direction)
-                + (("（空值在前）" if key.nulls == "first" else "（空值在后）") if chinese else " (nulls " + key.nulls + ")")
-                for key in result.spec.order_by]
+        keys = summary_ordering(result, chinese)
         lines.append(("完整排序：" if chinese else "Complete ordering: ") + _escape("; ".join(keys)))
     if result.spec.top:
         measure = next(measure for measure in result.spec.measures if measure.alias == result.spec.top.by)
@@ -1011,7 +1090,10 @@ def render_summary(result: SummaryResult, *, max_chars: int, user_text: str = ""
             if chinese else f"Ranking: {_measure_label(measure, chinese, source_columns)} {direction}, first {result.spec.top.n} positions including all cutoff ties."))
     lines.append("")
     measure_labels = {measure.alias: _measure_label(measure, chinese, source_columns) for measure in result.spec.measures}
-    headings = tuple(measure_labels.get(column.name, column.display_name or column.name) + (f" ({column.unit})" if column.unit else "") for column in result.columns)
+    headings = tuple(measure_labels.get(column.name, column.display_name or column.name)
+                     + (f" ({column.unit})" if column.unit else "")
+                     + ((" (单位未核验)" if chinese else " (unit unverified)") if column.unverified_unit else "")
+                     for column in result.columns)
     dictionaries = {column.name: {_label_key(column.kind, code): label for code, label in column.labels}
                     for column in result.columns if column.labels is not None}
     rows = tuple(tuple(_present(column, value, chinese, dictionaries.get(column.name))

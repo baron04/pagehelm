@@ -8,7 +8,7 @@ import unittest
 from web_operation_agent.answer.evidence import Origin
 from web_operation_agent.execution.read_summary import (
     Missing, RelationValue, SummaryColumn, SummaryRead, SummaryRefused, SummaryRow,
-    SummarySpec, compute_summary, render_summary, summary_schema,
+    SummarySpec, compute_summary, parse_summary_spec, render_summary, summary_schema,
 )
 
 
@@ -355,11 +355,51 @@ class ReadSummaryTests(unittest.TestCase):
         for value in ({"rows": []}, {}, {"columns": ["name"], "where": [{"column": "name", "op": "eval", "value": "x"}]},
                       {"columns": ["name"], "where": [{"column": "name", "op": "empty", "value": None}]},
                       {"columns": ["name", "name"]}, {"group_by": ["name"], "columns": ["name"]},
-                      {"measures": [{"op": "count", "column": "name", "as": "n"}]},
                       {"measures": [{"op": "sum", "as": "n"}]},
                       {"measures": [{"op": "count", "as": "n"}], "top": {"by": "n", "n": 51, "direction": "desc"}}):
             with self.subTest(value=value):
                 self.assertRefused("invalid_spec", SummarySpec.from_dict, value)
+
+    def test_harmless_spellings_are_rewritten_and_said_never_changing_the_selection(self):
+        # The declarations a model repeated unchanged in recorded turns (Q029, Q039).
+        spec, notes = parse_summary_spec({"measures": [{"op": "count", "column": "id", "as": "开启仓库数"}],
+                                          "where": [{"column": "status", "op": "==", "value": 0}]})
+        self.assertEqual(spec.to_json()["measures"], [{"op": "count", "as": "m1"}])
+        self.assertEqual(spec.to_json()["where"], [{"column": "status", "op": "=", "value": 0}])
+        self.assertEqual(len(notes), 2)
+        spec, notes = parse_summary_spec({"measures": [{"op": "count", "as": "合同数量"}],
+                                          "top": {"by": "合同数量", "n": 3, "direction": "desc"},
+                                          "group_by": ["owner"]})
+        self.assertEqual((spec.measures[0].alias, spec.top.by), ("m1", "m1"))
+        self.assertEqual(parse_summary_spec({"columns": ["name"]}), (SummarySpec.from_dict({"columns": ["name"]}), ()))
+        self.assertRefused("invalid_spec", parse_summary_spec, {"measures": [{"op": "sum", "as": "总额"}]})
+
+    def test_count_over_a_column_counts_its_nonempty_values_and_over_the_identity_every_record(self):
+        source = read([("id", "relation"), ("phone", "text")],
+                      [(RelationValue("1", "1"), "139"), (RelationValue("2", "2"), None), (RelationValue("3", "3"), "")])
+        result = summarize(source, measures=[{"op": "count", "column": "phone", "as": "phones"},
+                                             {"op": "count", "column": "id", "as": "rows"}])
+        self.assertEqual((("1", "3"),), result.rows)
+        self.assertIn("非空记录数", render_summary(result, max_chars=4000, user_text="有几个电话").text)
+
+    def test_literal_equivalents_compare_as_the_column_declares(self):
+        source = read([("status", "number"), ("owner", "relation"), ("code", "text"), ("open", "boolean")],
+                      [(20, RelationValue("7", "Ada"), "5", True), (0, RelationValue("8", "Bo"), "6", False)])
+        for where in ({"column": "status", "op": "=", "value": "20"}, {"column": "owner", "op": "=", "value": 7},
+                      {"column": "code", "op": "=", "value": 5}, {"column": "open", "op": "=", "value": "true"}):
+            with self.subTest(where=where):
+                self.assertEqual(1, summarize(source, columns=["status"], where=[where]).matched_count)
+        self.assertRefused("type_mismatch", summarize, source, columns=["status"],
+                           where=[{"column": "status", "op": "=", "value": "twenty"}])
+
+    def test_an_unverified_money_unit_is_kept_and_marked_through_computation(self):
+        column = SummaryColumn("tax", "number", unverified_unit=True)
+        source = replace(read([("tax", "number")], [(Decimal("101.4"),), (Decimal("2"),)]), columns=(column,))
+        result = summarize(source, measures=[{"op": "sum", "column": "tax", "as": "total"}])
+        self.assertTrue(result.columns[0].unverified_unit)
+        self.assertIn("(单位未核验)", render_summary(result, max_chars=4000, user_text="税额合计").text)
+        self.assertRefused("invalid_input", SummaryColumn, "tax", "number", "元", unverified_unit=True)
+        self.assertRefused("invalid_result", replace, result, columns=(replace(result.columns[0], unverified_unit=False),))
 
     def test_summary_schema_is_accepted_by_the_typed_tool_registry(self):
         from web_operation_agent.business.tools.registry import _validate_schema, validate_input

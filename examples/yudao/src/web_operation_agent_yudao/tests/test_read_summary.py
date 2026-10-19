@@ -4,6 +4,7 @@ from decimal import Decimal
 import unittest
 from types import SimpleNamespace as NS
 
+from web_operation_agent.execution.answer_references import table_from
 from web_operation_agent.execution.read_summary import SummaryRefused, render_summary
 from web_operation_agent.state.identity import actor_authority_digest
 from web_operation_agent.tests.execution.test_product_model_loop import LoopFixture, call, reply
@@ -136,13 +137,13 @@ class NativeSummaryTests(unittest.TestCase):
         self.assertEqual(result.source_count, 1)
         self.assertEqual(know.client.calls[-1], ("orders/get", {"id": 8}))
 
-    def test_native_detail_missing_identity_foreign_identity_and_unreviewed_money_are_refused(self):
-        for returned in ({"name": "no id"}, {"id": 9, "name": "wrong record"}, {"id": 8, "price": 100}):
+    def test_native_detail_missing_identity_and_foreign_identity_are_refused(self):
+        for returned in ({"name": "no id"}, {"id": 9, "name": "wrong record"}):
             know = knowledge([])
             original = know.client.get
             know.client.get = lambda path, **params: returned if path == "orders/get" else original(path, **params)
             with self.assertRaises(SummaryRefused):
-                know.call_api("orders/get", {"id": 8}, summary={"columns": ["price" if "price" in returned else "name"]},
+                know.call_api("orders/get", {"id": 8}, summary={"columns": ["name"]},
                               actor_digest=actor_authority_digest("app", "tenant", "actor"))
 
     def test_group_labels_come_from_same_native_foreign_key_name_pair_and_never_merge_ids(self):
@@ -171,9 +172,17 @@ class NativeSummaryTests(unittest.TestCase):
         self.assertEqual(result.columns[-1].unit, "元")
         self.assertEqual(result.ties_at_cutoff, 2)
 
-    def test_unreviewed_money_and_redacted_or_unpublished_columns_never_bypass_original_proofs(self):
-        for field, row, code in (("price", {"price": 100}, "unverified_money"),
-                ("apiSecret", {"apiSecret": "secret"}, "redacted_value"),
+    def test_unreviewed_money_keeps_its_raw_value_marked_and_never_takes_a_unit(self):
+        # Recorded turn Q003: one unreviewed amount refused the whole summary, and the
+        # model answered the amount in free text with a unit no review had proven.
+        result = self.read(knowledge([{"id": 1, "price": 100}]), ["price"], {"columns": ["price"]})
+        self.assertEqual((result.rows, result.columns[0].unit, result.columns[0].unverified_unit), ((("100",),), "", True))
+        self.assertIn("单位未核验", render_summary(result, max_chars=4000, user_text="单价").text)
+        reviewed = self.read(knowledge([{"id": 1, "price": 100}], reviewed=True), ["price"], {"columns": ["price"]})
+        self.assertEqual((reviewed.rows, reviewed.columns[0].unit, reviewed.columns[0].unverified_unit), ((("1.00",),), "元", False))
+
+    def test_redacted_or_unpublished_columns_never_bypass_original_proofs(self):
+        for field, row, code in (("apiSecret", {"apiSecret": "secret"}, "redacted_value"),
                 ("unknown", {"unknown": "actual"}, "unpublished_column")):
             with self.subTest(field=field), self.assertRaises(SummaryRefused) as caught:
                 self.read(knowledge([{"id": 1, **row}]), [field], {"columns": [field]})
@@ -243,10 +252,87 @@ class NativeSummaryTests(unittest.TestCase):
             "path": "orders/page", "params": '{"pageNo":1,"pageSize":20}',
             "fields": ["name"], "summary": {"columns": ["name"]}}, {"reads": []})
         self.assertEqual(result.query_answer.actor_digest, state.operation.principal.actor_authority_digest)
-        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="", read_answer="read-1"))],
+        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="", read_answer="r1"))],
             lambda *_: result)
         loop.state.approvals = NS(principal=state.operation.principal)
         self.assertIn("实际名称", loop.run())
+
+
+
+class Departments(Client):
+    def get(self, path, **params):
+        self.calls.append((path, params))
+        if path == "system/dept/list":
+            return [{"id": 100, "name": "研发部门", "leaderUserId": 1, "sort": 1, "status": 0},
+                    {"id": 101, "name": "市场部门", "leaderUserId": None, "sort": 2, "status": 0},
+                    {"id": 102, "name": "财务部门", "leaderUserId": 103, "sort": 3, "status": 1}]
+        if path == "system/user/simple-list":
+            return [{"id": 1, "nickname": "芋道源码"}, {"id": 103, "nickname": "源码"}, {"id": 104, "nickname": "测试"}]
+        return super().get(path, **params)
+
+
+def departments():
+    docs = copy.deepcopy(DOCS)
+    docs["paths"]["/admin-api/system/dept/list"] = {"get": {"summary": "获取部门列表", "tags": ["管理后台 - 部门"],
+        "parameters": [], "responses": {"200": {"content": {"*/*": {"schema": {"type": "object", "properties": {
+            "code": {"type": "integer"}, "data": {"type": "array", "items": {"$ref": "#/components/schemas/Dept"}}}}}}}}}}
+    docs["components"]["schemas"]["Dept"] = {"properties": {
+        "id": {"type": "integer"}, "name": {"type": "string"}, "leaderUserId": {"type": "integer"},
+        "sort": {"type": "integer"}, "status": {"type": "integer"}}}
+    return ActorKnowledge(Departments(), docs)
+
+
+class CitableReadTests(unittest.TestCase):
+    actor = actor_authority_digest("app", "tenant", "actor")
+
+    def test_a_plain_read_is_citable_but_not_a_requested_delivery(self):
+        procedure = YudaoLoopProcedures(knowledge([{"id": 1, "name": "实际名称", "status": 20}]), None,
+                                        "https://synthetic.test")
+        state = State()
+        state.operation = context()
+        result = procedure._tool(state, "call_api", {"path": "orders/page", "params": '{"pageNo":1,"pageSize":20}',
+                                                     "fields": ["name", "status"]}, {"reads": []})
+        self.assertIsNone(result.query_answer)
+        self.assertEqual((result.reference.complete, result.reference.rows), (True, (("1", "实际名称", "20"),)))
+        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="名称是{r1.name}"))],
+                           lambda *_: result)
+        loop.state.approvals = NS(principal=state.operation.principal)
+        self.assertEqual(loop.run("名称是什么"), "名称是实际名称")
+
+    def test_a_complete_read_with_no_rows_has_a_citable_count(self):
+        # The recorded Q121 answer said 0 matches but had no read to cite it from.
+        procedure = YudaoLoopProcedures(knowledge([]), None, "https://synthetic.test")
+        state = State()
+        state.operation = context()
+        result = procedure._tool(state, "call_api", {"path": "orders/page", "params": '{"pageNo":1,"pageSize":20}',
+                                                     "fields": ["name"]}, {"reads": []})
+        table = table_from(result.reference)
+        self.assertEqual((table.total, table.complete, table.rows), (0, True, ()))
+        loop = LoopFixture([reply(call("read")), reply(call("finish", status="done", answer="共{r1.total}条"))],
+                           lambda *_: result)
+        loop.state.approvals = NS(principal=state.operation.principal)
+        self.assertEqual(loop.run("有几条"), "共0条")
+
+    def test_the_recorded_count_declarations_compute_and_say_how_they_were_read(self):
+        # Q029 sent `count` with `column: id` and a Chinese alias 22 times; Q039 a Chinese alias.
+        know = knowledge([{"id": 1, "status": 0}, {"id": 2, "status": 0}, {"id": 3, "status": 1}])
+        text = know.call_api("orders/page", {"pageNo": 1, "pageSize": 2}, (), summary={
+            "measures": [{"op": "count", "column": "id", "as": "开启仓库数"}],
+            "where": [{"column": "status", "op": "=", "value": "0"}]}, actor_digest=self.actor)
+        self.assertEqual(know.last_query_answer.rows, (("2",),))
+        self.assertIn("已改为 m1", text)
+
+    def test_department_leaders_are_named_through_the_user_list_the_actor_reads(self):
+        know = departments()
+        text = know.call_api("system/dept/list", {}, ("name", "leaderUserId"), summary={
+            "columns": ["name", "leaderUserId"], "order_by": [{"column": "sort", "direction": "asc"}]},
+            actor_digest=self.actor)
+        result = know.last_query_answer
+        self.assertEqual(result.rows, (("研发部门", "芋道源码 (1)"), ("市场部门", None), ("财务部门", "源码 (103)")))
+        self.assertEqual(result.columns[1].display_name, "负责人")
+        self.assertIn("1=芋道源码", text)
+        self.assertNotIn("测试", text)
+        self.assertIn(("system/user/simple-list", {}), know.client.calls)
 
 
 if __name__ == "__main__":

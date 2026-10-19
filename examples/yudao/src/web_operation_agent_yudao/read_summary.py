@@ -32,8 +32,13 @@ def _instant(value, zone):
 
 
 def summarize(*, path, filters, fields, props, deref, rows, total, whole,
-              requests, actor_digest, zone, money_review, spec, columns=None, names=None):
-    """Use only the data this call fetched; no extra lookup or guessed type conversion."""
+              requests, actor_digest, zone, money_review, spec, columns=None, names=None,
+              relation_names=None):
+    """Use only the data the caller fetched; no lookup or guessed type conversion here.
+
+    `relation_names` names a bare identity column through another read the caller
+    made under the same actor ({column: {identity: name}}); it is display metadata and
+    never a grouping key."""
     declared = spec if isinstance(spec, SummarySpec) else SummarySpec.from_dict(spec)
     if rows is None or any(not isinstance(row, dict) for row in rows):
         raise SummaryRefused("not_a_collection", "summary requires a native list read")
@@ -42,7 +47,9 @@ def summarize(*, path, filters, fields, props, deref, rows, total, whole,
     policy = money_review.fields_for(path) if money_review is not None else {}
     display_names = columns if columns is not None else {}
     dictionaries = names if names is not None else {}
-    if not isinstance(display_names, dict) or not isinstance(dictionaries, dict):
+    named_relations = relation_names if relation_names is not None else {}
+    if (not isinstance(display_names, dict) or not isinstance(dictionaries, dict)
+            or not isinstance(named_relations, dict)):
         raise SummaryRefused("invalid_input", "native display metadata must be field-bound mappings")
     columns = []
     converters = []
@@ -51,7 +58,7 @@ def summarize(*, path, filters, fields, props, deref, rows, total, whole,
             raise SummaryRefused("unpublished_column", "summary columns must be published by this endpoint")
         schema = deref(props[key])
         description = str(schema.get("description") or "")
-        kind, unit = schema.get("type"), ""
+        kind, unit, unverified = schema.get("type"), "", False
         money = policy.get(key)
         if money is not None:
             kind, unit = "number", money.display_unit
@@ -59,15 +66,24 @@ def summarize(*, path, filters, fields, props, deref, rows, total, whole,
                 if not money.convertible(value):
                     raise SummaryRefused("invalid_money", "reviewed money field has an unverified value type")
                 return Decimal(str(value)) * money.factor
-        elif _MONEY.search(key + " " + description):
-            raise SummaryRefused("unverified_money", "money summary requires the existing per-field display review")
+        elif _MONEY.search(key + " " + description) and kind in {"integer", "number"}:
+            # No review has proven this amount's display unit: its raw value is shown
+            # as the application returned it, marked, never converted or given a unit.
+            kind, unverified = "number", True
+            def convert(value):
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise SummaryRefused("invalid_number", "numeric schema does not permit a text or boolean value")
+                return Decimal(str(value))
         elif (key == "id" or key.endswith("Id")) and kind in {"integer", "string"}:
             kind = "relation"
             label_key = key[:-2] + "Name" if key != "id" else ""
             labels = {}
             # These native foreign-key/name pairs are returned together in the same
             # actor-authorized row. Labels are display metadata, never grouping keys.
-            if (key in (*declared.group_by, *declared.columns) and label_key in props
+            if isinstance(named_relations.get(key), dict):
+                labels = {str(identity): str(label) for identity, label in named_relations[key].items()
+                          if isinstance(label, str) and label and REDACTED not in label}
+            elif (key in (*declared.group_by, *declared.columns) and label_key in props
                     and deref(props[label_key]).get("type") == "string"):
                 for row in rows:
                     identity, label = row.get(key), row.get(label_key)
@@ -135,7 +151,8 @@ def summarize(*, path, filters, fields, props, deref, rows, total, whole,
         if labels is not None and any(isinstance(label, str) and REDACTED in label for label in labels.values()):
             raise SummaryRefused("redacted_value", "a redacted dictionary label cannot be delivered exactly")
         columns.append(SummaryColumn(key, kind, unit, display_names.get(key, ""),
-            tuple((str(code), label) for code, label in labels.items()) if labels is not None else None))
+            tuple((str(code), label) for code, label in labels.items()) if labels is not None else None,
+            unverified_unit=unverified))
         converters.append(convert)
     actual = []
     for row in rows:

@@ -76,6 +76,7 @@ class WriteIntentTests(unittest.TestCase):
 
     def test_read_queries_do_not_select_business_review_but_mixed_obligations_do(self):
         from unittest.mock import patch
+        from web_operation_agent.execution.answer_references import ReferenceTable, TurnReferences
         from web_operation_agent_yudao.slim_loop import _CURRENT_REQUEST
         parent = SlimTurnExecutor.__mro__[1]
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
@@ -97,13 +98,52 @@ class WriteIntentTests(unittest.TestCase):
             with self.subTest(request=request), patch.object(parent, "_tools", return_value=[]):
                 current = _CURRENT_REQUEST.set(request)
                 intent = _WRITE_INTENT.set(classify_write_intent(request))
-                turn = {"writes": None, "query_answers": {"read_1": object()}}
+                refs = TurnReferences()
+                refs.add(ReferenceTable((("name", "名称"),), (("甲",),), 1, True))
+                turn = {"writes": None, "refs": refs, "requested_refs": ["r1"]}
                 try:
                     executor._tools(turn)
                     self.assertEqual(expected, bool(turn.get("review_completion")))
                 finally:
                     _CURRENT_REQUEST.reset(current)
                     _WRITE_INTENT.reset(intent)
+
+    def test_a_read_only_deployment_selects_no_review_for_any_request(self):
+        from unittest.mock import patch
+        from web_operation_agent_yudao.slim_loop import _CURRENT_REQUEST
+        parent = SlimTurnExecutor.__mro__[1]
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        # Recorded turns Q039 and Q109: a count of approved contracts, and an edit the
+        # deployment does not offer. Neither may be reviewed by another model.
+        for request in ("统计一下CRM合同里，审批状态为审核通过的合同数量。",
+                        "帮我把ERP供应商里“甲”这个供应商的联系人改成“乙”。", "审核这些订单"):
+            with self.subTest(request=request), patch.object(parent, "_tools", return_value=[]):
+                current = _CURRENT_REQUEST.set(request)
+                intent = _WRITE_INTENT.set(classify_write_intent(request))
+                turn = {"writes": None, "read_only": True}
+                try:
+                    executor._tools(turn)
+                    self.assertNotIn("review_completion", turn)
+                finally:
+                    _CURRENT_REQUEST.reset(current)
+                    _WRITE_INTENT.reset(intent)
+
+    def test_without_business_writes_a_save_intent_is_not_read(self):
+        import contextlib
+        from types import SimpleNamespace as NS
+        from unittest.mock import patch
+        seen = []
+        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.knowledge = NS(client=None)
+        executor.conversation_state = NS(model_context=lambda: {})
+        parent = SlimTurnExecutor.__mro__[1]
+        for enabled, expected in ((False, "neutral"), (True, "save")):
+            with self.subTest(enabled=enabled), \
+                    patch("web_operation_agent_yudao.bound_data_reads.turn_actor_reads",
+                          lambda client: contextlib.nullcontext()), \
+                    patch.object(parent, "_run", lambda self, state: seen.append(_WRITE_INTENT.get().mode)):
+                executor._run(NS(message=NS(text="审核这些订单"), approvals=NS(mutations_enabled=enabled)))
+                self.assertEqual(seen[-1], expected)
 
     def test_prepare_does_not_inject_save_skill_instructions(self):
         import contextlib

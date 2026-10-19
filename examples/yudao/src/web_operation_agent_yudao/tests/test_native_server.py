@@ -181,12 +181,12 @@ class NativeHostTests(unittest.TestCase):
         self.assertIn('本部署关闭', executor.profile.instructions)
         self.chat.return_value.complete.assert_not_called()
 
-    def test_the_slim_profile_carries_the_closing_number_check(self):
-        from web_operation_agent_yudao.answer_numbers import untraced
+    def test_the_slim_profile_has_no_model_reading_of_answer_numbers(self):
+        # Answers cite this turn's reads; the shared loop fills them in and reads the rest.
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
         executor = host._sessions[("1", "1")].session.runner.executor
-        self.assertIs(executor.profile.untraced_numbers, untraced)
+        self.assertFalse(hasattr(executor.profile, "untraced_numbers"))
 
     def test_native_slim_can_deliver_a_complete_long_roster_without_a_smaller_hidden_text_cap(self):
         host = self.host()

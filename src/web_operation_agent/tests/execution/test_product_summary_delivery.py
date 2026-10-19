@@ -38,12 +38,12 @@ class SummaryDeliveryTests(unittest.TestCase):
         loop = self.fixture(projection)
         answer = loop.run("List every name")
         self.assertIn("could not be fully verified", answer)
-        self.assertFalse(any(event == "read_answer_selected" for event, _ in loop.events))
+        self.assertFalse(any(event == "answer_references_used" for event, _ in loop.events))
 
     def fixture(self, projection, *, finish=None):
         result = LoopToolResult("Summary prepared", kind="read", query_answer=projection)
         loop = LoopFixture([reply(call("summary")),
-            reply(call("finish", status="done", answer="", read_answer="read-1")),
+            reply(call("finish", status="done", answer="", read_answer="r1")),
             reply(call("finish", status="cannot", answer="The requested result could not be fully verified."))],
             lambda *_: result)
         loop.state.approvals = NS(principal=context().principal)
@@ -55,14 +55,14 @@ class SummaryDeliveryTests(unittest.TestCase):
         answer = loop.run()
         self.assertIn("| 0 | 0 |", answer)
         self.assertIn("status=active", answer)
-        self.assertEqual([facts["records"] for event, facts in loop.events if event == "read_answer_selected"], [1])
+        self.assertEqual([facts["references"] for event, facts in loop.events if event == "answer_references_used"], [["r1"]])
 
     def test_foreign_actor_or_incomplete_read_cannot_be_delivered(self):
         for projection in (summary(actor="f" * 64), summary(count=1, complete=False)):
             with self.subTest(projection=projection):
                 loop = self.fixture(projection)
                 self.assertIn("could not be fully verified", loop.run())
-                self.assertFalse(any(event == "read_answer_selected" for event, _ in loop.events))
+                self.assertFalse(any(event == "answer_references_used" for event, _ in loop.events))
 
     def test_summary_cannot_be_replaced_with_model_prose_or_an_old_reference(self):
         projection = summary(count=3)
@@ -85,7 +85,7 @@ class SummaryDeliveryTests(unittest.TestCase):
         answer=loop.run("List all names")
         self.assertGreater(len(answer),8000)
         self.assertIn("Item 099",answer)
-        self.assertTrue(any(event=="read_answer_selected" for event,_ in loop.events))
+        self.assertTrue(any(event=="answer_references_used" for event,_ in loop.events))
 
     def test_over_budget_result_is_not_replaced_by_a_partial_table(self):
         loop = self.fixture(summary(count=3))
@@ -105,12 +105,12 @@ class SummaryDeliveryTests(unittest.TestCase):
                 return LoopToolResult("Opened", kind="page", dispatch="acknowledged")
             loop = LoopFixture([reply(call("read")),
                 reply(call("goto", path="/list", answer="All results are above")),
-                reply(call("finish", status="done", answer="", read_answer="read-1"))], handler)
+                reply(call("finish", status="done", answer="", read_answer="r1"))], handler)
             loop.state.approvals = NS(principal=context().principal)
             answer = loop.run("Show the result and open its page")
             self.assertNotIn("All results are above", answer)
             self.assertEqual(len(loop.state.chat.seen), 3)
-            self.assertTrue(any(event == "read_answer_selected" for event, _ in loop.events))
+            self.assertTrue(any(event == "answer_references_used" for event, _ in loop.events))
 
     def test_selected_server_values_are_only_recorded_in_opt_in_private_trace(self):
         loop = self.fixture(summary(count=3))
@@ -125,8 +125,8 @@ class SummaryDeliveryTests(unittest.TestCase):
         self.assertEqual(delivery["rendered_text"], answer)
         self.assertEqual(delivery["projection"]["matched_record_ids"], ["0", "1", "2"])
         self.assertEqual(delivery["projection"]["origin"]["scope"], "status=active")
-        event = next(facts for name, facts in loop.events if name == "read_answer_selected")
-        self.assertEqual(set(event), {"ref", "records", "digest"})
+        event = next(facts for name, facts in loop.events if name == "answer_references_used")
+        self.assertEqual(event, {"references": ["r1"]})
 
     def test_private_delivery_with_a_credential_is_withheld_instead_of_logged(self):
         with TemporaryDirectory() as tmp:
@@ -145,7 +145,7 @@ class SummaryDeliveryTests(unittest.TestCase):
             return LoopToolResult("Prepared", kind="read", query_answer=projection,
                                   read_key="/native/first" if name == "first" else "/native/later")
         loop = LoopFixture([reply(call("first")), reply(call("later")),
-            reply(call("finish", status="done", answer="", read_answer="read-1"))], handler)
+            reply(call("finish", status="done", answer="", read_answer="r1"))], handler)
         loop.state.approvals = NS(principal=context().principal)
         loop.config = NS(max_user_answer_chars=8000)
         with TemporaryDirectory() as tmp:
