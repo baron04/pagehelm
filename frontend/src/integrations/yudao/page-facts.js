@@ -35,7 +35,7 @@ function ledgerQuery(url) {
 }
 
 function orderQuery(url) {
-  const patterns = {customerId: /^[1-9][0-9]{0,19}$/, status: /^(0|10|20)$/,
+  const patterns = {no: /^[A-Za-z0-9_-]{1,64}$/, customerId: /^[1-9][0-9]{0,19}$/, status: /^(0|10|20)$/,
     orderTimeStart: /^\d{4}-\d{2}-\d{2} 00:00:00$/, orderTimeEnd: /^\d{4}-\d{2}-\d{2} 23:59:59$/}
   const keys = {'orderTime[0]': 'orderTimeStart', 'orderTime[1]': 'orderTimeEnd'}
   const parameters = {}, pairs = Array.from(url.searchParams)

@@ -14,11 +14,11 @@ is prepared read-only, shown to the person in full, dispatched once after their 
 and read back by the application; its outcome returns to the conversation like any other
 result. The page's own submit controls stay unpressed either way.
 
-A turn ends on the model's own word that it is done. Two cases are read a second time: the
-turn typed or chose, on the page, a value that is not in the person's words, and then a
-separate model request checks those words against what the page shows; or the finished
-answer states a business value this turn's own reads and the person's words do not show,
-and then the list goes back to the same model. Either way the turn may be sent back once.
+Read-only deployments review completion claims for draft and business requests against
+all the person's requirements. This uses the shared bounded review, as do unresolved
+record-tab targets. Typed values absent from the person's words may also prompt a
+review; untraced business numbers are fed back once to the same decision conversation.
+These model readings can miss intent; native receipts still prove only their own effects.
 
 A turn's conversation with the model lasts that turn. What later turns keep of it is the
 executor's bounded conversation state: the person's words, the answer each turn gave and
@@ -55,6 +55,8 @@ from .write_intent import WriteIntent, classify_write_intent
 
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
 MODEL_STEPS = 24
+#: Bound the native batch to the existing form handoff's twenty entered fields.
+_FORM_BATCH_FIELDS = 20
 #: How long a page is left alone before it is looked at again: while something it reads is
 #: still on its way, and between the two looks that must agree once nothing is.
 _PENDING_MS, _LOOK_MS = 400, 150
@@ -900,7 +902,7 @@ TOOLS = [
           "字段名用最新观察里“表单当前值”“明细行当前值”中出现的名字；带 add_lines 时，"
           "新行沿用已观察到的列名，行号按新增后的顺序填写。下拉先填用户给的名称，缺少精确选项时返回本字段的选项供纠正，不必先查接口。", {
         "fields": {"type": "array", "items": {"type": "object", "properties": {
-            "label": {"type": "string"}, "value": {"type": "string"}}, "required": ["label", "value"], "additionalProperties": False}, "minItems": 1, "maxItems": 12},
+            "label": {"type": "string"}, "value": {"type": "string"}}, "required": ["label", "value"], "additionalProperties": False}, "minItems": 1, "maxItems": _FORM_BATCH_FIELDS},
         "add_lines": {"type": "object", "properties": {
             "button": {"type": "string", "maxLength": 200},
             "count": {"type": "integer", "minimum": 1, "maximum": 4}},
@@ -1023,7 +1025,7 @@ SYSTEM_FORM = """3. 替用户把表单填好但不提交：打开“新增”或
    - 要修改某客户的联系人时，联系人是独立记录；先确认具体联系人。用户说“把手机号换成新的”却没有提供新号码时，先用 need_input 询问号码，不打开表单，也不把客户本身的编辑权限当作联系人权限。
    - 表单里的明细行（订单产品清单这类表格）：行内控件标着“明细第N行·列名”。需要新行时，在 fill_fields 带 add_lines={{"button":"观察中的添加按钮原文","count":要新增的行数}}，同一次调用带齐主表和各行用户给的字段，以及 then_highlight 和 answer。新行使用已观察到的列名与新增后的行号，程序先逐行建行核验，再按字段名填写，无须先单独填写主表或先点击添加行。只填用户给的列，单价、税率这些没提到的列不要动。
    - search_menu 已给出审核表单入口时，用 goto(path, open="入口文字") 一步打开页面和表单；当前页面上有唯一入口时也可直接 click。进入表单后先看返回的观察。
-   - 填表用 fill_fields 按字段名一次做完，不要一个个 input/select。已看到提交按钮时，同时带 then_highlight="按钮原文" 和 answer：程序逐个核验字段，再回读整张表单并标出按钮，通过才直接结束，无须再 highlight/finish。字段或交接没做成时先读反馈，再修正剩余部分。筛选带 then_click="搜索" 和 answer，程序核验全部字段和生效查询后直接结束。
+   - 填表用 fill_fields 按字段名一次做完，不要一个个 input/select。单批最多20个字段；超过时分批，只有用户要求的全部字段填完后，最后一批才带 then_highlight="按钮原文" 和 answer。程序逐个核验字段，再回读整张表单并标出按钮；完成前仍须核对完整原请求，不能遗漏字段却报完成。字段或交接没做成时先读反馈，再修正剩余部分。筛选带 then_click="搜索" 和 answer，程序核验全部字段和生效查询后直接结束。
    - 新增表单中类型已明确的客户、供应商、产品等关联字段，先直接填写用户说的名称；填表前不要用 find_record、search_api 或 call_api 确认下拉名称。下拉不存在会返回它自己的选项；从反馈中选精确文字纠正，保留空格，不替换成相近记录。只有本字段选项不完整或不足以确定对象时，才用所属类型的只读查询补充；有歧义仍需问用户。定位要修改的已有记录，以及用户另外要求查询的数据，照常读取。只读核验了没有改变表单的拒绝可继续，未确认的已发出动作不能重试。
    - 关联对象不在当前原生选择器中时，读取它的资料和状态解释原因；若状态为关闭而选择器只给出开启的对象，明确说明该对象已关闭、目前不可选，保留用户给出的其它明细并停止，不改选近似对象。
    - 绝对不要点击确定、保存、提交、删除等会写入数据的按钮；这一步留给用户。
@@ -1172,7 +1174,7 @@ def _fields(observation) -> dict[str, str]:
 
 def _business_handoff_ready(observation, element, request: str, *, detail_target: bool = False,
                             status_target: bool = False) -> bool:
-    """A list action must be bound to one named row in its application's latest GET.
+    """A list action binds one name- or business-number-filtered row in the latest GET.
 
     The button's label cannot establish which row it belongs to when the list has
     many rows. Draft submit controls use the separate form handoff verifier.
@@ -1198,18 +1200,21 @@ def _business_handoff_ready(observation, element, request: str, *, detail_target
     if query["path"] != read["path"]:
         return False
     # The page's scalar query projection can be empty even after a list GET included
-    # the native name filter. Bind its current visible control to that GET's field
+    # a native name or business-number filter. Bind the visible control to that GET's field
     # digest, and to words the person supplied; one visible row alone is insufficient.
     names = [control for control in observation.elements
              if control.attrs.get("page_control") == "query"
-             and control.attrs.get("query_field") == "name"
+             and control.attrs.get("query_field") in {"name", "no"}
              and control.attrs.get("value", "").strip()]
     if len(names) != 1:
         return False
     name = names[0].attrs["value"].strip()
     digest = hashlib.sha256(json.dumps([name], ensure_ascii=False,
                                     separators=(",", ":")).encode()).hexdigest()
-    return bool(name and name in request and read["query_fields"].get("name") == digest)
+    field = names[0].attrs["query_field"]
+    mentioned = (bool(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(name) + r"(?![A-Za-z0-9_-])", request))
+                 if field == "no" else name in request)
+    return bool(name and mentioned and read["query_fields"].get(field) == digest)
 
 
 _DEPTH = re.compile(r"^(\t*)\*?\[(\d+)\]")
@@ -2127,6 +2132,9 @@ class YudaoLoopProcedures:
         """Fill or choose several named fields one after another, each found afresh on the
         page as it then is, so that one model request does the work of several."""
         from web_operation_agent.execution.draft_handoff import add_draft_lines, field_identity, handoff_draft
+        if not 1 <= len(fields) <= _FORM_BATCH_FIELDS:
+            return LoopToolResult("字段批次数量超出工具上限，整批未执行；请分批填写，最后再交接。",
+                                  kind="page", state="refused", error_code="invalid_arguments")
         if then_click and then_highlight:
             return LoopToolResult("筛选和表单交接不能同时执行。", kind="page", state="refused",
                                   error_code="invalid_arguments")
@@ -2134,11 +2142,11 @@ class YudaoLoopProcedures:
         form_batch = bool(then_highlight or add_lines) or any(
             str(e.attrs.get("form_scope") or "").startswith(("dialog:", "form:"))
             and e.attrs.get("page_control") != "query"
-            and e.attrs.get("field_label") in {item.get("label") for item in fields[:12]}
+            and e.attrs.get("field_label") in {item.get("label") for item in fields}
             for e in getattr(s.obs, "elements", ()))
         if isinstance(intent, WriteIntent) and intent.mode == "draft" and not then_click and form_batch:
             unrequested = _unrequested_draft_fields(
-                fields[:12], _CURRENT_REQUEST.get(), _EARLIER_REQUESTS.get(),
+                fields, _CURRENT_REQUEST.get(), _EARLIER_REQUESTS.get(),
                 other_labels=[str(e.attrs.get("field_label") or "") for e in s.obs.elements
                               if str(e.attrs.get("form_scope") or "").startswith(("dialog:", "form:"))
                               and e.attrs.get("page_control") != "query"])
@@ -2154,7 +2162,7 @@ class YudaoLoopProcedures:
         before, expected = s.obs, []
         said, incomplete, failure = [], False, None
         paging_commands, paging_targets = [], []
-        for item in fields[:12]:
+        for item in fields:
             label, value = str(item.get("label", "")).strip().rstrip(":：").strip(), str(item.get("value", ""))
             if label in _PAGING:
                 paging = self._paging(s, _PAGING[label], label, value)
@@ -2454,8 +2462,14 @@ class YudaoLoopProcedures:
                       + "。逐个判断：是用户要求的另一种写法（如日期补全年份、名称补全全称）或应用自动联动（合计、天数、自动带出的关联）就不算问题；是助手自己编的值就算问题，要求恢复原值。"
                       if stray else "")
                    + "\n页面真实状态：" + json.dumps(state, ensure_ascii=False)[:7000])
-        return [{"role": "system", "content": VERIFY_SYSTEM if turn.get("writes") is None else
-                 VERIFY_SYSTEM.replace("\n只输出一个 JSON", VERIFY_WRITES + "\n只输出一个 JSON", 1)},
+        policy = VERIFY_SYSTEM
+        if turn.get("writes") is not None:
+            policy = policy.replace("\n只输出一个 JSON", VERIFY_WRITES + "\n只输出一个 JSON", 1)
+        elif isinstance(_WRITE_INTENT.get(), WriteIntent) and _WRITE_INTENT.get().mode == "save":
+            policy += ("\n本轮没有持久写入工具。办理请求可以降级为交接：须定位用户指定的确切记录，"
+                       "标出相应业务控件，并明确尚未实际办理。只打开列表、给手工建议或标出不相干控件，"
+                       "都不算完成交接；不得要求执行已被禁用的写入。")
+        return [{"role": "system", "content": policy},
                 {"role": "user", "content": content}]
 
     def prepare(self, prompt, context):
@@ -2607,11 +2621,17 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             _CURRENT_REQUEST.reset(token)
 
     def _tools(self, turn):
+        intent = _WRITE_INTENT.get()
+        if (turn.get("writes") is None and isinstance(intent, WriteIntent)
+                and intent.mode in {"draft", "save"}):
+            # A page receipt proves that action, not the complete form or business
+            # request. Select the shared loop's existing bounded completion review;
+            # the application does not replace its decision or settlement flow.
+            turn["review_completion"] = True
         offered = super()._tools(turn)
         if _read_only_status_question(_CURRENT_REQUEST.get()):
             return [tool for tool in offered
                     if tool["function"]["name"] in _STATUS_READ_TOOLS]
-        intent = _WRITE_INTENT.get()
         if not isinstance(intent, WriteIntent) or intent.mode != "draft":
             return offered
         names = {"load_skill", "read_skill_resource"}

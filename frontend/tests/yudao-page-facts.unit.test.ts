@@ -98,6 +98,38 @@ describe('native Yudao record and read completion facts', () => {
     facts.begin(url)!(403,null)
     expect(facts.readPageQuery()).toBeUndefined()
   })
+  it('retains the sales business number through XHR only after its successful list read', async () => {
+    mountedPage('/erp/sale/order', 'SaleOrder')
+    class Request extends EventTarget {
+      responseType = 'json'; response = {code:0,data:{list:[{id:17}],total:1}}; status = 200
+      open() {}
+      send() {this.dispatchEvent(new Event('loadend'))}
+    }
+    const facts = installPageFacts({location:window.location,fetch:window.fetch,
+      XMLHttpRequest:Request,crypto:window.crypto},document)
+    const path = '/admin-api/erp/sale-order/page'
+    const call = (query: string, status = 200) => {
+      const request = new Request(); request.status = status
+      // @ts-expect-error The installed wrapper receives native browser arguments.
+      request.open('GET',path + '?pageNo=1&pageSize=10&' + query)
+      request.send()
+    }
+    try {
+      call('no=SO-SYNTHETIC-17')
+      await vi.waitFor(() => {
+        expect(facts.readPageQuery()).toEqual({path,parameters:{no:'SO-SYNTHETIC-17'}})
+        expect(facts.readPageRead()).toMatchObject({path,total:1,rows:1,query_fields:{
+          no:createHash('sha256').update(JSON.stringify(['SO-SYNTHETIC-17'])).digest('hex')}})
+      })
+      call('no=SO-SYNTHETIC-17',403)
+      expect(facts.readPageQuery()).toBeUndefined()
+      for (const query of ['no=SO-17&no=SO-18','no=SO-17&token=private','no='+'x'.repeat(65)]) {
+        call(query)
+        await vi.waitFor(() => expect(facts.readPageRead()).toBeDefined())
+        expect(facts.readPageQuery()).toBeUndefined()
+      }
+    } finally {facts.dispose()}
+  })
   it('binds any standard list read to query digests and paging without retaining raw values', async () => {
     mountedPage('/erp/sale/order', 'SaleOrder')
     const facts = createPageFacts()

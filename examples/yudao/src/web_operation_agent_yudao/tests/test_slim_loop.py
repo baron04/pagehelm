@@ -163,6 +163,25 @@ class BusinessHandoffTests(unittest.TestCase):
         self.assertFalse(_business_handoff_ready(replace(page, elements=[button, name_box, duplicate]),
                                                  button, f"删除{target}"))
 
+    def test_business_number_handoff_requires_the_same_live_filter_digest_and_unique_row(self):
+        target = "PO-000017"
+        digest = hashlib.sha256(json.dumps([target], separators=(",", ":")).encode()).hexdigest()
+        button = element(12,"button","审批","button")
+        box = element(13,"textbox","单号","input",page_control="query",query_field="no",value=target)
+        read = {"path":"/admin-api/erp/purchase-order/page","query_digest":"a"*64,
+                "query_fields":{"no":digest},"revision":1,"page":1,"page_size":10,"total":1,"rows":1}
+        page = replace(observation(),elements=[button,box],page_route="/orders",
+                       page_query={"path":read["path"],"parameters":{}},page_read=read)
+        self.assertTrue(_business_handoff_ready(page,button,"审批"+target))
+        for changed in (replace(page,page_read={**read,"total":2,"rows":2}),
+                        replace(page,page_read={**read,"query_fields":{"no":"b"*64}}),
+                        replace(page,elements=[button,replace(box,attrs={**box.attrs,"query_field":"remark"})])):
+            self.assertFalse(_business_handoff_ready(changed,button,"审批"+target))
+        self.assertFalse(_business_handoff_ready(page,button,"审批PO-000018"))
+        for request in ("审批XPO-000017", "审批PO-0000170", "审批PO-000017-A", "审批PO-000017_suffix"):
+            self.assertFalse(_business_handoff_ready(page,button,request))
+        self.assertTrue(_business_handoff_ready(page,button,"审批「PO-000017」，由我提交"))
+
     def test_record_button_requires_a_separately_verified_target(self):
         button = element(12, "button", "审核", "button")
         detail = replace(observation(), elements=[button], url="https://synthetic.test/orders/7",
@@ -1641,11 +1660,11 @@ class SettledTests(unittest.TestCase):
 
 
 class LoopTests(unittest.TestCase):
-    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=()):
+    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=(), slim=False):
         """`page` is what each step on the page in turn changes of it; a step past the
         end of it leaves the page as it was. `tabs` are (name, aria-selected) of the
         page's tabs."""
-        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
+        executor = (SlimTurnExecutor if slim else ModelDrivenTurnExecutor).__new__(SlimTurnExecutor if slim else ModelDrivenTurnExecutor)
         executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
         executor.channel = self.channel = Channel()
         executor._messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "q"}]
@@ -1682,7 +1701,12 @@ class LoopTests(unittest.TestCase):
                 executor._verified_action_commands = {receipt.command_id: json.dumps(s.obs.to_json())}
             return LoopToolResult(text, kind="page" if name in {"goto","highlight","click","input","select","scroll","fill_fields"} else "read")
         executor._tool = typed
-        executor._tools = lambda _: TOOLS
+        def offered(turn):
+            if slim:
+                with patch.object(ModelDrivenTurnExecutor, "_tools", return_value=TOOLS):
+                    return SlimTurnExecutor._tools(executor, turn)
+            return TOOLS
+        executor._tools = offered
         executor._page = lambda s, turn: page_text(s.obs, handoffs=turn["handoffs"], marked=turn["marked"])
         executor._completion_conflict = lambda obs, answer: _tabs_not_shown(obs, answer)
         def observe(s, action, args, **kwargs):
@@ -1710,6 +1734,38 @@ class LoopTests(unittest.TestCase):
         self.turn = turn = {"reads": [], "marked": "", "trace": [], "touched": list(touched),
                             "handoffs": SessionHandoffPolicy.extending(()), "shown": [], "done": set(), "stalled": 0}
         return executor, state, executor._loop(state, asked, turn, verified=False)
+
+    def test_readonly_business_request_cannot_end_on_a_verified_list_navigation_alone(self):
+        token = _WRITE_INTENT.set(WriteIntent("save", "审批"))
+        self.addCleanup(_WRITE_INTENT.reset, token)
+        def opened(s, name, args, turn):
+            turn["confirmed"] = True
+            return "已打开。", True
+        _, state, answer = self.loop(
+            reply(call("goto",path="/orders",answer="已打开列表。")),
+            reply(call("finish",status="cannot",answer="尚未完成目标审批的交接。")),
+            slim=True,tool=opened,asked="请审批指定订单",problems=[("只打开列表，未交接目标审批按钮",)])
+        self.assertEqual(self.checked,["已打开列表。"])
+        self.assertEqual(answer,"尚未完成目标审批的交接。")
+        self.assertEqual(state.terminal_reason,"agent_refused")
+
+    def test_literal_draft_values_still_review_omitted_fields_and_cannot_bypass_with_finish(self):
+        token = _WRITE_INTENT.set(WriteIntent("draft"))
+        self.addCleanup(_WRITE_INTENT.reset, token)
+        _, state, answer = self.loop(
+            reply(call("finish",status="done",answer="已填好。")),
+            reply(call("finish",status="done",answer="已填好。")),
+            slim=True,asked="名称甲，备注乙，先别保存",touched=[("名称","甲")],
+            problems=[("备注未填",),("备注仍未填",)])
+        self.assertEqual(len(self.checked),2)
+        self.assertEqual(state.terminal_reason,"agent_refused")
+        self.assertIn("尚未核对到",answer)
+
+    def test_plain_read_in_slim_keeps_the_existing_no_extra_review_path(self):
+        token = _WRITE_INTENT.set(WriteIntent("neutral"))
+        self.addCleanup(_WRITE_INTENT.reset, token)
+        self.loop(reply(call("finish",status="done",answer="共3条")),slim=True,asked="总共有多少条")
+        self.assertEqual(self.checked,[])
 
     def test_done_ends_the_turn_finished_with_the_model_s_answer(self):
         _executor, state, text = self.loop(reply(call("search_menu", keyword="订单")),
@@ -2111,6 +2167,25 @@ class LoopTests(unittest.TestCase):
         self.assertIn("不存在：屏幕上没有这个字段", said)
         self.assertNotIn("已点“搜索”", said)  # a partial filter must never apply or complete
         self.assertEqual([label for label, _value in turn["touched"]], ["备注", "客户", "日期"])
+
+    def test_thirteenth_draft_field_is_executed_and_over_limit_batch_is_not_truncated(self):
+        executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        executor.knowledge, sent = None, []
+        executor._act = lambda s, action, args, **kw: sent.append(args["value"]) or ""
+        executor._settled = lambda s, **kw: None
+        state, turn = State(), {"touched":[],"trace":[]}
+        fields = [{"label":f"字段{i}","value":f"值{i}"}for i in range(1,14)]
+        state.obs = replace(state.obs,elements=[element(i,"textbox","","input",field_label=f"字段{i}")for i in range(1,14)],
+                            content="\n".join(f"[{i}]<input />"for i in range(1,14)))
+        result = executor._fill_fields(state,fields,"",turn)
+        self.assertEqual(result.state,"completed")
+        self.assertEqual(sent,[f"值{i}"for i in range(1,14)])
+        schema = next(t["function"]["parameters"]for t in TOOLS if t["function"]["name"]=="fill_fields")
+        self.assertGreaterEqual(schema["properties"]["fields"]["maxItems"],len(fields))
+        sent.clear()
+        result = executor._fill_fields(state,fields*2,"",turn)
+        self.assertEqual((result.state,result.error_code),("refused","invalid_arguments"))
+        self.assertEqual(sent,[])
 
     def test_draft_copy_refuses_extra_field_before_touching_the_form(self):
         executor = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
