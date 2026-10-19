@@ -40,6 +40,8 @@ class CloudReadonlyTests(unittest.TestCase):
         self.assertNotIn("--runtime-source", args)
         self.assertIn("--no-native-edit-prefill", args)
         self.assertIn("--source-root", args)
+        self.assertEqual(args[args.index("--native-money-policy") + 1],
+                         "/opt/native-policy/verified-money.json")
 
 
 class EntryTests(unittest.TestCase):

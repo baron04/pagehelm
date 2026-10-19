@@ -46,6 +46,7 @@ services:
               "--source-root", "/opt/source", "--source-release", "${YUDAO_RELEASE:-v2026.09}",
               "--native-read-policy", "/opt/native-policy/fence.json",
               "--native-page-policy", "/opt/native-policy/pages.json",
+              "--native-money-policy", "/opt/native-policy/verified-money.json",
               "--native-filter-semantics", "/opt/native-policy/filters.json",
               "--no-native-edit-prefill"]
     volumes:
