@@ -31,6 +31,33 @@ def _instant(value, zone):
             + timedelta(milliseconds=value % 1000)).astimezone(zone)
 
 
+def bind_native_conditions(spec, filters, props, equalities):
+    """Reapply proven native identity equalities before summarizing.
+
+    A published parameter name alone proves no comparison semantics. Only a
+    same-release compiled equality on a published, same-name identity column is
+    eligible. Do not compare native raw money/date parameters to converted display
+    values. Other native predicates retain their native handling; they are never
+    guessed, dropped from the request, or treated as local proof.
+    """
+    if not equalities:
+        return spec
+    where = spec.to_json()["where"]
+    for key, value in filters.items():
+        if (equalities.get(key) != key or key not in props
+                or not (key == "id" or key.endswith("Id"))
+                or props[key].get("type") not in {"integer", "string"}
+                or value is None or value == "" or isinstance(value, (list, dict))):
+            continue
+        if (props[key].get("type") == "integer" and isinstance(value, str)
+                and re.fullmatch(r"[+-]?[0-9]+", value)):
+            value = int(value)
+        condition = {"column": key, "op": "=", "value": value}
+        if condition not in where:
+            where.append(condition)
+    return SummarySpec.from_dict({**spec.to_json(), "where": where})
+
+
 def summarize(*, path, filters, fields, props, deref, rows, total, whole,
               requests, actor_digest, zone, money_review, spec, columns=None, names=None,
               relation_names=None):

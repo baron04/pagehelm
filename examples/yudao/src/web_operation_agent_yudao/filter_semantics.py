@@ -7,9 +7,9 @@ the mapper methods that take it, reading the `xxxIfPresent(Do::getField, reqVO.g
 conditions. A parameter is annotated only when every querying method of the VO binds it the
 same way; parameters whose condition it cannot resolve that way stay unknown.
 
-It is a release-time aid like the method fence. At runtime the compiled labels only annotate
-the endpoints and reads the actor's own account already shows; they withhold no data and
-refuse no read.
+It is a release-time aid like the method fence. Labels annotate the endpoints and reads
+the actor's own account already shows. Separately proven direct equalities may reapply an
+identity predicate in summaries; annotation alone never grants that executable binding.
 
     python -m web_operation_agent_yudao.filter_semantics --source-root /opt/source \
         --source-release v2026.09 --output native-policy/filters.json
@@ -43,12 +43,15 @@ _EXPORT = ("/export", "/import", "/download")
 class FilterSemantics:
     """A deployed filters.json: labels for the query parameters the scan resolved.
 
-    Annotation only. An endpoint or parameter missing here is not unsafe or unknown by
-    decision; the scan simply resolved no condition for it.
+    Missing entries mean the scan resolved no condition. Besides annotation, native
+    summaries reapply only a direct same-field/value equality from `equalities`,
+    when the response column is published. An equality annotation alone is not a
+    binding; neither columns nor value transformations are guessed.
     """
 
-    def __init__(self, apis: dict[str, dict[str, str]]):
+    def __init__(self, apis: dict[str, dict[str, str]], *, equalities=None):
         self._apis = apis
+        self._equalities = equalities or {}
 
     @classmethod
     def load(cls, document, *, release: str, source_digest: str | None = None) -> "FilterSemantics":
@@ -61,6 +64,7 @@ class FilterSemantics:
                 or not isinstance(document["apis"], dict)):
             raise ValueError("the filter semantics policy must match the deployment release and source")
         apis: dict[str, dict[str, str]] = {}
+        equalities = {}
         for path, entry in document["apis"].items():
             params = entry.get("params") if isinstance(entry, dict) else None
             if not isinstance(path, str) or not isinstance(params, dict):
@@ -71,10 +75,21 @@ class FilterSemantics:
                     raise ValueError("the filter semantics policy carries an unknown condition code")
                 resolved[param] = LABELS[code]
             apis[path] = resolved
-        return cls(apis)
+            bindings = entry.get("equalities", {})
+            if (not isinstance(bindings, dict) or any(
+                    not isinstance(key, str) or key != column or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key)
+                    or params.get(key) != "eq" for key, column in bindings.items())):
+                raise ValueError("native equality bindings require a proven same-column equality")
+            if bindings:
+                equalities[path] = dict(bindings)
+        return cls(apis, equalities=equalities)
 
     def params_for(self, path: str) -> dict[str, str]:
         return self._apis.get(path, {})
+
+    def equalities_for(self, path: str) -> dict[str, str]:
+        """Direct same-field/value bindings; old annotation-only policies prove none."""
+        return self._equalities.get(path, {})
 
     def condition_line(self, path: str, submitted) -> str:
         """`name 包含匹配；categoryId 等于` for the submitted conditions this policy resolves."""
@@ -176,6 +191,7 @@ def _vo_conditions(paths, read, fields_by_vo: dict[str, frozenset[str]]):
     the parameter stays unknown rather than annotated with a branch's condition.
     """
     per_vo: dict[str, dict[tuple[str, str], dict[str, set[str]]]] = {}
+    bindings_by_vo = {}
     for path in paths:
         if not path.rsplit("/", 1)[-1].endswith("Mapper.java"):
             continue
@@ -208,7 +224,17 @@ def _vo_conditions(paths, read, fields_by_vo: dict[str, frozenset[str]]):
                         if param in fields_by_vo[vo]:
                             (per_vo.setdefault(vo, {}).setdefault(method_key, {})
                              .setdefault(param, set()).add(call.group(1)))
-    out = {}
+                            # Annotation says which comparison is used, not which
+                            # row column/value it compares. Do not turn it into an
+                            # executable filter unless both operands are direct.
+                            variables = re.findall(r"\b" + re.escape(vo) + r"\s+(\w+)\b", match.group(0))
+                            direct = (call.group(1) == "eq" and len(args) == 2
+                                and re.fullmatch(r"\w+::(?:get|is)" + re.escape(getter), args[0].strip())
+                                and any(re.fullmatch(re.escape(variable) + r"\.(?:get|is)" + re.escape(getter)
+                                        + r"\s*\(\s*\)", args[1].strip()) for variable in variables))
+                            (bindings_by_vo.setdefault(vo, {}).setdefault(method_key, {})
+                             .setdefault(param, set()).add(param if direct else None))
+    out, equalities = {}, {}
     for vo, methods in per_vo.items():
         common = None
         for params in methods.values():
@@ -219,7 +245,9 @@ def _vo_conditions(paths, read, fields_by_vo: dict[str, frozenset[str]]):
             if len(codes) == 1 and next(iter(codes)) in LABELS:
                 resolved[param] = next(iter(codes))
         out[vo] = resolved
-    return out
+        equalities[vo] = {param: param for param, code in resolved.items() if code == "eq"
+            and all(bindings_by_vo[vo][method].get(param) == {param} for method in methods)}
+    return out, equalities
 
 
 def filter_policy(tree, release: str) -> dict:
@@ -228,7 +256,7 @@ def filter_policy(tree, release: str) -> dict:
     read = tree.read_text
     handlers = _get_handlers(paths, read)
     fields_by_vo = _vo_fields(_java_index(paths), read, {vo for _endpoint, vo in handlers})
-    conditions = _vo_conditions(paths, read, fields_by_vo)
+    conditions, equalities = _vo_conditions(paths, read, fields_by_vo)
     apis: dict[str, dict | None] = {}
     for endpoint, vo in handlers:
         fields = fields_by_vo.get(vo)
@@ -236,6 +264,8 @@ def filter_policy(tree, release: str) -> dict:
             continue
         params = conditions.get(vo, {})
         entry = {"req_vo": vo, "params": dict(params), "unknown": sorted(fields - set(params))}
+        if equalities.get(vo):
+            entry["equalities"] = equalities[vo]
         if endpoint in apis and apis[endpoint] != entry:
             apis[endpoint] = None
         else:

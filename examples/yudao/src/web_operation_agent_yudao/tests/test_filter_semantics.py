@@ -307,6 +307,7 @@ class CompileTests(unittest.TestCase):
                 self.assertEqual(apis[endpoint], {
                     "req_vo": "ContactLikePageReqVO",
                     "params": {"name": "like", "mobile": "eq"},
+                    "equalities": {"mobile": "mobile"},
                     "unknown": ["customerId"]})
 
     def test_a_parameter_two_methods_bind_differently_stays_unknown(self):
@@ -341,7 +342,33 @@ class CompileTests(unittest.TestCase):
         self.assertEqual(apis["/admin-api/erp/product/page"], {
             "req_vo": "ErpProductPageReqVO",
             "params": {"name": "like", "categoryId": "eq", "createTime": "between"},
+            "equalities": {"categoryId": "categoryId"},
             "unknown": []})
+
+    def test_only_direct_same_field_and_untransformed_values_become_executable_equalities(self):
+        for changed in (".eqIfPresent(ErpProductDO::getUnitId, reqVO.getCategoryId())",
+                        ".eqIfPresent(ErpProductDO::getCategoryId, reqVO.getCategoryId() + 1)",
+                        '.eqIfPresent("category_id", reqVO.getCategoryId())'):
+            sources = dict(_REAL)
+            path = next(p for p in sources if p.endswith("Mapper.java"))
+            sources[path] = sources[path].replace(
+                ".eqIfPresent(ErpProductDO::getCategoryId, reqVO.getCategoryId())", changed)
+            with self.subTest(changed=changed):
+                entry = filter_policy(_Tree(sources), "v-test")["apis"]["/admin-api/erp/product/page"]
+                self.assertEqual(entry["params"]["categoryId"], "eq")
+                self.assertNotIn("equalities", entry)
+
+    def test_compiled_equalities_load_but_old_annotation_only_policies_prove_none(self):
+        compiled = filter_policy(_Tree(_REAL), "v-test")
+        found = FilterSemantics.load(compiled, release="v-test")
+        self.assertEqual(found.equalities_for("/admin-api/erp/product/page"), {"categoryId": "categoryId"})
+        compiled["apis"]["/admin-api/erp/product/page"].pop("equalities")
+        self.assertEqual(FilterSemantics.load(compiled, release="v-test").equalities_for(
+            "/admin-api/erp/product/page"), {})
+        for bindings in ({"categoryId": "unitId"}, {"name": "name"}):
+            compiled["apis"]["/admin-api/erp/product/page"]["equalities"] = bindings
+            with self.assertRaises(ValueError):
+                FilterSemantics.load(compiled, release="v-test")
 
     def test_the_policy_binds_the_release_and_the_source_it_was_read_from(self):
         policy = filter_policy(_Tree(_SOURCES), "v-test")

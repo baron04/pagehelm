@@ -147,7 +147,8 @@ class ActorKnowledge:
         self._query_choices = query_choices
         self.money_review = money_review
         #: What each published query parameter's condition means, compiled from the
-        #: deployed release's source. Annotation only; it refuses or hides no read.
+        #: deployed release's source. Direct identity bindings may also be reapplied
+        #: in summaries; comparison labels alone are not executable bindings.
         self.filter_semantics = filter_semantics
         self._zone = ZoneInfo(time_zone)
         self._menu = self._ops = self._by_path = self._schemas = None
@@ -481,6 +482,13 @@ class ActorKnowledge:
         params = dict(params)
         filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
         relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
+        if summary is not None:
+            from .read_summary import bind_native_conditions
+            equalities = self.filter_semantics.equalities_for(path) if self.filter_semantics is not None else None
+            summary = bind_native_conditions(summary, filters, props, equalities)
+            fields = tuple(dict.fromkeys((*fields, *(c.column for c in summary.where))))
+            if len(fields) > 12:
+                raise QueryParametersError("汇总与接口范围条件合计引用列超过12个，未执行读取")
         declared_total = None
         data_lines: set[int] = set()
         try:
@@ -1005,7 +1013,7 @@ SYSTEM_INTRO = """你是企业后台助手，替当前登录用户完成请求�
 你能做三类事；混合请求每项都须落实：
 """
 SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call_api 按同账号读取；find_record 按确切名称找记录，带kind限定类型。业务编号用已发布接口对应参数查，不能当名称。目标多条用need_input让用户选；完整查询无匹配即cannot说明范围，不缩短名称、穷举模块或反复切页签。
-- 数据答案统一用call_api.summary：单字段/名单用columns；统计用measures(count/count_distinct/sum/min/max)，条件用where(AND)，排序用order_by(asc/desc,nulls)，排名用top。声明用户所有条件和列，程序自动并入读取列，最多读5000行；未读全不称完整。条件只能用接口已声明params或summary.where，等值不是范围。
+- 数据答案统一用call_api.summary：单字段/名单用columns；统计用measures(count/count_distinct/sum/min/max)，条件用where(AND)，排序用order_by(asc/desc,nulls)，排名用top。声明用户所有条件和列，程序自动并入读取列，最多读5000行；未读全不称完整。条件只能用接口已声明params或summary.where，等值不是范围。指定关联对象时先按当前账号解析唯一编号，再用对应外键的summary.where精确限定；接口参数已提交不等于返回行已落实条件。不能加入用户及部署约定没有要求的筛选。
 - 关联分组用编号，名称只展示，同名不同编号不合并。日期按用户动词选实际列；“创建”用createTime，业务日期不能代替；未约定术语先澄清。时间阈值带时区。逐记录排名用group_by=["id"]及数值measure；第N个位置并列全保留，不取N个不同价位。
 - 收到read_answer后用finish(status=done,answer="",read_answer=引用)交付服务端正文；不手抄事实、名单或重算。它只覆盖该次条件和数据，不能代替用户另要的页面、表单或交接。
 - CRM sceneType只在用户限定负责/参与/下属范围时按接口定义使用；全范围与当前页签不同，空结果只说明实际查询范围。后续指代需重新读取，历史助手文字不是当前事实。
