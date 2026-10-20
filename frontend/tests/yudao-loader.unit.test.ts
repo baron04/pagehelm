@@ -85,4 +85,62 @@ describe('Yudao identity for the server-declared native guard', () => {
     expect(fetcher.mock.calls.map(([input]) => new URL(input, location.href).pathname))
       .toEqual(['/woa-agent-boot/bootstrap', '/admin-api/system/auth/refresh-token'])
   })
+
+  it('starts from a surviving refresh token and replaces expired storage metadata after renewal', async () => {
+    localStorage.setItem('ACCESS_TOKEN', JSON.stringify({e: Date.now() - 1, v: JSON.stringify('expired')}))
+    localStorage.setItem('REFRESH_TOKEN', JSON.stringify({v: JSON.stringify('refresh')}))
+    const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
+      if (input.startsWith('/admin-api/')) return Response.json({code: 0, data: {accessToken: 'new'}})
+      return Response.json({config: {}}, {status:
+        new Headers(init?.headers).get('Authorization') === 'Bearer new' ? 200 : 401})
+    })
+    vi.stubGlobal('fetch', fetcher)
+    vi.resetModules()
+    // @ts-expect-error Application loader intentionally ships as framework-free JS.
+    await import('../../examples/yudao/deploy/cloud/yudao-loader.js')
+    expect(document.querySelector('script[data-woa-bootstrap]')).not.toBeNull()
+    expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(200)
+    expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(200)
+    expect(fetcher.mock.calls.filter(([input]) => input.startsWith('/admin-api/'))).toHaveLength(1)
+  })
+
+  it('reuses a token the page refreshed while bootstrap was awaiting its 401', async () => {
+    localStorage.setItem('ACCESS_TOKEN', JSON.stringify({v: JSON.stringify('old')}))
+    localStorage.setItem('REFRESH_TOKEN', JSON.stringify({v: JSON.stringify('refresh')}))
+    const fetcher = vi.fn(async (_input: string, init?: RequestInit) => {
+      if (new Headers(init?.headers).get('Authorization') === 'Bearer old') {
+        localStorage.setItem('ACCESS_TOKEN', JSON.stringify({v: JSON.stringify('page-new')}))
+        return Response.json({}, {status: 401})
+      }
+      return Response.json({config: {}})
+    })
+    vi.stubGlobal('fetch', fetcher)
+    vi.resetModules()
+    // @ts-expect-error Application loader intentionally ships as framework-free JS.
+    await import('../../examples/yudao/deploy/cloud/yudao-loader.js')
+    expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(200)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls.map(([, init]) => new Headers(init?.headers).get('Authorization')))
+      .toEqual(['Bearer old', 'Bearer page-new'])
+  })
+
+  it('does not overwrite a sign-out while refresh is in flight', async () => {
+    localStorage.setItem('ACCESS_TOKEN', JSON.stringify({v: JSON.stringify('old')}))
+    localStorage.setItem('REFRESH_TOKEN', JSON.stringify({v: JSON.stringify('refresh')}))
+    const fetcher = vi.fn(async (input: string) => {
+      if (input.startsWith('/admin-api/')) {
+        localStorage.clear()
+        return Response.json({code: 0, data: {accessToken: 'must-not-install', refreshToken: 'new-refresh'}})
+      }
+      return Response.json({}, {status: 401})
+    })
+    vi.stubGlobal('fetch', fetcher)
+    vi.resetModules()
+    // @ts-expect-error Application loader intentionally ships as framework-free JS.
+    await import('../../examples/yudao/deploy/cloud/yudao-loader.js')
+    expect((await window.fetch('/woa-agent-boot/bootstrap', {method: 'POST'})).status).toBe(401)
+    expect(localStorage.getItem('ACCESS_TOKEN')).toBeNull()
+    expect(localStorage.getItem('REFRESH_TOKEN')).toBeNull()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
 })

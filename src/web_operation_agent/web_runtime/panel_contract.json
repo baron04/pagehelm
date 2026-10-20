@@ -155,6 +155,7 @@
     "unknown_session": "与助手的连接已断开，正在重新连接。",
     "runtime_replaced": "助手已在另一个页面打开，这一页不再连接。到那个页面继续。",
     "unauthorized": "登录身份已变化，请重新登录后继续。",
+    "business_authentication": "应用登录已失效，请重新登录后重新提交需求。",
     "invalid_lease": "页面身份已变化，正在重新连接。",
     "principal_mismatch": "页面身份已变化，正在重新连接。",
     "origin_refused": "这个页面的来源不被助手接受，助手不会在这里运行。",
@@ -211,7 +212,8 @@
     "session_expired"
   ],
   "nonterminal_error_states": {
-    "turn_in_flight": "ready"
+    "turn_in_flight": "ready",
+    "business_authentication": "ready"
   },
   "terminal_panel_state_by_code": {
     "session_closed": "ended",

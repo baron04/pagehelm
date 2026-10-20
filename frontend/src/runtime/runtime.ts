@@ -75,6 +75,9 @@ const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll'])
 const APPLICATION_OPEN_MS = 6_000
 
 export class EmbeddedWebRuntime {
+  /** The session host reauthenticates while idle, before any observation or message is sent. */
+  beforeSubmit?: () => Promise<void>
+  private preparingSubmission = false
   config!: RuntimeConfig
   endpoint = ''
   sessionId = ''
@@ -572,8 +575,20 @@ export class EmbeddedWebRuntime {
   async submitTask(text: string): Promise<JsonObject> {
     if (this.stopped) throw new Error('embedded runtime is stopped')
     if (this.stored.taskInFlight) throw new Error('another task is still running')
+    if (this.preparingSubmission) throw new Error('a task is being prepared')
     const goal = String(text || '').trim()
     if (!goal || goal.length > 2000) throw new Error('task must contain 1-2000 characters')
+    this.preparingSubmission = true
+    try {
+      if (this.beforeSubmit) await this.beforeSubmit()
+      if (this.stopped || this.stored.taskInFlight) throw new Error('runtime is no longer idle')
+    } catch (error) {
+      this.panelHost?.setOptimistic({turnId: '', text: goal, failed: true})
+      this._raise(error)
+      throw error
+    } finally {
+      this.preparingSubmission = false
+    }
     this._clearHighlight()
     const messageId = crypto.randomUUID()
     this.stored.taskInFlight = true

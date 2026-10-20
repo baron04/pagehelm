@@ -18,7 +18,7 @@ import {detach, later, listen, report, type Cancel} from './contain'
 import {engagementRecord} from './engagement'
 import {examplesFromPage, watchForExamples} from './examples'
 import {startEmbeddedRuntime} from './runtime'
-import {IdleHandshakeClosed} from './transport'
+import {IdleHandshakeClosed, TransportError} from './transport'
 import {createShell} from './shell'
 import {START_TEXT, panelStartStatus, type StartStatus} from './startStatus'
 import type {RuntimeConfig} from './types'
@@ -128,6 +128,7 @@ export function inlineSource(config: RuntimeConfig): SessionSource {
 
 /** The part of a Runtime the supervisor drives. `EmbeddedWebRuntime` is one. */
 export interface Supervised {
+  beforeSubmit?: () => Promise<void>
   readonly stopped: boolean
   readonly endState: string
   canRenewSession(): boolean
@@ -167,6 +168,7 @@ export class Supervisor {
   private runningSince = 0
   /** Consecutive sessions that ended before they were stable: the rung of the ladder. */
   private flaps = 0
+  private renewals = new WeakMap<Supervised, Promise<void>>()
 
   constructor(private readonly deps: SupervisorDeps) {}
 
@@ -245,6 +247,19 @@ export class Supervisor {
     this.current = {kind: 'running', runtime}
     this.runningSince = Date.now()
     this.unwatch = runtime.onStopped(() => this.stopped(runtime))
+    if (this.deps.source.renewable) {
+      runtime.beforeSubmit = async () => {
+        try {
+          await this.renew(runtime)
+        } catch (error) {
+          const failure = BootFailure.from(error)
+          throw new TransportError('session identity could not be refreshed',
+            failure.status === 401 ? 'business_authentication'
+              : failure.status === 403 ? 'unauthorized' : 'submit_failed',
+            failure.status ?? 0)
+        }
+      }
+    }
     this.scheduleRenewal(runtime, bootstrap)
     this.deps.onRunning?.(runtime)
   }
@@ -312,10 +327,7 @@ export class Supervisor {
         return
       }
       try {
-        const renewed = await this.deps.source.obtain()
-        if (!live()) return
-        runtime.renewSession(renewed.config)
-        this.scheduleRenewal(runtime, renewed)
+        await this.renew(runtime)
       } catch (error) {
         // The Runtime keeps its own expiry and ends when its identity does; a renewal that
         // failed is tried again rather than turned into anything the host would hear.
@@ -323,6 +335,26 @@ export class Supervisor {
         if (live()) this.scheduleRenewal(runtime, bootstrap, RENEW_RETRY_MS)
       }
     })
+  }
+
+  /** Reauthenticate before a new turn as well as on the timer. Never replay a turn. */
+  private renew(runtime: Supervised): Promise<void> {
+    const pending = this.renewals.get(runtime)
+    if (pending) return pending
+    const renewal = (async () => {
+      if (this.current.kind !== 'running' || this.current.runtime !== runtime
+          || runtime.stopped || !runtime.canRenewSession()) {
+        throw new Error('session renewal requires the current idle runtime')
+      }
+      const renewed = await this.deps.source.obtain()
+      if (this.current.kind !== 'running' || this.current.runtime !== runtime || runtime.stopped) {
+        throw new Error('runtime changed during identity renewal')
+      }
+      runtime.renewSession(renewed.config)
+      this.scheduleRenewal(runtime, renewed)
+    })().finally(() => { this.renewals.delete(runtime) })
+    this.renewals.set(runtime, renewal)
+    return renewal
   }
 
   private cancel(which: 'pending' | 'renewal' | 'unwatch'): void {

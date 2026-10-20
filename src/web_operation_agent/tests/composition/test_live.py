@@ -12,6 +12,7 @@ from unittest import mock
 from web_operation_agent.composition.live import (LiveConversationRunner, LiveProductServer,
                                       LiveProductSession, render_live_replay)
 from web_operation_agent.business.control import ReadOnlyControl
+from web_operation_agent.business.errors import BusinessToolAuthenticationError
 from web_operation_agent.state.identity import PrincipalContext
 from web_operation_agent.modeling.client import ProviderError
 from web_operation_agent.execution.product import (AgentTurnConfig, AgentTurnError,
@@ -287,6 +288,21 @@ class LiveProductSessionTests(unittest.TestCase):
         self.assertTrue(failure.payload["retryable"])
         self.assertEqual(
             failure.payload["message"], "页面已发生变化，请检查当前页面后重新提交。")
+
+    def test_expired_business_authentication_is_actionable_and_never_replayed(self):
+        executor = self._executor(failures={
+            "message-1": BusinessToolAuthenticationError("private auth detail"),
+        })
+        _, outcomes = self._run_messages([_message(1)], executor)
+        self.assertEqual(len(executor.calls), 1)
+        self.assertIsNone(outcomes[0].result)
+        failure = [event for event in executor.channel.events_after("", lease_id=executor.lease)
+                   if event.kind == "progress" and event.payload.get("state") == "task_failed"][0]
+        self.assertEqual(failure.payload["error_code"], "business_authentication")
+        self.assertFalse(failure.payload["retryable"])
+        self.assertIn("重新登录", failure.payload["message"])
+        self.assertIn("不会自动重试", failure.payload["message"])
+        self.assertNotIn("private auth detail", failure.payload["message"])
 
     def test_remote_session_close_normally_ends_the_host(self):
         executor = self._executor()

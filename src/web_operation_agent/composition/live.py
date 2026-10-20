@@ -21,6 +21,7 @@ from ..state.identity import PrincipalContext
 from ..origins import validate_page_write_guard
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..execution.product import AgentTurnError
+from ..business.errors import BusinessToolAuthenticationError
 from ..transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
 from ..transport.protocol import RemoteSessionClosed
 from ..transport.registry import RemoteSessionRegistry
@@ -140,7 +141,11 @@ class LiveConversationRunner:
                         error=detail)
                     outcomes.append(outcome)
                     self._record(outcome)
-                    if isinstance(exc, AgentTurnError):
+                    if isinstance(exc, BusinessToolAuthenticationError):
+                        error_code = exc.code
+                        retryable = False
+                        user_message = "应用登录已失效，请重新登录后重新提交需求。本次任务不会自动重试。"
+                    elif isinstance(exc, AgentTurnError):
                         error_code = exc.code.value
                         retryable = exc.retryable
                         user_message = {
