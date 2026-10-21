@@ -2615,10 +2615,6 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(projection["attempts"], 2)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class HalfSupportedRequestTests(unittest.TestCase):
     """A request whose optional addition the port does not offer is still done as far as
     it can be, and a refusal that knows what the application asked for says it."""
@@ -2728,3 +2724,7 @@ class HalfSupportedRequestTests(unittest.TestCase):
         self.assertEqual(execution.status, AgentTurnStatus.FINISHED)
         self.assertIn("（空）", execution.user_answer)
         self.assertNotIn("Empty value", execution.user_answer)
+
+
+if __name__ == "__main__":
+    unittest.main()

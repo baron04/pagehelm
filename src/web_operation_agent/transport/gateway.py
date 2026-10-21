@@ -538,7 +538,10 @@ class EmbeddedGateway:
     def start(self) -> "EmbeddedGateway":
         if self._thread is not None:
             return self
+        # A short poll interval keeps shutdown latency out of every session teardown;
+        # idle wake-ups on a loopback listener are negligible.
         self._thread = threading.Thread(target=self._server.serve_forever,
+                                        kwargs={"poll_interval": 0.01},
                                         name="woa-embedded-gateway", daemon=True)
         self._thread.start()
         return self

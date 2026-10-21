@@ -102,6 +102,11 @@ RETRYABLE_PROVIDER_CODES = frozenset({"provider_transport", "provider_rate_limit
 MAX_PROVIDER_RETRIES_PER_TURN = 2
 #: A retry starts only with this much of the turn's wall budget left.
 PROVIDER_RETRY_MIN_REMAINING_S = 5.0
+#: How long a retry pauses first: a rate limit asks for a longer breath than a flaky
+#: transport. Module constants so scripted tests can shorten the wait without turning
+#: real turns into tight retries.
+PROVIDER_RETRY_PAUSE_RATE_LIMITED_S = 1.0
+PROVIDER_RETRY_PAUSE_DEFAULT_S = 0.3
 
 
 def _spent(session, t0: float) -> float:
@@ -143,7 +148,9 @@ def _complete_once_more_if_transient(session, messages: list, step: int, t0: flo
                 provider_request_id=getattr(exc, "request_id", "") or "",
                 dispatched=dispatched,
                 accounting_status="usage_unavailable" if dispatched else "not_dispatched")
-            pause = 1.0 if code == "provider_rate_limited" else 0.3
+            pause = (PROVIDER_RETRY_PAUSE_RATE_LIMITED_S
+                     if code == "provider_rate_limited"
+                     else PROVIDER_RETRY_PAUSE_DEFAULT_S)
             until = time.monotonic() + pause
             while time.monotonic() < until:
                 if session._cancel_requested():

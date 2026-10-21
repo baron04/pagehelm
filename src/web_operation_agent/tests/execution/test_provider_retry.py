@@ -38,6 +38,18 @@ class _Failing(_Chat):
 
 
 class ProviderRetry(unittest.TestCase):
+    def setUp(self):
+        # The real pauses protect a live provider, not this contract; what matters here is
+        # that the retry happens, is recorded, and stays inside its caps.
+        self._pauses = (loop.PROVIDER_RETRY_PAUSE_RATE_LIMITED_S,
+                        loop.PROVIDER_RETRY_PAUSE_DEFAULT_S)
+        loop.PROVIDER_RETRY_PAUSE_RATE_LIMITED_S = 0.0
+        loop.PROVIDER_RETRY_PAUSE_DEFAULT_S = 0.0
+
+    def tearDown(self):
+        (loop.PROVIDER_RETRY_PAUSE_RATE_LIMITED_S,
+         loop.PROVIDER_RETRY_PAUSE_DEFAULT_S) = self._pauses
+
     def _run(self, chat, **overrides):
         with tempfile.TemporaryDirectory() as tmp:
             session = _session(tmp, chat, _Browser([_obs()]), _Control([[]]))

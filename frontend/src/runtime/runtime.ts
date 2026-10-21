@@ -1301,13 +1301,20 @@ export class EmbeddedWebRuntime {
   async _openInApplication(url: string): Promise<boolean> {
     const opener = this.openPage
     if (!opener) return false
+    let stopWaiting: (() => void) | undefined
     try {
-      return await Promise.race([
-        Promise.resolve(opener(url)).then(opened => opened === true),
-        sleep(APPLICATION_OPEN_MS).then(() => false),
-      ])
+      // The losing side of the race must not leave its timer running: a cancelled wait
+      // does not hold the host's event loop (or a Node VM contract) for the full timeout.
+      return await new Promise<boolean>(resolve => {
+        stopWaiting = later('application open', APPLICATION_OPEN_MS, () => resolve(false))
+        Promise.resolve(opener(url)).then(
+          opened => resolve(opened === true),
+          () => resolve(false))
+      })
     } catch {
       return false
+    } finally {
+      stopWaiting?.()
     }
   }
 

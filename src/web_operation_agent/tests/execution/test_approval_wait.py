@@ -71,7 +71,7 @@ class WaitingOnAPersonMovesTheDeadline(unittest.TestCase):
                 chat=_Chat([("goto", {"url": "/y"})]), browser=browser,
                 control=_Control([[], [], [], []]),
                 ledger=SessionLedger(Path(tmp) / "audit.jsonl", "wait"),
-                operation_confirmation=_SlowPerson(1.3), wall_budget_s=1,
+                operation_confirmation=_SlowPerson(0.4), wall_budget_s=0.3,
                 operation_hold_s=30)
             session.entry_observation = browser.pages[0]
 
@@ -79,7 +79,7 @@ class WaitingOnAPersonMovesTheDeadline(unittest.TestCase):
 
             self.assertEqual(browser.done[0], ("goto", {"url": "/y"}))
             self.assertNotEqual(result.terminal_reason, "wall_clock_budget")
-            self.assertGreaterEqual(session._approvals.waited_ms, 1_300)
+            self.assertGreaterEqual(session._approvals.waited_ms, 400)
 
 
 if __name__ == "__main__":
