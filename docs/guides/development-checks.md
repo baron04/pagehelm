@@ -31,7 +31,7 @@
 
 本地指定`--base`但不指定`--head`时，也包含尚未提交的改动；显式`--head`只比较提交。CI使用提交共同祖先与head比较，包含删除和重命名前后的路径。基线不存在或不能解析时保守选择产品检查；未知代码路径回退核心检查，不能静默当作文档。开发组是快速反馈，不是跨所有模块的完整证明；修改跨模块语义时先查看计划，必要时显式使用CI profile。
 
-Python 3.12承担浏览器与主要集成检查；3.13只跑Python兼容性。CI按计划安装Node、两个Playwright版本的Chromium、PageController和nginx。PageController作为Runtime依赖保留，但无需因此构建或验收整个PageAgent比较实验。
+日常 push、PR 和手动 `ci` 只使用 Python 3.12。手动选择 `compat` 时检查 3.12、3.13 的兼容性；发布前选择 `release`，由 3.12 跑完整发布检查、3.13 跑兼容性检查。兼容性检查不重复浏览器和完整前端测试，但仍可能构建所需 Runtime 资源、运行 Node VM 契约检查。CI按计划安装Node、两个Playwright版本的Chromium、PageController和nginx。PageController作为Runtime依赖保留，但无需因此构建或验收整个PageAgent比较实验。
 
 ## 显式完整资格
 

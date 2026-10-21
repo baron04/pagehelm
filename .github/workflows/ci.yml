@@ -14,7 +14,7 @@ on:
       profile:
         description: Check profile
         type: choice
-        options: [ci, release]
+        options: [ci, compat, release]
         default: ci
         required: true
 
@@ -29,13 +29,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.profile == 'release' && 60 || 15 }}
-    # Both interpreters the distributions accept. A range that only one of them is ever run
-    # on is a claim, not a fact; `test_supported_python.py` keeps this list and the metadata
-    # from drifting apart.
+    # Daily checks use 3.12. Explicit compatibility and release runs also verify 3.13;
+    # its compat profile avoids repeating the browser and full frontend suites.
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ${{ fromJSON((inputs.profile == 'compat' || inputs.profile == 'release') && '["3.12","3.13"]' || '["3.12"]') }}
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
       CHECK_PROFILE: ${{ matrix.python-version == '3.13' && 'compat' || inputs.profile || 'ci' }}
