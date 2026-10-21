@@ -260,12 +260,6 @@ class Environment(unittest.TestCase):
 
     def test_a_missing_env_file_is_empty_not_an_error(self):
         self.assertEqual(load_env(Path("/no/such/.env")), {})
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheClientIsNotTiedToOneProvider(unittest.TestCase):
     """Swapping models must be a .env change, not a code change."""
 
@@ -538,3 +532,7 @@ class DailyAllowanceContract(unittest.TestCase):
         spent = ProviderError("x", code="provider_allowance_spent")
         self.assertIn("额度已用完", _provider_failed(spent, True))
         self.assertIn("暂时没有响应", _provider_failed(ProviderError("x"), True))
+
+
+if __name__ == "__main__":
+    unittest.main()

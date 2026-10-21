@@ -736,12 +736,6 @@ class ReasoningScenarios(unittest.TestCase):
         with self.assertRaises(ValueError):
             request_options("qwen3.8-flash", "https://provider.example/v1",
                             {"_woa_reasoning_scenario": "unbounded"})
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WhatTheAgentIsToldAfterAWrite(unittest.TestCase):
     """After a write is permitted, the agent may stop and verify instead of submitting again."""
 
@@ -806,3 +800,7 @@ class SessionRecoveryIsVisible(unittest.TestCase):
         action = next(row for row in rows
                       if row.get("event") == "action_receipt" and row.get("tool") == "click")
         self.assertTrue(action["relogin"])
+
+
+if __name__ == "__main__":
+    unittest.main()

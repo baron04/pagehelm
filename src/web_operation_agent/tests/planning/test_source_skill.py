@@ -124,12 +124,6 @@ class SourceSkillBootstrapperTests(unittest.TestCase):
             path.write_text("changed\nsecond\n")
             with self.assertRaisesRegex(ValueError, "version-bound hash"):
                 provider.read_source_slice("f.xml:1-1")
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ---------------------------------------------------------------- Business Skill drafts
 
 
@@ -441,3 +435,7 @@ class ReissuingASkill(unittest.TestCase):
         """
         with self.assertRaisesRegex(ValueError, "declared request"):
             self._reissue(subject="glasshouse/noSuchRequest")
+
+
+if __name__ == "__main__":
+    unittest.main()

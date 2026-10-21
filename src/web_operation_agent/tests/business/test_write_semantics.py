@@ -86,12 +86,6 @@ class WhatTheModelIsTold(unittest.TestCase):
     def test_a_refusal_reports_only_that_request_was_not_forwarded(self):
         self.assertIn("That request was not forwarded", self._rendered(WRITE_REFUSED))
         self.assertNotIn("nothing was saved", self._rendered(WRITE_REFUSED))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 # -- the real loop -----------------------------------------------------------------------
 from web_operation_agent.execution.session import (                         # noqa: E402
     LabApparatus, ServerAgentSession, TaskSpec,
@@ -289,3 +283,7 @@ class TheEvidenceThePlannerHadIsRecorded(unittest.TestCase):
         payload = {**b.stats, "evidence": list(b.lines)}
         self.assertEqual(payload["lines"], 1)
         self.assertEqual(payload["evidence"], ["[a.xml:1-2] a fact"])
+
+
+if __name__ == "__main__":
+    unittest.main()

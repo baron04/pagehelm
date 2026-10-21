@@ -109,12 +109,6 @@ class EntryScopesComeFromTheAdapter(unittest.TestCase):
                 ledger=SessionLedger(Path(tmp) / "ledger.jsonl", "entry"))
             session.adopt_entry(self._entry("/accounting/do/findPayments"))
             self.assertEqual(session.served_webapps, set())
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class LedgerContents(unittest.TestCase):
     def test_the_contract_the_agent_was_given_is_recorded_in_full(self):
         """A digest cannot answer 'what was this agent told?', and the provider is not
@@ -924,3 +918,7 @@ class APlanWhoseWriteIsAuthorisedPauses(unittest.TestCase):
         st.pause_for_confirmation("the write it led to was authorised")
         self.assertEqual(st.counts()["refuted"], 0)
         self.assertEqual(st.unattributed_refusals, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

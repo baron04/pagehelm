@@ -334,12 +334,6 @@ class ExplicitGatewayConfiguration(unittest.TestCase):
                     key_file=link,
                     key_header="X-WOA-Control-Key",
                 ))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ScopeIsABoundaryNotAnAnswer(unittest.TestCase):
     PLAN = plan_from_spec("p", "T", [{"webapp": "accounting", "request": "createWidgetLink",
                                       "targets": [{"widgetId": "W-77", "linkId": "L-9"}]}])
@@ -368,3 +362,7 @@ class ScopeIsABoundaryNotAnAnswer(unittest.TestCase):
     def test_an_empty_scope_is_fine(self):
         from web_operation_agent.business.controlplane import assert_scope_is_not_the_answer
         assert_scope_is_not_the_answer("", self.PLAN, self.PROMPT)
+
+
+if __name__ == "__main__":
+    unittest.main()

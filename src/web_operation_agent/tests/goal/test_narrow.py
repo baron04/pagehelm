@@ -331,12 +331,6 @@ class NameLocationTests(unittest.TestCase):
 
         self.assertEqual(locate_names(_References(), ("S00004",)),
                          (KnownReference("S00004", "order", "S00004"),))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ConventionTests(unittest.TestCase):
     """An organisation's meaning of its words reaches the model only when the request
     says one of them."""
@@ -368,3 +362,7 @@ class ConventionTests(unittest.TestCase):
         scope = summaries(self.index, "Acme 的报价单", ())
         self.assertIn("报价单: order with Status in Quotation", scope)
         self.assertNotIn("CONVENTIONS", summaries(self.index, "S00006 的客户是谁？", ()))
+
+
+if __name__ == "__main__":
+    unittest.main()

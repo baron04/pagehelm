@@ -193,12 +193,6 @@ class Planning(unittest.TestCase):
         self.assertIn(TASK, blob)
         for forbidden in ("PASS", "postcondition", "evaluator", "ControlPlan", "permit"):
             self.assertNotIn(forbidden, blob, f"{forbidden!r} reached the planner's input")
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Normalisation(unittest.TestCase):
     def test_the_servlet_prefix_is_stripped(self):
         from web_operation_agent.planning.contract import normalise_request
@@ -682,3 +676,7 @@ class TheTwoArmsShareEverythingButTheEvidence(unittest.TestCase):
         ContractPlanner(page, None, segment=SEGMENT).plan("T", TASK, self.empty, "r1")
         ContractPlanner(src, self.map, segment=SEGMENT).plan("T", TASK, self.bundle, "r1")
         self.assertEqual(page.budgets, src.budgets)
+
+
+if __name__ == "__main__":
+    unittest.main()

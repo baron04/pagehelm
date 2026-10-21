@@ -291,12 +291,6 @@ class TheSentenceSaysWhichKindOfGapItIs(unittest.TestCase):
             self.assertNotIn("没有找到", answer)
             self.assertNotIn("未找到", answer)
             self.assertNotIn("not found", answer.lower())
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ACountOfAPartialReadIsRefused(unittest.TestCase):
     """d06: the product answered "how many customers are there" with 239 over a read it had
     limited to 50, labelled "within what was read". The label was honest and the number still
@@ -341,3 +335,7 @@ class ACountOfAPartialReadIsRefused(unittest.TestCase):
             covers_whole_scope=False, count_exact=True)
         item = self._count(query)
         self.assertEqual((item.value, item.covers_whole_scope), ("239", True))
+
+
+if __name__ == "__main__":
+    unittest.main()
