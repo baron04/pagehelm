@@ -30,7 +30,7 @@
     "radius-window": "16px",
     "radius-field": "16px",
     "radius-tile": "20px",
-    "radius-composer": "24px",
+    "radius-composer": "20px",
     "radius-pill": "999px",
     "border-width": "1px",
     "motion-fast": "120ms",

@@ -22,7 +22,11 @@
         "platform": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "platform": "platform",
+        "status": "status"
+      }
     },
     "/admin-api/ai/chat-role/my-page": {
       "req_vo": "AiChatRolePageReqVO",
@@ -31,7 +35,10 @@
         "name": "like",
         "publicStatus": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category"
+      }
     },
     "/admin-api/ai/chat-role/page": {
       "req_vo": "AiChatRolePageReqVO",
@@ -40,7 +47,10 @@
         "name": "like",
         "publicStatus": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category"
+      }
     },
     "/admin-api/ai/chat/conversation/page": {
       "req_vo": "AiChatConversationPageReqVO",
@@ -49,7 +59,10 @@
         "title": "like",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "userId": "userId"
+      }
     },
     "/admin-api/ai/chat/message/page": {
       "req_vo": "AiChatMessagePageReqVO",
@@ -59,7 +72,11 @@
         "createTime": "between",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "conversationId": "conversationId",
+        "userId": "userId"
+      }
     },
     "/admin-api/ai/image/my-page": {
       "req_vo": "AiImagePageReqVO",
@@ -100,7 +117,10 @@
         "knowledgeId": "eq",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "knowledgeId": "knowledgeId"
+      }
     },
     "/admin-api/ai/knowledge/page": {
       "req_vo": "AiKnowledgePageReqVO",
@@ -109,7 +129,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/ai/knowledge/segment/page": {
       "req_vo": "AiKnowledgeSegmentPageReqVO",
@@ -118,7 +141,11 @@
         "documentId": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "documentId": "documentId",
+        "status": "status"
+      }
     },
     "/admin-api/ai/mind-map/page": {
       "req_vo": "AiMindMapPageReqVO",
@@ -127,7 +154,11 @@
         "prompt": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "prompt": "prompt",
+        "userId": "userId"
+      }
     },
     "/admin-api/ai/model/page": {
       "req_vo": "AiModelPageReqVO",
@@ -136,7 +167,11 @@
         "name": "like",
         "platform": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "model": "model",
+        "platform": "platform"
+      }
     },
     "/admin-api/ai/music/my-page": {
       "req_vo": "AiMusicPageReqVO",
@@ -172,7 +207,11 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "description": "description",
+        "status": "status"
+      }
     },
     "/admin-api/ai/workflow/page": {
       "req_vo": "AiWorkflowPageReqVO",
@@ -182,7 +221,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/ai/write/page": {
       "req_vo": "AiWritePageReqVO",
@@ -192,7 +234,12 @@
         "type": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "platform": "platform",
+        "type": "type",
+        "userId": "userId"
+      }
     },
     "/admin-api/bpm/category/page": {
       "req_vo": "BpmCategoryPageReqVO",
@@ -202,7 +249,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/bpm/form/page": {
       "req_vo": "BpmFormPageReqVO",
@@ -219,7 +269,11 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/bpm/process-definition/page": {
       "req_vo": "BpmProcessDefinitionPageReqVO",
@@ -235,7 +289,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/bpm/process-instance/copy/page": {
       "req_vo": "BpmProcessInstanceCopyPageReqVO",
@@ -281,7 +338,12 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "event": "event",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/bpm/task/done-page": {
       "req_vo": "BpmTaskPageReqVO",
@@ -325,7 +387,10 @@
       },
       "unknown": [
         "id"
-      ]
+      ],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/crm/business/page": {
       "req_vo": "CrmBusinessPageReqVO",
@@ -375,7 +440,14 @@
       },
       "unknown": [
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "followUpStatus": "followUpStatus",
+        "industryId": "industryId",
+        "level": "level",
+        "source": "source",
+        "transformStatus": "transformStatus"
+      }
     },
     "/admin-api/crm/contact/page": {
       "req_vo": "CrmContactPageReqVO",
@@ -391,7 +463,14 @@
         "businessId",
         "customerId",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "email": "email",
+        "mobile": "mobile",
+        "qq": "qq",
+        "telephone": "telephone",
+        "wechat": "wechat"
+      }
     },
     "/admin-api/crm/contact/page-by-business": {
       "req_vo": "CrmContactPageReqVO",
@@ -407,7 +486,14 @@
         "businessId",
         "customerId",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "email": "email",
+        "mobile": "mobile",
+        "qq": "qq",
+        "telephone": "telephone",
+        "wechat": "wechat"
+      }
     },
     "/admin-api/crm/contact/page-by-customer": {
       "req_vo": "CrmContactPageReqVO",
@@ -423,7 +509,14 @@
         "businessId",
         "customerId",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "email": "email",
+        "mobile": "mobile",
+        "qq": "qq",
+        "telephone": "telephone",
+        "wechat": "wechat"
+      }
     },
     "/admin-api/crm/contract/page": {
       "req_vo": "CrmContractPageReqVO",
@@ -437,7 +530,11 @@
         "auditStatus",
         "expiryType",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "businessId": "businessId",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/crm/contract/page-by-business": {
       "req_vo": "CrmContractPageReqVO",
@@ -451,7 +548,11 @@
         "auditStatus",
         "expiryType",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "businessId": "businessId",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/crm/contract/page-by-customer": {
       "req_vo": "CrmContractPageReqVO",
@@ -465,14 +566,21 @@
         "auditStatus",
         "expiryType",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "businessId": "businessId",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/crm/customer-limit-config/page": {
       "req_vo": "CrmCustomerLimitConfigPageReqVO",
       "params": {
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type"
+      }
     },
     "/admin-api/crm/customer/page": {
       "req_vo": "CrmCustomerPageReqVO",
@@ -488,7 +596,14 @@
         "contactStatus",
         "pool",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "followUpStatus": "followUpStatus",
+        "industryId": "industryId",
+        "level": "level",
+        "mobile": "mobile",
+        "source": "source"
+      }
     },
     "/admin-api/crm/customer/put-pool-remind-page": {
       "req_vo": "CrmCustomerPageReqVO",
@@ -504,7 +619,14 @@
         "contactStatus",
         "pool",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "followUpStatus": "followUpStatus",
+        "industryId": "industryId",
+        "level": "level",
+        "mobile": "mobile",
+        "source": "source"
+      }
     },
     "/admin-api/crm/follow-up-record/page": {
       "req_vo": "CrmFollowUpRecordPageReqVO",
@@ -512,7 +634,11 @@
         "bizId": "eq",
         "bizType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "bizId": "bizId",
+        "bizType": "bizType"
+      }
     },
     "/admin-api/crm/operate-log/page": {
       "req_vo": "CrmOperateLogPageReqVO",
@@ -530,7 +656,13 @@
         "objectType": "eq",
         "year": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "bizType": "bizType",
+        "objectId": "objectId",
+        "objectType": "objectType",
+        "year": "year"
+      }
     },
     "/admin-api/crm/product-category/list": {
       "req_vo": "CrmProductCategoryListReqVO",
@@ -540,7 +672,10 @@
       },
       "unknown": [
         "createTime"
-      ]
+      ],
+      "equalities": {
+        "parentId": "parentId"
+      }
     },
     "/admin-api/crm/product/page": {
       "req_vo": "CrmProductPageReqVO",
@@ -548,7 +683,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/crm/receivable-plan/page": {
       "req_vo": "CrmReceivablePlanPageReqVO",
@@ -560,7 +698,11 @@
       "unknown": [
         "remindType",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "contractId": "contractId",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/crm/receivable-plan/page-by-customer": {
       "req_vo": "CrmReceivablePlanPageReqVO",
@@ -572,7 +714,11 @@
       "unknown": [
         "remindType",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "contractId": "contractId",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/crm/receivable/page": {
       "req_vo": "CrmReceivablePageReqVO",
@@ -585,7 +731,12 @@
         "auditStatus",
         "customerId",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "contractId": "contractId",
+        "no": "no",
+        "planId": "planId"
+      }
     },
     "/admin-api/crm/receivable/page-by-customer": {
       "req_vo": "CrmReceivablePageReqVO",
@@ -598,7 +749,12 @@
         "auditStatus",
         "customerId",
         "sceneType"
-      ]
+      ],
+      "equalities": {
+        "contractId": "contractId",
+        "no": "no",
+        "planId": "planId"
+      }
     },
     "/admin-api/erp/account/page": {
       "req_vo": "ErpAccountPageReqVO",
@@ -607,7 +763,10 @@
         "no": "like",
         "remark": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "remark": "remark"
+      }
     },
     "/admin-api/erp/customer/page": {
       "req_vo": "ErpCustomerPageReqVO",
@@ -616,7 +775,11 @@
         "name": "like",
         "telephone": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "mobile": "mobile",
+        "telephone": "telephone"
+      }
     },
     "/admin-api/erp/finance-payment/page": {
       "req_vo": "ErpFinancePaymentPageReqVO",
@@ -631,7 +794,14 @@
         "status": "eq",
         "supplierId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "accountId": "accountId",
+        "creator": "creator",
+        "financeUserId": "financeUserId",
+        "status": "status",
+        "supplierId": "supplierId"
+      }
     },
     "/admin-api/erp/finance-receipt/page": {
       "req_vo": "ErpFinanceReceiptPageReqVO",
@@ -646,7 +816,14 @@
         "remark": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "accountId": "accountId",
+        "creator": "creator",
+        "customerId": "customerId",
+        "financeUserId": "financeUserId",
+        "status": "status"
+      }
     },
     "/admin-api/erp/product-category/list": {
       "req_vo": "ErpProductCategoryListReqVO",
@@ -654,7 +831,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/erp/product-unit/page": {
       "req_vo": "ErpProductUnitPageReqVO",
@@ -662,7 +842,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/erp/product/page": {
       "req_vo": "ErpProductPageReqVO",
@@ -671,7 +854,10 @@
         "createTime": "between",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "categoryId": "categoryId"
+      }
     },
     "/admin-api/erp/purchase-in/page": {
       "req_vo": "ErpPurchaseInPageReqVO",
@@ -690,7 +876,12 @@
       "unknown": [
         "paymentEnable",
         "paymentStatus"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "creator": "creator",
+        "supplierId": "supplierId"
+      }
     },
     "/admin-api/erp/purchase-order/page": {
       "req_vo": "ErpPurchaseOrderPageReqVO",
@@ -708,7 +899,11 @@
         "inStatus",
         "returnEnable",
         "returnStatus"
-      ]
+      ],
+      "equalities": {
+        "creator": "creator",
+        "supplierId": "supplierId"
+      }
     },
     "/admin-api/erp/purchase-return/page": {
       "req_vo": "ErpPurchaseReturnPageReqVO",
@@ -727,7 +922,12 @@
       "unknown": [
         "refundEnable",
         "refundStatus"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "creator": "creator",
+        "supplierId": "supplierId"
+      }
     },
     "/admin-api/erp/sale-order/page": {
       "req_vo": "ErpSaleOrderPageReqVO",
@@ -745,7 +945,11 @@
         "outStatus",
         "returnEnable",
         "returnStatus"
-      ]
+      ],
+      "equalities": {
+        "creator": "creator",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/erp/sale-out/page": {
       "req_vo": "ErpSaleOutPageReqVO",
@@ -764,7 +968,12 @@
       "unknown": [
         "receiptEnable",
         "receiptStatus"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "creator": "creator",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/erp/sale-return/page": {
       "req_vo": "ErpSaleReturnPageReqVO",
@@ -783,7 +992,12 @@
       "unknown": [
         "refundEnable",
         "refundStatus"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "creator": "creator",
+        "customerId": "customerId"
+      }
     },
     "/admin-api/erp/stock-check/page": {
       "req_vo": "ErpStockCheckPageReqVO",
@@ -796,7 +1010,11 @@
         "status": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "status": "status"
+      }
     },
     "/admin-api/erp/stock-in/page": {
       "req_vo": "ErpStockInPageReqVO",
@@ -810,7 +1028,12 @@
         "supplierId": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "status": "status",
+        "supplierId": "supplierId"
+      }
     },
     "/admin-api/erp/stock-move/page": {
       "req_vo": "ErpStockMovePageReqVO",
@@ -823,7 +1046,11 @@
         "remark": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "status": "status"
+      }
     },
     "/admin-api/erp/stock-out/page": {
       "req_vo": "ErpStockOutPageReqVO",
@@ -837,7 +1064,12 @@
         "status": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "customerId": "customerId",
+        "status": "status"
+      }
     },
     "/admin-api/erp/stock-record/page": {
       "req_vo": "ErpStockRecordPageReqVO",
@@ -848,7 +1080,12 @@
         "productId": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "bizType": "bizType",
+        "productId": "productId",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/erp/stock/page": {
       "req_vo": "ErpStockPageReqVO",
@@ -856,7 +1093,11 @@
         "productId": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "productId": "productId",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/erp/supplier/page": {
       "req_vo": "ErpSupplierPageReqVO",
@@ -873,7 +1114,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/fms/config/auxiliary-item/page": {
       "req_vo": "FmsAuxiliaryItemPageReqVO",
@@ -882,7 +1126,11 @@
         "auxiliaryTypeId": "eq",
         "search": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "accountSetId": "accountSetId",
+        "auxiliaryTypeId": "auxiliaryTypeId"
+      }
     },
     "/admin-api/fms/config/subject/list": {
       "req_vo": "FmsSubjectListReqVO",
@@ -1101,7 +1349,13 @@
         "maxAmount",
         "minAmount",
         "subjectId"
-      ]
+      ],
+      "equalities": {
+        "accountSetId": "accountSetId",
+        "status": "status",
+        "voucherNumber": "voucherNumber",
+        "voucherWordId": "voucherWordId"
+      }
     },
     "/admin-api/fms/voucher/print-list": {
       "req_vo": "FmsVoucherPageReqVO",
@@ -1119,7 +1373,13 @@
         "maxAmount",
         "minAmount",
         "subjectId"
-      ]
+      ],
+      "equalities": {
+        "accountSetId": "accountSetId",
+        "status": "status",
+        "voucherNumber": "voucherNumber",
+        "voucherWordId": "voucherWordId"
+      }
     },
     "/admin-api/hrm/attendance/clock/page": {
       "req_vo": "HrmAttendanceClockPageReqVO",
@@ -1143,7 +1403,10 @@
         "defaultStatus": "eq",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "defaultStatus": "defaultStatus"
+      }
     },
     "/admin-api/hrm/attendance/holiday/page": {
       "req_vo": "HrmAttendanceHolidayPageReqVO",
@@ -1151,7 +1414,10 @@
         "date": "between",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type"
+      }
     },
     "/admin-api/hrm/attendance/leave/page": {
       "req_vo": "HrmAttendanceLeavePageReqVO",
@@ -1165,7 +1431,10 @@
         "deptIds",
         "employeeId",
         "employeeKeyword"
-      ]
+      ],
+      "equalities": {
+        "approvalStatus": "approvalStatus"
+      }
     },
     "/admin-api/hrm/attendance/statistics/month-daily-export-excel": {
       "req_vo": "HrmAttendanceMonthRecordPageReqVO",
@@ -1310,7 +1579,13 @@
       "unknown": [
         "areaId",
         "employeeName"
-      ]
+      ],
+      "equalities": {
+        "employeeId": "employeeId",
+        "monthRecordId": "monthRecordId",
+        "schemeId": "schemeId",
+        "status": "status"
+      }
     },
     "/admin-api/hrm/insurance/standard/project-list": {
       "req_vo": "HrmInsuranceStandardProjectListReqVO",
@@ -1356,7 +1631,11 @@
         "employeeIds": "in",
         "planId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "employeeId": "employeeId",
+        "planId": "planId"
+      }
     },
     "/admin-api/hrm/performance/assessment/page": {
       "req_vo": "HrmPerformanceAssessmentPageReqVO",
@@ -1375,7 +1654,15 @@
         "employeeType",
         "resultLevelEmpty",
         "search"
-      ]
+      ],
+      "equalities": {
+        "appealStatus": "appealStatus",
+        "employeeId": "employeeId",
+        "planId": "planId",
+        "resultLevel": "resultLevel",
+        "stageType": "stageType",
+        "status": "status"
+      }
     },
     "/admin-api/hrm/performance/plan/page": {
       "req_vo": "HrmPerformancePlanPageReqVO",
@@ -1521,7 +1808,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/hrm/recruit/post/page": {
       "req_vo": "HrmRecruitPostPageReqVO",
@@ -1565,7 +1855,11 @@
         "search",
         "status",
         "statusCategory"
-      ]
+      ],
+      "equalities": {
+        "changeType": "changeType",
+        "employeeId": "employeeId"
+      }
     },
     "/admin-api/hrm/salary/employee-info/status-count": {
       "req_vo": "HrmSalaryEmployeeInfoPageReqVO",
@@ -1581,7 +1875,11 @@
         "search",
         "status",
         "statusCategory"
-      ]
+      ],
+      "equalities": {
+        "changeType": "changeType",
+        "employeeId": "employeeId"
+      }
     },
     "/admin-api/hrm/salary/group/page": {
       "req_vo": "HrmSalaryGroupPageReqVO",
@@ -1589,7 +1887,10 @@
         "name": "like",
         "taxRuleId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "taxRuleId": "taxRuleId"
+      }
     },
     "/admin-api/hrm/salary/month-employee-record/change-count": {
       "req_vo": "HrmSalaryMonthEmployeeRecordPageReqVO",
@@ -1604,7 +1905,11 @@
         "employeeName",
         "jobNumber",
         "salarySlipSent"
-      ]
+      ],
+      "equalities": {
+        "employeeId": "employeeId",
+        "monthRecordId": "monthRecordId"
+      }
     },
     "/admin-api/hrm/salary/month-employee-record/employee-page": {
       "req_vo": "HrmSalaryEmployeeMonthRecordPageReqVO",
@@ -1613,7 +1918,10 @@
       },
       "unknown": [
         "monthRecordStatus"
-      ]
+      ],
+      "equalities": {
+        "employeeId": "employeeId"
+      }
     },
     "/admin-api/hrm/salary/month-employee-record/list": {
       "req_vo": "HrmSalaryMonthEmployeeRecordListReqVO",
@@ -1628,7 +1936,11 @@
         "employeeName",
         "jobNumber",
         "salarySlipSent"
-      ]
+      ],
+      "equalities": {
+        "employeeId": "employeeId",
+        "monthRecordId": "monthRecordId"
+      }
     },
     "/admin-api/hrm/salary/month-employee-record/page": {
       "req_vo": "HrmSalaryMonthEmployeeRecordPageReqVO",
@@ -1643,7 +1955,11 @@
         "employeeName",
         "jobNumber",
         "salarySlipSent"
-      ]
+      ],
+      "equalities": {
+        "employeeId": "employeeId",
+        "monthRecordId": "monthRecordId"
+      }
     },
     "/admin-api/hrm/salary/month-record/option-summary": {
       "req_vo": "HrmSalaryMonthEmployeeRecordListReqVO",
@@ -1658,7 +1974,11 @@
         "employeeName",
         "jobNumber",
         "salarySlipSent"
-      ]
+      ],
+      "equalities": {
+        "employeeId": "employeeId",
+        "monthRecordId": "monthRecordId"
+      }
     },
     "/admin-api/hrm/salary/month-record/page": {
       "req_vo": "HrmSalaryMonthRecordPageReqVO",
@@ -1667,7 +1987,12 @@
         "status": "eq",
         "year": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "month": "month",
+        "status": "status",
+        "year": "year"
+      }
     },
     "/admin-api/hrm/salary/slip-send-record/page": {
       "req_vo": "HrmSalarySlipSendRecordPageReqVO",
@@ -1675,7 +2000,11 @@
         "month": "eq",
         "year": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "month": "month",
+        "year": "year"
+      }
     },
     "/admin-api/hrm/salary/slip/page": {
       "req_vo": "HrmSalarySlipPageReqVO",
@@ -1689,7 +2018,12 @@
       "unknown": [
         "deptId",
         "search"
-      ]
+      ],
+      "equalities": {
+        "employeeId": "employeeId",
+        "readStatus": "readStatus",
+        "sendRecordId": "sendRecordId"
+      }
     },
     "/admin-api/im/manager/channel-material/page": {
       "req_vo": "ImChannelMaterialPageReqVO",
@@ -1699,7 +2033,11 @@
         "title": "like",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "channelId": "channelId",
+        "type": "type"
+      }
     },
     "/admin-api/im/manager/channel-message/page": {
       "req_vo": "ImChannelMessagePageReqVO",
@@ -1708,7 +2046,11 @@
         "materialId": "eq",
         "sendTime": "between"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "channelId": "channelId",
+        "materialId": "materialId"
+      }
     },
     "/admin-api/im/manager/channel/page": {
       "req_vo": "ImChannelPageReqVO",
@@ -1717,7 +2059,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/im/manager/face-pack-item/page": {
       "req_vo": "ImFacePackItemPageReqVO",
@@ -1726,7 +2071,11 @@
         "packId": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "packId": "packId",
+        "status": "status"
+      }
     },
     "/admin-api/im/manager/face-pack/page": {
       "req_vo": "ImFacePackPageReqVO",
@@ -1735,7 +2084,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/im/manager/face-user-item/page": {
       "req_vo": "ImFaceUserItemManagerPageReqVO",
@@ -1744,7 +2096,10 @@
         "name": "like",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "userId": "userId"
+      }
     },
     "/admin-api/im/manager/friend-request/page": {
       "req_vo": "ImFriendRequestManagerPageReqVO",
@@ -1755,7 +2110,13 @@
         "handleResult": "eq",
         "toUserId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "addSource": "addSource",
+        "fromUserId": "fromUserId",
+        "handleResult": "handleResult",
+        "toUserId": "toUserId"
+      }
     },
     "/admin-api/im/manager/friend/page": {
       "req_vo": "ImFriendManagerPageReqVO",
@@ -1766,7 +2127,13 @@
         "status": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "friendUserId": "friendUserId",
+        "silent": "silent",
+        "status": "status",
+        "userId": "userId"
+      }
     },
     "/admin-api/im/manager/group-request/page": {
       "req_vo": "ImGroupRequestManagerPageReqVO",
@@ -1778,7 +2145,14 @@
         "inviterUserId": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "addSource": "addSource",
+        "groupId": "groupId",
+        "handleResult": "handleResult",
+        "inviterUserId": "inviterUserId",
+        "userId": "userId"
+      }
     },
     "/admin-api/im/manager/group/page": {
       "req_vo": "ImGroupManagerPageReqVO",
@@ -1789,7 +2163,12 @@
         "ownerUserId": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "banned": "banned",
+        "ownerUserId": "ownerUserId",
+        "status": "status"
+      }
     },
     "/admin-api/im/manager/message/group/page": {
       "req_vo": "ImGroupMessageManagerPageReqVO",
@@ -1801,7 +2180,13 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "groupId": "groupId",
+        "senderId": "senderId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/im/manager/message/private/page": {
       "req_vo": "ImPrivateMessageManagerPageReqVO",
@@ -1813,7 +2198,11 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/im/manager/rtc/page": {
       "req_vo": "ImRtcCallManagerPageReqVO",
@@ -1825,7 +2214,14 @@
         "startTime": "between",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "conversationType": "conversationType",
+        "endReason": "endReason",
+        "inviterUserId": "inviterUserId",
+        "mediaType": "mediaType",
+        "status": "status"
+      }
     },
     "/admin-api/im/manager/sensitive-word/page": {
       "req_vo": "ImSensitiveWordPageReqVO",
@@ -1834,7 +2230,10 @@
         "status": "eq",
         "word": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/im/message/group/list": {
       "req_vo": "ImGroupMessageListReqVO",
@@ -1865,7 +2264,13 @@
         "userId": "eq",
         "userType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "applicationName": "applicationName",
+        "resultCode": "resultCode",
+        "userId": "userId",
+        "userType": "userType"
+      }
     },
     "/admin-api/infra/api-error-log/page": {
       "req_vo": "ApiErrorLogPageReqVO",
@@ -1877,7 +2282,13 @@
         "userId": "eq",
         "userType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "applicationName": "applicationName",
+        "processStatus": "processStatus",
+        "userId": "userId",
+        "userType": "userType"
+      }
     },
     "/admin-api/infra/codegen/table/page": {
       "req_vo": "CodegenTablePageReqVO",
@@ -1897,7 +2308,10 @@
         "name": "like",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type"
+      }
     },
     "/admin-api/infra/demo01-contact/page": {
       "req_vo": "Demo01ContactPageReqVO",
@@ -1906,7 +2320,10 @@
         "name": "like",
         "sex": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "sex": "sex"
+      }
     },
     "/admin-api/infra/demo02-category/list": {
       "req_vo": "Demo02CategoryListReqVO",
@@ -1915,7 +2332,10 @@
         "name": "like",
         "parentId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "parentId": "parentId"
+      }
     },
     "/admin-api/infra/demo03-student-erp/page": {
       "req_vo": "Demo03StudentErpPageReqVO",
@@ -1925,7 +2345,11 @@
         "name": "like",
         "sex": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "description": "description",
+        "sex": "sex"
+      }
     },
     "/admin-api/infra/demo03-student-inner/page": {
       "req_vo": "Demo03StudentInnerPageReqVO",
@@ -1935,7 +2359,11 @@
         "name": "like",
         "sex": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "description": "description",
+        "sex": "sex"
+      }
     },
     "/admin-api/infra/demo03-student-normal/page": {
       "req_vo": "Demo03StudentNormalPageReqVO",
@@ -1945,7 +2373,11 @@
         "name": "like",
         "sex": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "description": "description",
+        "sex": "sex"
+      }
     },
     "/admin-api/infra/file-config/page": {
       "req_vo": "FileConfigPageReqVO",
@@ -1954,7 +2386,10 @@
         "name": "like",
         "storage": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "storage": "storage"
+      }
     },
     "/admin-api/infra/file/page": {
       "req_vo": "FilePageReqVO",
@@ -1974,7 +2409,11 @@
         "jobId": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "jobId": "jobId",
+        "status": "status"
+      }
     },
     "/admin-api/infra/job/page": {
       "req_vo": "JobPageReqVO",
@@ -1983,7 +2422,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/iot/alert-config/page": {
       "req_vo": "IotAlertConfigPageReqVO",
@@ -1992,7 +2434,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/iot/alert-record/page": {
       "req_vo": "IotAlertRecordPageReqVO",
@@ -2004,7 +2449,14 @@
         "processStatus": "eq",
         "productId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "configId": "configId",
+        "configLevel": "configLevel",
+        "deviceId": "deviceId",
+        "processStatus": "processStatus",
+        "productId": "productId"
+      }
     },
     "/admin-api/iot/device-group/page": {
       "req_vo": "IotDeviceGroupPageReqVO",
@@ -2023,7 +2475,12 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "deviceId": "deviceId",
+        "functionCode": "functionCode",
+        "status": "status"
+      }
     },
     "/admin-api/iot/device/message/page": {
       "req_vo": "IotDeviceMessagePageReqVO",
@@ -2061,7 +2518,10 @@
         "gatewayId",
         "groupId",
         "status"
-      ]
+      ],
+      "equalities": {
+        "productId": "productId"
+      }
     },
     "/admin-api/iot/device/property/history-list": {
       "req_vo": "IotDevicePropertyHistoryListReqVO",
@@ -2084,7 +2544,10 @@
         "gatewayId",
         "groupId",
         "status"
-      ]
+      ],
+      "equalities": {
+        "productId": "productId"
+      }
     },
     "/admin-api/iot/ota/firmware/page": {
       "req_vo": "IotOtaFirmwarePageReqVO",
@@ -2093,7 +2556,10 @@
         "name": "like",
         "productId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "productId": "productId"
+      }
     },
     "/admin-api/iot/ota/task/page": {
       "req_vo": "IotOtaTaskPageReqVO",
@@ -2101,7 +2567,10 @@
         "firmwareId": "eq",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "firmwareId": "firmwareId"
+      }
     },
     "/admin-api/iot/ota/task/record/page": {
       "req_vo": "IotOtaTaskRecordPageReqVO",
@@ -2109,7 +2578,11 @@
         "status": "eq",
         "taskId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "taskId": "taskId"
+      }
     },
     "/admin-api/iot/product-category/page": {
       "req_vo": "IotProductCategoryPageReqVO",
@@ -2135,7 +2608,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/iot/thing-model/list": {
       "req_vo": "IotThingModelListReqVO",
@@ -2145,7 +2621,12 @@
         "productId": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "identifier": "identifier",
+        "productId": "productId",
+        "type": "type"
+      }
     },
     "/admin-api/iot/thing-model/page": {
       "req_vo": "IotThingModelPageReqVO",
@@ -2155,7 +2636,12 @@
         "productId": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "identifier": "identifier",
+        "productId": "productId",
+        "type": "type"
+      }
     },
     "/admin-api/member/experience-record/page": {
       "req_vo": "MemberExperienceRecordPageReqVO",
@@ -2166,7 +2652,13 @@
         "title": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "bizId": "bizId",
+        "bizType": "bizType",
+        "title": "title",
+        "userId": "userId"
+      }
     },
     "/admin-api/member/group/page": {
       "req_vo": "MemberGroupPageReqVO",
@@ -2175,7 +2667,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/member/level-record/page": {
       "req_vo": "MemberLevelRecordPageReqVO",
@@ -2184,7 +2679,11 @@
         "levelId": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "levelId": "levelId",
+        "userId": "userId"
+      }
     },
     "/admin-api/member/level/list": {
       "req_vo": "MemberLevelListReqVO",
@@ -2192,7 +2691,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/member/point/record/page": {
       "req_vo": "MemberPointRecordPageReqVO",
@@ -2203,7 +2705,11 @@
       },
       "unknown": [
         "nickname"
-      ]
+      ],
+      "equalities": {
+        "bizType": "bizType",
+        "userId": "userId"
+      }
     },
     "/admin-api/member/sign-in/record/page": {
       "req_vo": "MemberSignInRecordPageReqVO",
@@ -2214,7 +2720,11 @@
       },
       "unknown": [
         "nickname"
-      ]
+      ],
+      "equalities": {
+        "day": "day",
+        "userId": "userId"
+      }
     },
     "/admin-api/member/tag/page": {
       "req_vo": "MemberTagPageReqVO",
@@ -2237,7 +2747,11 @@
       },
       "unknown": [
         "tagIds"
-      ]
+      ],
+      "equalities": {
+        "groupId": "groupId",
+        "levelId": "levelId"
+      }
     },
     "/admin-api/mes/cal/calendar/list": {
       "req_vo": "MesCalCalendarListReqVO",
@@ -2257,7 +2771,10 @@
         "name": "like",
         "planId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "planId": "planId"
+      }
     },
     "/admin-api/mes/cal/plan/page": {
       "req_vo": "MesCalPlanPageReqVO",
@@ -2270,14 +2787,22 @@
         "startDate": "between",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "calendarType": "calendarType",
+        "shiftType": "shiftType",
+        "status": "status"
+      }
     },
     "/admin-api/mes/cal/team-member/page": {
       "req_vo": "MesCalTeamMemberPageReqVO",
       "params": {
         "teamId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "teamId": "teamId"
+      }
     },
     "/admin-api/mes/cal/team-shift/list": {
       "req_vo": "MesCalTeamShiftListReqVO",
@@ -2288,7 +2813,11 @@
         "teamId": "eq",
         "teamIds": "in"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "planId": "planId",
+        "teamId": "teamId"
+      }
     },
     "/admin-api/mes/cal/team/page": {
       "req_vo": "MesCalTeamPageReqVO",
@@ -2297,7 +2826,10 @@
         "code": "like",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "calendarType": "calendarType"
+      }
     },
     "/admin-api/mes/dv/check-plan/page": {
       "req_vo": "MesDvCheckPlanPageReqVO",
@@ -2308,14 +2840,21 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/dv/check-record-line/page": {
       "req_vo": "MesDvCheckRecordLinePageReqVO",
       "params": {
         "recordId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "recordId": "recordId"
+      }
     },
     "/admin-api/mes/dv/check-record/page": {
       "req_vo": "MesDvCheckRecordPageReqVO",
@@ -2326,7 +2865,13 @@
         "status": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "machineryId": "machineryId",
+        "planId": "planId",
+        "status": "status",
+        "userId": "userId"
+      }
     },
     "/admin-api/mes/dv/machinery-type/list": {
       "req_vo": "MesDvMachineryTypeListReqVO",
@@ -2334,7 +2879,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/dv/machinery/page": {
       "req_vo": "MesDvMachineryPageReqVO",
@@ -2347,14 +2895,22 @@
         "status": "eq",
         "workshopId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "machineryTypeId": "machineryTypeId",
+        "status": "status",
+        "workshopId": "workshopId"
+      }
     },
     "/admin-api/mes/dv/mainten-record-line/page": {
       "req_vo": "MesDvMaintenRecordLinePageReqVO",
       "params": {
         "recordId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "recordId": "recordId"
+      }
     },
     "/admin-api/mes/dv/mainten-record/page": {
       "req_vo": "MesDvMaintenRecordPageReqVO",
@@ -2364,14 +2920,22 @@
         "planId": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "machineryId": "machineryId",
+        "planId": "planId",
+        "userId": "userId"
+      }
     },
     "/admin-api/mes/dv/repair-line/page": {
       "req_vo": "MesDvRepairLinePageReqVO",
       "params": {
         "repairId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "repairId": "repairId"
+      }
     },
     "/admin-api/mes/dv/repair/page": {
       "req_vo": "MesDvRepairPageReqVO",
@@ -2383,7 +2947,12 @@
         "result": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "machineryId": "machineryId",
+        "result": "result",
+        "status": "status"
+      }
     },
     "/admin-api/mes/dv/subject/page": {
       "req_vo": "MesDvSubjectPageReqVO",
@@ -2393,7 +2962,11 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/md-client/page": {
       "req_vo": "MesMdClientPageReqVO",
@@ -2405,7 +2978,12 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "code": "code",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/md-vendor/page": {
       "req_vo": "MesMdVendorPageReqVO",
@@ -2416,7 +2994,11 @@
         "nickname": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "code": "code",
+        "status": "status"
+      }
     },
     "/admin-api/mes/md-workshop/page": {
       "req_vo": "MesMdWorkshopPageReqVO",
@@ -2425,7 +3007,11 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "code": "code",
+        "status": "status"
+      }
     },
     "/admin-api/mes/md-workstation/page": {
       "req_vo": "MesMdWorkstationPageReqVO",
@@ -2436,7 +3022,13 @@
         "status": "eq",
         "workshopId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "code": "code",
+        "processId": "processId",
+        "status": "status",
+        "workshopId": "workshopId"
+      }
     },
     "/admin-api/mes/md/auto-code-rule/page": {
       "req_vo": "MesMdAutoCodeRulePageReqVO",
@@ -2446,7 +3038,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/md/item-type/list": {
       "req_vo": "MesMdItemTypeListReqVO",
@@ -2454,7 +3049,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/md/item/page": {
       "req_vo": "MesMdItemPageReqVO",
@@ -2466,7 +3064,10 @@
       },
       "unknown": [
         "itemTypeId"
-      ]
+      ],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/md/product-bom/page": {
       "req_vo": "MesMdProductBomPageReqVO",
@@ -2474,7 +3075,11 @@
         "itemId": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "status": "status"
+      }
     },
     "/admin-api/mes/md/product-sip/page": {
       "req_vo": "MesMdProductSipPageReqVO",
@@ -2482,7 +3087,10 @@
         "itemId": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId"
+      }
     },
     "/admin-api/mes/md/product-sop/page": {
       "req_vo": "MesMdProductSopPageReqVO",
@@ -2490,7 +3098,10 @@
         "itemId": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId"
+      }
     },
     "/admin-api/mes/md/unit-measure/page": {
       "req_vo": "MesMdUnitMeasurePageReqVO",
@@ -2499,7 +3110,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/pro/andon-config/page": {
       "req_vo": "MesProAndonConfigPageReqVO",
@@ -2507,7 +3121,10 @@
         "level": "eq",
         "reason": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "level": "level"
+      }
     },
     "/admin-api/mes/pro/andon-record/page": {
       "req_vo": "MesProAndonRecordPageReqVO",
@@ -2518,7 +3135,13 @@
         "userId": "eq",
         "workstationId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "handlerUserId": "handlerUserId",
+        "status": "status",
+        "userId": "userId",
+        "workstationId": "workstationId"
+      }
     },
     "/admin-api/mes/pro/card-process/page": {
       "req_vo": "MesProCardProcessPageReqVO",
@@ -2528,7 +3151,13 @@
         "userId": "eq",
         "workstationId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "cardId": "cardId",
+        "processId": "processId",
+        "userId": "userId",
+        "workstationId": "workstationId"
+      }
     },
     "/admin-api/mes/pro/card/page": {
       "req_vo": "MesProCardPageReqVO",
@@ -2538,7 +3167,11 @@
         "itemId": "eq",
         "workOrderId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "workOrderId": "workOrderId"
+      }
     },
     "/admin-api/mes/pro/feedback/page": {
       "req_vo": "MesProFeedbackPageReqVO",
@@ -2552,7 +3185,15 @@
         "type": "eq",
         "workOrderId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "feedbackUserId": "feedbackUserId",
+        "itemId": "itemId",
+        "status": "status",
+        "type": "type",
+        "workOrderId": "workOrderId"
+      }
     },
     "/admin-api/mes/pro/process/page": {
       "req_vo": "MesProProcessPageReqVO",
@@ -2562,7 +3203,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/pro/route/page": {
       "req_vo": "MesProRoutePageReqVO",
@@ -2572,7 +3216,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/pro/task-issue/page": {
       "req_vo": "MesProTaskIssuePageReqVO",
@@ -2583,7 +3230,13 @@
         "taskId": "eq",
         "workOrderId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "sourceDocType": "sourceDocType",
+        "taskId": "taskId",
+        "workOrderId": "workOrderId"
+      }
     },
     "/admin-api/mes/pro/task/gantt-list": {
       "req_vo": "MesProWorkOrderPageReqVO",
@@ -2597,7 +3250,13 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "clientId": "clientId",
+        "productId": "productId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/pro/task/page": {
       "req_vo": "MesProTaskPageReqVO",
@@ -2613,14 +3272,25 @@
         "workOrderId": "eq",
         "workstationId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "checkFlag": "checkFlag",
+        "processId": "processId",
+        "routeId": "routeId",
+        "status": "status",
+        "workOrderId": "workOrderId",
+        "workstationId": "workstationId"
+      }
     },
     "/admin-api/mes/pro/work-order-bom/page": {
       "req_vo": "MesProWorkOrderBomPageReqVO",
       "params": {
         "workOrderId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "workOrderId": "workOrderId"
+      }
     },
     "/admin-api/mes/pro/work-order/page": {
       "req_vo": "MesProWorkOrderPageReqVO",
@@ -2634,7 +3304,13 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "clientId": "clientId",
+        "productId": "productId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/pro/workrecord/log/page": {
       "req_vo": "MesProWorkRecordLogPageReqVO",
@@ -2644,7 +3320,12 @@
         "userId": "eq",
         "workstationId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type",
+        "userId": "userId",
+        "workstationId": "workstationId"
+      }
     },
     "/admin-api/mes/qc/defect-record/page": {
       "req_vo": "MesQcDefectRecordPageReqVO",
@@ -2653,7 +3334,12 @@
         "qcId": "eq",
         "qcType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "lineId": "lineId",
+        "qcId": "qcId",
+        "qcType": "qcType"
+      }
     },
     "/admin-api/mes/qc/defect/page": {
       "req_vo": "MesQcDefectPageReqVO",
@@ -2663,7 +3349,11 @@
         "name": "like",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "level": "level",
+        "type": "type"
+      }
     },
     "/admin-api/mes/qc/indicator-result/page": {
       "req_vo": "MesQcIndicatorResultPageReqVO",
@@ -2673,7 +3363,12 @@
         "qcId": "eq",
         "qcType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "qcId": "qcId",
+        "qcType": "qcType"
+      }
     },
     "/admin-api/mes/qc/indicator/page": {
       "req_vo": "MesQcIndicatorPageReqVO",
@@ -2683,14 +3378,21 @@
         "resultType": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "resultType": "resultType",
+        "type": "type"
+      }
     },
     "/admin-api/mes/qc/ipqc/line/page": {
       "req_vo": "MesQcIpqcLinePageReqVO",
       "params": {
         "ipqcId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "ipqcId": "ipqcId"
+      }
     },
     "/admin-api/mes/qc/ipqc/page": {
       "req_vo": "MesQcIpqcPageReqVO",
@@ -2703,14 +3405,25 @@
         "type": "eq",
         "workOrderId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "checkResult": "checkResult",
+        "inspectorUserId": "inspectorUserId",
+        "itemId": "itemId",
+        "status": "status",
+        "type": "type",
+        "workOrderId": "workOrderId"
+      }
     },
     "/admin-api/mes/qc/iqc/line/page": {
       "req_vo": "MesQcIqcLinePageReqVO",
       "params": {
         "iqcId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "iqcId": "iqcId"
+      }
     },
     "/admin-api/mes/qc/iqc/page": {
       "req_vo": "MesQcIqcPageReqVO",
@@ -2724,14 +3437,23 @@
         "vendorBatch": "like",
         "vendorId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "checkResult": "checkResult",
+        "inspectorUserId": "inspectorUserId",
+        "itemId": "itemId",
+        "vendorId": "vendorId"
+      }
     },
     "/admin-api/mes/qc/oqc/line/page": {
       "req_vo": "MesQcOqcLinePageReqVO",
       "params": {
         "oqcId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "oqcId": "oqcId"
+      }
     },
     "/admin-api/mes/qc/oqc/page": {
       "req_vo": "MesQcOqcPageReqVO",
@@ -2742,7 +3464,12 @@
         "code": "like",
         "itemId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "checkResult": "checkResult",
+        "clientId": "clientId",
+        "itemId": "itemId"
+      }
     },
     "/admin-api/mes/qc/pending-inspect/page": {
       "req_vo": "MesQcPendingInspectPageReqVO",
@@ -2758,7 +3485,10 @@
       "params": {
         "rqcId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "rqcId": "rqcId"
+      }
     },
     "/admin-api/mes/qc/rqc/page": {
       "req_vo": "MesQcRqcPageReqVO",
@@ -2772,21 +3502,34 @@
         "sourceDocType": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "checkResult": "checkResult",
+        "inspectorUserId": "inspectorUserId",
+        "itemId": "itemId",
+        "sourceDocType": "sourceDocType",
+        "status": "status"
+      }
     },
     "/admin-api/mes/qc/template/indicator/page": {
       "req_vo": "MesQcTemplateIndicatorPageReqVO",
       "params": {
         "templateId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "templateId": "templateId"
+      }
     },
     "/admin-api/mes/qc/template/item/page": {
       "req_vo": "MesQcTemplateItemPageReqVO",
       "params": {
         "templateId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "templateId": "templateId"
+      }
     },
     "/admin-api/mes/qc/template/page": {
       "req_vo": "MesQcTemplatePageReqVO",
@@ -2797,7 +3540,10 @@
       },
       "unknown": [
         "type"
-      ]
+      ],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/mes/tm/tool-type/page": {
       "req_vo": "MesTmToolTypePageReqVO",
@@ -2806,7 +3552,10 @@
         "maintenType": "eq",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "maintenType": "maintenType"
+      }
     },
     "/admin-api/mes/tm/tool/page": {
       "req_vo": "MesTmToolPageReqVO",
@@ -2818,14 +3567,21 @@
         "status": "eq",
         "toolTypeId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "toolTypeId": "toolTypeId"
+      }
     },
     "/admin-api/mes/wm/arrival-notice-line/page": {
       "req_vo": "MesWmArrivalNoticeLinePageReqVO",
       "params": {
         "noticeId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "noticeId": "noticeId"
+      }
     },
     "/admin-api/mes/wm/arrival-notice/page": {
       "req_vo": "MesWmArrivalNoticePageReqVO",
@@ -2837,7 +3593,11 @@
         "status": "eq",
         "vendorId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "vendorId": "vendorId"
+      }
     },
     "/admin-api/mes/wm/barcode-config/page": {
       "req_vo": "MesWmBarcodeConfigPageReqVO",
@@ -2848,7 +3608,13 @@
         "format": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "autoGenerateFlag": "autoGenerateFlag",
+        "bizType": "bizType",
+        "format": "format",
+        "status": "status"
+      }
     },
     "/admin-api/mes/wm/barcode/page": {
       "req_vo": "MesWmBarcodePageReqVO",
@@ -2863,7 +3629,14 @@
         "format": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "bizId": "bizId",
+        "bizType": "bizType",
+        "configId": "configId",
+        "format": "format",
+        "status": "status"
+      }
     },
     "/admin-api/mes/wm/batch/page": {
       "req_vo": "MesWmBatchPageReqVO",
@@ -2885,7 +3658,18 @@
         "workOrderId": "eq",
         "workstationId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "clientId": "clientId",
+        "itemId": "itemId",
+        "moldId": "moldId",
+        "qualityStatus": "qualityStatus",
+        "taskId": "taskId",
+        "toolId": "toolId",
+        "vendorId": "vendorId",
+        "workOrderId": "workOrderId",
+        "workstationId": "workstationId"
+      }
     },
     "/admin-api/mes/wm/item-consume-line/page": {
       "req_vo": "MesWmItemConsumeLinePageReqVO",
@@ -2902,7 +3686,10 @@
       },
       "unknown": [
         "vendorId"
-      ]
+      ],
+      "equalities": {
+        "receiptId": "receiptId"
+      }
     },
     "/admin-api/mes/wm/item-receipt/page": {
       "req_vo": "MesWmItemReceiptPageReqVO",
@@ -2912,7 +3699,10 @@
         "receiptDate": "between",
         "vendorId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "vendorId": "vendorId"
+      }
     },
     "/admin-api/mes/wm/material-stock/page": {
       "req_vo": "MesWmMaterialStockPageReqVO",
@@ -2929,14 +3719,25 @@
         "itemId",
         "itemTypeId",
         "virtualFilter"
-      ]
+      ],
+      "equalities": {
+        "areaId": "areaId",
+        "batchId": "batchId",
+        "frozen": "frozen",
+        "locationId": "locationId",
+        "vendorId": "vendorId",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/mes/wm/misc-issue-line/page": {
       "req_vo": "MesWmMiscIssueLinePageReqVO",
       "params": {
         "issueId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "issueId": "issueId"
+      }
     },
     "/admin-api/mes/wm/misc-issue/page": {
       "req_vo": "MesWmMiscIssuePageReqVO",
@@ -2949,14 +3750,22 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "sourceDocType": "sourceDocType",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/wm/misc-receipt-line/page": {
       "req_vo": "MesWmMiscReceiptLinePageReqVO",
       "params": {
         "receiptId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "receiptId": "receiptId"
+      }
     },
     "/admin-api/mes/wm/misc-receipt/page": {
       "req_vo": "MesWmMiscReceiptPageReqVO",
@@ -2969,14 +3778,22 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "sourceDocType": "sourceDocType",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/wm/outsource-issue-line/page": {
       "req_vo": "MesWmOutsourceIssueLinePageReqVO",
       "params": {
         "issueId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "issueId": "issueId"
+      }
     },
     "/admin-api/mes/wm/outsource-issue/page": {
       "req_vo": "MesWmOutsourceIssuePageReqVO",
@@ -2987,7 +3804,11 @@
         "vendorId": "eq",
         "workOrderId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "vendorId": "vendorId",
+        "workOrderId": "workOrderId"
+      }
     },
     "/admin-api/mes/wm/outsource-receipt-line/page": {
       "req_vo": "MesWmOutsourceReceiptLinePageReqVO",
@@ -2995,7 +3816,11 @@
         "itemId": "eq",
         "receiptId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "receiptId": "receiptId"
+      }
     },
     "/admin-api/mes/wm/outsource-receipt/page": {
       "req_vo": "MesWmOutsourceReceiptPageReqVO",
@@ -3008,7 +3833,11 @@
       },
       "unknown": [
         "workOrderCode"
-      ]
+      ],
+      "equalities": {
+        "status": "status",
+        "vendorId": "vendorId"
+      }
     },
     "/admin-api/mes/wm/package-line/page": {
       "req_vo": "MesWmPackageLinePageReqVO",
@@ -3027,14 +3856,23 @@
         "salesOrderCode": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "clientId": "clientId",
+        "inspectorUserId": "inspectorUserId",
+        "parentId": "parentId",
+        "status": "status"
+      }
     },
     "/admin-api/mes/wm/product-issue-line/page": {
       "req_vo": "MesWmProductIssueLinePageReqVO",
       "params": {
         "issueId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "issueId": "issueId"
+      }
     },
     "/admin-api/mes/wm/product-issue/page": {
       "req_vo": "MesWmProductIssuePageReqVO",
@@ -3049,21 +3887,32 @@
       "unknown": [
         "clientId",
         "taskId"
-      ]
+      ],
+      "equalities": {
+        "status": "status",
+        "workOrderId": "workOrderId",
+        "workstationId": "workstationId"
+      }
     },
     "/admin-api/mes/wm/product-produce-line/page": {
       "req_vo": "MesWmProductProduceLinePageReqVO",
       "params": {
         "feedbackId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "feedbackId": "feedbackId"
+      }
     },
     "/admin-api/mes/wm/product-receipt-line/page": {
       "req_vo": "MesWmProductReceiptLinePageReqVO",
       "params": {
         "receiptId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "receiptId": "receiptId"
+      }
     },
     "/admin-api/mes/wm/product-receipt/page": {
       "req_vo": "MesWmProductReceiptPageReqVO",
@@ -3073,7 +3922,11 @@
         "name": "like",
         "workOrderId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "workOrderId": "workOrderId"
+      }
     },
     "/admin-api/mes/wm/product-sales-line/page": {
       "req_vo": "MesWmProductSalesLinePageReqVO",
@@ -3083,7 +3936,10 @@
       },
       "unknown": [
         "clientId"
-      ]
+      ],
+      "equalities": {
+        "salesId": "salesId"
+      }
     },
     "/admin-api/mes/wm/product-sales/page": {
       "req_vo": "MesWmProductSalesPageReqVO",
@@ -3094,14 +3950,21 @@
         "shipmentDate": "between",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "clientId": "clientId",
+        "status": "status"
+      }
     },
     "/admin-api/mes/wm/return-issue-line/page": {
       "req_vo": "MesWmReturnIssueLinePageReqVO",
       "params": {
         "issueId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "issueId": "issueId"
+      }
     },
     "/admin-api/mes/wm/return-issue/page": {
       "req_vo": "MesWmReturnIssuePageReqVO",
@@ -3112,7 +3975,12 @@
         "workOrderId": "eq",
         "workstationId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type",
+        "workOrderId": "workOrderId",
+        "workstationId": "workstationId"
+      }
     },
     "/admin-api/mes/wm/return-sales-line/page": {
       "req_vo": "MesWmReturnSalesLinePageReqVO",
@@ -3120,7 +3988,11 @@
         "itemId": "eq",
         "returnId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "returnId": "returnId"
+      }
     },
     "/admin-api/mes/wm/return-sales/page": {
       "req_vo": "MesWmReturnSalesPageReqVO",
@@ -3132,14 +4004,21 @@
         "salesOrderCode": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "clientId": "clientId",
+        "status": "status"
+      }
     },
     "/admin-api/mes/wm/return-vendor-line/page": {
       "req_vo": "MesWmReturnVendorLinePageReqVO",
       "params": {
         "returnId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "returnId": "returnId"
+      }
     },
     "/admin-api/mes/wm/return-vendor/page": {
       "req_vo": "MesWmReturnVendorPageReqVO",
@@ -3149,14 +4028,20 @@
         "purchaseOrderCode": "like",
         "vendorId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "vendorId": "vendorId"
+      }
     },
     "/admin-api/mes/wm/sales-notice-line/page": {
       "req_vo": "MesWmSalesNoticeLinePageReqVO",
       "params": {
         "noticeId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "noticeId": "noticeId"
+      }
     },
     "/admin-api/mes/wm/sales-notice/page": {
       "req_vo": "MesWmSalesNoticePageReqVO",
@@ -3167,7 +4052,11 @@
         "salesOrderCode": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "clientId": "clientId",
+        "status": "status"
+      }
     },
     "/admin-api/mes/wm/sn/group-export-excel": {
       "req_vo": "MesWmSnPageReqVO",
@@ -3178,7 +4067,11 @@
         "itemId": "eq",
         "uuid": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "uuid": "uuid"
+      }
     },
     "/admin-api/mes/wm/sn/group-page": {
       "req_vo": "MesWmSnPageReqVO",
@@ -3189,14 +4082,21 @@
         "itemId": "eq",
         "uuid": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "itemId": "itemId",
+        "uuid": "uuid"
+      }
     },
     "/admin-api/mes/wm/stocktaking-plan-param/page": {
       "req_vo": "MesWmStockTakingPlanParamPageReqVO",
       "params": {
         "planId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "planId": "planId"
+      }
     },
     "/admin-api/mes/wm/stocktaking-plan/page": {
       "req_vo": "MesWmStockTakingPlanPageReqVO",
@@ -3206,14 +4106,21 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/wm/stocktaking-task-line/page": {
       "req_vo": "MesWmStockTakingTaskLinePageReqVO",
       "params": {
         "taskId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "taskId": "taskId"
+      }
     },
     "/admin-api/mes/wm/stocktaking-task-result/page": {
       "req_vo": "MesWmStockTakingTaskResultPageReqVO",
@@ -3224,7 +4131,14 @@
         "taskId": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "areaId": "areaId",
+        "itemId": "itemId",
+        "locationId": "locationId",
+        "taskId": "taskId",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/mes/wm/stocktaking-task/page": {
       "req_vo": "MesWmStockTakingTaskPageReqVO",
@@ -3237,7 +4151,13 @@
         "type": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "planId": "planId",
+        "status": "status",
+        "type": "type",
+        "userId": "userId"
+      }
     },
     "/admin-api/mes/wm/transfer/page": {
       "req_vo": "MesWmTransferPageReqVO",
@@ -3247,7 +4167,11 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/mes/wm/warehouse-area/page": {
       "req_vo": "MesWmWarehouseAreaPageReqVO",
@@ -3259,7 +4183,13 @@
         "positionY": "eq",
         "positionZ": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "locationId": "locationId",
+        "positionX": "positionX",
+        "positionY": "positionY",
+        "positionZ": "positionZ"
+      }
     },
     "/admin-api/mes/wm/warehouse-location/page": {
       "req_vo": "MesWmWarehouseLocationPageReqVO",
@@ -3268,7 +4198,10 @@
         "name": "like",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/mes/wm/warehouse/page": {
       "req_vo": "MesWmWarehousePageReqVO",
@@ -3277,7 +4210,10 @@
         "frozen": "eq",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "frozen": "frozen"
+      }
     },
     "/admin-api/mp/account/page": {
       "req_vo": "MpAccountPageReqVO",
@@ -3298,7 +4234,11 @@
         "createTime",
         "openid",
         "userId"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "type": "type"
+      }
     },
     "/admin-api/mp/draft/page": {
       "req_vo": "MpDraftPageReqVO",
@@ -3321,7 +4261,12 @@
         "permanent": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "accountId": "accountId",
+        "permanent": "permanent",
+        "type": "type"
+      }
     },
     "/admin-api/mp/message-template/list": {
       "req_vo": "MpMessageTemplateListReqVO",
@@ -3340,7 +4285,11 @@
         "createTime",
         "openid",
         "userId"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "type": "type"
+      }
     },
     "/admin-api/mp/tag/page": {
       "req_vo": "MpTagPageReqVO",
@@ -3348,7 +4297,10 @@
         "accountId": "eq",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "accountId": "accountId"
+      }
     },
     "/admin-api/mp/user/page": {
       "req_vo": "MpUserPageReqVO",
@@ -3359,7 +4311,10 @@
       },
       "unknown": [
         "unionId"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId"
+      }
     },
     "/admin-api/oa/announcement/published-page": {
       "req_vo": "OaAnnouncementPageReqVO",
@@ -3371,7 +4326,11 @@
       },
       "unknown": [
         "readStatus"
-      ]
+      ],
+      "equalities": {
+        "priority": "priority",
+        "type": "type"
+      }
     },
     "/admin-api/oa/announcement/received-page": {
       "req_vo": "OaAnnouncementPageReqVO",
@@ -3383,7 +4342,11 @@
       },
       "unknown": [
         "readStatus"
-      ]
+      ],
+      "equalities": {
+        "priority": "priority",
+        "type": "type"
+      }
     },
     "/admin-api/oa/attendance/my-page": {
       "req_vo": "OaAttendancePageReqVO",
@@ -3394,7 +4357,11 @@
       },
       "unknown": [
         "userId"
-      ]
+      ],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/oa/attendance/page": {
       "req_vo": "OaAttendancePageReqVO",
@@ -3405,7 +4372,11 @@
       },
       "unknown": [
         "userId"
-      ]
+      ],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/oa/contact/my-page": {
       "req_vo": "OaContactPageReqVO",
@@ -3446,7 +4417,11 @@
         "discussionId": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "discussionId": "discussionId",
+        "userId": "userId"
+      }
     },
     "/admin-api/oa/discussion/manage-page": {
       "req_vo": "OaDiscussionPageReqVO",
@@ -3456,7 +4431,11 @@
         "type": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type",
+        "userId": "userId"
+      }
     },
     "/admin-api/oa/discussion/page": {
       "req_vo": "OaDiscussionPageReqVO",
@@ -3466,7 +4445,11 @@
         "type": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type",
+        "userId": "userId"
+      }
     },
     "/admin-api/oa/file-node/page": {
       "req_vo": "OaFileNodePageReqVO",
@@ -3485,7 +4468,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/mail-message/page": {
       "req_vo": "OaMailMessagePageReqVO",
@@ -3497,7 +4483,12 @@
       },
       "unknown": [
         "folderKey"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "hasAttach": "hasAttach",
+        "readStatus": "readStatus"
+      }
     },
     "/admin-api/oa/meeting-room-booking/page": {
       "req_vo": "OaMeetingRoomBookingPageReqVO",
@@ -3515,7 +4506,13 @@
       "unknown": [
         "moderatorName",
         "roomName"
-      ]
+      ],
+      "equalities": {
+        "creator": "creator",
+        "deptId": "deptId",
+        "status": "status",
+        "useStatus": "useStatus"
+      }
     },
     "/admin-api/oa/meeting-room/bookable-page": {
       "req_vo": "OaMeetingRoomPageReqVO",
@@ -3527,7 +4524,10 @@
       },
       "unknown": [
         "managerName"
-      ]
+      ],
+      "equalities": {
+        "type": "type"
+      }
     },
     "/admin-api/oa/meeting-room/page": {
       "req_vo": "OaMeetingRoomPageReqVO",
@@ -3539,7 +4539,10 @@
       },
       "unknown": [
         "managerName"
-      ]
+      ],
+      "equalities": {
+        "type": "type"
+      }
     },
     "/admin-api/oa/note/my-page": {
       "req_vo": "OaNotePageReqVO",
@@ -3551,7 +4554,13 @@
         "title": "like",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "categoryId": "categoryId",
+        "favorite": "favorite",
+        "priority": "priority",
+        "type": "type"
+      }
     },
     "/admin-api/oa/note/received-page": {
       "req_vo": "OaNotePageReqVO",
@@ -3563,7 +4572,13 @@
         "title": "like",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "categoryId": "categoryId",
+        "favorite": "favorite",
+        "priority": "priority",
+        "type": "type"
+      }
     },
     "/admin-api/oa/officialdoc-receive/page": {
       "req_vo": "OaOfficialDocReceivePageReqVO",
@@ -3572,7 +4587,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/officialdoc-send/page": {
       "req_vo": "OaOfficialDocSendPageReqVO",
@@ -3581,7 +4599,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/officialdoc-template/page": {
       "req_vo": "OaOfficialDocTemplatePageReqVO",
@@ -3589,7 +4610,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/overtime-apply/page": {
       "req_vo": "OaOvertimeApplyPageReqVO",
@@ -3597,7 +4621,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/plan/page": {
       "req_vo": "OaPlanPageReqVO",
@@ -3608,7 +4635,11 @@
         "title": "like",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/oa/plan/report-page": {
       "req_vo": "OaPlanReportPageReqVO",
@@ -3625,7 +4656,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/reimbursement/page": {
       "req_vo": "OaReimbursementPageReqVO",
@@ -3633,7 +4667,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/resign-apply/page": {
       "req_vo": "OaResignApplyPageReqVO",
@@ -3641,7 +4678,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/oa/schedule/my-page": {
       "req_vo": "OaSchedulePageReqVO",
@@ -3655,7 +4695,11 @@
         "includeMine",
         "includeReceived",
         "overlapTime"
-      ]
+      ],
+      "equalities": {
+        "priority": "priority",
+        "type": "type"
+      }
     },
     "/admin-api/oa/schedule/page": {
       "req_vo": "OaSchedulePageReqVO",
@@ -3669,7 +4713,11 @@
         "includeMine",
         "includeReceived",
         "overlapTime"
-      ]
+      ],
+      "equalities": {
+        "priority": "priority",
+        "type": "type"
+      }
     },
     "/admin-api/oa/schedule/received-page": {
       "req_vo": "OaSchedulePageReqVO",
@@ -3683,7 +4731,11 @@
         "includeMine",
         "includeReceived",
         "overlapTime"
-      ]
+      ],
+      "equalities": {
+        "priority": "priority",
+        "type": "type"
+      }
     },
     "/admin-api/oa/seal-apply/page": {
       "req_vo": "OaSealApplyPageReqVO",
@@ -3700,7 +4752,16 @@
         "urgent": "eq",
         "useStatus": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "deptId": "deptId",
+        "mode": "mode",
+        "sealId": "sealId",
+        "status": "status",
+        "type": "type",
+        "urgent": "urgent",
+        "useStatus": "useStatus"
+      }
     },
     "/admin-api/oa/seal-apply/seal-page": {
       "req_vo": "OaSealPageReqVO",
@@ -3716,7 +4777,14 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category",
+        "deptId": "deptId",
+        "keeperUserId": "keeperUserId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/oa/seal/page": {
       "req_vo": "OaSealPageReqVO",
@@ -3732,7 +4800,14 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category",
+        "deptId": "deptId",
+        "keeperUserId": "keeperUserId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/oa/supply-apply/page": {
       "req_vo": "OaSupplyApplyPageReqVO",
@@ -3742,7 +4817,11 @@
         "no": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "deptId": "deptId",
+        "status": "status"
+      }
     },
     "/admin-api/oa/supply-issue/page": {
       "req_vo": "OaSupplyIssuePageReqVO",
@@ -3755,7 +4834,12 @@
       },
       "unknown": [
         "creatorName"
-      ]
+      ],
+      "equalities": {
+        "manageType": "manageType",
+        "status": "status",
+        "useType": "useType"
+      }
     },
     "/admin-api/oa/supply-item/page": {
       "req_vo": "OaSupplyItemPageReqVO",
@@ -3766,7 +4850,12 @@
         "no": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category",
+        "manageType": "manageType",
+        "status": "status"
+      }
     },
     "/admin-api/oa/supply-item/select-page": {
       "req_vo": "OaSupplyItemPageReqVO",
@@ -3777,7 +4866,12 @@
         "no": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category",
+        "manageType": "manageType",
+        "status": "status"
+      }
     },
     "/admin-api/oa/task/published-page": {
       "req_vo": "OaTaskPageReqVO",
@@ -3790,7 +4884,11 @@
       "unknown": [
         "publisherUserId",
         "status"
-      ]
+      ],
+      "equalities": {
+        "canceled": "canceled",
+        "type": "type"
+      }
     },
     "/admin-api/oa/task/received-page": {
       "req_vo": "OaTaskPageReqVO",
@@ -3803,7 +4901,11 @@
       "unknown": [
         "publisherUserId",
         "status"
-      ]
+      ],
+      "equalities": {
+        "canceled": "canceled",
+        "type": "type"
+      }
     },
     "/admin-api/oa/travel-apply/page": {
       "req_vo": "OaTravelApplyPageReqVO",
@@ -3814,7 +4916,12 @@
         "reimburseStatus": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "deptId": "deptId",
+        "reimburseStatus": "reimburseStatus",
+        "status": "status"
+      }
     },
     "/admin-api/oa/travel-reimbursement/page": {
       "req_vo": "OaTravelReimbursementPageReqVO",
@@ -3825,7 +4932,12 @@
         "payStatus": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "deptId": "deptId",
+        "payStatus": "payStatus",
+        "status": "status"
+      }
     },
     "/admin-api/oa/vehicle-apply/page": {
       "req_vo": "OaVehicleApplyPageReqVO",
@@ -3837,7 +4949,12 @@
         "status": "eq",
         "vehicleNo": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "deptId": "deptId",
+        "returnStatus": "returnStatus",
+        "status": "status"
+      }
     },
     "/admin-api/oa/vehicle-apply/vehicle-page": {
       "req_vo": "OaVehiclePageReqVO",
@@ -3853,7 +4970,12 @@
         "status": "eq",
         "type": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category",
+        "deptId": "deptId",
+        "status": "status"
+      }
     },
     "/admin-api/oa/vehicle-return/page": {
       "req_vo": "OaVehicleReturnPageReqVO",
@@ -3866,7 +4988,12 @@
         "status": "eq",
         "vehicleNo": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "applyId": "applyId",
+        "deptId": "deptId",
+        "status": "status"
+      }
     },
     "/admin-api/oa/vehicle/page": {
       "req_vo": "OaVehiclePageReqVO",
@@ -3882,7 +5009,12 @@
         "status": "eq",
         "type": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "category": "category",
+        "deptId": "deptId",
+        "status": "status"
+      }
     },
     "/admin-api/oa/work-report/page": {
       "req_vo": "OaWorkReportPageReqVO",
@@ -3896,7 +5028,12 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "deptId": "deptId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/pay/app/page": {
       "req_vo": "PayAppPageReqVO",
@@ -3906,7 +5043,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/pay/notify/page": {
       "req_vo": "PayNotifyTaskPageReqVO",
@@ -3920,7 +5060,16 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "appId": "appId",
+        "dataId": "dataId",
+        "merchantOrderId": "merchantOrderId",
+        "merchantRefundId": "merchantRefundId",
+        "merchantTransferId": "merchantTransferId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/pay/order/page": {
       "req_vo": "PayOrderPageReqVO",
@@ -3933,7 +5082,12 @@
         "no": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "appId": "appId",
+        "channelCode": "channelCode",
+        "status": "status"
+      }
     },
     "/admin-api/pay/refund/page": {
       "req_vo": "PayRefundPageReqVO",
@@ -3947,7 +5101,12 @@
         "merchantRefundId": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "appId": "appId",
+        "channelCode": "channelCode",
+        "status": "status"
+      }
     },
     "/admin-api/pay/transfer/page": {
       "req_vo": "PayTransferPageReqVO",
@@ -3962,7 +5121,14 @@
         "userAccount": "like",
         "userName": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "appId": "appId",
+        "channelCode": "channelCode",
+        "channelTransferNo": "channelTransferNo",
+        "no": "no",
+        "status": "status"
+      }
     },
     "/admin-api/pay/wallet-recharge-package/page": {
       "req_vo": "WalletRechargePackagePageReqVO",
@@ -3971,7 +5137,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/pay/wallet-transaction/page": {
       "req_vo": "PayWalletTransactionPageReqVO",
@@ -3989,7 +5158,11 @@
         "userId": "eq",
         "userType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "userId": "userId",
+        "userType": "userType"
+      }
     },
     "/admin-api/pms/kb/document-label/document-page": {
       "req_vo": "PmsKnowledgeDocumentLabelPageReqVO",
@@ -4006,14 +5179,20 @@
         "libraryId": "eq",
         "updateTime": "between"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "libraryId": "libraryId"
+      }
     },
     "/admin-api/pms/kb/favorite/page": {
       "req_vo": "PmsKnowledgeFavoritePageReqVO",
       "params": {
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type"
+      }
     },
     "/admin-api/pms/kb/library-template/page": {
       "req_vo": "PmsKnowledgeLibraryTemplatePageReqVO",
@@ -4039,7 +5218,11 @@
         "projectId": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "projectId": "projectId",
+        "status": "status"
+      }
     },
     "/admin-api/pms/pm/project-template/page": {
       "req_vo": "PmsProjectTemplatePageReqVO",
@@ -4048,7 +5231,11 @@
         "projectType": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "projectType": "projectType",
+        "status": "status"
+      }
     },
     "/admin-api/pms/pm/project/page": {
       "req_vo": "PmsProjectPageReqVO",
@@ -4060,7 +5247,10 @@
         "groupId",
         "sceneType",
         "sortType"
-      ]
+      ],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/pms/pm/work-item/page": {
       "req_vo": "PmsWorkItemPageReqVO",
@@ -4087,7 +5277,16 @@
         "planningOnly",
         "rootOnly",
         "unplannedOnly"
-      ]
+      ],
+      "equalities": {
+        "assigneeUserId": "assigneeUserId",
+        "iterationId": "iterationId",
+        "parentId": "parentId",
+        "priority": "priority",
+        "projectId": "projectId",
+        "statusId": "statusId",
+        "type": "type"
+      }
     },
     "/admin-api/pms/pm/workbench/count": {
       "req_vo": "PmsWorkbenchPageReqVO",
@@ -4145,7 +5344,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/product/browse-history/page": {
       "req_vo": "ProductBrowseHistoryPageReqVO",
@@ -4155,7 +5357,12 @@
         "userDeleted": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "spuId": "spuId",
+        "userDeleted": "userDeleted",
+        "userId": "userId"
+      }
     },
     "/admin-api/product/category/list": {
       "req_vo": "ProductCategoryListReqVO",
@@ -4165,7 +5372,11 @@
         "parentIds": "in",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "parentId": "parentId",
+        "status": "status"
+      }
     },
     "/admin-api/product/comment/page": {
       "req_vo": "ProductCommentPageReqVO",
@@ -4178,14 +5389,23 @@
         "spuName": "like",
         "userNickname": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "orderId": "orderId",
+        "replyStatus": "replyStatus",
+        "scores": "scores",
+        "spuId": "spuId"
+      }
     },
     "/admin-api/product/favorite/page": {
       "req_vo": "ProductFavoritePageReqVO",
       "params": {
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "userId": "userId"
+      }
     },
     "/admin-api/product/property/page": {
       "req_vo": "ProductPropertyPageReqVO",
@@ -4205,7 +5425,10 @@
       },
       "unknown": [
         "status"
-      ]
+      ],
+      "equalities": {
+        "propertyId": "propertyId"
+      }
     },
     "/admin-api/product/spu/get-count": {
       "req_vo": "ProductSpuPageReqVO",
@@ -4216,7 +5439,10 @@
       },
       "unknown": [
         "tabType"
-      ]
+      ],
+      "equalities": {
+        "categoryId": "categoryId"
+      }
     },
     "/admin-api/product/spu/page": {
       "req_vo": "ProductSpuPageReqVO",
@@ -4227,7 +5453,10 @@
       },
       "unknown": [
         "tabType"
-      ]
+      ],
+      "equalities": {
+        "categoryId": "categoryId"
+      }
     },
     "/admin-api/promotion/article-category/page": {
       "req_vo": "ArticleCategoryPageReqVO",
@@ -4236,7 +5465,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/article/page": {
       "req_vo": "ArticlePageReqVO",
@@ -4250,7 +5482,16 @@
         "status": "eq",
         "title": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "author": "author",
+        "categoryId": "categoryId",
+        "recommendBanner": "recommendBanner",
+        "recommendHot": "recommendHot",
+        "spuId": "spuId",
+        "status": "status",
+        "title": "title"
+      }
     },
     "/admin-api/promotion/banner/page": {
       "req_vo": "BannerPageReqVO",
@@ -4259,7 +5500,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/bargain-activity/page": {
       "req_vo": "BargainActivityPageReqVO",
@@ -4267,14 +5511,20 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/bargain-help/page": {
       "req_vo": "BargainHelpPageReqVO",
       "params": {
         "recordId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "recordId": "recordId"
+      }
     },
     "/admin-api/promotion/bargain-record/page": {
       "req_vo": "BargainRecordPageReqVO",
@@ -4282,7 +5532,10 @@
         "createTime": "between",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/combination-activity/page": {
       "req_vo": "CombinationActivityPageReqVO",
@@ -4290,7 +5543,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/coupon-template/page": {
       "req_vo": "CouponTemplatePageReqVO",
@@ -4304,7 +5560,12 @@
       "unknown": [
         "canTakeTypes",
         "productScopeValue"
-      ]
+      ],
+      "equalities": {
+        "discountType": "discountType",
+        "productScope": "productScope",
+        "status": "status"
+      }
     },
     "/admin-api/promotion/coupon/page": {
       "req_vo": "CouponPageReqVO",
@@ -4316,7 +5577,11 @@
       },
       "unknown": [
         "nickname"
-      ]
+      ],
+      "equalities": {
+        "status": "status",
+        "templateId": "templateId"
+      }
     },
     "/admin-api/promotion/discount-activity/page": {
       "req_vo": "DiscountActivityPageReqVO",
@@ -4325,7 +5590,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/diy-page/page": {
       "req_vo": "DiyPagePageReqVO",
@@ -4343,7 +5611,10 @@
         "used": "eq",
         "usedTime": "between"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "used": "used"
+      }
     },
     "/admin-api/promotion/kefu-message/list": {
       "req_vo": "KeFuMessageListReqVO",
@@ -4360,7 +5631,10 @@
       "params": {
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/reward-activity/page": {
       "req_vo": "RewardActivityPageReqVO",
@@ -4368,7 +5642,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/seckill-activity/page": {
       "req_vo": "SeckillActivityPageReqVO",
@@ -4379,7 +5656,10 @@
       },
       "unknown": [
         "configId"
-      ]
+      ],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/promotion/seckill-config/page": {
       "req_vo": "SeckillConfigPageReqVO",
@@ -4387,7 +5667,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/dept/list": {
       "req_vo": "DeptListReqVO",
@@ -4395,7 +5678,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/dict-type/page": {
       "req_vo": "DictTypePageReqVO",
@@ -4405,7 +5691,10 @@
         "status": "eq",
         "type": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/login-log/page": {
       "req_vo": "LoginLogPageReqVO",
@@ -4438,7 +5727,14 @@
       },
       "unknown": [
         "toMail"
-      ]
+      ],
+      "equalities": {
+        "accountId": "accountId",
+        "sendStatus": "sendStatus",
+        "templateId": "templateId",
+        "userId": "userId",
+        "userType": "userType"
+      }
     },
     "/admin-api/system/mail-template/page": {
       "req_vo": "MailTemplatePageReqVO",
@@ -4449,7 +5745,11 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "accountId": "accountId",
+        "status": "status"
+      }
     },
     "/admin-api/system/menu/list": {
       "req_vo": "MenuListReqVO",
@@ -4457,7 +5757,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/notice/page": {
       "req_vo": "NoticePageReqVO",
@@ -4465,7 +5768,10 @@
         "status": "eq",
         "title": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/notify-message/my-page": {
       "req_vo": "NotifyMessageMyPageReqVO",
@@ -4473,7 +5779,10 @@
         "createTime": "between",
         "readStatus": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "readStatus": "readStatus"
+      }
     },
     "/admin-api/system/notify-message/page": {
       "req_vo": "NotifyMessagePageReqVO",
@@ -4484,7 +5793,12 @@
         "userId": "eq",
         "userType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "templateType": "templateType",
+        "userId": "userId",
+        "userType": "userType"
+      }
     },
     "/admin-api/system/notify-template/page": {
       "req_vo": "NotifyTemplatePageReqVO",
@@ -4494,7 +5808,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/oauth2-client/page": {
       "req_vo": "OAuth2ClientPageReqVO",
@@ -4502,7 +5819,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/oauth2-token/page": {
       "req_vo": "OAuth2AccessTokenPageReqVO",
@@ -4511,7 +5831,11 @@
         "userId": "eq",
         "userType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "userId": "userId",
+        "userType": "userType"
+      }
     },
     "/admin-api/system/operate-log/page": {
       "req_vo": "OperateLogPageReqVO",
@@ -4523,7 +5847,11 @@
         "type": "like",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "bizId": "bizId",
+        "userId": "userId"
+      }
     },
     "/admin-api/system/post/page": {
       "req_vo": "PostPageReqVO",
@@ -4532,7 +5860,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/role/page": {
       "req_vo": "RolePageReqVO",
@@ -4542,7 +5873,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/sms-channel/page": {
       "req_vo": "SmsChannelPageReqVO",
@@ -4551,7 +5885,10 @@
         "signature": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/sms-log/page": {
       "req_vo": "SmsLogPageReqVO",
@@ -4564,7 +5901,13 @@
         "sendTime": "between",
         "templateId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "channelId": "channelId",
+        "receiveStatus": "receiveStatus",
+        "sendStatus": "sendStatus",
+        "templateId": "templateId"
+      }
     },
     "/admin-api/system/sms-template/page": {
       "req_vo": "SmsTemplatePageReqVO",
@@ -4577,7 +5920,12 @@
         "status": "eq",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "channelId": "channelId",
+        "status": "status",
+        "type": "type"
+      }
     },
     "/admin-api/system/social-client/page": {
       "req_vo": "SocialClientPageReqVO",
@@ -4588,7 +5936,12 @@
         "status": "eq",
         "userType": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "socialType": "socialType",
+        "status": "status",
+        "userType": "userType"
+      }
     },
     "/admin-api/system/social-user/page": {
       "req_vo": "SocialUserPageReqVO",
@@ -4598,7 +5951,10 @@
         "openid": "like",
         "type": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "type": "type"
+      }
     },
     "/admin-api/system/tenant-package/page": {
       "req_vo": "TenantPackagePageReqVO",
@@ -4608,7 +5964,10 @@
         "remark": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/tenant/page": {
       "req_vo": "TenantPageReqVO",
@@ -4619,7 +5978,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/system/user/page": {
       "req_vo": "UserPageReqVO",
@@ -4632,7 +5994,10 @@
       "unknown": [
         "deptId",
         "roleId"
-      ]
+      ],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/trade/after-sale/page": {
       "req_vo": "AfterSalePageReqVO",
@@ -4646,7 +6011,13 @@
         "userId": "eq",
         "way": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type",
+        "userId": "userId",
+        "way": "way"
+      }
     },
     "/admin-api/trade/brokerage-record/page": {
       "req_vo": "BrokerageRecordPageReqVO",
@@ -4657,7 +6028,13 @@
         "status": "eq",
         "userId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "bizType": "bizType",
+        "sourceUserLevel": "sourceUserLevel",
+        "status": "status",
+        "userId": "userId"
+      }
     },
     "/admin-api/trade/brokerage-user/page": {
       "req_vo": "BrokerageUserPageReqVO",
@@ -4669,7 +6046,10 @@
       "unknown": [
         "bindUserId",
         "level"
-      ]
+      ],
+      "equalities": {
+        "brokerageEnabled": "brokerageEnabled"
+      }
     },
     "/admin-api/trade/brokerage-withdraw/page": {
       "req_vo": "BrokerageWithdrawPageReqVO",
@@ -4682,7 +6062,12 @@
         "userId": "eq",
         "userName": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status",
+        "type": "type",
+        "userId": "userId"
+      }
     },
     "/admin-api/trade/delivery/express-template/page": {
       "req_vo": "DeliveryExpressTemplatePageReqVO",
@@ -4691,7 +6076,10 @@
         "createTime": "between",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "chargeMode": "chargeMode"
+      }
     },
     "/admin-api/trade/delivery/express/page": {
       "req_vo": "DeliveryExpressPageReqVO",
@@ -4701,7 +6089,10 @@
         "name": "like",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "status": "status"
+      }
     },
     "/admin-api/trade/delivery/pick-up-store/page": {
       "req_vo": "DeliveryPickUpStorePageReqVO",
@@ -4712,7 +6103,12 @@
         "phone": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "areaId": "areaId",
+        "phone": "phone",
+        "status": "status"
+      }
     },
     "/admin-api/trade/order/page": {
       "req_vo": "TradeOrderPageReqVO",
@@ -4732,7 +6128,16 @@
       "unknown": [
         "userMobile",
         "userNickname"
-      ]
+      ],
+      "equalities": {
+        "deliveryType": "deliveryType",
+        "logisticsId": "logisticsId",
+        "payChannelCode": "payChannelCode",
+        "status": "status",
+        "terminal": "terminal",
+        "type": "type",
+        "userId": "userId"
+      }
     },
     "/admin-api/trade/order/summary": {
       "req_vo": "TradeOrderPageReqVO",
@@ -4752,7 +6157,16 @@
       "unknown": [
         "userMobile",
         "userNickname"
-      ]
+      ],
+      "equalities": {
+        "deliveryType": "deliveryType",
+        "logisticsId": "logisticsId",
+        "payChannelCode": "payChannelCode",
+        "status": "status",
+        "terminal": "terminal",
+        "type": "type",
+        "userId": "userId"
+      }
     },
     "/admin-api/wms/check-order/page": {
       "req_vo": "WmsCheckOrderPageReqVO",
@@ -4772,7 +6186,13 @@
         "updater": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "status": "status",
+        "updater": "updater",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/wms/inventory-history/page": {
       "req_vo": "WmsInventoryHistoryPageReqVO",
@@ -4787,14 +6207,23 @@
         "skuName": "like",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "orderNo": "orderNo",
+        "orderType": "orderType",
+        "skuId": "skuId",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/wms/inventory/list": {
       "req_vo": "WmsInventoryListReqVO",
       "params": {
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/wms/inventory/page": {
       "req_vo": "WmsInventoryPageReqVO",
@@ -4810,7 +6239,11 @@
       "unknown": [
         "onlyPositiveQuantity",
         "type"
-      ]
+      ],
+      "equalities": {
+        "skuId": "skuId",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/wms/item-brand/page": {
       "req_vo": "WmsItemBrandPageReqVO",
@@ -4828,7 +6261,11 @@
         "parentId": "eq",
         "status": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "parentId": "parentId",
+        "status": "status"
+      }
     },
     "/admin-api/wms/item-sku/page": {
       "req_vo": "WmsItemSkuPageReqVO",
@@ -4841,7 +6278,11 @@
         "itemName": "like",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "brandId": "brandId",
+        "categoryId": "categoryId"
+      }
     },
     "/admin-api/wms/item/page": {
       "req_vo": "WmsItemPageReqVO",
@@ -4853,7 +6294,10 @@
       },
       "unknown": [
         "categoryId"
-      ]
+      ],
+      "equalities": {
+        "brandId": "brandId"
+      }
     },
     "/admin-api/wms/item/simple-list": {
       "req_vo": "WmsItemListReqVO",
@@ -4865,7 +6309,10 @@
       },
       "unknown": [
         "categoryId"
-      ]
+      ],
+      "equalities": {
+        "brandId": "brandId"
+      }
     },
     "/admin-api/wms/merchant/page": {
       "req_vo": "WmsMerchantPageReqVO",
@@ -4875,7 +6322,11 @@
         "type": "eq",
         "types": "in"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "code": "code",
+        "type": "type"
+      }
     },
     "/admin-api/wms/merchant/simple-list": {
       "req_vo": "WmsMerchantListReqVO",
@@ -4885,7 +6336,11 @@
         "type": "eq",
         "types": "in"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "code": "code",
+        "type": "type"
+      }
     },
     "/admin-api/wms/movement-order/page": {
       "req_vo": "WmsMovementOrderPageReqVO",
@@ -4904,7 +6359,14 @@
         "updateTime": "between",
         "updater": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "sourceWarehouseId": "sourceWarehouseId",
+        "status": "status",
+        "targetWarehouseId": "targetWarehouseId",
+        "updater": "updater"
+      }
     },
     "/admin-api/wms/receipt-order/page": {
       "req_vo": "WmsReceiptOrderPageReqVO",
@@ -4925,7 +6387,15 @@
         "updater": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "merchantId": "merchantId",
+        "status": "status",
+        "type": "type",
+        "updater": "updater",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/wms/shipment-order/page": {
       "req_vo": "WmsShipmentOrderPageReqVO",
@@ -4946,7 +6416,15 @@
         "updater": "eq",
         "warehouseId": "eq"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "creator": "creator",
+        "merchantId": "merchantId",
+        "status": "status",
+        "type": "type",
+        "updater": "updater",
+        "warehouseId": "warehouseId"
+      }
     },
     "/admin-api/wms/warehouse/page": {
       "req_vo": "WmsWarehousePageReqVO",
@@ -4954,7 +6432,10 @@
         "code": "eq",
         "name": "like"
       },
-      "unknown": []
+      "unknown": [],
+      "equalities": {
+        "code": "code"
+      }
     }
   }
 }
