@@ -44,7 +44,8 @@ def _serve(handler_body, *, delay: float = 0.0, status: int = 200):
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     return server, thread
 
@@ -234,7 +235,8 @@ class AuditedChatNeverDegradesCancellation(_ChatModelCase):
                 pass
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         thread.start()
         self.addCleanup(self._shutdown, server, thread)
         self.addCleanup(release.set)

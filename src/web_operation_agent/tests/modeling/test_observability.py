@@ -56,7 +56,8 @@ class RuntimeObservabilityTests(unittest.TestCase):
                 self.end_headers()
 
         receiver = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=receiver.serve_forever, daemon=True)
+        thread = threading.Thread(
+            target=receiver.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         thread.start()
         origin = f"http://127.0.0.1:{receiver.server_port}"
         try:

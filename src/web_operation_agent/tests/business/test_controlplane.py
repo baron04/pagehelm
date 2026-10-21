@@ -109,7 +109,8 @@ class Installation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.srv = ThreadingHTTPServer(("127.0.0.1", _free_port()), _FakeGateway)
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        threading.Thread(target=cls.srv.serve_forever,
+                         kwargs={"poll_interval": 0.01}, daemon=True).start()
         cls.tmp = tempfile.TemporaryDirectory()
         cls.key = Path(cls.tmp.name) / "key"
         cls.key.write_text("s3cret-key\n")

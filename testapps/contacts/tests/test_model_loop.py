@@ -16,6 +16,7 @@ from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnStatus
 from web_operation_agent.goal import executor as goal_executor
+from web_operation_agent.tests import browser_only
 from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
 from web_operation_agent.tests.support.business import _Chat
 
@@ -405,6 +406,7 @@ class ContactsAnswerTargetTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+@browser_only
 class ModelBrowserTests(unittest.TestCase):
     def test_structured_record_link_opens_an_actor_page_without_losing_a_draft(self):
         from playwright.sync_api import sync_playwright

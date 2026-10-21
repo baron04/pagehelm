@@ -873,7 +873,8 @@ class MinimalContactsApplication:
     def start(self) -> "MinimalContactsApplication":
         if self._thread is None:
             self._thread = threading.Thread(
-                target=self._server.serve_forever, name="minimal-contacts", daemon=True)
+                target=self._server.serve_forever, kwargs={"poll_interval": 0.01},
+                name="minimal-contacts", daemon=True)
             self._thread.start()
         return self
 

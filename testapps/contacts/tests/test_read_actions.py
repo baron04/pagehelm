@@ -14,6 +14,7 @@ from web_operation_agent.execution.action_admission import ActionAdmission, Acti
 from web_operation_agent.execution.product import AgentTurnConfig
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalError
+from web_operation_agent.tests import browser_only
 
 
 def bind(application, actor_id="ada-lovelace"):
@@ -49,6 +50,7 @@ class ContactsReadActionTests(unittest.TestCase):
                 runtime.prepare("goto", {"url": "/contacts/adversarial"}, before,
                     context=context, checkpoint=lambda: None)
 
+    @browser_only
     def test_native_host_without_an_effect_guard_refuses_before_model_or_browser_action(self):
         from playwright.sync_api import sync_playwright
         from testapps.contacts.demo import ScriptedDemoChat

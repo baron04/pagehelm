@@ -42,20 +42,18 @@ Demo deployment: `./deploy`; preflight: `./deploy check`, live release: `./deplo
 
 ## Required verification
 
-Use Python 3.12. During implementation run the narrowest relevant tests; before handing off completed code, run the full product suite on the final candidate:
+Use Python 3.12. Select checks from the actual diff; normal edits do not require the complete repository qualification.
 
 ```bash
-.venv/bin/python src/web_operation_agent/tests/run_all.py -k "test_product_*.py"
-.venv/bin/python src/web_operation_agent/tests/run_all.py
+.venv/bin/python scripts/check.py --plan
+.venv/bin/python scripts/check.py
 ```
 
-Choose the narrow pattern matching the change and run affected adapter/frontend suites. JavaScript tests require Node; browser tests may need an installed browser/page controller. Skips are not integration evidence. Reuse passed checks only with unchanged relevant code, inputs and environment. Repairs require affected checks and final gates; no duplicate full-suite runs across agents or for status updates alone.
+The default `dev` profile runs affected tests, never implicit browser/model acceptance. Before handing off code, finish the selected checks and any focused regression needed for the change. Use `--profile ci --base <ref>` for the merge-level plan; it runs core regression once for core changes and adds adapter/browser checks only for affected boundaries. `--profile compat` checks Python compatibility without repeating browser or JavaScript suites. Unknown paths or an unavailable base select conservative product checks instead of an empty success.
 
-For packaging changes, build the wheel and verify runtime assets/imports outside the checkout:
+Run `scripts/qualify.sh --require-browser` only for an explicitly requested full qualification or a release candidate. Unmaintained Odoo adapter/evaluator checks require `--reference-odoo` or relevant path changes; ordinary product edits do not run comparison/evaluation apparatus. Do not run the product subset and then the encompassing core suite, repeat browser tests in both core and integration lanes, rebuild Storybook for unrelated changes, or reinstall wheels without packaging changes.
 
-```bash
-.venv/bin/python -m pip wheel --no-deps --wheel-dir dist .
-```
+Packaging/dependency changes require `bash scripts/check_wheels.sh`, which builds distributions and verifies contents/imports outside the checkout. Browser changes require the relevant browser lane at integration/merge time; authorization, write-once/indeterminate outcomes, actor isolation and spend-ledger safety regressions remain required for affected behavior. Skips are not integration evidence. Reuse passed checks only when relevant code, inputs and environment are unchanged; repairs rerun affected checks, not all unrelated suites.
 
 Tests must not call paid models or alter the real spend ledger. Intentional model evaluations record provider/model, calls, tokens and actual cost; preserve failures, unknowns and original verdicts. Reuse existing acceptance protocols/evidence, normally one run per frozen configuration; repeats require changed inputs or a stated stability question. Never drop acceptance, required independent review or safety checks to save tokens.
 

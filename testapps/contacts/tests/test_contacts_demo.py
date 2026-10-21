@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from web_operation_agent.tests import browser_only
+
 import json
 import os
 import re
@@ -129,6 +131,7 @@ class MinimalDemoUnitTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "provider_cancelled")
 
 
+@browser_only
 class MinimalDemoBrowserTests(unittest.TestCase):
     def test_step_agent_uses_menu_result_then_fresh_desk_tab_with_rendered_page_proof(self):
         class MenuThenTab(ScriptedDemoChat):
@@ -541,6 +544,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
+@browser_only
 class TheWriteWalkthroughInARealBrowser(unittest.TestCase):
     """The whole chain as a person sees it, through the panel's own approval control.
 
@@ -1039,6 +1043,7 @@ def _replays(directory, events: list[dict], summary: dict) -> list[dict]:
     return cases
 
 
+@browser_only
 class TheApplicationsOwnAuthorityInARealBrowser(unittest.TestCase):
     """I01 and I02: who the actor is decides what the product may do and may say.
 

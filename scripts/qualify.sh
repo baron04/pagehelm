@@ -12,7 +12,7 @@
 #     says "qualified" while a section above it failed.
 #
 # Usage:
-#   scripts/qualify.sh [--require-browser] [--require-live] [--skip-wheel]
+#   scripts/qualify.sh [--require-browser] [--require-live] [--skip-wheel] [--reference-odoo]
 #
 # Live-Odoo prerequisites (all of them, or the gate reports BLOCKED):
 #   WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
@@ -46,11 +46,13 @@ fi
 require_browser=0
 require_live=0
 skip_wheel=0
+reference_odoo=0
 for arg in "$@"; do
   case "${arg}" in
     --require-browser) require_browser=1 ;;
     --require-live) require_live=1 ;;
     --skip-wheel) skip_wheel=1 ;;
+    --reference-odoo) reference_odoo=1 ;;
     -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown option: ${arg}" >&2; exit 2 ;;
   esac
@@ -114,187 +116,33 @@ else
   failed+=("assistant panel build")
 fi
 
-run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py
-run_gate "ordinary-browser host (offline)" 1 "${PYTHON}" -m unittest \
-  testapps.contacts.tests.test_native_server.NativeContactsHostTests
-run_gate "odoo example suite" 1 "${PYTHON}" -m unittest discover \
-  -s examples/odoo/src/web_operation_agent_odoo/tests \
-  -t examples/odoo/src
+run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py --without-browser
+run_gate "Contacts contracts (no Chromium)" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py \
+  --start-dir testapps/contacts/tests --top-level . --without-browser
+if [[ "${reference_odoo}" == "1" || "${require_live}" == "1" ]]; then
+  run_gate "Odoo reference adapter" 1 "${PYTHON}" -m unittest discover \
+    -s examples/odoo/src/web_operation_agent_odoo/tests -t examples/odoo/src
+else
+  record "Odoo reference adapter" SKIPPED "explicit --reference-odoo only"
+fi
 run_gate "yudao example and host suite (offline)" 1 "${PYTHON}" -m unittest discover \
   -s examples/yudao/src/web_operation_agent_yudao/tests \
   -t examples/yudao/src
 run_gate "Yudao evaluation apparatus (offline)" 1 "${PYTHON}" -m unittest discover \
   -s evals/yudao/tests -t .
-# P8 source qualification stays model-free.  The full 40-task run needs a deployment-owned
-# extracted source tree and is therefore an operated gate; these tests keep the frozen
-# manifest, citation drift probe, and cross-release diff apparatus in every repository run.
-run_gate "Odoo source qualification apparatus (offline)" 1 "${PYTHON}" -m unittest discover \
-  -s evals/odoo_source/tests -t .
-# Citation resolution needs the deployed release's source, so the authoritative run of it is
-# the live gate's `every_skill_citation_resolves_in_this_release`, not a skippable test.
-# The P7.4 Odoo apparatus: ledger, outcome axes, gateway, task sets and seals, evaluator
-# extraction, statistics and report. Offline by design; the live fixture qualification runs
-# separately through `python -m evals.odoo.qualify` against the isolated evaluation stack.
-# Sharded across processes: almost all of this suite waits on loopback servers rather than
-# using a core, and the runner refuses its own result unless the shards ran every test the
-# sequential discovery found. Run it with --shards 1 to reproduce a failure in one process.
-run_gate "evals/odoo apparatus (offline)" 1 "${PYTHON}" scripts/offline_suite.py \
-  --start-dir evals/odoo/tests --top-level . --shards "${OFFLINE_SHARDS:-4}"
-# The structural apparatus and scorer, model-free. It belongs with the offline gates rather
-# than the browser ones: the apparatus half needs no browser at all, and the probe half
-# skips itself with a named prerequisite when the PageAgent bundle is absent.
-run_gate "PageAgent host (offline)" 1 "${PYTHON}" -m unittest \
-  evals.pageagent.test_host evals.pageagent.test_business_host
-
-# ---------------------------------------------------------------- PageAgent bundle gate
-# `npm ci` is environment preparation. Reproducibility verification and the build itself are
-# qualification gates, so they live here rather than in the CI workflow. A local checkout
-# without the installed pinned dependencies is BLOCKED; it must never reuse an unverified old
-# bundle and report the browser path as passed.
-printf '\n\033[1m── PageAgent deterministic bundle ──\033[0m\n'
+# Historical comparison/evaluation tools are not product dependencies.
+if [[ "${reference_odoo}" == "1" ]]; then
+  run_gate "Odoo source qualification apparatus" 1 "${PYTHON}" -m unittest discover -s evals/odoo_source/tests -t .
+  run_gate "Odoo evaluator apparatus" 1 "${PYTHON}" scripts/offline_suite.py --start-dir evals/odoo/tests --top-level .
+fi
+# Runtime needs this dependency, not the PageAgent comparison host or baseline bundle.
 pageagent_ready=0
-if ! command -v npm >/dev/null 2>&1; then
-  record "PageAgent deterministic bundle" BLOCKED "npm is unavailable"
-  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent deterministic bundle")
-elif [[ ! -d "${ROOT}/evals/pageagent/node_modules" ]]; then
-  record "PageAgent deterministic bundle" BLOCKED \
-    "run npm ci in evals/pageagent"
-  [[ "${require_browser}" == "1" ]] && failed+=("PageAgent deterministic bundle")
-elif ( cd "${ROOT}/evals/pageagent" && npm test && npm run build ); then
-  record "PageAgent deterministic bundle" PASS ""
+if [[ -f "${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js" ]]; then
   pageagent_ready=1
-else
-  record "PageAgent deterministic bundle" FAIL "deterministic build failed"
-  failed+=("PageAgent deterministic bundle")
 fi
 
 # ---------------------------------------------------------------- packaging gate
-build_and_check_wheel() {
-  # setuptools may otherwise copy deleted modules from an ignored build/lib tree into a new
-  # wheel. A release gate must build from the current source tree, not incremental residue.
-  rm -rf dist build src/*.egg-info
-  rm -rf examples/odoo/dist examples/odoo/build \
-    examples/odoo/src/*.egg-info
-  rm -rf examples/yudao/dist examples/yudao/build examples/yudao/src/*.egg-info
-  "${PYTHON}" -m pip wheel --no-deps --quiet --wheel-dir dist . || return 1
-  "${PYTHON}" -m pip wheel --no-deps --quiet \
-    --wheel-dir examples/odoo/dist examples/odoo \
-    || return 1
-  "${PYTHON}" -m pip wheel --no-deps --quiet \
-    --wheel-dir examples/yudao/dist examples/yudao || return 1
-  "${PYTHON}" scripts/check_wheel_contents.py || return 1
-
-  # Importing from outside the checkout is the part a path-shadowed test cannot prove. Core
-  # is installed and probed alone first -- it must compose and run with no application
-  # distribution present -- then the Odoo distribution is added on top of it.
-  local core_wheel odoo_wheel smoke_venv smoke_cwd
-  core_wheel="$("${PYTHON}" -c 'import glob, os; print(os.path.abspath(glob.glob("dist/*.whl")[0]))')"
-  odoo_wheel="$("${PYTHON}" -c \
-    'import glob, os; print(os.path.abspath(glob.glob("examples/odoo/dist/*.whl")[0]))')"
-  smoke_venv="$(mktemp -d)/venv"
-  smoke_cwd="$(mktemp -d)"
-  "${PYTHON}" -m venv "${smoke_venv}" || return 1
-  # Without -u PYTHONPATH pip finds the checkout's own metadata on the path, reports the
-  # requirement as already satisfied, and installs nothing -- so the import below would prove
-  # only that the checkout is importable, which is the opposite of what this gate is for.
-  # The adapter import reaches core's declared runtime dependencies. Install those in
-  # the isolated environment so this probe tests the packaged distributions rather
-  # than failing because the smoke venv itself is missing PyYAML/jsonschema.
-  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install "${core_wheel}" \
-    | grep -v "^\[notice\]" || return 1
-  env -u PYTHONPATH "${smoke_venv}/bin/python" -c \
-    "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('web_operation_agent') else 1)" \
-    || { echo "the core wheel did not install into the smoke venv" >&2; return 1; }
-  ( cd "${smoke_cwd}" && env -u PYTHONPATH WOA_CHECKOUT="${ROOT}" \
-      "${smoke_venv}/bin/python" -I - <<'PY'
-import os, sys
-from pathlib import Path
-import web_operation_agent
-from web_operation_agent.business.mutation import SQLiteMutationJournal
-from web_operation_agent.state.store import SQLiteSessionStore
-from web_operation_agent.state.quota import SQLiteProviderQuota
-from web_operation_agent.business.operations import reconcile
-from web_operation_agent.sourcetree import SourceTree
-
-installed = Path(web_operation_agent.__file__).resolve()
-assert Path(sys.prefix).resolve() in installed.parents, installed
-assert Path(os.environ["WOA_CHECKOUT"]).resolve() not in installed.parents, installed
-assert SQLiteMutationJournal and SQLiteSessionStore and SQLiteProviderQuota
-assert reconcile and SourceTree
-# The framework ships no application and no example. Any of these resolving here would mean
-# the core wheel is carrying something a framework has no business carrying.
-for name in ("web_operation_agent_odoo", "web_operation_agent_demo", "examples", "testapps"):
-    import importlib.util
-    assert importlib.util.find_spec(name) is None, \
-        f"core alone must not resolve {name}; applications and examples install separately"
-print("core wheel alone imports and composes, and carries no application or example")
-PY
-  ) || return 1
-  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps \
-    "${odoo_wheel}" | grep -v "^\[notice\]" || return 1
-  ( cd "${smoke_cwd}" && env -u PYTHONPATH \
-      "${smoke_venv}/bin/python" -I - <<'PY'
-from pathlib import Path
-root = Path.cwd().resolve()
-from web_operation_agent.composition.sources import SourceCapability
-from web_operation_agent_odoo import ODOO_ROUTE_PORT, ODOO_SOURCE_POLICY
-from web_operation_agent_odoo.adapter import OdooApplicationAdapter
-
-# The main application must compose from its own wheel, with its packaged Skills and source
-# policy present -- a missing package-data entry is exactly the failure a path-shadowed test
-# cannot see.
-assert ODOO_ROUTE_PORT.compose_contract_route("odoo", "sales") == "/odoo/sales"
-assert ODOO_SOURCE_POLICY["repository_id"] == "odoo/odoo"
-(root / "odoo-key.json").write_text(
-    '{"database": "woa", "login": "grower", "api_key": "0123456789abcdef0123"}')
-odoo = OdooApplicationAdapter(base_url="http://127.0.0.1:8069",
-                              api_key_path=root / "odoo-key.json")
-assert odoo.business_tools.tool_names == frozenset(
-    {"query_sale_orders", "query_quotations", "query_customers", "query_products",
-     "query_customer_invoices", "prepare_customer_form", "discover_entities",
-     "describe_entity", "query_entity_records", "resolve_record_reference",
-     "find_page_entries", "resolve_goal_candidates"})
-assert odoo.business_tools.mutation_tool_names == frozenset()
-# The packaged write Skills have to be present in the wheel too, or a mutation-enabled
-# deployment fails at composition time with a missing package-data entry -- exactly the
-# failure a path-shadowed test cannot see.
-from web_operation_agent.business.mutation import SQLiteMutationJournal as _Journal
-writing = OdooApplicationAdapter(
-    base_url="http://127.0.0.1:8069", api_key_path=root / "odoo-key.json",
-    allow_mutations=True, mutation_journal=_Journal(root / "odoo-mutations.sqlite3"))
-assert writing.business_tools.mutation_tool_names == frozenset(
-    {"create_customer", "archive_customer", "confirm_quotation", "invoice_sale_order"})
-assert odoo.source_capability().session_kwargs()["source_affordance_mode"] == "off"
-assert isinstance(odoo.source_capability(), SourceCapability)
-print("the Odoo distribution installs on top of core and composes outside the checkout")
-PY
-  ) || return 1
-  local yudao_wheel
-  yudao_wheel="$("${PYTHON}" -c \
-    'import glob, os; print(os.path.abspath(glob.glob("examples/yudao/dist/*.whl")[0]))')"
-  env -u PYTHONPATH "${smoke_venv}/bin/python" -m pip install --no-deps \
-    "${yudao_wheel}" || return 1
-  ( cd "${smoke_cwd}" && env -u PYTHONPATH \
-      "${smoke_venv}/bin/python" -I - <<'PYUD'
-from web_operation_agent_yudao.application import YudaoApplication
-from web_operation_agent_yudao.client import YudaoAccount
-from web_operation_agent_yudao.native_server import YudaoHost
-from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
-from web_operation_agent_yudao.repository import repository_source
-from importlib.resources import files
-app = YudaoApplication("http://127.0.0.1:48080", YudaoAccount("synthetic", "synthetic"), {})
-assert app.business_tools.tool_names == frozenset({
-    "discover_entities", "describe_entity", "query_entity_records",
-    "resolve_record_reference", "find_page_entries", "resolve_goal_candidates"})
-assert app.business_tools.mutation_tool_names == frozenset()
-assert REFERENCE_CONVENTIONS.is_file() and YudaoHost
-assert files("web_operation_agent_yudao").joinpath("policies/repository.json").is_file()
-assert not repository_source(None, "").runtime_source
-print("the Yudao wheel composes generic reads with its conventions and source policy outside the checkout")
-PYUD
-  ) || return 1
-  rm -rf "${smoke_venv}" "${smoke_cwd}"
-}
+source "${ROOT}/scripts/check_wheels.sh"
 
 if [[ "${skip_wheel}" == "1" ]]; then
   record "wheel build and contents" SKIPPED "--skip-wheel"
@@ -325,8 +173,8 @@ else
   chromium_ready=1
   run_gate "synthetic Contacts Chromium qualification" 1 \
     env WOA_REQUIRE_MINIMAL_DEMO_BROWSER=1 PYTHONPATH="${ROOT}/src:${ROOT}" "${PYTHON}" \
-    -m unittest testapps.contacts.tests.test_contacts_demo \
-      testapps.contacts.tests.test_native_server.NativeContactsBrowserTests
+    src/web_operation_agent/tests/run_all.py --start-dir testapps/contacts/tests --top-level . \
+      --only-browser --strict-skips
 fi
 
 # The panel's own Chromium checks: every state, the confirmation card's keyboard and narrow
@@ -360,17 +208,13 @@ elif [[ "${chromium_ready}" != "1" ]]; then
   runtime_blocked "Chromium is unavailable"
 else
   run_gate "embedded Runtime Chromium qualification" 1 \
-    env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
-    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_observation_is_viewport_bounded_and_scrollable \
-    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_pagecontroller_survives_navigation_without_repeating_action \
-    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_same_origin_iframe_form_navigation_is_observed_without_top_level_change \
-    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_real_confirmation_card_posts_authenticated_user_decision \
-    web_operation_agent.tests.transport.test_embedded_runtime.EmbeddedRuntimeTests.test_the_timeline_survives_a_full_page_navigation
-  # D21's two invariants under injected faults: the host page never hears the assistant fail
-  # (I1), and the assistant is never silently absent (I2).
+    env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" \
+    src/web_operation_agent/tests/run_all.py --only-browser --strict-skips \
+    --exclude "*.test_assistant_lifecycle.*"
   run_gate "assistant lifecycle faults (I1, I2)" 1 \
-    env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" -m unittest \
-    web_operation_agent.tests.transport.test_assistant_lifecycle
+    env WOA_PAGE_CONTROLLER_MODULE="${page_controller_module}" "${PYTHON}" \
+    src/web_operation_agent/tests/run_all.py --module web_operation_agent.tests.transport.test_assistant_lifecycle \
+    --only-browser --strict-skips
 fi
 
 # ---------------------------------------------------------------- live Odoo

@@ -105,19 +105,20 @@ python scripts/build_panel.py
 
 `--install` 在新检出上先执行一次 `npm ci`。拉取前端改动后要重新构建；另开的 worktree 也要各自构建。
 
-运行核心测试：
+按当前改动运行检查：
 
 ```bash
-python src/web_operation_agent/tests/run_all.py
+python scripts/check.py --plan  # 只查看选择，不执行测试
+python scripts/check.py         # 运行受影响的开发检查
 ```
 
-运行仓库门禁：
+合入前使用 `python scripts/check.py --profile ci --base <ref>`。文档改动只检查链接和语法；适配器及浏览器套件按各自边界的改动触发。完整发布资格检查需显式执行：
 
 ```bash
-scripts/qualify.sh
+scripts/qualify.sh --require-browser
 ```
 
-`--require-browser` 会把 Chromium 和前端构建前置条件设为必需；`--require-live` 还会要求已配置的真实 Odoo 资格门禁。离线门禁包含芋道适配器、宿主生命周期、评测装置及独立 wheel 的导入与资产检查。`BLOCKED` 表示没有执行，不能算通过。
+`--reference-odoo` 额外检查不再维护的 Odoo 参考适配器及评测装置；`--require-live` 要求已配置的真实 Odoo 资格门禁。`BLOCKED` 或 `SKIPPED` 表示没有执行，不能算通过。详见[开发检查指南](docs/guides/development-checks.md)。
 
 独立 Odoo evaluator 的离线装置可单独运行：
 

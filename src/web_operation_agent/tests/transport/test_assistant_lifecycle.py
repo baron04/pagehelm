@@ -24,6 +24,8 @@ read and has to be inferred.
 """
 from __future__ import annotations
 
+from web_operation_agent.tests import browser_only
+
 import json
 import os
 import threading
@@ -140,7 +142,8 @@ class _Host:
         self.gateway = EmbeddedGateway(
             registry, sse_wait_s=0.1,
             **({"public_base_url": self.origin + "/assistant"} if same_origin else {})).start()
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self.thread.start()
         self._grant = None
 
@@ -163,6 +166,7 @@ class _Host:
         self.gateway.close()
 
 
+@browser_only
 @unittest.skipUnless(RUNTIME_PATH.is_file(), "assistant.js is not built; run scripts/build_runtime.py")
 @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                      "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")

@@ -106,19 +106,24 @@ python scripts/build_panel.py
 
 `--install` runs `npm ci` once for a fresh checkout. Rebuild after pulling frontend changes; a separate worktree needs its own build.
 
-Run the core suite:
+Run checks for the current diff:
 
 ```bash
-python src/web_operation_agent/tests/run_all.py
+python scripts/check.py --plan  # inspect the selection without running tests
+python scripts/check.py         # affected development checks
 ```
 
-Run all repository gates:
+For merge-level checks, use `python scripts/check.py --profile ci --base <ref>`.
+Documentation edits only check links/syntax; adapter and browser suites follow their own
+changed boundaries. Full release qualification is explicit:
 
 ```bash
-scripts/qualify.sh
+scripts/qualify.sh --require-browser
 ```
 
-`--require-browser` makes Chromium and built frontend prerequisites mandatory. `--require-live` additionally requires the configured live Odoo qualification. The offline gates include the Yudao adapter, native host lifecycle, evaluation apparatus and separate wheel import/assets checks. A `BLOCKED` gate did not run and is not a pass.
+`--reference-odoo` additionally checks the unmaintained Odoo reference and evaluator.
+`--require-live` requires the configured live Odoo qualification. A `BLOCKED` or `SKIPPED`
+gate did not run and is not a pass. See the [development checks guide](docs/guides/development-checks.md).
 
 The independent Odoo evaluator's offline apparatus can be run directly:
 

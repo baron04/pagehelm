@@ -2,13 +2,21 @@ name: CI
 
 # Actions are pinned to reviewed commit SHAs, not to floating tags. A tag is a mutable
 # pointer: `@v4` today and `@v4` next month can be different code with the same name, and
-# this workflow installs dependencies and runs the qualification. The trailing comment is
+# this workflow installs dependencies and runs the selected checks. The trailing comment is
 # the tag each SHA was resolved from, so a person can tell what they are looking at.
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Check profile
+        type: choice
+        options: [ci, release]
+        default: ci
+        required: true
 
 permissions:
   contents: read
@@ -20,7 +28,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.profile == 'release' && 60 || 15 }}
     # Both interpreters the distributions accept. A range that only one of them is ever run
     # on is a claim, not a fact; `test_supported_python.py` keeps this list and the metadata
     # from drifting apart.
@@ -28,35 +36,86 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
+    env:
+      STORYBOOK_DISABLE_TELEMETRY: "1"
+      CHECK_PROFILE: ${{ matrix.python-version == '3.13' && 'compat' || inputs.profile || 'ci' }}
+      CHECK_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+      CHECK_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: |
-            evals/pageagent/package-lock.json
-            frontend/package-lock.json
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: requirements.lock
+      - name: Plan checks
+        id: plan
+        run: |
+          python scripts/check.py --profile "$CHECK_PROFILE" \
+            --base "$CHECK_BASE" --head "$CHECK_HEAD" --plan > "$RUNNER_TEMP/check-plan.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          plan = json.loads((Path(os.environ["RUNNER_TEMP"]) / "check-plan.json").read_text())
+          prerequisites = (
+              "needs_python_packages", "needs_node", "needs_frontend", "needs_page_controller",
+              "needs_python_browser", "needs_node_browser", "needs_nginx",
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              for key in prerequisites:
+                  value = plan[key]
+                  if type(value) is not bool:
+                      raise TypeError(f"{key} must be a boolean")
+                  output.write(f"{key}={str(value).lower()}\n")
+          print(json.dumps(plan, indent=2))
+          PY
       - name: Install package
+        if: steps.plan.outputs.needs_python_packages == 'true'
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
           python -m pip install --editable .
           python -m pip install --no-deps --editable examples/odoo
           python -m pip install --no-deps --editable examples/yudao
-      - name: Install pinned PageAgent baseline
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.plan.outputs.needs_node == 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            evals/pageagent/package-lock.json
+            frontend/package-lock.json
+      - name: Install pinned PageController dependency
+        if: steps.plan.outputs.needs_page_controller == 'true'
         working-directory: evals/pageagent
         run: npm ci
       - name: Install the assistant panel toolchain
+        if: steps.plan.outputs.needs_frontend == 'true'
         working-directory: frontend
         run: npm ci
-      - name: Install Chromium for PageAgent qualification
+      - name: Install Python Chromium
+        if: steps.plan.outputs.needs_python_browser == 'true'
         run: python -m playwright install --with-deps chromium
-      - name: Qualify
+      - name: Install panel Chromium
+        if: steps.plan.outputs.needs_node_browser == 'true'
+        working-directory: frontend
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Install nginx
+        if: steps.plan.outputs.needs_nginx == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes nginx
+      - name: Run selected checks
+        if: env.CHECK_PROFILE != 'release'
+        run: |
+          python scripts/check.py --profile "$CHECK_PROFILE" \
+            --base "$CHECK_BASE" --head "$CHECK_HEAD"
+      - name: Qualify release
+        if: env.CHECK_PROFILE == 'release'
         env:
           WOA_REQUIRE_PAGEAGENT_BROWSER: "1"
         run: scripts/qualify.sh --require-browser

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from web_operation_agent.tests import browser_only
+
 import json
 import os
 import tempfile
@@ -552,6 +554,7 @@ class NativeContactsHostTests(unittest.TestCase):
                 self.assertEqual(recovered.application.post_requests, 0)
 
 
+@browser_only
 class NativeContactsBrowserTests(unittest.TestCase):
     def test_write_card_form_choice_prefills_exact_contact_without_rest_write(self):
         from playwright.sync_api import sync_playwright

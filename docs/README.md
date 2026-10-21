@@ -26,3 +26,6 @@
 
 ### 查某条行为的确切说法
 - [运行时行为详情](reference/runtime-behavior.md)
+
+### 开发与验证
+- [开发检查](guides/development-checks.md) —— 按改动选择检查、合入前验证与显式发布资格。

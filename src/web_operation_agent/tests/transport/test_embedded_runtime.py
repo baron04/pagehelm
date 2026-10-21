@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from web_operation_agent.tests import browser_only
+
 import json
 import os
 import shutil
@@ -54,6 +56,7 @@ def _panel_configuration_js() -> str:
 
 
 class EmbeddedRuntimeTests(unittest.TestCase):
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_linked_tab_panel_must_be_visible_unique_and_not_busy(self):
@@ -173,6 +176,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             "code": "stale_observation",
         })
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_the_timeline_survives_a_full_page_navigation(self):
@@ -305,6 +309,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_confirmation_card_posts_authenticated_user_decision(self):
@@ -1525,6 +1530,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                           "evaluator"):
             self.assertNotIn(forbidden, source)
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_highlight_hands_control_to_person_without_clicking(self):
@@ -1583,6 +1589,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_form_handoff_reads_value_then_returns_control_without_submit(self):
@@ -1729,21 +1736,25 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_partial_prefill_hands_over_an_observed_disabled_submit(self):
         self._required_form_handoff(fill_email=False)
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_complete_prefill_enables_submit_without_activating_it(self):
         self._required_form_handoff(fill_email=True)
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_observed_disabled_submit_cannot_be_clicked(self):
         self._required_form_handoff(fill_email=False, refuse_click=True)
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_pagecontroller_observation_is_viewport_bounded_and_scrollable(self):
@@ -1790,6 +1801,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_real_pagecontroller_survives_navigation_without_repeating_action(self):
@@ -1895,6 +1907,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_goto_current_address_preserves_document_without_reload_or_retry(self):
@@ -1938,6 +1951,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_document_navigation_receipt_survives_history_canonicalization_without_retry(self):
@@ -2019,6 +2033,7 @@ class EmbeddedRuntimeTests(unittest.TestCase):
             gateway.close()
             app.close()
 
+    @browser_only
     @unittest.skipUnless(PAGE_CONTROLLER is not None and PAGE_CONTROLLER.is_file(),
                          "WOA_PAGE_CONTROLLER_MODULE does not name an installed module")
     def test_same_origin_iframe_form_navigation_is_observed_without_top_level_change(self):
@@ -2232,7 +2247,8 @@ class _FixtureApplication:
         return f"http://127.0.0.1:{self.server.server_port}"
 
     def start(self):
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self.thread.start()
 
     def close(self):

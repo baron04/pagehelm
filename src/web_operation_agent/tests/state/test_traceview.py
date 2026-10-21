@@ -14,6 +14,7 @@ from unittest import mock
 from web_operation_agent.state import traceview
 from web_operation_agent.state.traceview import (TraceReplayUnavailable, build_trace_case,
                                             render_trace_html, write_trace_bundle)
+from web_operation_agent.tests import browser_only
 
 #: The page's source is the frontend's; what the server fills in is the frontend's build of it.
 SOURCE = Path(__file__).resolve().parents[4] / "frontend" / "trace" / "trace_replay.html"
@@ -166,6 +167,7 @@ class TraceViewTests(unittest.TestCase):
                 check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    @browser_only
     @needs_build
     def test_rendered_replay_runs_from_a_local_file_with_no_dependency(self):
         try:
