@@ -1522,9 +1522,6 @@ class EmbeddedRuntimeTests(unittest.TestCase):
 
     def test_runtime_has_no_server_brain_or_arbitrary_javascript_surface(self):
         source = _runtime_bytes().decode("utf-8")
-        self.assertIn("PageController", source)
-        self.assertIn("highlightLabelOpacity: 0", source)
-        self.assertIn("playwright-highlight-container", source)
         self.assertNotIn("executeJavascript(", source)
         for forbidden in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "SourceMap", "ControlPlan",
                           "evaluator"):

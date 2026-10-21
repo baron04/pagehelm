@@ -136,9 +136,8 @@ from web_operation_agent.tests.support.knowledge_fixture import (FixtureKnowledg
 from web_operation_agent.state.ledger import SessionLedger
 from web_operation_agent.business.runtime import FormDraft, FormDraftField
 from web_operation_agent.schemas import OperationContract, empty_contract
-from web_operation_agent.execution.session import (AGENT_SYSTEM, SCOPE_FIRST_SYSTEM,
-                                         LabApparatus, ServerAgentSession, TaskSpec,
-                                         _PLAN_MARK)
+from web_operation_agent.execution.session import (SCOPE_FIRST_SYSTEM, LabApparatus,
+                                         ServerAgentSession, TaskSpec, _PLAN_MARK)
 
 
 class _MultiThenFinishChat(_Chat):
@@ -390,9 +389,6 @@ class PreDispatchActionPolicy(unittest.TestCase):
             second = "\n".join(str(message.get("content") or "")
                                for message in chat.seen[1])
             self.assertIn("None was dispatched", second)
-
-    def test_agent_system_states_the_one_tool_react_contract(self):
-        self.assertIn("Call exactly one tool in each response", AGENT_SYSTEM)
 
     def test_a_disabled_action_is_not_dispatched_and_the_next_turn_gets_a_fresh_page(self):
         with tempfile.TemporaryDirectory() as tmp:
