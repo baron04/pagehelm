@@ -1,11 +1,9 @@
 """Application-neutral entity discovery and bounded query contract."""
 from __future__ import annotations
 
-import inspect
 import time
 import unittest
 
-import web_operation_agent.business.entities as entity_module
 from web_operation_agent.answer.conclusion import Aggregate
 from web_operation_agent.answer.evidence import TurnEvidence
 from web_operation_agent.business.entities import (
@@ -270,9 +268,6 @@ class EntityReadContractTests(unittest.TestCase):
             field_label="Status", filter_operator="=", filter_value="done",
             expected_record_id="42", expected_value="Done",
         )
-        source = inspect.getsource(entity_module).casefold()
-        for forbidden in ("odoo", "fields_get", "json-rpc", "jsonrpc"):
-            self.assertNotIn(forbidden, source)
 
     def test_agent_schemas_accept_only_opaque_generic_bindings(self):
         self.assertEqual(

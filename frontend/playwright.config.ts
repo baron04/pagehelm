@@ -4,7 +4,7 @@ import {defineConfig, devices} from '@playwright/test'
  * The panel's Chromium checks: the built panel (`npm run build`) over a scripted host, in
  * `e2e/`. They are the gate for what the panel does in a real browser -- its states, the
  * confirmation card's keyboard and narrow layouts, and that it constructs under a strict CSP.
- * Storybook is for looking; its build is checked too when present (`npm run build-storybook`).
+ * Storybook is a separate showcase build; these checks exercise the shipped Runtime.
  *
  * `@playwright/test` is pinned apart from the Python `playwright` pin on purpose: 1.52 hangs
  * while loading a test file under Node 24 in an ESM package such as this one, before any

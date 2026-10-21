@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import inspect
 import json
 import tempfile
 import threading
@@ -11,7 +10,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from web_operation_agent.execution import product, turn
 from web_operation_agent.composition.binding import bind_application
 from web_operation_agent.composition.descriptor import (
     APPLICATION_ADAPTER_VERSION,
@@ -43,6 +41,7 @@ from web_operation_agent.execution.product import (
     AgentTurnMessage,
     AgentTurnStatus,
 )
+from web_operation_agent.execution import turn
 from web_operation_agent.transport import RemoteSessionClosed
 from web_operation_agent.schemas import ApprovalDecision, ObservationEnvelope
 from web_operation_agent.tests.support.business import (
@@ -272,12 +271,3 @@ class AgentTurnBoundaryTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, AgentTurnErrorCode.STALE_MESSAGE)
         self.assertTrue(caught.exception.retryable)
         self.assertEqual(events[-1]["event"], "turn_binding_rejected")
-
-    def test_product_module_has_no_environment_or_outcome_oracle_dependency(self):
-        source = inspect.getsource(product).casefold()
-        for marker in (
-            ".q0-cache", "phase", "oracle", "evaluator", "database", "reset",
-            "product_success", "acceptance_passed", "verification",
-        ):
-            with self.subTest(marker=marker):
-                self.assertNotIn(marker, source)

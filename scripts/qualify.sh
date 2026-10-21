@@ -105,14 +105,13 @@ if ! command -v npm >/dev/null 2>&1; then
 elif [[ ! -d "${ROOT}/frontend/node_modules" ]]; then
   record "assistant panel build" BLOCKED "run npm ci in frontend"
   [[ "${require_browser}" == "1" ]] && failed+=("assistant panel build")
-elif ( cd "${ROOT}/frontend" && npm run lint && npm test && npm run build \
-       && npm run build-storybook ) \
+elif ( cd "${ROOT}/frontend" && npm run lint && npm test && npm run build ) \
      && "${PYTHON}" scripts/build_panel.py --skip-build \
      && "${PYTHON}" scripts/build_runtime.py --skip-build; then
   record "assistant panel build" PASS ""
   panel_ready=1
 else
-  record "assistant panel build" FAIL "lint, unit tests, bundle or Storybook failed"
+  record "assistant panel build" FAIL "lint, unit tests or bundle failed"
   failed+=("assistant panel build")
 fi
 
@@ -186,8 +185,8 @@ elif [[ "${chromium_ready}" != "1" ]]; then
   record "assistant panel Chromium qualification" BLOCKED "Chromium is unavailable"
   [[ "${require_browser}" == "1" ]] && failed+=("assistant panel Chromium qualification")
 else
-  # Written in TypeScript beside the panel (frontend/e2e/), against the built panel and the
-  # Storybook build above; Node's Playwright brings its own Chromium (npx playwright install).
+  # Written beside the panel, against the built Runtime. Node Playwright brings its own
+  # Chromium (npx playwright install). Storybook is an independent showcase.
   run_gate "assistant panel Chromium qualification" 1 \
     bash -c 'cd "$1/frontend" && npx playwright test' _ "${ROOT}"
 fi

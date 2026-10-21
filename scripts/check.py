@@ -103,7 +103,9 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     core_paths = [f for f in p if f.startswith(CORE)]
     production = [f for f in core_paths if not f.startswith(CORE + 'tests/')]
     core = bool(core_paths) or broad or python_dependencies
-    frontend = any(f.startswith('frontend/') for f in p) or broad or builders
+    frontend_paths = [f for f in p if f.startswith('frontend/')]
+    story_paths = [f for f in frontend_paths if f.startswith(('frontend/stories/', 'frontend/.storybook/')) or '.stories.' in Path(f).name]
+    frontend = bool(set(frontend_paths) - set(story_paths)) or broad or builders
     runtime = ('frontend/vite.runtime.config.ts' in p) or builders or frontend_dependencies or controller_dependencies or any(f.startswith(('frontend/src/runtime/', 'frontend/src/contract/', 'frontend/src/trace/', 'frontend/trace/')) for f in p)
     transport = any(f.startswith((CORE + 'transport/', CORE + 'state/', CORE + 'composition/',
                                   CORE + 'tests/transport/', CORE + 'tests/state/test_traceview.py')) for f in p)
@@ -145,14 +147,11 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
         add('frontend lint', ['npm', 'run', 'lint'], cwd='frontend', needs_frontend=True)
         add('frontend unit tests', ['npm', 'test'], cwd='frontend')
         assets()
-        stories = broad or any('/stories/' in f or '.stories.' in Path(f).name or '/.storybook/' in f or 'storybook' in f
-                               or Path(f).name in {'package.json', 'package-lock.json'} for f in p if f.startswith('frontend/'))
-        if stories:
-            add('Storybook build', ['npm', 'run', 'build-storybook'], cwd='frontend')
         if profile == 'ci':
-            files = sorted(str(f.relative_to(ROOT / 'frontend')) for f in (ROOT / 'frontend/e2e').glob('*.spec.ts')
-                           if stories or f.name != 'storybook.spec.ts')
+            files = sorted(str(f.relative_to(ROOT / 'frontend')) for f in (ROOT / 'frontend/e2e').glob('*.spec.ts'))
             add('panel Chromium', ['npx', 'playwright', 'test', *files], cwd='frontend', needs_node_browser=True)
+    if story_paths:
+        add('Storybook build', ['npm', 'run', 'build-storybook'], cwd='frontend', needs_frontend=True)
     if contacts:
         add('Contacts contracts', ['@python', RUNNER, '--start-dir', 'testapps/contacts/tests',
                                   '--top-level', '.', '--without-browser'], needs_python_packages=True)

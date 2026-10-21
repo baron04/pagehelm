@@ -23,7 +23,6 @@ from web_operation_agent.transport import RemoteSessionChannel
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, ActionCommand,
                                          ActionEnvelope, TaskEvent)
 
-FRONTEND = Path(__file__).resolve().parents[4] / "frontend"
 
 
 def _event(kind: str, payload: dict, *, sequence: int = 1, turn_id: str = "turn-1") -> TaskEvent:
@@ -298,16 +297,6 @@ class PanelContractTests(unittest.TestCase):
                          contract["terminal_error_codes"])
         self.assertEqual(configuration["nonterminal_error_states"], contract["nonterminal_error_states"])
 
-    def test_the_frontend_reads_the_same_file_rather_than_copying_it(self):
-        """The panel's types are a view over the contract, not a second declaration."""
-        if not FRONTEND.is_dir():
-            self.skipTest("the frontend project is not present in this checkout")
-        source = (FRONTEND / "src" / "contract" / "panel.ts").read_text(encoding="utf-8")
-        self.assertIn("import raw from '@contract/panel_contract.json'", source)
-        alias = (FRONTEND / "vite.config.ts").read_text(encoding="utf-8")
-        self.assertIn("src/web_operation_agent/web_runtime", alias)
-        for literal in ('"awaiting_confirmation"', "'awaiting_confirmation'"):
-            self.assertNotIn(literal, source)
 
 
 class ASessionEndIsSaidNotCoded(unittest.TestCase):

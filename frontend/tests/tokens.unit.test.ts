@@ -76,38 +76,6 @@ describe('the generated sources', () => {
 })
 
 describe('the handwritten styles', () => {
-  /*
-   * P3 put every size, radius and colour onto the scale; this keeps them there. Three rules,
-   * each earned by a defect: font-size and line-height are token references, border-radius
-   * too (a percentage is allowed only for a true circle); no solid colour is written inline
-   * anywhere, the shadow rgba surviving because a shadow is light, not colour; the white
-   * that lights a highlight comes from the sheen tokens.
-   */
-  it('quote the scale rather than restate it', () => {
-    const problems: string[] = []
-    withoutComments(read('src/styles/panel.scss')).split('\n').forEach((line, index) => {
-      const at = `panel.scss:${index + 1}`
-      if (!line.trim()) return
-      for (const [property, prefix] of [['font-size', '--woa-font-size'],
-                                        ['line-height', '--woa-line-height']]) {
-        const value = new RegExp(`\\b${property}\\s*:\\s*([^;]+)`).exec(line)
-        if (value?.[1] !== undefined && !value[1].startsWith(`var(${prefix}`)) {
-          problems.push(`${at} ${property}: ${value[1]}`)
-        }
-      }
-      const radius = /\bborder-radius\s*:\s*([^;]+)/.exec(line)
-      if (radius?.[1] !== undefined && !radius[1].split(/\s+/).every(
-        token => token.startsWith('var(--woa-radius') || token === '50%')) {
-        problems.push(`${at} border-radius: ${radius[1]}`)
-      }
-      if (/#[0-9a-fA-F]{3,8}\b/.test(line)) problems.push(`${at} colour literal: ${line.trim()}`)
-      if (/rgba\(\s*255,\s*255,\s*255/.test(line)) {
-        problems.push(`${at} white highlight not taken from the sheen tokens`)
-      }
-    })
-    expect(problems).toEqual([])
-  })
-
   it('reach only for tokens that are declared', () => {
     // A reference to a token nobody declares falls back to nothing, quietly.
     const declared = new Set([

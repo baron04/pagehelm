@@ -61,11 +61,11 @@ class SelectionTests(unittest.TestCase):
         names, _ = self.names(['frontend/src/runtime/boot.ts'])
         self.assertIn('runtime Chromium', names)
 
-    def test_story_changes_build_and_test_storybook(self):
-        names, plan = self.names(['frontend/src/stories/Panel.stories.tsx'])
-        self.assertIn('Storybook build', names)
-        browser = next(c for c in plan['checks'] if c['name'] == 'panel Chromium')
-        self.assertIn('e2e/storybook.spec.ts', browser['argv'])
+    def test_story_changes_only_build_the_showcase(self):
+        names, plan = self.names(['frontend/stories/Panel.stories.tsx'])
+        self.assertEqual(names, {'changed-file syntax/links', 'Storybook build'})
+        self.assertTrue(plan['needs_frontend'])
+        self.assertFalse(plan['needs_node_browser'] or plan['needs_python_browser'])
 
     def test_compat_never_runs_browser_or_javascript_tests(self):
         names, plan = self.names(['src/web_operation_agent/execution/session.py'], 'compat')
