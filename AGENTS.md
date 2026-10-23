@@ -55,7 +55,7 @@ Run `scripts/qualify.sh --require-browser` only for an explicitly requested full
 
 Packaging/dependency changes require `bash scripts/check_wheels.sh`, which builds distributions and verifies contents/imports outside the checkout. Browser changes require the relevant browser lane at integration/merge time; authorization, write-once/indeterminate outcomes, actor isolation and spend-ledger safety regressions remain required for affected behavior. Skips are not integration evidence. Reuse passed checks only when relevant code, inputs and environment are unchanged; repairs rerun affected checks, not all unrelated suites.
 
-Tests must not call paid models or alter the real spend ledger. Intentional model evaluations record provider/model, calls, tokens and actual cost; preserve failures, unknowns and original verdicts. Reuse existing acceptance protocols/evidence, normally one run per frozen configuration; repeats require changed inputs or a stated stability question. Never drop acceptance, required independent review or safety checks to save tokens.
+Tests must not call paid models or alter the real spend ledger. Intentional model evaluations need no approval, spend cap or cost-based stop; after the run, report provider/model, calls, tokens and the spend ledger's reference cost; preserve failures, unknowns and original verdicts. Reuse existing acceptance protocols/evidence, normally one run per frozen configuration; repeats require changed inputs or a stated stability question. Never drop acceptance, required independent review or safety checks to save tokens.
 
 Documentation/configuration-only changes need syntax, links and relevant invariants checked; no product/model/browser acceptance unless behavior changed.
 
