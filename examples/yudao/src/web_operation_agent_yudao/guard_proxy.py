@@ -8,6 +8,7 @@ not enable native operations safely. No token, cookie, body or URL is logged.
 from __future__ import annotations
 
 import http.client
+import hashlib
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -35,7 +36,7 @@ _PUBLIC = frozenset({"/admin-api/system/auth/login", "/admin-api/system/auth/ref
 class NativeGuardProxy:
     def __init__(self, *, upstream: str, origin: str, guard: NativePageGuard,
                  resolve_actor, host="127.0.0.1", port=0, timeout_s=30,
-                 application_window: bool = False):
+                 application_window: bool = False, ingress_base: str | None = None):
         target = urlsplit(upstream)
         site = urlsplit(origin)
         if (target.scheme not in {"http", "https"} or not target.hostname or target.username
@@ -48,6 +49,16 @@ class NativeGuardProxy:
                 or not 0 < timeout_s <= 120):
             raise ValueError("the proxy requires fixed upstream, origin and identity verifier")
         self.upstream, self.origin = target, origin.rstrip("/")
+        # Cookies share a host across ports. Scope the window owner to the published
+        # origin so two local deployments cannot overwrite each other's owner cookie.
+        self.cookie_name = _COOKIE + "_" + hashlib.sha256(self.origin.encode()).hexdigest()[:16]
+        ingress = urlsplit(ingress_base or self.origin)
+        if (ingress.scheme not in {"http", "https"} or not ingress.hostname or ingress.username
+                or ingress.password or ingress.query or ingress.fragment or ingress.path not in {"", "/"}):
+            raise ValueError("the ingress probe requires a fixed HTTP origin")
+        # A container may reach the same routing front internally while browsers use
+        # its published port. Origin enforcement remains bound to the public origin.
+        self.ingress_base = ingress_base.rstrip("/") if ingress_base else None
         self.guard, self.resolve_actor, self.timeout_s = guard, resolve_actor, timeout_s
         #: The application refuses its own writes while a window is open (the server's
         #: `/admin-api/woa/page-guard`); a window it does not confirm is not opened.
@@ -78,8 +89,8 @@ class NativeGuardProxy:
                 return None
         opener = urllib.request.build_opener(NoRedirect())
         for path in ("/admin-api/woa-native-guard/probe", GUARD_PATH + "/probe"):
-            request = urllib.request.Request(self.origin + path,
-                headers={"X-WOA-Guard-Probe": self._probe})
+            request = urllib.request.Request((self.ingress_base or self.origin) + path,
+                headers={"X-WOA-Guard-Probe": self._probe, "Host": urlsplit(self.origin).netloc})
             try:
                 with opener.open(request, timeout=5) as response:
                     body = json.loads(response.read(1024))
@@ -106,7 +117,7 @@ class NativeGuardProxy:
                 self.send_header("Content-Length", str(len(body)))
                 if cookie:
                     secure = "; Secure" if proxy.origin.startswith("https:") else ""
-                    self.send_header("Set-Cookie", f"{_COOKIE}={cookie}; Path=/; HttpOnly; SameSite=Strict{secure}")
+                    self.send_header("Set-Cookie", f"{proxy.cookie_name}={cookie}; Path=/; HttpOnly; SameSite=Strict{secure}")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -139,7 +150,7 @@ class NativeGuardProxy:
                     cookie.load(self.headers.get("Cookie", ""))
                 except Exception:
                     raise GuardRefused("invalid_browser") from None
-                owner = cookie[_COOKIE].value if _COOKIE in cookie else ""
+                owner = cookie[proxy.cookie_name].value if proxy.cookie_name in cookie else ""
                 body = json.loads(self.body(8192) or b"{}")
                 if not isinstance(body, dict):
                     raise GuardRefused("invalid_window")

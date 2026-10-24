@@ -169,7 +169,7 @@ class GuardProxyTests(unittest.TestCase):
 
     def test_bad_identity_origin_or_cookie_cannot_open_or_release_a_window(self):
         for kwargs in ({"token": ""}, {"token": "unknown"}, {"origin": "http://other.test"},
-                       {"cookie": "woa_native_window=bad"}):
+                       {"cookie": self.proxy.cookie_name + "=bad"}):
             self.assertIn(self.request("POST", GUARD_PATH + "/begin", **kwargs)[0], {401, 403})
         self.begin()
         self.assertEqual(self.request("POST", GUARD_PATH + "/end", cookie="")[0], 403)
@@ -209,6 +209,47 @@ class GuardProxyTests(unittest.TestCase):
             status, body, _ = self.request(method, path, token="")
             self.assertEqual((status, body["code"], body["data"]), (200, 401, None))
         self.assertEqual(len(self.calls), count)
+
+    def test_internal_ingress_probe_preserves_public_origin_enforcement(self):
+        self.proxy.ingress_base = self.proxy.url
+        self.proxy.origin = "http://localhost:40002"
+        self.proxy.verify_ingress()
+        self.assertEqual(self.calls, [])
+        status, body, _ = self.request("POST", GUARD_PATH + "/begin", origin="http://localhost:40001")
+        self.assertEqual((status, body["error"]), (403, "origin_refused"))
+        status, body, _ = self.request("POST", GUARD_PATH + "/begin", origin="http://localhost:40002")
+        self.assertEqual((status, body["active"]), (200, True))
+        self.proxy.ingress_base = f"http://127.0.0.1:{self.app.server_port}"
+        with self.assertRaises(GuardRefused) as failed:
+            self.proxy.verify_ingress()
+        self.assertEqual(failed.exception.code, "guard_ingress_unverified")
+
+    def test_internal_ingress_base_rejects_non_origin_urls(self):
+        for address in ("file:///tmp/probe", "http://user:secret@localhost", "http://localhost/path", "http://localhost?query=1"):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                NativeGuardProxy(upstream="http://127.0.0.1:1", origin=self.origin,
+                    ingress_base=address, guard=self.guard, resolve_actor=lambda *_: None)
+
+    def test_same_browser_can_end_independent_windows_on_two_origins(self):
+        other = NativeGuardProxy(upstream=self.proxy.upstream.geturl(), origin="http://fixture.test:40002",
+            guard=NativePageGuard(frozenset({READ})), resolve_actor=self.proxy.resolve_actor).start()
+        self.addCleanup(other.close)
+        self.assertNotEqual(self.proxy.cookie_name, other.cookie_name)
+        first = self.request("POST", GUARD_PATH + "/begin", cookie="")[2].split(";", 1)[0]
+        def request(proxy, operation, cookie):
+            connection = http.client.HTTPConnection("127.0.0.1", proxy.http.server_port, timeout=3)
+            connection.request("POST", GUARD_PATH + "/" + operation, body=b"{}", headers={
+                "Origin": proxy.origin, "Authorization": "Bearer synthetic-a", "tenant-id": "1",
+                "Content-Type": "application/json", "Cookie": cookie})
+            response = connection.getresponse()
+            status, body, received = response.status, json.loads(response.read()), response.getheader("Set-Cookie")
+            connection.close()
+            self.assertEqual(status, 200)
+            return body, received
+        second = request(other, "begin", "")[1].split(";", 1)[0]
+        cookies = first + "; " + second
+        for proxy in (self.proxy, other):
+            self.assertFalse(request(proxy, "end", cookies)[0]["active"])
 
     def test_expired_browser_token_uses_native_login_envelope_without_dispatch(self):
         count = len(self.calls)

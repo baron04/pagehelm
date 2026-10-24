@@ -12,6 +12,19 @@ spec.loader.exec_module(check)
 
 
 class SelectionTests(unittest.TestCase):
+    def test_yaml_syntax_accepts_compose_reset_and_override_tags(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(check, 'ROOT', Path(directory)):
+            (Path(directory) / 'compose.yaml').write_text(
+                'services:\n  db:\n    ports: !reset []\n  web:\n    ports: !override ["127.0.0.1:1:80"]\n')
+            self.assertEqual(check.syntax(['compose.yaml']), 0)
+
+    def test_yaml_syntax_does_not_accept_arbitrary_tags(self):
+        import yaml
+        with tempfile.TemporaryDirectory() as directory, patch.object(check, 'ROOT', Path(directory)):
+            (Path(directory) / 'compose.yaml').write_text('value: !unsupported tag\n')
+            with self.assertRaises(yaml.constructor.ConstructorError):
+                check.syntax(['compose.yaml'])
+
     def names(self, paths, profile='ci'):
         plan = check.make_plan(paths, profile)
         return {row['name'] for row in plan['checks']}, plan

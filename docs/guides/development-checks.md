@@ -9,6 +9,14 @@
 
 默认比较HEAD与暂存、未暂存及未忽略的新文件；`--plan`只输出JSON计划。`--path`可重复，用于明确检查范围。没有变更时不执行检查。`THIRD_PARTY.md`、SBOM等依赖清单会触发锁/许可核对，不按普通说明文档跳过。失败立即返回非零，不把未执行套件记成通过。
 
+## 开发准备
+
+依赖安装与构建命令见[根目录README](../../README.zh-CN.md#开发)。`.env.example`是不含凭据的配置模板，`.env`仅供当前checkout使用并已被Git忽略；只填写实际使用的部分，脚本测试不需要模型配置。模型由`AGENT_OPENAI_MODEL`选择；源码安装更改配置后重启服务，代码打包进wheel或镜像的安装需重建并部署。本地双实例通过`./local`更新，具体见[本地指南](local-yudao.md)。
+
+`build_runtime.py --install`会先执行`npm ci`，`build_panel.py`构建面板。浏览器脚本和轨迹回放页是生成物，不提交Git；缺少构建时助手不可用，依赖它们的测试可能失败或跳过。前端变化后及每个独立checkout都需构建。
+
+仅开发旧Odoo参考时安装`python -m pip install --no-deps --editable examples/odoo`，装置准备和完整更新步骤见[Odoo指南](../../examples/odoo/README.md)。独立离线评测装置的命令见[评测指南](../../evals/odoo/README.md#running-it)，不作为日常产品检查的依赖。
+
 ## 分流规则
 
 | 改动 | 默认开发检查 | 合入前CI |
@@ -44,6 +52,8 @@ scripts/qualify.sh --require-browser --reference-odoo
 ```
 
 完整资格用于发布候选或所有者明确要求的全量核对，CI也可通过手动`release`选择。它保留核心、Contacts、芋道、面板、Runtime、生命周期及打包检查。未维护的Odoo适配器/评测默认不执行，显式选用才运行；真实Odoo环境需另行配置，不自动连接。
+
+Odoo参考资格的`--require-live`要求已配置的真实环境门禁。`BLOCKED`或`SKIPPED`表示未执行，不能算通过。
 
 核心与Chromium集合用显式标记分开，收集时按测试ID去重。测试文件导入失败或选中集合为空会拒绝执行；必需浏览器lane遇到缺依赖导致的skip也失败。审批、actor隔离、写入仅一次、不确定写入不重试、费用账本保护及相关篡改回归保留。
 

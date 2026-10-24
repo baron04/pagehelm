@@ -122,6 +122,8 @@ class YudaoHostConfig:
     #: Not the removed page-filtering `--native-filter-policy` of the declaration layer.
     native_filter_semantics: Path | None = None
     native_guard_port: int = 48093
+    #: Internal address of the same routing front, when its public URL is host-only.
+    native_ingress_base: str | None = None
     #: Only reviewed server-side typed mutations; browser submission stays disabled.
     native_writes: bool = False
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
@@ -198,7 +200,8 @@ class YudaoHost:
                 guard=NativePageGuard(frozenset(), writing_gets=self._fenced_gets(policy),
                                       journal=config.state_dir / "native-guard.sqlite3"),
                 resolve_actor=GuardIdentity(config.api_base), host=config.bootstrap_host,
-                port=config.native_guard_port, application_window=self.live_forms).start()
+                port=config.native_guard_port, application_window=self.live_forms,
+                ingress_base=config.native_ingress_base).start()
             try:
                 self.native_proxy.verify_ingress()
             except Exception:

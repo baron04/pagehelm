@@ -1,5 +1,5 @@
 #!/bin/sh
-# Start the local acceptance environment; no arguments needed.
+# Start environment 1, or select environment 2 with --env 2.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ ! -x "$ROOT/.venv/bin/python" ]; then

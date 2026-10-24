@@ -1,0 +1,8 @@
+**
+!requirements.lock
+!examples/
+!examples/yudao/
+!examples/yudao/deploy/
+!examples/yudao/deploy/local/
+!examples/yudao/deploy/local/agent.Dockerfile
+!examples/yudao/deploy/local/agent.Dockerfile.dockerignore

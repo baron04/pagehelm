@@ -207,7 +207,17 @@ def syntax(paths: list[str]) -> int:
             subprocess.run(['bash', '-n', str(path)], check=True)
         elif suffix in {'.yaml', '.yml'}:
             import yaml
-            yaml.safe_load(path.read_text())
+            class ComposeLoader(yaml.SafeLoader):
+                pass
+            def compose_tag(loader, node):
+                if isinstance(node, yaml.SequenceNode):
+                    return loader.construct_sequence(node, deep=True)
+                if isinstance(node, yaml.MappingNode):
+                    return loader.construct_mapping(node, deep=True)
+                return loader.construct_scalar(node)
+            for tag in ('!reset', '!override'):
+                ComposeLoader.add_constructor(tag, compose_tag)
+            yaml.load(path.read_text(), Loader=ComposeLoader)
         elif suffix == '.md':
             for target in re.findall(r'\]\(([^\s)]+)(?:\s+[^)]*)?\)', path.read_text()):
                 url = urlsplit(target.strip('<>'))

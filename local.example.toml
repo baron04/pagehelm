@@ -1,2 +1,3 @@
-# Optional. Copy to local.local.toml only when adopting an existing synthetic stack.
-compose_project = "woa-yudao-local"
+# Legacy launcher only. The new ./local does not read this file.
+# Start/rebuild that stack with its preserved deprecated-compose/compose.json.
+compose_project = "woa-yudao-local-deprecated"

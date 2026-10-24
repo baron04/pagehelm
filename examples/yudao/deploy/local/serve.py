@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+from pathlib import Path
 import signal
 import sys
 import threading
@@ -20,11 +22,23 @@ from web_operation_agent_yudao.guard_proxy import GUARD_PATH  # noqa: E402
 MAX_BODY = 20 * 1024 * 1024
 
 
+@dataclass(frozen=True)
+class Settings:
+    environment: int
+    checkout_id: str
+    origin: str
+    upstream: str = "http://web:80"
+    state: Path | None = None
+    ports: tuple[int, int, int, int] = cfg.PORTS
+    listen_host: str = "127.0.0.1"
+
+
 class Front(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self):
-        super().__init__(("127.0.0.1", cfg.PORTS[0]), Handler)
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        super().__init__((settings.listen_host, settings.ports[0]), Handler)
         self.ready = False
         self.runtime_sha256 = hashlib.sha256(cfg.RUNTIME.read_bytes()).hexdigest()
         self.source_digest = cfg.source_digest()
@@ -63,18 +77,19 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def route(self):
+        settings = self.server.settings
         path = urlsplit(self.path).path
         if path == "/__local__/health":
-            payload = {"schema_version": 1, "ready": self.server.ready,
-                       "checkout_id": cfg.checkout_id(), "pid": os.getpid(),
+            payload = {"schema_version": 2, "ready": self.server.ready,
+                       "environment": settings.environment, "checkout_id": settings.checkout_id,
                        "runtime_sha256": self.server.runtime_sha256,
                        "source_digest": self.server.source_digest}
             self.reply(200 if self.server.ready else 503, json.dumps(payload).encode())
             return
-        if (self.command in {"GET", "HEAD"} and self.headers.get("Host") == f"127.0.0.1:{cfg.PORTS[0]}"
+        if (self.command in {"GET", "HEAD"} and self.headers.get("Host") == urlsplit(settings.origin).netloc.replace("localhost", "127.0.0.1")
                 and "text/html" in self.headers.get("Accept", "")):
             self.send_response(302)
-            self.send_header("Location", cfg.ORIGIN + self.path)
+            self.send_header("Location", settings.origin + self.path)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -92,17 +107,20 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, file.read_bytes(), "text/plain" if name == "LICENSE" else "text/javascript")
             return
         target = self.path
+        upstream = urlsplit(settings.upstream)
+        hostname = "127.0.0.1"
+        application = False
         if path.startswith("/admin-api/") or path.startswith(GUARD_PATH + "/"):
-            port = cfg.PORTS[3]
+            port = settings.ports[3]
         elif path == "/woa-agent-boot/bootstrap":
-            port, target = cfg.PORTS[2], "/bootstrap"
+            port, target = settings.ports[2], "/bootstrap"
         elif path.startswith("/woa-agent/"):
-            port, target = cfg.PORTS[1], self.path.removeprefix("/woa-agent")
+            port, target = settings.ports[1], self.path.removeprefix("/woa-agent")
         elif path.startswith(("/app-api/", "/infra/ws")):
             self.reply(403, b'{"error":"not_available_in_local_acceptance"}')
             return
         else:
-            port = urlsplit(cfg.UPSTREAM).port
+            hostname, port, application = upstream.hostname, upstream.port or 80, True
         if self.headers.get("Transfer-Encoding"):
             self.reply(400, b'{"error":"unsupported_transfer"}')
             return
@@ -120,12 +138,12 @@ class Handler(BaseHTTPRequestHandler):
         if (path == "/woa-agent-boot/bootstrap" or path.startswith("/woa-agent/")) and not self.headers.get("Origin"):
             # As the site's nginx does: a same-origin GET carries no Origin header, and the
             # assistant's gateway requires one. A request naming another origin keeps it.
-            headers["Origin"] = cfg.ORIGIN
+            headers["Origin"] = settings.origin
         body = self.rfile.read(size)
         if len(body) != size:
             self.reply(400, b'{"error":"incomplete_body"}')
             return
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+        connection = http.client.HTTPConnection(hostname, port, timeout=60)
         try:
             connection.request(self.command, target, body=body, headers=headers)
             response = connection.getresponse()
@@ -140,7 +158,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                 return
             body = response.read()
-            if port == urlsplit(cfg.UPSTREAM).port and "text/html" in content_type:
+            if application and "text/html" in content_type:
                 body = body.replace(b"<head>", b'<head><script type="module" src="/woa/page-facts.js"></script>'
                                     b'<script src="/woa/yudao-loader.js"></script>', 1)
             self.send_response(response.status)
@@ -158,23 +176,26 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    os.environ.update(NO_PROXY="localhost,127.0.0.1,::1", no_proxy="localhost,127.0.0.1,::1")
-    env = cfg.load_model_environment()
-    cfg.STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    environment = int(os.environ["WOA_LOCAL_ENVIRONMENT"])
+    env = {key: os.environ[key] for key in ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL", "AGENT_PROVIDER")
+           if os.environ.get(key)}
+    settings = Settings(environment, os.environ["WOA_LOCAL_CHECKOUT_ID"], os.environ["WOA_LOCAL_PUBLIC_ORIGIN"],
+                        state=Path("/var/lib/woa-yudao"), listen_host="0.0.0.0")
+    settings.state.mkdir(parents=True, exist_ok=True, mode=0o700)
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
-    front = Front()
+    front = Front(settings)
     threading.Thread(target=front.serve_forever, daemon=True).start()
     host = boot = None
-    pidfile = cfg.STATE / "server.pid"
     try:
         host = native.YudaoHost(native.YudaoHostConfig(
-            api_base=cfg.UPSTREAM, public_origin=cfg.ORIGIN,
-            public_agent_url=cfg.ORIGIN + "/woa-agent", state_dir=cfg.STATE / "state",
-            gateway_host="127.0.0.1", gateway_port=cfg.PORTS[1],
-            bootstrap_host="127.0.0.1", bootstrap_port=cfg.PORTS[2],
-            native_guard_port=cfg.PORTS[3], ui_source=cfg.CACHE / "ui",
+            api_base=settings.upstream, public_origin=settings.origin,
+            public_agent_url=settings.origin + "/woa-agent", state_dir=settings.state,
+            gateway_host="127.0.0.1", gateway_port=settings.ports[1],
+            bootstrap_host="127.0.0.1", bootstrap_port=settings.ports[2],
+            native_guard_port=settings.ports[3], native_ingress_base=f"http://127.0.0.1:{settings.ports[0]}",
+            ui_source=cfg.CACHE / "ui",
             source_release=cfg.RELEASE, native_read_policy=cfg.POLICIES / "fence.json",
             native_page_policy=cfg.POLICIES / "pages.json",
             native_money_policy=cfg.POLICIES / "verified-money.json",
@@ -182,13 +203,11 @@ def main():
             native_edit_prefill=False,
             model=env["AGENT_OPENAI_MODEL"], model_env=env, daily_allowance_cny=20.0))
         host.server.start()
-        boot = ThreadingHTTPServer(("127.0.0.1", cfg.PORTS[2]), native._handler(host))
+        boot = ThreadingHTTPServer(("127.0.0.1", settings.ports[2]), native._handler(host))
         threading.Thread(target=boot.serve_forever, daemon=True).start()
         threading.Thread(target=host._warm_api_docs, daemon=True).start()
-        pidfile.write_text(str(os.getpid()))
-        pidfile.chmod(0o600)
         front.ready = True
-        print(f"Local acceptance ready: {cfg.ORIGIN}", flush=True)
+        print(f"环境{settings.environment}就绪：{settings.origin}", flush=True)
         while not stop.wait(60):
             host.forget_closed()
     finally:
@@ -200,8 +219,6 @@ def main():
             host.close()
         front.shutdown()
         front.server_close()
-        if pidfile.is_file() and pidfile.read_text().strip() == str(os.getpid()):
-            pidfile.unlink()
 
 
 if __name__ == "__main__":
