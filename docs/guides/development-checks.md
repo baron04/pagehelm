@@ -1,62 +1,46 @@
 # 开发检查
 
-普通开发按当前改动选择检查，不要求每次提交跑整仓库、浏览器和评测装置。使用Python 3.12；这些检查使用合成数据，不调用付费模型，不连接现用实例。
+使用Python 3.12，按实际改动选检查。测试使用隔离合成数据，不调用付费模型、不连接现用实例或修改真实费用账本。
 
 ```bash
 .venv/bin/python scripts/check.py --plan
 .venv/bin/python scripts/check.py
-```
-
-默认比较HEAD与暂存、未暂存及未忽略的新文件；`--plan`只输出JSON计划。`--path`可重复，用于明确检查范围。没有变更时不执行检查。`THIRD_PARTY.md`、SBOM等依赖清单会触发锁/许可核对，不按普通说明文档跳过。失败立即返回非零，不把未执行套件记成通过。
-
-## 开发准备
-
-依赖安装与构建命令见[根目录README](../../README.zh-CN.md#开发)。`.env.example`是不含凭据的配置模板，`.env`仅供当前checkout使用并已被Git忽略；只填写实际使用的部分，脚本测试不需要模型配置。模型由`AGENT_OPENAI_MODEL`选择；源码安装更改配置后重启服务，代码打包进wheel或镜像的安装需重建并部署。本地双实例通过`./local`更新，具体见[本地指南](local-yudao.md)。
-
-`build_runtime.py --install`会先执行`npm ci`，`build_panel.py`构建面板。浏览器脚本和轨迹回放页是生成物，不提交Git；缺少构建时助手不可用，依赖它们的测试可能失败或跳过。前端变化后及每个独立checkout都需构建。
-
-仅开发旧Odoo参考时安装`python -m pip install --no-deps --editable examples/odoo`，装置准备和完整更新步骤见[Odoo指南](../../examples/odoo/README.md)。独立离线评测装置的命令见[评测指南](../../evals/odoo/README.md#running-it)，不作为日常产品检查的依赖。
-
-## 分流规则
-
-| 改动 | 默认开发检查 | 合入前CI |
-| --- | --- | --- |
-| Markdown/文档 | 语法、相对链接 | 同左，不安装浏览器或产品依赖 |
-| 核心Python | 所属模块及直接依赖边界的测试组；测试文件可单独运行 | 一次完整核心回归，排除另有独立lane的真实Chromium测试 |
-| 前端组件/样式 | lint、单测、类型及Runtime构建 | 增加面板Chromium；不运行服务端生命周期或历史评测 |
-| 浏览器Runtime、会话/持久状态边界 | 对应核心/前端检查 | 增加真实Runtime及生命周期故障检查 |
-| Contacts或芋道适配器 | 对应合同套件 | 对应集成检查；不运行无关适配器 |
-| Storybook | 仅展示工程构建 | 同左，不触发产品浏览器；展示效果人工复核 |
-| 打包/依赖 | 锁/SBOM及wheel内容、检出外安装 | 同左，另保守覆盖产品边界 |
-| 评测/对照工具 | 只跑改动工具的装置 | 同左，不作为普通产品改动的依赖 |
-
-```bash
-# 指定合入前基线；CI传入事件的base/head提交
+# 合入前与兼容性检查
 .venv/bin/python scripts/check.py --profile ci --base main
-# 不重复浏览器或JS单测的Python兼容性检查
 .venv/bin/python scripts/check.py --profile compat --base main
 ```
 
-本地指定`--base`但不指定`--head`时，也包含尚未提交的改动；显式`--head`只比较提交。CI使用提交共同祖先与head比较，包含删除和重命名前后的路径。基线不存在或不能解析时保守选择产品检查；未知代码路径回退核心检查，不能静默当作文档。开发组是快速反馈，不是跨所有模块的完整证明；修改跨模块语义时先查看计划，必要时显式使用CI profile。
+默认范围是HEAD、暂存/未暂存及未忽略的新文件；无变更不执行。`--path`可重复指定范围，`--plan`仅输出JSON。`--base`包含本地改动，显式`--head`只比较提交；CI比较共同祖先到head，包含删除与重命名两端。无效基线或未知代码路径保守选择产品检查，不能空选成功。失败立即返回非零，未执行不算通过。
 
-日常 push、PR 和手动 `ci` 只使用 Python 3.12。手动选择 `compat` 时检查 3.12、3.13 的兼容性；发布前选择 `release`，由 3.12 跑完整发布检查、3.13 跑兼容性检查。兼容性检查不重复浏览器和完整前端测试，但仍可能构建所需 Runtime 资源、运行 Node VM 契约检查。CI按计划安装Node、两个Playwright版本的Chromium、PageController和nginx。PageController作为Runtime依赖保留，但无需因此构建或验收整个PageAgent比较实验。
+## 准备
 
-## 显式完整资格
+安装与构建命令见[README](../../README.zh-CN.md#开发)。`.env.example`不含凭据，忽略的`.env`只填当前checkout所需配置；脚本测试无需模型。`AGENT_OPENAI_MODEL`变更后，源码安装重启，代码打包进wheel/镜像的安装重建并部署；本地双实例按[本地指南](local-yudao.md)更新。
 
-```bash
-scripts/qualify.sh --require-browser
-# 仅打包检查，无需先跑全量产品/评测
-bash scripts/check_wheels.sh
-# 确实修改或需要核对旧参考时
-scripts/qualify.sh --require-browser --reference-odoo
-```
+`build_runtime.py --install`先执行`npm ci`，`build_panel.py`构建面板。脚本和回放页是生成物，不提交；缺少构建时助手不可用、相关测试失败或跳过。前端变化及每个独立checkout都需构建。
 
-完整资格用于发布候选或所有者明确要求的全量核对，CI也可通过手动`release`选择。它保留核心、Contacts、芋道、面板、Runtime、生命周期及打包检查。未维护的Odoo适配器/评测默认不执行，显式选用才运行；真实Odoo环境需另行配置，不自动连接。
+旧Odoo额外安装`python -m pip install --no-deps --editable examples/odoo`，准备与更新见[接入指南](../../examples/odoo/README.md)，独立离线装置见[评测指南](../../evals/odoo/README.md#running-it)。它们不是普通产品检查的依赖。
 
-Odoo参考资格的`--require-live`要求已配置的真实环境门禁。`BLOCKED`或`SKIPPED`表示未执行，不能算通过。
+## 检查分流
 
-核心与Chromium集合用显式标记分开，收集时按测试ID去重。测试文件导入失败或选中集合为空会拒绝执行；必需浏览器lane遇到缺依赖导致的skip也失败。审批、actor隔离、写入仅一次、不确定写入不重试、费用账本保护及相关篡改回归保留。
+| 改动 | 默认dev | 合入前ci |
+| --- | --- | --- |
+| 文档/Markdown | 语法、相对链接 | 同左 |
+| 核心Python | 模块及直接依赖边界 | 一次核心回归，排除独立浏览器lane |
+| 前端 | lint、单测、类型、Runtime构建 | 增加面板Chromium |
+| Runtime、会话/持久状态 | 对应核心/前端检查 | 增加真实Runtime与生命周期故障检查 |
+| Contacts/芋道适配器 | 对应合同 | 对应集成，不跑无关适配器 |
+| Storybook | 展示工程构建，效果人工复核 | 同左 |
+| 打包/依赖 | 锁/SBOM、wheel内容与检出外安装 | 同左，并覆盖相关产品边界 |
+| 评测/对照工具 | 对应工具装置 | 同左 |
 
-没有改动的相关输入/依赖/环境可以复用已通过检查。不为状态汇报重复全量，不先跑完整核心再重复其中的产品子集，不为无关改动构建Storybook或安装三个wheel。重新验证时说明实际运行、失败、跳过与没有覆盖的范围。
+依赖清单（含`THIRD_PARTY.md`、SBOM）触发锁/许可核对，不按普通文档跳过。dev提供局部反馈，跨模块语义需查看计划并选ci。日常CI用3.12；手动compat覆盖3.12/3.13，release由3.12跑完整资格、3.13跑兼容性。compat不重复浏览器或完整前端，但可构建必要Runtime资源、运行Node VM合同。CI按需安装Node、Playwright Chromium、PageController和nginx；PageController依赖不要求构建整个PageAgent实验。
 
-视觉装饰不以固定GPU像素或动画相位作为产品门槛。保留确认点击、过期/拒绝、CSP、宿主交互、降低动态效果及GPU失效回退等实际行为验证；主题对比度和已声明设计变量仍检查。不以源码关键字黑名单、固定import拼写或CSS写法代替行为测试；协议、依赖和边界的静态不变量仍检查。
+## 完整资格与复用
+
+仅发布候选或所有者明确要求全量时运行`scripts/qualify.sh --require-browser`，也可手动选择release。它覆盖核心、Contacts、芋道、面板、Runtime、生命周期与打包。打包/依赖改动必须运行`bash scripts/check_wheels.sh`，无需先跑全量。Odoo仅相关改动或显式`--reference-odoo`时执行；其真实环境另行配置，`--require-live`要求真实门禁。`BLOCKED`/`SKIPPED`不算通过。
+
+测试按ID去重；收集时导入失败、选中测试集为空，或必需浏览器lane缺依赖导致skip均失败。保留审批、actor隔离、写入仅一次、不确定写入不重试、账本与篡改回归。浏览器改动在集成/合入时跑对应lane。
+
+仅相关代码、输入和环境未变时复用通过结果；修复后只重跑受影响检查。勿重复核心与其子集、两个lane的同一浏览器测试，或为无关改动构建Storybook/安装wheel。交接准确报告执行、失败、跳过和未覆盖范围。
+
+视觉检查保留确认、过期/拒绝、CSP、宿主交互、降低动态效果、GPU失效回退、主题对比度与声明变量；不以固定GPU像素/动画相位或源码关键词、import/CSS拼写代替行为验证。协议、依赖和边界静态不变量仍检查。

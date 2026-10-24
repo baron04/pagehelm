@@ -25,7 +25,7 @@
 3. [写入模型](concepts/writes.md) 与 [Skill 与类型化工具](concepts/skills-and-tools.md)。
 
 ### 查某条行为的确切说法
-- [运行时行为详情](reference/runtime-behavior.md)
+- [通用运行时行为](reference/runtime-behavior.md) · [芋道接入行为](reference/yudao-behavior.md)，按当前接入读取。
 
 ### 开发与验证
 - [开发检查](guides/development-checks.md) —— 按改动选择检查、合入前验证与显式发布资格。
