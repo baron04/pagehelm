@@ -11,7 +11,7 @@ Applies throughout this repository.
 
 ## Environment
 
-- Local: `./local` → environment 1 (`http://localhost:40001`); `./local --env 2` → environment 2 (`http://localhost:40002`). For local work read [guide](docs/guides/local-yudao.md) and [Skill](.agents/skills/local-yudao/SKILL.md); preserve the deprecated stack/assistant.
+- Local: `./local` → environment 1 (`http://localhost:40001`); `./local --env 2` → environment 2 (`http://localhost:40002`). For local work use the [Skill](.agents/skills/local-yudao/SKILL.md); read the [guide](docs/guides/local-yudao.md) for first-time setup, troubleshooting or data tools; preserve the deprecated stack/assistant.
 - Deployment: `./deploy`; read [guide](docs/guides/deploy-yudao.md) and [Skill](.agents/skills/deploy-yudao/SKILL.md). Runtime entry points belong in `examples/yudao/deploy/`, never `.workbench/` or evaluators. Reuse `.q0-cache/yudao`; no version/date-suffixed caches.
 
 ## Architecture

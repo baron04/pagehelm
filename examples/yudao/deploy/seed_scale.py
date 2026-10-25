@@ -3,7 +3,15 @@
 Uses application APIs and exact deterministic keys, retaining existing records. A failed
 mutation stops the run: inspect its application state before running again. No workflow,
 payment, mail, role grant or external notification is submitted. Credentials are read from
-a private account file, never printed. The required backup is made by the operator first.
+a named entry of the private accounts file, never printed. The required backup is made by
+the operator first.
+
+By default each main entity gains 120 named records with varied dates, statuses, amounts
+and linked lines: system users, posts, departments and notices; HRM employees; CRM
+customers, contacts, leads, products, opportunities and draft contracts; ERP basics,
+purchase and sale orders and approved purchase receipts, which create the application's
+own stock records; WMS item specs; MES customers and suppliers; PMS projects. New users get
+random passwords. The report is built from the full lists read back afterwards.
 """
 from __future__ import annotations
 

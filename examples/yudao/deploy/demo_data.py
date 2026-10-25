@@ -2,6 +2,27 @@
 
 Explicit --apply and an operator-created database backup are mandatory. Mutations
 are journaled without request bodies. Failed/uncertain dispatches are not retried.
+
+Stages:
+  menus              remove three upstream external links, disable unserved modules and
+                     create the read-only explorer role and the demoexplorer account;
+                     devops, integration examples and AI, pay, MP and IM menus are not
+                     granted to it, and admin entries stay
+  broad              common module samples; --groups selects groups, and the coverage-*
+                     groups add devices, warehouse and QC drafts, templates and settings
+                     (usually 5 each; the check-in rule spans a fixed 7 days)
+  large --size N     grow the chosen CRM and ERP sets to at most 5,000 main records;
+                     verify a small batch before scaling up
+  personal           the explorer's own schedules, plans and reports
+  coverage-personal  the explorer's own office application, lead, contact, opportunity
+                     and contract drafts
+  ownership          set the owners of new customers and contacts through the
+                     application's transfer API; creation arguments do not decide it
+
+The personal stages grant a temporary minimal setup role and revoke it at the end.
+Applications are not submitted and warehouse documents do not move stock. Finance
+vouchers need the subject chart initialized first. Group names are defined in
+demo_data_profiles.py, demo_data_extended.py, demo_data_flows.py and demo_data_coverage.py.
 """
 from __future__ import annotations
 
@@ -190,7 +211,7 @@ def ownership(r, actor):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('stage', choices=['menus', 'broad', 'large', 'personal', 'coverage-personal', 'ownership'])
     ap.add_argument('--base', default='http://localhost:48163')
     add_account_arguments(ap)
