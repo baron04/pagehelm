@@ -10,7 +10,7 @@ lane that stops resumes where it left off.
 
     PYTHONPATH=src:examples/yudao/src .venv/bin/python -m evals.yudao.run_goals \\
         --taskset <path>/yudao-goals-zh-v1-holdout/cases.json --output .artifacts/yudao-v1 \\
-        --account .private/yudao-local-evaluator.json --model-env .env --lane 1/4
+        --account evaluator --model-env .env --lane 1/4
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from pathlib import Path
 from evals.odoo.goals.judge import score
 from evals.odoo.goals.source_citations import bound_source
 from evals.odoo.goals.run_goals import sheet, summarize_v7
+from web_operation_agent_yudao.accounts import add_account_arguments
 from web_operation_agent_yudao.client import YudaoAccount, YudaoClient
 from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
 from web_operation_agent_yudao.demo import (YudaoSession, model_env, read_api_docs, run_session,
@@ -246,7 +247,7 @@ def run_attempt(task: dict, doc: dict, *, args, api_docs: dict, ui, env: dict,
     started = time.monotonic()
     run_dir = args.output / "runs" / task["id"]
     session = YudaoSession(
-        origin=args.origin, account=YudaoAccount.from_file(args.account), api_docs=api_docs,
+        origin=args.origin, account=YudaoAccount.load(args.account, args.accounts), api_docs=api_docs,
         tasks=(task["prompt"],), run_dir=run_dir, ui=ui, model_env=env,
         start_path=doc["entry_path"], turn_timeout_s=_TURN_TIMEOUT_S,
         today=date.fromisoformat(doc["reference_date"]), batch_id=f"{run_name}-{task['id']}",
@@ -287,7 +288,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--taskset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--account", type=Path, required=True)
+    add_account_arguments(parser)
     parser.add_argument("--model-env", type=Path, required=True)
     parser.add_argument("--origin", default="http://localhost:48088")
     parser.add_argument("--ui-source", type=Path)
@@ -316,7 +317,7 @@ def main() -> int:
         return 0
     doc = load_sealed(args.taskset)
     seal = _seal(args.taskset)
-    account = YudaoAccount.from_file(args.account)
+    account = YudaoAccount.load(args.account, args.accounts)
     check_run_contract(doc, seal, origin=args.origin, account=account, snapshot=args.snapshot)
     citations = None
     if "source_binding" in doc:

@@ -10,7 +10,7 @@ Mapping is not readability: a list may require a parent, an account set or an ac
 before it answers. `--probe` calls each mapped entity's endpoint once and reports what it did.
 
     PYTHONPATH=src:examples/yudao/src python -m web_operation_agent_yudao.coverage \\
-        --account .private/yudao-local-evaluator.json --ui-source $YUDAO_CACHE/ui
+        --account evaluator --ui-source $YUDAO_CACHE/ui
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from pathlib import Path
 
 from web_operation_agent.goal.data import DataRefused
 
+from .accounts import add_account_arguments
 from .client import YudaoAccount, YudaoClient
 from .goal import YudaoGoalData, _leaves, _page_item
 from .ui_source import UiSource
@@ -155,7 +156,7 @@ def report(doc: dict) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--origin", default="http://127.0.0.1:48088")
-    parser.add_argument("--account", type=Path, required=True)
+    add_account_arguments(parser)
     parser.add_argument("--ui-source", type=Path)
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--module", action="append", default=[],
@@ -167,7 +168,7 @@ def main() -> int:
     args = parser.parse_args()
     from .demo import read_api_docs, ui_source
 
-    account = YudaoAccount.from_file(args.account)
+    account = YudaoAccount.load(args.account, args.accounts)
     client = YudaoClient(args.origin, account)
     docs = read_api_docs(args.origin)
     data = YudaoGoalData(client, docs, ui=ui_source(args.ui_source, args.source_root))

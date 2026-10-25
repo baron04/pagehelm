@@ -8,7 +8,7 @@ the replay's `goto` sent it. A replay measures what a code change does to the sa
 declarations; it is not a run, and a task whose calls diverge from the recording is marked.
 
     PYTHONPATH=src:examples/yudao/src:examples/odoo/src .venv/bin/python -m evals.yudao.replay \\
-        <taskset.json> <run output> --account <account.json> --ui-source <ui checkout> [--all]
+        <taskset.json> <run output> --account <name> --ui-source <ui checkout> [--all]
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.tests.execution.product_support import _Channel
 from web_operation_agent.tests.goal.test_goal_turn import _Adapter, _Browser
 from web_operation_agent.tests.support.chat_port_contract import CancellableChatDouble
+from web_operation_agent_yudao.accounts import add_account_arguments
 from web_operation_agent_yudao.client import YudaoAccount, YudaoClient
 from web_operation_agent.goal.conventions import load_conventions
 from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
@@ -96,7 +97,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("taskset", type=Path)
     p.add_argument("run", type=Path)
-    p.add_argument("--account", type=Path, required=True)
+    add_account_arguments(p)
     p.add_argument("--ui-source", type=Path)
     p.add_argument("--source-root", type=Path)
     p.add_argument("--source-release", default="")
@@ -110,7 +111,7 @@ def main() -> int:
     a = p.parse_args()
     doc = json.loads(a.taskset.read_text())
     tasks = {t["id"]: {**t, "truth": t.get("expected_outcome")} for t in doc["questions"]}
-    data = YudaoGoalData(YudaoClient(a.origin, YudaoAccount.from_file(a.account)),
+    data = YudaoGoalData(YudaoClient(a.origin, YudaoAccount.load(a.account, a.accounts)),
                          read_api_docs(a.origin),
                          ui=UiSource.read(a.ui_source) if a.ui_source else None)
     if not a.no_conventions:

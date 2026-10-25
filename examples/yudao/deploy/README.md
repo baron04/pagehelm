@@ -496,7 +496,7 @@ with `require_served_directory`). The goal demo signs a browser in as the evalua
 account, injects the assistant, submits tasks through the panel and meters model calls:
 
 ```bash
-python -m web_operation_agent_yudao.demo --account account.json --source-root $YUDAO_CACHE --source-release v2026.09 --model-env ../../.env --task "为什么我看不到合同的提交审核按钮？"
+python -m web_operation_agent_yudao.demo --account evaluator --source-root $YUDAO_CACHE --source-release v2026.09 --model-env ../../.env --task "为什么我看不到合同的提交审核按钮？"
 ```
 
 `evals/yudao/run_goals.py` runs a sealed goal set against the local deployment: it checks the task file and the judge against their seal, requires the sealed browser origin, actor, tenant and snapshot when declared, checks that the current actor's index contains every feasible task's entity and page, then verifies that the signed-in admin page actually renders and reads its permission data from that origin in Chromium before any model call. Pass `--ui-source $YUDAO_CACHE/ui` when the evaluated coverage relies on the deployment's UI source. It runs each task in a fresh session under a hard deadline (the browser's process group is killed past it), treats any change to the database other than a sign-in's stamps as a write, and scores each attempt with the rubric-7 judge. A task set that cites source carries a `source_binding`; the runner then requires `--source-root` and `--source-release` of that release and hands the judge its own sealed copy of the cited files, so a rule counts only with a citation whose lines hash as bound. `--snapshot` checks that the live database is the snapshot the truth was read from; a migrated database needs a newly authored and sealed task set. `--summarize-only` reports all lanes by category and task type. `evals/yudao/replay.py` replays a run's recorded declarations through the current code at no model cost.
@@ -509,7 +509,7 @@ Known limits: ERP, MES and WMS records open as their list pages; `crm/customer`'
 
 ```bash
 PYTHONPATH=src:examples/yudao/src python -m web_operation_agent_yudao.coverage \
-    --account .private/yudao-local-evaluator.json --ui-source $YUDAO_CACHE/ui --probe
+    --account evaluator --ui-source $YUDAO_CACHE/ui --probe
 ```
 
 ## Offline qualification

@@ -45,7 +45,7 @@
 
 实例配置和运行状态位于`$XDG_STATE_HOME/web-operation-agent/yudao/env1/`与`env2/`；未设置`XDG_STATE_HOME`时使用`~/.local/state/web-operation-agent/yudao/`。同一用户的源码目录共用这两个固定实例，目录包含数据库配置`application.env`、必要模型配置`agent.env`、源码挂载配置及`state/`。这些私有文件不进入Git；已有数据卷但原数据库配置缺失时拒绝启动，不生成替代密码或重置数据。
 
-首次创建新卷按缓存SQL建立表结构和初始系统数据，不自动补充业务样本。迁移已有本地合成数据时，备份和导入新卷是独立的一次性准备：两套新卷各自导入，旧卷保留，登录令牌和Redis不沿用，助手会话与账本重新建立。日常启动不备份、恢复、seed或迁移数据库。人工登录账号可保存在所选实例的`account.json`中，启动器不读取或自动登录它。
+首次创建新卷按缓存SQL建立表结构和初始系统数据，不自动补充业务样本。迁移已有本地合成数据时，备份和导入新卷是独立的一次性准备：两套新卷各自导入，旧卷保留，登录令牌和Redis不沿用，助手会话与账本重新建立。日常启动不备份、恢复、seed或迁移数据库。需要登录芋道的工具默认从当前源码目录的`.private/yudao-accounts.json`读取账号：文件是名字到`{"username","password","tenant"}`的映射，工具用`--account 名字`选择条目，`--accounts`可改用其他文件，例如让其他源码目录使用同一文件。两套实例默认共用这个文件，两边密码不同时用不同条目名或另一个文件区分。启动器不读取也不自动登录它；不要提交或输出文件内容。
 
 `.q0-cache/yudao`仍是当前源码目录的基础缓存；`.q0-cache/yudao-local/compose-build.json`仅记录前端构建。原目录下的旧账号、会话、账本与日志保留，不作为新实例运行状态使用。
 
@@ -62,7 +62,7 @@
 ```bash
 .venv/bin/python examples/yudao/deploy/seed_scale.py \
   --base http://localhost:40001 \
-  --account ~/.local/state/web-operation-agent/yudao/env1/account.json \
+  --account admin \
   --backup .q0-cache/yudao/snapshots/before-scale.sql.gz \
   --report ~/.local/state/web-operation-agent/yudao/env1/scale-report.json --apply
 ```
@@ -75,7 +75,7 @@
 
 `examples/yudao/deploy/demo_data.py` 提供独立的合成演示数据准备工具，不由 `./local` 自动运行。执行前必须释放所有冻结测评占用，保存并演练恢复完整数据库备份；旧题、答案和成绩继续绑定原数据，不能移植到新数据。
 
-工具只接受回环地址、已有MySQL压缩备份和 `--apply`。`menus` 删除三个上游外链、禁用未服务模块，并建立只读探索角色及 `demoexplorer` 账号；开发运维、接入示例和AI/支付/公众号/IM菜单不授予该角色，管理员入口保留。`broad` 经应用接口准备常用模块样本，`large --size N` 扩充指定CRM和ERP集合，最高5,000个主记录；先小批验证再逐级扩量。`personal` 使用临时的最小准备权限为探索账号建立日程、计划和汇报，结束时收回权限；`ownership` 通过应用正式转移接口设置新增客户及联系人的负责人，不能仅凭创建参数判断归属。财务凭证准备需要先在隔离合成实例中初始化科目表。参数见 `--help`；各分组名称定义在部署目录的 `demo_data_profiles.py`、`demo_data_extended.py`、`demo_data_flows.py` 和 `demo_data_coverage.py`。账号凭据只写入指定状态目录的上级 `demo-account.json`，不要提交或粘贴到日志。
+工具只接受回环地址、已有MySQL压缩备份和 `--apply`。`menus` 删除三个上游外链、禁用未服务模块，并建立只读探索角色及 `demoexplorer` 账号；开发运维、接入示例和AI/支付/公众号/IM菜单不授予该角色，管理员入口保留。`broad` 经应用接口准备常用模块样本，`large --size N` 扩充指定CRM和ERP集合，最高5,000个主记录；先小批验证再逐级扩量。`personal` 使用临时的最小准备权限为探索账号建立日程、计划和汇报，结束时收回权限；`ownership` 通过应用正式转移接口设置新增客户及联系人的负责人，不能仅凭创建参数判断归属。财务凭证准备需要先在隔离合成实例中初始化科目表。参数见 `--help`；各分组名称定义在部署目录的 `demo_data_profiles.py`、`demo_data_extended.py`、`demo_data_flows.py` 和 `demo_data_coverage.py`。探索账号凭据写入 `.private/yudao-accounts.json`（或 `--accounts` 指定的文件）的 `demoexplorer` 条目；应用里已有该账号而文件缺少条目时停止，不生成新密码。凭据不要提交或粘贴到日志。
 
 按页面覆盖补数时，`broad --groups coverage-... --size 5` 可选择额外设备、仓储与质检草稿、模板和常用配置分组；这些分组通常各准备5条，签到规则固定7天。`coverage-personal --size 5` 以临时最小权限建立探索账号自己的办公申请草稿、线索、联系人、商机和合同草稿，结束时撤销授权。申请不提交审批，仓储单据不执行库存变更。页面覆盖率须固定账号和可见菜单清单，以实际页面显示记录核验；卡片/配置表单、空页、异常页和隐藏菜单分别列明，不能把辅助下拉列表的数据当成主页面有数据。管理员还保留额外运维菜单，且个人页面按当前身份显示，不能把探索账号的覆盖率推广到所有账号。
 

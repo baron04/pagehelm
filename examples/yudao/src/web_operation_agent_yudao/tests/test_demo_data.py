@@ -1,4 +1,6 @@
 """Offline trust-boundary checks for the synthetic-data operator tools."""
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import sys
@@ -101,7 +103,7 @@ class DemoDataTests(unittest.TestCase):
             records = Records()
             with patch.object(demo_data, 'DemoClient', side_effect=RuntimeError('dispatch unavailable')):
                 with self.assertRaises(RuntimeError):
-                    demo_data.personal(records, state, 8, 3)
+                    demo_data.personal(records, state, state / 'accounts.json', 8, 3)
             self.assertEqual(records.c.calls[-2][1], {'userId': 8, 'roleIds': [7]})
             self.assertEqual(records.c.calls[-1][1], {'roleId': 99, 'menuIds': []})
 
@@ -129,10 +131,40 @@ class DemoDataTests(unittest.TestCase):
             records = Records()
             with patch.object(demo_data, 'DemoClient', side_effect=RuntimeError('unavailable')):
                 with self.assertRaises(RuntimeError):
-                    demo_data.personal(records, state, 8, 3, coverage=True)
+                    demo_data.personal(records, state, state / 'accounts.json', 8, 3, coverage=True)
             self.assertEqual(records.c.calls[0][1]['menuIds'], list(range(len(allowed))))
             self.assertEqual(records.c.calls[-2][1], {'userId': 8, 'roleIds': [7]})
             self.assertEqual(records.c.calls[-1][1], {'roleId': 99, 'menuIds': []})
+
+    def test_explorer_entry_is_added_beside_others_but_never_minted_for_an_existing_user(self):
+        class Client:
+            def __init__(self):
+                self.posts = []
+            def get(self, path):
+                return []
+            def post(self, path, body):
+                self.posts.append(path)
+        class Records:
+            def __init__(self, users):
+                self.c, self.users = Client(), users
+            def rows(self, route):
+                return self.users
+            def ensure(self, *args, **kwargs):
+                return 5
+        admin = {'username': 'admin', 'password': 'synthetic-admin', 'tenant': '1'}
+        with tempfile.TemporaryDirectory() as directory:
+            state, accounts = Path(directory) / 'state', Path(directory) / 'accounts.json'
+            state.mkdir()
+            accounts.write_text(json.dumps({'admin': admin}))
+            existing = Records([{'username': 'demoexplorer'}])
+            with self.assertRaises(RuntimeError):
+                demo_data.prepare_menus(existing, state, accounts)
+            self.assertEqual(json.loads(accounts.read_text()), {'admin': admin})
+            self.assertNotIn('system/permission/assign-user-role', existing.c.posts)
+            with redirect_stdout(io.StringIO()):
+                demo_data.prepare_menus(Records([]), state, accounts)
+            saved = json.loads(accounts.read_text())
+            self.assertEqual((saved['admin'], saved['demoexplorer']['username']), (admin, 'demoexplorer'))
 
     def test_finance_reports_are_retained_when_standalone_report_module_is_disabled(self):
         rows = [dict(id=1, parentId=0, name='报表管理', path='/report', component=None, type=1, status=0),

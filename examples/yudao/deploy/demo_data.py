@@ -12,10 +12,16 @@ import json
 import os
 from pathlib import Path
 import secrets
+import sys
 from urllib.parse import urlsplit
 
 from demo_data_common import DemoClient, Records, menu_scope
 from seed import ApiError
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'examples/yudao/src')]
+from web_operation_agent_yudao.accounts import (  # noqa: E402
+    add_account_arguments, load_account, read_accounts, save_account)
 
 MARK = '合成演示'
 ANCHOR = datetime(2026, 10, 20, 10, tzinfo=timezone(timedelta(hours=8)))
@@ -37,7 +43,7 @@ def private_json(path, value):
         out.write('\n')
 
 
-def prepare_menus(r, state):
+def prepare_menus(r, state, accounts):
     menus = r.c.get('system/menu/list')
     scope = menu_scope(menus)
     if not (state / 'menus-original.json').exists():
@@ -54,12 +60,12 @@ def prepare_menus(r, state):
                     key='code')
     r.c.post('system/permission/assign-role-menu', {'roleId': role, 'menuIds': scope['explorer_grants']})
     r.c.post('system/permission/assign-role-data-scope', {'roleId': role, 'dataScope': 1, 'dataScopeDeptIds': []})
-    credential = state.parent / 'demo-account.json'
-    if credential.exists():
-        account = json.loads(credential.read_text())
-    else:
+    account = read_accounts(accounts).get('demoexplorer')
+    if account is None:
+        if any(u['username'] == 'demoexplorer' for u in r.rows('system/user/page')):
+            raise RuntimeError(f'demoexplorer exists in the application but has no entry in {accounts}')
         account = {'username': 'demoexplorer', 'password': secrets.token_urlsafe(12), 'tenant': '1'}
-        private_json(credential, account)
+        save_account('demoexplorer', account, accounts)
     actor = r.ensure('system/user', {'username': account['username'], 'password': account['password'],
                      'nickname': '合成演示探索员', 'remark': 'Synthetic read-only exploration account'}, key='username')
     r.c.post('system/permission/assign-user-role', {'userId': actor, 'roleIds': [role]})
@@ -132,7 +138,7 @@ def large(r, actor, size):
             print(json.dumps({'checkpoint': 'erp', 'products': len(products), 'orders': i + 1}), flush=True)
 
 
-def personal(r, state, actor, size, *, coverage=False):
+def personal(r, state, accounts, actor, size, *, coverage=False):
     """Seed actor-private lists, then revoke the narrowly scoped temporary setup role."""
     from demo_data_profiles import seed_groups
     identity = json.loads((state / 'identity.json').read_text())
@@ -151,7 +157,7 @@ def personal(r, state, actor, size, *, coverage=False):
     try:
         r.c.post('system/permission/assign-user-role', {'userId': actor, 'roleIds': [identity['role'], setup]})
         c = DemoClient(r.c.base, '1', state / ('coverage-personal-actor-writes.jsonl' if coverage else 'personal-actor-writes.jsonl'))
-        account = json.loads((state.parent / 'demo-account.json').read_text())
+        account = load_account('demoexplorer', accounts)
         c.login(account['username'], account['password'])
         own = Records(c)
         if coverage:
@@ -187,7 +193,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('stage', choices=['menus', 'broad', 'large', 'personal', 'coverage-personal', 'ownership'])
     ap.add_argument('--base', default='http://localhost:48163')
-    ap.add_argument('--account', type=Path, required=True)
+    add_account_arguments(ap)
     ap.add_argument('--backup', type=Path, required=True)
     ap.add_argument('--state', type=Path, required=True)
     ap.add_argument('--size', type=int, default=20)
@@ -205,17 +211,17 @@ def main():
     args.state.mkdir(parents=True, exist_ok=True)
     args.state.chmod(0o700)
     c = DemoClient(args.base, '1', args.state / (args.stage + '-writes.jsonl'))
-    account = json.loads(args.account.read_text())
+    account = load_account(args.account, args.accounts)
     c.login(account['username'], account['password'])
     r, outcomes = Records(c), []
     if args.stage == 'menus':
-        prepare_menus(r, args.state)
+        prepare_menus(r, args.state, args.accounts)
     else:
         actor = json.loads((args.state / 'identity.json').read_text())['actor']
         if args.stage == 'ownership':
             ownership(r, actor)
         elif args.stage in {'personal', 'coverage-personal'}:
-            personal(r, args.state, actor, args.size, coverage=args.stage == 'coverage-personal')
+            personal(r, args.state, args.accounts, actor, args.size, coverage=args.stage == 'coverage-personal')
         elif args.stage == 'broad':
             broad(r, actor, args.size, outcomes, set(args.groups.split(',')) if args.groups else None)
         else:

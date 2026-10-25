@@ -19,6 +19,8 @@ from dataclasses import dataclass
 
 from web_operation_agent.goal.data import DataRefused
 
+from .accounts import load_account
+
 #: yudao's "not logged in" code.
 _UNAUTHORIZED = 401
 _READ_CHECKPOINT = ContextVar("yudao_read_checkpoint", default=None)
@@ -40,9 +42,9 @@ class YudaoAccount:
     tenant: str = "1"
 
     @staticmethod
-    def from_file(path) -> "YudaoAccount":
-        """A JSON file {"username", "password", "tenant"} kept outside Git."""
-        data = json.loads(open(path, encoding="utf-8").read())
+    def load(name: str, path) -> "YudaoAccount":
+        """The account stored under `name` in a private accounts file (see `.accounts`)."""
+        data = load_account(name, path)
         return YudaoAccount(str(data["username"]), str(data["password"]), str(data.get("tenant", "1")))
 
 

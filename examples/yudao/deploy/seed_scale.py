@@ -14,9 +14,14 @@ import hashlib
 import json
 from pathlib import Path
 import secrets
+import sys
 from urllib.parse import urlsplit
 
 from seed import Client
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "examples/yudao/src")]
+from web_operation_agent_yudao.accounts import add_account_arguments, load_account  # noqa: E402
 
 VERSION = "local-scale-v1"
 PREFIX = "合成规模"
@@ -213,7 +218,7 @@ class Scale:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="http://localhost:48163")
-    parser.add_argument("--account", type=Path, required=True)
+    add_account_arguments(parser)
     parser.add_argument("--backup", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--size", type=int, default=120)
@@ -227,7 +232,7 @@ def main():
     with gzip.open(args.backup, "rb") as backup:
         if not backup.read(1024).startswith(b"-- MySQL dump"):
             parser.error("requires an existing MySQL dump backup")
-    account = json.loads(args.account.read_text())
+    account = load_account(args.account, args.accounts)
     client = Client(args.base, str(account.get("tenant", "1")))
     client.login(account["username"], account["password"])
     actor = client.get("system/auth/get-permission-info")["user"]["id"]

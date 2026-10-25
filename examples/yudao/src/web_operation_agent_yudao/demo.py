@@ -8,7 +8,7 @@ own answer to "who am I" on both sides.
 
 Model calls are metered into the project's spend ledger under the batch this run names.
 
-    python -m web_operation_agent_yudao.demo --account account.json --task "我负责的客户有哪些？"
+    python -m web_operation_agent_yudao.demo --account evaluator --task "我负责的客户有哪些？"
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.modeling.client import ChatModel, SpendMeter, load_env
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 
+from .accounts import add_account_arguments
 from .application import YudaoApplication
 from .conventions import REFERENCE_CONVENTIONS
 from .client import YudaoAccount
@@ -521,8 +522,7 @@ def main(argv=None) -> int:
     parser.add_argument("--origin", default="http://localhost:48088")
     parser.add_argument("--api-base", default="", help="where the API and its documentation are "
                         "reachable from the server, when not at the origin")
-    parser.add_argument("--account", type=Path, required=True,
-                        help='JSON {"username", "password", "tenant"} kept outside Git')
+    add_account_arguments(parser)
     parser.add_argument("--ui-source", type=Path, help="checkout of yudao-ui-admin-vue3")
     parser.add_argument("--source-root", type=Path, help="directory holding the deployed release's "
                         "server/ and ui/ checkouts, whose rules are then offered")
@@ -541,7 +541,7 @@ def main(argv=None) -> int:
 
     api_base = (args.api_base or args.origin).rstrip("/")
     summary = run_session(YudaoSession(
-        origin=args.origin, account=YudaoAccount.from_file(args.account),
+        origin=args.origin, account=YudaoAccount.load(args.account, args.accounts),
         api_docs=read_api_docs(api_base), tasks=tuple(args.task),
         run_dir=args.run_dir or Path.cwd() / ".artifacts" / f"yudao-demo-{uuid.uuid4().hex[:8]}",
         api_base=api_base, ui=ui_source(args.ui_source, args.source_root),

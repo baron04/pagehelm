@@ -7,10 +7,15 @@ from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 from pathlib import Path
+import sys
 from urllib.parse import urlsplit
 
 from demo_data_common import Records
 from seed import Client
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'examples/yudao/src')]
+from web_operation_agent_yudao.accounts import add_account_arguments, load_account  # noqa: E402
 
 
 PAGES = {
@@ -127,13 +132,13 @@ def verify(base, account, output):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--base', default='http://localhost:48163')
-    ap.add_argument('--account', required=True, type=Path)
+    add_account_arguments(ap)
     ap.add_argument('--output', required=True, type=Path)
     args = ap.parse_args()
     parsed = urlsplit(args.base)
     if parsed.username or parsed.password or parsed.scheme not in {'http', 'https'}:
         ap.error('invalid application origin')
-    verify(args.base, json.loads(args.account.read_text()), args.output)
+    verify(args.base, load_account(args.account, args.accounts), args.output)
 
 
 if __name__ == '__main__':

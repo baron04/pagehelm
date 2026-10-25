@@ -2,8 +2,13 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
 from playwright.sync_api import sync_playwright
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'examples/yudao/src')]
+from web_operation_agent_yudao.accounts import add_account_arguments, load_account  # noqa: E402
 
 
 def verify(base, account, tenant_name, menu_file, output):
@@ -53,9 +58,9 @@ def verify(base, account, tenant_name, menu_file, output):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--base', default='http://localhost:48163')
-    ap.add_argument('--account', type=Path, required=True)
+    add_account_arguments(ap)
     ap.add_argument('--tenant-name', required=True)
     ap.add_argument('--menus', type=Path, required=True)
     ap.add_argument('--output', type=Path, required=True)
     args = ap.parse_args()
-    verify(args.base.rstrip('/'), json.loads(args.account.read_text()), args.tenant_name, args.menus, args.output)
+    verify(args.base.rstrip('/'), load_account(args.account, args.accounts), args.tenant_name, args.menus, args.output)
