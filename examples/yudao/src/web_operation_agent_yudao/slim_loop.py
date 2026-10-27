@@ -1479,8 +1479,37 @@ def _record_page(address: str, rid: str, list_path: str) -> bool:
         re.search(rf"(?<![0-9]){re.escape(rid)}(?![0-9])", address))
 
 
-def page_text(observation, *, handoffs, marked: str = "") -> str:
-    """The page as the loop's model reads it; what it may act on is marked [n]."""
+def _own_list_path(goal_port, observation) -> str | None:
+    """The page's own list endpoint per this actor's application map.
+
+    None when the map names no list for this route; "" when the map cannot be read,
+    so that no list fact passes as the page's own."""
+    resolve = getattr(getattr(goal_port, "data", None), "page_list_path", None)
+    if resolve is None:
+        return None
+    try:
+        return resolve(urlsplit(observation.url).path)
+    except Exception:  # an unreadable application map verifies no list
+        return ""
+
+
+def _own_list_facts(observation, list_path: str | None):
+    """The list read and applied query, each only when it names the page's own list.
+
+    A cached page refreshing its list on a route change must not read as this page's
+    list. With no known list endpoint the runtime's own table binding stands alone."""
+    read, query = observation.page_read, observation.page_query
+    if list_path is None:
+        return read, query
+    return (read if read is not None and read.get("path") == list_path else None,
+            query if query is not None and query.get("path") == list_path else None)
+
+
+def page_text(observation, *, handoffs, marked: str = "", list_path: str | None = None) -> str:
+    """The page as the loop's model reads it; what it may act on is marked [n].
+
+    `list_path` is the page's own list endpoint when known: a list read or applied
+    query naming another endpoint is left out."""
     head = [f"当前页面: {urlsplit(observation.url).path}  {observation.title}"]
     if observation.render_state in {"pending", "blocked"}:
         head.append(f"页面状态: {observation.render_state}")
@@ -1489,14 +1518,13 @@ def page_text(observation, *, handoffs, marked: str = "") -> str:
           if e.role == "tab" and e.attrs.get("aria-selected") == "true" and e.name.strip()))))
     if selected:
         head.append("选中的页签/视图: " + " | ".join(selected[:12]))
-    if observation.page_read is not None:
-        read = observation.page_read
+    read, query = _own_list_facts(observation, list_path)
+    if read is not None:
         head.append(f"列表: 第 {read['page']} 页，每页 {read['page_size']} 条，本页 {read['rows']} 行，共 {read['total']} 条")
-    if observation.page_query is not None:
-        query = observation.page_query
+    if query is not None:
         head.append("页面生效的查询（页面自己最近一次成功读取的参数，即当前生效的筛选）: GET "
                     f"{query['path']} {json.dumps(query['parameters'], ensure_ascii=False)[:400]}")
-        if observation.page_read is not None and query["path"] == observation.page_read["path"]:
+        if read is not None and query["path"] == read["path"]:
             applied = []
             for control in observation.elements:
                 attrs = control.attrs
@@ -1506,7 +1534,7 @@ def page_text(observation, *, handoffs, marked: str = "") -> str:
                     continue
                 digest = hashlib.sha256(json.dumps([value], ensure_ascii=False,
                                                   separators=(",", ":")).encode()).hexdigest()
-                if observation.page_read["query_fields"].get(field) == digest:
+                if read["query_fields"].get(field) == digest:
                     applied.append(f"{_control_name(control) or field}={value}")
             if applied:
                 head.append("已核验的列表查询条件: " + "; ".join(dict.fromkeys(applied))[:800])
@@ -2431,14 +2459,16 @@ class YudaoLoopProcedures:
         said = re.sub(r"[\s,，。.：:]", "", " ".join(history))
         stray = [f"{label}←{value}" for label, value in turn["touched"]
                  if value and re.sub(r"[\s,，。.：:]", "", value) not in said]
+        list_path = _own_list_path(getattr(self, "goal_port", None), obs)
+        read, query = _own_list_facts(obs, list_path)
         state = {"path": urlsplit(obs.url).path, "title": obs.title,
                  "selected": list(obs.selected_controls),
-                 "list": ({k: obs.page_read[k] for k in ("page", "page_size", "rows", "total")}
-                          if obs.page_read is not None else None),
-                 "applied_query": obs.page_query, "form": _fields(obs),
+                 "list": ({k: read[k] for k in ("page", "page_size", "rows", "total")}
+                          if read is not None else None),
+                 "applied_query": query, "form": _fields(obs),
                  "form_lines": {f"第{row}行": cells for row, cells in sorted(_lines(obs).items())},
                  "highlighted": turn["marked"], "messages": list(obs.messages[:4]),
-                 "page_text": page_text(obs, handoffs=self.knowledge.handoffs)[-2500:]}
+                 "page_text": page_text(obs, handoffs=self.knowledge.handoffs, list_path=list_path)[-2500:]}
         content = ("用户本轮原话：" + prompt
                    + ("\n此前各轮原话：" + " / ".join(history[:-1]) if len(history) > 1 else "")
                    + "\n助手答复：" + answer
@@ -2685,7 +2715,8 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                         runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
                                                     "runtime_source", False)))
                 + page_scope_notice(getattr(goal_port, "review", None)), procedures,
-            lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked),
+            lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked,
+                                                  list_path=_own_list_path(goal_port, observation)),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
             owner.verification_messages, draft_steps, mutation_prefill,
             untraced_numbers=untraced_answer_numbers)

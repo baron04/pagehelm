@@ -976,6 +976,21 @@ class YudaoGoalData:
                             labels.setdefault(key, set()).add(label)
         return {key: next(iter(names)) for key, names in labels.items() if len(names) == 1}
 
+    def page_list_path(self, route: str) -> str | None:
+        """The admin API path this actor's menu page reads its own list from, or None.
+
+        A runtime list read or applied query names this page's list only when its path
+        is this one, the same path `scope_from_page` requires. None when the route is
+        not one menu page with a list entity (a record page, a report).
+        """
+        schema = self._known()
+        pages = [page for page in schema.pages if page.key == route and page.entity]
+        if len(pages) != 1:
+            return None
+        with self._lock:
+            spec = self._entities.get(pages[0].entity)
+        return "/admin-api/" + spec.list_path if spec is not None else None
+
     def choice_label(self, route: str, label: str, value: str) -> str:
         """Resolve bracket spacing only in this actor's native enum, never record names.
 

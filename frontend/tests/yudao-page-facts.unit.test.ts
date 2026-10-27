@@ -39,7 +39,7 @@ describe('native Yudao record and read completion facts', () => {
     ['/infra/config', 'Config', '/admin-api/infra/config/page'],
     ['/mall/trade/order', 'TradeOrder', '/admin-api/trade/order/page'],
   ])('retains the applied creation date range through XHR on %s', async (route, component, path) => {
-    mountedPage(route, component)
+    pageTable(mountedPage(route, component), [])
     class Request extends EventTarget {
       responseType = 'json'; response = {code: 0, data: {list: [], total: 0}}; status = 200
       open() {}
@@ -81,7 +81,7 @@ describe('native Yudao record and read completion facts', () => {
     } finally { facts.dispose() }
   })
   it('reports order filters only after the latest successful application read', async () => {
-    mountedPage('/erp/sale/order', 'SaleOrder')
+    pageTable(mountedPage('/erp/sale/order', 'SaleOrder'), [])
     const facts = createPageFacts()
     const url = '/admin-api/erp/sale-order/page?pageNo=1&pageSize=10&customerId=7&status=0'
       + '&orderTime%5B0%5D=2026-10-01%2000%3A00%3A00&orderTime%5B1%5D=2026-10-31%2023%3A59%3A59'
@@ -99,7 +99,7 @@ describe('native Yudao record and read completion facts', () => {
     expect(facts.readPageQuery()).toBeUndefined()
   })
   it('retains the sales business number through XHR only after its successful list read', async () => {
-    mountedPage('/erp/sale/order', 'SaleOrder')
+    pageTable(mountedPage('/erp/sale/order', 'SaleOrder'), [{id: 17}])
     class Request extends EventTarget {
       responseType = 'json'; response = {code:0,data:{list:[{id:17}],total:1}}; status = 200
       open() {}
@@ -131,7 +131,7 @@ describe('native Yudao record and read completion facts', () => {
     } finally {facts.dispose()}
   })
   it('binds any standard list read to query digests and paging without retaining raw values', async () => {
-    mountedPage('/erp/sale/order', 'SaleOrder')
+    const table = pageTable(mountedPage('/erp/sale/order', 'SaleOrder'), [{id: 1}])
     const facts = createPageFacts()
     const url = '/admin-api/erp/sale-order/page?pageNo=2&pageSize=10&no=SO-SYNTHETIC&remark=synthetic'
     const finish = facts.begin(url)!
@@ -146,6 +146,7 @@ describe('native Yudao record and read completion facts', () => {
     const next = facts.begin(url.replace('pageNo=2','pageNo=3'))!
     expect(facts.readPageRead()).toBeUndefined()
     await next(200,{code:0,data:{list:[],total:25}})
+    table.data = []
     expect(facts.readPageRead()?.revision).toBe(2)
     expect(facts.readPageRead()?.query_digest).toBe(hash([['no','SO-SYNTHETIC'],['remark','synthetic']]))
     const failure = facts.begin(url)!
@@ -153,7 +154,7 @@ describe('native Yudao record and read completion facts', () => {
     expect(facts.readPageRead()).toBeUndefined()
   })
   it('tracks a customer list tab as a newer read with a changed scene query', async () => {
-    mountedPage('/crm/customer', 'CrmCustomer')
+    const table = pageTable(mountedPage('/crm/customer', 'CrmCustomer'), [{id: 1}])
     const facts = createPageFacts()
     const path = '/admin-api/crm/customer/page'
     const first = facts.begin(`${path}?pageNo=1&pageSize=10&sceneType=1`)!
@@ -163,12 +164,88 @@ describe('native Yudao record and read completion facts', () => {
     const next = facts.begin(`${path}?pageNo=1&pageSize=10&sceneType=2`)!
     expect(facts.readPageRead()).toBeUndefined()
     await next(200, {code:0, data:{list:[{id:2}], total:2}})
+    table.data = [{id: 2}]
     expect(facts.readPageRead()).toMatchObject({path, revision:original.revision + 1})
     expect(facts.readPageRead()?.query_digest).not.toBe(original.query_digest)
     expect(facts.readPageQuery()).toEqual({path, parameters:{pageNo:'1', pageSize:'10', sceneType:'2'}})
   })
+  it('never takes a cached page refreshing its list on a route change for this page\'s list', async () => {
+    pageTable(mountedPage('/erp/finance/account', 'ErpAccount'), [{id: 1}, {id: 2}])
+    const facts = createPageFacts()
+    const own = facts.begin('/admin-api/erp/account/page?pageNo=1&pageSize=10')!
+    // The cached customer list reloads itself on every route change; its response lands last.
+    const cached = facts.begin('/admin-api/crm/customer/page?pageNo=1&pageSize=10&sceneType=1')!
+    await own(200, {code:0, data:{list:[{id:1}, {id:2}], total:2}})
+    await cached(200, {code:0, data:{list:[{id:101}, {id:102}, {id:103}], total:240}})
+    expect(facts.readPageQuery()).toEqual({path:'/admin-api/erp/account/page', parameters:{pageNo:'1', pageSize:'10'}})
+    expect(facts.readPageRead()).toMatchObject({path:'/admin-api/erp/account/page', total:2, rows:2})
+  })
+  it('reports no list until a visible table of the page renders its records', async () => {
+    const state = mountedPage('/erp/finance/account', 'ErpAccount')
+    const facts = createPageFacts()
+    await facts.begin('/admin-api/erp/account/page?pageNo=1&pageSize=10')!(200,
+      {code:0, data:{list:[{id:1}], total:1}})
+    expect(facts.readPageQuery()).toBeUndefined()
+    expect(facts.readPageRead()).toBeUndefined()
+    const table = pageTable(state, [{id:7}])
+    expect(facts.readPageRead()).toBeUndefined()
+    table.data = [{id:1}]
+    expect(facts.readPageRead()).toMatchObject({path:'/admin-api/erp/account/page', total:1, rows:1})
+    const root = state.element.querySelector('.el-table')! as HTMLElement
+    root.getBoundingClientRect = () => ({width:0, height:0} as DOMRect)
+    expect(facts.readPageRead()).toBeUndefined()
+    root.getBoundingClientRect = () => ({width:50, height:20} as DOMRect)
+    // A table inside a dialog (an editor's lines) is not the page's list.
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    state.element.append(dialog)
+    dialog.append(root)
+    expect(facts.readPageRead()).toBeUndefined()
+    state.element.append(root)
+    dialog.remove()
+    expect(facts.readPageRead()).toMatchObject({path:'/admin-api/erp/account/page'})
+  })
+  it('reports neither list when page tables render two endpoints at once', async () => {
+    const state = mountedPage('/mes/pro/task', 'ProTask')
+    pageTable(state, [{id:1}])
+    pageTable(state, [{id:9}])
+    const facts = createPageFacts()
+    await facts.begin('/admin-api/mes/pro/task/page?pageNo=1&pageSize=10')!(200, {code:0, data:{list:[{id:1}], total:1}})
+    await facts.begin('/admin-api/mes/pro/work-order/page?pageNo=1&pageSize=10')!(200,
+      {code:0, data:{list:[{id:9}], total:1}})
+    expect(facts.readPageQuery()).toBeUndefined()
+    expect(facts.readPageRead()).toBeUndefined()
+  })
+  it('keeps a shared endpoint to its newest request, and only while the table renders it', async () => {
+    pageTable(mountedPage('/crm/customer/pool', 'CrmCustomerPool'), [{id:5}])
+    const facts = createPageFacts()
+    const path = '/admin-api/crm/customer/page'
+    // The cached customer list's watcher sends first; the pool's own read follows.
+    const cached = facts.begin(`${path}?pageNo=1&pageSize=10&sceneType=1`)!
+    const own = facts.begin(`${path}?pageNo=1&pageSize=10&pool=true`)!
+    await cached(200, {code:0, data:{list:[{id:101}], total:240}})
+    await own(200, {code:0, data:{list:[{id:5}], total:1}})
+    expect(facts.readPageQuery()).toEqual({path, parameters:{pageNo:'1', pageSize:'10', pool:'true'}})
+    // Sent the other way round, the newest request renders nowhere: report nothing rather than it.
+    const early = facts.begin(`${path}?pageNo=1&pageSize=10&pool=true`)!
+    const late = facts.begin(`${path}?pageNo=1&pageSize=10&sceneType=1`)!
+    await early(200, {code:0, data:{list:[{id:5}], total:1}})
+    await late(200, {code:0, data:{list:[{id:101}], total:240}})
+    expect(facts.readPageQuery()).toBeUndefined()
+    expect(facts.readPageRead()).toBeUndefined()
+  })
+  it('matches records without IDs only by their row count and the one visible total', async () => {
+    pageTable(mountedPage('/erp/finance/account', 'ErpAccount'), [{name:'一般户'}, {name:'现金'}], 2)
+    const facts = createPageFacts()
+    await facts.begin('/admin-api/erp/account/page?pageNo=1&pageSize=10')!(200,
+      {code:0, data:{list:[{name:'一般户'}, {name:'现金'}], total:2}})
+    expect(facts.readPageRead()).toMatchObject({path:'/admin-api/erp/account/page', total:2, rows:2})
+    await facts.begin('/admin-api/crm/customer/page?pageNo=1&pageSize=10')!(200,
+      {code:0, data:{list:[{name:'甲'}, {name:'乙'}], total:240}})
+    expect(facts.readPageRead()).toMatchObject({path:'/admin-api/erp/account/page', total:2})
+  })
   it('settles the current pending count when another list read starts before hashing completes', async () => {
-    mountedPage('/erp/sale/order', 'SaleOrder')
+    pageTable(mountedPage('/erp/sale/order', 'SaleOrder'), [])
     const facts = createPageFacts()
     const first = facts.begin('/admin-api/erp/sale-order/page?pageNo=1&pageSize=10')!
     const oldDigest = first(200, {code:0,data:{list:[],total:0}})
@@ -470,6 +547,27 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
   app.config.globalProperties.$router = {currentRoute: {value: active}}
   Object.assign(document.querySelector('#app')!, {__vue_app__: app})
   return {app, active, matched, instance, routerView, appView, keepAlive, component, element, section}
+}
+
+/** A visible Element Plus table of the mounted page, bound to the records it renders.
+ * Replace the returned `data` as the page re-renders after a read. */
+function pageTable(state: ReturnType<typeof mountedPage>, data: object[], total?: number) {
+  const root = document.createElement('div')
+  root.className = 'el-table'
+  root.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+  state.element.append(root)
+  if (total !== undefined) {
+    const shown = document.createElement('span')
+    shown.className = 'el-pagination__total'
+    shown.textContent = `共 ${total} 条`
+    shown.getBoundingClientRect = () => ({width: 50, height: 20} as DOMRect)
+    state.element.append(shown)
+  }
+  const props = {data}
+  const table = {...state.instance, type: {name: 'ElTable'}, props, subTree: {type: 'div', el: root, children: []}}
+  state.instance.subTree.children = [...(state.instance.subTree.children || []),
+    {component: table} as unknown as NativeVNode]
+  return props
 }
 
 describe('native Yudao mounted navigation identity', () => {
@@ -945,7 +1043,7 @@ describe('native date range selection uses only an exact owned live calendar', (
 
 describe('applied query facets for target settlement', () => {
   it('reports visible query-form labels only while an applied read exists', async () => {
-    mountedPage('/mall/trade/order', 'TradeOrder')
+    pageTable(mountedPage('/mall/trade/order', 'TradeOrder'), [{id: 1}])
     const facts = createPageFacts()
     // No applied read yet: nothing may be claimed as an applied condition.
     document.body.insertAdjacentHTML('beforeend',

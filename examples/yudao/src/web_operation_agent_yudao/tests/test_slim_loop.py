@@ -36,7 +36,7 @@ from web_operation_agent_yudao.skill_packages import packaged_skills
 from web_operation_agent_yudao.api_content import BEGIN, END
 from web_operation_agent_yudao.answer_numbers import untraced
 from web_operation_agent_yudao.slim_loop import (SYSTEM, TOOLS, VERIFY_SYSTEM, ActorKnowledge, SlimTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _EARLIER_REQUESTS, _WRITE_INTENT, _draft_only_request, _unrequested_draft_fields, _read_only_status_question, _tabs_not_shown,
-                                                 _business_handoff_ready, _commits, _fields, _lines, _page_lines, _scroll_anchor, _shown,
+                                                 _business_handoff_ready, _commits, _fields, _lines, _own_list_facts, _own_list_path, _page_lines, _scroll_anchor, _shown,
                                                  _today, conventions_text, page_text, system_text)
 from web_operation_agent_yudao.write_intent import WriteIntent
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -308,6 +308,52 @@ class PageTextTests(unittest.TestCase):
         self.assertIn('"customerId": "7"', text)
         self.assertIn("Customer=Acme", text)
         self.assertIn("已标出的控件: OK", text)
+
+    def test_a_cached_pages_refresh_is_not_stated_as_this_pages_list(self):
+        own = "/admin-api/erp/account/page"
+        foreign = "/admin-api/crm/customer/page"
+        read = {"path": foreign, "query_digest": "0" * 64, "query_fields": {},
+                "revision": 3, "page": 1, "page_size": 10, "total": 240, "rows": 10}
+        query = {"path": foreign, "parameters": {"pageNo": "1", "sceneType": "1"}}
+        obs = replace(observation(), url="https://synthetic.test/erp/finance/account",
+                      page_read=read, page_query=query)
+        text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()), list_path=own)
+        self.assertNotIn("共 240 条", text)
+        self.assertNotIn("页面生效的查询", text)
+        # With no map answer the runtime's own table binding stands alone.
+        text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()))
+        self.assertIn("共 240 条", text)
+        # Only the page's own endpoint is stated as its list and applied query.
+        obs = replace(obs, page_read={**read, "path": own},
+                      page_query={**query, "path": own})
+        text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()), list_path=own)
+        self.assertIn("共 240 条", text)
+        self.assertIn("页面生效的查询", text)
+
+    def test_an_unreadable_map_verifies_no_list_at_all(self):
+        read = {"path": "/admin-api/erp/account/page", "query_digest": "0" * 64,
+                "query_fields": {}, "revision": 1, "page": 1, "page_size": 10,
+                "total": 2, "rows": 2}
+        obs = replace(observation(), url="https://synthetic.test/erp/finance/account",
+                      page_read=read)
+        text = page_text(obs, handoffs=SessionHandoffPolicy.extending(()), list_path="")
+        self.assertNotIn("共 2 条", text)
+
+    def test_the_pages_own_list_path_comes_from_the_actor_map(self):
+        obs = replace(observation(), url="https://synthetic.test/erp/finance/account")
+        resolve = lambda route: "/admin-api/erp/account/page" if route == "/erp/finance/account" else None
+        self.assertEqual(_own_list_path(NS(data=NS(page_list_path=resolve)), obs),
+                         "/admin-api/erp/account/page")
+        self.assertIsNone(_own_list_path(NS(), obs))
+        self.assertIsNone(_own_list_path(NS(data=NS()), obs))
+
+        def broken(route):
+            raise DataRefused("map unreadable")
+        self.assertEqual(_own_list_path(NS(data=NS(page_list_path=broken)), obs), "")
+        read = {"path": "/admin-api/erp/account/page", "query_digest": "0" * 64,
+                "query_fields": {}, "revision": 1, "page": 1, "page_size": 10,
+                "total": 2, "rows": 2}
+        self.assertEqual(_own_list_facts(replace(obs, page_read=read), ""), (None, None))
 
     def test_the_date_told_is_the_application_s_reference_day_or_today_there(self):
         self.assertEqual(_today("2026-10-03", "Asia/Shanghai"), "2026-10-03")

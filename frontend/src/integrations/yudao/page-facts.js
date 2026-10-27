@@ -153,17 +153,53 @@ function matchedPageInstance(app, active, matched) {
   return !stack.length && candidates.size === 1 ? candidates.values().next().value : undefined
 }
 
+/** Row identities of a list response: its record IDs, or none when any row lacks one. */
+function listRows(rows) {
+  const ids = rows.map(row => row && (typeof row.id === 'number' && Number.isSafeInteger(row.id)
+    || typeof row.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(row.id)) ? String(row.id) : null)
+  return {count: rows.length, ids: ids.every(id => id !== null) ? ids : null}
+}
+
+/** Whether a table's own records are this list response's rows. Without record IDs,
+ * the row count and the page's one visible total must agree instead. */
+function rendersList(list, data, totals) {
+  if (data.length !== list.rows.count) return false
+  if (!list.rows.ids) return totals.length === 1 && totals[0] === list.total
+  const shown = data.map(row => row?.id === undefined || row?.id === null ? null : String(row.id))
+  return shown.every(id => id !== null) && shown.sort().join('\n') === [...list.rows.ids].sort().join('\n')
+}
+
 export function createPageFacts({view = window, doc = document} = {}) {
-  let route = '', locationKey = '', generation = 0, record = null, appliedQuery = null, appliedRead = null, disposed = false
+  let route = '', locationKey = '', generation = 0, record = null, appliedLedger = null, listSerial = 0, disposed = false
   const reads = new Map()
+  // The latest list request per endpoint. A list is the page's own query only while a
+  // visible table of the page renders its rows (pageList): a cached page refreshing its
+  // list on every route change, or another list on the page, never stands in for it.
+  const lists = new Map()
   const visible = element => Boolean(element && element.getBoundingClientRect().width
     && element.getBoundingClientRect().height && !element.closest('[hidden],[aria-hidden="true"]'))
   function current() {
     const next = view.location.pathname + view.location.search + view.location.hash
     if (next !== locationKey) {
-      locationKey = next; route = view.location.pathname; generation++; record = null; appliedQuery = null; appliedRead = null; reads.clear()
+      locationKey = next; route = view.location.pathname; generation++; record = null; appliedLedger = null
+      reads.clear(); lists.clear()
     }
     return generation
+  }
+  function pageList() {
+    const tables = []
+    for (const root of Array.from(doc.querySelectorAll('.el-table'))) {
+      if (!visible(root) || root.closest('[role="dialog"],dialog')) continue
+      const data = pageComponentForRoot(root, 'ElTable')?.instance?.props?.data
+      if (Array.isArray(data)) tables.push(data)
+    }
+    if (!tables.length || tables.length > 8) return undefined
+    const totals = Array.from(doc.querySelectorAll('.el-pagination__total'))
+      .filter(element => visible(element) && !element.closest('[role="dialog"],dialog'))
+      .map(element => Number((element.textContent || '').replace(/[^0-9]/g, '')))
+    // Two endpoints both rendered are ambiguous: report neither.
+    const matching = Array.from(lists.values()).filter(list => list.rows && tables.some(data => rendersList(list, data, totals)))
+    return matching.length === 1 ? matching[0] : undefined
   }
   function begin(input, method = 'GET', readQuery) {
     if (disposed || String(method).toUpperCase() !== 'GET') return null
@@ -172,22 +208,28 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/')) return null
     const heldGeneration = current()
     readQuery = readQuery === undefined ? listReadQuery(url, view) : readQuery
-    if (url.pathname.endsWith('/page')) appliedRead = null
     const ledger = route === '/fms/ledger/general' && url.pathname === '/admin-api/fms/ledger/general/list'
     const order = route === '/erp/sale/order' && url.pathname === '/admin-api/erp/sale-order/page'
     const creation = creationRangeList(route, url.pathname)
     let query = null
     if (ledger || order || creation) {
-      appliedQuery = null
+      if (ledger) appliedLedger = null
       // Application-owned scalar query observation for the first native report.
       // Retain only reviewed query fields, never headers, bodies or arbitrary URLs.
       query = ledger ? ledgerQuery(url) : order ? orderQuery(url) : creationRangeQuery(url)
     } else if (url.pathname.endsWith('/page') && route && route.indexOf('/detail/') < 0) {
-      // Any other collection page's own list read: the tracked GET is the page's
-      // applied query. Scalar projection stays on reviewed lists; this general
+      // Any other collection list read may be the page's applied query once a page
+      // table renders it. Scalar projection stays on reviewed lists; this general
       // capture feeds applied-query facets for target settlement on every list.
-      appliedQuery = null
       query = {path: url.pathname, parameters: Object.fromEntries(url.searchParams)}
+    }
+    // A newer request to an endpoint replaces its earlier list at send, failures included.
+    let list = null
+    if (url.pathname.endsWith('/page')) {
+      list = {serial: ++listSerial, query: null, read: null, rows: null, total: null}
+      lists.delete(url.pathname)
+      if (lists.size >= 16) lists.delete(lists.keys().next().value)
+      lists.set(url.pathname, list)
     }
     const detail = recordDetailRoute(route)
     const isRecord = Boolean(detail && url.pathname === `/admin-api/${detail[1]}/get`)
@@ -221,10 +263,11 @@ export function createPageFacts({view = window, doc = document} = {}) {
       if (latest.serial !== serial) return
       const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
       latest.failed = !ok
-      if ((ledger && ok && query && Array.isArray(body?.data)) ||
-          (order && ok && query && Array.isArray(body?.data?.list)) ||
-          (query && ok && url.pathname.endsWith('/page') && Array.isArray(body?.data?.list))) {
-        appliedQuery = query
+      if (ledger && ok && query && Array.isArray(body?.data)) appliedLedger = query
+      if (list && lists.get(url.pathname) === list && ok && Array.isArray(body?.data?.list)) {
+        list.rows = listRows(body.data.list)
+        list.total = Number.isSafeInteger(body.data.total) ? body.data.total : null
+        list.query = query
       }
       if (isRecord && ok) {
         const id = body?.data?.id, name = body?.data?.name
@@ -239,8 +282,9 @@ export function createPageFacts({view = window, doc = document} = {}) {
         latest.pending++
         const total = body.data.total, rows = body.data.list.length, path = url.pathname
         return readQuery.digest.then(digest => {
-          if (digest && !disposed && current() === heldGeneration && reads.get(key)?.serial === serial && !latest.failed) {
-            appliedRead = {path, ...digest, revision: serial,
+          if (digest && list && !disposed && current() === heldGeneration && reads.get(key)?.serial === serial
+              && !latest.failed && lists.get(path) === list) {
+            list.read = {path, ...digest, revision: serial,
               page: readQuery.page, page_size: readQuery.size, total, rows}
           }
         }).finally(() => {
@@ -284,13 +328,17 @@ export function createPageFacts({view = window, doc = document} = {}) {
   }
   function readPageQuery() {
     current()
-    if (!appliedQuery || readPageBlocker() || readPageRoute() !== route) return undefined
-    return {path: appliedQuery.path, parameters: {...appliedQuery.parameters}}
+    if (!appliedLedger && !Array.from(lists.values()).some(list => list.query)) return undefined
+    if (readPageBlocker() || readPageRoute() !== route) return undefined
+    const query = appliedLedger || pageList()?.query
+    return query ? {path: query.path, parameters: {...query.parameters}} : undefined
   }
   function readPageRead() {
     current()
-    if (!appliedRead || readPageBlocker() || readPageRoute() !== route) return undefined
-    return {...appliedRead}
+    if (!Array.from(lists.values()).some(list => list.read)) return undefined
+    if (readPageBlocker() || readPageRoute() !== route) return undefined
+    const read = pageList()?.read
+    return read ? {...read} : undefined
   }
   function readPageRoute() {
     if (disposed) return undefined
@@ -377,10 +425,11 @@ export function createPageFacts({view = window, doc = document} = {}) {
   // Applied query facets for target settlement: one entry per query-form control
   // whose selection or value is visibly non-default. Names are the rendered field
   // labels — what a person sees and what set_target declares. Pagination, dialogs
-  // and hidden controls are not page conditions. The applied GET (appliedQuery)
-  // must exist: a form the page has not yet read proves no applied condition.
+  // and hidden controls are not page conditions. The applied GET (the ledger's, or the
+  // list a page table renders) must exist: a form the page has not yet read proves no
+  // applied condition.
   function readPageFacets() {
-    if (disposed || !appliedQuery || readPageBlocker()) return []
+    if (disposed || readPageBlocker() || !(appliedLedger || pageList()?.query)) return []
     const facts = []
     for (const item of Array.from(doc.querySelectorAll('.el-form-item')).filter(visible)) {
       if (item.closest('[role="dialog"],dialog')) continue
@@ -396,7 +445,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
   }
   return {begin, readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
     readPageFacets,
-    dispose() {disposed = true; reads.clear(); record = null; appliedQuery = null; appliedRead = null}}
+    dispose() {disposed = true; reads.clear(); lists.clear(); record = null; appliedLedger = null}}
 }
 
 /** What this page's own API requests carry while the assistant is working it. */

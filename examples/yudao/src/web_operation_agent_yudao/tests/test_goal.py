@@ -361,6 +361,15 @@ class YudaoGoalDataTests(unittest.TestCase):
         self.assertEqual(index.page("/erp/purchase/supplier").breadcrumb, "ERP 系统 / 采购管理 / 供应商信息")
         self.assertIn("合同管理", index.entity("crm/contract").aliases)
 
+    def test_the_pages_own_list_path_is_its_menu_lists_documented_endpoint(self):
+        self.assertEqual(self.data.page_list_path("/crm/customer"), "/admin-api/crm/customer/page")
+        self.assertEqual(self.data.page_list_path("/crm/contract"), "/admin-api/crm/contract/page")
+        # A page reading another list than its path's reports that list's endpoint.
+        self.assertEqual(self.data.page_list_path("/bpm/task/my"), "/admin-api/bpm/process-instance/my-page")
+        # A page with no documented list, and a route that is no menu page, name no path.
+        self.assertIsNone(self.data.page_list_path("/crm/customer/pool"))
+        self.assertIsNone(self.data.page_list_path("/orders/detail/7"))
+
     def test_department_number_is_a_readable_field_of_the_actor_visible_record(self):
         class DepartmentClient(_Client):
             def get(self, path, **params):
