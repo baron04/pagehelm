@@ -1,13 +1,13 @@
 {
  "schema_version": 1,
  "status": "reviewed",
- "review": "The owner decided on 2026-09-29: 客户 is the CRM customer, 产品 the ERP product, and 成交 a CRM contract whose approval passed; and, as proposed, that 订单 is every ERP sales order whatever its approval, that 回款 is money received while 回款计划 are the plans and 待回款 the plans with no receipt yet, that an approval process is one of the person's own processes (我的流程), and that 我能看的 is every record the account may read. Terms are kept narrow where a word sits inside a field's name (审批 in 审批状态), and longer words (采购订单, 进销存客户, CRM 产品) are entries of their own so that they keep their meaning. Meanings are written in the goal index's own terms. The owner decided on 2026-09-30 that, of a 商城订单, 未付款/没付款/还没付款 (and 未支付) mean 订单状态 = 待支付: the mall tracks payment as the order state, and the boolean 支付 field answers a different question. The owner decided on 2026-10-19 that 新签 dates a CRM contract by its 下单日期, not by when it was entered; that 产品 is the CRM product when the person is on a CRM product page, the module they are looking at winning over the ERP default; and that 公告 is a 通知公告 record whose 公告类型 is 公告, the whole list being 通知公告.",
+ "review": "The owner decided on 2026-09-29: 客户 is the CRM customer, 产品 the ERP product, and 成交 a CRM contract whose approval passed; and, as proposed, that 订单 is every ERP sales order whatever its approval, that 回款 is money received while 回款计划 are the plans and 待回款 the plans with no receipt yet, that an approval process is one of the person's own processes (我的流程), and that 我能看的 is every record the account may read. Terms are kept narrow where a word sits inside a field's name (审批 in 审批状态), and longer words (采购订单, 进销存客户, CRM 产品) are entries of their own so that they keep their meaning. Meanings are written in the goal index's own terms. The owner decided on 2026-09-30 that, of a 商城订单, 未付款/没付款/还没付款 (and 未支付) mean 订单状态 = 待支付: the mall tracks payment as the order state, and the boolean 支付 field answers a different question. The owner decided on 2026-10-19 that 新签 dates a CRM contract by its 下单日期, not by when it was entered; that 产品 is the CRM product when the person is on a CRM product page, the module they are looking at winning over the ERP default; and that 公告 is a 通知公告 record whose 公告类型 is 公告, the whole list being 通知公告. The owner decided on 2026-10-28 that the module they are looking at wins for 客户 and 公告 as it does for 产品: on an ERP page 客户 is the ERP customer, and on an OA 办公协同 page 公告 is an OA 公告.",
  "conventions": [
   {
    "terms": [
     "客户"
    ],
-   "meaning": "crm/customer (CRM 客户); the ERP customer (erp/customer) only when the request says 进销存 or ERP",
+   "meaning": "crm/customer (CRM 客户); the ERP customer (erp/customer) when the request says 进销存 or ERP or the person is on an ERP page (the module they are looking at wins)",
    "records": {
     "entity": "crm/customer",
     "where": []
@@ -173,7 +173,7 @@
    "terms": [
     "公告"
    ],
-   "meaning": "system/notice records whose 公告类型 is 公告; every 通知公告 record (通知 and 公告) only when the request means the whole 通知公告 list",
+   "meaning": "system/notice records whose 公告类型 is 公告; an OA 公告 (OA 办公协同 › 公告管理) when the person is on an OA 办公协同 page (the module they are looking at wins); every 通知公告 record (通知 and 公告) only when the request means the whole 通知公告 list",
    "records": {
     "entity": "system/notice",
     "where": [
