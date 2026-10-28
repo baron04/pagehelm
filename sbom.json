@@ -17750,6 +17750,41 @@
       "hashes": [
         {
           "alg": "SHA-256",
+          "content": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "attrs",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "license_expression"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "examples/odoo, web-operation-agent"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:pypi/attrs@26.1.0",
+      "type": "library",
+      "version": "26.1.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
           "content": "a5876d0a60355af98d535c47f6cd6eb0f8a432396dab26845d380b92f8412422"
         }
       ],
@@ -17780,6 +17815,76 @@
       "purl": "pkg:pypi/greenlet@3.5.6",
       "type": "library",
       "version": "3.5.6"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "jsonschema",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "license_expression"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "examples/odoo, web-operation-agent"
+        },
+        {
+          "name": "woa:direct",
+          "value": "true"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:pypi/jsonschema@4.26.0",
+      "type": "library",
+      "version": "4.26.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "jsonschema-specifications",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "license_expression"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "examples/odoo, web-operation-agent"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:pypi/jsonschema-specifications@2025.9.1",
+      "type": "library",
+      "version": "2025.9.1"
     },
     {
       "hashes": [
@@ -17850,6 +17955,76 @@
       "purl": "pkg:pypi/pyee@13.0.1",
       "type": "library",
       "version": "13.0.1"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "referencing",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "license_expression"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "examples/odoo, web-operation-agent"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:pypi/referencing@0.37.0",
+      "type": "library",
+      "version": "0.37.0"
+    },
+    {
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e21c1429e205828ea886a2293a4a2c8e01f4c25d9893ca330e97a6cf73f52e7b"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "rpds-py",
+      "properties": [
+        {
+          "name": "woa:licenseSource",
+          "value": "license_expression"
+        },
+        {
+          "name": "woa:requiredBy",
+          "value": "examples/odoo, web-operation-agent"
+        },
+        {
+          "name": "woa:direct",
+          "value": "false"
+        },
+        {
+          "name": "woa:shipped",
+          "value": "true"
+        }
+      ],
+      "purl": "pkg:pypi/rpds-py@2026.9.1",
+      "type": "library",
+      "version": "2026.9.1"
     },
     {
       "hashes": [

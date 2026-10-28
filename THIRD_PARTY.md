@@ -12,7 +12,7 @@ optional test applications or their dependency trees as product dependencies.
 resolves every distribution's runtime closure and both npm lockfiles into
 [`requirements.lock`](requirements.lock) (exact versions with sha256 hashes,
 installable with `--require-hashes`) and [`sbom.json`](sbom.json) (CycloneDX 1.5,
-512 components). `--check` runs offline in `scripts/qualify.sh` and fails when the
+517 components). `--check` runs offline in `scripts/qualify.sh` and fails when the
 lock, the SBOM, the npm lockfiles, the pinned browser asset and this document stop
 agreeing. Anything whose bytes reach a user must be named here by name; build-only
 tooling is inventoried in the SBOM and covered by the blanket paragraph below.
@@ -31,14 +31,20 @@ it; see *The assistant panel bundle* below.
 | Component | Constraint | License | Source | Use |
 | --- | --- | --- | --- | --- |
 | [PyYAML](https://github.com/yaml/pyyaml) (`PyYAML`) | `>=6.0.2,<7` | MIT | PyPI and the linked source repository | Safe YAML parser for standard Skill metadata; aliases, tags and duplicate keys are rejected |
+| [jsonschema](https://github.com/python-jsonschema/jsonschema) (`jsonschema`) | `>=4.23,<5` | MIT | PyPI and the linked source repository | Draft 2020-12 validation of goal/skill payloads on the server side |
 | [Playwright for Python](https://github.com/microsoft/playwright-python) (`playwright`) | `>=1.52,<1.53` | Apache-2.0 | PyPI and the linked source repository | Browser worker and browser-build attestation; installed separately from this wheel |
 
-Playwright 1.52 metadata declares `pyee>=13,<14` and
-`greenlet>=3.1.1,<4.0.0`; pyee in turn requires `typing-extensions`.
+jsonschema 4.26.0 metadata declares `attrs`, `jsonschema-specifications`,
+`referencing` and `rpds-py`; Playwright 1.52 metadata declares `pyee>=13,<14`
+and `greenlet>=3.1.1,<4.0.0`; pyee in turn requires `typing-extensions`.
 Their licenses and sources are:
 
 | Transitive package | License | Source |
 | --- | --- | --- |
+| `attrs` | MIT | [python-attrs/attrs](https://github.com/python-attrs/attrs) |
+| `jsonschema-specifications` | MIT | [python-jsonschema/jsonschema-specifications](https://github.com/python-jsonschema/jsonschema-specifications) |
+| `referencing` | MIT | [python-jsonschema/referencing](https://github.com/python-jsonschema/referencing) |
+| `rpds-py` | MIT | [rpds/rpds-py](https://github.com/crate-py/rpds) |
 | `pyee` | MIT | [jfhbrook/pyee](https://github.com/jfhbrook/pyee) |
 | `greenlet` | MIT AND PSF-2.0 | [python-greenlet/greenlet](https://github.com/python-greenlet/greenlet) |
 | `typing-extensions` | PSF-2.0 | [python/typing_extensions](https://github.com/python/typing_extensions) |
