@@ -26,6 +26,8 @@ class LocalError(RuntimeError):
 @dataclass(frozen=True)
 class Configuration:
     number: int = 1
+    test_clock: str | None = None
+    test_clock_library: str | None = None
 
     def __post_init__(self):
         if type(self.number) is not int or self.number not in (1, 2):
@@ -122,7 +124,10 @@ def source_composition(config: Configuration) -> str:
     deployment.update((config.state / "agent.env").read_bytes())
     agent = {"volumes": source_mounts(config),
              "labels": {"org.web-operation-agent.deployment": deployment.hexdigest()}}
-    return json.dumps({"services": {"agent": agent}}, sort_keys=True, indent=2) + "\n"
+    from test_clock import composition
+    clockfile = config.state / "test-clock.json"
+    clock = json.loads(clockfile.read_text()) if clockfile.is_file() else None
+    return json.dumps({"services": {"agent": agent, **composition(clock)}}, sort_keys=True, indent=2) + "\n"
 
 
 def source_digest(*, frontend_only: bool = False) -> str:

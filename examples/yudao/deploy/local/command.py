@@ -20,6 +20,7 @@ import urllib.request
 
 import assets
 import configuration as cfg
+import test_clock
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -77,6 +78,8 @@ def application_ready(config: cfg.Configuration, *, internal=False) -> bool:
 
 
 def check(config: cfg.Configuration):
+    if config.test_clock:
+        test_clock.settings(config.test_clock, config.test_clock_library)
     missing = [tool for tool in ("docker", "npm", "node") if not shutil.which(tool)]
     if missing:
         raise cfg.LocalError("缺少命令：" + ", ".join(missing))
@@ -142,6 +145,13 @@ def prepare(config: cfg.Configuration, current=None) -> bool:
     if any("\n" in value or "\r" in value or "\0" in value for value in model.values()):
         raise cfg.LocalError("模型环境配置必须是单行值。")
     changed = write_private(config.state / "agent.env", "".join(f"{key}={value}\n" for key, value in sorted(model.items())))
+    clockfile = config.state / "test-clock.json"
+    if config.test_clock:
+        previous = json.loads(clockfile.read_text()) if clockfile.is_file() else None
+        clock = test_clock.settings(config.test_clock, config.test_clock_library, previous)
+        write_private(clockfile, json.dumps(clock, sort_keys=True) + "\n")
+    else:
+        clockfile.unlink(missing_ok=True)
     source = cfg.source_composition(config)
     changed = write_private(config.state / "source.compose.json", source) or changed
     expected = json.loads(source)["services"]["agent"]["labels"]["org.web-operation-agent.deployment"]
@@ -151,9 +161,17 @@ def prepare(config: cfg.Configuration, current=None) -> bool:
 
 def ensure_application(config: cfg.Configuration):
     services = set(cfg.compose(config, "ps", "--services", "--status", "running", capture=True).split())
-    if {"mysql", "redis", "server", "web"} <= services and application_ready(config, internal=True):
+    expected = json.loads((config.state / "source.compose.json").read_text())["services"]["server"]["labels"]["org.web-operation-agent.test-clock"]
+    applied = subprocess.run(["docker", "inspect", "--format",
+        '{{index .Config.Labels "org.web-operation-agent.test-clock"}}',
+        config.project + "-server-1", config.project + "-mysql-1"], capture_output=True, text=True)
+    clock_matches = applied.returncode == 0 and len(applied.stdout.splitlines()) == 2 and all(v == expected or (expected == "real" and v == "<no value>") for v in applied.stdout.splitlines())
+    if clock_matches and {"mysql", "redis", "server", "web"} <= services and application_ready(config, internal=True):
         print("复用本环境的业务服务和数据。", flush=True)
         return
+    if not clock_matches and "agent" in services:
+        # Drain assistant metadata reads before changing the application clock.
+        cfg.compose(config, "stop", "agent")
     cfg.compose(config, "up", "-d", "--no-build", "mysql", "redis", "server", "web")
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
@@ -238,12 +256,18 @@ def log_text(text: str, config: cfg.Configuration) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="./local", description="本地双实例合成数据验收；默认环境1。")
     parser.add_argument("--env", type=int, choices=(1, 2), default=1, dest="environment")
+    parser.add_argument("--test-clock", help="仅测试：从带+08:00时区的ISO时间开始走时")
+    parser.add_argument("--test-clock-library", help="与容器匹配的libfaketimeMT.so.1绝对路径")
     parser.add_argument("action", nargs="?", default="start", choices=("start", "restart", "stop", "status", "check", "logs"))
     parser.add_argument("component", nargs="?", choices=("app",), help="仅 logs 可选 app")
     args = parser.parse_args(argv)
     if args.component and args.action != "logs":
         parser.error("app仅用于logs")
-    config = cfg.Configuration(args.environment)
+    if bool(args.test_clock) != bool(args.test_clock_library):
+        parser.error("--test-clock与--test-clock-library必须同时指定")
+    if args.test_clock and args.action not in {"start", "restart", "check"}:
+        parser.error("测试时钟只用于start/restart/check")
+    config = cfg.Configuration(args.environment, args.test_clock, args.test_clock_library)
     try:
         if args.action == "check":
             check(config)

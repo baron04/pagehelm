@@ -44,6 +44,41 @@ class LauncherTests(unittest.TestCase):
         self.config = cfg.Configuration()
         self.config.state.mkdir(parents=True)
 
+    def test_running_clock_reuses_one_offset_and_is_local_only(self):
+        library = self.root / "libfaketimeMT.so.1"
+        library.write_bytes(b"\x7fELFsynthetic")
+        with patch.object(command.test_clock.time, "time_ns", return_value=1_800_000_000_000_000_000):
+            clock = command.test_clock.settings("2026-10-25T09:00:00+08:00", str(library))
+        with patch.object(command.test_clock.time, "time_ns", side_effect=AssertionError("must not reset")):
+            self.assertEqual(clock, command.test_clock.settings(clock["target"], str(library), clock))
+        services = command.test_clock.composition(clock)
+        self.assertEqual({"mysql", "server"}, set(services))
+        self.assertEqual("mysql", services["mysql"]["user"])
+        for service in services.values():
+            self.assertEqual("1", service["environment"]["FAKETIME_DONT_FAKE_MONOTONIC"])
+            self.assertTrue(service["volumes"][0]["read_only"])
+        for service in command.test_clock.composition(None).values():
+            self.assertNotIn("environment", service)
+            self.assertNotIn("volumes", service)
+            self.assertNotIn("user", service)
+
+    def test_clock_rejects_unzoned_time_and_non_library_before_start(self):
+        library = self.root / "library"
+        library.write_bytes(b"not an ELF")
+        for target in ("2026-10-25", "2026-10-25T09:00:00Z", "2026-10-25T09:00:00+08:00"):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                command.test_clock.settings(target, str(library))
+
+    def test_clock_off_clears_private_setting_and_compose_injection(self):
+        (self.config.state / "application.env").write_text("YUDAO_DB_PASSWORD=synthetic")
+        (self.config.state / "test-clock.json").write_text('{"offset_ms":-100}')
+        with patch.object(cfg, "load_model_environment", return_value={"AGENT_OPENAI_BASE_URL":"http://model.invalid", "AGENT_OPENAI_API_KEY":"synthetic"}):
+            command.prepare(self.config)
+        self.assertFalse((self.config.state / "test-clock.json").exists())
+        services = json.loads((self.config.state / "source.compose.json").read_text())["services"]
+        self.assertNotIn("environment", services["mysql"])
+        self.assertNotIn("volumes", services["server"])
+
     def current(self, config=None):
         config = config or self.config
         return {"running": True, "image": cfg.image_name(), "ports": {"48163/tcp": [{"HostPort": str(config.port)}]}, "labels": {
@@ -202,9 +237,21 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(receipt, (directory / "build.json").read_text())
         self.assertEqual(json.loads(receipt), json.loads((directory / "compose-build.json").read_text()))
 
-    def test_healthy_application_does_not_run_compose_up(self):
+    def test_clock_change_quiesces_assistant_before_recreating_application(self):
+        (self.config.state / "source.compose.json").write_text(json.dumps({"services": command.test_clock.composition(None)}))
         with patch.object(cfg, "compose", return_value="mysql\nredis\nserver\nweb\nagent") as compose, \
-                patch.object(command, "application_ready", return_value=True), redirect_stdout(io.StringIO()):
+                patch.object(command, "application_ready", return_value=True), \
+                patch.object(command.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "old-offset\nold-offset\n")):
+            command.ensure_application(self.config)
+        self.assertEqual([("ps", "--services", "--status", "running"), ("stop", "agent"),
+            ("up", "-d", "--no-build", "mysql", "redis", "server", "web")],
+            [c.args[1:] for c in compose.call_args_list])
+
+    def test_healthy_application_does_not_run_compose_up(self):
+        (self.config.state / "source.compose.json").write_text(json.dumps({"services": command.test_clock.composition(None)}))
+        with patch.object(cfg, "compose", return_value="mysql\nredis\nserver\nweb\nagent") as compose, \
+                patch.object(command, "application_ready", return_value=True), \
+                patch.object(command.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "<no value>\n<no value>\n")), redirect_stdout(io.StringIO()):
             command.ensure_application(self.config)
         compose.assert_called_once_with(self.config, "ps", "--services", "--status", "running", capture=True)
 
