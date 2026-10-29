@@ -247,7 +247,9 @@ export class Supervisor {
     this.current = {kind: 'running', runtime}
     this.runningSince = Date.now()
     this.unwatch = runtime.onStopped(() => this.stopped(runtime))
-    if (this.deps.source.renewable) {
+    // Only application-bound sessions have an identity to refresh. A bootstrap may
+    // also issue a standalone capability; obtaining it again creates another session.
+    if (this.deps.source.renewable && bootstrap.config.applicationId && bootstrap.config.principalBinding) {
       runtime.beforeSubmit = async () => {
         try {
           await this.renew(runtime)

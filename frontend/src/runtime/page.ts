@@ -27,6 +27,18 @@ import {createControlGuide, type ControlGuide} from '../handoff/guide'
 
 const ANNOTATION_STYLE_ID = 'woa-hide-page-controller-annotations'
 
+/** Controller annotations are temporary observation UI, not the control's context. */
+function controlContextText(owner: Element | null): string {
+  if (!owner) return ''
+  const nodes = owner.ownerDocument.createTreeWalker(owner, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode: node => node instanceof Element && node.id === 'playwright-highlight-container'
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  })
+  let text = ''
+  while (nodes.nextNode()) if (nodes.currentNode.nodeType === Node.TEXT_NODE) text += nodes.currentNode.textContent
+  return text
+}
+
 function numericValue(text: string): string | undefined {
   const value = text.trim()
   const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(value)
@@ -699,10 +711,10 @@ export class Page {
       saved.property, element.style.getPropertyValue(saved.property),
     ]))
     const owner = element.closest('tr,[role="row"],[role="dialog"],form') ?? element.parentElement
-    const ownerText = owner?.textContent, label = element.textContent
+    const ownerText = controlContextText(owner), label = element.textContent
     const current = () => element.isConnected &&
       (element.closest('tr,[role="row"],[role="dialog"],form') ?? element.parentElement) === owner &&
-      owner?.textContent === ownerText && element.textContent === label
+      controlContextText(owner) === ownerText && element.textContent === label
     let active = true
     let guide: ControlGuide | null = null
     const clear = () => {

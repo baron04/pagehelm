@@ -290,6 +290,17 @@ describe('when the session ends under the page', () => {
 })
 
 describe('renewing the identity behind a running session', () => {
+  it('keeps a standalone capability when sending instead of obtaining another session', async () => {
+    const src = source([{config: config()}])
+    const h = harness(src)
+    h.supervisor.start()
+    await flush()
+    const runtime: Supervised = h.started[0]!
+    await runtime.beforeSubmit?.()
+    expect(src.calls).toBe(1)
+    expect(h.started[0]!.renewals).toHaveLength(0)
+  })
+
   it('renews at the time the bootstrap named, then again at the next one', async () => {
     const now = Date.now()
     const src = source([

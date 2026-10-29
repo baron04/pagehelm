@@ -334,8 +334,9 @@ class TheAssistantIsNeverSilentAndNeverLoud(unittest.TestCase):
         page.reload(wait_until="domcontentloaded")
         self.running(page)
         self.assertEqual(self.host.bootstraps, 2)
-        # Nobody opened the panel or sent anything on the new page.
-        self.assertEqual(page.locator(".woa-window").count(), 0)
+        # The expanded panel survives the reload without another user gesture.
+        page.locator(".woa-window").wait_for(timeout=8000)
+        self.assertEqual(page.locator(".woa-launcher").count(), 0)
         self.watch_presence(page, 1)
         self.assert_quiet(page, errors)
 

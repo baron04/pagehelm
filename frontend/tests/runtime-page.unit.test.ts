@@ -848,6 +848,30 @@ describe('Page refuses controls that are not writable at execution time', () => 
     }
   })
 
+  it('keeps a highlight through controller annotations but clears it when application context changes', async () => {
+    const owner = document.createElement('main')
+    owner.innerHTML = '<span>Order Q-1042</span><button>Review</button>'
+    const button = owner.querySelector('button')!
+    button.getBoundingClientRect = () => ({width: 80, height: 20} as DOMRect)
+    document.body.append(owner)
+    const marker = new Page(controller(), () => button, createRedactor()).highlight('e1')
+    try {
+      const overlay = document.createElement('div')
+      overlay.id = 'playwright-highlight-container'
+      overlay.innerHTML = '<span>1</span><span>2</span>'
+      owner.append(overlay)
+      await Promise.resolve()
+      expect(marker.active()).toBe(true)
+      overlay.remove()
+      await Promise.resolve()
+      expect(marker.active()).toBe(true)
+      owner.querySelector('span')!.textContent = 'Order Q-1043'
+      await Promise.resolve()
+      expect(marker.active()).toBe(false)
+      expect(button.style.outline).toBe('')
+    } finally { marker.clear(); owner.remove() }
+  })
+
   it('refuses a hidden or detached handoff control', () => {
     const button = document.createElement('button')
     button.getBoundingClientRect = () => ({width: 0, height: 0} as DOMRect)

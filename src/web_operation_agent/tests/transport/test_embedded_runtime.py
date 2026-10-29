@@ -289,12 +289,11 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 page.locator(".woa-launcher").click()
                 page.locator(".woa-window").wait_for(timeout=3000)
 
-                # A real, full document navigation: new document, new Runtime, new panel. The
-                # panel's open state is not carried across documents (owner, P7.5), so the new
-                # page shows the launcher; the timeline is behind it, replayed from the server.
+                # A real document navigation restores the person's expanded panel and
+                # replays the timeline from the server without another launcher gesture.
                 page.goto(app.origin + "/page2?source=navigation", wait_until="domcontentloaded")
-                page.locator(".woa-launcher").click(timeout=8000)
                 page.locator(".woa-window").wait_for(timeout=8000)
+                self.assertEqual(page.locator(".woa-launcher").count(), 0)
                 replayed = page.locator(".woa-thread")
                 replayed.get_by_text("列出所有待开票的销售订单").wait_for(timeout=8000)
                 self.assertTrue(page.locator("#woa-composer-input").is_enabled())
@@ -354,7 +353,11 @@ class EmbeddedRuntimeTests(unittest.TestCase):
                 card.wait_for(timeout=8000)
                 self.assertIn("Accept supplier quote", card.inner_text())
                 self.assertIn("Quote Q-1042", card.inner_text())
-                # Deny holds the initial focus: the safe direction is the default one.
+                # The card is announced before either answer; Tab reaches cancellation first.
+                page.wait_for_function(
+                    "document.querySelector('#woa-assistant').shadowRoot"
+                    ".activeElement?.classList.contains('woa-approval')")
+                page.keyboard.press("Tab")
                 self.assertEqual(
                     page.evaluate(
                         "document.querySelector('#woa-assistant').shadowRoot"
