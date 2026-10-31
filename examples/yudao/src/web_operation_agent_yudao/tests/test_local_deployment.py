@@ -381,8 +381,22 @@ class FrontTests(unittest.TestCase):
         with self.opener.open(self.origin + "/__local__/health") as response:
             payload = json.load(response)
         self.assertTrue(payload["ready"])
+        self.assertIs(payload["api_docs_loaded"], False)
         self.assertEqual((2, 2, "synthetic-checkout"),
                          (payload["schema_version"], payload["environment"], payload["checkout_id"]))
+
+    def test_document_warmup_reports_loaded_only_after_a_document_is_available(self):
+        from types import SimpleNamespace
+        self.front.ready = True
+        host = SimpleNamespace(_api_documents=None, _documents_lock=threading.Lock())
+        with patch.object(serve.native, '_api_docs', side_effect=OSError('synthetic')) as request:
+            serve.warm_documents(host, self.front)
+            self.assertIs(self.front.api_docs_loaded, False)
+            request.assert_called_once_with('http://server:48080', wait_s=0, timeout_s=300)
+        with patch.object(serve.native, '_api_docs', return_value={"openapi": "3.0.1", "paths": {}}):
+            serve.warm_documents(host, self.front)
+        with self.opener.open(self.origin + "/__local__/health") as response:
+            self.assertTrue(json.load(response)["api_docs_loaded"])
 
     def test_upstream_authentication_status_and_body_are_preserved(self):
         with self.assertRaises(urllib.error.HTTPError) as error:

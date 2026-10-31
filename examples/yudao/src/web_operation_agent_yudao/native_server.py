@@ -109,7 +109,7 @@ class YudaoHostConfig:
     #: What one person may spend on the model per day, in CNY, counted on Beijing time.
     daily_allowance_cny: float = 5.0
     principal_lifetime_s: int = 600
-    turn_timeout_s: int = 180
+    turn_timeout_s: int = 120
     model: str | None = None
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None

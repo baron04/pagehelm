@@ -64,6 +64,14 @@ class NativeHostTests(unittest.TestCase):
         self.hosts.append(host)
         return host
 
+    def test_two_minute_turn_deadline_reaches_model_and_executor(self):
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "source-only")
+        session = host._sessions[("1", "1")].session
+        self.assertEqual(self.config.turn_timeout_s, 120)
+        self.assertEqual(self.chat.call_args.kwargs["timeout"], 120)
+        self.assertEqual(session.runner.executor.config.wall_budget_s, 120)
+
     def test_unavailable_business_documents_do_not_block_host_or_authenticated_session(self):
         from web_operation_agent.goal.data import DataRefused
         self.documents.side_effect = OSError("synthetic catalog outage")

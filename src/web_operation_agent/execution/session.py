@@ -149,7 +149,7 @@ class ServerAgentSession(SessionLifecycle, FinishHandler, SessionContext):
                  control: ControlPlaneClient, ledger: SessionLedger,
                  source: SourceCapability | None = None,
                  lab: LabApparatus = NO_LAB,
-                 step_budget: int = 20, wall_budget_s: int = 300, run_id: str | None = None,
+                 step_budget: int = 20, wall_budget_s: int = 120, run_id: str | None = None,
                  turn_budget: TurnBudget | None = None,
                  keep_observations: int = DEFAULT_KEEP_OBSERVATIONS,
                  disabled_actions: frozenset[str] | set[str] | None = None,

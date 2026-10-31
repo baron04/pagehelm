@@ -117,7 +117,7 @@ class AgentTurnConfig:
     #: Both model requests (including planning and retries) and loop decisions are bounded
     #: by this limit. A completed last request may still dispatch its chosen tool.
     step_budget: int = 8
-    wall_budget_s: int = 240
+    wall_budget_s: int = 120
     transport_timeout_s: float = 60.0
     # Fail closed for every browser action that can initiate an application write. An
     # integration opts into a reviewed subset by supplying its complete disabled set.

@@ -129,6 +129,19 @@ class ProductSharedBudgetTests(unittest.TestCase):
         self.assertEqual(browser.actions, [])
         self.assertEqual(result.agent.wall_seconds, 61)
 
+    def test_default_two_minute_turn_stops_after_late_model_reply(self):
+        budget = AgentTurnConfig(supported_scope="Read the page only.",
+                                 ledger_path=Path("unused-audit.jsonl")).wall_budget_s
+        self.assertEqual(budget, 120)
+        clock = [100.0]
+        chat = Chat([{"content": '["invoice"]'}, finish()],
+                    after_call=lambda: clock.__setitem__(0, clock[0] + 121))
+        result, events, browser = self.execute(chat, source=True, seconds=budget, clock=clock)
+        self.assertEqual(result.terminal_reason, "wall_clock_budget")
+        self.assertEqual(len(chat.calls), 1)
+        self.assertEqual(browser.actions, [])
+        self.assertTrue(any(event["event"] == "turn_model_receipt" for event in events))
+
     def test_planning_time_reduces_the_next_request_deadline(self):
         clock = [100.0]
         def advance():

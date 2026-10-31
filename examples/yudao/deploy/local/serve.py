@@ -40,6 +40,7 @@ class Front(ThreadingHTTPServer):
         self.settings = settings
         super().__init__((settings.listen_host, settings.ports[0]), Handler)
         self.ready = False
+        self.api_docs_loaded = False
         self.runtime_sha256 = hashlib.sha256(cfg.RUNTIME.read_bytes()).hexdigest()
         self.source_digest = cfg.source_digest()
 
@@ -81,6 +82,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/__local__/health":
             payload = {"schema_version": 2, "ready": self.server.ready,
+                       "api_docs_loaded": self.server.api_docs_loaded,
                        "environment": settings.environment, "checkout_id": settings.checkout_id,
                        "runtime_sha256": self.server.runtime_sha256,
                        "source_digest": self.server.source_digest}
@@ -175,6 +177,20 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = dispatch
 
 
+def warm_documents(host, front):
+    # Cold document construction can exceed nginx's ordinary 120 s timeout.
+    # This startup-only read uses the same local backend, without that proxy.
+    try:
+        with host._documents_lock:
+            if host._api_documents is None:
+                documents = native._api_docs("http://server:48080", wait_s=0, timeout_s=300)
+                if isinstance(documents, dict):
+                    host._api_documents = documents
+        front.api_docs_loaded = host._api_documents is not None
+    except (OSError, ValueError):
+        pass
+
+
 def main():
     environment = int(os.environ["WOA_LOCAL_ENVIRONMENT"])
     env = {key: os.environ[key] for key in ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL", "AGENT_PROVIDER")
@@ -205,7 +221,7 @@ def main():
         host.server.start()
         boot = ThreadingHTTPServer(("127.0.0.1", settings.ports[2]), native._handler(host))
         threading.Thread(target=boot.serve_forever, daemon=True).start()
-        threading.Thread(target=host._warm_api_docs, daemon=True).start()
+        threading.Thread(target=warm_documents, args=(host, front), daemon=True).start()
         front.ready = True
         print(f"环境{settings.environment}就绪：{settings.origin}", flush=True)
         while not stop.wait(60):

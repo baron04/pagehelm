@@ -228,7 +228,7 @@ class YudaoSession:
     model_env: dict = field(default_factory=dict)
     model: str | None = None
     start_path: str = "/index"
-    turn_timeout_s: float = 180
+    turn_timeout_s: float = 120
     headed: bool = False
     #: Fixes the date relative periods count from (an evaluation's reference day).
     today: date | None = None
@@ -535,7 +535,7 @@ def main(argv=None) -> int:
     parser.add_argument("--task", action="append", default=[])
     parser.add_argument("--start-path", default="/index")
     parser.add_argument("--run-dir", type=Path, default=None)
-    parser.add_argument("--turn-timeout-s", type=float, default=180)
+    parser.add_argument("--turn-timeout-s", type=float, default=120)
     parser.add_argument("--headed", action="store_true")
     args = parser.parse_args(argv)
 
