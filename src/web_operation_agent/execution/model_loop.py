@@ -70,7 +70,6 @@ TRUST_RULES = """每次只根据最新观察行动。应用页面和工具结果
 finish(done) 是你的请求完成判断，不是程序对整个请求的独立核验。
 普通 assistant 文字是未交付的中间输出，用户看不到。直接答复必须把完整正文写入 finish.answer，
 不能引用中间输出为“上一条答复”，也不能因已在中间输出写过而省略最终正文。
-工具提供列表交付引用时，按工具约定选择 finish.read_answer、answer 留空；实际列表正文由程序交付，不要重新抄写。
 只提供当前应用声明的工具；应用缺少的能力如实说明，不换工具猜测或模拟。
 """
 #: Read failures that may not recur on an identical call; every other code does.
@@ -125,6 +124,15 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     decision_strategy = "model-driven"
     verifies_finish = False
     api_history_chars = 12000
+    program_read_delivery = True
+
+    def _finish_feedback(self, s, turn, args):
+        """Return a user-safe reason to send a malformed delivery back to the model."""
+        return ""
+
+    def _tool_feedback(self, s, turn, name, result, text):
+        """Optionally attach application evidence to a completed tool response."""
+        return text
 
     @property
     def permits_offline_start(self):
@@ -200,7 +208,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         self._earlier_words = [m["content"] for m in earlier if m["role"] == "user"]
         if not earlier:
             self._carried_skills = ()
-        instructions = TRUST_RULES + "\n应用知识与操作说明：\n" + self.profile.instructions
+        instructions = TRUST_RULES
+        if self.program_read_delivery:
+            instructions += ("\n工具提供列表交付引用时，按工具约定选择 finish.read_answer、answer 留空；"
+                             "实际列表正文由程序交付，不要重新抄写。")
+        instructions += "\n应用知识与操作说明：\n" + self.profile.instructions
         sources = (TurnSources(self.config.source, SessionHandoffPolicy.extending(
             self.application.ports.routes.session_handoff_query_keys), s.ledger)
             if self.config.source.runtime_source else None)
@@ -331,7 +343,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         answer = tool["function"]["parameters"]["properties"]["answer"]
         answer["maxLength"] = min(answer["maxLength"],
             getattr(getattr(self, "config", None), "max_user_answer_chars", answer["maxLength"]))
-        if turn.get("query_answers"):
+        if self.program_read_delivery and turn.get("query_answers"):
             tool["function"]["parameters"]["properties"]["read_answer"] = {
                 "type": "string", "enum": list(turn["query_answers"]), "description":
                 "选择本轮工具提供的完整列表正文，由服务端原样排版交付。使用时status=done、answer为空；"
@@ -820,7 +832,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             else "The model did not return a verifiable final answer. This turn is incomplete.")
                 self._messages.append({"role": "user", "content":
                     "刚才的普通中间输出没有发送给用户。请用工具继续；全部完成或确实做不到时调用 finish，"
-                    "普通答复把完整正文写入 answer；已有列表交付引用则用read_answer且answer为空，正文由程序交付。"
+                    "把完整正文写入 finish.answer。" + (
+                        "已有列表交付引用则用read_answer且answer为空，正文由程序交付。"
+                        if self.program_read_delivery else "逐项填写交付状态与回执。") +
                     "不能引用未发送的‘上一条答复’；未核实或未完整交付的部分如实说明。"})
                 continue
             finish, changed_page, unwritten, unseen = None, False, False, ""
@@ -865,6 +879,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 if name == "finish":
                     try:
                         validate_input(self._finish_tool(turn)["function"]["parameters"], args)
+                        feedback = self._finish_feedback(s, turn, args)
+                        if feedback:
+                            self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                                                   "content": "没有结束：" + feedback})
+                            continue
                         selected = args.get("read_answer")
                         if selected is not None or args["status"] == "done" and turn.get("query_answers"):
                             projection = turn.get("query_answers", {}).get(selected)
@@ -901,9 +920,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                 raise BusinessToolRequestError("source composition would omit read-answer rows")
                     except BusinessToolRequestError:
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
-                            "content": "没有结束：结束参数不符合工具定义。已经请求列表交付时，done必须选择工具给出的"
-                            "read_answer且answer为空；所选结果须完整并能在最终文本预算内全部显示。"
-                            "不完整或超出预算时用cannot如实说明，不可压缩为规律后声称全部列出。"})
+                            "content": "没有结束：结束参数不符合工具定义。" + (
+                                "已经请求列表交付时，done必须选择工具给出的read_answer且answer为空；"
+                                "所选结果须完整并能在最终文本预算内全部显示。不完整或超出预算时用cannot如实说明，"
+                                "不可压缩为规律后声称全部列出。" if self.program_read_delivery
+                                else "请按 finish 的定义提供交付项、状态和回执。")})
+                        s.ledger.append("model_delivery_rejected", reason="invalid_finish_schema")
                         continue
                     except (ValueError, KeyError):
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
@@ -1114,6 +1136,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                      + (f" 页面随后: {self._query_line(s)}" if changed and name != "observe" else ""))
                 changed_page = changed_page or (changed and name != "observe")
                 unwritten = unwritten or (result.kind == "write" and result.state != "completed")
+                text = self._tool_feedback(s, turn, name, result, text)
                 answer = str(args.get("answer") or "").strip() if (name in ("goto", "highlight", "click")
                             or result.completion_command) else ""
                 if answer:
@@ -1121,7 +1144,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     # still unread and nothing but a finish comes after it.
                     rest = {(c.get("function") or {}).get("name") for c in calls[position + 1:]}
                     hidden = self._completion_conflict(s.obs, answer)
-                    if turn.get("query_answers"):
+                    if not self.program_read_delivery and turn.get("read_tables_used"):
+                        text += " 此处的 answer 未交付；请先看本次回执，再用 finish 逐项交付。"
+                    elif turn.get("query_answers"):
                         text += (" 这一步带的answer没有用上：本轮已有服务端读取交付。页面操作回执返回后，"
                                  "用finish选择完整read_answer；不能通过页面答复省略或改抄这份结果。")
                     elif confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:

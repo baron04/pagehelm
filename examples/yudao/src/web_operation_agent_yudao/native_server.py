@@ -389,7 +389,7 @@ class YudaoHost:
             # native writes it may also propose a loaded Skill's typed operations.
             from web_operation_agent.goal.conventions import load_conventions
             from web_operation_agent.transport.panel_view import panel_limits
-            from .slim_loop import MODEL_STEPS, ActorKnowledge, SlimTurnExecutor
+            from .slim_loop import MODEL_STEPS, ActorKnowledge, TableReadTurnExecutor
             from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
             model_goal = ModelPageGoalPort(app.goal_port, self.page_review)
             action_policy = NativeModelReadActions(app.origin, app.goal_data,
@@ -401,7 +401,7 @@ class YudaoHost:
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
                 max_user_answer_chars=panel_limits()["result_max_chars"])
-            executor = SlimTurnExecutor(
+            executor = TableReadTurnExecutor(
                 **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
                 goal_port=model_goal, draft_steps=draft_steps,
                 mutation_prefill=mutation_prefill,

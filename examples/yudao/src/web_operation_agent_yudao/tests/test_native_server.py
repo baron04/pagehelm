@@ -189,12 +189,20 @@ class NativeHostTests(unittest.TestCase):
         self.assertIn('本部署关闭', executor.profile.instructions)
         self.chat.return_value.complete.assert_not_called()
 
-    def test_the_slim_profile_carries_the_closing_number_check(self):
-        from web_operation_agent_yudao.answer_numbers import untraced
+    def test_native_read_turn_uses_only_table_tools_and_item_delivery(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
         executor = host._sessions[("1", "1")].session.runner.executor
-        self.assertIs(executor.profile.untraced_numbers, untraced)
+        tools = {t["function"]["name"]: t["function"]["parameters"]
+                 for t in executor._tools({})}
+        self.assertTrue({"tables", "sql", "date_range"} <= tools.keys())
+        self.assertNotIn("summary", tools["call_api"]["properties"])
+        self.assertNotIn("deliver", tools["call_api"]["properties"])
+        self.assertNotIn("read_answer", tools["finish"]["properties"])
+        self.assertIn("items", tools["finish"]["required"])
+        self.assertIsNone(executor.profile.untraced_numbers)
+        self.assertNotIn("call_api.summary", executor.profile.instructions)
+        self.assertIn("date_range", executor.profile.instructions)
 
     def test_native_slim_can_deliver_a_complete_long_roster_without_a_smaller_hidden_text_cap(self):
         host = self.host()
@@ -488,7 +496,7 @@ class NativeHostTests(unittest.TestCase):
 
     def test_default_is_shared_loop_and_warmup_can_be_disabled(self):
         from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
-        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor
         from web_operation_agent_yudao.model_page_policy import ModelPageGoalPort
         self.config = replace(self._fence(), native_page_policy=self._page_policy(),
                                ui_source=None, source_root=None)
@@ -497,7 +505,7 @@ class NativeHostTests(unittest.TestCase):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "default")
             executor = host._sessions[("1", "1")].session.runner.executor
-            self.assertIs(type(executor), SlimTurnExecutor)
+            self.assertIs(type(executor), TableReadTurnExecutor)
             self.assertIs(executor._loop.__func__, ModelDrivenTurnExecutor._loop)
             self.assertIsInstance(executor.goal_port, ModelPageGoalPort)
             self.assertNotIn("source", executor.goal_port.capabilities())

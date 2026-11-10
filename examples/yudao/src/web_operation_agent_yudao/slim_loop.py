@@ -28,6 +28,7 @@ starts from those and reads the page and the data again.
 from __future__ import annotations
 
 from contextvars import ContextVar
+from copy import deepcopy
 from datetime import datetime, timedelta
 from dataclasses import replace
 from types import SimpleNamespace
@@ -52,6 +53,7 @@ from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHando
 
 from .answer_numbers import untraced as untraced_answer_numbers
 from .api_content import REDACTED, composed, fenced, program_lines, redacted
+from .turn_tables import TurnReadError, TurnTables, date_range
 from .write_intent import WriteIntent, classify_write_intent
 
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
@@ -440,8 +442,10 @@ class ActorKnowledge:
         return data, rows, total, first_page == 1 and len(rows) == total, requests
 
     def call_api(self, path: str, params: dict, fields=(), *, row_offset: int = 0, deliver: bool = False,
-                 summary=None, actor_digest: str = "") -> str:
+                 summary=None, actor_digest: str = "", row_sink=None) -> str:
         self.last_query_answer = None
+        if row_sink is not None and (summary is not None or deliver):
+            raise QueryParametersError("行表读取不接受汇总交付参数")
         if type(deliver) is not bool:
             raise QueryParametersError("deliver must be boolean")
         # Translate older direct callers into the single summary contract.
@@ -637,6 +641,27 @@ class ActorKnowledge:
             if is_data:
                 data_lines.add(len(out))
             out.append(line)
+        if row_sink is not None:
+            if (rows is None and isinstance(data, dict) and "id" in filters
+                    and "id" in data and str(filters["id"]) != str(data["id"])):
+                raise TurnReadError("record_identity_mismatch", "详情接口返回的记录编号与请求不符。")
+            observed = rows if rows is not None else ([] if data is None else [data])
+            table_rows = [
+                row if not isinstance(row, dict) or not fields else
+                {k: v for k, v in row.items() if k in ("id", *fields)}
+                for row in observed
+            ]
+            info = row_sink(path=relative, params=filters, rows=table_rows,
+                            total=declared_total if rows is not None else len(table_rows),
+                            complete=whole if rows is not None else True,
+                            published=(fields or tuple(props)) if not table_rows else ())
+            out.append(f"本轮行表 {info['name']}，读取回执 {info['receipt']}。")
+            data_lines.add(len(out))
+            out.append(json.dumps(info, ensure_ascii=False))
+            if table_rows:
+                data_lines.add(len(out))
+                out.append("样例（不是全表）：" + json.dumps(table_rows[:3], ensure_ascii=False)[:2600])
+            return self._told(out, data_lines)
         if rows is None:
             shown = self._row(data) if isinstance(data, dict) else data
             if isinstance(data, dict):
@@ -1020,6 +1045,49 @@ SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call
 - “查看某字段/数量/名单”直接交付；“查看某记录/详情/页面”进入相应位置。纯查询不额外操作页面。金额由程序按已核验单位填入，未核验的标“单位未核验”，不自行换算或补单位。
 - 无权限结论只能来自指向它本身的确切读取被拒。某次查询被拒不等于整类不可读；已读结果能回答时照常作答。
 """
+TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按确切名称找记录，kind 限定类型，编号用对应编号参数。
+1）交付中的值须来自本轮回执。先 tables 看行表、查询范围、实读数、总数和完整性，再用 sql 计算；说明依据回执、条件、口径和算法。
+2）今天、本周、上月、下周二等先用 date_range 换成具体范围，再写入 API 参数或 SQL 筛选。按用户动词选真实时间列；创建时间不代替业务日期。SQL 表保留接口原值或已核验的显示单位；时间戳用换算结果中的毫秒阈值，ISO 日期用日期范围。
+3）找不到接口、字段或记录，或读取失败，说明缺什么；不能核实时用 cannot 或追问。不把已提交的参数当作返回行确已满足条件的证明；用已读字段核对。范围未读全不能报全量合计、极值、完整名单或不存在。
+4）同名时按组织用语约定和所在模块消歧；仍有多条，列候选并追问，不缩短名称或穷举模块。关联对象先按确切名称解析同账号编号，条件和分组用编号，名称用于展示。
+5）问指定记录的详情，优先查该记录的详情接口，不把列表摘要当成详情。
+6）要改数据先读现值；已经满足就说明，只改用户指定项。
+7）实际写入仍须走已安装 Skill 的批准、执行及核验；没有已核验回执不能声称写成。只要求预填时，填好交给用户，停在提交前。
+8）查无结果要说清条件和范围；CRM sceneType 只按用户明确的负责/参与/下属等条件使用。后续指代重新读取，历史答复不算当前证据。
+9）组织审阅过的业务用语约定照用，不自行套用额外默认条件。
+10）最早、最晚、最大、最小等有并列时列出全部；取前 N 名保留第 N 名并列。需要唯一结果时再问用户。
+- 最后调用 finish：answer 写给用户的完整正文，items 逐项列出交付什么、是否交付、依据的本轮回执号。混合请求把读数、用户页状态和写入分别列项；回执只证明实际返回的内容。普通中间输出不会交付。
+"""
+
+TABLE_TOOLS = (
+    _tool("tables", "列出本轮已读取的行表、来源、条件、列和完整性。", {}, []),
+    _tool("sql", "在本轮行表上执行一条只读 SQLite SELECT 或 WITH，返回列、至多200行、截断标记和引用回执。", {
+        "query": {"type": "string", "minLength": 1, "maxLength": 8000}}, ["query"]),
+    _tool("date_range", "按当前应用日期和时区换算日、周（月到周日）、月、季度或年份；offset=0当前、-1上期、1下期。指定月份用unit=month及month/year；指定周内某天用unit=week与weekday（周一=1）。elapsed=true表示当前周期截至今天（含今天）。", {
+        "unit": {"type": "string", "enum": ["day", "week", "month", "quarter", "year"]},
+        "offset": {"type": "integer", "minimum": -366, "maximum": 366},
+        "elapsed": {"type": "boolean"}, "year": {"type": "integer", "minimum": 1, "maximum": 9999},
+        "month": {"type": "integer", "minimum": 1, "maximum": 12},
+        "weekday": {"type": "integer", "minimum": 1, "maximum": 7}}, ["unit"]),
+)
+_TABLE_TOOLS = frozenset(tool["function"]["name"] for tool in TABLE_TOOLS)
+_TURN_TABLES = ContextVar("yudao_turn_tables", default=None)
+
+
+def _table_tool_schemas(review):
+    for tool in scoped_page_tools(review):
+        if tool["function"]["name"] == "call_api":
+            tool = deepcopy(tool)
+            properties = tool["function"]["parameters"]["properties"]
+            del properties["summary"]
+            properties["fields"]["description"] = (
+                "指定用于行表的接口字段；给 fields 时分页接口最多读取5000行。"
+                "未指定只读所请求的页；以行表完整性为准。")
+            del properties["row_offset"]
+        yield tool
+    yield from TABLE_TOOLS
+
+
 SYSTEM_PAGE = """2. 页面请求用search_menu/goto，记录有详情地址就直接goto；否则定位唯一行。没有详情可交接唯一列表行，不用编辑代替查看。名称跨模块按部署用语约定；不明确就问。
 - 只按最新观察序号操作，隐藏控件先scroll/展开。下拉用select或fill_fields，不直接点选项；日期按观察格式输入。筛选用fill_fields+then_click，分页用“页码/每页条数”，树节点直接click，已选中不重复点。应用实际查询/页签回执证明生效；0条也可证明筛选成功，不自行切范围。
 - 最后一步goto/click/highlight/fill_fields可带answer，核验后结束；还有筛选、页签、读取或填写时先不带answer。goto(open=入口)后必须读表单观察。只到列表不证明指定详情或后续义务完成。
@@ -1863,6 +1931,19 @@ class YudaoLoopProcedures:
 
     def _tool(self, s, name: str, args: dict, turn: dict) -> LoopToolResult:
         know = self.knowledge
+        table_context = _TURN_TABLES.get()
+        if name in _TABLE_TOOLS and table_context is not None:
+            store, today, zone = table_context
+            try:
+                if name == "tables":
+                    data = store.describe()
+                elif name == "sql":
+                    data = store.query(args["query"])
+                else:
+                    data = date_range(today=today, zone=zone, **args)
+                return LoopToolResult(fenced(json.dumps(data, ensure_ascii=False)), kind="read")
+            except TurnReadError as exc:
+                return LoopToolResult(str(exc), kind="read", state="refused", error_code=exc.code)
         review_completion = False
         said = {key: value for key, value in args.items() if isinstance(value, (str, int, float))
                 and not isinstance(value, bool)}
@@ -1907,12 +1988,16 @@ class YudaoLoopProcedures:
             called_path = "/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/")
             with s.measure("business"):
                 try:
+                    sink = {"row_sink": table_context[0].add} if table_context is not None else {}
                     text = know.call_api(args["path"], params, args.get("fields", ()),
+                                         **sink,
                                          row_offset=args.get("row_offset", 0),
                                          **({"deliver": True} if args.get("deliver") else {}),
                                          **({"summary": args["summary"]} if "summary" in args else {}),
                                          **({"actor_digest": s.operation.principal.actor_authority_digest}
                                             if "summary" in args or args.get("deliver") else {}))
+                except TurnReadError as exc:
+                    return LoopToolResult(str(exc), kind="read", state="unverified", error_code=exc.code)
                 except SummaryRefused as exc:
                     return LoopToolResult("程序汇总未能核实：" + exc.detail,
                         kind="read", state="unverified", error_code=exc.code)
@@ -2654,7 +2739,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         offered = super()._tools(turn)
         if _read_only_status_question(_CURRENT_REQUEST.get()):
             return [tool for tool in offered
-                    if tool["function"]["name"] in _STATUS_READ_TOOLS]
+                    if tool["function"]["name"] in (_STATUS_READ_TOOLS | (_TABLE_TOOLS if _TURN_TABLES.get() else frozenset()))]
         if not isinstance(intent, WriteIntent) or intent.mode != "draft":
             return offered
         names = {"load_skill", "read_skill_resource"}
@@ -2664,7 +2749,8 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         return [tool for tool in offered if tool["function"]["name"] not in names]
 
     def _invoke_tool(self, s, name, args, turn):
-        if name == "call_api" and "deliver" in args and type(args["deliver"]) is bool:
+        if (_TURN_TABLES.get() is None and name == "call_api" and "deliver" in args
+                and type(args["deliver"]) is bool):
             # Accept persisted pre-prototype calls without exposing two live
             # contracts. An explicit summary wins, including its sorting rules.
             args = dict(args)
@@ -2675,7 +2761,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                         kind="read", state="refused", error_code="invalid_arguments")
                 args["summary"] = {"columns": list(args["fields"])}
         if _read_only_status_question(_CURRENT_REQUEST.get()):
-            if name not in _STATUS_READ_TOOLS:
+            if name not in (_STATUS_READ_TOOLS | (_TABLE_TOOLS if _TURN_TABLES.get() else frozenset())):
                 return LoopToolResult("本轮只询问状态；请根据当前账号的只读接口结果直接回答，不操作页面。",
                                       kind="read", state="refused", error_code="read_only_question")
         intent = _WRITE_INTENT.get()
@@ -2701,28 +2787,87 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         self.knowledge = knowledge
         knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
         self.procedures = owner = YudaoLoopProcedures(knowledge, goal_port, application.descriptor.origin)
+        review = getattr(goal_port, "review", None)
+        schemas = scoped_page_tools(review) if self.program_read_delivery else _table_tool_schemas(review)
         procedures = tuple(LoopProcedure(json.dumps(schema, ensure_ascii=False),
             _Procedure(owner, schema["function"]["name"]),
-            "read" if schema["function"]["name"] in {"call_api", "find_record"} else
+            "read" if schema["function"]["name"] in {"call_api", "find_record"} | _TABLE_TOOLS else
             "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page",
             "yudao.read", frozenset({"handoffs"}) if schema["function"]["name"] == "highlight" else frozenset(),
             lambda arguments, observation, name=schema["function"]["name"]:
                 _requirements(name, arguments, observation, getattr(goal_port, "review", None)))
-                for schema in scoped_page_tools(getattr(goal_port, "review", None)) if schema["function"]["name"] != "finish")
+                for schema in schemas if schema["function"]["name"] != "finish")
         profile = ModelLoopProfile(
             system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
                         conventions=conventions,
                         runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
                                                     "runtime_source", False)))
-                + page_scope_notice(getattr(goal_port, "review", None)), procedures,
+                .replace(SYSTEM_READ, SYSTEM_READ if self.program_read_delivery else TABLE_READ_RULES)
+                + page_scope_notice(review), procedures,
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked,
                                                   list_path=_own_list_path(goal_port, observation)),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
             owner.verification_messages, draft_steps, mutation_prefill,
-            untraced_numbers=untraced_answer_numbers)
+            untraced_numbers=untraced_answer_numbers if self.program_read_delivery else None)
         super().__init__(profile=profile, **kwargs)
 
 
 
-__all__ = ["ActorKnowledge", "SlimTurnExecutor", "conventions_text", "history_messages", "page_text",
+class TableReadTurnExecutor(SlimTurnExecutor):
+    """Product candidate: calculation and delivery both cite this turn's real receipts."""
+
+    program_read_delivery = False
+
+    def __init__(self, *, today="", time_zone="Asia/Shanghai", **kwargs):
+        self._date_override, self._time_zone = today, time_zone
+        kwargs.setdefault("model_steps", MODEL_STEPS)
+        super().__init__(today=today, time_zone=time_zone, **kwargs)
+
+    def _run(self, state):
+        tables = TurnTables(self.knowledge.handoffs)
+        token = _TURN_TABLES.set((tables, _today(self._date_override, self._time_zone), self._time_zone))
+        try:
+            return super()._run(state)
+        finally:
+            _TURN_TABLES.reset(token)
+            tables.close()
+
+    def _finish_tool(self, turn):
+        tool = super()._finish_tool(turn)
+        parameters = tool["function"]["parameters"]
+        parameters["properties"]["items"] = {"type": "array", "minItems": 1, "maxItems": 16, "items": {
+            "type": "object", "properties": {
+                "item": {"type": "string", "minLength": 1, "maxLength": 240},
+                "status": {"type": "string", "enum": ["delivered", "undelivered"]},
+                "receipts": {"type": "array", "maxItems": 12,
+                             "items": {"type": "string", "minLength": 1, "maxLength": 48}}},
+            "required": ["item", "status", "receipts"], "additionalProperties": False}}
+        # Source-only turns keep their own structured source conclusions.
+        if turn.get("sources") is None or turn.get("runtime_used"):
+            parameters["required"].append("items")
+        return tool
+
+    def _finish_feedback(self, s, turn, args):
+        if "items" not in args:
+            return ""
+        try:
+            _TURN_TABLES.get()[0].validate_delivery(args["answer"], args["items"])
+        except TurnReadError as exc:
+            s.ledger.append("model_delivery_rejected", reason=exc.code)
+            return str(exc)
+        s.ledger.append("model_delivery_validated", items=[{
+            "status": item["status"], "receipts": item["receipts"]} for item in args["items"]])
+        return ""
+
+    def _tool_feedback(self, s, turn, name, result, text):
+        if name in {"call_api", "tables", "sql"}:
+            turn["read_tables_used"] = True
+        if result.state == "completed" and result.kind in {"read", "page", "write"} and name != "tables":
+            reference = _TURN_TABLES.get()[0].issue_receipt()
+            s.ledger.append("model_delivery_receipt", tool=name, reference=reference)
+            return text + f"\n本轮工具回执：{reference}"
+        return text
+
+
+__all__ = ["ActorKnowledge", "SlimTurnExecutor", "TableReadTurnExecutor", "conventions_text", "history_messages", "page_text",
            "skills_text", "system_text"]
