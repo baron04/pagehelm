@@ -180,16 +180,35 @@ class TurnTables:
                 raise TurnReadError("delivery_foreign_receipt", "有回执不存在或不属于本轮；请用本轮工具返回的编号。")
 
 
-def date_range(*, today, zone, unit, offset=0, elapsed=False, year=None, month=None, weekday=None):
+def date_range(*, today, zone, unit, offset=0, elapsed=None, year=None, month=None,
+               weekday=None, scope="occurred", days=None, start_date=None, end_date=None):
     """Resolve explicit Gregorian boundaries in the application actor's time zone."""
     if type(offset) is not int or not -366 <= offset <= 366:
         raise TurnReadError("date_range", "日期偏移超出范围。")
     try:
         anchor = date.fromisoformat(today)
         tz = ZoneInfo(zone)
+        if scope not in {"occurred", "planned"} or elapsed is not None and type(elapsed) is not bool:
+            raise ValueError()
+        explicit = start_date is not None or end_date is not None
+        if explicit != (unit == "range") or (days is not None) != (unit == "rolling_days"):
+            raise ValueError()
+        if unit in {"range", "rolling_days"} and (offset or year is not None or
+                                                  month is not None or weekday is not None):
+            raise ValueError()
         if weekday is not None and (unit != "week" or type(weekday) is not int or not 1 <= weekday <= 7):
             raise ValueError()
-        if year is not None or month is not None:
+        if unit == "range":
+            start = date.fromisoformat(start_date)
+            stop = date.fromisoformat(end_date) + timedelta(days=1)
+            if start >= stop:
+                raise ValueError()
+        elif unit == "rolling_days":
+            if type(days) is not int or not 1 <= days <= 36600:
+                raise ValueError()
+            start = anchor - timedelta(days=days - 1)
+            stop = anchor + timedelta(days=1)
+        elif year is not None or month is not None:
             if offset or weekday is not None:
                 raise ValueError()
             if unit == "year" and month is None:
@@ -208,7 +227,9 @@ def date_range(*, today, zone, unit, offset=0, elapsed=False, year=None, month=N
             start = date(serial // 12, serial % 12 + 1, 1)
         else:
             raise ValueError()
-        if weekday is not None:
+        if unit in {"range", "rolling_days"}:
+            pass
+        elif weekday is not None:
             start += timedelta(days=weekday - 1)
             stop = start + timedelta(days=1)
         elif unit in {"day", "week"}:
@@ -216,7 +237,8 @@ def date_range(*, today, zone, unit, offset=0, elapsed=False, year=None, month=N
         else:
             serial = start.year * 12 + start.month - 1 + {"month": 1, "quarter": 3, "year": 12}[unit]
             stop = date(serial // 12, serial % 12 + 1, 1)
-        if elapsed and start <= anchor < stop:
+        to_today = scope == "occurred" if elapsed is None else elapsed
+        if to_today and not explicit and weekday is None and start <= anchor < stop:
             stop = anchor + timedelta(days=1)
         begin_dt = datetime(start.year, start.month, start.day, tzinfo=tz)
         stop_dt = datetime(stop.year, stop.month, stop.day, tzinfo=tz)

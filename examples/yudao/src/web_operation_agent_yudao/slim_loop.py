@@ -1047,7 +1047,7 @@ SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call
 """
 TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按确切名称找记录，kind 限定类型，编号用对应编号参数。
 1）交付中的值须来自本轮回执。先 tables 看行表、查询范围、实读数、总数和完整性，再用 sql 计算；说明依据回执、条件、口径和算法。
-2）今天、本周、上月、下周二等先用 date_range 换成具体范围，再写入 API 参数或 SQL 筛选。按用户动词选真实时间列；创建时间不代替业务日期。SQL 表保留接口原值或已核验的显示单位；时间戳用换算结果中的毫秒阈值，ISO 日期用日期范围。
+2）相对日期先用 date_range 换成具体范围，再写入 API 参数或 SQL 筛选。已发生事项的本周、本月、本季度、今年默认截至当天；计划、预算用scope=planned覆盖完整自然周期。近N天含当天共N个自然日，用unit=rolling_days及days=N；最近一个月为近30天，上个月为上一个自然月。用户明确起止日期优先，用unit=range及start_date/end_date，首尾均含。按用户动词选真实时间列；创建时间不代替业务日期。SQL 表保留接口原值或已核验的显示单位；时间戳用换算结果中的毫秒阈值，ISO 日期用日期范围。
 3）找不到接口、字段或记录，或读取失败，说明缺什么；不能核实时用 cannot 或追问。不把已提交的参数当作返回行确已满足条件的证明；用已读字段核对。范围未读全不能报全量合计、极值、完整名单或不存在。
 4）同名时按组织用语约定和所在模块消歧；仍有多条，列候选并追问，不缩短名称或穷举模块。关联对象先按确切名称解析同账号编号，条件和分组用编号，名称用于展示。
 5）问指定记录的详情，优先查该记录的详情接口，不把列表摘要当成详情。
@@ -1063,9 +1063,13 @@ TABLE_TOOLS = (
     _tool("tables", "列出本轮已读取的行表、来源、条件、列和完整性。", {}, []),
     _tool("sql", "在本轮行表上执行一条只读 SQLite SELECT 或 WITH，返回列、至多200行、截断标记和引用回执。", {
         "query": {"type": "string", "minLength": 1, "maxLength": 8000}}, ["query"]),
-    _tool("date_range", "按当前应用日期和时区换算日、周（月到周日）、月、季度或年份；offset=0当前、-1上期、1下期。指定月份用unit=month及month/year；指定周内某天用unit=week与weekday（周一=1）。elapsed=true表示当前周期截至今天（含今天）。", {
-        "unit": {"type": "string", "enum": ["day", "week", "month", "quarter", "year"]},
+    _tool("date_range", "按应用日期及时区换算自然日、周（周一到周日）、月、季度、年。已发生事项默认截至当天，计划/预算用scope=planned覆盖完整周期；offset=0当前、-1上期、1下期。近N天含当天共N自然日，用rolling_days及days=N，最近一个月用days=30；上个月用month及offset=-1。用户明确起止日期用range及start_date/end_date，首尾均含且优先。明确月份用month/year，周内某天用weekday（周一=1）。elapsed保留显式截至当天/完整周期的兼容用法。", {
+        "unit": {"type": "string", "enum": ["day", "week", "month", "quarter", "year", "rolling_days", "range"]},
         "offset": {"type": "integer", "minimum": -366, "maximum": 366},
+        "scope": {"type": "string", "enum": ["occurred", "planned"]},
+        "days": {"type": "integer", "minimum": 1, "maximum": 36600},
+        "start_date": {"type": "string", "minLength": 10, "maxLength": 10},
+        "end_date": {"type": "string", "minLength": 10, "maxLength": 10},
         "elapsed": {"type": "boolean"}, "year": {"type": "integer", "minimum": 1, "maximum": 9999},
         "month": {"type": "integer", "minimum": 1, "maximum": 12},
         "weekday": {"type": "integer", "minimum": 1, "maximum": 7}}, ["unit"]),

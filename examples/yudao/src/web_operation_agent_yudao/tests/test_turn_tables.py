@@ -82,3 +82,53 @@ class TurnTablesTest(unittest.TestCase):
         self.assertEqual((tuesday["start"], tuesday["end_inclusive"]), ("2026-01-06", "2026-01-06"))
         elapsed = date_range(today="2026-01-04", zone="Asia/Shanghai", unit="year", elapsed=True)
         self.assertEqual((elapsed["start"], elapsed["end_inclusive"]), ("2026-01-01", "2026-01-04"))
+
+    def test_current_occurrences_end_today_and_plans_cover_the_period(self):
+        for unit, begin, end in (
+            ("week", "2026-10-19", "2026-10-25"),
+            ("month", "2026-10-01", "2026-10-31"),
+            ("quarter", "2026-10-01", "2026-12-31"),
+            ("year", "2026-01-01", "2026-12-31"),
+        ):
+            with self.subTest(unit=unit):
+                occurred = date_range(today="2026-10-21", zone="Asia/Shanghai", unit=unit)
+                planned = date_range(today="2026-10-21", zone="Asia/Shanghai", unit=unit, scope="planned")
+                self.assertEqual((occurred["start"], occurred["end_inclusive"]), (begin, "2026-10-21"))
+                self.assertEqual((planned["start"], planned["end_inclusive"]), (begin, end))
+        full = date_range(today="2026-10-21", zone="Asia/Shanghai", unit="month", elapsed=False)
+        self.assertEqual(full["end_inclusive"], "2026-10-31")
+        tomorrow = date_range(today="2026-10-21", zone="Asia/Shanghai", unit="day", offset=1)
+        self.assertEqual(tomorrow["start"], "2026-10-22")
+
+    def test_rolling_days_include_today_and_differ_from_previous_calendar_month(self):
+        last_thirty = date_range(today="2026-10-25", zone="Asia/Shanghai", unit="rolling_days", days=30)
+        previous_month = date_range(today="2026-10-25", zone="Asia/Shanghai", unit="month", offset=-1)
+        self.assertEqual((last_thirty["start"], last_thirty["end_inclusive"]), ("2026-09-26", "2026-10-25"))
+        self.assertEqual((previous_month["start"], previous_month["end_inclusive"]), ("2026-09-01", "2026-09-30"))
+        for today, days, begin in (
+            ("2026-01-01", 1, "2026-01-01"),
+            ("2026-01-01", 2, "2025-12-31"),
+            ("2024-03-01", 2, "2024-02-29"),
+        ):
+            with self.subTest(today=today, days=days):
+                result = date_range(today=today, zone="Asia/Shanghai", unit="rolling_days", days=days)
+                self.assertEqual((result["start"], result["end_inclusive"]), (begin, today))
+        dst = date_range(today="2026-03-08", zone="America/New_York", unit="rolling_days", days=2)
+        self.assertEqual(dst["end_exclusive_ms"] - dst["start_ms"], 47 * 3600000)
+
+    def test_explicit_range_has_priority_over_elapsed_default(self):
+        result = date_range(today="2026-10-25", zone="Asia/Shanghai", unit="range",
+                            start_date="2026-10-01", end_date="2026-10-31", elapsed=True)
+        self.assertEqual((result["start"], result["end_inclusive"], result["end_exclusive"]),
+                         ("2026-10-01", "2026-10-31", "2026-11-01"))
+        for args in (
+            {"unit": "rolling_days", "days": 0},
+            {"unit": "rolling_days", "days": True},
+            {"unit": "rolling_days", "days": 30, "offset": 1},
+            {"unit": "month", "days": 30},
+            {"unit": "range", "start_date": "2026-10-31", "end_date": "2026-10-01"},
+            {"unit": "range", "start_date": "2026-10-01"},
+            {"unit": "week", "scope": "unknown"},
+        ):
+            with self.subTest(args=args), self.assertRaises(TurnReadError):
+                date_range(today="2026-10-25", zone="Asia/Shanghai", **args)
