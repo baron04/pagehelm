@@ -200,6 +200,7 @@ class NativeHostTests(unittest.TestCase):
         self.assertNotIn("deliver", tools["call_api"]["properties"])
         self.assertNotIn("read_answer", tools["finish"]["properties"])
         self.assertIn("items", tools["finish"]["required"])
+        self.assertIn("kind", tools["finish"]["properties"]["items"]["items"]["required"])
         self.assertIsNone(executor.profile.untraced_numbers)
         self.assertNotIn("call_api.summary", executor.profile.instructions)
         self.assertIn("date_range", executor.profile.instructions)

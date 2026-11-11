@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
 from web_operation_agent_yudao.turn_tables import TurnReadError, TurnTables, date_range
@@ -132,3 +134,46 @@ class TurnTablesTest(unittest.TestCase):
         ):
             with self.subTest(args=args), self.assertRaises(TurnReadError):
                 date_range(today="2026-10-25", zone="Asia/Shanghai", **args)
+
+    def test_page_delivery_requires_a_successful_current_page_receipt(self):
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
+
+        executor = object.__new__(TableReadTurnExecutor)
+        observation = SimpleNamespace(to_json=lambda: {
+            "url": "https://synthetic.invalid/list", "epoch": 1, "content": "Synthetic row", "elements": []})
+        state = SimpleNamespace(obs=observation, ledger=Mock())
+        executor._tool_receipts = [SimpleNamespace(action="goto", ok=True, observation=observation,
+                                                   command_id="synthetic-command")]
+        token = _TURN_TABLES.set((self.tables, "2026-10-25", "Asia/Shanghai"))
+        self.addCleanup(_TURN_TABLES.reset, token)
+        turn = {}
+        result = LoopToolResult("已打开", kind="page")
+        self.assertFalse(executor._completion_proved(state, "goto", {"answer": "已打开"}, result))
+        feedback = executor._tool_feedback(state, turn, "goto", result, result.feedback)
+        reference = next(iter(turn["page_delivery_receipts"]))
+        self.assertIn(reference, feedback)
+        args = {"answer": "已打开", "items": [
+            {"item": "用户页", "kind": "page", "status": "delivered", "receipts": [reference]}]}
+        self.assertEqual(executor._finish_feedback(state, turn, args), "")
+
+        data_reference = self.tables.issue_receipt()
+        args["items"][0]["receipts"] = [data_reference]
+        self.assertIn("页面回执", executor._finish_feedback(state, turn, args))
+        args["items"][0]["receipts"] = [reference]
+        state.obs = SimpleNamespace(to_json=lambda: {
+            "url": "https://synthetic.invalid/other", "epoch": 2, "content": "Other row", "elements": []})
+        self.assertIn("页面回执", executor._finish_feedback(state, turn, args))
+
+    def test_unobserved_page_result_cannot_issue_a_page_state_receipt(self):
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
+
+        executor = object.__new__(TableReadTurnExecutor)
+        executor._tool_receipts = []
+        token = _TURN_TABLES.set((self.tables, "2026-10-25", "Asia/Shanghai"))
+        self.addCleanup(_TURN_TABLES.reset, token)
+        state = SimpleNamespace(ledger=Mock())
+        turn = {}
+        executor._tool_feedback(state, turn, "observe", LoopToolResult("缺少观察", kind="page"), "缺少观察")
+        self.assertNotIn("page_delivery_receipts", turn)

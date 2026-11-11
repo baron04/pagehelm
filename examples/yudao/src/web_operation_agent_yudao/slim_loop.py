@@ -1059,6 +1059,13 @@ TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，ca
 - 最后调用 finish：answer 写给用户的完整正文，items 逐项列出交付什么、是否交付、依据的本轮回执号。混合请求把读数、用户页状态和写入分别列项；回执只证明实际返回的内容。普通中间输出不会交付。
 """
 
+PAGE_DELIVERY_RULES = """
+用户要求定位、打开记录详情、切页签、点树节点或在列表筛选时，结果必须落在发起请求的用户页上。接口结果、记录地址和文字建议不能代替页面落点。
+- 用现有通用页面动作操作。每一步查看最新观察和回执，核对记录、详情标题、选中页签或树节点。只到列表不能交付指定记录详情。
+- 筛选须同时核对页面自己发出的请求条件和当前渲染行。用观察中的应用查询回执核对条件，用可见表格的行和值核对结果；0行时说明已核验的条件与空结果。缺少条件或行的证明时如实报告尚未核验，不称筛选成功。
+- 页面定位动作完成后先看回执，再用 finish 交付，不在动作上带 answer。finish.items 的 kind 分别用 data、page、write。页面交付用 kind=page，并引用本轮页面状态回执；接口或计算回执不能充当页面回执。最后核对用户页仍在该状态，混合请求逐项交付。
+"""
+
 TABLE_TOOLS = (
     _tool("tables", "列出本轮已读取的行表、来源、条件、列和完整性。", {}, []),
     _tool("sql", "在本轮行表上执行一条只读 SQLite SELECT 或 WITH，返回列、至多200行、截断标记和引用回执。", {
@@ -2826,6 +2833,7 @@ class TableReadTurnExecutor(SlimTurnExecutor):
         self._date_override, self._time_zone = today, time_zone
         kwargs.setdefault("model_steps", MODEL_STEPS)
         super().__init__(today=today, time_zone=time_zone, **kwargs)
+        self.profile = replace(self.profile, instructions=self.profile.instructions + PAGE_DELIVERY_RULES)
 
     def _run(self, state):
         tables = TurnTables(self.knowledge.handoffs)
@@ -2842,25 +2850,41 @@ class TableReadTurnExecutor(SlimTurnExecutor):
         parameters["properties"]["items"] = {"type": "array", "minItems": 1, "maxItems": 16, "items": {
             "type": "object", "properties": {
                 "item": {"type": "string", "minLength": 1, "maxLength": 240},
+                "kind": {"type": "string", "enum": ["data", "page", "write"]},
                 "status": {"type": "string", "enum": ["delivered", "undelivered"]},
                 "receipts": {"type": "array", "maxItems": 12,
                              "items": {"type": "string", "minLength": 1, "maxLength": 48}}},
-            "required": ["item", "status", "receipts"], "additionalProperties": False}}
+            "required": ["item", "kind", "status", "receipts"], "additionalProperties": False}}
         # Source-only turns keep their own structured source conclusions.
         if turn.get("sources") is None or turn.get("runtime_used"):
             parameters["required"].append("items")
         return tool
+
+    def _completion_proved(self, s, name, args, result=None, *, target=None):
+        if args.get("answer") and result is not None and result.kind == "page":
+            if not any(receipt.action == "handoff_form" and receipt.command_id == result.completion_command
+                       for receipt in self._tool_receipts):
+                return False
+        return super()._completion_proved(s, name, args, result, target=target)
 
     def _finish_feedback(self, s, turn, args):
         if "items" not in args:
             return ""
         try:
             _TURN_TABLES.get()[0].validate_delivery(args["answer"], args["items"])
+            current = hashlib.sha256(self._page_fingerprint(s.obs).encode()).hexdigest()
+            pages = turn.get("page_delivery_receipts", {})
+            for item in args["items"]:
+                if (item["kind"] == "page" and item["status"] == "delivered"
+                        and not any(pages.get(ref) == current for ref in item["receipts"])):
+                    raise TurnReadError("delivery_page_receipt",
+                                        "页面交付必须引用仍与用户页当前状态一致的本轮页面回执。")
         except TurnReadError as exc:
             s.ledger.append("model_delivery_rejected", reason=exc.code)
             return str(exc)
         s.ledger.append("model_delivery_validated", items=[{
-            "status": item["status"], "receipts": item["receipts"]} for item in args["items"]])
+            "kind": item["kind"], "status": item["status"], "receipts": item["receipts"]}
+            for item in args["items"]])
         return ""
 
     def _tool_feedback(self, s, turn, name, result, text):
@@ -2869,6 +2893,15 @@ class TableReadTurnExecutor(SlimTurnExecutor):
         if result.state == "completed" and result.kind in {"read", "page", "write"} and name != "tables":
             reference = _TURN_TABLES.get()[0].issue_receipt()
             s.ledger.append("model_delivery_receipt", tool=name, reference=reference)
+            if result.kind == "page":
+                observed = [receipt for receipt in self._tool_receipts
+                            if receipt.ok and receipt.observation is not None]
+                if observed and self._page_fingerprint(observed[-1].observation) == self._page_fingerprint(s.obs):
+                    digest = hashlib.sha256(self._page_fingerprint(s.obs).encode()).hexdigest()
+                    turn.setdefault("page_delivery_receipts", {})[reference] = digest
+                    s.ledger.append("model_page_delivery_receipt", reference=reference,
+                                    command_id=observed[-1].command_id, state_sha256=digest)
+                    return text + f"\n本轮页面状态回执：{reference}。核对当前页面后用于kind=page的交付。"
             return text + f"\n本轮工具回执：{reference}"
         return text
 
