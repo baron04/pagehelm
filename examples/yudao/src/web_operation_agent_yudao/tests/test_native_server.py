@@ -189,6 +189,37 @@ class NativeHostTests(unittest.TestCase):
         self.assertIn('本部署关闭', executor.profile.instructions)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_optional_method_fence_selects_page_policy_and_blocks_every_scanned_write_get(self):
+        from web_operation_agent_yudao.method_fenced_actions import MethodFencedPageActions
+        from web_operation_agent_yudao.page_guard import GuardRefused
+
+        with self.assertRaises(ValueError):
+            replace(self.config, native_page_admission="all-actions")
+        writing_get = "/admin-api/fixture/initializing-list"
+        self.config = self._fence(writing_gets=[writing_get],
+                                  scan={"reasons": {writing_get: "FixtureMapper.insert"}})
+        self.assertNotIn(writing_get, self.host()._fenced)
+        self.config = replace(self.config, native_page_admission="method-fence",
+                              native_page_disabled_handlers=frozenset({"paging"}))
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "method-fence-tab")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertIsInstance(executor.config.action_policy, MethodFencedPageActions)
+        self.assertFalse(host.page_review.permits("query", "/crm/customer"))
+        self.assertTrue(executor.goal_port.review.permits("query", "/crm/customer"))
+        self.assertFalse(executor.goal_port.review.permits("paging", "/crm/customer"))
+        self.assertIn("submit", executor.config.disabled_actions)
+        guard = proxy.call_args.kwargs["guard"]
+        actor = "a" * 64
+        guard.begin(actor, "b" * 64)
+        with guard.request(actor, "GET", "/admin-api/fixture/ordinary-list"):
+            pass
+        for method, path in (("GET", writing_get), ("POST", "/admin-api/fixture/save")):
+            with self.assertRaisesRegex(GuardRefused, "page_write_blocked"), guard.request(actor, method, path):
+                self.fail("write reached dispatch")
+        self.chat.return_value.complete.assert_not_called()
+
     def test_native_read_turn_uses_only_table_tools_and_item_delivery(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")

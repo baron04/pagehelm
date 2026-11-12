@@ -459,6 +459,23 @@ describe('hydrateFormFacts adds a bounded application field identifier', () => {
 })
 
 describe('hydrateButtonFacts adds a bounded live method identifier', () => {
+  it('marks native submit controls including implicit and externally associated buttons', () => {
+    const fixture = document.createElement('div')
+    fixture.innerHTML = '<form id="checkout"><button>Continue</button>' +
+      '<button type="button">Details</button><input type="image" alt="Go"></form>' +
+      '<button form="checkout" role="tab">Next</button><button>Outside</button>'
+    document.body.append(fixture)
+    try {
+      const buttons = [...fixture.querySelectorAll('button,input')]
+      const elements = elementsFrom('[0]<button>Continue />\n[1]<button>Details />\n[2]<input type=image />\n' +
+        '[3]<button role=tab>Next />\n[4]<button native_submit=true>Outside />', 1, redactor)
+      hydrateButtonFacts(elements, {}, (_, index) => buttons[index], redactor)
+      expect(elements.map(item => item.attrs.native_submit)).toEqual(['true', undefined, 'true', 'true', undefined])
+    } finally {
+      fixture.remove()
+    }
+  })
+
   it('uses the indexed button rather than display text', () => {
     const elements = elementsFrom('[0]<button>Pay />', 1, redactor)
     hydrateButtonFacts(elements, {}, () => ({hasAttribute: (n: string) => n === 'name',

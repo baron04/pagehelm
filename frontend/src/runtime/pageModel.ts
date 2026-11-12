@@ -545,13 +545,21 @@ export function hydrateRevealFacts(elements: ElementRef[], selectorMap: unknown,
   return elements
 }
 
-/** A bounded live button method identifier for an adapter's exact click review. */
+/** Bounded live facts used by an adapter to recognize button effects. */
 export function hydrateButtonFacts(elements: ElementRef[], selectorMap: unknown,
                                    getByIndex: ElementLookup, redactor: Redactor): ElementRef[] {
   for (const item of elements) {
-    if (item.role !== 'button') continue
+    if (item.role !== 'button' && !['button', 'input'].includes(item.tag)) continue
+    delete item.attrs.native_submit
     try {
       const element = getByIndex(selectorMap, refIndex(item.ref))
+      // The DOM resolves implicit <button> types and the `form` attribute. Expose only
+      // the submit fact, including a native control whose ARIA role masks its button role.
+      if (element?.form && ['BUTTON', 'INPUT'].includes(String(element.tagName).toUpperCase())
+          && ['submit', 'image'].includes(String(element.type).toLowerCase())) {
+        item.attrs.native_submit = 'true'
+      }
+      if (item.role !== 'button') continue
       // Some controllers emit no text for buttons containing icons and spans.
       // Recover only an already indexed native button's live visible name.
       if (!item.name && element instanceof HTMLButtonElement &&

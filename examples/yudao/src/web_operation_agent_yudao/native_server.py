@@ -114,6 +114,7 @@ class YudaoHostConfig:
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
     native_page_policy: Path | None = None
+    native_page_admission: str = "reviewed"
     #: Explicit deployment scope; it overrides generated menu and exact handler grants.
     native_page_disabled_handlers: frozenset[str] = frozenset()
     native_edit_prefill: bool = True
@@ -141,6 +142,8 @@ class YudaoHostConfig:
 
     def __post_init__(self):
         from .model_page_policy import DEPLOYMENT_OPTIONAL_HANDLERS
+        if self.native_page_admission not in ("reviewed", "method-fence"):
+            raise ValueError("native_page_admission must be reviewed or method-fence")
         if (not isinstance(self.native_page_disabled_handlers, frozenset)
                 or not self.native_page_disabled_handlers <= DEPLOYMENT_OPTIONAL_HANDLERS):
             raise ValueError("native_page_disabled_handlers must be an immutable optional-handler set")
@@ -197,7 +200,7 @@ class YudaoHost:
             self._fenced = self._fenced_gets(policy)
             self.native_proxy = NativeGuardProxy(
                 upstream=config.api_base, origin=config.public_origin,
-                guard=NativePageGuard(frozenset(), writing_gets=self._fenced_gets(policy),
+                guard=NativePageGuard(frozenset(), writing_gets=self._fenced,
                                       journal=config.state_dir / "native-guard.sqlite3"),
                 resolve_actor=GuardIdentity(config.api_base), host=config.bootstrap_host,
                 port=config.native_guard_port, application_window=self.live_forms,
@@ -226,14 +229,15 @@ class YudaoHost:
     def _fenced_gets(self, policy: dict) -> frozenset:
         """The scanned GET handlers the fence still refuses inside a window.
 
-        Without the application's own window, all of them. With it, a handler the scan
+        Method-fence action admission retains all scanned writing handlers. Reviewed
+        admission without the application's own window does too. With that window, a handler the scan
         traced to a mapped database statement is let through: the application refuses
         that statement itself, and the request succeeds whenever it had nothing to
         write (a default row that already exists). A handler traced anywhere else, or
         not traced to its end, stays refused -- the window covers the database only.
         """
         listed = frozenset(policy["writing_gets"])
-        if not self.live_forms:
+        if self.config.native_page_admission == "method-fence" or not self.live_forms:
             return listed
         reasons = policy["scan"].get("reasons") if isinstance(policy.get("scan"), dict) else None
         reasons = reasons if isinstance(reasons, dict) else {}
@@ -391,10 +395,14 @@ class YudaoHost:
             from web_operation_agent.transport.panel_view import panel_limits
             from .slim_loop import MODEL_STEPS, ActorKnowledge, TableReadTurnExecutor
             from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
-            model_goal = ModelPageGoalPort(app.goal_port, self.page_review)
-            action_policy = NativeModelReadActions(app.origin, app.goal_data,
-                self.ui.records if self.ui is not None else {}, model_goal, self.page_review)
-            draft_steps = NativeDraftSteps(app.goal_data, app.ports.forms, self.page_review)
+            page_review, page_actions = self.page_review, NativeModelReadActions
+            if self.config.native_page_admission == "method-fence":
+                from .method_fenced_actions import MethodFencedPageActions, MethodFencedPageReview
+                page_review, page_actions = MethodFencedPageReview.from_review(page_review), MethodFencedPageActions
+            model_goal = ModelPageGoalPort(app.goal_port, page_review)
+            action_policy = page_actions(app.origin, app.goal_data,
+                self.ui.records if self.ui is not None else {}, model_goal, page_review)
+            draft_steps = NativeDraftSteps(app.goal_data, app.ports.forms, page_review)
             mutation_prefill = None
             if self.config.native_writes and self.live_forms:
                 from .mutation_prefill import YudaoMutationPrefill
@@ -535,6 +543,9 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-page-policy", type=Path,
                     help="release-reviewed model page handlers; required for slim")
+    ap.add_argument("--native-page-admission", choices=("reviewed", "method-fence"), default="reviewed",
+                    help="allow unregistered ordinary page controls under the method fence; "
+                         "keeps target binding and refuses write controls")
     ap.add_argument("--native-page-disable", action="append", default=[],
                     choices=("query", "paging", "fields", "lines"),
                     help="repeat to disable an optional page handler before menu/exact grants; API reads remain available")
@@ -567,6 +578,7 @@ def main(argv=None) -> int:
             source_release=a.source_release, source_commits=commits, gateway_port=a.gateway_port,
             bootstrap_port=a.bootstrap_port, model=a.model, model_env=env,
             native_read_policy=a.native_read_policy, native_page_policy=a.native_page_policy,
+            native_page_admission=a.native_page_admission,
             native_page_disabled_handlers=frozenset(a.native_page_disable),
             native_edit_prefill=a.native_edit_prefill,
             native_money_policy=a.native_money_policy,

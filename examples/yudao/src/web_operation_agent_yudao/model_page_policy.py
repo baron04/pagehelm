@@ -47,7 +47,8 @@ def _unsafe_button(element):
     labels = " ".join(str(value) for value in (element.name, element.attrs.get("title"),
         element.attrs.get("aria-label"), element.attrs.get("action_name")) if value)
     icon = str(element.attrs.get("action_icon") or "")
-    return bool(_UNSAFE_BUTTON.search(labels) or _UNSAFE_ICON.search(icon)
+    return bool(element.attrs.get("native_submit") == "true" or element.attrs.get("type") in {"submit", "image"}
+                or _UNSAFE_BUTTON.search(labels) or _UNSAFE_ICON.search(icon)
                 or not labels.strip() and icon not in {"ep:search", "ep:refresh", "ep:plus", "ep:edit"})
 
 
@@ -162,10 +163,12 @@ class NativePageReview:
                    digest, generated["fence_sha256"], tuple((route, tuple(fields.items()))
                        for route, fields in generated["columns"].items()))
 
+    def denies(self, kind, path):
+        return kind in self.disabled_handlers or any(
+            family == kind and _matches_route(route, path) for route, family in self.excluded)
+
     def permits(self, kind, path, control=None):
-        if kind in self.disabled_handlers:
-            return False
-        if any(family == kind and _matches_route(route, path) for route, family in self.excluded):
+        if self.denies(kind, path):
             return False
         # A menu address grants the read-shaped families (D2). Page-load effects of
         # every menu route were scanned at release time; routes that write on load
