@@ -1,7 +1,7 @@
 # Two project-isolated synthetic environments; only the assistant ingress is published.
 services:
   mysql:
-    cpus: 1.5
+    cpus: 3
     ports: !reset []
     mem_limit: 1024m
     memswap_limit: 1024m
@@ -11,7 +11,7 @@ services:
     mem_limit: 128m
     memswap_limit: 128m
   server:
-    cpus: 2
+    cpus: 4
     environment:
       JAVA_OPTS: ${YUDAO_JAVA_OPTS:--Xms256m -Xmx1280m -XX:MaxMetaspaceSize=512m -XX:+UseSerialGC -Xss512k}
     mem_limit: 2048m
@@ -22,7 +22,7 @@ services:
     mem_limit: 128m
     memswap_limit: 128m
   agent:
-    cpus: 1
+    cpus: 0.5
     build:
       context: ${LOCAL_CHECKOUT}
       dockerfile: examples/yudao/deploy/local/agent.Dockerfile
