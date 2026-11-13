@@ -166,7 +166,13 @@ def ensure_application(config: cfg.Configuration):
         '{{index .Config.Labels "org.web-operation-agent.test-clock"}}',
         config.project + "-server-1", config.project + "-mysql-1"], capture_output=True, text=True)
     clock_matches = applied.returncode == 0 and len(applied.stdout.splitlines()) == 2 and all(v == expected or (expected == "real" and v == "<no value>") for v in applied.stdout.splitlines())
-    if clock_matches and {"mysql", "redis", "server", "web"} <= services and application_ready(config, internal=True):
+    cfg.ensure_resources(config)
+    parents = subprocess.run(["docker", "inspect", "--format", "{{.HostConfig.CgroupParent}}",
+        *(config.project + f"-{name}-1" for name in ("mysql", "redis", "server", "web"))],
+        capture_output=True, text=True)
+    # Containers created before the shared environment group must be recreated into it.
+    placed = parents.returncode == 0 and set(parents.stdout.split()) == {cfg.cgroup_parent(config)}
+    if clock_matches and placed and {"mysql", "redis", "server", "web"} <= services and application_ready(config, internal=True):
         print("复用本环境的业务服务和数据。", flush=True)
         return
     if not clock_matches and "agent" in services:
@@ -213,6 +219,7 @@ def start(config: cfg.Configuration, *, restart=False):
     if current and current["running"] and not changed and current["image"] == cfg.image_name():
         cfg.compose(config, "restart", "agent")
     else:
+        cfg.ensure_resources(config)
         cfg.compose(config, "up", "-d", "--no-deps", "--no-build", "--force-recreate", "agent")
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:

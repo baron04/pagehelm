@@ -241,19 +241,47 @@ class LauncherTests(unittest.TestCase):
         (self.config.state / "source.compose.json").write_text(json.dumps({"services": command.test_clock.composition(None)}))
         with patch.object(cfg, "compose", return_value="mysql\nredis\nserver\nweb\nagent") as compose, \
                 patch.object(command, "application_ready", return_value=True), \
+                patch.object(cfg, "ensure_resources") as resources, \
                 patch.object(command.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "old-offset\nold-offset\n")):
             command.ensure_application(self.config)
+        resources.assert_called_once_with(self.config)
         self.assertEqual([("ps", "--services", "--status", "running"), ("stop", "agent"),
             ("up", "-d", "--no-build", "mysql", "redis", "server", "web")],
             [c.args[1:] for c in compose.call_args_list])
+
+    def _inspect(self, parent):
+        def run(args, **kwargs):
+            if "{{.HostConfig.CgroupParent}}" in args:
+                return subprocess.CompletedProcess(args, 0, (parent + "\n") * 4)
+            return subprocess.CompletedProcess(args, 0, "<no value>\n<no value>\n")
+        return run
 
     def test_healthy_application_does_not_run_compose_up(self):
         (self.config.state / "source.compose.json").write_text(json.dumps({"services": command.test_clock.composition(None)}))
         with patch.object(cfg, "compose", return_value="mysql\nredis\nserver\nweb\nagent") as compose, \
                 patch.object(command, "application_ready", return_value=True), \
-                patch.object(command.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "<no value>\n<no value>\n")), redirect_stdout(io.StringIO()):
+                patch.object(cfg, "ensure_resources") as resources, \
+                patch.object(command.subprocess, "run", side_effect=self._inspect(cfg.cgroup_parent(self.config))), \
+                redirect_stdout(io.StringIO()):
             command.ensure_application(self.config)
         compose.assert_called_once_with(self.config, "ps", "--services", "--status", "running", capture=True)
+        resources.assert_called_once_with(self.config)
+
+    def test_healthy_services_outside_the_environment_group_are_recreated_into_it(self):
+        (self.config.state / "source.compose.json").write_text(json.dumps({"services": command.test_clock.composition(None)}))
+        with patch.object(cfg, "compose", return_value="mysql\nredis\nserver\nweb\nagent") as compose, \
+                patch.object(command, "application_ready", return_value=True), \
+                patch.object(cfg, "ensure_resources"), \
+                patch.object(command.subprocess, "run", side_effect=self._inspect("")):
+            command.ensure_application(self.config)
+        self.assertIn(("up", "-d", "--no-build", "mysql", "redis", "server", "web"),
+                      [c.args[1:] for c in compose.call_args_list])
+
+    def test_environment_group_is_refused_when_its_totals_differ(self):
+        outputs = iter(["", "700000 100000\n2147483648\n100\n0\n"])
+        with patch.object(cfg.subprocess, "run", side_effect=lambda *a, **k: subprocess.CompletedProcess(a, 0, next(outputs))):
+            with self.assertRaises(cfg.LocalError):
+                cfg.ensure_resources(self.config)
 
     def test_health_rejects_other_environment_and_legacy_schema(self):
         for data in ({"schema_version": 1, "checkout_id": cfg.checkout_id()},

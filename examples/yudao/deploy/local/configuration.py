@@ -71,11 +71,62 @@ def process_environment(config: Configuration | None = None) -> dict[str, str]:
                LOCAL_PUBLIC_PORT=str(config.port), LOCAL_PUBLIC_ORIGIN=config.origin, LOCAL_AGENT_IMAGE=image_name(),
                LOCAL_AGENT_ENV_FILE=str(config.state / "agent.env"),
                LOCAL_ENVIRONMENT=str(config.number), LOCAL_CHECKOUT_ID=checkout_id(),
+               LOCAL_CGROUP_PARENT=cgroup_parent(config),
                LOCAL_UID=str(os.getuid()), LOCAL_GID=str(os.getgid()),
                PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT / "examples/yudao/src"))),
                NO_PROXY="localhost,127.0.0.1,::1", no_proxy="localhost,127.0.0.1,::1")
     env.pop("COMPOSE_PROFILES", None)
     return env
+
+
+#: One parent cgroup per environment holds every container of it, including a
+#: measurement host. The services share these totals instead of fixed per-service
+#: caps; the two environments have equal CPU weight.
+ENVIRONMENT_CPUS = 7
+ENVIRONMENT_MEMORY_BYTES = 4 * 1024 ** 3
+_CGROUP_HELPER = "redis:latest"  # an image the deployment already pulls; only its shell is used
+
+
+def cgroup_parent(config: Configuration) -> str:
+    return config.project
+
+
+def _cgroup(script: str) -> str:
+    result = subprocess.run(["docker", "run", "--rm", "--privileged", "--cgroupns=host", "--network", "none",
+                             "-v", "/sys/fs/cgroup:/sys/fs/cgroup", "--entrypoint", "sh", _CGROUP_HELPER,
+                             "-c", script], capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise LocalError("无法在 Docker 虚拟机中设置该环境的资源组。")
+    return result.stdout
+
+
+def environment_resources(config: Configuration) -> dict:
+    """The effective totals of this environment's parent group, read from the Linux VM."""
+    group = "/sys/fs/cgroup/" + cgroup_parent(config)
+    out = _cgroup(f'cd {group} && cat cpu.max memory.max cpu.weight && '
+                  f'(cat memory.swap.max 2>/dev/null || echo none)').split("\n")
+    quota, period = out[0].split()
+    return {"group": cgroup_parent(config), "cpus": int(quota) / int(period), "memory_bytes": int(out[1]),
+            "cpu_weight": int(out[2]), "swap": out[3]}
+
+
+def ensure_resources(config: Configuration) -> dict:
+    """Create or reset this environment's parent group; never touches the other one.
+
+    The VM loses the group when Docker restarts, so every start runs this first and
+    refuses to start services if the read-back totals differ."""
+    group = "/sys/fs/cgroup/" + cgroup_parent(config)
+    _cgroup(f'set -e; mkdir -p {group}; '
+            f'echo "+cpu +memory +pids" > {group}/cgroup.subtree_control; '
+            f'echo "{ENVIRONMENT_CPUS * 100000} 100000" > {group}/cpu.max; '
+            f'echo {ENVIRONMENT_MEMORY_BYTES} > {group}/memory.max; '
+            f'echo 100 > {group}/cpu.weight; '
+            f'if [ -f {group}/memory.swap.max ]; then echo 0 > {group}/memory.swap.max; fi')
+    actual = environment_resources(config)
+    if (actual["cpus"] != ENVIRONMENT_CPUS or actual["memory_bytes"] != ENVIRONMENT_MEMORY_BYTES
+            or actual["cpu_weight"] != 100 or actual["swap"] not in {"0", "none"}):
+        raise LocalError("该环境资源组的实际配额与配置不一致。")
+    return actual
 
 
 def compose(config: Configuration, *args: str, capture: bool = False, quiet: bool = False) -> str:
