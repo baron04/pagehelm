@@ -1,6 +1,6 @@
 # yudao (ruoyi-vue-pro) local test application
 
-A local, resettable deployment of yudao used as the second test application. Nothing here is imported by the Python package.
+Build and deployment resources for the Yudao demo and test application. Use the repository's `./local` entry point for the two local environments; setup and operation are documented in the [local guide](../../../docs/guides/local-yudao.md). Nothing here is imported by the Python package.
 
 ## Pinned versions
 
@@ -51,27 +51,37 @@ A seeded database is upgraded in place, not rebuilt. `upgrade.py` compares the o
 
 ## Build and run
 
+### Build cache artifacts
+
+Run these commands from `examples/yudao/deploy/` when preparing the cache for the first time. They build artifacts shared by the local and cloud entry points; they do not start an environment.
+
 ```bash
 export YUDAO_CACHE="$(git rev-parse --show-toplevel)/.q0-cache/yudao"   # the one active cache
 git clone https://gitee.com/zhijiantianya/ruoyi-vue-pro.git $YUDAO_CACHE/server && git -C $YUDAO_CACHE/server checkout d3d00639c0
 git clone https://gitee.com/yudaocode/yudao-ui-admin-vue3.git $YUDAO_CACHE/ui && git -C $YUDAO_CACHE/ui checkout 9323ffa2ca
+cp -R patches/server/. $YUDAO_CACHE/server/
 python3 enable_modules.py $YUDAO_CACHE/server iot report
 git -C $YUDAO_CACHE/ui apply "$PWD"/patches/ui/*.patch   # the upstream's promotional links: login page, user menu, home page
 python3 generate_ddl.py $YUDAO_CACHE/server > $YUDAO_CACHE/business-schema.sql
 docker run --rm -v $YUDAO_CACHE/server:/src -v yudao-m2:/root/.m2 -w /src maven:3.9-eclipse-temurin-21 mvn -B -q -T 1C clean package -DskipTests -Dmaven.test.skip=true
 (cd $YUDAO_CACHE/ui && pnpm install --frozen-lockfile --registry https://registry.npmmirror.com/ && VITE_BASE_URL= VITE_APP_CAPTCHA_ENABLE=false pnpm run build:prod)
-docker compose up -d
 ```
-Before building, copy `patches/server/` over the server checkout (`cp -R patches/server/. $YUDAO_CACHE/server/`). It adds four classes under `yudao-server` and changes none of upstream's: a read-only window per signed-in user (`/admin-api/woa/page-guard/begin`, `/end`, `/status`). While a user's window is open, every insert, update and delete their requests reach is refused at the one place all mapped statements pass, whatever handler or HTTP method they came through; work handed to other threads (access logs) is not affected, and the window closes by itself when its time runs out. It covers database writes only: a handler that sends a message or calls another service is outside it, which is why the assistant's host still refuses every request that is not a read. The assistant's host opens this window with its own and does not work the page without it.
+The copied `patches/server/` adds four classes under `yudao-server` and changes none of upstream's: a read-only window per signed-in user (`/admin-api/woa/page-guard/begin`, `/end`, `/status`). While a user's window is open, every insert, update and delete their requests reach is refused at the one place all mapped statements pass, whatever handler or HTTP method they came through; work handed to other threads (access logs) is not affected, and the window closes by itself when its time runs out. It covers database writes only: a handler that sends a message or calls another service is outside it, which is why the assistant's host still refuses every request that is not a read. The assistant's host opens this window with its own and does not work the page without it.
 
 
 The UI lockfile resolves from `registry.npmmirror.com`, so install against that registry; a current pnpm rejects the lockfile against npmjs metadata. The UI build needs about 8 GB of heap, so build it on the host rather than in a default Docker VM. Keep `VITE_BASE_URL` empty for the local build: nginx proxies `/admin-api` on the page's own origin, including an isolated clone on another port. A bundle baked for `localhost:48088` leaves a clone on another port stuck at its loading screen.
 
-The app is served at `http://localhost:48088`; MySQL listens on `127.0.0.1:43306`. The database password defaults to a local-only value; set `YUDAO_DB_PASSWORD` to change it.
+Prepare the pinned PageController assets as described in the [deployment guide](../../../docs/guides/deploy-yudao.md#固定缓存), then return to the [local guide](../../../docs/guides/local-yudao.md#首次准备) to start environment 1 or 2.
+
+### Standalone stack (legacy)
+
+The direct `docker compose up -d` command starts the older `woa-yudao` project, separate from environments 1 and 2. Its app is served at `http://localhost:48088`; MySQL listens on `127.0.0.1:43306`. The database password defaults to a local-only value; set `YUDAO_DB_PASSWORD` to change it. These commands are retained for that stack; use `./local` for the two current environments.
 
 `reset.sh` recreates the database from the schema scripts, discarding every record. `menu_stats.sql` counts pages and buttons per top-level menu.
 
 ## Seed data
+
+The `seed.py` and `snapshot.sh` examples below target the legacy standalone stack. For environments 1 and 2, use the [synthetic data tools](../../../docs/guides/local-yudao.md#合成数据工具); frozen evaluations manage snapshot recovery through their evaluation protocol.
 
 `seed.py` writes synthetic records through the admin API (and, for the mall, the member API), so numbering, totals, stock and approval state are the application's own. It looks every record up before creating it, so a second run creates nothing.
 
