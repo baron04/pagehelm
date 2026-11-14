@@ -50,6 +50,7 @@ MAX_OBSERVATION_CONTENT_CHARS = int(
 MAX_SCROLL_PAGES = int(_BROWSER_CONTRACT["scroll"]["max_pages"])
 MAX_CHOICE_CANDIDATES = int(_BROWSER_CONTRACT["choice_failure"]["max_candidates"])
 MAX_CHOICE_CANDIDATE_CHARS = int(_BROWSER_CONTRACT["choice_failure"]["max_label_chars"])
+_EXECUTION_TRACE = _BROWSER_CONTRACT["execution_trace"]
 SCOPED_FORM_HANDOFF_CAPABILITY = _BROWSER_CONTRACT["form_handoff"]["scoped_capability"]
 MAX_FORM_LABEL_CHARS = int(_BROWSER_CONTRACT["form_handoff"]["max_label_chars"])
 MAX_FORM_CHOICE_OPTIONS = int(_BROWSER_CONTRACT["form_handoff"]["max_choice_options"])
@@ -360,6 +361,31 @@ class PageObservation:
         return digest(self.to_json())
 
 
+def _execution_trace(value, action):
+    """Best-effort diagnostics; never reject or reinterpret a business receipt."""
+    try:
+        if action not in _EXECUTION_TRACE["operations"] or not isinstance(value, dict):
+            return None
+        identifier, events = value.get("trace_id"), value.get("events")
+        if (not isinstance(identifier, str) or not 0 < len(identifier) <= _EXECUTION_TRACE["max_trace_id_chars"]
+                or not re.fullmatch(_EXECUTION_TRACE["trace_id_pattern"], identifier)
+                or not isinstance(events, list) or not 0 < len(events) <= _EXECUTION_TRACE["max_events"]):
+            return None
+        clean, previous = [], 0
+        for event in events:
+            if not isinstance(event, dict):
+                return None
+            sequence = event.get("sequence")
+            if (type(sequence) is not int or not previous < sequence <= 2**53 - 1
+                    or event.get("operation") != action or event.get("path") not in _EXECUTION_TRACE["paths"]):
+                return None
+            clean.append({"sequence": sequence, "operation": action, "path": event["path"]})
+            previous = sequence
+        return {"trace_id": identifier, "events": clean}
+    except Exception:
+        return None
+
+
 @dataclass
 class ActionReceipt:
     """What the browser did, echoed back in full.
@@ -397,6 +423,8 @@ class ActionReceipt:
     #: they never authorize a substitute selection.
     candidate_labels: tuple[str, ...] = ()
     no_effect: bool = False
+    #: Private execution diagnostics, excluded from semantic copies and equality.
+    execution_trace: dict | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ActionReceipt")
@@ -429,8 +457,10 @@ class ActionReceipt:
         _require(self.observation is None or isinstance(self.observation, PageObservation),
                  "observation must be a PageObservation or null")
         self.observation = copy.deepcopy(self.observation)
+        self.execution_trace = _execution_trace(self.execution_trace, self.action)
 
-    def to_json(self) -> dict:
+    def to_json(self, *, include_diagnostics: bool = True) -> dict:
+        trace = _execution_trace(self.execution_trace, self.action) if include_diagnostics else None
         return {"schema_version": self.schema_version, "command_id": self.command_id,
                 "action": self.action, "args_echo": copy.deepcopy(self.args_echo), "ok": self.ok,
                 "error_code": self.error_code, "error_detail": self.error_detail,
@@ -440,6 +470,7 @@ class ActionReceipt:
                 "relogin": self.relogin, "write_guard_held": self.write_guard_held,
                 **({"candidate_labels": list(self.candidate_labels)} if self.candidate_labels else {}),
                 **({"no_effect": True} if self.no_effect else {}),
+                **({"execution_trace": trace} if trace else {}),
                 "observation": self.observation.to_json() if self.observation else None}
 
     @staticmethod
@@ -447,7 +478,7 @@ class ActionReceipt:
         allowed = {"schema_version", "command_id", "action", "args_echo", "ok",
                    "error_code", "error_detail", "url_before", "url_after", "navigated",
                    "epoch_before", "epoch_after", "elapsed_ms", "relogin",
-                   "write_guard_held", "candidate_labels", "no_effect", "observation"}
+                   "write_guard_held", "candidate_labels", "no_effect", "observation", "execution_trace"}
         required = {"schema_version", "command_id", "action", "args_echo", "ok"}
         d = _strict_object(d, "ActionReceipt", allowed=allowed, required=required)
         obs = d.get("observation")
@@ -465,6 +496,7 @@ class ActionReceipt:
                              write_guard_held=d.get("write_guard_held", False),
                              candidate_labels=tuple(d.get("candidate_labels", ())),
                              no_effect=d.get("no_effect", False),
+                             execution_trace=d.get("execution_trace"),
                              observation=PageObservation.from_json(obs)
                              if obs is not None else None)
 

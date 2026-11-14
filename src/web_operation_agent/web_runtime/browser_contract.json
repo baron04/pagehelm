@@ -21,6 +21,13 @@
     "max_candidates": 12,
     "max_label_chars": 200
   },
+  "execution_trace": {
+    "max_events": 64,
+    "max_trace_id_chars": 96,
+    "trace_id_pattern": "^[A-Za-z0-9_/-]+$",
+    "operations": ["click", "fill"],
+    "paths": ["binding", "ordinary"]
+  },
   "form_handoff": {
     "scoped_capability": "page.scoped_form_handoff",
     "max_label_chars": 120,

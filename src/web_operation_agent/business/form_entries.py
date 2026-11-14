@@ -12,6 +12,7 @@ from .errors import (BusinessToolContractError, BusinessToolIdentityError,
                      BusinessToolPermissionError, BusinessToolRequestError)
 from .tools.contracts import form_control_unavailable
 from ..state.identity import PrincipalError
+from ..schemas import ActionReceipt
 
 
 @dataclass(frozen=True)
@@ -158,7 +159,8 @@ class FormEntryTools:
                     or observation.epoch <= receipt.observation.epoch):
                 raise _FormEntryPending("observe/wait for a fresh form before describing it")
             self.pending = None
-            reference = self._call("accept_entry", entry, before, receipt, observation, context=context)
+            reference = self._call("accept_entry", entry, before,
+                ActionReceipt.from_json(receipt.to_json(include_diagnostics=False)), observation, context=context)
             if (not isinstance(reference, str) or not reference.strip()
                     or len(reference) > 300):
                 raise BusinessToolContractError("the application did not bind the opened form")

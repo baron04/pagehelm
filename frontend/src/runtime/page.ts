@@ -234,11 +234,30 @@ export class Page {
     try {
       const fingerprint = actionElementFingerprint(this.element(ref)), navigation = this.navigation(ref)
       const form = this.formContext(ref)
-      const contextual = form ? JSON.stringify([fingerprint, form]) : fingerprint
+      const record = this.recordContext(ref)
+      const contextual = form || record ? JSON.stringify([fingerprint, form, record]) : fingerprint
       return navigation ? JSON.stringify([contextual, navigation]) : contextual
     } catch {
       return 'missing'
     }
+  }
+
+  /** Application-observed row identity, re-read before dispatch. No effect grant. */
+  private recordContext(ref: unknown): {id: string; table: string; values: string[][]} | undefined {
+    const element = this.element(ref)
+    const fact = this.readElementPageControl?.(element) as
+      {kind?: unknown; id?: unknown; table?: unknown; values?: unknown} | undefined
+    if (fact?.kind !== 'record' || typeof fact.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(fact.id) ||
+        typeof fact.table !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(fact.table) ||
+        !Array.isArray(fact.values) || fact.values.length > 80) return undefined
+    const values: string[][] = []
+    for (const pair of fact.values) {
+      if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== 'string' ||
+          typeof pair[1] !== 'string' || pair[0].length > 80 || pair[1].length > 300 ||
+          this.redactor.isSensitiveName(pair[0]) || this.redactor.redactString(pair[1]) !== pair[1]) return undefined
+      values.push(pair as string[])
+    }
+    return {id: fact.id, table: fact.table, values}
   }
 
   private formContext(ref: unknown): {mode: 'create' | 'update'; recordId: string | null;
@@ -808,9 +827,18 @@ export class Page {
       delete item.attrs.form_mode
       delete item.attrs.form_record_id
       delete item.attrs.form_input_kind
+      delete item.attrs.record_id
+      delete item.attrs.record_table
+      delete item.attrs.record_values
       try {
         const element = this.element(item.ref)
         if (!(element instanceof HTMLElement) || !element.isConnected) continue
+        const record = this.recordContext(item.ref)
+        if (record) {
+          item.attrs.record_id = record.id
+          item.attrs.record_table = record.table
+          item.attrs.record_values = JSON.stringify(record.values)
+        }
         const fact = this.readElementPageControl?.(element) as
           {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown; queryValue?: unknown;
             mode?: unknown; recordId?: unknown} | undefined

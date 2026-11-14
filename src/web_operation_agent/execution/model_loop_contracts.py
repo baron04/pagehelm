@@ -16,6 +16,25 @@ from ..business.prefill_conversion import MutationPrefillPort
 
 
 @dataclass(frozen=True, slots=True)
+class DeliveryFeedback:
+    """A bounded closing check; indices refer to this finish's deliverable items."""
+
+    code: str
+    message: str
+    item_indices: tuple[int, ...] = ()
+
+    def __post_init__(self):
+        if (not isinstance(self.code, str) or not self.code or len(self.code) > 80
+                or not self.code.isascii()
+                or not self.code.replace("_", "").isalnum()
+                or not isinstance(self.message, str) or not 1 <= len(self.message) <= 2000
+                or not isinstance(self.item_indices, tuple)
+                or len(self.item_indices) > 16 or len(set(self.item_indices)) != len(self.item_indices)
+                or any(type(i) is not int or not 0 <= i < 16 for i in self.item_indices)):
+            raise ValueError("invalid delivery feedback")
+
+
+@dataclass(frozen=True, slots=True)
 class PageActionOutcome:
     """A captured dispatch result; later observations cannot overwrite its diagnosis."""
 
@@ -123,7 +142,8 @@ class ModelLoopProfile:
     mutation_prefill: MutationPrefillPort | None = None
     #: Optional closing reading of a finished answer against the turn's own sources,
     #: as (answer, sources) and the stated values the sources do not show. The loop
-    #: sends the list back once and audits it; it never withholds data or ends the turn.
+    #: sends the list back once and audits it. Unresolved item values mark those items
+    #: and the turn incomplete; narrative-only values receive an explicit footer.
     untraced_numbers: Callable[[str, tuple[str, ...]], tuple[str, ...]] | None = None
 
     def __post_init__(self):

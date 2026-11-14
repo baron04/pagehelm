@@ -101,6 +101,21 @@ class ChannelTests(unittest.TestCase):
                 raise AssertionError(
                     f"no action event after {cursor}; saw {[e.kind for e in events]}")
 
+    def test_execution_diagnostic_changes_do_not_conflict_with_an_acknowledged_result(self):
+        action = action_for(self.grant.session_id, self.first)
+        self.channel.enqueue_action(action)
+        self.channel.claim_action({"action_id":action.action_id}, lease_id=self.lease)
+        after = observation(self.grant.session_id,2,caused_by=action.action_id,url=ORIGIN + "/next")
+        result = completed(action,after)
+        trace = {"trace_id":"trace-original","events":[{"sequence":1,"operation":"click","path":"ordinary"}]}
+        traced = dataclasses.replace(result,receipt=dataclasses.replace(result.receipt,execution_trace=trace))
+        self.assertFalse(self.channel.accept_result(traced,lease_id=self.lease)["duplicate"])
+        delivered = self.channel.wait_for_result(action.action_id,timeout_s=0)
+        self.assertEqual(delivered.receipt.execution_trace,trace)
+        changed = dataclasses.replace(result,receipt=dataclasses.replace(result.receipt,execution_trace={
+            "trace_id":"trace-replayed","events":[{"sequence":1,"operation":"click","path":"binding"}]}))
+        self.assertTrue(self.channel.accept_result(changed,lease_id=self.lease)["duplicate"])
+
     def test_event_replay_is_same_action_and_result_is_idempotent(self):
         action = action_for(self.grant.session_id, self.first)
         event = self.channel.enqueue_action(action)

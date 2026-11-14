@@ -225,7 +225,10 @@ class ToolDefinition:
 
 
 class ToolRegistry:
-    def __init__(self, definitions: tuple[ToolDefinition, ...]):
+    def __init__(self, definitions: tuple[ToolDefinition, ...], *, mutation_dispatch_enabled: bool = True):
+        if type(mutation_dispatch_enabled) is not bool:
+            raise TypeError("mutation_dispatch_enabled must be boolean")
+        self._mutation_dispatch_enabled = mutation_dispatch_enabled
         tools = {t.name: t for t in definitions}
         if len(tools) != len(definitions):
             raise ValueError("duplicate installed tool")
@@ -263,4 +266,6 @@ class ToolRegistry:
         tool = self.get(name)
         if tool.effect != "write":
             raise BusinessToolRequestError("tool is read only")
+        if not self._mutation_dispatch_enabled:
+            raise BusinessToolRequestError("mutation dispatch is disabled for preparation")
         return tool.handler.dispatch(args, context=context)

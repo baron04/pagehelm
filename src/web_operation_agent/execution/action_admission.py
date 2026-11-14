@@ -262,7 +262,7 @@ class ActionAdmission:
         after = verified_observation(intent, receipt, context=context,
                                      settlement=settlement, minimum_epoch=minimum_epoch)
         try:
-            verified = self.policy.verify(permit, intent, ActionReceipt.from_json(receipt.to_json()),
+            verified = self.policy.verify(permit, intent, ActionReceipt.from_json(receipt.to_json(include_diagnostics=False)),
                 observation=PageObservation.from_json(after.to_json()),
                 context=context, checkpoint=checkpoint)
         except ActionResultPending:

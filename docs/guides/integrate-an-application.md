@@ -35,6 +35,8 @@ Adapter 负责把条件翻译成自己的查询语言。应用接口不能按某
 
 应用 Origin 必须提供一个导出 `PageController` 和 `getElementByIndex` 的 ES module。Minimal 示例为合成页面提供了一个小型兼容 controller。真实集成应固定并部署已经通过资格验证的 PageController 实现，再把准确的同源 URL 写入 `ApplicationDescriptor.page_controller_module`。其它 Origin 上的 CDN URL 会被拒绝。
 
+应用模块可通过 `readElementPageControl(element)` 为行内控件返回 `{kind: 'record', id, table, values}`：`id` 是应用记录标识，`table` 区分当前挂载的数据视图，`values` 是可见列名和值的二元数组。这些事实只描述当前页面，不授予点击或读取权限；应用必须证明控件、渲染行及同账号记录的对应，渲染未提交或无法对应时不返回。Runtime 从实时回调生成 `record_id/record_table/record_values`，清除控制器文本中的同名属性，并把这些事实纳入派发前指纹；行或视图变化后旧引用失效。应用标识可以是非数字字符串，Runtime 不认识 Vue 或业务实体。实现与反例须同时覆盖应用组件和结构不同的合成页面。
+
 这个模块还可以导出 `openPage(url)`：由应用在当前文档里打开自己的页面，例如经它的路由。描述符的导航模式为 `document` 时，Runtime 在执行 `goto` 时先调用它；只有它在六秒内准确返回 `true`，页面才不按整页加载。它只应在应用此刻显示的地址与之前不同的情况下返回 `true`，因为 Runtime 仍然按地址来证明跳转发生了。路由只靠 History API 就能驱动的应用改为声明 `navigation_mode="spa"`，不需要这个导出。
 
 该模块还可导出 `readPageBlocker()`：就绪时严格返回 `false`，正常加载时返回 `"pending"`，阻断错误返回 `true`；其它值及异常均按阻断处理。即使 URL 和 DOM 投影未变，加载也保持待确认；服务端等待新的就绪观察，不重放前一个动作。错误优先于加载。记录身份与权限仍需应用自己的证据，加载标识不能授予这些证据。

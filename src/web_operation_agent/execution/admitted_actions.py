@@ -61,7 +61,7 @@ def verify_action(session, turn, admitted, receipt, *, settlement=None):
             context=admitted.context, checkpoint=admitted.checkpoint, settlement=settlement,
             minimum_epoch=turn.obs.epoch)
     except ActionResultPending:
-        session._pending_action = PendingAction(admitted, json.dumps(receipt.to_json(),
+        session._pending_action = PendingAction(admitted, json.dumps(receipt.to_json(include_diagnostics=False),
             ensure_ascii=False, separators=(",", ":"), allow_nan=False))
         session.ledger.append("action_effect_pending", step=turn.step,
             command_id=receipt.command_id, binding_digest=admitted.intent.binding_digest,

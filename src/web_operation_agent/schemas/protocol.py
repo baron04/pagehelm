@@ -318,9 +318,9 @@ class ActionResultEnvelope:
 
     @property
     def content_digest(self) -> str:
-        return digest(self.to_json())
+        return digest(self.to_json(include_diagnostics=False))
 
-    def to_json(self) -> dict:
+    def to_json(self, *, include_diagnostics: bool = True) -> dict:
         return {"schema_version": self.schema_version, "session_id": self.session_id,
                 "turn_id": self.turn_id, "action_id": self.action_id,
                 "based_on_observation_id": self.based_on_observation_id,
@@ -328,7 +328,7 @@ class ActionResultEnvelope:
                 "status": self.status,
                 "observation_after": (self.observation_after.to_json()
                                       if self.observation_after else None),
-                "receipt": self.receipt.to_json() if self.receipt else None,
+                "receipt": self.receipt.to_json(include_diagnostics=include_diagnostics) if self.receipt else None,
                 "error_code": self.error_code, "error_detail": self.error_detail}
 
     @staticmethod

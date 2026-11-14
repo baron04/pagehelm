@@ -9,7 +9,33 @@
 import type {Redactor} from './redaction'
 import browserContract from '@contract/browser_contract.json'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope,
-  type ActionReceipt, type ActionResultEnvelope, type ObservationEnvelope} from './types'
+  type ActionReceipt, type ActionResultEnvelope, type ObservationEnvelope, type ExecutionTrace} from './types'
+
+/** Read only the diagnostic whitelist. A getter or malformed collector cannot
+ * replace a valid business result or its original failure. */
+export function executionTraceOf(result: unknown, action: string): ExecutionTrace | undefined {
+  try {
+    const limits = browserContract.execution_trace
+    if (!limits.operations.includes(action) || !result || typeof result !== 'object') return undefined
+    const raw = (result as {execution_trace?: unknown}).execution_trace
+    if (!raw || typeof raw !== 'object') return undefined
+    const {trace_id, events} = raw as {trace_id?: unknown; events?: unknown}
+    if (typeof trace_id !== 'string' || !trace_id.length || trace_id.length > limits.max_trace_id_chars
+        || !new RegExp(limits.trace_id_pattern).test(trace_id)
+        || !Array.isArray(events) || !events.length || events.length > limits.max_events) return undefined
+    let previous = 0
+    const clean: ExecutionTrace['events'] = []
+    for (const event of events) {
+      if (!event || typeof event !== 'object') return undefined
+      const {sequence, operation, path} = event as {sequence?: unknown; operation?: unknown; path?: unknown}
+      if (typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence <= previous
+          || operation !== action || typeof path !== 'string' || !limits.paths.includes(path)) return undefined
+      clean.push({sequence, operation: action, path})
+      previous = sequence
+    }
+    return {trace_id, events: clean}
+  } catch { return undefined }
+}
 
 export type ResultStatus = 'completed' | 'rejected' | 'indeterminate'
 
@@ -76,9 +102,11 @@ export interface ReceiptFacts {
   /** Bounded labels from the owned list, for a recoverable no-effect refusal. */
   candidateLabels?: string[]
   noEffect?: boolean
+  execution_trace?: unknown
 }
 
 export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: Redactor): ActionReceipt {
+  const execution_trace = executionTraceOf(facts, action.command.action)
   return {
     schema_version: WIRE_VERSION,
     command_id: action.action_id,
@@ -100,6 +128,7 @@ export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: R
       .map(label => redactor.redactString(label).slice(0, browserContract.choice_failure.max_label_chars))
       .filter(Boolean)} : {}),
     ...(facts.noEffect === true ? {no_effect: true} : {}),
+    ...(execution_trace ? {execution_trace} : {}),
     observation: facts.observation.observation,
   }
 }

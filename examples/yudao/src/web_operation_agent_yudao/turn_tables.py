@@ -21,10 +21,10 @@ MAX_TABLES = 36
 MAX_SQL_ROWS = 200
 MAX_SQL_CHARS = 14000
 _FUNCTIONS = frozenset("""
-abs avg coalesce count date datetime dense_rank first_value group_concat ifnull iif
-instr json_array_length json_extract json_type julianday lag last_value lead length
-lower ltrim max min nullif rank replace round row_number rtrim strftime substr
-substring sum time total trim typeof unixepoch upper
+abs avg coalesce count date datetime dense_rank first_value glob group_concat
+ifnull iif instr json_array_length json_extract json_type julianday lag last_value
+lead length like lower ltrim match max min nullif rank replace round row_number
+rtrim strftime substr substring sum time total trim typeof unixepoch upper
 """.split())
 
 
@@ -40,6 +40,128 @@ def _quoted(identifier):
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def _strip_comments(statement):
+    """Remove `--` and `/* */` comments, honouring string literals. Only used
+    for parsing: the wrapped probe query re-embeds the cleaned text, which is
+    semantically identical."""
+    out, i, end = [], 0, len(statement)
+    while i < end:
+        ch = statement[i]
+        if ch in "'\"`":
+            j = i + 1
+            while j < end and (statement[j] != ch or
+                               j + 1 < end and statement[j + 1] == ch):
+                j += 2 if j + 1 < end and statement[j] == ch and statement[j + 1] == ch else 1
+            out.append(statement[i:j + 1])
+            i = j + 1
+            continue
+        if statement.startswith("--", i):
+            stop = statement.find("\n", i)
+            i = end if stop < 0 else stop
+            continue
+        if statement.startswith("/*", i):
+            stop = statement.find("*/", i + 2)
+            if stop < 0:
+                break
+            out.append(" ")
+            i = stop + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+_KEYWORDS = re.compile(r"(?i)\bORDER\s+BY\b|\bLIMIT\b|\bOFFSET\b")
+
+
+def _top_level(statement):
+    """(keyword, start, end) marks outside parentheses and string literals."""
+    marks, depth, i, end = [], 0, 0, len(statement)
+    while i < end:
+        char = statement[i]
+        if char in "'\"`":
+            stop = i + 1
+            while stop < end and (statement[stop] != char or
+                                  stop + 1 < end and statement[stop + 1] == char):
+                stop += 2 if statement[stop] == char else 1
+            i = stop + 1
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            match = _KEYWORDS.match(statement, i)
+            if match is not None:
+                marks.append((match.group(0).split()[0].upper(), i, match.end()))
+                i = match.end()
+                continue
+        i += 1
+    return marks
+
+
+def _split_top(text):
+    parts, depth, start, i = [], 0, 0, 0
+    while i < len(text):
+        char = text[i]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+        i += 1
+    parts.append(text[start:])
+    return parts
+
+
+def _split_direction(term):
+    """Split an ORDER BY term into (key part, direction/NULLS suffix). A term
+    that opens with a quoted identifier keeps everything through its closing
+    quote as the key -- `ORDER BY "x DESC"` names a column literally called
+    `x DESC`, it does not order descending."""
+    t = term.strip()
+    if t[:1] in "\"'`[":
+        close = {"\"": '"', "'": "'", "`": "`", "[": "]"}[t[0]]
+        i = 1
+        while i < len(t):
+            if t[i] == "\\":
+                i += 2
+                continue
+            if t[0] == '"' and t[i:i + 2] == '""':
+                i += 2
+                continue
+            if t[i] == close:
+                rest = t[i + 1:].strip()
+                if rest and not re.fullmatch(
+                        r"(?i)(?:(?:ASC|DESC)(?:\s+NULLS\s+(?:FIRST|LAST))?|NULLS\s+(?:FIRST|LAST))",
+                        rest):
+                    return t, ""
+                return t[:i + 1], rest
+            i += 1
+        return t, ""
+    core = re.sub(r"(?i)\s+(?:ASC|DESC)\b(?:\s+NULLS\s+(?:FIRST|LAST)\b)?\s*$", "", t)
+    return core.rstrip(), t[len(core.rstrip()):].strip()
+
+
+def _order_key(core):
+    """The output-column name an ORDER BY key resolves to: qualified prefixes
+    (`t.col`, `"t"."col"`, `[t].[col]`) peel off, then one quoting layer drops.
+    A quoted name containing a dot (`"my.col"`) stays whole."""
+    t = core.strip()
+    while True:
+        m = re.match(r'^(?:"(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]|[\w]+)\s*\.\s*', t)
+        if not m:
+            break
+        t = t[m.end():]
+    if len(t) >= 2 and t[0] == '"' and t[-1] == '"':
+        return t[1:-1].replace('""', '"')
+    if len(t) >= 2 and ((t[0] == "`" and t[-1] == "`") or (t[0] == "[" and t[-1] == "]")):
+        return t[1:-1]
+    return t
+
+
 def _secret_field(key):
     return bool(_SECRET.search(key) or re.search(r"密码|口令|密钥|令牌", key))
 
@@ -47,6 +169,8 @@ def _secret_field(key):
 def _cell(value):
     if value is None or isinstance(value, (bool, str)):
         return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
     if type(value) is int:
         return value if -(2**63) <= value < 2**63 else str(value)
     if isinstance(value, float):
@@ -99,12 +223,19 @@ class TurnTables:
         name = f"t{len(self.tables) + 1}"
         field_defs = ", ".join(_quoted(key) for key in ("_row", *columns))
         insert = f"INSERT INTO {name} VALUES ({','.join('?' for _ in range(len(columns) + 1))})"
+        folded_keys = [key.casefold() for key in columns]
+
+        def values(row):
+            folded = {}
+            for k, v in row.items():
+                folded.setdefault(str(k).casefold(), v)
+            return tuple(_cell(folded.get(key)) for key in folded_keys)
+
         try:
             with self.connection:
                 self.connection.execute(f"CREATE TABLE {name} ({field_defs})")
                 self.connection.executemany(insert, (
-                    (index, *(_cell(row.get(key)) for key in columns))
-                    for index, row in enumerate(rows, 1)))
+                    (index, *values(row)) for index, row in enumerate(rows, 1)))
         except (sqlite3.Error, ValueError, OverflowError) as exc:
             self.connection.execute(f"DROP TABLE IF EXISTS {name}")
             raise TurnReadError("table_unavailable", "未能完整保存这份行表；请缩小读取范围。") from exc
@@ -127,7 +258,8 @@ class TurnTables:
         def authorize(action, first, second, database, _trigger):
             if action == sqlite3.SQLITE_SELECT:
                 return sqlite3.SQLITE_OK
-            if action == sqlite3.SQLITE_READ and database in {"main", None} and first in self.tables:
+            if action == sqlite3.SQLITE_READ and database in {"main", None} \
+                    and str(first).casefold() in {name.casefold() for name in self.tables}:
                 sources.add(first)
                 return sqlite3.SQLITE_OK
             if action == sqlite3.SQLITE_FUNCTION and second in _FUNCTIONS:
@@ -149,7 +281,8 @@ class TurnTables:
             size = 0
             truncated = False
             for row in cursor:
-                safe_row = redacted(list(row), self.handoffs)
+                safe_row = [value.hex() if isinstance(value, bytes) else value
+                            for value in redacted(list(row), self.handoffs)]
                 size += len(json.dumps(safe_row, ensure_ascii=False))
                 if len(result) >= MAX_SQL_ROWS or size > MAX_SQL_CHARS:
                     truncated = True
@@ -165,9 +298,135 @@ class TurnTables:
             conn.set_authorizer(None)
         if not sources or any(_secret_field(col) for col in columns):
             raise TurnReadError("sql_refused", "查询必须读取本轮行表，且不能输出凭据字段。")
-        return {"receipt": self.issue_receipt(), "columns": columns, "rows": result,
-                "returned_rows": len(result), "truncated": truncated,
-                "sources": [self.tables[name]["receipt"] for name in sorted(sources)]}
+        out = {"receipt": self.issue_receipt(), "columns": columns, "rows": result,
+               "returned_rows": len(result), "truncated": truncated,
+               "sources": [self.tables[name]["receipt"] for name in sorted(sources)],
+               "sources_complete": all(self.tables[name]["complete"] for name in sources)}
+        tie = self._tie_boundary(conn, statement, authorize, deadline)
+        if tie is not None:
+            out["tie"] = tie
+            rows_out = out["rows"]
+            verified = tie["complete"] and out["sources_complete"] and not truncated
+            if tie["tied"]:
+                extra = [row for row in tie["extra_rows"] if row not in rows_out]
+                extra = extra[:max(0, MAX_SQL_ROWS - len(rows_out))]
+                out["rows"] = rows_out = rows_out + extra
+                out["returned_rows"] = len(rows_out)
+                group = "该并列组共" + str(tie["group_rows"]) + "行" if tie.get("group_rows") else "并列组行数未知"
+                out["tie_note"] = (f"第 {tie['at']} 行与后续行按排序键同值并列，{group}，"
+                                   f"已按上限返回 {len(extra)} 行。" if verified else
+                                   f"第 {tie['at']} 行与后续行同值并列；并列组未读全或来源未读全，"
+                                   "排名与并列均标为未查全。")
+            elif not verified:
+                reason = ("来源行表未读全或结果已截断，" if (not out["sources_complete"] or truncated)
+                          else "")
+                out["tie_note"] = (f"{reason}第 {tie['at']} 行之外无法核对并列；排名与并列均标为未查全。")
+        return out
+
+    def _tie_boundary(self, conn, statement, authorize, deadline):
+        """Top-level ``ORDER BY <terms> LIMIT <k>``: fetch row k+1 and, when it ties
+        with row k on every order key, the whole tied group. Order terms that are not
+        plain output columns or positions leave the boundary unchecked and said so."""
+        stmt = _strip_comments(statement).rstrip().rstrip(";").rstrip()
+        marks = _top_level(stmt)
+        order = next((m for m in reversed(marks) if m[0] == "ORDER"), None)
+        limit = next((m for m in reversed(marks) if m[0] == "LIMIT"), None)
+        if order is None or limit is None or order[1] > limit[1]:
+            return None
+
+        def mark(complete, **fields):
+            return {"at": start + k, "tied": False, "complete": complete,
+                    "extra_rows": [], "group_rows": None, **fields}
+
+        offset = next((m for m in reversed(marks) if m[0] == "OFFSET" and m[1] > limit[1]), None)
+        limit_end = offset[1] if offset is not None else len(stmt)
+        m = re.match(r"\s*([0-9]+)\s*$", stmt[limit[2]:limit_end])
+        comma = re.match(r"\s*([0-9]+)\s*,\s*([0-9]+)\s*$", stmt[limit[2]:limit_end])
+        start = k = 0
+        if m is not None:
+            k = int(m.group(1))
+        elif comma is not None:
+            start, k = int(comma.group(1)), int(comma.group(2))
+        else:
+            return None
+        if offset is not None:
+            if not re.fullmatch(r"\s*[0-9]+\s*", stmt[offset[2]:]):
+                return mark(False, unchecked=True)
+            start += int(stmt[offset[2]:].strip())
+        if k < 1 or k >= MAX_SQL_ROWS:
+            return None
+        unchecked = mark(False, unchecked=True)
+        if start + k >= MAX_SQL_ROWS:
+            return mark(False, unreachable=True)
+        order_text = stmt[order[2]:limit[1]]
+        terms_full = [t.strip() for t in _split_top(order_text) if t.strip()]
+        parsed = [_split_direction(t) for t in terms_full]
+        terms = [core for core, _suffix in parsed]
+        if not terms or not all(terms):
+            return unchecked
+        inner = stmt[:order[1]].strip()
+        if not re.match(r"(?is)^(?:SELECT|WITH)\b", inner):
+            return unchecked
+        # The probe re-emits ORDER BY against the subquery's output columns:
+        # keys are quoted identifiers (any content is safe once `"` doubles),
+        # directions/NULLS keep their spelling, and only an unquoted integer
+        # literal stays positional -- `ORDER BY "1"` names a column, not a spot.
+        wrap_terms = []
+        for core, suffix in parsed:
+            direction = f" {suffix}" if suffix else ""
+            if re.fullmatch(r"[0-9]+", core.strip()):
+                wrap_terms.append(core.strip() + direction)
+            else:
+                wrap_terms.append('"' + _order_key(core).replace('"', '""') + '"' + direction)
+
+        def probe(n):
+            conn.set_authorizer(authorize)
+            conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 500)
+            try:
+                cursor = conn.execute(
+                    f"SELECT * FROM ({inner}) ORDER BY {', '.join(wrap_terms)} LIMIT {n}")
+                cols = [item[0] for item in cursor.description]
+                return cols, cursor.fetchall()
+            except sqlite3.Error:
+                return None, None
+            finally:
+                conn.set_progress_handler(None, 0)
+                conn.set_authorizer(None)
+
+        probe_cols, rows = probe(start + k + 1)
+        if rows is None:
+            return unchecked
+        if len(rows) <= start + k:
+            return mark(True)
+        lowered = {}
+        for i, col in enumerate(probe_cols):
+            lowered.setdefault(col.casefold(), i)
+        idx = []
+        for term in terms:
+            if re.fullmatch(r"[0-9]+", term.strip()):
+                idx.append(int(term.strip()) - 1)
+            else:
+                key = _order_key(term).casefold()
+                if key in lowered:
+                    idx.append(lowered[key])
+                else:
+                    return unchecked
+        if any(i < 0 or i >= len(probe_cols) for i in idx):
+            return unchecked
+        key = lambda row: tuple(row[i] for i in idx)
+        boundary = key(rows[start + k - 1])
+        if key(rows[start + k]) != boundary:
+            return mark(True)
+        leading = start > 0 and key(rows[start - 1]) == boundary
+        _, widened = probe(MAX_SQL_ROWS + 1)
+        if widened is None:
+            return mark(False, tied=True)
+        same = [row for row in widened if key(row) == boundary]
+        ended = len(widened) <= MAX_SQL_ROWS or key(widened[-1]) != boundary
+        extra = [redacted(list(row), self.handoffs)
+                 for row in widened[start + k:] if key(row) == boundary]
+        return {"at": start + k, "tied": True, "complete": ended and not leading,
+                "extra_rows": extra, "group_rows": len(same), "leading_group": leading}
 
     def validate_delivery(self, answer, items):
         if any(has_unredacted_sensitive_assignment(value) or self.handoffs.has_unredacted(value)

@@ -29,11 +29,13 @@ class FormBrowser:
     fail = ""
     submit_after_scroll = 0
     submit_requires_values = False
+    execution_trace = None
 
     def __init__(self, channel, **kwargs):
         self.url = channel.latest_observation_envelope.observation.url
         self.epoch, self.values, self.actions = 1, {"name": "", "email": ""}, []
         self.submit_states = []
+        self.receipts = []
         self.instances.append(self)
 
     def start(self):
@@ -62,18 +64,22 @@ class FormBrowser:
             elements = [e for e in elements if e.ref != "e3"]
         obs = PageObservation(1, self.epoch, self.url, "New contact", [], elements,
                               "synthetic form", render_state="ready")
-        return ActionReceipt(1, str(len(self.actions)), action, dict(args), action != self.fail,
+        receipt = ActionReceipt(1, str(len(self.actions)), action, dict(args), action != self.fail,
                              error_code="navigation_timeout" if action == self.fail else "",
-                             observation=obs)
+                             observation=obs, execution_trace=self.execution_trace if action == "click" else None)
+        self.receipts.append(receipt)
+        return receipt
 
 
 class GoalFormsTests(unittest.TestCase):
     def run_goal(self, *, extras=(), values=None, decision="approved", enabled=True,
-                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交", repair_label=False, submit_requires_values=False, preparation_error=None):
+                 disabled=frozenset(), fail="", actor_id="ada-lovelace", open_entry=False, batch=False, submit_after_scroll=0, batch_action="", prompt="填写 Name 和 Email，尚不提交", repair_label=False, submit_requires_values=False, preparation_error=None, execution_trace=None):
         FormBrowser.instances.clear()
         FormBrowser.fail = fail
         FormBrowser.submit_after_scroll = submit_after_scroll
         FormBrowser.submit_requires_values = submit_requires_values
+        FormBrowser.execution_trace = execution_trace
+        self.addCleanup(setattr, FormBrowser, "execution_trace", None)
         self.addCleanup(setattr, FormBrowser, "submit_after_scroll", 0)
         self.addCleanup(setattr, FormBrowser, "submit_requires_values", False)
         self.addCleanup(setattr, FormBrowser, "fail", "")
@@ -139,6 +145,8 @@ class GoalFormsTests(unittest.TestCase):
                     def plan_entry(self, reference, obs, *, context):
                         return ApplicationFormEntry(reference, next(e for e in obs.elements if e.name == "Prepare contact"))
                     def accept_entry(self, entry, before, receipt, obs, *, context):
+                        if receipt.execution_trace is not None:
+                            raise BusinessToolRequestError("private diagnostic reached a business hook")
                         if (not receipt.ok or receipt.action != "click"
                                 or receipt.args_echo != {"ref": entry.control.ref, "epoch": before.epoch}):
                             raise BusinessToolRequestError("the contact entry receipt failed")
@@ -329,6 +337,13 @@ class GoalFormsTests(unittest.TestCase):
         self.assertIn("Partner desk", result.user_answer)
         self.assertEqual(browser.actions[-1], "handoff_form")
         self.assertEqual(browser.actions.count("handoff_form"), 1)
+
+    def test_form_entry_diagnostics_do_not_change_the_goal_or_reach_its_port(self):
+        trace = {"trace_id":"private-goal-entry","events":[{"sequence":1,"operation":"click","path":"ordinary"}]}
+        for diagnostic in (None,trace):
+            result,browser,*_ = self.run_goal(open_entry=True,execution_trace=diagnostic)
+            self.assertEqual(result.status,AgentTurnStatus.FINISHED)
+            self.assertEqual(next(r for r in browser.receipts if r.action == "click").execution_trace,diagnostic)
 
     def test_named_rest_form_entry_consumes_one_exact_click_before_batch(self):
         result, browser, channel, chat, _ = self.run_goal(open_entry=True)

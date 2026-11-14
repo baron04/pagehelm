@@ -115,6 +115,27 @@ class SkillWritesTests(unittest.TestCase):
     def propose(self, writes, body="Reviewed in May", target="Cedar", step=1):
         return writes.propose("revise_note", {"target": target, "body": body}, step=step, texts=(REQUEST,))
 
+    def test_preparation_can_reach_real_approval_but_cannot_dispatch_at_either_boundary(self):
+        from web_operation_agent.business.errors import BusinessToolRequestError
+        original = self.application.ports.operations
+        tools = ToolRegistry(original.tools.definitions, mutation_dispatch_enabled=False)
+        runtime = BusinessToolRuntime.from_registry(tools, application_id="notes",
+            skill_registry=original.skills, require_skill_for_writes=True,
+            mutation_dispatch_enabled=False)
+        self.application.business_tools = runtime
+        self.application.ports.operations = RegisteredOperations(tools, original.skills, self.invalidated.append)
+        writes = self.writes()
+        writes.load(SKILL, step=0)
+        outcome = self.propose(writes)
+        self.assertEqual(outcome.state, "refused")
+        self.assertEqual(len(self.person.shown), 1)
+        self.assertTrue(self.notes.prepared)
+        self.assertEqual(self.notes.dispatched, [])
+        with self.assertRaises(BusinessToolRequestError):
+            tools.execute_mutation("revise_note", {"target": "Cedar", "body": "bypass"})
+        self.assertEqual(self.notes.dispatched, [])
+        self.assertEqual(self.notes.records["Cedar"], "draft")
+
     def test_only_a_skill_that_offers_this_actor_an_operation_is_in_the_catalog(self):
         catalog = self.writes().catalog()
         self.assertEqual([(skill.skill_id, [d.name for d in definitions]) for skill, definitions in catalog],

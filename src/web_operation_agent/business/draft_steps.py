@@ -128,7 +128,7 @@ class DraftStepAdmission:
             raise ActionAdmissionRefused("unverified")
         observation = verified_observation(intent, receipt, context=context,
                                            settlement=settlement, minimum_epoch=minimum_epoch)
-        verified = self.port.verify_step(permit, intent, ActionReceipt.from_json(receipt.to_json()),
+        verified = self.port.verify_step(permit, intent, ActionReceipt.from_json(receipt.to_json(include_diagnostics=False)),
             observation=observation, context=context, checkpoint=checkpoint)
         self._check(context, checkpoint)
         if verified is not True:
@@ -161,7 +161,8 @@ class DraftStepAdmission:
                 or after.render_state != "ready"
                 or urlsplit(after.url)[:2] != urlsplit(before.url)[:2]):
             raise ActionAdmissionRefused("unverified")
-        if not isinstance(self.port, ApplicationNoEffectPort) or self.port.verify_no_effect(permit, intent, receipt,
+        if not isinstance(self.port, ApplicationNoEffectPort) or self.port.verify_no_effect(permit, intent,
+                ActionReceipt.from_json(receipt.to_json(include_diagnostics=False)),
                 observation=after, context=context, checkpoint=checkpoint) is not True:
             raise ActionAdmissionRefused("unverified")
         self._check(context, checkpoint)
@@ -175,6 +176,9 @@ class DraftStepAdmission:
                 or not isinstance(self.port, ApplicationUnverifiedDraftPort)):
             return False
         try:
+            receipt = ActionReceipt.from_json(receipt.to_json(include_diagnostics=False))
+            settlement = (ActionReceipt.from_json(settlement.to_json(include_diagnostics=False))
+                          if settlement is not None else None)
             observation = verified_observation(intent, receipt, context=context, settlement=settlement)
         except (ActionAdmissionRefused, ActionResultPending):
             return False

@@ -208,6 +208,12 @@ class NativePageGuard:
             state = self._actor(actor)
             return bool(state.windows or state.opening or state.uncertain)
 
+    def window_held(self, actor: str) -> bool:
+        """An acknowledged, unexpired window; a poisoned actor is not proof of one."""
+        with self._condition:
+            state = self._actor(actor)
+            return bool(state.windows) and not state.uncertain
+
     def refusal_mark(self, actor: str) -> int:
         """A position in this actor's refusals, to ask later what was refused after it."""
         with self._condition:

@@ -66,6 +66,7 @@ class NativeGuardProxy:
         self._probe = secrets.token_hex(32)
         self.http = ThreadingHTTPServer((host, port), self._handler())
         self._thread = None
+        self._ingress_verified = False
 
     @property
     def url(self):
@@ -77,6 +78,7 @@ class NativeGuardProxy:
         return self
 
     def close(self):
+        self._ingress_verified = False
         if self._thread is not None:
             self.http.shutdown()
             self._thread.join(3)
@@ -84,6 +86,7 @@ class NativeGuardProxy:
 
     def verify_ingress(self) -> None:
         """Require both public routes to reach this process before enabling UI actions."""
+        self._ingress_verified = False
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *_args):
                 return None
@@ -98,6 +101,12 @@ class NativeGuardProxy:
                         raise GuardRefused("guard_ingress_unverified")
             except Exception:
                 raise GuardRefused("guard_ingress_unverified") from None
+        self._ingress_verified = True
+
+    @property
+    def method_fence_ready(self) -> bool:
+        return (self._ingress_verified and self._thread is not None
+                and self._thread.is_alive() and self.guard.writing_gets is not None)
 
     def _handler(self):
         proxy = self

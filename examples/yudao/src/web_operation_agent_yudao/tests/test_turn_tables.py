@@ -140,9 +140,12 @@ class TurnTablesTest(unittest.TestCase):
         from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
 
         executor = object.__new__(TableReadTurnExecutor)
-        observation = SimpleNamespace(to_json=lambda: {
+        observation = SimpleNamespace(url="https://synthetic.invalid/list", to_json=lambda: {
             "url": "https://synthetic.invalid/list", "epoch": 1, "content": "Synthetic row", "elements": []})
-        state = SimpleNamespace(obs=observation, ledger=Mock())
+        read_reference = "ev_synthetic_read"
+        self.tables.receipts.add(read_reference)
+        state = SimpleNamespace(obs=observation, ledger=Mock(
+            of_kind=lambda event: [{"tool": "call_api", "reference": read_reference}]))
         executor._tool_receipts = [SimpleNamespace(action="goto", ok=True, observation=observation,
                                                    command_id="synthetic-command")]
         token = _TURN_TABLES.set((self.tables, "2026-10-25", "Asia/Shanghai"))
@@ -153,17 +156,23 @@ class TurnTablesTest(unittest.TestCase):
         feedback = executor._tool_feedback(state, turn, "goto", result, result.feedback)
         reference = next(iter(turn["page_delivery_receipts"]))
         self.assertIn(reference, feedback)
+        # A current page receipt is sufficient; a separate API read is optional.
         args = {"answer": "已打开", "items": [
-            {"item": "用户页", "kind": "page", "status": "delivered", "receipts": [reference]}]}
+            {"item": "用户页", "kind": "page", "status": "delivered",
+             "receipts": [reference, read_reference]}]}
         self.assertEqual(executor._finish_feedback(state, turn, args), "")
+        # Page-only delivery does not acquire an extra API-read obligation.
+        args["items"][0]["receipts"] = [reference]
+        self.assertEqual(executor._finish_feedback(state, turn, args), "")
+        args["items"][0]["receipts"] = [reference, read_reference]
 
         data_reference = self.tables.issue_receipt()
         args["items"][0]["receipts"] = [data_reference]
-        self.assertIn("页面回执", executor._finish_feedback(state, turn, args))
+        self.assertIn("页面回执", executor._finish_feedback(state, turn, args).message)
         args["items"][0]["receipts"] = [reference]
         state.obs = SimpleNamespace(to_json=lambda: {
             "url": "https://synthetic.invalid/other", "epoch": 2, "content": "Other row", "elements": []})
-        self.assertIn("页面回执", executor._finish_feedback(state, turn, args))
+        self.assertIn("页面回执", executor._finish_feedback(state, turn, args).message)
 
     def test_unobserved_page_result_cannot_issue_a_page_state_receipt(self):
         from web_operation_agent.execution.model_loop_contracts import LoopToolResult
@@ -177,3 +186,53 @@ class TurnTablesTest(unittest.TestCase):
         turn = {}
         executor._tool_feedback(state, turn, "observe", LoopToolResult("缺少观察", kind="page"), "缺少观察")
         self.assertNotIn("page_delivery_receipts", turn)
+
+    def test_current_dialog_can_be_the_delivery_object_without_allowing_a_residual_mask(self):
+        from web_operation_agent.schemas import ElementRef, PageObservation
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
+        executor=object.__new__(TableReadTurnExecutor)
+        observation=PageObservation(1,2,"https://synthetic.invalid/list","List",[],[
+            ElementRef("e1","dialog","Details","div",2,{"form_scope":"dialog:details"})],
+            content="Details",render_state="ready",page_route="/list")
+        state=SimpleNamespace(obs=observation,ledger=Mock())
+        executor._tool_receipts=[SimpleNamespace(ok=True,observation=observation,command_id="opened")]
+        token=_TURN_TABLES.set((self.tables,"2026-11-14","Asia/Shanghai"))
+        self.addCleanup(_TURN_TABLES.reset,token)
+        turn={}
+        executor._tool_feedback(state,turn,"open_record",LoopToolResult("opened",kind="page"),"opened")
+        reference=next(iter(turn["page_delivery_receipts"]))
+        args={"status":"done","answer":"Details are open.","items":[{
+            "item":"Details dialog","kind":"page","status":"delivered","receipts":[reference]}]}
+        self.assertEqual(executor._finish_feedback(state,turn,args).code,"delivery_page_masked")
+        args["items"][0]["container"]="dialog"
+        self.assertEqual(executor._finish_feedback(state,turn,args),"")
+
+    def test_like_glob_and_match_operators_run_inside_the_sandbox(self):
+        self.tables.add(path="names", params={}, rows=[
+            {"name": "Alice"}, {"name": "Bob"}, {"name": "Alicia"}], total=3, complete=True)
+        self.assertEqual(
+            self.tables.query("SELECT name FROM t1 WHERE name LIKE 'A%'")["rows"],
+            [["Alice"], ["Alicia"]])
+        self.assertEqual(
+            self.tables.query("SELECT name FROM t1 WHERE name GLOB 'A*'")["rows"],
+            [["Alice"], ["Alicia"]])
+
+    def test_a_quoted_alias_cannot_inject_sql_into_the_tie_probe(self):
+        self.tables.add(path="items", params={}, rows=[
+            {"v": i} for i in range(1, 8)], total=7, complete=True)
+        # `x LIMIT 0--` as an output alias must stay an identifier: the probe
+        # re-quotes it, so the boundary is checked, not silently "verified".
+        result = self.tables.query(
+            'SELECT v AS "x LIMIT 0--" FROM t1 ORDER BY "x LIMIT 0--" LIMIT 3')
+        self.assertIn("tie", result)
+        self.assertTrue(result["sources_complete"])
+
+    def test_blob_cells_serialize_instead_of_crashing_the_answer(self):
+        self.tables.add(path="blobs", params={}, rows=[{"raw": b"\x00\xff"}], total=1, complete=True)
+        result = self.tables.query("SELECT raw FROM t1")
+        self.assertEqual(result["rows"], [["00ff"]])
+
+    def test_table_names_resolve_case_insensitively(self):
+        self.tables.add(path="ci", params={}, rows=[{"id": 1}], total=1, complete=True)
+        self.assertEqual(self.tables.query("SELECT id FROM T1")["rows"], [[1]])

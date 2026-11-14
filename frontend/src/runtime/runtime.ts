@@ -1117,7 +1117,8 @@ export class EmbeddedWebRuntime {
   /** Run the command, and wait for the navigation it was expected to cause. */
   private async _dispatch(action: ActionEnvelope, executing: ActionEnvelope,
                           navigation: NavigationExpectation,
-  ): Promise<{ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean}> {
+  ): Promise<{ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean;
+              execution_trace?: unknown}> {
     // Claiming is a network round trip. Neither the action deadline nor the application's
     // confirmed window may have lapsed while it was pending; reject before page dispatch.
     if (Date.now() >= action.deadline) {
@@ -1167,6 +1168,7 @@ export class EmbeddedWebRuntime {
         }
       }
       const ok = result?.success !== false
+      const execution_trace = results.executionTraceOf(result, action.command.action)
       if (ok && action.command.action === 'handoff_form' && this.config?.pageWriteGuard) {
         if (!await releaseWriteGuard(this.config.pageWriteGuard)) {
           return {ok: false, code: 'capability_refused',
@@ -1178,6 +1180,7 @@ export class EmbeddedWebRuntime {
         ok,
         code: ok ? '' : 'element_not_actionable',
         detail: ok ? '' : results.safeErrorDetail(result?.message || '', action.command, this.redactor),
+        ...(execution_trace ? {execution_trace} : {}),
       }
     } catch (error) {
       if (error instanceof ChoiceUnavailable) {
@@ -1197,7 +1200,8 @@ export class EmbeddedWebRuntime {
 
   /** Observe what the action left behind and report it. */
   private async _settle(executing: ActionEnvelope, before: ObservationEnvelope,
-                        outcome: {ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean}): Promise<void> {
+                        outcome: {ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean;
+                                  execution_trace?: unknown}): Promise<void> {
     const observation = await this.observe(executing.action_id)
     if (executing.command.action === 'highlight' && outcome.ok &&
         (!this.highlightHandle?.active() ||
@@ -1244,6 +1248,7 @@ export class EmbeddedWebRuntime {
       writeGuardHeld: this.writeGuardUntil > Date.now(),
       ...(outcome.candidate_labels ? {candidateLabels: outcome.candidate_labels} : {}),
       ...(outcome.no_effect ? {noEffect: true} : {}),
+      ...(outcome.execution_trace ? {execution_trace: outcome.execution_trace} : {}),
     }, this.redactor)
     await this._deliver(results.completed(executing, receipt, observation))
   }

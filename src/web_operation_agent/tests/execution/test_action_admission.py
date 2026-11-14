@@ -58,6 +58,28 @@ class ActionAdmissionTests(unittest.TestCase):
             url_before=self.before.url, url_after=page(2).url, observation=page(2, selected=True),
             write_guard_held=True, **changes)
 
+    def test_execution_diagnostics_never_reach_the_policy_or_prove_completion(self):
+        original_verify = self.policy.verify
+        seen = []
+        def verify(permit, intent, receipt, **kwargs):
+            seen.append(receipt.execution_trace)
+            return original_verify(permit, intent, receipt, **kwargs)
+        self.policy.verify = verify
+        for mode in ("binding", "ordinary"):
+            self.runtime = ActionAdmission(self.policy, "fixture.app")
+            intent, permit = self.prepare()
+            self.runtime.consume(intent, permit, self.before, context=self.context, checkpoint=lambda:None)
+            traced = self.receipt(execution_trace={"trace_id":"trace", "events":[
+                {"sequence":1,"operation":"click","path":mode}]})
+            self.runtime.verify(intent, permit, traced, context=self.context, checkpoint=lambda:None)
+        self.assertEqual(seen, [None,None])
+        self.runtime = ActionAdmission(self.policy, "fixture.app")
+        intent, permit = self.prepare()
+        self.runtime.consume(intent, permit, self.before, context=self.context, checkpoint=lambda:None)
+        with self.assertRaises(ActionAdmissionRefused):
+            self.runtime.verify(intent, permit, replace(traced, observation=page(2,selected=False)),
+                                context=self.context, checkpoint=lambda:None)
+
     def test_exact_action_has_one_application_result_check(self):
         intent, permit = self.prepare()
         self.runtime.consume(intent, permit, self.before, context=self.context, checkpoint=lambda: None)

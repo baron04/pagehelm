@@ -127,6 +127,10 @@ class YudaoHostConfig:
     native_ingress_base: str | None = None
     #: Only reviewed server-side typed mutations; browser submission stays disabled.
     native_writes: bool = False
+    #: Offer existing preparation tools while refusing every mutation dispatch.
+    native_write_preparation: bool = False
+    #: Optional component-backed query/location batches; ordinary form boundaries remain.
+    location_bindings: bool = False
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
     #: what that text changes; the operations and every check on a write are the same.
     slim_skill_knowledge: bool = True
@@ -142,8 +146,8 @@ class YudaoHostConfig:
 
     def __post_init__(self):
         from .model_page_policy import DEPLOYMENT_OPTIONAL_HANDLERS
-        if self.native_page_admission not in ("reviewed", "method-fence"):
-            raise ValueError("native_page_admission must be reviewed or method-fence")
+        if self.native_page_admission not in ("reviewed", "method-fence", "read-only-window"):
+            raise ValueError("unknown native_page_admission profile")
         if (not isinstance(self.native_page_disabled_handlers, frozenset)
                 or not self.native_page_disabled_handlers <= DEPLOYMENT_OPTIONAL_HANDLERS):
             raise ValueError("native_page_disabled_handlers must be an immutable optional-handler set")
@@ -151,6 +155,16 @@ class YudaoHostConfig:
             raise ValueError("native_edit_prefill must be explicit")
         if not isinstance(self.native_writes, bool):
             raise ValueError("native writes must be explicitly enabled")
+        if type(self.native_write_preparation) is not bool:
+            raise ValueError("native_write_preparation must be explicit")
+        if self.native_write_preparation and (self.native_writes or self.location_bindings):
+            raise ValueError("preparation requires disabled native writes and bindings")
+        if type(self.location_bindings) is not bool:
+            raise ValueError("location_bindings must be explicit")
+        if self.location_bindings and self.native_writes:
+            raise ValueError("location bindings do not enable business writes")
+        if self.native_page_admission == "read-only-window" and self.native_writes:
+            raise ValueError("read-only-window does not permit business writes")
         if not isinstance(self.slim_skill_knowledge, bool):
             raise ValueError("slim_skill_knowledge is on or off")
         if not isinstance(self.warm_index, bool):
@@ -237,7 +251,7 @@ class YudaoHost:
         not traced to its end, stays refused -- the window covers the database only.
         """
         listed = frozenset(policy["writing_gets"])
-        if self.config.native_page_admission == "method-fence" or not self.live_forms:
+        if self.config.native_page_admission in {"method-fence", "read-only-window"} or not self.live_forms:
             return listed
         reasons = policy["scan"].get("reasons") if isinstance(policy.get("scan"), dict) else None
         reasons = reasons if isinstance(reasons, dict) else {}
@@ -334,8 +348,9 @@ class YudaoHost:
                                 forms=forms,
                                 page_write_guard=GUARD_PATH if self.native_proxy is not None else "",
                                 native_writes=self.config.native_writes,
+                                native_write_preparation=self.config.native_write_preparation,
                                 mutation_journal=SQLiteMutationJournal(self.config.state_dir / "mutations.sqlite3")
-                                    if self.config.native_writes else None)
+                                    if (self.config.native_writes or self.config.native_write_preparation) else None)
         return app
 
     def prune_turn_traces(self) -> None:
@@ -382,7 +397,7 @@ class YudaoHost:
                                            source=self.source, click_policy=app.native_tab_policy,
                                            form_prefill=self.live_forms,
                                            page_filtering=False,
-                                           native_writes=self.config.native_writes)
+                                           native_writes=self.config.native_writes or self.config.native_write_preparation)
             common = dict(channel=channel, chat=chat, application=bound, control=ReadOnlyControl(),
                 run_id_factory=lambda _m: "yudao-" + uuid.uuid4().hex[:16],
                 conversation_state=SQLiteConversationState(
@@ -396,15 +411,25 @@ class YudaoHost:
             from .slim_loop import MODEL_STEPS, ActorKnowledge, TableReadTurnExecutor
             from .model_page_policy import NativeModelReadActions, NativeDraftSteps, ModelPageGoalPort
             page_review, page_actions = self.page_review, NativeModelReadActions
+            action_options = {}
             if self.config.native_page_admission == "method-fence":
                 from .method_fenced_actions import MethodFencedPageActions, MethodFencedPageReview
                 page_review, page_actions = MethodFencedPageReview.from_review(page_review), MethodFencedPageActions
+            elif self.config.native_page_admission == "read-only-window":
+                from .read_only_window_actions import ReadOnlyWindowPageActions, ReadOnlyWindowPageReview
+                page_review = ReadOnlyWindowPageReview.from_review(page_review)
+                page_actions = ReadOnlyWindowPageActions
+                action_options["guard_proxy"] = self.native_proxy
             model_goal = ModelPageGoalPort(app.goal_port, page_review)
             action_policy = page_actions(app.origin, app.goal_data,
-                self.ui.records if self.ui is not None else {}, model_goal, page_review)
-            draft_steps = NativeDraftSteps(app.goal_data, app.ports.forms, page_review)
+                self.ui.records if self.ui is not None else {}, model_goal, page_review, **action_options)
+            draft_policy = NativeDraftSteps
+            if self.config.native_page_admission == "read-only-window":
+                from .read_only_window_actions import ReadOnlyWindowDraftSteps
+                draft_policy = ReadOnlyWindowDraftSteps
+            draft_steps = draft_policy(app.goal_data, app.ports.forms, page_review)
             mutation_prefill = None
-            if self.config.native_writes and self.live_forms:
+            if (self.config.native_writes or self.config.native_write_preparation) and self.live_forms:
                 from .mutation_prefill import YudaoMutationPrefill
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
@@ -413,6 +438,7 @@ class YudaoHost:
                 **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
                 goal_port=model_goal, draft_steps=draft_steps,
                 mutation_prefill=mutation_prefill,
+                location_bindings=self.config.location_bindings,
                 disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                 knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                          time_zone=app.goal_data.time_zone(),
@@ -429,7 +455,8 @@ class YudaoHost:
 
         session = self.server.create_session(
             allowed_origin=bound.descriptor.origin,
-            page_controller_module=bound.descriptor.page_controller_module,
+            page_controller_module=bound.descriptor.page_controller_module + (
+                "?bindings=1" if self.config.location_bindings else ""),
             runner_factory=runner_factory, session_id=session_id,
             navigation_mode=bound.descriptor.navigation_mode,
             page_write_guard=bound.descriptor.page_write_guard,
@@ -543,7 +570,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-page-policy", type=Path,
                     help="release-reviewed model page handlers; required for slim")
-    ap.add_argument("--native-page-admission", choices=("reviewed", "method-fence"), default="reviewed",
+    ap.add_argument("--native-page-admission", choices=("reviewed", "method-fence", "read-only-window"), default="reviewed",
                     help="allow unregistered ordinary page controls under the method fence; "
                          "keeps target binding and refuses write controls")
     ap.add_argument("--native-page-disable", action="append", default=[],
@@ -556,6 +583,10 @@ def main(argv=None) -> int:
     ap.add_argument("--native-filter-semantics", type=Path,
                     help="optional release-bound query parameter semantics compiled from the server source")
     ap.add_argument("--native-guard-port", type=int, default=48093)
+    ap.add_argument("--location-bindings", action="store_true",
+                    help="enable component-backed location batches, excluding business form entry")
+    ap.add_argument("--native-write-preparation", action="store_true",
+                    help="offer existing preparation tools; mutation dispatch remains disabled")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")
@@ -585,6 +616,8 @@ def main(argv=None) -> int:
             native_filter_semantics=a.native_filter_semantics,
             native_guard_port=a.native_guard_port,
             native_writes=a.native_writes,
+            native_write_preparation=a.native_write_preparation,
+            location_bindings=a.location_bindings,
             max_sessions=a.max_sessions,
             daily_allowance_cny=a.daily_allowance_cny,
             turn_trace_days=a.turn_trace_days,

@@ -51,6 +51,90 @@ async mode => {
 @unittest.skipUnless((OWNED / "yudao-page-controller.js").is_file(),
                      "the application's page controller module is not in this checkout")
 class PageControllerClickTests(unittest.TestCase):
+    def test_plain_html_uses_ordinary_diagnostics_even_when_component_bindings_are_enabled(self):
+        from playwright.sync_api import sync_playwright
+        from urllib.parse import urlsplit
+        playwright = self.enterContext(sync_playwright())
+        browser = playwright.chromium.launch()
+        self.addCleanup(browser.close)
+        context = browser.new_context()
+        self.addCleanup(context.close)
+        files = {"/woa/page-controller.js":GENERIC,
+                 "/woa/yudao-page-controller.js":OWNED / "yudao-page-controller.js",
+                 "/woa/page-facts.js":OWNED / "page-facts.js"}
+        def serve(route):
+            path = urlsplit(route.request.url).path
+            route.fulfill(body=files[path].read_bytes() if path in files else PAGE,
+                          content_type="text/javascript; charset=utf-8" if path in files else "text/html; charset=utf-8")
+        context.route("**/*", serve)
+        page = context.new_page()
+        page.goto(ORIGIN)
+        result = page.evaluate("""async () => {
+          const api=await import('/woa/yudao-page-controller.js?bindings=1')
+          const controller=new api.PageController({enableMask:false})
+          const find=id=>[...controller.elementTextMap.keys()].find(index=>
+            api.getElementByIndex(controller.selectorMap,index)?.id===id)
+          try {
+            const before=await controller.getBrowserState()
+            const filled=await controller.inputText(find('name'),'New name')
+            await controller.getBrowserState()
+            const clicked=await controller.clickElement(find('first'))
+            const after=await controller.getBrowserState()
+            const random=crypto.getRandomValues
+            let degraded
+            try {
+              Object.defineProperty(crypto,'getRandomValues',{configurable:true,value:()=>{throw new Error('collector failed')}})
+              degraded=await controller.inputText(find('name'),'Second name')
+            } finally {Object.defineProperty(crypto,'getRandomValues',{configurable:true,value:random})}
+            return {before,after,fill:filled.execution_trace,click:clicked.execution_trace,
+              name:document.getElementById('name').value,degraded,diagnostic:degraded.execution_trace??null}
+          } finally {controller.dispose()}
+        }""")
+        self.assertEqual(result["name"], "Second name")
+        self.assertTrue(result["degraded"]["success"])
+        self.assertIsNone(result["diagnostic"])
+        self.assertNotEqual(result["fill"]["trace_id"], result["click"]["trace_id"])
+        for key, operation in (("fill","fill"),("click","click")):
+            events = result[key]["events"]
+            self.assertTrue(events)
+            self.assertEqual([e["sequence"] for e in events], list(range(1,len(events)+1)))
+            self.assertTrue(all(e["path"] == "ordinary" and e["operation"] == operation for e in events))
+            self.assertNotIn(result[key]["trace_id"], str(result["before"]) + str(result["after"]))
+        self.assertNotIn("组件动作回执:", result["after"]["content"])
+
+    def test_disabled_binding_mode_keeps_the_generic_page_reading(self):
+        from playwright.sync_api import sync_playwright
+        playwright = self.enterContext(sync_playwright())
+        browser = playwright.chromium.launch()
+        self.addCleanup(browser.close)
+        files = {"/woa/page-controller.js": GENERIC,
+                 "/woa/yudao-page-controller.js": OWNED / "yudao-page-controller.js",
+                 "/woa/page-facts.js": OWNED / "page-facts.js"}
+        results = []
+        for mode in ("generic", "owned"):
+            context = browser.new_context()
+            try:
+                def serve(route):
+                    path = route.request.url[len(ORIGIN):]
+                    if path in files:
+                        route.fulfill(body=files[path].read_bytes(), content_type="text/javascript")
+                    else:
+                        route.fulfill(body=PAGE, content_type="text/html")
+                context.route("**/*", serve)
+                page = context.new_page()
+                page.goto(ORIGIN)
+                results.append(page.evaluate("""async mode => {
+                  const generic = await import('/woa/page-controller.js')
+                  const owned = await import('/woa/yudao-page-controller.js')
+                  const api = mode === 'generic' ? generic : owned
+                  const controller = new api.PageController({enableMask:false})
+                  try {return await controller.getBrowserState()}
+                  finally {controller.dispose()}
+                }""", mode))
+            finally:
+                context.close()
+        self.assertEqual(results[0], results[1])
+
     def drive(self, browser, mode):
         files = {"/woa/page-controller.js": GENERIC, "/woa/yudao-page-controller.js": OWNED / "yudao-page-controller.js",
                  "/woa/page-facts.js": OWNED / "page-facts.js"}

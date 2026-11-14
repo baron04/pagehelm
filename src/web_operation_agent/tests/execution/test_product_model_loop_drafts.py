@@ -95,6 +95,47 @@ class DraftContractTests(unittest.TestCase):
         with self.assertRaises(ActionAdmissionRefused):
             admission.verify_no_effect(intent, permit, receipt, context=self.context, checkpoint=lambda: None)
 
+    def test_unverified_hook_diagnostics_do_not_change_permission_exception_or_raw_receipt(self):
+        from web_operation_agent.business import draft_steps as boundary
+        from web_operation_agent.execution.action_admission import verified_observation
+        from unittest.mock import patch
+        for allowed in (False, True, "error"):
+            seen = []
+            failure = RuntimeError("original application failure")
+            class DiagnosticPort(Port):
+                def may_continue_unverified(self, permit, intent, receipt, **kwargs):
+                    seen.append(receipt.execution_trace)
+                    if allowed == "error":
+                        raise failure
+                    return allowed if receipt.execution_trace is None else not allowed
+            admission = DraftStepAdmission(DiagnosticPort(), "fixture.app")
+            intent, permit = admission.prepare("fill", self.args, self.before,
+                context=self.context, checkpoint=lambda:None)
+            admission.consume(intent, permit, self.before, context=self.context, checkpoint=lambda:None)
+            original = ActionReceipt(1,"command","fill",_remote_args_echo({**self.args,"epoch":1}),True,
+                observation=page(2),url_before=self.before.url,url_after=page(2).url,write_guard_held=True)
+            trace = {"trace_id":"private-draft","events":[{"sequence":1,"operation":"fill","path":"binding"}]}
+            traced = replace(original,execution_trace=trace)
+            settlement = ActionReceipt(1,"settle","observe",{},True,observation=page(3),
+                url_before=self.before.url,url_after=page(3).url,write_guard_held=True)
+            settlement.execution_trace = trace  # even an internally attached non-business value is stripped
+            with patch.object(boundary,"verified_observation",wraps=verified_observation) as verification:
+                for receipt in (original,traced):
+                    if allowed == "error":
+                        with self.assertRaises(RuntimeError) as caught:
+                            admission.may_continue_unverified(intent,permit,receipt,context=self.context,
+                                checkpoint=lambda:None,settlement=settlement)
+                        self.assertIs(caught.exception,failure)
+                    else:
+                        self.assertIs(admission.may_continue_unverified(intent,permit,receipt,
+                            context=self.context,checkpoint=lambda:None,settlement=settlement),allowed)
+                for call in verification.call_args_list:
+                    self.assertIsNone(call.args[1].execution_trace)
+                    self.assertIsNone(call.kwargs["settlement"].execution_trace)
+            self.assertEqual(seen,[None,None])
+            self.assertEqual(traced.execution_trace,trace)
+            self.assertEqual(settlement.execution_trace,trace)
+
     def test_unverified_draft_can_continue_only_with_application_proof_and_guard(self):
         class LocalPort(Port):
             def may_continue_unverified(self, permit, intent, receipt, *, observation, **kwargs):

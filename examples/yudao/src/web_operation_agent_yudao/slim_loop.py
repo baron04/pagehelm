@@ -42,7 +42,7 @@ from zoneinfo import ZoneInfo
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, history_messages
 from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
-                                                               VerificationResult, ModelLoopProfile, LoopProcedure)
+    DeliveryFeedback, VerificationResult, ModelLoopProfile, LoopProcedure)
 from web_operation_agent.execution.read_summary import (SummaryRefused, parse_summary_spec,
                                                        summary_schema)
 from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
@@ -1064,6 +1064,7 @@ PAGE_DELIVERY_RULES = """
 - 用现有通用页面动作操作。每一步查看最新观察和回执，核对记录、详情标题、选中页签或树节点。只到列表不能交付指定记录详情。
 - 筛选须同时核对页面自己发出的请求条件和当前渲染行。用观察中的应用查询回执核对条件，用可见表格的行和值核对结果；0行时说明已核验的条件与空结果。缺少条件或行的证明时如实报告尚未核验，不称筛选成功。
 - 页面定位动作完成后先看回执，再用 finish 交付，不在动作上带 answer。finish.items 的 kind 分别用 data、page、write。页面交付用 kind=page，并引用本轮页面状态回执；接口或计算回执不能充当页面回执。最后核对用户页仍在该状态，混合请求逐项交付。
+- 交付对象就是当前详情弹窗时，页面项写 container=dialog；它必须确实仍在当前用户页上。普通页面项不把无关残留弹窗当完成。程序已核验的表单交接保留其当前弹窗对象。
 """
 
 TABLE_TOOLS = (
@@ -2242,7 +2243,8 @@ class YudaoLoopProcedures:
         if str(got) == str(int(number)):
             return LoopToolResult(f"{label}：已改为{'每页 ' + number + ' 条' if control == 'page_size' else '第 ' + number + ' 页'}（列表读回：第 {read.get('page')} 页，每页 {read.get('page_size')} 条，共 {read.get('total')} 条）", kind="page", state="completed", completion_command=completion)
         return LoopToolResult(f"{label}：已操作，但列表读回的不是 {number}（{got if got is not None else '没有读回'}），看下面的页面再决定", kind="page", state="unverified")
-    def _fill_fields(self, s, fields, then_click: str, turn: dict, *, then_highlight="", add_lines=None) -> LoopToolResult:
+    def _fill_fields(self, s, fields, then_click: str, turn: dict, *, then_highlight="", add_lines=None,
+                     query_only=False, locate=None, choose=None) -> LoopToolResult:
         """Fill or choose several named fields one after another, each found afresh on the
         page as it then is, so that one model request does the work of several."""
         from web_operation_agent.execution.draft_handoff import add_draft_lines, field_identity, handoff_draft
@@ -2291,10 +2293,15 @@ class YudaoLoopProcedures:
                 if s.terminal_reason:
                     return LoopToolResult("操作没有完成。", kind="page", state="unverified")
                 continue
+            if locate is not None:
+                missing = locate(s,label)
+                if missing:
+                    return missing
             lines, _hints = _page_lines(s.obs)
             shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
             found = [e for e in s.obs.elements if e.ref[1:] in shown and label and label in (
-                str(e.attrs.get("field_label") or "").rstrip(":：").strip(), str(e.attrs.get("title") or ""))]
+                str(e.attrs.get("field_label") or "").rstrip(":：").strip(), str(e.attrs.get("title") or ""))
+                and (not query_only or e.attrs.get("page_control") == "query")]
             if not found:
                 incomplete = True
                 said.append(f"{label}：屏幕上没有这个字段（先 scroll 让它出现，或核对字段名）")
@@ -2335,7 +2342,7 @@ class YudaoLoopProcedures:
                 text = _native_input_text(element, text)
                 if kind in ("〔下拉〕", "〔单选〕") and text.strip():
                     text = self._choice_label(s, element, text)
-                    failed = self._select(s, element, text)
+                    failed = (choose or self._select)(s, element, text)
                 else:
                     failed = self._act(s, "fill", {"ref": element.ref, "value": text,
                                                    "commit": _commits(element, s.obs.elements)})
@@ -2361,10 +2368,15 @@ class YudaoLoopProcedures:
                 said.append(f"{label}：已{'选' if kind in ('〔下拉〕', '〔单选〕') else '填'}")
         wanted = re.sub(r"\s+", "", then_click or "")
         if wanted and not incomplete and not failure:
+            if locate is not None:
+                missing = locate(s,then_click,button=True)
+                if missing:
+                    return missing
             lines, _hints = _page_lines(s.obs)
             shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
             buttons = [e for e in s.obs.elements if e.ref[1:] in shown and e.tag == "button"
-                       and re.sub(r"\s+", "", e.name) == wanted]
+                       and re.sub(r"\s+", "", e.name) == wanted
+                       and (not query_only or e.attrs.get("page_control") == "query")]
             if len(buttons) != 1:
                 incomplete = True
                 said.append(f"没有找到“{then_click}”按钮，没有点")
@@ -2620,6 +2632,12 @@ class _Procedure:
 
 
 def _requirements(name, arguments, observation, review=None):
+    if name == "filter_page":
+        return frozenset({"facets"}) | (frozenset({"sections"}) if arguments.get("tab") else frozenset())
+    if name == "page_section":
+        return frozenset({"sections"})
+    if name == "page_number":
+        return frozenset({"paging"})
     if name == "highlight":
         return frozenset({"handoffs"})
     if name == "goto" and arguments.get("open"):
@@ -2793,13 +2811,20 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         return super()._propose(s, writes, operation, inputs, turn)
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
-                 draft_steps=None, mutation_prefill=None, **kwargs):
+                 draft_steps=None, mutation_prefill=None, location_bindings=False, **kwargs):
         application, goal_port = kwargs["application"], kwargs["goal_port"]
         self.knowledge = knowledge
         knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
-        self.procedures = owner = YudaoLoopProcedures(knowledge, goal_port, application.descriptor.origin)
+        procedure_type = YudaoLoopProcedures
+        if location_bindings:
+            from .location import LocationProcedures
+            procedure_type = LocationProcedures
+        self.procedures = owner = procedure_type(knowledge, goal_port, application.descriptor.origin)
         review = getattr(goal_port, "review", None)
         schemas = scoped_page_tools(review) if self.program_read_delivery else _table_tool_schemas(review)
+        if location_bindings:
+            from .location import location_schemas
+            schemas = location_schemas(schemas)
         procedures = tuple(LoopProcedure(json.dumps(schema, ensure_ascii=False),
             _Procedure(owner, schema["function"]["name"]),
             "read" if schema["function"]["name"] in {"call_api", "find_record"} | _TABLE_TOOLS else
@@ -2814,12 +2839,15 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                         runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
                                                     "runtime_source", False)))
                 .replace(SYSTEM_READ, SYSTEM_READ if self.program_read_delivery else TABLE_READ_RULES)
-                + page_scope_notice(review), procedures,
+                + page_scope_notice(review) + ("\n当前仅定位：filter_page一次导航、切页签和筛选；"
+                    "open_record按当前行的record_id或精确列值打开详情；page_section/page_number切页签和分页。"
+                    "新增绑定工具只操作查询区；原普通动作完整保留，沿用同一准入及业务填表值来源边界。"
+                    if location_bindings else ""), procedures,
             lambda observation, marked: page_text(observation, handoffs=knowledge.handoffs, marked=marked,
                                                   list_path=_own_list_path(goal_port, observation)),
             owner.prepare, lambda observation, answer: tuple(_tabs_not_shown(observation, answer)),
             owner.verification_messages, draft_steps, mutation_prefill,
-            untraced_numbers=untraced_answer_numbers if self.program_read_delivery else None)
+            untraced_numbers=untraced_answer_numbers)
         super().__init__(profile=profile, **kwargs)
 
 
@@ -2852,6 +2880,7 @@ class TableReadTurnExecutor(SlimTurnExecutor):
                 "item": {"type": "string", "minLength": 1, "maxLength": 240},
                 "kind": {"type": "string", "enum": ["data", "page", "write"]},
                 "status": {"type": "string", "enum": ["delivered", "undelivered"]},
+                "container": {"type":"string", "enum":["page", "dialog"]},
                 "receipts": {"type": "array", "maxItems": 12,
                              "items": {"type": "string", "minLength": 1, "maxLength": 48}}},
             "required": ["item", "kind", "status", "receipts"], "additionalProperties": False}}
@@ -2874,14 +2903,49 @@ class TableReadTurnExecutor(SlimTurnExecutor):
             _TURN_TABLES.get()[0].validate_delivery(args["answer"], args["items"])
             current = hashlib.sha256(self._page_fingerprint(s.obs).encode()).hexdigest()
             pages = turn.get("page_delivery_receipts", {})
+            page_state = {}
+
+            def page_facts():
+                if not page_state:
+                    route = getattr(s.obs, "page_route", "") or urlsplit(
+                        getattr(s.obs, "url", "") or "").path
+                    page_state["home"] = route.rstrip("/") in {"", "/index"}
+                    page_state["masked"] = any(
+                        str(getattr(e, "attrs", {}).get("form_scope", "")).startswith("dialog")
+                        or getattr(e, "role", "") == "dialog"
+                        for e in getattr(s.obs, "elements", ()) or ())
+                return page_state
+
             for item in args["items"]:
-                if (item["kind"] == "page" and item["status"] == "delivered"
-                        and not any(pages.get(ref) == current for ref in item["receipts"])):
-                    raise TurnReadError("delivery_page_receipt",
-                                        "页面交付必须引用仍与用户页当前状态一致的本轮页面回执。")
+                if item["kind"] == "page" and item["status"] == "delivered":
+                    facts = page_facts()
+                    if not any(pages.get(ref) == current for ref in item["receipts"]):
+                        raise TurnReadError("delivery_page_receipt",
+                                            "页面交付必须引用仍与用户页当前状态一致的本轮页面回执。")
+                    if facts["home"]:
+                        raise TurnReadError("delivery_page_home",
+                                            "用户页仍在首页；先到达交付要求的页面再标为已交付。")
+                    handoff = turn.get("handoff")
+                    delivered_dialog = (item.get("container") == "dialog" or
+                        bool(handoff and handoff[0] == self._page_fingerprint(s.obs)))
+                    if item.get("container") == "dialog" and not facts["masked"]:
+                        raise TurnReadError("delivery_dialog_missing",
+                                            "交付声明为弹窗，但当前用户页没有这个弹窗。")
+                    if facts["masked"] and not delivered_dialog:
+                        raise TurnReadError("delivery_page_masked",
+                                            "当前页面仍有弹窗遮罩未关闭；等页面落定后再标为已交付。")
+            if (args.get("status") == "done"
+                    and any(item["status"] != "delivered" for item in args["items"])):
+                raise TurnReadError("delivery_incomplete",
+                                    "仍有交付项未交付或在等澄清、批准；本轮如实标为未完成。")
         except TurnReadError as exc:
-            s.ledger.append("model_delivery_rejected", reason=exc.code)
-            return str(exc)
+            if exc.code.startswith(("delivery_page_", "delivery_dialog_")):
+                affected = tuple(i for i, item in enumerate(args["items"]) if item["kind"] == "page")
+            elif exc.code == "delivery_incomplete":
+                affected = tuple(i for i, item in enumerate(args["items"]) if item["status"] != "delivered")
+            else:
+                affected = ()
+            return DeliveryFeedback(exc.code, str(exc), affected)
         s.ledger.append("model_delivery_validated", items=[{
             "kind": item["kind"], "status": item["status"], "receipts": item["receipts"]}
             for item in args["items"]])

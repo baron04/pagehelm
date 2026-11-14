@@ -25,7 +25,7 @@ from ..panel_view import describe_step, step_facts
 from ..modeling.egress import AuditedChat
 from .receipt import MeasuredChat
 from .turn_trace import TurnTrace
-from .model_loop_contracts import ModelLoopProfile, PageProcedureContext
+from .model_loop_contracts import DeliveryFeedback, ModelLoopProfile, PageProcedureContext
 import time
 from pathlib import Path
 from ..modeling.provider import ProviderError
@@ -129,6 +129,95 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     def _finish_feedback(self, s, turn, args):
         """Return a user-safe reason to send a malformed delivery back to the model."""
         return ""
+
+    def _delivery_correction(self, s, turn, args, feedback, *, terminal=False):
+        """One correction per check/item position; then close with an honest result."""
+        issue = feedback if isinstance(feedback, DeliveryFeedback) else DeliveryFeedback(
+            "delivery_contract", str(feedback)[:2000])
+        attempts = turn.setdefault("delivery_corrections", {})
+        keys = tuple((issue.code, index) for index in issue.item_indices) or ((issue.code, None),)
+        returned_before = (bool(attempts.get((issue.code, None))) or
+            (any(attempts.get(key) for key in keys) if issue.item_indices
+             else any(code == issue.code for code, _index in attempts)))
+        if (not terminal and not returned_before and turn.get("model_calls", 0) < self.model_steps
+                and s.budget.remaining() > 1):
+            for key in keys:
+                attempts[key] = 1
+            turn["pending_delivery"] = (dict(args), issue)
+            s.ledger.append("model_delivery_rejected", reason=issue.code,
+                item_indices=list(issue.item_indices), attempt=1, returned=True, terminal=False)
+            return None
+        raw_items = args.get("items", ())
+        items = [dict(item) for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, (list,tuple)) else []
+        indices = issue.item_indices or tuple(range(len(items)))
+        for i in indices:
+            if i < len(items):
+                items[i]["status"] = "undelivered"
+        labels = "、".join(f"第 {i + 1} 项" for i in indices) or "本轮交付"
+        answer = f"本轮未完成：{labels}尚未核实。\n{issue.message}"
+        turn.pop("pending_delivery", None)
+        s.ledger.append("model_delivery_rejected", reason=issue.code,
+            item_indices=list(indices), attempt=int(returned_before), returned=False, terminal=True)
+        return {**{key:value for key,value in args.items() if key != "read_answer"},
+                "status":"cannot", "answer":answer, "items":items}
+
+    def _finalize_untraced(self, s, turn, finish, untraced):
+        status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
+        items = [item for item in finish.get("items") or () if isinstance(item, dict)]
+        items_required = "items" in self._finish_tool(turn)[
+            "function"]["parameters"].get("required", ())
+        if items:
+            def in_item(token, item):
+                # Boundary-aware and display-tolerant: "5" must not match
+                # "15", "3.5" or the "10" inside "2026-10-21"; "4,499" still
+                # matches "4499", "−500" matches "-500". Trailing sentence
+                # punctuation on the label does not hide the value.
+                label = str(item.get("item") or "").rstrip(".。,，、;；:：!！?？ ")
+                label = re.sub(r"负\s*(?=\d)", "-", label)
+                forms = {token}
+                for _ in range(2):
+                    forms |= {v.replace("−", "-") for v in forms}
+                    forms |= {v.lstrip("+") for v in forms}
+                    forms |= {v.replace(",", "").replace("，", "") for v in forms}
+                    forms |= {v.rstrip("%") for v in forms}
+                forms.discard("")
+                return any(re.search(r"(?<![\d.,，%+\-−A-Za-z0-9_/])" + re.escape(v)
+                                     + r"(?![\d.,，%+\-−A-Za-z0-9_/])", label)
+                           for v in forms)
+            deliverable = [str(item.get("item") or "")[:80] for item in items
+                           if any(in_item(token, item) for token in untraced)]
+            narrative = [token for token in untraced
+                         if not any(in_item(token, item) for item in items)]
+        elif items_required:
+            # The turn's finish contract requires items and this finish
+            # has none -- only the page-action shortcut can produce that,
+            # since model calls are schema-validated. The answer itself
+            # is the deliverable, so every untraced value fails closed.
+            deliverable = ["答复内容"]
+            narrative = []
+        else:
+            deliverable = []
+            narrative = list(untraced)
+        failed_indices = [i for i, item in enumerate(items)
+            if any(in_item(token, item) for token in untraced)] if items else []
+        for i in failed_indices:
+            items[i]["status"] = "undelivered"
+        if failed_indices:
+            finish = {**finish, "items":items, "status":"cannot"}
+        s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=False,
+            deliverable=list(deliverable), narrative=list(narrative),
+            **({"undelivered_indices":failed_indices} if failed_indices else {}))
+        max_chars = getattr(getattr(self, "config", None), "max_user_answer_chars", 4000)
+        if deliverable:
+            status = "cannot"
+            note = ("\n\n交付项「" + "、".join(deliverable[:4])
+                    + "」的数值在本轮读取中找不到出处，该项与本轮均标为未完成。"
+                    + ("另有无出处数值：" + "、".join(narrative[:10]) + "。" if narrative else ""))
+        else:
+            note = "\n\n以下数值未在本轮读取中找到出处：" + "、".join(untraced[:20]) + "。"
+        note = note[:max_chars]
+        answer = answer[:max(0, max_chars - len(note))] + note
+        return {**finish, "status":status, "answer":answer}
 
     def _tool_feedback(self, s, turn, name, result, text):
         """Optionally attach application evidence to a completed tool response."""
@@ -476,7 +565,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             dispatch = ("acknowledged" if receipt is not None else
                         "uncertain" if state == "unverified" else "not_dispatched")
             self._page_action_outcome = PageActionOutcome(state, dispatch, code,
-                json.dumps(receipt.to_json(), ensure_ascii=False) if receipt is not None else "",
+                json.dumps(receipt.to_json(include_diagnostics=False), ensure_ascii=False) if receipt is not None else "",
                 tuple(json.dumps(obs.to_json(), ensure_ascii=False) for obs in observations))
             return receipt
         if s.terminal_reason:
@@ -528,10 +617,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         context=context, checkpoint=checkpoint)
                     admission.consume(intent, permit, s.obs, context=context, checkpoint=checkpoint)
                 admitted = (admission, intent, permit, context, checkpoint)
+                admitted_policy = admission.policy if isinstance(admission, ActionAdmission) else admission.port
                 s.ledger.append("action_effect_consumed", tool=action,
                     binding_digest=intent.binding_digest,
                     effect=permit.effect.value if isinstance(permit, ActionPermit) else "transient_draft",
                     review_digest=hashlib.sha256(permit.review.encode()).hexdigest(), dispatched=False,
+                    policy_module=type(admitted_policy).__module__, policy_type=type(admitted_policy).__qualname__,
                     target=target)
             except ActionAdmissionRefused as exc:
                 s.ledger.append("model_action_refused", tool=action, error_code=exc.code, target=target,
@@ -590,10 +681,19 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     except ActionResultPending:
                         if attempt == 3:
                             raise ActionAdmissionRefused("unverified")
-                        settlement = self._dispatch(s, "wait_for", {"ms": 150})
-                        if settlement is None:
+                        for refresh in range(2):
+                            checkpoint()
+                            settlement = self._dispatch(s, "wait_for", {"ms": 150})
+                            if settlement is None:
+                                raise ActionAdmissionRefused("unverified")
+                            observations.append(s.obs)
+                            if settlement.error_code != "stale_observation":
+                                break
+                            # This wait was refused before dispatch and delivered a
+                            # fresh page. Rebase only the next wait; the original
+                            # effect is never replayed or proved by this refusal.
+                        else:
                             raise ActionAdmissionRefused("unverified")
-                        observations.append(s.obs)
             except ActionAdmissionRefused as exc:
                 state, code = "unverified", exc.code
                 s.ledger.append("model_action_unverified", tool=action, error_code=exc.code,
@@ -807,6 +907,17 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     timeout_s=max(1.0, s.budget.remaining()))
             except ProviderError as exc:
                 s.ledger.append("slim_model_failed", error_type=type(exc).__name__)
+                pending = turn.get("pending_delivery")
+                if pending is not None:
+                    failed = self._delivery_correction(s, turn, *pending, terminal=True)
+                    s.terminal_reason, s.detail = "agent_refused", "delivery correction unavailable"
+                    return self._with_not_executed(s, turn, failed["answer"])
+                numeric = turn.pop("pending_numeric_finish", None)
+                if numeric is not None:
+                    failed = self._finalize_untraced(s, turn, *numeric)
+                    if failed["status"] != "done":
+                        s.terminal_reason, s.detail = "agent_refused", "numeric delivery correction unavailable"
+                    return self._with_not_executed(s, turn, failed["answer"])
                 s.terminal_reason, s.detail = "agent_refused", "the model request failed"
                 return "模型请求失败，本次没有完成。"
             calls = message.get("tool_calls") or []
@@ -881,9 +992,15 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         validate_input(self._finish_tool(turn)["function"]["parameters"], args)
                         feedback = self._finish_feedback(s, turn, args)
                         if feedback:
-                            self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
-                                                   "content": "没有结束：" + feedback})
-                            continue
+                            corrected = self._delivery_correction(s, turn, args, feedback)
+                            if corrected is None:
+                                message = feedback.message if isinstance(feedback, DeliveryFeedback) else feedback
+                                self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
+                                                       "content": "没有结束：" + message})
+                                continue
+                            args = corrected
+                        else:
+                            turn.pop("pending_delivery", None)
                         selected = args.get("read_answer")
                         if selected is not None or args["status"] == "done" and turn.get("query_answers"):
                             projection = turn.get("query_answers", {}).get(selected)
@@ -919,15 +1036,30 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             if selected is not None and rendering.text not in args["answer"]:
                                 raise BusinessToolRequestError("source composition would omit read-answer rows")
                     except BusinessToolRequestError:
+                        feedback = DeliveryFeedback("invalid_finish_schema",
+                            "结束参数不符合工具定义；请核对交付项、状态及本轮回执。")
+                        corrected = self._delivery_correction(s, turn, args, feedback)
+                        if corrected is not None:
+                            finish = corrected
+                            self._messages.append({"role":"tool", "tool_call_id":call.get("id"),
+                                                   "content":"本轮以未完成结束。"})
+                            continue
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                             "content": "没有结束：结束参数不符合工具定义。" + (
                                 "已经请求列表交付时，done必须选择工具给出的read_answer且answer为空；"
                                 "所选结果须完整并能在最终文本预算内全部显示。不完整或超出预算时用cannot如实说明，"
                                 "不可压缩为规律后声称全部列出。" if self.program_read_delivery
                                 else "请按 finish 的定义提供交付项、状态和回执。")})
-                        s.ledger.append("model_delivery_rejected", reason="invalid_finish_schema")
                         continue
                     except (ValueError, KeyError):
+                        feedback = DeliveryFeedback("source_conclusion_refused",
+                            "源码结论须引用本轮同类型证据及原文支持；当前交付尚未核实。")
+                        corrected = self._delivery_correction(s, turn, args, feedback)
+                        if corrected is not None:
+                            finish = corrected
+                            self._messages.append({"role":"tool", "tool_call_id":call.get("id"),
+                                                   "content":"本轮以未完成结束。"})
+                            continue
                         self._messages.append({"role": "tool", "tool_call_id": call.get("id"),
                             "content": "没有结束：source_conclusions 必须引用本轮同类型证据，support 必须是原文，"
                                        "statement 不得包含代码、路径或哈希。请核对工具结果。"
@@ -1186,20 +1318,30 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             if finish is None:
                 continue
             status, answer = str(finish.get("status") or "done"), str(finish.get("answer") or "").strip()
-            if status == "done" and answer and not finish.get("read_answer"):
+            if status == "done" and (answer or finish.get("items")) and not finish.get("read_answer"):
                 # One reading of the stated values against the turn's own sources,
                 # while the step budget can still carry the correction. Feedback,
-                # not a gate: the second answer ends the turn as it stands.
-                untraced = self._untraced_numbers(prompt, answer, turn)
+                # then close according to the affected item/narrative scope.
+                number_text = "\n".join([answer, *(str(item.get("item") or "")
+                    for item in finish.get("items", ()) if isinstance(item, dict))])
+                untraced = self._untraced_numbers(prompt, number_text, turn)
                 if untraced:
-                    if not turn.get("numbers_sent_back") and turn.get("model_calls", 0) < self.model_steps:
+                    if (not turn.get("numbers_sent_back") and turn.get("model_calls", 0) < self.model_steps
+                            and s.budget.remaining() > 1):
                         turn["numbers_sent_back"] = True
+                        turn["pending_numeric_finish"] = (dict(finish), tuple(untraced))
                         s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=True)
                         self._messages.append({"role": "user", "content":
                             "以下值在本轮读取中找不到：" + "、".join(untraced)
                             + "；请改用读到的值。编号必须逐字保留；其它数值可说明计算依据或无法核实，然后重新调用 finish。"})
                         return self._loop(s, prompt, turn, verified=verified)
-                    s.ledger.append("untraced_numbers", numbers=list(untraced), sent_back=False)
+                    # Two terminal outcomes once no correction turn remains (retry spent
+                    # or budget exhausted): a value inside a deliverable item marks that
+                    # item and the turn incomplete; narrative-only values keep done and
+                    # are named at the end of the answer.
+                    finish = self._finalize_untraced(s, turn, finish, untraced)
+                    status, answer = finish["status"], finish["answer"]
+            turn.pop("pending_numeric_finish", None)
             if status == "done" and turn.get("review_completion") and not turn.get("read_only"):
                 self._note(s, stage="check")
                 review = self._verify(s, prompt, answer, turn)

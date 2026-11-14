@@ -1,8 +1,10 @@
 import {afterAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createHash} from 'node:crypto'
 import {tryOpenAnswerInPlace} from '../src/runtime/answerNavigation'
+import {Page, type PageControllerApi} from '../src/runtime/page'
+import {createRedactor} from '../src/runtime/redaction'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage, withTreeQueryControls, withUserStatusControls} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage, withTreeQueryControls, withUserStatusControls, boundRecord, boundInput, boundClick} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -495,6 +497,7 @@ interface NativeVNode {
   key?: string
 }
 interface NativeInstance {
+  job?: {flags: number}
   type: ComponentType
   parent: NativeInstance | null
   isMounted?: boolean
@@ -530,7 +533,7 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
   const component = {name: componentName}
   const app: NativeApp = {config: {globalProperties: {}}}
   const internal = (name: string, parent: NativeInstance | null = null): NativeInstance => ({type: {name}, parent,
-    isMounted: true, isUnmounted: false, isDeactivated: false, appContext: {app}, subTree: {}})
+    isMounted: true, isUnmounted: false, isDeactivated: false, job: {flags:0}, appContext: {app}, subTree: {}})
   const appView = internal('AppView')
   appView.subTree = {type: 'section', el: section, children: []}
   const routerView = internal('RouterView', appView)
@@ -548,6 +551,83 @@ function mountedPage(path = '/system/role', componentName = 'SystemRole') {
   Object.assign(document.querySelector('#app')!, {__vue_app__: app})
   return {app, active, matched, instance, routerView, appView, keepAlive, component, element, section}
 }
+
+describe('component location bindings', () => {
+  function table() {
+    const state = mountedPage('/system/role')
+    const props = pageTable(state, [{id: 7, name: 'Alpha'}, {id: 8, name: 'Beta'}])
+    const root = state.element.querySelector('.el-table')!
+    root.innerHTML = '<div class="el-table__header-wrapper"><table><thead><tr><th>Name</th><th>Action</th></tr></thead></table></div>'
+      + '<div class="el-table__body-wrapper"><table><tbody>'
+      + '<tr><td><a>Alpha</a></td><td><button>详情</button></td></tr>'
+      + '<tr><td>Beta</td><td><button>详情</button></td></tr></tbody></table></div>'
+    for (const node of root.querySelectorAll('*')) node.getBoundingClientRect = () => ({width:50,height:20} as DOMRect)
+    const owner = state.instance.subTree.children![0]!.component!
+    const store = {states:{data:{value:[...props.data]}}}
+    const body = {...state.instance,type:{name:'ElTableBody'},props:{store},
+      subTree:{type:'tbody',el:root.querySelector('tbody')!,children:[] as NativeVNode[]}}
+    Object.assign(owner, {uid: 23,store})
+    owner.subTree.children = [{component:body}] as unknown as NativeVNode[]
+    return {state, props, store, body, root, owner, button: root.querySelector('button')!}
+  }
+  it('binds a visible business value to its own table record and invalidates reused DOM buttons', () => {
+    const s = table()
+    expect(boundRecord(s.button)).toEqual({id:'7',table:'23',values:[['Name','Alpha']]})
+    const api = {selectorMap: {}, getBrowserState: vi.fn(), clickElement: vi.fn(), inputText: vi.fn(),
+      selectOption: vi.fn(), scroll: vi.fn(), dispose: vi.fn()} as PageControllerApi
+    const page = new Page(api, () => s.button, createRedactor(), undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      element => ({kind:'record',...boundRecord(element)}))
+    const before = page.fingerprint('e1')
+    Object.assign(s.owner, {job:{flags:1}})
+    expect(boundRecord(s.button)).toBeUndefined()
+    Object.assign(s.owner, {job:{flags:0}})
+    s.store.states.data.value.reverse() // Internal sorting keeps props.data unchanged.
+    s.root.querySelector('tbody td')!.textContent = 'Beta'
+    expect(page.fingerprint('e1')).not.toBe(before)
+    expect(boundRecord(s.button)?.id).toBe('8')
+    Object.assign(s.body, {job:{flags:1}})
+    expect(boundRecord(s.button)).toBeUndefined()
+    Object.assign(s.body, {job:{flags:0}})
+    s.store.states.data.value = [{id:7},{id:7}]
+    expect(boundRecord(s.button)).toBeUndefined()
+    s.store.states.data.value = [{id:7}]
+    expect(boundRecord(s.button)).toBeUndefined() // Expanded/virtual/misaligned rows.
+  })
+  it('calls the mounted row callback once without dispatching pointer or click events', async () => {
+    const s = table(), action = vi.fn(), dom = vi.fn()
+    s.button.addEventListener('click', dom)
+    s.body.subTree.children = [{type:'button',el:s.button,props:{onClick:action}}] as unknown as NativeVNode[]
+    expect(await boundClick(s.button)).toBe(true)
+    expect(action).toHaveBeenCalledTimes(1)
+    expect(dom).not.toHaveBeenCalled()
+    s.state.instance.isDeactivated = true
+    expect(await boundClick(s.button)).toBe(false)
+    expect(action).toHaveBeenCalledTimes(1)
+  })
+  it('uses update/change callbacks of the active query, never a matching business form', async () => {
+    const state = mountedPage()
+    state.element.innerHTML = '<form><div class="el-form-item"><input></div></form>'
+    const form = state.element.querySelector('form')!, item = form.firstElementChild!, input = item.firstElementChild as HTMLInputElement
+    for (const node of [form,item,input]) node.getBoundingClientRect = () => ({width:50,height:20} as DOMRect)
+    const model = {pageNo:1,pageSize:10,name:''}, calls: string[] = []
+    const onInput = async (event: Event) => {model.name = (event.target as HTMLInputElement).value; calls.push('input')}
+    const onChange = () => {calls.push('change')}
+    const field = {...state.instance,type:{name:'ElFormItem'},props:{prop:'name'},
+      subTree:{type:'div',el:item,children:[{type:'input',el:input,props:{onInput,onChange}}]}}
+    const owner = {...state.instance,type:{name:'ElForm'},props:{model},vnode:{ctx:state.instance},
+      subTree:{type:'form',el:form,children:[{component:field}]}}
+    state.instance.subTree.children = [{component:owner}] as unknown as NativeVNode[]
+    expect(await boundInput(input,'Alpha')).toBe(true)
+    expect(model.name).toBe('Alpha')
+    expect(calls).toEqual(['input','change'])
+    delete (model as Partial<typeof model>).pageNo
+    expect(await boundInput(input,'Unrequested')).toBe(false)
+    expect(model.name).toBe('Alpha')
+    model.pageNo = 1; input.readOnly = true
+    expect(await boundInput(input,'Unrequested')).toBe(false)
+  })
+})
 
 /** A visible Element Plus table of the mounted page, bound to the records it renders.
  * Replace the returned `data` as the page re-renders after a read. */
