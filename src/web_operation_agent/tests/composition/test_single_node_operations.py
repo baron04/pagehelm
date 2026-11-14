@@ -106,12 +106,15 @@ class SingleNodeOperationsTests(unittest.TestCase):
 
     def test_rebuild_refreshes_test_delegations_before_starting_agent(self):
         script = REBUILD.read_text(encoding="utf-8")
-        assets = 'python3 -m web_operation_agent_odoo.deploy assets'
+        assets = '"$PYTHON" -m web_operation_agent_odoo.deploy assets'
         build = '"${compose[@]}" build agent odoo'
         qualification = 'run --rm odoo-qualification-users'
         start_agent = 'up -d --no-deps --force-recreate agent gateway'
 
+        selector = '. "$ROOT/scripts/python.sh"'
+        self.assertIn(selector, script)
         self.assertIn(assets, script)
+        self.assertLess(script.index(selector), script.index(assets))
         self.assertLess(script.index(assets), script.index(build))
         self.assertIn(qualification, script)
         self.assertIn(start_agent, script)
