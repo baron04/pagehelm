@@ -36,7 +36,7 @@ describe('form model reading', () => {
   })
 
   it('reads a table row only when it has a plain identity', () => {
-    expect(normalizeRowRead({id: '12', name: '张三'})).toEqual({record_id: '12', name: '张三', title: '', mode: 'action'})
+    expect(normalizeRowRead({id: '12', name: '张三'})).toMatchObject({record_id: '12', name: '张三', title: '', mode: 'action'})
     expect(normalizeRowRead({id: '../x'})).toBeNull()
     expect(normalizeRowRead(undefined)).toBeNull()
     expect(formCheck('a')).not.toBe(formCheck('b'))

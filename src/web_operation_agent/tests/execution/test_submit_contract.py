@@ -3,7 +3,7 @@ import json
 import unittest
 
 from web_operation_agent.execution.submit_contract import (
-    ContractRefused, FormData, SubmitPermit, build_card, diff_models, same_value, terminal_state)
+    ActionRequest, ContractRefused, FormData, SubmitPermit, build_card, diff_models, same_value, terminal_state)
 
 PREFIX = "/admin-api/crm/contact/"
 CATALOG = frozenset({("POST", PREFIX + "create"), ("PUT", PREFIX + "update"),
@@ -162,12 +162,46 @@ class PermitTests(unittest.TestCase):
 
     def test_row_action_needs_the_target_and_one_documented_interface(self):
         card = build_card(loaded=None, form=None, page="/crm/contact", button="停用", mode="action",
-                          target_name="张三", record_id="7")
+                          target_name="张三", record_id="7", record=LOADED,
+                          action_request=ActionRequest("PUT", PREFIX + "update-status", {"id": 7, "status": 1}))
         permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
         self.assertFalse(permit_.admit("PUT", PREFIX + "update-status", "",
                                        json.dumps({"id": 8, "status": 1}).encode()).allowed)
         self.assertTrue(permit_.admit("PUT", PREFIX + "update-status", "",
                                       json.dumps({"id": 7, "status": 1}).encode()).allowed)
+
+    def test_same_entity_other_action_or_extra_field_is_never_this_card(self):
+        card = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7",
+            record=LOADED, action_request=ActionRequest("PUT", PREFIX + "update-status", {"id": 7, "status": 1}))
+        for path, payload, code in [
+            (PREFIX + "update", {"id": 7, "status": 1}, "action_not_on_card"),
+            (PREFIX + "update-status", {"id": 8, "status": 1}, "target_mismatch"),
+            (PREFIX + "update-status", {"id": 7, "status": 0}, "action_body_not_on_card"),
+            (PREFIX + "update-status", {"id": 7, "status": 1, "name": "extra"}, "action_body_not_on_card")]:
+            p = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
+            self.assertEqual(p.admit("PUT", path, "", json.dumps(payload).encode()).code, code)
+        unbound = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7")
+        self.assertFalse(SubmitPermit("a" * 64, unbound, (PREFIX,), CATALOG).admit("PUT", PREFIX + "update-status", "", b'{"id":7,"status":1}').allowed)
+
+    def test_empty_extra_fields_are_not_part_of_an_action_or_form_payload(self):
+        for empty in (None, "", [], {}):
+            card = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7",
+                record=LOADED, action_request=ActionRequest("PUT", PREFIX + "update-status", {"id": 7, "status": 1}))
+            p = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
+            self.assertEqual(p.admit("PUT", PREFIX + "update-status", "", json.dumps({"id": 7, "status": 1, "extra": empty}).encode()).code,
+                             "action_body_not_on_card")
+            p = permit(update_card(mobile="1"))
+            self.assertEqual(p.admit("PUT", PREFIX + "update", "", body(mobile="1", extra=empty)).code,
+                             "body_differs_from_form")
+        from web_operation_agent.execution.submit_contract import same_payload
+        self.assertFalse(same_payload({"line": {"qty": 1, "extra": None}}, {"line": {"qty": 1}}))
+
+    def test_restoration_notes_count_toward_the_card_limit(self):
+        from web_operation_agent.execution.submit_contract import Change
+        with self.assertRaises(ContractRefused) as raised:
+            build_card(loaded=form(LOADED), form=form({**LOADED, "mobile": "1"}), page="p", button="保存",
+                mode="update", record_id="7", restored=tuple(Change((f"f{i}",), 1, 0) for i in range(151)))
+        self.assertEqual(raised.exception.code, "card_too_large")
 
     def test_expired_permit_admits_nothing(self):
         now = [0.0]
@@ -206,7 +240,8 @@ class LinesTests(unittest.TestCase):
 
 class ReviewRegressionTests(unittest.TestCase):
     def test_a_query_id_that_differs_from_the_body_id_or_extra_query_keys_are_refused(self):
-        card = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7")
+        card = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7", record=LOADED,
+                          action_request=ActionRequest("PUT", PREFIX + "update-status", {"status": 1}))
         permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
         self.assertEqual(permit_.admit("PUT", PREFIX + "update-status", "id=999", b'{"id": 7, "status": 1}').code, "target_mismatch")
         self.assertEqual(permit_.admit("PUT", PREFIX + "update-status", "id=7&force=1", b'{"id": 7}').code, "query_not_on_card")

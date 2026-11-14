@@ -21,7 +21,8 @@ from urllib.parse import urlsplit
 
 from .model_loop_contracts import LoopToolResult
 from .submit_contract import (ContractRefused, FormData, SubmitCard, SubmitPermit, build_card,
-                              is_empty, same_value, strip_volatile, terminal_state)
+                              diff_models, digest, is_empty, same_value, strip_volatile, terminal_state)
+from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from .value_source import Entry, Receipt, SourceLedger, check_entries
 
 #: The control the model names; the program decides everything else.
@@ -62,7 +63,9 @@ class SubmitPort(Protocol):
     """What the application contributes; every method acts as the signed-in person."""
 
     def recent_reads(self) -> tuple: ...
-    def prefixes(self, reads: tuple, *, mode: str, record_id: str) -> tuple[str, ...]: ...
+    def prefixes(self, reads: tuple, *, mode: str, record_id: str, source: str = "") -> tuple[str, ...]: ...
+    def row_prefixes(self, reads: tuple, row: dict) -> tuple[str, ...]: ...
+    def row_request(self, prefixes: tuple, row: dict, element, record: dict): ...
     def catalog(self, prefixes: tuple[str, ...]) -> frozenset: ...
     def read_record(self, prefixes: tuple[str, ...], record_id: str): ...
     def dangerous(self, element) -> bool: ...
@@ -81,6 +84,43 @@ def _contains(held, wanted) -> bool:
     return same_value(held, wanted)
 
 
+def record_model(record, shape):
+    """Compare submitted fields; extra read-only record/line keys are not submitted."""
+    if isinstance(record, dict) and isinstance(shape, dict):
+        return {k: record_model(record.get(k), v) for k, v in shape.items()}
+    if isinstance(record, list) and isinstance(shape, list):
+        keyed = all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *shape])
+        if keyed:
+            by_id = {str(v["id"]): v for v in record}
+            if len(by_id) != len(record) or len({str(v["id"]) for v in shape}) != len(shape):
+                raise ContractRefused("form_data_unreadable", "duplicate line identities")
+            paired = [(by_id.pop(str(v["id"])), v) for v in shape if str(v["id"]) in by_id]
+            return [record_model(a, b) for a, b in paired] + list(by_id.values())
+        return [record_model(value, shape[index] if index < len(shape) else value)
+                for index, value in enumerate(record)]
+    return record
+
+
+def opening_values(record, loaded, current):
+    """Undo opening-only differences while preserving subsequent edits at each leaf."""
+    if isinstance(record, dict) and isinstance(loaded, dict) and isinstance(current, dict):
+        return {k: opening_values(record[k], loaded[k], v) if k in record and k in loaded else v
+                for k, v in current.items()}
+    if isinstance(record, list) and isinstance(loaded, list) and isinstance(current, list) \
+            and len(record) == len(loaded) == len(current):
+        if all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *loaded, *current]):
+            old = {str(v["id"]): v for v in loaded}
+            base = {str(v["id"]): v for v in record}
+            if len(old) != len(loaded) or len(base) != len(record):
+                raise ContractRefused("form_data_unreadable", "duplicate line identities")
+            return [opening_values(base[str(v["id"])], old[str(v["id"])], v)
+                    if str(v["id"]) in base and str(v["id"]) in old else v for v in current]
+        if not same_value(record, loaded) and not same_value(loaded, current):
+            raise ContractRefused("opening_changes", "无法区分没有编号的明细行的页面自动变化与填写变化，请自行核对提交")
+        return record if same_value(loaded, current) else current
+    return record if same_value(loaded, current) and not same_value(record, loaded) else current
+
+
 def _confirm_words(text: str) -> bool:
     """A yes. Any refusal or hesitation anywhere in the words makes it not one ("不可以删除")."""
     plain = text.replace("没问题", "")
@@ -91,6 +131,17 @@ class NativeSubmitMixin:
     """`request_submit` for a model-driven executor that has a `native_submit` port."""
 
     native_submit: SubmitPort | None = None
+
+    def _private_submit_record(self, s, event, **fields):
+        """Optional local evidence collector; the normal ledger never receives whole records."""
+        collect = getattr(self.native_submit, "record_private", None)
+        if collect is not None:
+            try:
+                collect(event, {"run_id": getattr(s.ledger, "run_id", ""),
+                    **getattr(s.ledger, "base", {}), "step": s.step,
+                    **redact_sensitive_assignments(redact_session_handoffs(fields))})
+            except Exception as exc:
+                s.ledger.append("native_submit_evidence_error", error_type=type(exc).__name__)
 
     # -- offered ----------------------------------------------------------------------
     def _submit_offered(self, turn) -> bool:
@@ -123,7 +174,17 @@ class NativeSubmitMixin:
                                 scope=str(element.attrs.get("form_scope", ""))[:80])
             return
         try:
-            baselines[key] = self._read_form(s, element)[0]
+            baselines[key], raw = self._read_form(s, element)
+            form = baselines[key]
+            if form.mode == "update":
+                port = self.native_submit
+                prefixes = port.prefixes(port.recent_reads(), mode=form.mode, record_id=form.record_id, source=raw.get("source", ""))
+                if not prefixes:
+                    raise ContractRefused("entity_unknown")
+                record = port.read_record(prefixes, form.record_id)
+                if record is None:
+                    raise ContractRefused("record_unreadable")
+                turn.setdefault("form_record_baselines", {})[key] = record
             s.ledger.append("native_submit_baseline", captured=True, mode=baselines[key].mode,
                             record_id=baselines[key].record_id, digest=baselines[key].digest)
         except ContractRefused as exc:
@@ -184,10 +245,10 @@ class NativeSubmitMixin:
         current, raw = self._read_form(s, element)
         if raw.get("withheld"):
             raise ContractRefused("credential_field")
-        if raw.get("invalid"):
-            raise ContractRefused("validation", "、".join(str(p) for p in raw["invalid"][:8]))
         key = self._form_key(element)
         loaded = turn.get("form_baselines", {}).get(key)
+        if key in turn.get("form_baselines", {}) and loaded is None:
+            raise ContractRefused("form_data_unreadable", "填写前未能读取完整表单和记录")
         if loaded is None:
             loaded = current                     # never typed into: the form as it stands
         if loaded.mode != current.mode or loaded.record_id != current.record_id:
@@ -202,17 +263,45 @@ class NativeSubmitMixin:
         if invented:
             raise ContractRefused("value_not_from_user", "、".join(invented))
         requested = self._requested_fields(current, ledger)
-        card = build_card(loaded=loaded, form=current, page=self._page_name(s), button=element.name.strip(),
-                          mode=current.mode, record_id=current.record_id, requested=requested)
         reads = port.recent_reads()
-        prefixes = port.prefixes(reads, mode=card.mode, record_id=card.record_id)
+        prefixes = port.prefixes(reads, mode=current.mode, record_id=current.record_id, source=raw.get("source", ""))
         if not prefixes:
             raise ContractRefused("entity_unknown")
         baseline = None
-        if card.mode == "update":
-            baseline = port.read_record(prefixes, card.record_id)
+        comparison, restored = None, ()
+        if current.mode == "update":
+            baseline = port.read_record(prefixes, current.record_id)
             if baseline is None:
                 raise ContractRefused("record_unreadable")
+            earlier = turn.get("form_record_baselines", {}).get(key)
+            if earlier is not None and not same_value(strip_volatile(earlier), strip_volatile(baseline)):
+                raise ContractRefused("record_changed", "填写期间目标记录被别人修改，请重新核对")
+            comparison = record_model(baseline, current.model)
+            proposed = opening_values(strip_volatile(comparison), strip_volatile(loaded.model), current.model)
+            restored = tuple(diff_models(current.model, proposed))
+            if restored:
+                values = {c.field: proposed[c.field] for c in restored}
+                try:
+                    raw = self._read(s, element, "restore", expected=current.model, values=values)
+                except ContractRefused:
+                    effects = "、".join(f"{current.label(k)}={current.model[k]}" for k in sorted(values))
+                    raise ContractRefused("opening_changes", "页面自动变化还原失败，请自行核对提交；保存可能改为：" + effects) from None
+                current = FormData.from_json(raw)
+                if raw.get("invalid") or raw.get("withheld") or not same_value(current.model, proposed):
+                    raise ContractRefused("opening_changes", "页面打开时改了字段，还原未通过或页面又改回；保存会改变：" + "、".join(sorted(values)))
+        raw = self._read(s, element, "validate")
+        final = FormData.from_json(raw)
+        if final.mode != current.mode or final.record_id != current.record_id or raw.get("withheld"):
+            raise ContractRefused("form_data_unreadable", "校验期间表单目标发生变化")
+        if raw.get("validation") is not True or raw.get("invalid"):
+            raise ContractRefused("validation", "、".join(str(p) for p in raw.get("invalid", [])[:8]) or "应用没有确认校验通过")
+        if any(not same_value(final.model.get(c.field), current.model.get(c.field)) for c in restored):
+            raise ContractRefused("opening_changes", "页面在还原后又自动改值，请自行核对提交")
+        current = final
+        comparison = record_model(baseline, current.model) if baseline is not None else None
+        card = build_card(loaded=loaded, form=current, page=self._page_name(s), button=element.name.strip(),
+                          mode=current.mode, record_id=current.record_id, requested=requested,
+                          record=comparison, restored=restored)
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
                                        kind="form", check=raw.get("check", ""), loaded=loaded)
 
@@ -248,21 +337,24 @@ class NativeSubmitMixin:
             history = self._earlier_words
             if not history or not _confirm_words(s.message.text):
                 raise ContractRefused("dangerous_unconfirmed", button + "\x1f" + target)
-        card = build_card(loaded=None, form=None, page=self._page_name(s), button=button, mode="action",
-                          target_name=name, record_id=record_id)
         reads = port.recent_reads()
-        prefixes = port.prefixes(reads, mode="action", record_id=record_id)
+        prefixes = port.row_prefixes(reads, row)
         if not prefixes:
             raise ContractRefused("entity_unknown")
         baseline = port.read_record(prefixes, record_id)
         if baseline is None:
             raise ContractRefused("record_unreadable")
+        request = port.row_request(prefixes, row, element, baseline)
+        if request is None:
+            raise ContractRefused("action_unknown", "无法把这个控件对应到唯一接口和具体字段变化，请自行操作")
+        card = build_card(loaded=None, form=None, page=self._page_name(s), button=button, mode="action",
+            target_name=name, record_id=record_id, record=baseline, action_request=request)
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
-                                       kind="row", record_id=record_id)
+                                       kind="row", record_id=record_id, row_check=str(row.get("check") or ""))
 
     # -- approval, press, readback -----------------------------------------------------
     def _approve_and_press(self, s, element, turn, card: SubmitCard, prefixes, baseline, *,
-                           kind, check="", record_id="", loaded=None) -> LoopToolResult:
+                           kind, check="", record_id="", loaded=None, row_check="") -> LoopToolResult:
         port = self.native_submit
         step = s.step
         context = s.approvals.context(step, "native_submit", hold_ms=s.approvals.approval_hold_ms)
@@ -272,8 +364,10 @@ class NativeSubmitMixin:
             button=card.button, form_digest=card.form.digest if card.form else "",
             loaded_digest=card.loaded.digest if card.loaded else "",
             changes=[d.to_json() for d in card.details()],
-            loaded=card.loaded.model if card.loaded else None,
-            submitted=card.form.model if card.form else None)
+            restored_fields=sorted({c.field for c in card.restored}))
+        self._private_submit_record(s, "card", loaded=card.loaded.model if card.loaded else None,
+            submitted=card.form.model if card.form else None, record=baseline,
+            validation={"check": check}, changes=[d.to_json() for d in card.details()])
         s.write_intent = True
         turn["submit_started"] = True
         identity = context.audit_projection() if context is not None else {}
@@ -281,9 +375,9 @@ class NativeSubmitMixin:
                                                 context=context, identity=identity)
         if not approval.approved:
             s.terminal_reason, s.detail = approval.reason, approval.detail[:200]
-            turn["final"] = {"approval_denied": "你没有批准这项修改，没有执行。",
-                             "approval_expired": "批准卡片已过期，这项修改没有执行。",
-                             "user_cancelled": "操作已停止，这项修改没有执行。"}.get(approval.reason, "这项修改没有执行。")
+            turn["final"] = {"approval_denied": "你没有批准，助手未提交这项修改。",
+                             "approval_expired": "批准卡片已过期，助手未提交这项修改。",
+                             "user_cancelled": "助手操作已停止，未提交这项修改。"}.get(approval.reason, "助手未提交这项修改。")
             return LoopToolResult(turn["final"], kind="write", state="refused",
                                   terminal_reason=s.terminal_reason)
         # What was approved must still be what is on the page and in the record.
@@ -294,30 +388,31 @@ class NativeSubmitMixin:
                     return self._stopped(s, turn, "form_changed", "批准之后表单里的数据又变了")
             else:
                 row = self._read(s, element, "row")
-                if str(row.get("record_id") or "") != record_id:
+                if str(row.get("record_id") or "") != record_id or str(row.get("check") or "") != row_check:
                     return self._stopped(s, turn, "row_changed", "批准之后这一行不再是原来的记录")
             now = port.read_record(prefixes, card.record_id) if card.mode != "create" else None
             if card.mode != "create":
                 if now is None:
                     return self._stopped(s, turn, "record_unreadable", "没能重新读取目标记录")
-                if card.mode == "update" and not self._same_as_loaded(now, loaded):
-                    return self._stopped(s, turn, "record_changed", "批准之后这条记录被别人改过")
                 if not same_value(strip_volatile(now), strip_volatile(baseline)):
                     return self._stopped(s, turn, "record_changed", "批准之后这条记录被别人改过")
         except ContractRefused as exc:
             return self._stopped(s, turn, exc.code, exc.detail or "核对没有通过")
         s.ledger.append("native_submit_reread", step=step, form_digest=card.form.digest if card.form else "",
                         prefixes=list(prefixes), documented_writes=sorted(f"{m} {p}" for m, p in port.catalog(prefixes))[:12],
-                        record=now if card.mode != "create" else None, dispatched=False, side_effect_possible=False)
+                        record_digest=digest(now) if now is not None else "",
+                        dispatched=False, side_effect_possible=False)
+        self._private_submit_record(s, "before_click", record=now)
         permit = SubmitPermit(
             actor="", card=card, prefixes=prefixes, catalog=port.catalog(prefixes), baseline=baseline,
-            reread=(lambda: port.read_record(prefixes, card.record_id)) if card.mode != "create" else None)
+            reread=(lambda: port.read_record(prefixes, card.record_id)) if card.mode != "create" else None,
+            reread_observer=lambda record: self._private_submit_record(s, "before_release", record=record))
         s.ledger.append("native_submit_approved", step=step, approval_id=approval.approval_id,
-                        permit=permit.permit_id, baseline=baseline, dispatched=False,
+                        permit=permit.permit_id, dispatched=False,
                         side_effect_possible=False)
         label = element.name.strip()
         press = ({"ref": element.ref, "kind": "form", "check": check, "label": label} if kind == "form"
-                 else {"ref": element.ref, "kind": "row", "record_id": record_id, "label": label})
+                 else {"ref": element.ref, "kind": "row", "record_id": record_id, "label": label, "row_check": row_check})
         broken, confirmed = "", ""
         try:
             clicked = self._press(s, permit, press)
@@ -332,14 +427,6 @@ class NativeSubmitMixin:
             return self._finish_submit(s, turn, permit, card, prefixes, baseline, readback=None,
                                        extra="应用弹出的确认框里有卡上没有的后果，已取消，没有执行。")
         return self._finish_submit(s, turn, permit, card, prefixes, baseline, uncertain=bool(broken))
-
-    def _same_as_loaded(self, record, loaded) -> bool:
-        if loaded is None or not isinstance(record, dict):
-            return True
-        for key, value in loaded.model.items():
-            if key in record and isinstance(value, (str, int, float, bool)) and not same_value(record[key], value):
-                return False
-        return True
 
     def _stopped(self, s, turn, code, detail) -> LoopToolResult:
         s.ledger.append("native_submit_not_sent", step=s.step, code=code, detail=detail,
@@ -416,12 +503,16 @@ class NativeSubmitMixin:
             "native_submit_result", step=s.step, permit=permit.permit_id, state=state,
             requests=[{"seq": r.sequence, "method": r.method, "path": r.path, "decision": r.decision,
                        "status": r.status, "fields": list(r.fields), "digest": r.body_digest,
-                       "detail": list(r.detail), "body": r.sent, "reread_digest": r.reread_digest,
+                       "detail": list(r.detail), "reread_digest": r.reread_digest,
                        "answer": r.answer if isinstance(r.answer, (int, str)) else None}
                       for r in permit.log],
-            readback_record=self._last_readback,
+
             duplicates=permit.duplicates, readback=outcome, notes=notes,
             side_effect_possible=True)
+        self._private_submit_record(s, "result", state=state, readback_record=self._last_readback,
+            requests=[{"sequence": r.sequence, "method": r.method, "path": r.path,
+                "body": r.sent, "decision": r.decision, "status": r.status, "answer": r.answer}
+                for r in permit.log])
         what = {"create": "新增", "update": "修改", "action": "执行"}[card.mode]
         label = f"{card.effect()}"
         blocked = [r for r in permit.blocked() if r.decision != "duplicate"]
@@ -495,9 +586,15 @@ class NativeSubmitMixin:
             return None, ["回读失败"]
         self._last_readback = now
         if card.mode == "action":
-            gone = now is None
-            moved = gone or not same_value(strip_volatile(now), strip_volatile(baseline))
-            return (True if moved else None), ([] if moved else ["回读时记录没有变化，无法确认动作生效"])
+            expected = card.action_request
+            if expected is None or not isinstance(now, dict):
+                return None, ["无法回读动作要求的字段"]
+            wrong = [k for k, v in expected.body.items() if k != "id" and not same_value(now.get(k), v)]
+            previous, latest = strip_volatile(baseline), strip_volatile(now)
+            other = sorted(k for k in previous.keys() | latest.keys() if k not in card.changed_fields
+                           and (k not in previous or k not in latest or not same_value(previous[k], latest[k])))
+            return not wrong, (["回读时动作字段不符：" + "、".join(wrong)] if wrong else []) + (
+                ["回读时其它字段与点击前不同：" + "、".join(other)] if other else [])
         if now is None:
             return None, ["回读时找不到这条记录"]
         form = card.form.model

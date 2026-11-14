@@ -9,7 +9,7 @@ from evals.yudao.write_contract.fullstack import ScriptedModel, call, index_of, 
 FORM = """<template><el-dialog><el-form :model="formData"/></el-dialog></template>
 <script setup>const formType = ref(''); const open = async (type, id) => { formType.value = type; if (id) { x = await Api.get(id) } }</script>"""
 PAGE = """<template><el-button @click="openForm('update', row.id)">编辑</el-button><el-button @click="openForm('create')">新增</el-button><AForm ref="f"/></template>
-<script setup>import AForm from './AForm.vue'</script>"""
+<script setup>import AForm from './AForm.vue'; const openForm = (type, id) => { f.value.open(type, id) }</script>"""
 
 
 def tree(names):
@@ -32,6 +32,27 @@ class InventoryTests(unittest.TestCase):
         again = inventory.sample(inventory.scan(root))
         self.assertEqual(again, inventory.sample(found))
         self.assertEqual(len(again), inventory.SAMPLE)
+
+    def test_an_imported_group_editor_is_not_the_list_edit_target(self):
+        source = PAGE.replace('<AForm ref="f"/>', '<AForm ref="f"/><BForm ref="group"/>').replace(
+            "import AForm from './AForm.vue'", "import BForm from './BForm.vue'; import AForm from './AForm.vue'")
+        bindings = inventory.editor_bindings(source)
+        self.assertEqual(bindings["AForm"]["state"], "confirmed")
+        self.assertEqual(bindings["BForm"]["state"], "different_editor")
+        unknown = inventory.editor_bindings(source.replace('f.value.open(type, id)', 'customOpen(type, id)'))
+        self.assertEqual(unknown["AForm"]["state"], "unknown")
+        for inert in ("// f.value.open(type, id)\n customOpen(type, id)", "'f.value.open(type, id)'; customOpen(type, id)"):
+            self.assertEqual(inventory.editor_bindings(source.replace('f.value.open(type, id)', inert))["AForm"]["state"], "unknown")
+
+    def test_comment_braces_and_quotes_cannot_hide_a_second_editor_call(self):
+        source = PAGE.replace('<AForm ref="f"/>', '<AForm ref="f"/><BForm ref="group"/>').replace(
+            "import AForm from './AForm.vue'", "import BForm from './BForm.vue'; import AForm from './AForm.vue'")
+        for comment in ("// }", "// '", "/* } */", "/* ' */"):
+            changed = source.replace('f.value.open(type, id)',
+                'f.value.open(type, id); ' + comment + '\n group.value.open(type, id)')
+            bindings = inventory.editor_bindings(changed)
+            self.assertEqual(bindings["AForm"]["state"], "unknown")
+            self.assertEqual(bindings["BForm"]["state"], "unknown")
 
     def test_a_dialog_that_never_loads_a_record_is_not_an_editable_form(self):
         root = tree(["a/send"])

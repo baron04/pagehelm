@@ -33,14 +33,29 @@ class PrefixTests(unittest.TestCase):
     def test_the_pages_own_table_wins_over_option_lists_loaded_after_it(self):
         reads = (("/admin-api/mes/wm/warehouse/page", "pageNo=1"), ("/admin-api/system/user/list", ""),
                  ("/admin-api/mes/md/unit/list", ""), ("/admin-api/system/dept/list", ""), ("/admin-api/mes/md/item/list", ""))
-        found = port().prefixes(reads, mode="create", record_id="")
+        found = port().prefixes(reads, mode="create", record_id="", source="/admin-api/mes/wm/warehouse/page")
         self.assertEqual(found[0], "/admin-api/mes/wm/warehouse/")
 
     def test_an_edit_follows_the_read_that_loaded_the_record_by_its_id(self):
         reads = (("/admin-api/mes/wm/warehouse/get", "id=5"), ("/admin-api/system/user/get", "id=5x"),
                  ("/admin-api/mes/md/unit/list", ""))
-        self.assertEqual(port().prefixes(reads, mode="update", record_id="5"), ("/admin-api/mes/wm/warehouse/",))
-        self.assertEqual(port().prefixes((), mode="update", record_id="5"), ())
+        self.assertEqual(port().prefixes(reads, mode="update", record_id="5", source="/admin-api/mes/wm/warehouse/get"), ("/admin-api/mes/wm/warehouse/",))
+        self.assertEqual(port().prefixes((), mode="update", record_id="5", source="/admin-api/mes/wm/warehouse/get"), ())
+
+    def test_row_uses_its_table_source_even_after_another_entity_was_read(self):
+        source = "/admin-api/mes/wm/warehouse/page"
+        reads = ((source, ""), ("/admin-api/mes/md/unit/page", ""))
+        self.assertEqual(port().row_prefixes(reads, {"record_id": "5", "source": source}),
+                         ("/admin-api/mes/wm/warehouse/",))
+        for row in ({"record_id": "5"}, {"source": "/admin-api/other/page"},
+                    {"source": source + "?id=5"}):
+            self.assertEqual(port().row_prefixes(reads, row), ())
+
+    def test_form_entity_never_falls_back_to_an_unrelated_recent_read(self):
+        reads = (("/admin-api/mes/wm/warehouse/get", "id=5"), ("/admin-api/mes/md/unit/get", "id=5"))
+        self.assertEqual(port().prefixes(reads, mode="update", record_id="5"), ())
+        self.assertEqual(port().prefixes(reads, mode="update", record_id="5", source="/admin-api/mes/wm/warehouse/get"),
+                         ("/admin-api/mes/wm/warehouse/",))
 
     def test_the_catalogue_is_every_documented_write_under_those_prefixes_only(self):
         found = port().catalog(("/admin-api/mes/wm/warehouse/",))

@@ -99,6 +99,7 @@ interface PageControllerModule {
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
   readElementFormModel?: ElementNavigationReader
+  restoreElementFormModel?: (element: unknown, request: unknown) => Promise<boolean>
   readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
 }
@@ -1104,6 +1105,7 @@ export interface LoadedPageController {
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
   readElementFormModel?: ElementNavigationReader
+  restoreElementFormModel?: (element: unknown, request: unknown) => Promise<boolean>
   readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
 }
@@ -1180,6 +1182,8 @@ export async function loadPageController(moduleUrl: string | undefined,
       ? {readElementPageControl: module.readElementPageControl} : {}),
     ...(typeof module.readElementFormModel === 'function'
       ? {readElementFormModel: module.readElementFormModel} : {}),
+    ...(typeof module.restoreElementFormModel === 'function'
+      ? {restoreElementFormModel: module.restoreElementFormModel} : {}),
     ...(typeof module.readElementRowRecord === 'function'
       ? {readElementRowRecord: module.readElementRowRecord} : {}),
     ...(typeof module.readElementNavigation === 'function'

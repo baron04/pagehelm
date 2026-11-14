@@ -171,7 +171,7 @@ function rendersList(list, data, totals) {
 
 export function createPageFacts({view = window, doc = document} = {}) {
   let route = '', locationKey = '', generation = 0, record = null, appliedLedger = null, listSerial = 0, disposed = false
-  const reads = new Map()
+  const reads = new Map(), formReads = new Map()
   // The latest list request per endpoint. A list is the page's own query only while a
   // visible table of the page renders its rows (pageList): a cached page refreshing its
   // list on every route change, or another list on the page, never stands in for it.
@@ -182,7 +182,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
     const next = view.location.pathname + view.location.search + view.location.hash
     if (next !== locationKey) {
       locationKey = next; route = view.location.pathname; generation++; record = null; appliedLedger = null
-      reads.clear(); lists.clear()
+      reads.clear(); lists.clear(); formReads.clear()
     }
     return generation
   }
@@ -207,6 +207,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
     try { url = new URL(input, view.location.href) } catch { return null }
     if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/')) return null
     const heldGeneration = current()
+    if (/\/get(?:-[a-z0-9-]+)?$/.test(url.pathname)) formReads.delete(url.pathname)
     readQuery = readQuery === undefined ? listReadQuery(url, view) : readQuery
     const ledger = route === '/fms/ledger/general' && url.pathname === '/admin-api/fms/ledger/general/list'
     const order = route === '/erp/sale/order' && url.pathname === '/admin-api/erp/sale-order/page'
@@ -225,8 +226,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
     }
     // A newer request to an endpoint replaces its earlier list at send, failures included.
     let list = null
-    if (url.pathname.endsWith('/page')) {
-      list = {serial: ++listSerial, query: null, read: null, rows: null, total: null}
+    if (/\/(?:page|list)(?:-[a-z0-9-]+)?$/.test(url.pathname)) {
+      list = {serial: ++listSerial, path: url.pathname, query: null, read: null, rows: null, total: null}
       lists.delete(url.pathname)
       if (lists.size >= 16) lists.delete(lists.keys().next().value)
       lists.set(url.pathname, list)
@@ -262,10 +263,18 @@ export function createPageFacts({view = window, doc = document} = {}) {
       // Concurrent older completions cannot overwrite the newest request's verdict.
       if (latest.serial !== serial) return
       const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
+      if (/\/get(?:-[a-z0-9-]+)?$/.test(url.pathname)) {
+        formReads.delete(url.pathname)
+        if (ok && body?.data?.id !== undefined && String(body.data.id) === url.searchParams.get('id')) {
+          if (formReads.size >= 32) formReads.delete(formReads.keys().next().value)
+          formReads.set(url.pathname, String(body.data.id))
+        }
+      }
       latest.failed = !ok
       if (ledger && ok && query && Array.isArray(body?.data)) appliedLedger = query
-      if (list && lists.get(url.pathname) === list && ok && Array.isArray(body?.data?.list)) {
-        list.rows = listRows(body.data.list)
+      const records = Array.isArray(body?.data?.list) ? body.data.list : Array.isArray(body?.data) ? body.data : null
+      if (list && lists.get(url.pathname) === list && ok && records) {
+        list.rows = listRows(records)
         list.total = Number.isSafeInteger(body.data.total) ? body.data.total : null
         list.query = query
       }
@@ -332,6 +341,21 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (readPageBlocker() || readPageRoute() !== route) return undefined
     const query = appliedLedger || pageList()?.query
     return query ? {path: query.path, parameters: {...query.parameters}} : undefined
+  }
+  function readFormSource(id) {
+    current()
+    if (disposed) return undefined
+    if (!id) return pageList()?.path
+    const paths = [...formReads].filter(([, held]) => held === String(id)).map(([path]) => path)
+    return paths.length === 1 ? paths[0] : undefined
+  }
+  function readRowSource(element) {
+    current()
+    const table = element?.closest?.('.el-table')
+    const data = table && pageComponentForRoot(table, 'ElTable')?.instance?.props?.data
+    if (disposed || !visible(table) || !Array.isArray(data) || readPageBlocker()) return undefined
+    const matching = Array.from(lists.values()).filter(list => list.rows?.ids && rendersList(list, data, []))
+    return matching.length === 1 ? matching[0].path : undefined
   }
   function readPageRead() {
     current()
@@ -444,8 +468,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
     return facts
   }
   return {begin, readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
-    readPageFacets,
-    dispose() {disposed = true; reads.clear(); lists.clear(); record = null; appliedLedger = null}}
+    readPageFacets, readRowSource, readFormSource,
+    dispose() {disposed = true; reads.clear(); lists.clear(); formReads.clear(); record = null; appliedLedger = null}}
 }
 
 /** What this page's own API requests carry while the assistant is working it. */
@@ -844,10 +868,10 @@ function shownIn(root) {
  */
 export function readElementFormModel(element) {
   if (!(element instanceof HTMLElement) || !element.isConnected) return undefined
-  const dialog = element.closest('[role="dialog"],dialog')
+  const dialog = element.closest('[role="dialog"],dialog') || element.closest('form.el-form')
   if (!dialog) return undefined
   const shown = node => node.getBoundingClientRect().width && node.getBoundingClientRect().height
-  const forms = Array.from(dialog.querySelectorAll('form.el-form')).filter(shown)
+  const forms = (dialog.matches('form.el-form') ? [dialog] : Array.from(dialog.querySelectorAll('form.el-form'))).filter(shown)
   const roots = forms.filter(form => !forms.some(other => other !== form && other.contains(form)))
   if (Array.from(dialog.querySelectorAll('.el-loading-mask')).some(shown)) return {unreadable: 'still_loading'}
   if (forms.length > 32 || roots.length !== 1) return {unreadable: roots.length ? 'several_forms' : 'no_form'}
@@ -875,7 +899,50 @@ export function readElementFormModel(element) {
   }
   const title = (dialog.querySelector('.el-dialog__header')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
   return {model: copy.data, withheld: copy.withheld, invalid: invalid.slice(0, 40), items, title,
-    mode: hasId ? 'update' : 'create', record_id: hasId ? String(id) : ''}
+    mode: hasId ? 'update' : 'create', record_id: hasId ? String(id) : '', source: installed?.readFormSource(hasId ? id : '')}
+}
+
+/** Restore page-opening changes to the same-actor values supplied by the server. */
+export async function restoreElementFormModel(element, request) {
+  const before = readElementFormModel(element)
+  if (!before || before.unreadable || before.withheld?.length || !request ||
+      JSON.stringify(before.model) !== JSON.stringify(request.expected) ||
+      !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return false
+  const area = element.closest('[role="dialog"],dialog') || element.closest('form.el-form')
+  const forms = area?.matches('form.el-form') ? [area] : [...(area?.querySelectorAll('form.el-form') || [])]
+  const root = forms.find(form => !forms.some(other => other !== form && other.contains(form)))
+  const bound = root && pageComponentForRoot(root, 'ElForm', true)
+  const model = bound?.instance.props?.model
+  const values = cloneFormModel(request.values)
+  if (!model || values.unreadable || values.withheld.length || Object.keys(values.data).some(key =>
+      key === 'id' || key === '__proto__' || key === 'constructor' || key === 'prototype' ||
+      !Object.hasOwn(model, key))) return false
+  for (const [key, value] of Object.entries(values.data)) model[key] = value
+  await Promise.resolve()
+  const validate = bound.instance.exposed?.validate || bound.instance.proxy?.validate
+  if (typeof validate !== 'function') return false
+  try { return await validate() !== false } catch { return false }
+}
+
+function rowToggle(element, row) {
+  const area = element.closest('.el-switch'), tableRoot = area?.closest('.el-table')
+  const binding = area && pageComponentForRoot(area, 'ElSwitch')
+  const table = tableRoot && pageComponentForRoot(tableRoot, 'ElTable')
+  if (!binding || !table || binding.owner !== table.owner || binding.instance.props?.disabled) return undefined
+  const cell = area.closest('td')
+  const store = table.instance.store || table.instance.proxy?.store || table.instance.setupState?.store
+  const column = store?.states?.columns?.value?.find(c => cell?.classList.contains(c.id))
+  const field = column?.property
+  const records = store?.states?.data?.value
+  const record = Array.isArray(records) && records.find(r => String(r.id) === row.id)
+  const props = binding.instance.props
+  const scalar = value => ['string', 'boolean', 'number'].includes(typeof value) &&
+    (typeof value !== 'number' || Number.isFinite(value))
+  if (typeof field !== 'string' || !/^[a-z][A-Za-z0-9]{0,59}$/.test(field) || !record ||
+      !scalar(props.activeValue) || !scalar(props.inactiveValue) || props.activeValue === props.inactiveValue ||
+      props.modelValue !== record[field] || ![props.activeValue, props.inactiveValue].includes(record[field])) return undefined
+  return {field, before: record[field], after: record[field] === props.activeValue ? props.inactiveValue : props.activeValue,
+    label: String(column.label || field).slice(0, 80), checked: record[field] === props.activeValue}
 }
 
 /** The table row a row control belongs to, read from the table that renders it. */
@@ -883,7 +950,8 @@ export function readElementRowRecord(element) {
   const row = element instanceof HTMLElement ? boundRecord(element) : undefined
   if (!row || !FORM_ID.test(row.id)) return undefined
   const named = row.values.find(([label]) => /名称|名字|标题|姓名|name/i.test(label))
-  return {id: row.id, name: named ? named[1].slice(0, 200) : '', values: row.values.slice(0, 40)}
+  return {id: row.id, name: named ? named[1].slice(0, 200) : '', values: row.values.slice(0, 40),
+    source: installed?.readRowSource(element), toggle: rowToggle(element, row)}
 }
 
 /** Local binding facts only; application effect review still owns action authority. */
@@ -1035,6 +1103,19 @@ export function withUserStatusControls(selectorMap, html, root = document) {
     const index = ++top
     selectorMap.set(index, {ref: area, tagName: 'div', isInteractive: true, highlightIndex: index})
     lines.push(`[${index}]<div role=switch id=woa-user-status-${record.id} aria-checked=${record.status === 0}>${label} />`)
+  }
+  // Other native scalar switches expose their mounted column property and exact values.
+  for (const area of root.querySelectorAll('.el-table .el-switch')) {
+    if (lines.length >= 32) break
+    if ([...selectorMap.values()].some(value => value.ref === area)) continue
+    const rect = area.getBoundingClientRect()
+    if (!rect.width || !rect.height || rect.bottom <= 0 || rect.top >= window.innerHeight) continue
+    const row = boundRecord(area), toggle = row && rowToggle(area, row)
+    if (!toggle) continue
+    const label = `${toggle.label}开关：编号 ${row.id}`
+    const index = ++top
+    selectorMap.set(index, {ref: area, tagName: 'div', isInteractive: true, highlightIndex: index})
+    lines.push(`[${index}]<div role=switch aria-label="${label}" aria-checked=${toggle.checked}>${label} />`)
   }
   return lines.length ? lines.join('\n') + '\n' + html : html
 }

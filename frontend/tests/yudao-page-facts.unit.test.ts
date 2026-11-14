@@ -4,7 +4,7 @@ import {tryOpenAnswerInPlace} from '../src/runtime/answerNavigation'
 import {Page, type PageControllerApi} from '../src/runtime/page'
 import {createRedactor} from '../src/runtime/redaction'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage, withTreeQueryControls, withUserStatusControls, boundRecord, boundInput, boundClick} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage, withTreeQueryControls, withUserStatusControls, readElementFormModel, restoreElementFormModel, boundRecord, boundInput, boundClick} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -181,6 +181,34 @@ describe('native Yudao record and read completion facts', () => {
     await cached(200, {code:0, data:{list:[{id:101}, {id:102}, {id:103}], total:240}})
     expect(facts.readPageQuery()).toEqual({path:'/admin-api/erp/account/page', parameters:{pageNo:'1', pageSize:'10'}})
     expect(facts.readPageRead()).toMatchObject({path:'/admin-api/erp/account/page', total:2, rows:2})
+  })
+  it('binds an editor only to a unique successful current-route record source', async () => {
+    mountedPage('/crm/contact', 'Contact')
+    const facts = createPageFacts()
+    const own = '/admin-api/crm/contact/get'
+    await facts.begin(own + '?id=5')!(200, {code: 0, data: {id: 5}})
+    expect(facts.readFormSource(5)).toBe(own)
+    await facts.begin('/admin-api/other/record/get?id=5')!(200, {code: 0, data: {id: 5}})
+    expect(facts.readFormSource(5)).toBeUndefined()
+    window.history.replaceState({}, '', '/system/post')
+    expect(facts.readFormSource(5)).toBeUndefined()
+    const pending = facts.begin(own + '?id=5')!
+    expect(facts.readFormSource(5)).toBeUndefined()
+    await pending(500, null)
+    expect(facts.readFormSource(5)).toBeUndefined()
+  })
+  it.each(['page', 'list', 'page-by-state'])('binds a row to its own table source %s, refusing ambiguous IDs', async endpoint => {
+    const state = mountedPage('/erp/finance/account', 'ErpAccount')
+    pageTable(state, [{id: 1}, {id: 2}])
+    const table = state.element.querySelector('.el-table')!
+    const button = document.createElement('button'); table.append(button)
+    const facts = createPageFacts()
+    const source = `/admin-api/erp/account/${endpoint}`
+    await facts.begin(source)!(200, {code: 0, data: endpoint === 'list' ? [{id: 1}, {id: 2}] : {list: [{id: 1}, {id: 2}], total: 2}})
+    await facts.begin('/admin-api/crm/customer/page')!(200, {code: 0, data: {list: [{id: 3}], total: 1}})
+    expect(facts.readRowSource(button)).toBe(source)
+    await facts.begin('/admin-api/crm/customer/page')!(200, {code: 0, data: {list: [{id: 1}, {id: 2}], total: 2}})
+    expect(facts.readRowSource(button)).toBeUndefined()
   })
   it('reports no list until a visible table of the page renders its records', async () => {
     const state = mountedPage('/erp/finance/account', 'ErpAccount')
@@ -1277,6 +1305,26 @@ describe('the application opens its own page through its router, in this documen
 })
 
 describe('native editor mode is current application state', () => {
+  it('reads and restores a mounted full-page form, revalidating and checking its precondition', async () => {
+    const state = mountedPage('/synthetic/editor', 'Editor')
+    const form = document.createElement('form'); form.className = 'el-form'
+    const input = document.createElement('input'); form.append(input); state.element.append(form)
+    form.getBoundingClientRect = () => ({width: 500, height: 300} as DOMRect)
+    const model = {id: 42, accountId: 8, hidden: 'default'}
+    const validate = vi.fn(async () => true)
+    const native = {...state.instance, type: {name: 'ElForm'}, props: {model},
+      subTree: {type: 'form', el: form}, vnode: {ctx: state.instance}, exposed: {validate}}
+    state.instance.subTree.children = [{component: native}] as unknown as NativeVNode[]
+    expect(readElementFormModel(input)).toMatchObject({mode: 'update', record_id: '42', model})
+    const request = {expected: {...model}, values: {accountId: 3}}
+    expect(await restoreElementFormModel(input, request)).toBe(true)
+    expect(model.accountId).toBe(3)
+    expect(validate).toHaveBeenCalledOnce()
+    expect(await restoreElementFormModel(input, request)).toBe(false)
+    expect(await restoreElementFormModel(input, {expected: {...model}, values: {id: 9}})).toBe(false)
+    validate.mockRejectedValueOnce(new Error('application validation'))
+    expect(await restoreElementFormModel(input, {expected: {...model}, values: {accountId: 2}})).toBe(false)
+  })
   it('requires the mounted native form model and rendered action to agree, including teleported dialogs', () => {
     const state=mountedPage('/system/user','SystemUser')
     const dialog=document.createElement('div');dialog.setAttribute('role','dialog')

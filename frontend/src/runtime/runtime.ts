@@ -118,6 +118,7 @@ export class EmbeddedWebRuntime {
   readElementNavigation: ElementNavigationReader | undefined
   readElementPageControl: ElementNavigationReader | undefined
   readElementFormModel: ElementNavigationReader | undefined
+  restoreElementFormModel: ((element: unknown, request: unknown) => Promise<boolean>) | undefined
   readElementRowRecord: ElementNavigationReader | undefined
   openPage: PageOpener | undefined
   panelEnabled = true
@@ -291,7 +292,7 @@ export class EmbeddedWebRuntime {
   async start(): Promise<this> {
     const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
       readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute, readPageQuery,
-      readElementNavigation, readPageRead, readElementPageControl, readElementFormModel, readElementRowRecord,
+      readElementNavigation, readPageRead, readElementPageControl, readElementFormModel, readElementRowRecord, restoreElementFormModel,
       openPage} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
@@ -308,6 +309,7 @@ export class EmbeddedWebRuntime {
     this.readPageRead = readPageRead
     this.readElementPageControl = readElementPageControl
     this.readElementFormModel = readElementFormModel
+    this.restoreElementFormModel = restoreElementFormModel
     this.readElementRowRecord = readElementRowRecord
     this.openPage = openPage
     return this._startConnectedRuntime()
@@ -1322,6 +1324,18 @@ export class EmbeddedWebRuntime {
       if (command.args?.kind === 'confirm') {
         return Promise.resolve({success: true, form_data: readConfirmBox(), message: 'confirmation box read'})
       }
+      if (command.args?.kind === 'restore' || command.args?.kind === 'validate') {
+        const element = this.page.element(command.args?.ref)
+        if (!this.restoreElementFormModel) throw new Error('bad_arguments: form restoration unavailable')
+        const validating = command.args?.kind === 'validate'
+        const request = validating ? {expected: this.page.formModel(command.args?.ref)?.model, values: {}} : command.args
+        return this.restoreElementFormModel(element, request).then(ok => {
+          if (!ok && !validating) throw new Error('bad_arguments: form restoration or validation failed')
+          const form = this.page.formModel(command.args?.ref)
+          if (!form) throw new Error('bad_arguments: restored form unreadable')
+          return {success: true, form_data: {...form, validation: ok}, message: validating ? 'application validation checked' : 'page opening changes restored'}
+        })
+      }
       if (command.args?.kind === 'row') {
         const row = this.page.rowRecord(command.args?.ref)
         if (!row) throw new Error('bad_arguments: the table row is not readable')
@@ -1346,7 +1360,8 @@ export class EmbeddedWebRuntime {
         throw new Error('bad_arguments: the control is no longer the one that was approved')
       }
       if (command.args?.kind === 'row') {
-        if (this.page.rowRecord(command.args?.ref)?.record_id !== String(command.args?.record_id ?? '')) {
+        const row = this.page.rowRecord(command.args?.ref)
+        if (row?.record_id !== String(command.args?.record_id ?? '') || row?.check !== command.args?.row_check) {
           throw new Error('bad_arguments: the table row changed after approval')
         }
       } else if (this.page.formModel(command.args?.ref)?.check !== String(command.args?.check ?? '')) {

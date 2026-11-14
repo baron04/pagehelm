@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from web_operation_agent.execution.submit_contract import SubmitPermit
+from web_operation_agent.execution.submit_contract import ActionRequest, SubmitPermit, same_value
 
 from .client import YudaoReadRefused
 
@@ -26,8 +26,16 @@ _DANGER = re.compile(r"删除|移除|清除|作废|关闭|撤销|取消|注销|�
 class YudaoSubmitPort:
     """`SubmitPort` for one signed-in person's session."""
 
-    def __init__(self, client, proxy, api_docs):
+    def __init__(self, client, proxy, api_docs, *, private_evidence=None):
+        if private_evidence is not None and not callable(private_evidence):
+            raise TypeError("private_evidence must be callable")
         self.client, self.proxy, self._api_docs = client, proxy, api_docs
+        self._private_evidence = private_evidence
+
+    def record_private(self, event, fields):
+        """Explicit, integration-owned local collector; disabled in ordinary deployments."""
+        if self._private_evidence is not None:
+            self._private_evidence(event, fields)
 
     # -- who ---------------------------------------------------------------------------
     def _actor(self) -> str:
@@ -37,27 +45,58 @@ class YudaoSubmitPort:
     def recent_reads(self) -> tuple:
         return self.proxy.guard.recent_reads(self._actor())
 
-    def prefixes(self, reads, *, mode, record_id):
-        """Entity prefixes the page reached the record or its list through."""
-        found = []
-        if mode == "update" and record_id:
-            for path, query in reversed(reads):
-                head, _, last = path.rpartition("/")
-                if last.startswith("get") and f"id={record_id}" in query.split("&"):
-                    found.append(head + "/")
-        if not found:
-            # The page's own table first, newest first; the option lists a dialog loads for its
-            # selects come after it and must not push it out.
-            for kind in ("page", "list"):
-                for path, _query in reversed(reads):
-                    last = path.rpartition("/")[2]
-                    if _LIST_READ.search(path) and last.split("-")[0] == kind:
-                        found.append(path.rpartition("/")[0] + "/")
-        out = []
-        for prefix in found:
-            if _PREFIX.fullmatch(prefix) and prefix not in out:
-                out.append(prefix)
-        return tuple(out[:4])
+    def prefixes(self, reads, *, mode, record_id, source=""):
+        """One observed source, identified by the mounted form's own route generation."""
+        if not isinstance(source, str): return ()
+        prefix, _, leaf = source.rpartition("/")
+        if not _PREFIX.fullmatch(prefix + "/"): return ()
+        if mode == "update":
+            if not leaf.startswith("get") or not any(path == source and f"id={record_id}" in query.split("&") for path, query in reads):
+                return ()
+        elif not _LIST_READ.search(source) or not any(path == source for path, _ in reads):
+            return ()
+        return (prefix + "/",)
+
+    def row_prefixes(self, reads, row):
+        """Only the list rendered by the target row's own table can name its entity."""
+        source = row.get("source")
+        if not isinstance(source, str) or not _LIST_READ.search(source):
+            return ()
+        prefix = source.rpartition("/")[0] + "/"
+        if not _PREFIX.fullmatch(prefix) or not any(path == source for path, _ in reads):
+            return ()
+        return (prefix,)
+
+    def row_request(self, prefixes, row, element, record):
+        """Bind native scalar toggles to a documented field update, never a whole entity."""
+        toggle = row.get("toggle")
+        if isinstance(toggle, dict):
+            field, before, after = toggle.get("field"), toggle.get("before"), toggle.get("after")
+            if not isinstance(field, str) or not re.fullmatch(r"[a-z][A-Za-z0-9]{0,59}", field):
+                return None
+            if not same_value(record.get(field), before) or same_value(before, after):
+                return None
+        else:
+            field, before = "status", record.get("status")
+            label = element.name
+            if before not in (0, 1) or isinstance(before, bool):
+                return None
+            if element.role == "switch" and label.startswith("状态开关："):
+                checked = element.attrs.get("aria-checked")
+                if checked != str(before == 0).lower(): return None
+                after = 1 - before
+            elif re.search(r"停用|禁用", label): after = 1
+            elif "启用" in label: after = 0
+            else: return None
+        if not isinstance(after, (str, int, float, bool)) or isinstance(after, str) and len(after) > 100:
+            return None
+        slug = re.sub(r"([A-Z])", lambda m: "-" + m[1].lower(), field)
+        candidates = [(method, path) for method, path in self.catalog(prefixes)
+                      if method in {"PUT", "PATCH"} and path in {p + "update-" + slug for p in prefixes}]
+        if len(candidates) != 1:
+            return None
+        method, path = candidates[0]
+        return ActionRequest(method, path, {"id": record["id"], field: after})
 
     def catalog(self, prefixes):
         """Every documented write interface under those prefixes."""

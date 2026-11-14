@@ -17,6 +17,8 @@ import re
 import time
 
 from playwright.sync_api import sync_playwright
+from web_operation_agent.execution.native_submit import record_model, opening_values
+from web_operation_agent.privacy import redact_sensitive_assignments
 
 from web_operation_agent.execution.submit_contract import (
     ContractRefused, FormData, SubmitPermit, build_card, diff_models)
@@ -70,6 +72,13 @@ MARK_FIELD = """
       return {label, value: control.value}
     }
   }
+  for (const item of root.querySelectorAll('.el-form-item')) {
+    const control = item.querySelector('.el-input-number input')
+    if (control && !control.disabled && !control.readOnly && control.getBoundingClientRect().width > 0) {
+      control.setAttribute('data-w46', '1')
+      return {label: (item.querySelector('.el-form-item__label')?.textContent || '').trim(), value: control.value, numeric: true}
+    }
+  }
   return null
 }
 """
@@ -106,6 +115,7 @@ class Outcome:
     requests: list = field(default_factory=list)
     card: dict = field(default_factory=dict)
     seconds: float = 0.0
+    evidence: dict = field(default_factory=dict)
 
 
 class Driver:
@@ -141,12 +151,10 @@ class Driver:
         begun = self.guard("begin")
         if begun["status"] != 200:
             raise ContractRefused("window_refused", str(begun)[:160])
-        opened = self.page.evaluate("path => window.__w46.open(path)", route)
-        if not opened:
-            self.page.goto(self.stack.origin + route, wait_until="domcontentloaded")
-            self.guard("begin")
+        self.page.goto(self.stack.origin + route, wait_until="domcontentloaded")
+        self.guard("begin")
         self.page.wait_for_selector(".el-table", timeout=20000)
-        self.page.wait_for_function("() => !document.querySelector('.el-table .el-loading-mask')", timeout=15000)
+        self.page.wait_for_function("() => ![...document.querySelectorAll('.el-table .el-loading-mask')].some(e => e.getBoundingClientRect().width && e.getBoundingClientRect().height)", timeout=15000)
         return begun
 
     def press(self, button):
@@ -160,37 +168,45 @@ class Driver:
     def first_row_button(self, labels):
         """The first row, in order, that offers the control: rows in some states do not."""
         rows = self.page.locator(".el-table__body-wrapper tbody tr")
-        for index in range(min(rows.count(), 10)):
+        for index in range(rows.count()):
             for label in labels:
                 button = rows.nth(index).locator("button", has_text=label)
-                if button.count():
-                    return button.first
+                for candidate in button.all():
+                    if candidate.is_visible() and candidate.is_enabled():
+                        return candidate
         return None
 
     def dialog_selector(self):
         return ".el-dialog:visible, .el-overlay-dialog .el-dialog"
 
     def wait_form(self, mode=None):
-        self.page.wait_for_selector(".el-dialog form.el-form", timeout=10000)
         deadline = time.time() + 12
-        selector = ".el-dialog form.el-form input, .el-dialog form.el-form textarea, .el-dialog form.el-form .el-form-item"
         while time.time() < deadline:
-            data = self.page.evaluate("s => window.__w46.form(s)", selector)
-            if data and not data.get("unreadable") and (mode is None or data.get("mode") == mode):
-                return data
-            self.last_unreadable = (data or {}).get("unreadable") or ("waiting_for_" + str(mode) if data else "not_found")
+            raw = self.page.evaluate("""async mode => {
+              const m = await import('/woa/page-facts.js')
+              const shown = e => e.getBoundingClientRect().width && e.getBoundingClientRect().height
+              const dialogs = [...document.querySelectorAll('.el-dialog')].filter(shown)
+              const roots = [...(dialogs.length ? dialogs.at(-1).querySelectorAll('form.el-form') : document.querySelectorAll('form.el-form'))]
+                .filter(e => shown(e) && !e.parentElement.closest('form.el-form'))
+              const matches = roots.map(e => [e, m.readElementFormModel(e)]).filter(([,r]) => r && !r.unreadable && (!mode || r.mode === mode))
+              if (matches.length !== 1) return null
+              document.querySelectorAll('[data-w46-editor]').forEach(e => e.removeAttribute('data-w46-editor'))
+              matches[0][0].setAttribute('data-w46-editor', '1')
+              return matches[0][1]
+            }""", mode)
+            if raw: return raw
+            self.last_unreadable = 'no_unique_readable_editor'
             time.sleep(0.4)
         return None
 
     def read_form(self):
-        selector = ".el-dialog form.el-form .el-form-item"
-        return self.page.evaluate("s => window.__w46.form(s)", selector)
+        return self.page.evaluate("s => window.__w46.form(s)", '[data-w46-editor="1"]')
 
     def fill_required(self):
         """A plain, generic filler for a new record: each required control still empty gets some
         value of its own kind. Whatever it cannot fill is left, and the form's own validation
         then says so (no request is sent)."""
-        items = self.page.locator(".el-dialog .el-form-item.is-required")
+        items = self.page.locator('[data-w46-editor="1"] .el-form-item.is-required')
         for index in range(items.count()):
             item = items.nth(index)
             try:
@@ -225,7 +241,7 @@ class Driver:
                 continue
 
     def submit_button(self):
-        for button in self.page.locator(".el-dialog button").all():
+        for button in self.page.locator(".el-dialog:visible button, form[data-w46-editor] button").all():
             try:
                 if SUBMIT.match(button.inner_text()) and button.is_visible() and button.is_enabled():
                     return button
@@ -286,20 +302,26 @@ class Driver:
         if operation == "create" and loaded.mode != "create":
             out.reason, out.detail = "not_reachable", "the dialog is not a create form"
             return
-        marked = self.page.evaluate(MARK_FIELD, ".el-dialog:last-of-type form.el-form, .el-dialog form.el-form")
+        port = stack.port
+        prefixes = port.prefixes(port.recent_reads(), mode=loaded.mode, record_id=loaded.record_id, source=raw.get("source", ""))
+        if not prefixes: raise ContractRefused("entity_unknown")
+        baseline = port.read_record(prefixes, loaded.record_id) if operation == "update" else None
+        if operation == "update" and baseline is None: raise ContractRefused("record_unreadable")
+        marked = self.page.evaluate(MARK_FIELD, '[data-w46-editor="1"]')
         label = ""
         if marked is None:
             out.reason, out.detail = "no_editable_field", "no plain text field to change"
             return
         label = marked["label"]
         control = self.page.locator('[data-w46="1"]').first
-        control.fill((marked["value"] or "") + ("" if operation == "update" else "") + "w46")
+        control.fill(str(float(marked["value"] or 0) + 1) if marked.get("numeric") else (marked["value"] or "") + "w46")
         if operation == "create":
             self.fill_required()
         self.page.wait_for_timeout(300)
         raw = self.read_form()
         if raw is None or raw.get("unreadable"):
             raise ContractRefused("form_data_unreadable", (raw or {}).get("unreadable", "after_typing"))
+        if raw.get("withheld"): raise ContractRefused("credential_field")
         current = FormData.from_json(raw)
         changed = diff_models(loaded.model, current.model)
         out.changed = sorted({c.field for c in changed})
@@ -308,17 +330,35 @@ class Driver:
         if button is None:
             out.reason, out.detail = "no_submit_control", "no visible submit control"
             return
+        comparison, restored = None, ()
+        if operation == "update":
+            comparison = record_model(baseline, current.model)
+            proposed = opening_values(comparison, loaded.model, current.model)
+            restored = tuple(diff_models(current.model, proposed))
+            if restored:
+                values = {c.field: proposed[c.field] for c in restored}
+                ok = self.page.locator('[data-w46-editor="1"]').evaluate("async (e,r) => (await import('/woa/page-facts.js')).restoreElementFormModel(e,r)",
+                    {"expected": current.model, "values": values})
+                current = FormData.from_json(self.read_form())
+                if not ok or current.model != proposed: raise ContractRefused("opening_changes")
+        valid = self.page.locator('[data-w46-editor="1"]').evaluate("async (e,expected) => (await import('/woa/page-facts.js')).restoreElementFormModel(e,{expected,values:{}})", current.model)
+        if not valid:
+            raise ContractRefused("apparatus_uncovered_required" if operation == "create" else "validation", "application validation did not pass")
+        current = FormData.from_json(self.read_form())
+        comparison = record_model(baseline, current.model) if baseline is not None else None
         card = build_card(loaded=loaded, form=current, page=entry["route"], button=re.sub(r"\s+", "", button.inner_text()),
-                          mode=operation, record_id=current.record_id, requested=requested)
+                          mode=operation, record_id=current.record_id, requested=requested, record=comparison, restored=restored)
+        out.evidence = redact_sensitive_assignments({"loaded": loaded.model, "submitted": current.model, "record": baseline,
+            "application_invalid": raw.get("invalid", []), "restored": [c.field for c in restored],
+            "items": [{"prop": i.prop, "label": i.label, "display": i.display} for i in current.items]})
         out.card = {"target": card.target, "changes": [[d.label, d.text] for d in card.details() if d.kind == "change"],
-                    "derived": [[d.label, d.text] for d in card.details() if d.kind == "derived"]}
+                    "derived": [[d.label, d.text] for d in card.details() if d.kind == "derived"],
+                    "all_details": [d.to_json() for d in card.details()]}
         port = stack.port
-        prefixes = port.prefixes(port.recent_reads(), mode=card.mode, record_id=card.record_id)
+        prefixes = port.prefixes(port.recent_reads(), mode=card.mode, record_id=card.record_id, source=raw.get("source", ""))
         if not prefixes:
             raise ContractRefused("entity_unknown", "the page made no read that names the entity")
-        baseline = port.read_record(prefixes, card.record_id) if card.mode == "update" else None
-        if card.mode == "update" and baseline is None:
-            raise ContractRefused("record_unreadable", "the record could not be read as the same person")
+
         permit = SubmitPermit(actor, card, prefixes, port.catalog(prefixes), baseline,
                               (lambda: port.read_record(prefixes, card.record_id)) if card.mode == "update" else None,
                               dry_run=True)
@@ -331,7 +371,7 @@ class Driver:
         self.guard("end")
         port.disarm()
         out.requests = [{"seq": r.sequence, "method": r.method, "path": r.path, "decision": r.decision,
-                         "fields": list(r.fields), "detail": list(r.detail)} for r in permit.log]
+                         "fields": list(r.fields), "detail": list(r.detail), "body": redact_sensitive_assignments(r.body)} for r in permit.log]
         out.passed, out.reason = self._judge(permit)
 
     @staticmethod

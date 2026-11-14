@@ -146,6 +146,17 @@ def same_value(left, right) -> bool:
     return same_scalar(left, right)
 
 
+def same_payload(left, right):
+    """Field presence is part of an authorized payload, including empty/nullable fields."""
+    if isinstance(left, dict) or isinstance(right, dict):
+        return isinstance(left, dict) and isinstance(right, dict) and left.keys() == right.keys() and all(
+            same_payload(left[k], right[k]) for k in left)
+    if isinstance(left, list) or isinstance(right, list):
+        return isinstance(left, list) and isinstance(right, list) and len(left) == len(right) and all(
+            same_payload(a, b) for a, b in zip(left, right))
+    return same_value(left, right)
+
+
 def strip_volatile(record, keys=VOLATILE_KEYS):
     if isinstance(record, dict):
         return {key: strip_volatile(value, keys) for key, value in record.items() if key not in keys}
@@ -279,6 +290,13 @@ def _show(value) -> str:
 
 
 @dataclass(frozen=True)
+class ActionRequest:
+    method: str
+    path: str
+    body: dict
+
+
+@dataclass(frozen=True)
 class SubmitCard:
     mode: str                       # create | update | action
     page: str
@@ -290,6 +308,9 @@ class SubmitCard:
     form: FormData | None
     loaded: FormData | None
     unrequested: tuple[Change, ...] = ()
+    record: dict | None = None
+    restored: tuple[Change, ...] = ()
+    action_request: ActionRequest | None = None
 
     @property
     def changed_fields(self) -> frozenset:
@@ -309,6 +330,8 @@ class SubmitCard:
         out = [ApprovalDetail("target_rule", "目标", self.target[:300]),
                ApprovalDetail("target_rule", "页面", self.page[:300] or "当前页面"),
                ApprovalDetail("target_rule", "将要点的按钮", self.button[:200] or "（提交）")]
+        if self.action_request is not None:
+            out.append(ApprovalDetail("target_rule", "动作接口", f"{self.action_request.method} {self.action_request.path}"))
         form = self.form
         for change in self.changes[:MAX_CHANGES]:
             label, text = self._line(change, form)
@@ -319,6 +342,10 @@ class SubmitCard:
         for change in self.unrequested[:MAX_CHANGES]:
             label, text = self._line(change, form)
             out.append(ApprovalDetail("derived", ("用户没有要求：" + label)[:200], text[:2000]))
+        for change in self.restored:
+            label, _ = self._line(change, form)
+            out.append(ApprovalDetail("derived", ("页面打开时：" + label)[:200],
+                f"改成了 {_show(change.before)}，已还原为 {_show(change.after)}"))
         return tuple(out)
 
     def effect(self) -> str:
@@ -333,7 +360,8 @@ class SubmitCard:
         args = {"mode": self.mode, "record_id": self.record_id, "button": self.button,
                 "page": self.page, "form_digest": self.form.digest if self.form else "",
                 "loaded_digest": self.loaded.digest if self.loaded else "",
-                "fields": sorted(self.changed_fields)}
+                "fields": sorted(self.changed_fields),
+                "action_digest": digest([self.action_request.method, self.action_request.path, self.action_request.body]) if self.action_request else ""}
         return BusinessMutationProposal(
             tool=tool, args=args, effect=self.effect(), targets=(self.target[:300] or "当前表单",),
             nonce=secrets.token_hex(16), operation_context_digest=context_digest,
@@ -342,14 +370,19 @@ class SubmitCard:
 
 def build_card(*, loaded: FormData | None, form: FormData | None, page: str, button: str,
                mode: str, target_name: str = "", record_id: str = "",
-               requested: frozenset = frozenset()) -> SubmitCard:
+               requested: frozenset = frozenset(), record: dict | None = None,
+               restored: tuple[Change, ...] = (),
+               action_request: ActionRequest | None = None) -> SubmitCard:
     """The card for a form. `requested` names the top-level fields the person asked for;
     everything else that differs lands in its own list rather than being hidden."""
     if mode not in MODES:
         raise ContractRefused("form_data_unreadable", "unknown submit mode")
     if mode == "action":
         label = f"{target_name or record_id or '所选记录'}（编号 {record_id}）" if record_id else target_name
-        return SubmitCard("action", page, label.strip(), record_id, (), (), button, None, None)
+        changes = tuple(diff_models({k: (record or {}).get(k) for k in action_request.body if k != "id"},
+                                    {k: v for k, v in action_request.body.items() if k != "id"})) if action_request else ()
+        return SubmitCard("action", page, label.strip(), record_id, changes, (), button, None, None,
+                          action_request=action_request)
     if form is None or (mode == "update" and loaded is None):
         raise ContractRefused("form_data_unreadable", "the form was not read")
     if mode == "create":
@@ -366,14 +399,14 @@ def build_card(*, loaded: FormData | None, form: FormData | None, page: str, but
         card = SubmitCard("create", page, target, "", tuple(requested_changes), tuple(other),
                           button, form, loaded)
     else:
-        changes = diff_models(loaded.model, form.model)
+        changes = diff_models(record if record is not None else loaded.model, form.model)
         asked = [c for c in changes if not requested or c.field in requested]
         rest = [c for c in changes if requested and c.field not in requested]
         name = target_name or loaded.display("name") or str(loaded.model.get("name") or "")
         target = f"编号 {record_id}" + (f"「{name}」" if name else "")
         card = SubmitCard("update", page, target, record_id, tuple(asked), (), button, form, loaded,
-                          unrequested=tuple(rest))
-    if len(card.changes) + len(card.other) + len(card.unrequested) > MAX_CHANGES:
+                          unrequested=tuple(rest), record=record, restored=restored)
+    if len(card.changes) + len(card.other) + len(card.unrequested) + len(card.restored) > MAX_CHANGES:
         raise ContractRefused("card_too_large", "the change list is too long to show completely")
     if not (card.changes or card.other or card.unrequested):
         raise ContractRefused("no_change", "the form holds no change")
@@ -410,7 +443,7 @@ class LoggedRequest:
 
 
 def _small_body(body: bytes):
-    if not body or len(body) > 16000:
+    if not body or len(body) > MAX_MODEL_BYTES:
         return None
     try:
         return json.loads(body.decode("utf-8"))
@@ -446,6 +479,7 @@ class SubmitPermit:
     catalog: frozenset                   # {(METHOD, path)} of documented write interfaces
     baseline: object = None              # the record as read before the click (update/action)
     reread: Callable[[], object] | None = None
+    reread_observer: Callable[[object], None] | None = None
     ttl_s: float = 30.0
     #: Judge every request exactly as if it were to be sent, record it, and send nothing.
     dry_run: bool = False
@@ -519,13 +553,19 @@ class SubmitPermit:
                 self.log.append(LoggedRequest(sequence, method, path[:200], "duplicate", fields, key[:16]))
                 return Decision(False, "duplicate", sequence)
         covered, reread_digest = set(), ""
+        if card.mode == "action":
+            expected = card.action_request
+            if expected is None or method != expected.method or path != expected.path:
+                return self._refuse(method, path, "action_not_on_card", body)
+            if not same_payload(parsed, expected.body):
+                return self._refuse(method, path, "action_body_not_on_card", body)
+            covered = set(card.changed_fields)
         if card.mode in {"create", "update"}:
             if parsed is None or card.form is None:
                 return self._refuse(method, path, "body_differs_from_form", body)
             form = card.form.model
             sent = {k: v for k, v in parsed.items() if k not in VOLATILE_KEYS}
-            differs = [k for k, v in sent.items() if (k not in form or not same_value(v, form[k]))
-                       and (not is_empty(v) or k in form and not is_empty(form[k]))]
+            differs = [k for k, v in sent.items() if k not in form or not same_payload(v, form[k])]
             if differs:
                 return self._refuse(method, path, "body_differs_from_form", body, differs)
             if card.mode == "update":
@@ -539,7 +579,7 @@ class SubmitPermit:
                     # comparing the body to the record would call representation a change. The
                     # record's own unchanged-ness is checked on its own terms, before the click and
                     # again before release.
-                    return loaded.get(key) if card.loaded is not None else base.get(key)
+                    return card.record.get(key) if card.record is not None else (loaded.get(key) if card.loaded is not None else base.get(key))
                 moved = {k for k, v in sent.items() if not same_value(before(k, v), v)}
                 # A plain value the record holds now, that the request would put something else
                 # over without the card saying so, is someone else's change about to be undone.
@@ -564,6 +604,8 @@ class SubmitPermit:
                 current = self.reread()
             except Exception:  # noqa: BLE001 -- an unreadable record is not an unchanged one
                 return self._refuse(method, path, "record_unreadable", body)
+            if self.reread_observer is not None:
+                self.reread_observer(current)
             released = self._covered | {"id"}
             held = {k: v for k, v in (strip_volatile(current) or {}).items() if k not in released} \
                 if isinstance(current, dict) else current

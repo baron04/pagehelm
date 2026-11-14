@@ -12,7 +12,7 @@ from pathlib import Path
 import random
 import re
 
-SEED = 20261114
+SEED = 20261115
 SAMPLE = 30
 
 _IMPORT = re.compile(r"import\s+(\w+Form)\s+from\s+'(\./[^']+)'")
@@ -21,11 +21,48 @@ _OPEN_ANY = re.compile(r"""@click="(\w+)\(\s*'(update|create)'""")
 _DIALOG = re.compile(r"<el-form\b")
 
 
+def editor_bindings(text: str) -> dict[str, dict]:
+    """Resolve list edit handlers to template refs. Unknown syntax stays unknown."""
+    refs = {}
+    for component, ref in re.findall(r"<(\w+Form)\b[^>]*\bref=[\"'](\w+)[\"']", text):
+        refs.setdefault(ref, set()).add(component)
+    handlers = sorted({name for name, mode in _OPEN_ANY.findall(text) if mode == "update"})
+    # Preserve source offsets while removing inert comments and quoted text *before*
+    # locating/scanning handler bodies. Comment braces cannot terminate a handler.
+    code = re.sub(r""""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|//[^\n]*|/\*[\s\S]*?\*/""",
+                  lambda match: re.sub(r"[^\n]", " ", match[0]), text)
+    resolved, unknown = {}, []
+    for handler in handlers:
+        name = re.escape(handler)
+        head = re.search(rf"(?:function\s+{name}\s*\([^)]*\)\s*(?::[^{{\n]+)?|(?:const|let)\s+{name}\s*=\s*(?:async\s*)?\([^)]*\)\s*(?::[^=\n]+)?=>)\s*", code)
+        if not head or head.end() >= len(code) or code[head.end()] != "{":
+            unknown.append(handler); continue
+        start, depth, stop = head.end(), 0, None
+        for index in range(start, len(code)):
+            char = code[index]
+            if char == "{": depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0: stop = index; break
+        body = code[start:stop] if stop is not None else ""
+        targets = set(re.findall(r"\b(\w+)(?:\.value)?(?:\?\.|\.)open\s*\(", body))
+        components = set().union(*(refs.get(ref, set()) for ref in targets)) if targets else set()
+        if len(targets) != 1 or len(components) != 1:
+            unknown.append(handler); continue
+        component = next(iter(components))
+        resolved.setdefault(component, []).append({"handler": handler, "ref": next(iter(targets))})
+    imports = {name for name, _ in _IMPORT.findall(text)}
+    return {component: {"state": "confirmed" if component in resolved else "unknown" if unknown or not resolved else "different_editor",
+                        "bindings": resolved.get(component, []), "unresolved_handlers": unknown}
+            for component in imports}
+
+
 def scan(views: Path) -> list[dict]:
     found = []
     for index in sorted(views.rglob("index.vue")):
         text = index.read_text(encoding="utf-8")
         forms = {name: path for name, path in _IMPORT.findall(text)}
+        bindings = editor_bindings(text)
         if not forms:
             continue
         opens = {(kind) for _name, kind in _OPEN_ANY.findall(text)}
@@ -47,7 +84,7 @@ def scan(views: Path) -> list[dict]:
             found.append({"route": route, "page": index.relative_to(views).as_posix(), "form": file.relative_to(views).as_posix(),
                           "component": name, "edit_label": labels.get("update", ""),
                           "create_label": labels.get("create", ""), "can_create": "create" in opens,
-                          "has_lines": bool(re.search(r"<el-table\b", body))})
+                          "has_lines": bool(re.search(r"<el-table\b", body)), "edit_binding": bindings[name]})
     return sorted(found, key=lambda row: (row["route"], row["form"]))
 
 

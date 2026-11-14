@@ -14,6 +14,7 @@ export interface FormItemRead {prop: string; label: string; display: string}
 export interface FormModelRead {
   model: Record<string, unknown>
   items: FormItemRead[]
+  source?: string
   mode: 'create' | 'update'
   record_id: string
   title: string
@@ -22,7 +23,7 @@ export interface FormModelRead {
   /** Form items the application currently marks as failing its own validation. */
   invalid: string[]
 }
-export interface RowRecordRead {record_id: string; name: string; title: string; mode: 'action'}
+export interface RowRecordRead {record_id: string; name: string; title: string; mode: 'action'; check?: string; source?: string; toggle?: {field: string; before: unknown; after: unknown; label: string}}
 
 const LIMIT = browserContract.form_model
 
@@ -58,7 +59,7 @@ export function unreadableReason(raw: unknown): string {
 export function normalizeFormRead(raw: unknown): FormModelRead | null {
   if (!raw || typeof raw !== 'object') return null
   const read = raw as {model?: unknown; items?: unknown; mode?: unknown; record_id?: unknown;
-    title?: unknown; withheld?: unknown; invalid?: unknown}
+    title?: unknown; withheld?: unknown; invalid?: unknown; source?: unknown}
   if (!read.model || typeof read.model !== 'object' || Array.isArray(read.model)) return null
   if (read.mode !== 'create' && read.mode !== 'update') return null
   const text = canonicalJson(read.model)
@@ -76,14 +77,20 @@ export function normalizeFormRead(raw: unknown): FormModelRead | null {
     ? read.invalid.filter((name): name is string => typeof name === 'string').slice(0, 40).map(name => clip(name, 120)) : []
   return {model: read.model as Record<string, unknown>, items, mode: read.mode, invalid,
     record_id: read.mode === 'update' ? clip(read.record_id, 40) : '', title: clip(read.title, 120),
-    check: formCheck(text + '|' + JSON.stringify(withheld)), withheld}
+    check: formCheck(text + '|' + JSON.stringify(withheld)), withheld,
+    ...(typeof read.source === 'string' && /^\/admin-api\/(?:[A-Za-z0-9_-]+\/)+(?:get|page|list)(?:-[a-z0-9-]+)?$/.test(read.source) ? {source: read.source} : {})}
 }
 
 export function normalizeRowRead(raw: unknown): RowRecordRead | null {
   if (!raw || typeof raw !== 'object') return null
-  const {id, name} = raw as {id?: unknown; name?: unknown}
+  const {id, name, source, toggle} = raw as {id?: unknown; name?: unknown; source?: unknown; toggle?: RowRecordRead["toggle"]}
   if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(id)) return null
-  return {record_id: id, name: clip(name, 200), title: '', mode: 'action'}
+  return {record_id: id, name: clip(name, 200), title: '', mode: 'action', check: formCheck(canonicalJson({id, source, toggle})),
+    ...(typeof source === 'string' && /^\/admin-api\/(?:[A-Za-z0-9_-]+\/)+(?:page|list)(?:-[a-z0-9-]+)?$/.test(source) ? {source} : {}),
+    ...(toggle && typeof toggle.field === 'string' && /^[a-z][A-Za-z0-9]{0,59}$/.test(toggle.field) &&
+      ['string', 'number', 'boolean'].includes(typeof toggle.before) &&
+      ['string', 'number', 'boolean'].includes(typeof toggle.after)
+      ? {toggle: {...toggle, label: clip(toggle.label, 80)}} : {})}
 }
 
 export interface ConfirmBoxRead {open: boolean; title: string; text: string; buttons: string[]}

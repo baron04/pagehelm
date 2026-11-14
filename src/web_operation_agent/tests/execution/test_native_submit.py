@@ -34,7 +34,11 @@ class Port:
         self.dangerous_ = False
 
     def recent_reads(self): return ((PREFIX + "get", "id=7"),)
-    def prefixes(self, reads, *, mode, record_id): return (PREFIX,)
+    def prefixes(self, reads, *, mode, record_id, source=""): return (PREFIX,)
+    def row_prefixes(self, reads, row): return (PREFIX,)
+    def row_request(self, prefixes, row, element, record):
+        from web_operation_agent.execution.submit_contract import ActionRequest
+        return ActionRequest("PUT", PREFIX + "update-status", {"id": 7, "status": 1})
     def catalog(self, prefixes): return CATALOG
     def dangerous(self, element): return self.dangerous_
     def arm(self, permit): self.armed = permit
@@ -89,6 +93,11 @@ class Executor(NativeSubmitMixin):
         data = None
         if action == "form_model":
             if args["kind"] == "form":
+                data = self.form_read()
+            elif args["kind"] == "validate":
+                data = {**self.form_read(), "validation": True}
+            elif args["kind"] == "restore":
+                self.form.update(args["values"])
                 data = self.form_read()
             elif args["kind"] == "row":
                 data = {"record_id": "7", "name": "张三", "mode": "action", "title": ""}
@@ -148,8 +157,8 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
         self.assertEqual(kinds[kinds.index("native_submit_card"):][:4],
                          ["native_submit_card", "native_submit_reread", "native_submit_approved", "native_submit_clicked"])
         result = [f for e, f in self.ex.s.events if e == "native_submit_result"][0]
-        self.assertEqual(result["readback_record"]["mobile"], "13900000000")
-        self.assertEqual(result["requests"][0]["body"]["mobile"], "13900000000")
+        self.assertNotIn("readback_record", result)
+        self.assertNotIn("body", result["requests"][0])
         self.assertTrue(self.ex.turn["written"])
         self.assertEqual(self.ex.s.mutation_outcomes[0]["verified"], True)
 
@@ -166,6 +175,7 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
         self.ex.s.approvals.approved = False
         out = self.run_request()
         self.assertEqual((out.state, self.ex.s.terminal_reason), ("refused", "approval_denied"))
+        self.assertIn("助手未提交", out.feedback)
         self.assertEqual(self.ex.native_submit.record["mobile"], "13800000000")
         self.assertNotIn("form_submit", [a for a, _ in self.ex.dispatched])
 
@@ -233,7 +243,7 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
         def broken():
             raise __import__("web_operation_agent.execution.submit_contract", fromlist=["x"]).ContractRefused(
                 "form_data_unreadable")
-        self.ex._read_form = lambda s, e: broken()
+        self.ex._read = lambda *a, **kw: broken()
         out = self.run_request()
         self.assertEqual((out.state, out.error_code), ("refused", "form_data_unreadable"))
         self.assertIn("留给你自己", out.feedback)
@@ -316,6 +326,77 @@ class ReviewRegressionTests(_Setup, unittest.TestCase):
         self.assertIn(out.state, {"completed", "refused", "indeterminate"})
 
 
+class OpeningChangeTests(_Setup, unittest.TestCase):
+    def test_restores_opening_change_then_approves_once_against_record(self):
+        self.ex.form = {**LOADED, "customerId": 9}
+        self.ex.turn["form_baselines"] = {}
+        self.ex.capture_form_baseline(self.ex.s, self.ex.turn, self.ex.s.obs.elements[0])
+        self.ex.form["mobile"] = "13900000000"
+        out = self.run_request()
+        self.assertEqual(out.state, "completed", out.feedback)
+        self.assertEqual(self.ex.form["customerId"], 3)
+        card = self.ex.s.approvals.cards[0]
+        self.assertTrue(any("已还原" in d.text for d in card.details))
+        self.assertNotIn("customerId", card.args["fields"])
+        self.assertEqual(len(self.ex.clicks), 1)
+
+    def test_detects_concurrent_change_while_filling_before_card(self):
+        self.ex.native_submit.record["name"] = "别人改的"
+        out = self.run_request()
+        self.assertEqual(out.error_code, "record_changed")
+        self.assertEqual(self.ex.s.approvals.cards, [])
+
+    def test_line_identity_survives_reordering_in_record_and_in_form(self):
+        from web_operation_agent.execution.native_submit import opening_values, record_model
+        base = {"lines": [{"id": 2, "qty": 20, "computed": 4}, {"id": 1, "qty": 10}]}
+        loaded = {"lines": [{"id": 1, "qty": 10}, {"id": 2, "qty": 21}]}
+        current = {"lines": [{"id": 2, "qty": 21}, {"id": 1, "qty": 11}]}
+        projected = record_model(base, current)
+        self.assertEqual(opening_values(projected, loaded, current),
+                         {"lines": [{"id": 2, "qty": 20}, {"id": 1, "qty": 11}]})
+
+    def test_invalid_opening_value_is_restored_before_application_validation(self):
+        self.ex.form = {**LOADED, "customerId": None}
+        self.ex.turn["form_baselines"] = {}
+        self.ex.capture_form_baseline(self.ex.s, self.ex.turn, self.ex.s.obs.elements[0])
+        self.ex.form["mobile"] = "13900000000"
+        self.ex.form_read = lambda: {**self.ex.model(), "invalid": [] if self.ex.form["customerId"] else ["customerId"]}
+        out = self.run_request()
+        self.assertEqual(out.state, "completed", out.feedback)
+        kinds = [kind for action, kind in self.ex.dispatched if action == "form_model"]
+        self.assertLess(kinds.index("restore"), kinds.index("validate"))
+
+    def test_private_records_are_opt_in_and_absent_from_the_normal_ledger(self):
+        captured = []
+        self.ex.native_submit.record_private = lambda event, facts: captured.append((event, facts))
+        out = self.run_request()
+        self.assertEqual(out.state, "completed")
+        self.assertEqual([e for e, _ in captured], ["card", "before_click", "before_release", "result"])
+        self.assertEqual(captured[-1][1]["readback_record"]["mobile"], "13900000000")
+        card = next(f for e, f in self.ex.s.events if e == "native_submit_card")
+        self.assertNotIn("loaded", card)
+        self.assertNotIn("submitted", card)
+        reread = next(f for e, f in self.ex.s.events if e == "native_submit_reread")
+        self.assertNotIn("record", reread)
+
+    def test_failed_restore_never_approves_or_clicks(self):
+        self.ex.form = {**LOADED, "customerId": 9}
+        self.ex.turn["form_baselines"] = {}
+        self.ex.capture_form_baseline(self.ex.s, self.ex.turn, self.ex.s.obs.elements[0])
+        self.ex.form["mobile"] = "13900000000"
+        dispatch = self.ex._dispatch
+        def refuse(s, action, args, **kw):
+            if args.get("kind") == "restore":
+                from web_operation_agent.execution.submit_contract import ContractRefused
+                raise ContractRefused("validation")
+            return dispatch(s, action, args, **kw)
+        self.ex._dispatch = refuse
+        out = self.run_request()
+        self.assertEqual(out.error_code, "opening_changes")
+        self.assertIn("客户=9", out.feedback)
+        self.assertEqual(self.ex.s.approvals.cards, [])
+
+
 class RowActionTests(unittest.TestCase):
     def setUp(self):
         self.ex = Executor()
@@ -330,6 +411,19 @@ class RowActionTests(unittest.TestCase):
         self.assertEqual(out.state, "completed", out.feedback)
         self.assertIn("停用", self.ex.s.approvals.cards[0].effect)
         self.assertEqual(self.ex.native_submit.record["status"], 1)
+
+    def test_readback_checks_the_action_field_and_reports_other_key_additions_or_removals(self):
+        ex = self.ex
+        click = ex.click
+        def with_changes():
+            click()
+            ex.native_submit.record.pop("mobile", None)
+            ex.native_submit.record["newBusinessField"] = "added"
+        ex.click = with_changes
+        out = self.run_request()
+        self.assertEqual(out.state, "completed", out.feedback)
+        self.assertIn("mobile", out.feedback)
+        self.assertIn("newBusinessField", out.feedback)
 
     def test_dangerous_action_needs_a_confirmation_in_the_conversation(self):
         self.ex.native_submit.dangerous_ = True
