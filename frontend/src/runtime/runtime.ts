@@ -1135,7 +1135,8 @@ export class EmbeddedWebRuntime {
       return {ok: false, code: 'deadline_expired',
         detail: 'the action deadline expired before page dispatch'}
     }
-    if (action.command.action !== 'observe' && this.config?.pageWriteGuard
+    // Reading the form data or the confirmation box changes nothing, so it needs no window either.
+    if (action.command.action !== 'observe' && action.command.action !== 'form_model' && this.config?.pageWriteGuard
         && !(this.writeGuardUntil > Date.now())) {
       return {ok: false, code: 'capability_refused',
         detail: 'page_write_guard_unavailable: the confirmed window expired before page dispatch'}
