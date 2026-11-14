@@ -136,3 +136,13 @@ export async function waitForSubmitToSettle(doc: Document = document,
     await pause(150)
   }
 }
+
+/**
+ * Whether the control about to be pressed is still the one the card named, by its own text.
+ * A control with no text of its own (a switch, an icon button) is named by what the server read
+ * from around it, so there is nothing here to compare: it is bound by its row or form instead.
+ */
+export function sameControlText(expected: unknown, actual: unknown): boolean {
+  const plain = (value: unknown) => String(value ?? '').replace(/\s+/g, '')
+  return !plain(expected) || !plain(actual) || plain(expected) === plain(actual)
+}

@@ -40,7 +40,7 @@ import {renderState, type PendingView} from './renderState'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
 import {IdleHandshakeClosed, SessionClient, TransportError, sseBatches} from './transport'
 import {closeWriteGuard, openWriteGuard, releaseWriteGuard} from './writeGuard'
-import {pressConfirmButton, readConfirmBox, waitForSubmitToSettle} from './formModel'
+import {pressConfirmButton, readConfirmBox, sameControlText, waitForSubmitToSettle} from './formModel'
 import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
 import {activityPoint} from './activityPoint'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
@@ -1340,9 +1340,8 @@ export class EmbeddedWebRuntime {
         return sleep(300).then(() => ({success: true, message: 'confirmation button pressed'}))
       }
       // The control itself must still be the one the card named, by its own text.
-      const shown = (value: unknown) => String(value ?? '').replace(/\s+/g, '')
       const target = this.page.element(command.args?.ref) as {textContent?: string | null} | null | undefined
-      if (shown(command.args?.label) && shown(target?.textContent) !== shown(command.args?.label)) {
+      if (!sameControlText(command.args?.label, target?.textContent)) {
         throw new Error('bad_arguments: the control is no longer the one that was approved')
       }
       if (command.args?.kind === 'row') {

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {canonicalJson, formCheck, normalizeFormRead, normalizeRowRead} from '../src/runtime/formModel'
+import {canonicalJson, formCheck, normalizeFormRead, normalizeRowRead, sameControlText} from '../src/runtime/formModel'
 
 const read = (model: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
   model, items: [{prop: 'name', label: '姓名', display: '张三'}], mode: 'update', record_id: '7', title: '编辑', ...extra})
@@ -40,5 +40,12 @@ describe('form model reading', () => {
     expect(normalizeRowRead({id: '../x'})).toBeNull()
     expect(normalizeRowRead(undefined)).toBeNull()
     expect(formCheck('a')).not.toBe(formCheck('b'))
+  })
+
+  it('compares a control with the card by its own text, and binds one with no text otherwise', () => {
+    expect(sameControlText('确 定', '确定')).toBe(true)
+    expect(sameControlText('确定', '取消')).toBe(false)
+    expect(sameControlText('状态开关：张三', '')).toBe(true)
+    expect(sameControlText('', '确定')).toBe(true)
   })
 })
