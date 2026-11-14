@@ -1,28 +1,21 @@
 # Two project-isolated synthetic environments; only the assistant ingress is published.
+# Each environment shares one parent cgroup (CPU and memory totals in configuration.py).
 services:
   mysql:
-    cpus: 3
+    cgroup_parent: ${LOCAL_CGROUP_PARENT}
     ports: !reset []
-    mem_limit: 1024m
-    memswap_limit: 1024m
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--lower-case-table-names=1", "--innodb-buffer-pool-size=128M", "--performance-schema=OFF", "--max-connections=60"]
   redis:
-    cpus: 0.25
-    mem_limit: 128m
-    memswap_limit: 128m
+    cgroup_parent: ${LOCAL_CGROUP_PARENT}
   server:
-    cpus: 4
+    cgroup_parent: ${LOCAL_CGROUP_PARENT}
     environment:
       JAVA_OPTS: ${YUDAO_JAVA_OPTS:--Xms256m -Xmx1280m -XX:MaxMetaspaceSize=512m -XX:+UseSerialGC -Xss512k}
-    mem_limit: 2048m
-    memswap_limit: 2048m
   web:
-    cpus: 0.25
+    cgroup_parent: ${LOCAL_CGROUP_PARENT}
     ports: !reset []
-    mem_limit: 128m
-    memswap_limit: 128m
   agent:
-    cpus: 0.5
+    cgroup_parent: ${LOCAL_CGROUP_PARENT}
     build:
       context: ${LOCAL_CHECKOUT}
       dockerfile: examples/yudao/deploy/local/agent.Dockerfile
@@ -46,8 +39,6 @@ services:
     networks: [default, ingress]
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [web]
-    mem_limit: 512m
-    memswap_limit: 512m
     logging:
       driver: json-file
       options:

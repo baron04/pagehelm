@@ -17,6 +17,12 @@ function withViewport(width: number, height: number, run: () => void) {
 }
 
 describe('the open window survives a refresh in the same tab', () => {
+  it('starts closed in a fresh document with no remembered choice', async () => {
+    sessionStorage.clear()
+    vi.resetModules()
+    const fresh = await import('../src/state/geometry')
+    expect(fresh.loadOpen()).toBe(false)
+  })
   it('remembers the state in module memory', () => {
     rememberOpen(false)
     expect(loadOpen()).toBe(false)

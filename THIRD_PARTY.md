@@ -50,7 +50,7 @@ Their licenses and sources are:
 | `typing-extensions` | PSF-2.0 | [python/typing_extensions](https://github.com/python/typing_extensions) |
 
 These are resolver ranges, not a release lock. Exact versions must be recorded
-from the final clean Python 3.12 installation.
+from the final clean Python 3.13 installation.
 
 Playwright's wheel includes its LICENSE, driver LICENSE, and
 `ThirdPartyNotices.txt`. Browsers installed by `playwright install` are

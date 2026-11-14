@@ -1,6 +1,6 @@
 # 开发检查
 
-使用Python 3.12，按实际改动选检查。测试使用隔离合成数据，不调用付费模型、不连接现用实例或修改真实费用账本。
+使用Python 3.13，按实际改动选检查。测试使用隔离合成数据，不调用付费模型、不连接现用实例或修改真实费用账本。
 
 ```bash
 .venv/bin/python scripts/check.py --plan
@@ -15,6 +15,8 @@
 ## 准备
 
 安装与构建命令见[README](../../README.zh-CN.md#开发)。`.env.example`不含凭据，忽略的`.env`只填当前checkout所需配置；脚本测试无需模型。`AGENT_OPENAI_MODEL`变更后，源码安装重启，代码打包进wheel/镜像的安装重建并部署；本地双实例按[本地指南](local-yudao.md)更新。
+
+从旧Python版本迁移时，使用Python 3.13重新创建`.venv`并安装依赖。
 
 `build_runtime.py --install`先执行`npm ci`，`build_panel.py`构建面板。脚本和回放页是生成物，不提交；缺少构建时助手不可用、相关测试失败或跳过。前端变化及每个独立checkout都需构建。
 
@@ -33,7 +35,7 @@
 | 打包/依赖 | 锁/SBOM、wheel内容与检出外安装 | 同左，并覆盖相关产品边界 |
 | 评测/对照工具 | 对应工具装置 | 同左 |
 
-依赖清单（含`THIRD_PARTY.md`、SBOM）触发锁/许可核对，不按普通文档跳过。dev提供局部反馈，跨模块语义需查看计划并选ci。日常CI用3.12；手动compat覆盖3.12/3.13，release由3.12跑完整资格、3.13跑兼容性。compat不重复浏览器或完整前端，但可构建必要Runtime资源、运行Node VM合同。CI按需安装Node、Playwright Chromium、PageController和nginx；PageController依赖不要求构建整个PageAgent实验。
+依赖清单（含`THIRD_PARTY.md`、SBOM）触发锁/许可核对，不按普通文档跳过。dev提供局部反馈，跨模块语义需查看计划并选ci。CI、compat和release均使用Python 3.13，release执行完整资格。compat不重复浏览器或完整前端，但可构建必要Runtime资源、运行Node VM合同。CI按需安装Node、Playwright Chromium、PageController和nginx；PageController依赖不要求构建整个PageAgent实验。
 
 ## 完整资格与复用
 

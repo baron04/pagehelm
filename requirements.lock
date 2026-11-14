@@ -6,7 +6,7 @@
 #     python -m pip install --require-hashes -r requirements.lock
 #
 # Each requirement carries an artifact hash for every platform this is generated
-# for -- this machine, glibc x86_64 and glibc aarch64, on CPython 3.12, CPython 3.13. pip picks
+# for -- this machine, glibc x86_64 and glibc aarch64, on CPython 3.13. pip picks
 # the one matching the machine it runs on. A lock resolved only where it was
 # written pins that machine's wheels and refuses to install anywhere else, with no
 # message that says why.

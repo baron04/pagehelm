@@ -7,13 +7,12 @@ name = "web-operation-agent-odoo"
 dynamic = ["version"]
 description = "Odoo 18 application adapter, route grammar, source compiler and Business Skills for web-operation-agent"
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.13,<3.14"
 license = "MIT"
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Operating System :: POSIX",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [

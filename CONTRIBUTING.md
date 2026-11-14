@@ -6,10 +6,10 @@ Read [README.md](README.md) for the implemented scope and [SECURITY.md](SECURITY
 
 ## Set up a development environment
 
-The package supports Python 3.12 and 3.13. A POSIX shell is used by the documented commands. Node.js is needed to execute all embedded-runtime tests.
+The package uses Python 3.13. A POSIX shell is used by the documented commands. Node.js is needed to execute all embedded-runtime tests.
 
 ```bash
-python3 -m venv .venv    # Python 3.12 or 3.13
+python3.13 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .

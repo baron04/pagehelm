@@ -23,7 +23,7 @@
 | `id` | 必需 | 题号，套内唯一 |
 | `prompt` | 与 `turns` 二选一 | 单轮题的题面，字符串 |
 | `turns` | 与 `prompt` 二选一 | 多轮题的各轮题面，字符串列表，按顺序 |
-| `context` | 可选 | 起始状态。起始页写在 `context.page.route` |
+| `context` | 可选 | 起始状态。起始页写在 `context.page.route`，取法见出题 Skill 的“表达与覆盖” |
 | `category` | `cases.json` 里建议有 | 题型 |
 | `module` | 可选 | 所属模块 |
 | `expected_outcome` | `cases.json` 里有金标的题必需 | 金标，任意 JSON。是对象并且有字符串字段 `summary` 时，页面先显示它。多轮题各轮的预期放在 `expected_outcome.turns` |
