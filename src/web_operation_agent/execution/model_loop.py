@@ -1282,7 +1282,15 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                         text += (" 这一步带的answer没有用上：本轮已有服务端读取交付。页面操作回执返回后，"
                                  "用finish选择完整read_answer；不能通过页面答复省略或改抄这份结果。")
                     elif confirmed and not (unseen or unwritten) and rest <= {"finish"} and not hidden:
-                        finish = {"status": "done", "answer": answer}
+                        proposed = {"status": "done", "answer": answer}
+                        feedback = self._finish_feedback(s, turn, proposed)
+                        if feedback:
+                            finish = self._delivery_correction(s, turn, proposed, feedback)
+                            message = feedback.message if isinstance(feedback, DeliveryFeedback) else feedback
+                            text += " 这一步带的 answer 未交付：" + message
+                        else:
+                            turn.pop("pending_delivery", None)
+                            finish = proposed
                     elif hidden:
                         # It was written before the page was seen: the page shows another tab.
                         unseen = unseen or name

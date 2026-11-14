@@ -46,7 +46,7 @@ from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, Lo
 from web_operation_agent.execution.read_summary import (SummaryRefused, parse_summary_spec,
                                                        summary_schema)
 from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
-from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
+from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS, MAX_SCROLL_PAGES
 from web_operation_agent.business.tools.contracts import form_control_unavailable
 from web_operation_agent.privacy import (BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy,
                                          redact_sensitive_assignments)
@@ -2728,6 +2728,17 @@ def _read_only_status_question(text: str) -> bool:
             and not re.search(r"金额|价格|单价|费用|余额|打开|进入|跳转|页面|筛选|过滤|点击|选择|选中|填写|切换|翻页|定位|显示在|修改|改成|改为|变更|调整|设为|置为|标记|更新|设置|保存|提交|创建|新建|删除|取消|执行|办理", text))
 
 
+def _draft_form_binding(observation, element):
+    attrs = element.attrs
+    scope = attrs.get("form_scope")
+    instance = attrs.get("form_lifetime") or attrs.get("form_instance")
+    if (isinstance(scope, str) and scope.startswith(("dialog:", "form:"))
+            and isinstance(instance, str) and instance.strip() and attrs.get("page_control") != "query"):
+        return (observation.url, observation.page_route, scope,
+                "lifetime" if attrs.get("form_lifetime") else "instance", instance)
+    return None
+
+
 class SlimTurnExecutor(ModelDrivenTurnExecutor):
     """Yudao composition of the application-neutral model-driven executor."""
 
@@ -2800,7 +2811,45 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             if name in {"load_skill", "read_skill_resource"} | operations:
                 return LoopToolResult("用户本轮只要求预填表单；Skill 写入工具不可用。",
                                       kind="write", state="refused", error_code="draft_only")
-        return super()._invoke_tool(s, name, args, turn)
+        before = getattr(s, "obs", None)
+        result = super()._invoke_tool(s, name, args, turn)
+        if isinstance(intent, WriteIntent) and intent.mode == "draft":
+            # Entry batches remain open. Only a final done claim needs a real
+            # handoff of the same live business form, never an ordinary filter.
+            if result.entered:
+                observed = before
+                for receipt in self._tool_receipts:
+                    if receipt.ok and receipt.action in {"fill", "select"}:
+                        target = next((e for e in getattr(observed, "elements", ())
+                                       if e.ref == receipt.args_echo.get("ref") and e.role in FORM_INPUT_CONTROLS), None)
+                        if target is not None and target.attrs.get("form_scope") and target.attrs.get("page_control") != "query":
+                            turn.setdefault("draft_form_entries", set()).add(_draft_form_binding(observed, target))
+                    observed = receipt.observation or observed
+            if (result.marked and result.state == "completed" and result.completion_command
+                    and self._completion_proved(s, name, args, result)):
+                receipt = next((r for r in self._tool_receipts
+                    if r.action == "handoff_form" and r.command_id == result.completion_command), None)
+                if receipt is not None:
+                    turn.pop("draft_handoff_form", None)
+                    submit = receipt.args_echo.get("submit", {})
+                    targets = [e for e in receipt.observation.elements if isinstance(submit, dict) and e.role == "button"
+                               and e.name.strip() == str(submit.get("label") or "").strip()
+                               and e.attrs.get("form_scope") == submit.get("scope")]
+                    if len(targets) == 1:
+                        turn["draft_handoff_form"] = _draft_form_binding(receipt.observation, targets[0])
+        return result
+
+    def _finish_feedback(self, s, turn, args):
+        entered = turn.get("draft_form_entries")
+        if args.get("status") == "done" and entered:
+            handoff = turn.get("handoff")
+            if (not handoff or handoff[0] != self._page_fingerprint(s.obs) or not turn.get("draft_handoff_form")
+                    or entered != {turn.get("draft_handoff_form")}):
+                return DeliveryFeedback("draft_handoff_required",
+                    "已填写的业务表单尚未完成同一实时表单的回读与提交控件交接。"
+                    "请核对当前表单，用 fill_fields 的 then_highlight 完成审核交接；"
+                    "不能交接时用 cannot 如实说明，不能仅凭填写或普通高亮声称完成。")
+        return super()._finish_feedback(s, turn, args)
 
     def _propose(self, s, writes, operation: str, inputs: dict, turn: dict) -> LoopToolResult:
         intent = _WRITE_INTENT.get()
@@ -2897,6 +2946,9 @@ class TableReadTurnExecutor(SlimTurnExecutor):
         return super()._completion_proved(s, name, args, result, target=target)
 
     def _finish_feedback(self, s, turn, args):
+        feedback = super()._finish_feedback(s, turn, args)
+        if feedback:
+            return feedback
         if "items" not in args:
             return ""
         try:
