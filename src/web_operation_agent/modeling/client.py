@@ -710,7 +710,10 @@ class ChatModel(_ConcreteChatProvider):
         finally:
             finished.set()
             watcher.join(timeout=1)
-            if keep:
+            # A watcher still parked inside the cancel hook can yet close this
+            # connection under the next caller; only a dead watcher is safe, and
+            # one that already cancelled this call leaves a dead socket behind.
+            if keep and not watcher.is_alive() and not was_cancelled.is_set():
                 cache.give(key, connection)
             else:
                 connection.close()
