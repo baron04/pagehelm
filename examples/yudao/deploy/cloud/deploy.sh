@@ -25,6 +25,8 @@ done
 HERE=$(cd "$(dirname "$0")" && pwd)
 DEPLOY=$(cd "$HERE/.." && pwd)
 REPO=$(cd "$DEPLOY/../../.." && pwd)
+ROOT=$REPO
+. "$ROOT/scripts/python.sh"
 : "${YUDAO_CACHE:=$REPO/.q0-cache/yudao}"
 export YUDAO_CACHE
 export RSYNC_RSH='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
@@ -47,12 +49,12 @@ WHEELS=$STAGING/wheels
 mkdir -p "$WHEELS"
 trap 'rm -rf "$STAGING"' EXIT
 # The assistant host: the core and the yudao adapter, as wheels the host builds its image from.
-uv build --quiet --wheel --out-dir "$WHEELS" "$REPO"
-uv build --quiet --wheel --out-dir "$WHEELS" "$REPO/examples/yudao"
+uv build --python "$PYTHON" --quiet --wheel --out-dir "$WHEELS" "$REPO"
+uv build --python "$PYTHON" --quiet --wheel --out-dir "$WHEELS" "$REPO/examples/yudao"
 RELEASE=$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)
 DIR=/opt/yudao/releases/$RELEASE
 COMPOSE="docker compose -p yudao --env-file /opt/yudao/.env -f /opt/yudao/current/compose.yaml -f /opt/yudao/current/compose.cloud.yaml"
-python3 "$HERE/manifest.py" "$REPO" "$STAGING" "$RELEASE"
+"$PYTHON" "$HERE/manifest.py" "$REPO" "$STAGING" "$RELEASE"
 
 echo "release $RELEASE -> $TARGET"
 # The server must carry the read-only window (patches/server); a jar without it would let
@@ -94,7 +96,7 @@ if [ -n "$RESTORE" ]; then
   command ssh -f -N -o ExitOnForwardFailure=yes -L "$PORT:127.0.0.1:48080" \
     -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 "$TARGET"
   trap 'rm -rf "$STAGING"; pkill -f "ssh -f -N -o ExitOnForwardFailure=yes -L $PORT:127.0.0.1:48080" || true' EXIT
-  (cd "$DEPLOY" && python3 harden.py --base "http://127.0.0.1:$PORT" --out "$CREDENTIALS")
+  (cd "$DEPLOY" && "$PYTHON" harden.py --base "http://127.0.0.1:$PORT" --out "$CREDENTIALS")
   ssh "$TARGET" 'docker exec -i yudao-mysql-1 sh -c '"'"'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" ruoyi-vue-pro 2>/dev/null'"'" < "$DEPLOY/harden.sql"
   echo "restored; the new passwords are in $CREDENTIALS"
 fi

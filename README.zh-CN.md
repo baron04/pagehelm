@@ -25,21 +25,25 @@
 
 ## 运行芋道
 
+### 本地环境
+
 | 本地环境 | 命令 | 地址 |
 | --- | --- | --- |
 | 环境1（默认） | `./local` | <http://localhost:40001> |
 | 环境2 | `./local --env 2` | <http://localhost:40002> |
 
-每套 Compose 包含助手、业务应用、数据库和 Redis。源码从 `local` 所在目录挂载，普通源码更新只重启所选助手。准备与诊断见[本地指南](docs/guides/local-yudao.md)，Skill 为 `$local-yudao`。
+每套 Compose 包含助手、业务应用、数据库和 Redis。源码从 `local` 所在目录挂载，普通源码更新只重启所选助手。准备与诊断见[本地指南](docs/guides/local-yudao.md)。
 
-服务器配置完成后用 `./deploy` 部署；准备与恢复见[部署指南](docs/guides/deploy-yudao.md)，Skill 为 `$deploy-yudao`。
+### 线上演示站
+
+服务器配置完成后用 `./deploy` 部署；准备与恢复见[线上部署指南](docs/guides/deploy-yudao.md)。
 
 ## 开发
 
-使用 Python 3.12（也支持 3.13）和 Node.js：
+使用 Python 3.13 和 Node.js：
 
 ```bash
-python3.12 -m venv .venv
+python3.13 -m venv .venv
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python -m pip install --no-deps --editable examples/yudao

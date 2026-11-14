@@ -1,6 +1,13 @@
-# yudao (ruoyi-vue-pro) local test application
+# Yudao build and deployment reference
 
-Build and deployment resources for the Yudao demo and test application. Use the repository's `./local` entry point for the two local environments; setup and operation are documented in the [local guide](../../../docs/guides/local-yudao.md). Nothing here is imported by the Python package.
+Use the operation guide for the target environment:
+
+| Target | Entry point from the repository root | Operation guide |
+| --- | --- | --- |
+| Local environments 1 and 2 | `./local [--env 2]` | [Local environment guide](../../../docs/guides/local-yudao.md) |
+| Online demo | `./deploy` | [Online deployment guide](../../../docs/guides/deploy-yudao.md) |
+
+This reference covers shared application builds and integration details. The [cache build](#build-cache-artifacts) and [PageController preparation](#prepare-pagecontroller-assets) supply both entry points. The [legacy standalone stack](#standalone-stack-legacy) is separate from the two current local environments. Nothing here is imported by the Python package.
 
 ## Pinned versions
 
@@ -71,7 +78,27 @@ The copied `patches/server/` adds four classes under `yudao-server` and changes 
 
 The UI lockfile resolves from `registry.npmmirror.com`, so install against that registry; a current pnpm rejects the lockfile against npmjs metadata. The UI build needs about 8 GB of heap, so build it on the host rather than in a default Docker VM. Keep `VITE_BASE_URL` empty for the local build: nginx proxies `/admin-api` on the page's own origin, including an isolated clone on another port. A bundle baked for `localhost:48088` leaves a clone on another port stuck at its loading screen.
 
-Prepare the pinned PageController assets as described in the [deployment guide](../../../docs/guides/deploy-yudao.md#固定缓存), then return to the [local guide](../../../docs/guides/local-yudao.md#首次准备) to start environment 1 or 2.
+### Prepare PageController assets
+
+The local and online entry points use the same pinned PageController. Run this from the repository root to copy its entry, dependency chunks and license files; deployment checks verify their hashes.
+
+```bash
+controller_tmp=$(mktemp -d)
+npm install --ignore-scripts --no-save --prefix "$controller_tmp" @page-agent/page-controller@1.12.4
+.venv/bin/python - "$controller_tmp" <<'PY'
+import json, shutil, sys
+from pathlib import Path
+policy = json.loads(Path('src/web_operation_agent/policies/page_controller.json').read_text())
+package = Path(sys.argv[1]) / 'node_modules/@page-agent/page-controller'
+dest = Path('.q0-cache/yudao/woa')
+dest.mkdir(parents=True, exist_ok=True)
+for name, entry in policy['served_files'].items():
+    shutil.copyfile(package / entry['tarball_path'].removeprefix('package/'), dest / name)
+PY
+rm -rf "$controller_tmp"
+```
+
+After preparing the artifacts, follow the operation guide for the target environment in the table above.
 
 ### Standalone stack (legacy)
 

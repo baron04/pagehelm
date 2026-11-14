@@ -9,9 +9,9 @@ Applies throughout this repository.
 - Keep large outputs in temporary logs; never hide errors or claim unread checks passed. Hand over commit, changes, checks/skips, constraints and next action briefly; do not add reviews without new risk/change.
 - Keep both READMEs aligned and limited to overview. Public behavior belongs in the matching Chinese `docs/` page; internal plans/research/reviews belong in ignored `.workbench/`, never product Git/public links. It has separate instructions, Git and commit authorization. Preserve frozen protocols/artifacts and original verdicts; label hypotheses and avoid generalizing fixture results.
 
-## Task skills
+## Task entry points
 
-Local environments: [local-yudao](.agents/skills/local-yudao/SKILL.md). Deployment: [deploy-yudao](.agents/skills/deploy-yudao/SKILL.md).
+Local environments: [guide](docs/guides/local-yudao.md). Online deployment: [guide](docs/guides/deploy-yudao.md).
 
 ## Architecture
 
@@ -30,7 +30,7 @@ Local environments: [local-yudao](.agents/skills/local-yudao/SKILL.md). Deployme
 
 ## Verification and delivery
 
-Use Python 3.12 and select checks from the actual diff:
+Use Python 3.13 and select checks from the actual diff:
 
 ```bash
 .venv/bin/python scripts/check.py --plan

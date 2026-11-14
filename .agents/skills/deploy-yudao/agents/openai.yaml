@@ -1,4 +1,0 @@
-interface:
-  display_name: "部署芋道助手"
-  short_description: "使用仓库固定入口部署芋道助手，检查前置条件并核验线上版本"
-  default_prompt: "使用 $deploy-yudao 将当前仓库部署到已配置的服务器并核验线上版本。"

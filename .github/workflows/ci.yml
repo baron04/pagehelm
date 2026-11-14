@@ -29,15 +29,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.profile == 'release' && 60 || 15 }}
-    # Daily checks use 3.12. Explicit compatibility and release runs also verify 3.13;
-    # its compat profile avoids repeating the browser and full frontend suites.
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ${{ fromJSON((inputs.profile == 'compat' || inputs.profile == 'release') && '["3.12","3.13"]' || '["3.12"]') }}
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
-      CHECK_PROFILE: ${{ matrix.python-version == '3.13' && 'compat' || inputs.profile || 'ci' }}
+      CHECK_PROFILE: ${{ inputs.profile || 'ci' }}
       CHECK_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
       CHECK_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -46,7 +40,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version-file: .python-version
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Plan checks

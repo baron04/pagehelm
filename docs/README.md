@@ -14,8 +14,8 @@
 3. [运行时行为详情](reference/runtime-behavior.md) —— 具体某条行为的确切说法。
 
 ### 部署与运维
-1. [芋道本地验收环境](guides/local-yudao.md) —— 本地启动、更新、健康检查及故障定位。
-2. [部署芋道演示站](guides/deploy-yudao.md) —— 无参数发布、首次配置、版本核验与失败恢复。
+1. [芋部署本地环境](guides/local-yudao.md) —— 本地启动、更新、健康检查及故障定位。
+2. [部署线上环境（演示站）](guides/deploy-yudao.md) —— 无参数发布、首次配置、版本核验与失败恢复。
 3. [持久化运维](guides/operate-durably.md) —— SQLite 共享、备份与恢复、不确定写入的人工裁决。
 4. [写入模型](concepts/writes.md) —— 一次批准、单次派发、同 actor 回读，以及三种结果的处置。
 

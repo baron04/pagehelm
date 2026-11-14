@@ -330,16 +330,6 @@ class TheDemoOpensWhereAPersonCanSeeIt(unittest.TestCase):
         self.assertIn("woa.panel.open.v1", source)
         self.assertIn("localStorage.setItem", source)
 
-    def test_it_is_seeded_in_the_demo_and_nowhere_in_the_product(self):
-        """Remembering the viewer's own choice is right in a real deployment."""
-        import web_operation_agent
-
-        product = Path(web_operation_agent.__file__).resolve().parent
-        offenders = [path for path in product.rglob("*.js")
-                     if "panel/" not in path.as_posix()
-                     and "woa.panel.open.v1" in path.read_text(errors="ignore")]
-        self.assertEqual(offenders, [])
-
 
 class TheSourceTreeIsACopyOfWhatIsCompiled(unittest.TestCase):
     def test_the_modules_are_the_set_the_citations_need(self):

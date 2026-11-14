@@ -1,5 +1,5 @@
 # Development image: dependencies are immutable; source is mounted by ./local.
-FROM python:3.12-slim
+FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PYTHONPATH=/workspace/src:/workspace/examples/yudao/src

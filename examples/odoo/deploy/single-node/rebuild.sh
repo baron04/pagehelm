@@ -4,6 +4,8 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../../../.." && pwd)"
 cd "$repo_root"
+ROOT=$repo_root
+. "$ROOT/scripts/python.sh"
 
 default_private_dir="$repo_root/.private/odoo-single-node"
 deployment_env="${WOA_DEPLOYMENT_ENV:-${WOA_PRIVATE_DIR:-$default_private_dir}/deployment.env}"
@@ -23,7 +25,7 @@ export WOA_BUILD_REVISION="$(git rev-parse HEAD)"
 
 compose=(docker compose -f examples/odoo/deploy/single-node/docker-compose.yml)
 
-PYTHONPATH=src:examples/odoo/src python3 -m web_operation_agent_odoo.deploy assets
+PYTHONPATH=src:examples/odoo/src "$PYTHON" -m web_operation_agent_odoo.deploy assets
 "${compose[@]}" build agent odoo
 "${compose[@]}" --profile setup run --rm odoo-init
 "${compose[@]}" up -d --no-deps --force-recreate odoo

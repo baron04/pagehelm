@@ -266,4 +266,10 @@ def main(argv=None) -> int:
 
 
 if __name__ == '__main__':
+    sys.path.insert(0, str(ROOT / 'src'))
+    from web_operation_agent import python_is_supported, supported_python_text
+    if not python_is_supported():
+        print(f'需要 Python {supported_python_text()}；请使用 .venv/bin/python scripts/check.py。',
+              file=sys.stderr)
+        raise SystemExit(2)
     raise SystemExit(main())

@@ -1,6 +1,6 @@
-# 部署芋道演示站
+# 部署线上环境（演示站）
 
-在仓库根目录执行：
+本文用于发布到线上服务器。在仓库根目录执行：
 
 ```bash
 ./deploy
@@ -14,7 +14,7 @@
 
 ## 一次性配置
 
-本机需要 Python 3.12 的 `.venv`、符合 `frontend/package.json` 的 Node.js、npm、uv、Git、SSH、rsync、unzip 和 OpenSSL。按根目录 README 创建 Python 环境；安装 uv 后确保命令在 `PATH` 中。
+本机需要 Python 3.13 的 `.venv`、符合 `frontend/package.json` 的 Node.js、npm、uv、Git、SSH、rsync、unzip 和 OpenSSL。按根目录 README 创建 Python 环境；安装 uv 后确保命令在 `PATH` 中。
 
 ```bash
 cp deploy.example.toml deploy.local.toml
@@ -60,23 +60,7 @@ export YUDAO_CACHE="$PWD/.q0-cache/yudao"
   NODE_OPTIONS=--max-old-space-size=8192 pnpm exec vite build --mode prod)
 ```
 
-页面控制器从锁定的 npm 包复制，部署前会再次核对全部文件摘要。在仓库根目录执行：
-
-```bash
-controller_tmp=$(mktemp -d)
-npm install --ignore-scripts --no-save --prefix "$controller_tmp" @page-agent/page-controller@1.12.4
-.venv/bin/python - "$controller_tmp" <<'PY'
-import json, shutil, sys
-from pathlib import Path
-policy = json.loads(Path('src/web_operation_agent/policies/page_controller.json').read_text())
-package = Path(sys.argv[1]) / 'node_modules/@page-agent/page-controller'
-dest = Path('.q0-cache/yudao/woa')
-dest.mkdir(parents=True, exist_ok=True)
-for name, entry in policy['served_files'].items():
-    shutil.copyfile(package / entry['tarball_path'].removeprefix('package/'), dest / name)
-PY
-rm -rf "$controller_tmp"
-```
+页面控制器资源与本地环境共用，按[共用构建说明](../../examples/yudao/deploy/README.md#prepare-pagecontroller-assets)准备。
 
 ### 服务器前置条件
 

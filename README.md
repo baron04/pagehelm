@@ -25,21 +25,25 @@ Applications provide their own trusted identity, permissions and verification. B
 
 ## Run Yudao
 
+### Local environments
+
 | Local environment | Command | URL |
 | --- | --- | --- |
 | Environment 1 (default) | `./local` | <http://localhost:40001> |
 | Environment 2 | `./local --env 2` | <http://localhost:40002> |
 
-Each Compose project contains its assistant, application, database and Redis. Source is mounted from the directory containing `local`; ordinary source updates restart only the selected assistant. Setup and diagnostics: [local guide](docs/guides/local-yudao.md), Skill `$local-yudao`.
+Each Compose project contains its assistant, application, database and Redis. Source is mounted from the directory containing `local`; ordinary source updates restart only the selected assistant. Setup and diagnostics: [local guide](docs/guides/local-yudao.md).
 
-Deploy to a configured server with `./deploy`; setup and recovery: [deployment guide](docs/guides/deploy-yudao.md), Skill `$deploy-yudao`.
+### Online demo
+
+Deploy to a configured server with `./deploy`; setup and recovery: [online deployment guide](docs/guides/deploy-yudao.md).
 
 ## Development
 
-Use Python 3.12 (3.13 is also supported) and Node.js:
+Use Python 3.13 and Node.js:
 
 ```bash
-python3.12 -m venv .venv
+python3.13 -m venv .venv
 . .venv/bin/activate
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 python -m pip install --editable .
 python -m pip install --no-deps --editable examples/yudao

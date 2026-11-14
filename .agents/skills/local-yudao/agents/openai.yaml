@@ -1,4 +1,0 @@
-interface:
-  display_name: "芋道本地验收环境"
-  short_description: "用固定命令启动、更新、检查和排查芋道本地合成数据验收环境"
-  default_prompt: "使用 $local-yudao 启动或更新当前 checkout 的本地验收环境并核验健康状态。"

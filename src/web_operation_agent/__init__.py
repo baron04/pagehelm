@@ -8,10 +8,9 @@ import sys
 
 __version__ = "0.1.0"
 
-#: The interpreters this repository is tested on, as [minimum, first unsupported). Five
-#: modules carried "3.12" as a literal and four `pyproject.toml` files repeated it in their
-#: metadata; `test_supported_python.py` fails when any of them drifts from this one.
-SUPPORTED_PYTHON = ((3, 12), (3, 14))
+#: Tested interpreter range, as [minimum, first unsupported).
+#: Distribution metadata is checked against this range by test_supported_python.py.
+SUPPORTED_PYTHON = ((3, 13), (3, 14))
 
 
 def python_is_supported(version: tuple[int, int] | None = None) -> bool:
@@ -21,7 +20,7 @@ def python_is_supported(version: tuple[int, int] | None = None) -> bool:
 
 
 def supported_python_text() -> str:
-    """The range as a person reads it: "3.12 or 3.13"."""
+    """The supported version range for user-facing messages."""
     low, high = SUPPORTED_PYTHON
     names = [f"{low[0]}.{minor}" for minor in range(low[1], high[1])]
     return names[0] if len(names) == 1 else " or ".join([", ".join(names[:-1]), names[-1]])

@@ -13,9 +13,9 @@
 
 ## 首次准备
 
-1. 按根目录 [README](../../README.zh-CN.md#开发) 准备 Python 3.12 的 `.venv`，安装依赖与芋道适配器。
+1. 按根目录 [README](../../README.zh-CN.md#开发) 准备 Python 3.13 的 `.venv`，安装依赖与芋道适配器。
 2. 安装 Node.js、npm、Docker Engine 及 Docker Compose 2.30 或更新版本，并启动 Docker。
-3. 按[缓存构建说明](../../examples/yudao/deploy/README.md#build-cache-artifacts)准备固定缓存 `.q0-cache/yudao/`：带 Java 补丁的 JAR、管理前端 `ui/dist-prod/`、初始化 SQL 及上游源码。管理前端的 `VITE_BASE_URL` 保持空值。页面控制器按[固定缓存说明](deploy-yudao.md#固定缓存)准备。
+3. 按[缓存构建说明](../../examples/yudao/deploy/README.md#build-cache-artifacts)准备固定缓存 `.q0-cache/yudao/`：带 Java 补丁的 JAR、管理前端 `ui/dist-prod/`、初始化 SQL 及上游源码。管理前端的 `VITE_BASE_URL` 保持空值。页面控制器按[共用构建说明](../../examples/yudao/deploy/README.md#prepare-pagecontroller-assets)准备。
 4. 在 Git 忽略的 `.env` 填写 `AGENT_OPENAI_BASE_URL`、`AGENT_OPENAI_API_KEY`、`AGENT_OPENAI_MODEL` 及可选的 `AGENT_PROVIDER`，模型须有已登记价格。地址可以指向本机回环地址；配置只以私有文件注入容器，不进入镜像。
 5. 运行所选环境的 `check`，通过后执行启动命令。环境 2 依次执行 `./local --env 2 check` 和 `./local --env 2`；首次启动会构建依赖镜像。
 

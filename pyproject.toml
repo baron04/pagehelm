@@ -7,14 +7,13 @@ name = "web-operation-agent"
 dynamic = ["version"]
 description = "A server-side web operation agent with a thin browser runtime"
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.13,<3.14"
 license = "MIT"
 license-files = ["LICENSE"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Operating System :: POSIX",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [

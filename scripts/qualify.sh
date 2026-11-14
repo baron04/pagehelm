@@ -25,6 +25,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
+. "${ROOT}/scripts/python.sh"
 
 # What is being qualified, said first and last. A result is evidence for one commit in one
 # checkout; a run recorded against the wrong one qualified nothing (P7.5: four evening runs
@@ -38,10 +39,6 @@ else
 fi
 tested_what="commit ${tested_commit} (${tested_branch}), tracked files ${tested_tree}, checkout ${ROOT}"
 printf 'Qualifying %s\n' "${tested_what}"
-
-if [[ -z "${PYTHON:-}" ]]; then
-  if [[ -x "${ROOT}/.venv/bin/python" ]]; then PYTHON="${ROOT}/.venv/bin/python"; else PYTHON="python3"; fi
-fi
 
 require_browser=0
 require_live=0

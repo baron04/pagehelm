@@ -1,7 +1,7 @@
 # The yudao assistant host (web_operation_agent_yudao.native_server), built on the public host
 # from the wheels deploy.sh brings. The model provider's settings come from an env file the
 # owner keeps on the host; nothing secret is built into the image.
-FROM python:3.12-slim
+FROM python:3.13-slim
 ARG PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
 ENV PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY wheels/ /tmp/wheels/
