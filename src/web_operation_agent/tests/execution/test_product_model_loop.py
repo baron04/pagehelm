@@ -892,8 +892,10 @@ class DeliveryCorrectionTests(unittest.TestCase):
         executor=self.fixture(self.finish(),self.finish())
         answer=executor.run()
         self.assertEqual(executor.state.terminal_reason,"agent_refused")
-        self.assertNotIn("已打开详情",answer)
-        self.assertIn("第 1 项尚未核实",answer)
+        # The reply goes out as written; the failed item is marked and said once, after it.
+        self.assertTrue(answer.startswith("已打开详情。"))
+        self.assertIn("第 1 项没有通过交付检查，标为未交付",answer)
+        self.assertIn("当前页面回执尚未核实",answer)
         rows=[facts for event,facts in executor.events if event=="model_delivery_rejected"]
         self.assertEqual([r["returned"] for r in rows],[True,False])
         self.assertEqual([r["terminal"] for r in rows],[False,True])
@@ -903,7 +905,7 @@ class DeliveryCorrectionTests(unittest.TestCase):
         executor=self.fixture(self.finish())
         executor.state.budget.remaining=lambda:0.5
         answer=executor.run()
-        self.assertIn("本轮未完成",answer)
+        self.assertIn("标为未交付",answer)
         self.assertEqual(executor.state.terminal_reason,"agent_refused")
         self.assertEqual(len(executor.state.chat.seen),1)
 
@@ -920,7 +922,7 @@ class DeliveryCorrectionTests(unittest.TestCase):
         feedback=iter((DeliveryFeedback("delivery_page_receipt","两项尚未核实。",(0,1)),
                        DeliveryFeedback("delivery_page_receipt","第 1 项仍未核实。",(0,))))
         executor._finish_feedback=lambda *_:next(feedback)
-        self.assertIn("本轮未完成",executor.run())
+        self.assertIn("标为未交付",executor.run())
         self.assertEqual(len(executor.state.chat.seen),2)
         events=[facts for event,facts in executor.events if event=="model_delivery_rejected"]
         self.assertEqual([e["returned"] for e in events],[True,False])
@@ -931,13 +933,13 @@ class DeliveryCorrectionTests(unittest.TestCase):
         feedback=iter((DeliveryFeedback("delivery_page_receipt","尚未核实。",(0,)),
                        DeliveryFeedback("delivery_page_receipt","仍未核实。",(0,1))))
         executor._finish_feedback=lambda *_:next(feedback)
-        self.assertIn("本轮未完成",executor.run())
+        self.assertIn("标为未交付",executor.run())
         self.assertEqual(len(executor.state.chat.seen),2)
 
     def test_repeated_malformed_finish_closes_without_another_model_call(self):
         bad=reply(call("finish",status="done",answer="已打开详情。",unknown="invalid"))
         executor=self.fixture(bad,bad)
-        self.assertIn("本轮未完成",executor.run())
+        self.assertIn("标为未交付",executor.run())
         self.assertEqual(executor.state.terminal_reason,"agent_refused")
         self.assertEqual(len(executor.state.chat.seen),2)
 
@@ -946,7 +948,7 @@ class DeliveryCorrectionTests(unittest.TestCase):
         def refuse(*_):raise ValueError("untrusted diagnostic")
         executor._finish_feedback=refuse
         answer=executor.run()
-        self.assertIn("本轮未完成",answer)
+        self.assertIn("标为未交付",answer)
         self.assertNotIn("untrusted diagnostic",answer)
         self.assertEqual(len(executor.state.chat.seen),2)
 
@@ -960,7 +962,7 @@ class DeliveryCorrectionTests(unittest.TestCase):
             calls.append(True)
             return original(*args,**kwargs)
         executor.state.chat.complete_cancellable=complete
-        self.assertIn("本轮未完成",executor.run())
+        self.assertIn("标为未交付",executor.run())
         self.assertEqual(executor.state.terminal_reason,"agent_refused")
 
 
@@ -1215,3 +1217,52 @@ class ReadOnlyTurnTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HandoffStaysTests(unittest.TestCase):
+    """A handoff the page shows is not taken down by asking for it again, or by looking."""
+
+    def executor(self):
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
+        executor.config = NS(action_policy=None)
+        executor.profile = NS(draft_steps=None)
+        executor.application = NS(descriptor=NS(application_id="sample"))
+        executor.channel = NS(latest_observation_envelope=None)
+        self.events, self.sent = [], []
+        self.state = NS(obs=page(), terminal_reason="", detail="", step=0, run_id="run-1",
+            cancelled=lambda: False, budget=NS(check=lambda: None), receipt=TurnReceipt(),
+            approvals=NS(confirm_operation=lambda *a, **k: ("", ""), operation_hold_ms=1000),
+            ledger=NS(append=lambda event, **facts: self.events.append((event, facts))))
+        def dispatch(_s, action, args, **_):
+            self.sent.append(action)
+            before = self.state.obs
+            after = page(before.epoch + (0 if action in {"observe", "form_model"} else 1))
+            receipt = ActionReceipt(1, f"c{len(self.sent)}", action, args, True, url_before=before.url,
+                                    url_after=after.url, observation=after, write_guard_held=False)
+            self.state.obs = after
+            return receipt
+        self.dispatch_patch = patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch)
+        return executor
+
+    def test_the_same_handoff_asked_again_on_an_unchanged_page_sends_nothing(self):
+        executor = self.executor()
+        args = {"fields": [{"ref": "e1", "field": "name", "value": "x"}], "submit": {"ref": "e1", "label": "Next", "scope": "s"}}
+        with self.dispatch_patch:
+            first = executor._dispatch(self.state, "handoff_form", args)
+            executor._dispatch(self.state, "observe", {})
+            executor._dispatch(self.state, "form_model", {"ref": "e1", "kind": "form"})
+            again = executor._dispatch(self.state, "handoff_form", args)
+        self.assertIsNotNone(first)
+        self.assertEqual(self.sent, ["handoff_form", "observe", "form_model"])
+        self.assertEqual(again.command_id, first.command_id)
+        self.assertIn("handoff_kept", [e for e, _ in self.events])
+
+    def test_a_changed_page_or_a_different_handoff_is_dispatched_normally(self):
+        executor = self.executor()
+        args = {"fields": [{"ref": "e1", "field": "name", "value": "x"}]}
+        with self.dispatch_patch:
+            executor._dispatch(self.state, "handoff_form", args)
+            executor._dispatch(self.state, "handoff_form", {"fields": [{"ref": "e1", "field": "name", "value": "y"}]})
+            executor._dispatch(self.state, "scroll", {"direction": "down", "pages": 1})
+            executor._dispatch(self.state, "handoff_form", args)
+        self.assertEqual(self.sent, ["handoff_form", "handoff_form", "scroll", "handoff_form"])

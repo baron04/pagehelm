@@ -135,6 +135,8 @@ export interface ActionReceipt {
   no_effect?: boolean
   /** Optional private diagnostics; never part of the observed page or authorization. */
   execution_trace?: ExecutionTrace
+  /** The data bound to a live form, for a `form_model` action only. */
+  form_data?: JsonObject
   observation: PageObservation | null
 }
 

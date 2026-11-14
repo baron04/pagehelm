@@ -103,6 +103,7 @@ export interface ReceiptFacts {
   candidateLabels?: string[]
   noEffect?: boolean
   execution_trace?: unknown
+  form_data?: unknown
 }
 
 export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: Redactor): ActionReceipt {
@@ -129,6 +130,8 @@ export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: R
       .filter(Boolean)} : {}),
     ...(facts.noEffect === true ? {no_effect: true} : {}),
     ...(execution_trace ? {execution_trace} : {}),
+    ...(facts.form_data && action.command.action === 'form_model'
+      ? {form_data: facts.form_data as NonNullable<ActionReceipt['form_data']>} : {}),
     observation: facts.observation.observation,
   }
 }

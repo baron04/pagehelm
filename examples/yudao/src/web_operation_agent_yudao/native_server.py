@@ -129,6 +129,10 @@ class YudaoHostConfig:
     native_writes: bool = False
     #: Offer existing preparation tools while refusing every mutation dispatch.
     native_write_preparation: bool = False
+    #: A native form or row control pressed by the program after a fresh approval, under a
+    #: permit that releases exactly the requests the approved card shows. Needs the
+    #: read-only-window profile and its guard; typed Skill writes stay as they are.
+    native_submit: bool = False
     #: Optional component-backed query/location batches; ordinary form boundaries remain.
     location_bindings: bool = False
     #: Whether a loaded Skill's text reaches the slim turn's model. Off only to measure
@@ -163,7 +167,13 @@ class YudaoHostConfig:
             raise ValueError("location_bindings must be explicit")
         if self.location_bindings and self.native_writes:
             raise ValueError("location bindings do not enable business writes")
-        if self.native_page_admission == "read-only-window" and self.native_writes:
+        if type(self.native_submit) is not bool:
+            raise ValueError("native_submit must be explicit")
+        if self.native_submit and not (self.native_writes and self.native_page_admission == "read-only-window"
+                                       and self.native_read_policy is not None):
+            raise ValueError("native submit needs native writes under the read-only-window profile and its guard")
+        if (self.native_page_admission == "read-only-window" and self.native_writes
+                and not self.native_submit):
             raise ValueError("read-only-window does not permit business writes")
         if not isinstance(self.slim_skill_knowledge, bool):
             raise ValueError("slim_skill_knowledge is on or off")
@@ -432,6 +442,10 @@ class YudaoHost:
             if (self.config.native_writes or self.config.native_write_preparation) and self.live_forms:
                 from .mutation_prefill import YudaoMutationPrefill
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
+            native_submit = None
+            if self.config.native_submit:
+                from .native_submit import YudaoSubmitPort
+                native_submit = YudaoSubmitPort(app.client, self.native_proxy, self._load_api_docs)
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
                 max_user_answer_chars=panel_limits()["result_max_chars"])
             executor = TableReadTurnExecutor(
@@ -439,6 +453,7 @@ class YudaoHost:
                 goal_port=model_goal, draft_steps=draft_steps,
                 mutation_prefill=mutation_prefill,
                 location_bindings=self.config.location_bindings,
+                native_submit=native_submit,
                 disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                 knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                          time_zone=app.goal_data.time_zone(),
@@ -587,6 +602,9 @@ def main(argv=None) -> int:
                     help="enable component-backed location batches, excluding business form entry")
     ap.add_argument("--native-write-preparation", action="store_true",
                     help="offer existing preparation tools; mutation dispatch remains disabled")
+    ap.add_argument("--native-submit", action="store_true",
+                    help="after a fresh approval press the native form or row control once under a permit that "
+                         "releases only the card's requests; requires --native-writes and read-only-window")
     ap.add_argument("--native-writes", action="store_true",
                     help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
                          "does not enable browser submission")
@@ -617,6 +635,7 @@ def main(argv=None) -> int:
             native_guard_port=a.native_guard_port,
             native_writes=a.native_writes,
             native_write_preparation=a.native_write_preparation,
+            native_submit=a.native_submit,
             location_bindings=a.location_bindings,
             max_sessions=a.max_sessions,
             daily_allowance_cny=a.daily_allowance_cny,

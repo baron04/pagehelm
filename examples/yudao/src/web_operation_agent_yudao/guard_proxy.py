@@ -167,7 +167,17 @@ class NativeGuardProxy:
                     owner = owner or secrets.token_hex(32)
                     ttl = proxy.guard.begin(actor, owner, ttl_s=body.get("ttl_s", 120))
                     state = {"active": True, "expires_at": time.time() + ttl}
-                    if proxy.application_window:
+                    if proxy.guard.permit_active(actor):
+                        # An approved click, not a read-only window: the application's own
+                        # statement guard must be off for the request the card shows. The
+                        # permit still decides every write; nothing else can be sent.
+                        if proxy.application_window:
+                            ended = self.application("end", {})
+                            if not ended or ended.get("active") is True:
+                                proxy.guard.disarm_permit(actor)
+                                raise GuardRefused("application_window_unavailable")
+                        state["guard"] = "approved_submit"
+                    elif proxy.application_window:
                         confirmed = self.application("begin", {"ttl_s": math.ceil(ttl)})
                         if confirmed.get("active") is not True or confirmed.get("guard") != "read_only_statements":
                             proxy.guard.end(actor, owner)
@@ -216,10 +226,15 @@ class NativeGuardProxy:
                 anonymous = path in _PUBLIC and not self.headers.get("Authorization")
                 actor = None if anonymous else self.actor()
                 if actor is None or self.headers.get(ASSISTANT_HEADER) != "1":
+                    if actor is not None and self.command == "GET":
+                        try:
+                            proxy.guard.note_read(actor, self.path)
+                        except GuardRefused:
+                            pass          # a full actor table must not stop the person's own read
                     self.upstream_request(body)
                 else:
-                    with proxy.guard.request(actor, self.command, self.path):
-                        self.upstream_request(body)
+                    with proxy.guard.request(actor, self.command, self.path, body) as ticket:
+                        ticket.status, ticket.response = self.upstream_request(body)
 
             def upstream_request(self, body):
                 connect = http.client.HTTPSConnection if proxy.upstream.scheme == "https" else http.client.HTTPConnection
@@ -240,6 +255,7 @@ class NativeGuardProxy:
                     self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
                     self.wfile.write(payload)
+                    return response.status, payload[:65536]
                 finally:
                     connection.close()
 

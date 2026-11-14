@@ -40,5 +40,14 @@
       "spinbutton",
       "radiogroup"
     ]
+  },
+  "form_model": {
+    "max_bytes": 200000,
+    "max_depth": 8,
+    "max_nodes": 6000,
+    "capability": "page.form_model"
+  },
+  "form_submit": {
+    "capability": "page.form_submit"
   }
 }

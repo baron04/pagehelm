@@ -22,6 +22,7 @@ import {formInstance, localChoiceRemoval} from './formInstance'
 import {ChoiceUnavailable, listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
+import {normalizeFormRead, normalizeRowRead, unreadableReason, type FormModelRead, type RowRecordRead} from './formModel'
 import {suspendPanelHitTargets} from './panelObservation'
 import {createControlGuide, type ControlGuide} from '../handoff/guide'
 
@@ -97,6 +98,8 @@ interface PageControllerModule {
   readPageRead?: () => unknown
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
+  readElementFormModel?: ElementNavigationReader
+  readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
 }
 
@@ -240,6 +243,39 @@ export class Page {
     } catch {
       return 'missing'
     }
+  }
+
+  /** Set by the Runtime from the application's controller module; absent means unreadable. */
+  formModelReader: ElementNavigationReader | undefined
+  rowRecordReader: ElementNavigationReader | undefined
+
+  /** Why the last `formModel` read gave nothing, in a word the server can classify. */
+  formUnreadable = ''
+
+  /** The whole data bound to the live form under `ref`; null if the form cannot be read. */
+  formModel(ref: unknown): FormModelRead | null {
+    this.formUnreadable = ''
+    try {
+      const element = this.element(ref)
+      if (!(element instanceof HTMLElement) || !element.isConnected || !this.formModelReader) {
+        this.formUnreadable = 'no_reader'
+        return null
+      }
+      const raw = this.formModelReader(element)
+      const read = normalizeFormRead(raw)
+      if (read && JSON.stringify(read).length <= browserContract.form_model.max_bytes) return read
+      this.formUnreadable = unreadableReason(raw) || 'not_a_form'
+      return null
+    } catch { this.formUnreadable = 'reader_failed'; return null }
+  }
+
+  /** The table row a row control belongs to, as the table that renders it says. */
+  rowRecord(ref: unknown): RowRecordRead | null {
+    try {
+      const element = this.element(ref)
+      if (!(element instanceof HTMLElement) || !element.isConnected || !this.rowRecordReader) return null
+      return normalizeRowRead(this.rowRecordReader(element))
+    } catch { return null }
   }
 
   /** Application-observed row identity, re-read before dispatch. No effect grant. */
@@ -1067,6 +1103,8 @@ export interface LoadedPageController {
   readPageRead?: PageQueryReader
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
+  readElementFormModel?: ElementNavigationReader
+  readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
 }
 
@@ -1140,6 +1178,10 @@ export async function loadPageController(moduleUrl: string | undefined,
       ? {readPageRead: module.readPageRead} : {}),
     ...(typeof module.readElementPageControl === 'function'
       ? {readElementPageControl: module.readElementPageControl} : {}),
+    ...(typeof module.readElementFormModel === 'function'
+      ? {readElementFormModel: module.readElementFormModel} : {}),
+    ...(typeof module.readElementRowRecord === 'function'
+      ? {readElementRowRecord: module.readElementRowRecord} : {}),
     ...(typeof module.readElementNavigation === 'function'
       ? {readElementNavigation: module.readElementNavigation} : {}),
     ...(typeof module.openPage === 'function' ? {openPage: module.openPage} : {})}

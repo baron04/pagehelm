@@ -135,7 +135,7 @@ class TurnTablesTest(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(TurnReadError):
                 date_range(today="2026-10-25", zone="Asia/Shanghai", **args)
 
-    def test_page_delivery_requires_a_successful_current_page_receipt(self):
+    def test_page_delivery_is_checked_against_the_page_not_a_quoted_receipt(self):
         from web_operation_agent.execution.model_loop_contracts import LoopToolResult
         from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
 
@@ -166,13 +166,28 @@ class TurnTablesTest(unittest.TestCase):
         self.assertEqual(executor._finish_feedback(state, turn, args), "")
         args["items"][0]["receipts"] = [reference, read_reference]
 
+        # No receipt has to be quoted for a page: a data receipt, none at all, or one for an
+        # earlier state of the page all pass while the page itself is where it should be.
         data_reference = self.tables.issue_receipt()
-        args["items"][0]["receipts"] = [data_reference]
-        self.assertIn("页面回执", executor._finish_feedback(state, turn, args).message)
+        for quoted in ([data_reference], [], [reference, read_reference]):
+            args["items"][0]["receipts"] = quoted
+            self.assertEqual(executor._finish_feedback(state, turn, args), "")
         args["items"][0]["receipts"] = [reference]
-        state.obs = SimpleNamespace(to_json=lambda: {
-            "url": "https://synthetic.invalid/other", "epoch": 2, "content": "Other row", "elements": []})
-        self.assertIn("页面回执", executor._finish_feedback(state, turn, args).message)
+        state.obs = SimpleNamespace(url="https://synthetic.invalid/other", page_route="/other", elements=[],
+            to_json=lambda: {"url": "https://synthetic.invalid/other", "epoch": 2, "content": "Other row", "elements": []})
+        self.assertEqual(executor._finish_feedback(state, turn, args), "")
+        # What is still checked: the user's page is not the home page.
+        state.obs = SimpleNamespace(url="https://synthetic.invalid/", page_route="/", elements=[],
+            to_json=lambda: {"url": "https://synthetic.invalid/", "epoch": 3, "content": "Home", "elements": []})
+        self.assertEqual(executor._finish_feedback(state, turn, args).code, "delivery_page_home")
+        # And a handoff the answer claims must still be on the page.
+        state.obs = SimpleNamespace(url="https://synthetic.invalid/form", page_route="/form", elements=[],
+            to_json=lambda: {"url": "https://synthetic.invalid/form", "epoch": 4, "content": "Form", "elements": []})
+        turn["handoff"] = ("a-page-state-that-is-gone", None)
+        args["answer"] = "表单已填好并交接，提交按钮已标出。"
+        self.assertEqual(executor._finish_feedback(state, turn, args).code, "delivery_page_handoff")
+        args["answer"] = "已打开"
+        self.assertEqual(executor._finish_feedback(state, turn, args), "")
 
     def test_unobserved_page_result_cannot_issue_a_page_state_receipt(self):
         from web_operation_agent.execution.model_loop_contracts import LoopToolResult

@@ -124,7 +124,7 @@ def _answer_targets(payload: dict, answer: str) -> list[dict]:
 #: dispatch would say everything twice.
 _PAGE_TOOLS = frozenset({
     "goto", "back", "click", "fill", "select", "submit", "scroll", "wait_for", "observe",
-    "apply_facet", "reveal",
+    "apply_facet", "reveal", "form_model", "form_submit",
     "prefill_form", "finish", "ask_user"})
 
 
@@ -296,6 +296,10 @@ def describe_action(command: dict | None, target: dict | None = None) -> str:
         return "切换页面筛选或分组"
     if action == "reveal":
         return f"展开{quoted}菜单" if quoted else "展开页面上的菜单"
+    if action == "form_model":
+        return "读取表单里的完整数据"
+    if action == "form_submit":
+        return f"按已批准的内容点击{quoted}" if quoted else "按已批准的内容点击提交"
     if action == "submit":
         return f"提交{quoted}" if quoted else "提交页面表单"
     if action == "wait_for":

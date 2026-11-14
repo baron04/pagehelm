@@ -2202,7 +2202,7 @@ class GoalTurnExecutor:
                         ok=receipt.ok, error_code=receipt.error_code,
                         url_before=receipt.url_before, url_after=receipt.url_after,
                         navigated=receipt.navigated, write="none")
-        if action not in ("observe", "wait_for"):
+        if action not in ("observe", "wait_for", "form_model"):
             s.page_actions += 1
         s.refused = receipt.error_code == "capability_refused"
         if receipt.observation is not None:

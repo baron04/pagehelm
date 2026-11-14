@@ -37,6 +37,7 @@ class ChannelServer:
                 "back": "page.back", "scroll": "page.scroll", "wait_for": "page.wait",
                 "apply_facet": "page.apply_facet", "highlight": "page.highlight",
                 "handoff_form": "page.handoff_form", "reveal": "page.reveal",
+                "form_model": "page.form_model", "form_submit": "page.form_submit",
             }[action.command.action]
             form_fields = action.command.args.get("fields")
             if action.command.action == "handoff_form" and (

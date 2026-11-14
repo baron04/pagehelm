@@ -787,6 +787,105 @@ function nativeFormContext(element) {
   return undefined
 }
 
+const FORM_SECRET = /pass(word)?|pwd|secret|token|credential|密码|密钥|令牌/i
+const FORM_LIMITS = {depth: 8, nodes: 6000, bytes: 200000}
+const FORM_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/
+
+/** A plain-data copy of the form's model: bounded, no functions, credentials named and left out. */
+function cloneFormModel(model) {
+  const withheld = [], active = new Set()
+  let nodes = 0
+  const walk = (value, depth, path) => {
+    if (++nodes > FORM_LIMITS.nodes) throw new Error('too_many_values')
+    if (depth > FORM_LIMITS.depth) throw new Error('too_deep')
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+    // As JSON.stringify, which is what the page sends: a number that is not finite is null.
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString()
+    if (typeof value !== 'object') return undefined
+    if (active.has(value)) throw new Error('cyclic')
+    active.add(value)
+    try {
+      if (Array.isArray(value)) return value.map((item, index) => walk(item, depth + 1, path + '.' + index) ?? null)
+      const out = {}
+      for (const key of Object.keys(value)) {
+        if (FORM_SECRET.test(key)) { withheld.push(path ? path + '.' + key : key); continue }
+        const item = walk(value[key], depth + 1, path ? path + '.' + key : key)
+        if (item !== undefined) out[key] = item
+      }
+      return out
+    } finally { active.delete(value) }
+  }
+  try {
+    const data = walk(model, 0, '')
+    return JSON.stringify(data).length <= FORM_LIMITS.bytes ? {data, withheld} : {unreadable: 'too_large'}
+  } catch (error) { return {unreadable: String(error?.message || 'not_data').slice(0, 40)} }
+}
+
+function shownIn(root) {
+  const parts = []
+  for (const node of root.querySelectorAll('.el-select__selected-item,.el-radio.is-checked,.el-checkbox.is-checked,.el-tag')) {
+    const text = (node.textContent || '').replace(/\s+/g, ' ').trim()
+    if (text) parts.push(text)
+  }
+  for (const node of root.querySelectorAll('input:not([type="hidden"]):not([type="password"]),textarea')) {
+    if (node.closest('.el-select')) continue
+    const text = String(node.value || '').trim()
+    if (text) parts.push(text)
+  }
+  return [...new Set(parts)].join('、').slice(0, 200)
+}
+
+/**
+ * The whole data bound to the native editor the element sits in: the ElForm's model (hidden
+ * fields, related ids and lines included), each form item's label and what it shows, and
+ * whether the editor creates a record or changes one. This is a read of the mounted
+ * component, never a grant; the server decides what it may be used for.
+ */
+export function readElementFormModel(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected) return undefined
+  const dialog = element.closest('[role="dialog"],dialog')
+  if (!dialog) return undefined
+  const shown = node => node.getBoundingClientRect().width && node.getBoundingClientRect().height
+  const forms = Array.from(dialog.querySelectorAll('form.el-form')).filter(shown)
+  const roots = forms.filter(form => !forms.some(other => other !== form && other.contains(form)))
+  if (Array.from(dialog.querySelectorAll('.el-loading-mask')).some(shown)) return {unreadable: 'still_loading'}
+  if (forms.length > 32 || roots.length !== 1) return {unreadable: roots.length ? 'several_forms' : 'no_form'}
+  const form = roots[0], bound = pageComponentForRoot(form, 'ElForm', true)
+  if (!bound) return {unreadable: 'form_component_not_found'}
+  const model = bound.instance.props?.model
+  if (!model || typeof model !== 'object' || Array.isArray(model)) return {unreadable: 'model_not_an_object'}
+  const copy = cloneFormModel(model)
+  if (copy.unreadable) return {unreadable: copy.unreadable}
+  const id = model.id
+  const hasId = id !== undefined && id !== null && id !== ''
+  if (hasId && !(typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+      || typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id))) return {unreadable: 'record_id_not_plain'}
+  const items = [], invalid = []
+  for (const node of liveVNodes(bound.instance)) {
+    const component = node.component
+    if (!component || (component.type?.name || component.type?.__name) !== 'ElFormItem') continue
+    const prop = component.props?.prop, root = component.subTree?.el
+    if (typeof prop !== 'string' || !prop || !(root instanceof HTMLElement) || !root.isConnected) continue
+    const label = String(component.props.label || root.querySelector('.el-form-item__label')?.textContent || '')
+      .replace(/\s+/g, ' ').trim().slice(0, 120)
+    items.push({prop, label, display: shown(root) ? shownIn(root) : ''})
+    if (root.classList.contains('is-error')) invalid.push(prop)
+    if (items.length >= 400) break
+  }
+  const title = (dialog.querySelector('.el-dialog__header')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+  return {model: copy.data, withheld: copy.withheld, invalid: invalid.slice(0, 40), items, title,
+    mode: hasId ? 'update' : 'create', record_id: hasId ? String(id) : ''}
+}
+
+/** The table row a row control belongs to, read from the table that renders it. */
+export function readElementRowRecord(element) {
+  const row = element instanceof HTMLElement ? boundRecord(element) : undefined
+  if (!row || !FORM_ID.test(row.id)) return undefined
+  const named = row.values.find(([label]) => /名称|名字|标题|姓名|name/i.test(label))
+  return {id: row.id, name: named ? named[1].slice(0, 200) : '', values: row.values.slice(0, 40)}
+}
+
 /** Local binding facts only; application effect review still owns action authority. */
 export function readElementPageControl(element) {
   if (!(element instanceof HTMLElement) || !element.isConnected) return undefined

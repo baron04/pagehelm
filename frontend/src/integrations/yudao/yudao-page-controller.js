@@ -178,4 +178,4 @@ export function readElementPageControl(element) {
   return record ? {kind: 'record', ...record} : ordinaryControl(element)
 }
 export {readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
-  readElementNavigation, openPage} from './page-facts.js'
+  readElementNavigation, readElementFormModel, readElementRowRecord, openPage} from './page-facts.js'

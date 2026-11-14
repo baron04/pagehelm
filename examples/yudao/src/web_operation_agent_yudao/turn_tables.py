@@ -433,6 +433,8 @@ class TurnTables:
                for value in (answer, *(item["item"] for item in items))):
             raise TurnReadError("delivery_sensitive", "交付内容含凭据；删去后重新交付。")
         for item in items:
+            if item.get("kind") == "page":
+                continue          # a page is checked as the user's page stands, not by a quoted receipt
             if item["status"] == "delivered" and not item["receipts"]:
                 raise TurnReadError("delivery_missing_receipt", "已交付项必须引用至少一份本轮回执。")
             if any(ref not in self.receipts for ref in item["receipts"]):

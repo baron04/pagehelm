@@ -36,6 +36,7 @@ from .action_admission import (ADMITTED_ACTIONS, ActionAdmission,
                                ActionIntent, ActionPermit, ActionAdmissionRefused, ActionResultPending)
 from ..business.draft_steps import DraftStepAdmission
 from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTRUCTIONS, source_finish_tool
+from .native_submit import NativeSubmitMixin, REQUEST_SUBMIT_TOOL
 from ..transport.browser import TransportError
 from .product import page_observation_failure
 from ..answer.answering import render_structured_query_answer
@@ -118,7 +119,7 @@ class _ProcedurePage:
         return self.execute("handoff_form", {"fields": fields, "submit": submit})
 
 
-class ModelDrivenTurnExecutor(GoalTurnExecutor):
+class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
     """The common decision strategy; adapters retain their application procedures."""
 
     decision_strategy = "model-driven"
@@ -129,6 +130,11 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
     def _finish_feedback(self, s, turn, args):
         """Return a user-safe reason to send a malformed delivery back to the model."""
         return ""
+
+    def _closing(self, s, turn, args):
+        """The adapter's last word on an accepted finish: program work the turn still owes
+        (a handoff it must leave in place) and what the reply must say about it."""
+        return args
 
     def _delivery_correction(self, s, turn, args, feedback, *, terminal=False):
         """One correction per check/item position; then close with an honest result."""
@@ -154,10 +160,16 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             if i < len(items):
                 items[i]["status"] = "undelivered"
         labels = "、".join(f"第 {i + 1} 项" for i in indices) or "本轮交付"
-        answer = f"本轮未完成：{labels}尚未核实。\n{issue.message}"
+        # The reply goes out as the model wrote it. What failed the check is marked on its
+        # item and said once, after it; the model's words are never swapped for ours.
+        original = str(args.get("answer") or "").strip()
+        note = f"（程序核对：{labels}没有通过交付检查，标为未交付。{issue.message}）"
+        limit = getattr(getattr(self, "config", None), "max_user_answer_chars", 4000)
+        answer = (original[:max(0, limit - len(note) - 2)] + "\n\n" + note) if original else note[:limit]
         turn.pop("pending_delivery", None)
         s.ledger.append("model_delivery_rejected", reason=issue.code,
-            item_indices=list(indices), attempt=int(returned_before), returned=False, terminal=True)
+            item_indices=list(indices), attempt=int(returned_before), returned=False, terminal=True,
+            answer_kept=bool(original))
         return {**{key:value for key,value in args.items() if key != "read_answer"},
                 "status":"cannot", "answer":answer, "items":items}
 
@@ -425,6 +437,8 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 schema = definition.schema
                 schema["function"]["description"] = _OPERATION_NOTE + definition.description
                 tools.append(schema)
+        if self._submit_offered(turn):
+            tools.append(REQUEST_SUBMIT_TOOL)
         return [*tools, *(SOURCE_TOOLS if turn.get("sources") is not None else ()), self._finish_tool(turn)]
 
     def _finish_tool(self, turn):
@@ -472,6 +486,9 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
         return None
 
     def _tool(self, s, name, args, turn):
+        if name == "request_submit" and self._submit_offered(turn):
+            self._note(s, stage="tool", tool="request_submit", mutation=True)
+            return self._request_submit(s, args, turn)
         writes = turn.get("writes")
         if writes is not None:
             if name == "load_skill":
@@ -570,6 +587,12 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
             return receipt
         if s.terminal_reason:
             return finish(code=s.terminal_reason)
+        kept = self._kept_handoff(s, action, args)
+        if kept is not None:
+            # The handoff is on the page and the page has not changed: asking for it again
+            # touches nothing, so a retry or a re-check cannot take it down.
+            s.ledger.append("handoff_kept", tool=action, command_id=kept.command_id)
+            return finish(kept, state="completed", observations=(s.obs,))
         admitted = None
         if action in ADMITTED_ACTIONS:
             target = self._action_target(s.obs, args)
@@ -706,7 +729,26 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                     command_id=receipt.command_id, target=target)
                 elif isinstance(admission, DraftStepAdmission):
                     s.terminal_reason, s.detail = "agent_refused", "acknowledged draft step could not be verified"
+        self._hold_handoff(s, action, args, receipt)
         return finish(receipt, state=state, code=code, observations=observations)
+
+    def _hold_handoff(self, s, action, args, receipt):
+        """Remember a handoff the page now shows, and drop the memory when anything changes it."""
+        if receipt is not None and receipt.ok and action in {"handoff_form", "highlight"} and s.obs is not None:
+            self._held_handoff = {"run": s.run_id, "fingerprint": self._page_fingerprint(s.obs),
+                                  "action": action, "args": json.dumps(args, sort_keys=True, default=str),
+                                  "receipt": receipt}
+        elif action not in {"observe", "wait_for", "form_model"}:
+            self._held_handoff = None
+
+    def _kept_handoff(self, s, action, args):
+        held = getattr(self, "_held_handoff", None)
+        if (held is None or action not in {"handoff_form", "highlight"} or held["run"] != s.run_id
+                or s.obs is None or held["fingerprint"] != self._page_fingerprint(s.obs)):
+            return None
+        if action == held["action"] and json.dumps(args, sort_keys=True, default=str) == held["args"]:
+            return held["receipt"]
+        return None
 
     def _invoke_tool(self, s, name, args, turn):
         schema = next((item["function"]["parameters"] for item in self._tools(turn)
@@ -1065,7 +1107,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                                        "statement 不得包含代码、路径或哈希。请核对工具结果。"
                                        " error_code=source_conclusion_refused"})
                         continue
-                    finish = args
+                    finish = self._closing(s, turn, args)
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content": "已收到。"})
                     continue
                 if turn.get("tool_calls", 0) >= self.model_steps:
@@ -1161,7 +1203,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                 if result.kind == "page":
                     # Dispatch is a transport fact, including earlier steps of a
                     # partially completed procedure; application prose cannot reset it.
-                    dispatched = any(r.action not in {"observe", "wait_for"}
+                    dispatched = any(r.action not in {"observe", "wait_for", "form_model"}
                                      for r in self._tool_receipts)
                     result = replace(result, dispatch="acknowledged" if dispatched else
                                      "uncertain" if self._uncertain_page_dispatch else "not_dispatched")
@@ -1224,7 +1266,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                     s.terminal_reason = s.terminal_reason or result.terminal_reason
                 receipts = tuple(self._tool_receipts)
                 has_observation = any(r.observation is not None for r in receipts)
-                has_page_action = any(r.action not in {"observe", "wait_for"} for r in receipts)
+                has_page_action = any(r.action not in {"observe", "wait_for", "form_model"} for r in receipts)
                 if has_page_action:
                     turn.pop("handoff", None)
                 handoff = next((r for r in receipts if r.action == "handoff_form"
@@ -1290,7 +1332,7 @@ class ModelDrivenTurnExecutor(GoalTurnExecutor):
                             text += " 这一步带的 answer 未交付：" + message
                         else:
                             turn.pop("pending_delivery", None)
-                            finish = proposed
+                            finish = self._closing(s, turn, proposed)
                     elif hidden:
                         # It was written before the page was seen: the page shows another tab.
                         unseen = unseen or name

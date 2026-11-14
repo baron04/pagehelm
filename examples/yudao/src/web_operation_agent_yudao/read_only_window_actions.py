@@ -110,6 +110,14 @@ class ReadOnlyWindowPageActions(NativeReadActions):
                 inert = re.fullmatch(r"javascript:\s*(?:void\s*\(\s*0\s*\)|;?)\s*;?", href, re.I)
                 if href and not inert:
                     self._same_origin(urljoin(before.url, href))
+        actor = self.guard_proxy.resolve_actor(self.data._client._login(), self.data._client.tenant)
+        if intent.action == "goto" or (intent.action == "click" and (
+                element.attrs.get("href") or element.attrs.get("navigation_kind"))):
+            # The page this opens loads itself; its own GETs pass, even scan-listed ones.
+            self.guard_proxy.guard.arm_page_load(actor, 10.0)
+        else:
+            # Any other action is not that page's loading: nothing earlier carries over to it.
+            self.guard_proxy.guard.clear_page_load(actor)
         postcondition = json.dumps([self.data._client.read_generation,
             hashlib.sha256(target.encode()).hexdigest() if target else ""], separators=(",", ":"))
         return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY,
