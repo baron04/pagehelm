@@ -34,7 +34,7 @@
 
 每套 Compose 包含助手、业务应用、数据库和 Redis。源码从 `local` 所在目录挂载，普通源码更新只重启所选助手。准备与诊断见[本地指南](docs/guides/local-yudao.md)。
 
-### 线上演示站
+### 线上环境（演示站）
 
 服务器配置完成后用 `./deploy` 部署；准备与恢复见[线上部署指南](docs/guides/deploy-yudao.md)。
 

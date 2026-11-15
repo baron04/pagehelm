@@ -34,7 +34,7 @@ Applications provide their own trusted identity, permissions and verification. B
 
 Each Compose project contains its assistant, application, database and Redis. Source is mounted from the directory containing `local`; ordinary source updates restart only the selected assistant. Setup and diagnostics: [local guide](docs/guides/local-yudao.md).
 
-### Online demo
+### Online environment (demo)
 
 Deploy to a configured server with `./deploy`; setup and recovery: [online deployment guide](docs/guides/deploy-yudao.md).
 
