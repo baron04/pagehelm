@@ -3144,7 +3144,8 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                     + "\n\n未标出提交按钮：表单打开时页面自动修改了字段且无法还原，"
                     + (f"直接保存会把 {effects}；" if effects else "直接保存会带入未核对的变化；")
                     + "请核对后自己提交。").strip()}
-        pressed = self._await_handoff_press(s, turn) if args.get("status") == "done" else ""
+        pressed = (self._await_handoff_press(s, turn)
+                   if args.get("status") in ("done", "cannot") else "")
         if pressed:
             args = {**args, "answer": (str(args.get("answer") or "").rstrip() + "\n\n" + pressed).strip()}
         return args
