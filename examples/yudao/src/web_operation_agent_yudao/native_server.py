@@ -88,6 +88,14 @@ class BootstrapRefused(Exception):
         self.status, self.code = status, code
 
 
+def native_write_options(environment) -> dict:
+    """Normal integration opt-in, shared by the local host and deployed CLI."""
+    value = environment.get("WOA_NATIVE_WRITES", "false").strip().lower()
+    if value not in {"true", "false"}:
+        raise ValueError("WOA_NATIVE_WRITES must be true or false")
+    return {"native_writes": value == "true"}
+
+
 @dataclass(frozen=True)
 class YudaoHostConfig:
     api_base: str
@@ -114,7 +122,7 @@ class YudaoHostConfig:
     model_env: dict = field(default_factory=dict)
     native_read_policy: Path | None = None
     native_page_policy: Path | None = None
-    native_page_admission: str = "reviewed"
+    native_page_admission: str = "read-only-window"
     #: Explicit deployment scope; it overrides generated menu and exact handler grants.
     native_page_disabled_handlers: frozenset[str] = frozenset()
     native_edit_prefill: bool = True
@@ -125,7 +133,7 @@ class YudaoHostConfig:
     native_guard_port: int = 48093
     #: Internal address of the same routing front, when its public URL is host-only.
     native_ingress_base: str | None = None
-    #: Only reviewed server-side typed mutations; browser submission stays disabled.
+    #: Integration opt-in: typed writes and approved native submission; ordinary submit stays disabled.
     native_writes: bool = False
     #: Offer existing preparation tools while refusing every mutation dispatch.
     native_write_preparation: bool = False
@@ -169,6 +177,9 @@ class YudaoHostConfig:
             raise ValueError("location bindings do not enable business writes")
         if type(self.native_submit) is not bool:
             raise ValueError("native_submit must be explicit")
+        if self.native_writes and self.native_page_admission == "read-only-window":
+            object.__setattr__(self, "native_submit", True)
+            object.__setattr__(self, "native_edit_prefill", True)
         if self.native_submit and not (self.native_writes and self.native_page_admission == "read-only-window"
                                        and self.native_read_policy is not None):
             raise ValueError("native submit needs native writes under the read-only-window profile and its guard")
@@ -386,7 +397,8 @@ class YudaoHost:
         # they are, never their name.
         person = hashlib.sha256("\0".join(key).encode()).hexdigest()[:24]
         meter = SpendMeter(ledger=self.ledger, batch_id=f"yudao-native-{run_dir.name}",
-                           allowance=self.allowance, allowance_key=person)
+                           allowance=self.allowance, allowance_key=person,
+                           run_input_token_abort=16_000_000)
         chat = ChatModel(meter, env=dict(self.config.model_env), model=self.config.model,
                          max_completion_tokens=8192, timeout=self.config.turn_timeout_s,
                          egress_policy=ProviderEgressPolicy(
@@ -442,18 +454,17 @@ class YudaoHost:
             if (self.config.native_writes or self.config.native_write_preparation) and self.live_forms:
                 from .mutation_prefill import YudaoMutationPrefill
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
-            native_submit = None
-            if self.config.native_submit:
-                from .native_submit import YudaoSubmitPort
-                native_submit = YudaoSubmitPort(app.client, self.native_proxy, self._load_api_docs)
+            from .native_submit import YudaoSubmitPort
+            submit_port = YudaoSubmitPort(app.client, self.native_proxy, self._load_api_docs)
+            native_submit = submit_port if self.config.native_submit else None
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
                 max_user_answer_chars=panel_limits()["result_max_chars"])
             executor = TableReadTurnExecutor(
-                **common, config=replace(turn_config, step_budget=MODEL_STEPS + 4),
+                **common, config=replace(turn_config, step_budget=MODEL_STEPS),
                 goal_port=model_goal, draft_steps=draft_steps,
                 mutation_prefill=mutation_prefill,
                 location_bindings=self.config.location_bindings,
-                native_submit=native_submit,
+                native_submit=native_submit, page_reads=submit_port.recent_reads,
                 disabled_page_actions=frozenset({"submit", "back", "apply_facet"}),
                 knowledge=ActorKnowledge(app.client, self._load_api_docs, self._fenced,
                                          time_zone=app.goal_data.time_zone(),
@@ -585,7 +596,7 @@ def main(argv=None) -> int:
     ap.add_argument("--native-read-policy", type=Path)
     ap.add_argument("--native-page-policy", type=Path,
                     help="release-reviewed model page handlers; required for slim")
-    ap.add_argument("--native-page-admission", choices=("reviewed", "method-fence", "read-only-window"), default="reviewed",
+    ap.add_argument("--native-page-admission", choices=("reviewed", "method-fence", "read-only-window"), default="read-only-window",
                     help="allow unregistered ordinary page controls under the method fence; "
                          "keeps target binding and refuses write controls")
     ap.add_argument("--native-page-disable", action="append", default=[],
@@ -605,9 +616,9 @@ def main(argv=None) -> int:
     ap.add_argument("--native-submit", action="store_true",
                     help="after a fresh approval press the native form or row control once under a permit that "
                          "releases only the card's requests; requires --native-writes and read-only-window")
-    ap.add_argument("--native-writes", action="store_true",
-                    help="enable reviewed typed Skill writes with fresh approval and actor-bound readback; "
-                         "does not enable browser submission")
+    ap.add_argument("--native-writes", action="store_true", default=native_write_options(os.environ)["native_writes"],
+                    help="enable reviewed typed Skill writes and approved native submission with actor-bound readback; "
+                         "ordinary browser submission remains disabled")
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-sessions", type=int, default=YudaoHostConfig.max_sessions)
     ap.add_argument("--daily-allowance-cny", type=float,

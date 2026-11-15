@@ -30,7 +30,8 @@ class NativeHostTests(unittest.TestCase):
         self.addCleanup(lambda: [h.close() for h in self.hosts])
         self.config = YudaoHostConfig(
             api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
-            state_dir=Path(self.tmp.name), gateway_host="127.0.0.1", gateway_port=0, warm_index=False)
+            state_dir=Path(self.tmp.name), gateway_host="127.0.0.1", gateway_port=0, warm_index=False,
+            native_page_admission="reviewed")
         self.config = replace(self._fence(), native_page_policy=self._page_policy())
         self.addCleanup(patch.stopall)
         patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy").start()
@@ -251,6 +252,29 @@ class NativeHostTests(unittest.TestCase):
         self.assertTrue({"goto","fill_fields","filter_page","open_record"}<=names)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_normal_host_budget_and_write_opt_in_reach_the_real_executor(self):
+        from web_operation_agent_yudao.page_guard import NativePageGuard
+        self.config = replace(self.config, native_page_admission="read-only-window", native_writes=True,
+                              native_edit_prefill=False)
+        proxy = RealGuardProxy(upstream="http://127.0.0.1:9", origin="https://fixture.test",
+            guard=NativePageGuard(frozenset(), writing_gets=frozenset()), resolve_actor=lambda *_: "a" * 64).start()
+        self.addCleanup(proxy.close)
+        proxy.ingress_base = proxy.url
+        proxy.verify_ingress()
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy", return_value=proxy):
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "normal-host-defaults")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertEqual(executor.model_steps, 33)
+        self.assertEqual(executor.config.step_budget, 33)
+        self.assertEqual(executor.config.wall_budget_s, 120)
+        self.assertEqual(self.chat.call_args.args[0].run_input_token_abort, 16_000_000)
+        self.assertTrue(host.config.native_submit)
+        self.assertTrue(host.config.native_edit_prefill)
+        self.assertIsNotNone(executor.native_submit)
+        self.assertTrue(callable(executor.procedures.page_reads))
+        self.chat.return_value.complete.assert_not_called()
+
     def test_native_read_turn_uses_only_table_tools_and_item_delivery(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
@@ -323,8 +347,9 @@ class NativeHostTests(unittest.TestCase):
         self.assertNotIn("filter_page", names)
         self.assertIsNotNone(executor.profile.draft_steps)
         self.assertIsNotNone(executor.profile.mutation_prefill)
-        with self.assertRaisesRegex(ValueError, "read-only-window does not permit"):
-            replace(self.config, native_write_preparation=False, native_writes=True)
+        enabled = replace(self.config, native_write_preparation=False, native_writes=True)
+        self.assertTrue(enabled.native_submit)
+        self.assertTrue(enabled.native_edit_prefill)
         self.chat.return_value.complete.assert_not_called()
 
     def test_preparation_mode_offers_existing_tools_but_never_enables_native_writes(self):

@@ -191,9 +191,30 @@ def warm_documents(host, front):
         pass
 
 
+def host_config(settings: Settings, env: dict) -> native.YudaoHostConfig:
+    """Build the normal local integration; env carries model settings and write opt-in.
+
+    Addresses, ports and state come from Settings; page admission and approved native
+    submission are product defaults, shared with deployment, not caller overrides.
+    """
+    return native.YudaoHostConfig(
+        api_base=settings.upstream, public_origin=settings.origin,
+        public_agent_url=settings.origin + "/woa-agent", state_dir=settings.state,
+        gateway_host="127.0.0.1", gateway_port=settings.ports[1],
+        bootstrap_host="127.0.0.1", bootstrap_port=settings.ports[2],
+        native_guard_port=settings.ports[3], native_ingress_base=f"http://127.0.0.1:{settings.ports[0]}",
+        ui_source=cfg.CACHE / "ui",
+        source_release=cfg.RELEASE, native_read_policy=cfg.POLICIES / "fence.json",
+        native_page_policy=cfg.POLICIES / "pages.json",
+        native_money_policy=cfg.POLICIES / "verified-money.json",
+        native_filter_semantics=cfg.POLICIES / "filters.json", **native.native_write_options(env),
+        native_edit_prefill=False,
+        model=env["AGENT_OPENAI_MODEL"], model_env=env, daily_allowance_cny=20.0)
+
+
 def main():
     environment = int(os.environ["WOA_LOCAL_ENVIRONMENT"])
-    env = {key: os.environ[key] for key in ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL", "AGENT_PROVIDER")
+    env = {key: os.environ[key] for key in ("AGENT_OPENAI_BASE_URL", "AGENT_OPENAI_API_KEY", "AGENT_OPENAI_MODEL", "AGENT_PROVIDER", "WOA_NATIVE_WRITES")
            if os.environ.get(key)}
     settings = Settings(environment, os.environ["WOA_LOCAL_CHECKOUT_ID"], os.environ["WOA_LOCAL_PUBLIC_ORIGIN"],
                         state=Path("/var/lib/woa-yudao"), listen_host="0.0.0.0")
@@ -205,19 +226,7 @@ def main():
     threading.Thread(target=front.serve_forever, daemon=True).start()
     host = boot = None
     try:
-        host = native.YudaoHost(native.YudaoHostConfig(
-            api_base=settings.upstream, public_origin=settings.origin,
-            public_agent_url=settings.origin + "/woa-agent", state_dir=settings.state,
-            gateway_host="127.0.0.1", gateway_port=settings.ports[1],
-            bootstrap_host="127.0.0.1", bootstrap_port=settings.ports[2],
-            native_guard_port=settings.ports[3], native_ingress_base=f"http://127.0.0.1:{settings.ports[0]}",
-            ui_source=cfg.CACHE / "ui",
-            source_release=cfg.RELEASE, native_read_policy=cfg.POLICIES / "fence.json",
-            native_page_policy=cfg.POLICIES / "pages.json",
-            native_money_policy=cfg.POLICIES / "verified-money.json",
-            native_filter_semantics=cfg.POLICIES / "filters.json", native_writes=False,
-            native_edit_prefill=False,
-            model=env["AGENT_OPENAI_MODEL"], model_env=env, daily_allowance_cny=20.0))
+        host = native.YudaoHost(host_config(settings, env))
         host.server.start()
         boot = ThreadingHTTPServer(("127.0.0.1", settings.ports[2]), native._handler(host))
         threading.Thread(target=boot.serve_forever, daemon=True).start()

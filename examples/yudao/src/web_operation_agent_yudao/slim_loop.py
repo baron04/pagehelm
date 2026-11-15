@@ -36,7 +36,7 @@ import hashlib
 import json
 import re
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qsl
 from zoneinfo import ZoneInfo
 
 from web_operation_agent.goal.data import DataRefused
@@ -58,7 +58,7 @@ from .live_forms import SUBMIT_WORDS, plain
 from .write_intent import WriteIntent, classify_write_intent
 
 #: Requests a turn may make of the model for its steps; the check at the end is extra.
-MODEL_STEPS = 24
+MODEL_STEPS = 33
 #: Bound the native batch to the existing form handoff's twenty entered fields.
 _FORM_BATCH_FIELDS = 20
 #: How long a page is left alone before it is looked at again: while something it reads is
@@ -70,7 +70,6 @@ _CURRENT_REQUEST = ContextVar("yudao_slim_current_request", default="")
 _EARLIER_REQUESTS = ContextVar("yudao_slim_earlier_requests", default=())
 _WRITE_INTENT = ContextVar("yudao_slim_write_intent", default=None)
 _MARK = re.compile(r"^\s*\*?\[(\d+)\]")
-_BUSINESS_BUTTON = re.compile(r"删除|审核|审批|确认|提交|启用|停用")
 _RUN, _HEAD, _TAIL = 60, 3, 30
 _PAGE_CHARS = 9_000
 #: What one API result may add to the conversation, and how much of earlier API results
@@ -166,6 +165,7 @@ class ActorKnowledge:
         #: read was refused or named no interface.
         self.last_read: dict | None = None
         self.last_keys: tuple[str, ...] = ()
+        self.turn_targets: dict[str, set[str]] = {}
 
     def _load(self):
         with self._loading:
@@ -499,6 +499,11 @@ class ActorKnowledge:
         try:
             data, rows, total, whole, requests = self._pages(relative, params, bool(fields))
             declared_total = total if type(total) is int and total >= 0 else None
+            observed = rows if rows is not None else [data]
+            if (whole or rows is None) and all(isinstance(row, dict) for row in observed):
+                ids = {str(row["id"]) for row in observed if row.get("id") is not None}
+                if ids:
+                    self.turn_targets.setdefault(path.rpartition("/")[0], set()).update(ids)
             if isinstance(data, list):
                 out.append(f"返回 {len(rows)} 行")
             elif rows is not None:
@@ -1120,10 +1125,10 @@ SYSTEM_RULES = """
 """
 NATIVE_SUBMIT_RULES = """
 批准后提交（本部署已开放）：
-- 用户明确要求保存、新增、修改、提交，或启停、审核、关闭某条记录时，不要只预填：用原生表单按用户给的值填好（值只用用户原话、用户选定的候选或本轮的日期/计算回执，不编），再用 request_submit(index=提交按钮序号) 请求提交；行内启停、审核、关闭等直接对该行按钮用 request_submit。
+- 用户明确要求保存、新增、修改、提交，或启停、审核、关闭某条记录时，不要只预填：用原生表单按用户给的值填好（必填信息缺失、说法含糊或有多个目标候选时先用 finish(need_input) 问清楚，不沿用旧值、不猜；值按用户原话、选定的页面候选或本轮日期/计算填写），再用 request_submit(index=提交按钮序号) 请求提交；行内启停、审核、关闭等直接对该行按钮用 request_submit。
 - 程序会读取整份表单数据做成批准卡，用户批准后由程序点击一次并回读核对；你不要自己点保存、确定、提交，也不要用 highlight 或 then_highlight 代替，更不要重复请求。
 - 用户只要预填、说“我自己提交”时，才用 fill_fields 的 then_highlight 交接。
-- request_submit 返回“没有提交”的原因（值不是用户给的、表单读不出、校验未通过等）时，按原因修正或用 finish(need_input) 问用户；程序说已执行并核对后，据实答复并 finish；批准被拒、结果不明或只部分生效时据实说明，不重试。
+- request_submit 返回“没有提交”的原因（表单读不出、校验未通过等）时，按原因修正或用 finish(need_input) 问用户；程序说已执行并核对后，据实答复并 finish；批准被拒、结果不明或只部分生效时据实说明，不重试。
 - 删除、作废、关闭等危险动作：先说明对这条记录的影响，用 finish(need_input) 请用户明确确认，确认后才请求。
 """
 SYSTEM = "".join((SYSTEM_INTRO, SYSTEM_READ, SYSTEM_PAGE, SYSTEM_FORM, SYSTEM_RULES))
@@ -1251,49 +1256,43 @@ def _fields(observation) -> dict[str, str]:
     return found
 
 
+def _record_handoff_control(element) -> bool:
+    """Native row identity or an unclassified action control needs record proof.
+
+    Query, navigation and business-form controls have their own bindings. Button
+    wording supplies no exemption for row actions that the write catalogue cannot name.
+    """
+    attrs = element.attrs
+    if attrs.get("record_id") or attrs.get("record_table"):
+        return True
+    if element.role == "switch":
+        return True
+    if attrs.get("page_control") in {"query", "pagination", "page_size"} or attrs.get("navigation_kind"):
+        return False
+    if attrs.get("form_scope"):
+        return False
+    return element.role in {"button", "link", "menuitem"} or element.tag in {"button", "a"}
+
+
 def _business_handoff_ready(observation, element, request: str, *, detail_target: bool = False,
-                            status_target: bool = False) -> bool:
-    """A list action binds one name- or business-number-filtered row in the latest GET.
+                            status_target: bool = False, list_target: bool = False) -> bool:
+    """A list action needs a separately verified, same-actor unique-row binding.
 
     The button's label cannot establish which row it belongs to when the list has
     many rows. Draft submit controls use the separate form handoff verifier.
     """
-    if element.role == "switch":
-        return status_target
-    if not _BUSINESS_BUTTON.search(element.name):
+    if not _record_handoff_control(element):
         return True
-    if element.tag != "button":
+    if element.role == "switch" and status_target:
+        return True
+    if element.role not in {"button", "link", "menuitem", "switch"} and element.tag not in {"button", "a"}:
         return False
-    if str(element.attrs.get("form_scope", "")).startswith("dialog"):
-        return True
     route = urlsplit(observation.url).path
-    same_name = [candidate for candidate in observation.elements
-                 if candidate.tag == "button" and candidate.name.strip() == element.name.strip()]
-    if len(same_name) != 1 or observation.page_route != route:
+    if observation.page_route != route or observation.render_state != "ready":
         return False
     if observation.record_route == route:
-        return detail_target and observation.render_state == "ready"
-    read, query = observation.page_read, observation.page_query
-    if not read or not query or read["page"] != 1 or read["total"] != 1 or read["rows"] != 1:
-        return False
-    if query["path"] != read["path"]:
-        return False
-    # The page's scalar query projection can be empty even after a list GET included
-    # a native name or business-number filter. Bind the visible control to that GET's field
-    # digest, and to words the person supplied; one visible row alone is insufficient.
-    names = [control for control in observation.elements
-             if control.attrs.get("page_control") == "query"
-             and control.attrs.get("query_field") in {"name", "no"}
-             and control.attrs.get("value", "").strip()]
-    if len(names) != 1:
-        return False
-    name = names[0].attrs["value"].strip()
-    digest = hashlib.sha256(json.dumps([name], ensure_ascii=False,
-                                    separators=(",", ":")).encode()).hexdigest()
-    field = names[0].attrs["query_field"]
-    mentioned = (bool(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(name) + r"(?![A-Za-z0-9_-])", request))
-                 if field == "no" else name in request)
-    return bool(name and mentioned and read["query_fields"].get(field) == digest)
+        return detail_target
+    return list_target
 
 
 _DEPTH = re.compile(r"^(\t*)\*?\[(\d+)\]")
@@ -1792,6 +1791,9 @@ class YudaoLoopProcedures:
             if (not isinstance(record, dict) or str(record.get("id")) != identifier
                     or bound.record_address(entity, identifier) != path):
                 return False
+            if identifier in getattr(self.knowledge, "turn_targets", {}).get(
+                    "/admin-api/" + spec.get_path.rpartition("/")[0], set()):
+                return True
             display = data._display(entity, record).strip()
             if not display:
                 return False
@@ -1819,6 +1821,86 @@ class YudaoLoopProcedures:
         if number not in shown:
             return None
         return next((e for e in s.obs.elements if e.ref == f"e{number}"), None)
+
+    def _list_handoff_target(self, s, element, request: str) -> bool:
+        """Bind the clicked row to the exact applied page GET and a fresh same-actor query.
+
+        Browser query digests are compared with the guard's actual request, not guessed
+        from one input's display value. A complete turn read can establish the identity;
+        it does not establish that the model understood an extreme or other condition.
+        """
+        obs, read = s.obs, s.obs.page_read
+        recent = getattr(self, "page_reads", None)
+        if (not callable(recent) or not read or read["page"] != 1 or read["total"] != 1
+                or read["rows"] != 1 or obs.render_state != "ready"
+                or obs.page_route != urlsplit(obs.url).path):
+            return False
+        matching = []
+        for path, query in recent():
+            if path != read["path"]:
+                continue
+            pairs = parse_qsl(query, keep_blank_values=True)
+            groups = {}
+            for key, value in pairs:
+                groups.setdefault(key, []).append(value)
+            if groups.get("pageNo") != ["1"] or groups.get("pageSize") != [str(read["page_size"])]:
+                continue
+            filters = {k: v for k, v in groups.items() if k not in {"pageNo", "pageSize"}}
+            hashes = {key: hashlib.sha256(json.dumps(values, ensure_ascii=False,
+                separators=(",", ":")).encode()).hexdigest() for key, values in filters.items()}
+            if hashes == read["query_fields"]:
+                matching.append((path, groups))
+        if not matching:
+            return False
+        path, groups = matching[-1]
+        params = {key: values[0] if len(values) == 1 else values for key, values in groups.items()}
+        self.knowledge._load()
+        if path in getattr(self.knowledge, "writing_gets", ()):
+            return False
+        # Spring's indexed array spelling is part of the real page request. Validate
+        # its published array shape, then replay the original spelling unchanged.
+        validation_params, indexed = {}, {}
+        for key, value in params.items():
+            match = re.fullmatch(r"(.+)\[([0-9]+)\]", key)
+            if match:
+                indexed.setdefault(match[1], {})[int(match[2])] = value
+            else:
+                validation_params[key] = value
+        for key, values in indexed.items():
+            if key in validation_params or sorted(values) != list(range(len(values))):
+                return False
+            validation_params[key] = [values[i] for i in range(len(values))]
+        try:
+            self.knowledge._validate_params(path, validation_params)
+        except (QueryParametersError, KeyError):
+            return False
+        from .bound_data_reads import BoundDataReads
+        data = self.goal_port.data
+        bound = BoundDataReads(data, s.operation, s.page.checkpoint)
+        outcome = s.page.execute("form_model", {"ref": element.ref, "kind": "row"})
+        row = getattr(getattr(outcome, "receipt", None), "form_data", None)
+        fresh = next((e for e in s.obs.elements if e.ref == element.ref), None)
+        if (outcome.state != "completed" or not isinstance(row, dict) or row.get("source") != path
+                or not str(row.get("record_id") or "") or s.obs.page_read != read
+                or element.attrs.get("record_id") not in {None, "", str(row.get("record_id"))}
+                or s.obs.page_route != obs.page_route or s.obs.render_state != "ready"
+                or fresh is None or (fresh.role, fresh.name, fresh.tag) != (element.role, element.name, element.tag)):
+            return False
+        listed = bound._invoke(data._client.get, path.removeprefix("/admin-api/"), **params)
+        if (not isinstance(listed, dict) or type(listed.get("total")) is not int or listed["total"] != 1
+                or not isinstance(listed.get("list"), list) or len(listed["list"]) != 1
+                or not isinstance(listed["list"][0], dict)
+                or str(listed["list"][0].get("id")) != str(row["record_id"])):
+            return False
+        record, identifier = listed["list"][0], str(row["record_id"])
+        prefix = path.rpartition("/")[0]
+        if identifier in getattr(self.knowledge, "turn_targets", {}).get(prefix, set()):
+            return True
+        if re.search(r"(?:编号|ID)\s*[=:：#]?\s*" + re.escape(identifier) + r"(?![0-9])", request, re.I):
+            return True
+        return any(isinstance(value := record.get(field), str) and value.strip() and (
+            bool(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(value) + r"(?![A-Za-z0-9_-])", request))
+            if field == "no" else value in request) for field in ("name", "no"))
 
     def _user_status_target(self, s, element, request: str) -> bool:
         obs = s.obs
@@ -2185,12 +2267,15 @@ class YudaoLoopProcedures:
                     if _shown(s.obs) == before else "已滚动。")
         elif name == "highlight":
             request = _CURRENT_REQUEST.get()
+            needs_target = _record_handoff_control(element)
             detail_target = (self._detail_handoff_target(s, request)
-                             if _BUSINESS_BUTTON.search(element.name)
+                             if needs_target
                              and s.obs.record_route == urlsplit(s.obs.url).path else False)
             status_target = element.role == "switch" and self._user_status_target(s, element, request)
+            list_target = (self._list_handoff_target(s, element, request)
+                           if needs_target and not detail_target and not status_target else False)
             if not _business_handoff_ready(s.obs, element, request, detail_target=detail_target,
-                                           status_target=status_target):
+                                           status_target=status_target, list_target=list_target):
                 return LoopToolResult("未标出：业务按钮须在已核对用户目标的记录详情页，或先把列表筛选到已核验的唯一一行。"
                                       "请核对目标记录和按钮归属；不能在多行列表上直接交接。",
                                       kind="page", state="refused", error_code="invalid_target")
@@ -2768,6 +2853,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
     def _run(self, state):
         from .bound_data_reads import turn_actor_reads
         token = _CURRENT_REQUEST.set(state.message.text)
+        self.knowledge.turn_targets = {}
         context = self.conversation_state.model_context() or {}
         history_token = _EARLIER_REQUESTS.set(tuple(
             str(turn["user"]) for turn in context.get("prior_turns", ())))
@@ -2842,6 +2928,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                 return LoopToolResult("用户本轮只要求预填表单；Skill 写入工具不可用。",
                                       kind="write", state="refused", error_code="draft_only")
         before = getattr(s, "obs", None)
+        receipt_start = len(getattr(self, "_tool_receipts", ()))
         if self.native_submit is not None and name in {"fill_fields", "input", "select"} and before is not None:
             # The form as it was loaded, read once before the first value goes into it.
             anchor = next((e for e in before.elements
@@ -2856,6 +2943,37 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         result = super()._invoke_tool(s, name, args, turn)
         if self.native_submit is not None and result.entered:
             self.note_entries(s, turn, result.entered, before)
+            ledger = turn.get("source_ledger")
+            observed = before
+            for receipt in self._tool_receipts[receipt_start:]:
+                target = next((e for e in getattr(observed, "elements", ())
+                               if e.ref == receipt.args_echo.get("ref")), None)
+                if (receipt.ok and receipt.action == "select" and target is not None
+                        and target.attrs.get("form_scope") and target.attrs.get("page_control") != "query"):
+                    label = _control_name(target)
+                    selected = [e for e in getattr(receipt.observation, "elements", ())
+                                if e.attrs.get("form_scope") == target.attrs.get("form_scope")
+                                and _control_name(e) == label and e.attrs.get("selected_option")]
+                    if len(selected) == 1:
+                        value = selected[0].attrs["selected_option"]
+                        ledger.entries = [replace(entry, candidate=True) if entry.field == label
+                                          and entry.value == value else entry for entry in ledger.entries]
+                observed = receipt.observation or observed
+        if result.entered and name in {"input", "select"} and getattr(self, "procedures", None) is not None:
+            from web_operation_agent.execution.draft_handoff import field_identity
+            entered = dict(result.entered)
+            target = self.procedures._element(SimpleNamespace(obs=before), args["index"])
+            if (target is not None and target.role in FORM_INPUT_CONTROLS
+                    and _business_scope(target.attrs.get("form_scope"))
+                    and target.attrs.get("page_control") != "query" and _control_name(target) in entered):
+                fill = self.procedures.form_fill
+                identity = field_identity(target)
+                if fill is None:
+                    self.procedures.form_fill = {"before": before,
+                        "expected": [(identity, entered[_control_name(target)])]}
+                elif any(key[:2] == identity[:2] for key, _ in fill["expected"]):
+                    fill["expected"] = [(key, value) for key, value in fill["expected"] if key != identity] + [
+                        (identity, entered[_control_name(target)])]
         if isinstance(intent, WriteIntent) and intent.mode == "draft":
             # Entry batches remain open. Only a final done claim needs a real
             # handoff of the same live business form, never an ordinary filter.
@@ -2889,7 +3007,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         from web_operation_agent.execution.draft_handoff import handoff_draft
         from .draft_readback import product_price_readback
         fill = getattr(getattr(self, "procedures", None), "form_fill", None)
-        if not fill or s.obs is None:
+        if not fill or s.obs is None or turn.get("submit_handoff_blocked"):
             return ""
         handoff = turn.get("handoff")
         if handoff and handoff[0] == self._page_fingerprint(s.obs):
@@ -2907,9 +3025,18 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         if len(labels) != 1:
             return ""
         context = self._procedure_context(s, "default_handoff", page_actions=True)
+        before = fill["before"]
+        restored = turn.get("restored_form_labels", ())
+        if restored:
+            from web_operation_agent.execution.draft_handoff import field_identity
+            now = {field_identity(e): e for e in s.obs.elements}
+            # These changes have already been restored and validated transactionally by
+            # the native contract. They are the new untouched values for handoff readback.
+            before = replace(before, elements=[replace(e, attrs=now[field_identity(e)].attrs)
+                if _control_name(e) in restored and field_identity(e) in now else e for e in before.elements])
         try:
-            expected = product_price_readback(context, fill["before"], fill["expected"], self.goal_port.data)
-            result = handoff_draft(context, fill["before"], expected, next(iter(labels)))
+            expected = product_price_readback(context, before, fill["expected"], self.goal_port.data)
+            result = handoff_draft(context, before, expected, next(iter(labels)))
         except Exception as exc:  # noqa: BLE001 -- the reply then says it was not done
             s.ledger.append("default_handoff_failed", error_type=type(exc).__name__)
             return ""
@@ -2924,7 +3051,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
     def _closing(self, s, turn, args):
         args = super()._closing(s, turn, args)
         if (not getattr(getattr(self, "procedures", None), "form_fill", None) or turn.get("submit_started")
-                or turn.get("written") or args.get("status") != "done"):
+                or turn.get("written") or turn.get("submit_handoff_blocked")):
             return args
         label = self._default_handoff(s, turn)
         said = str(args.get("answer") or "")
@@ -2935,8 +3062,10 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         return {**args, "answer": (said.rstrip() + "\n\n" + note).strip()}
 
     def _finish_feedback(self, s, turn, args):
+        if not turn.get("submit_started") and not turn.get("written"):
+            self._default_handoff(s, turn)
         entered = turn.get("draft_form_entries")
-        if args.get("status") == "done" and entered:
+        if args.get("status") == "done" and entered and not turn.get("submit_handoff_blocked"):
             handoff = turn.get("handoff")
             if (not handoff or handoff[0] != self._page_fingerprint(s.obs) or not turn.get("draft_handoff_form")
                     or entered != {turn.get("draft_handoff_form")}):
@@ -2967,7 +3096,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         return super()._propose(s, writes, operation, inputs, turn)
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
-                 draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, **kwargs):
+                 draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, page_reads=None, **kwargs):
         application, goal_port = kwargs["application"], kwargs["goal_port"]
         self.knowledge = knowledge
         knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
@@ -2976,6 +3105,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             from .location import LocationProcedures
             procedure_type = LocationProcedures
         self.procedures = owner = procedure_type(knowledge, goal_port, application.descriptor.origin)
+        owner.page_reads = page_reads
         review = getattr(goal_port, "review", None)
         schemas = scoped_page_tools(review) if self.program_read_delivery else _table_tool_schemas(review)
         if location_bindings:

@@ -16,6 +16,7 @@ send what the form holds, is not submitted: the person is handed the filled form
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal, InvalidOperation
 import re
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -33,7 +34,7 @@ REQUEST_SUBMIT_TOOL = {"type": "function", "function": {
         "用户要真正保存或执行时使用：先把原生表单按用户给的值填好，再用本工具请求提交；"
         "也用于表格某一行的启停、审核、关闭等行内按钮。index 是最新观察里的提交按钮（保存、确定、提交）"
         "或那一行的按钮序号。程序读取表单全部数据，把目标和每一项变化做成批准卡给用户；用户批准后由程序点击一次并回读核对。"
-        "用户只要求预填、自己提交时不要用，改用 fill_fields 的 then_highlight。读不出表单数据或不能核对时，程序会说明并改为交接。"
+        "必填信息缺失、说法含糊或目标有多个候选时，用 finish(need_input) 问清楚，不沿用旧值、不猜。用户只要求预填、自己提交时不要用，改用 fill_fields 的 then_highlight。读不出表单数据或不能核对时，程序会说明并改为交接。"
         "删除、作废、关闭等危险动作要先在对话里说明对这条记录的影响并取得用户明确确认，之后才能请求。"),
     "parameters": {"type": "object", "properties": {
         "index": {"type": "integer"}}, "required": ["index"], "additionalProperties": False}}}
@@ -90,16 +91,62 @@ def record_model(record, shape):
     if isinstance(record, dict) and isinstance(shape, dict):
         return {k: record_model(record.get(k), v) for k, v in shape.items()}
     if isinstance(record, list) and isinstance(shape, list):
-        keyed = all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *shape])
+        keyed = (all(isinstance(v, dict) and v.get("id") is not None for v in record)
+                 and all(isinstance(v, dict) for v in shape))
         if keyed:
             by_id = {str(v["id"]): v for v in record}
-            if len(by_id) != len(record) or len({str(v["id"]) for v in shape}) != len(shape):
+            shape_ids = [str(v["id"]) for v in shape if v.get("id") is not None]
+            if len(by_id) != len(record) or len(set(shape_ids)) != len(shape_ids):
                 raise ContractRefused("form_data_unreadable", "duplicate line identities")
-            paired = [(by_id.pop(str(v["id"])), v) for v in shape if str(v["id"]) in by_id]
+            paired = [(by_id.pop(str(v["id"])), v) for v in shape
+                      if v.get("id") is not None and str(v["id"]) in by_id]
             return [record_model(a, b) for a, b in paired] + list(by_id.values())
         return [record_model(value, shape[index] if index < len(shape) else value)
                 for index, value in enumerate(record)]
     return record
+
+
+def submit_conversion(record, loaded) -> bool:
+    """The two supported opening representations; never write stored units into these."""
+    if record is None or isinstance(record, str) and record == "":
+        if type(record) is type(loaded) and record == loaded:
+            return False
+        if not isinstance(loaded, bool) and isinstance(loaded, (int, float)):
+            return loaded == 0
+        if isinstance(loaded, str):
+            if loaded == "" or re.fullmatch(r"1970-01-01(?:[ T]00:00(?::00(?:\.0+)?)?(?:Z|[+]00:00)?)?", loaded):
+                return True
+            try:
+                return Decimal(loaded).is_finite() and Decimal(loaded) == 0
+            except InvalidOperation:
+                return False
+        return False
+    if isinstance(record, (int, float)) and not isinstance(record, bool) and isinstance(loaded, str):
+        try:
+            old, new = Decimal(str(record)), Decimal(loaded)
+            if old.is_finite() and new.is_finite() and old and new:
+                ratio = new / old
+                return ratio > 0 and ratio.normalize().as_tuple().digits == (1,)
+        except (InvalidOperation, ValueError):
+            pass
+    return False
+
+
+def conversion_fields(record, loaded, path=()):
+    if isinstance(record, dict) and isinstance(loaded, dict):
+        return tuple(field for key in record.keys() & loaded.keys()
+                     for field in conversion_fields(record[key], loaded[key], (*path, key)))
+    if isinstance(record, list) and isinstance(loaded, list):
+        if all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *loaded]):
+            old = {str(v["id"]): v for v in loaded}
+            if len(old) != len(loaded) or len({str(v["id"]) for v in record}) != len(record):
+                raise ContractRefused("form_data_unreadable", "duplicate line identities")
+            return tuple(field for row in record if str(row["id"]) in old
+                         for field in conversion_fields(row, old[str(row["id"])], (*path, "#" + str(row["id"]))))
+        if len(record) == len(loaded):
+            return tuple(field for index, (a, b) in enumerate(zip(record, loaded))
+                         for field in conversion_fields(a, b, (*path, index)))
+    return (path,) if path and submit_conversion(record, loaded) else ()
 
 
 def opening_values(record, loaded, current):
@@ -107,18 +154,34 @@ def opening_values(record, loaded, current):
     if isinstance(record, dict) and isinstance(loaded, dict) and isinstance(current, dict):
         return {k: opening_values(record[k], loaded[k], v) if k in record and k in loaded else v
                 for k, v in current.items()}
-    if isinstance(record, list) and isinstance(loaded, list) and isinstance(current, list) \
-            and len(record) == len(loaded) == len(current):
-        if all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *loaded, *current]):
+    if isinstance(record, list) and isinstance(loaded, list) and isinstance(current, list):
+        keyed = all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *loaded])
+        if keyed:
             old = {str(v["id"]): v for v in loaded}
             base = {str(v["id"]): v for v in record}
-            if len(old) != len(loaded) or len(base) != len(record):
-                raise ContractRefused("form_data_unreadable", "duplicate line identities")
+            ids = [str(v["id"]) for v in current if isinstance(v, dict) and v.get("id") is not None]
+            if len(old) != len(loaded) or len(base) != len(record) or len(set(ids)) != len(ids):
+                raise ContractRefused("opening_changes", "明细编号重复，无法核对页面自动变化，请自行核对提交")
+            if base.keys() != old.keys():
+                raise ContractRefused("opening_changes", "页面打开时增删了明细，无法安全还原，请自行核对提交")
+            if any(not isinstance(v, dict) for v in current) or (
+                    len(ids) != len(current) and not old.keys() <= set(ids)):
+                if not same_value(record, loaded):
+                    raise ContractRefused("opening_changes", "明细身份无法对应，不能区分页面自动变化与填写变化，请自行核对提交")
+                return current
+            # Current membership/order is the assistant's edit. Match every retained old
+            # line independently, even when rows were added or removed after opening.
             return [opening_values(base[str(v["id"])], old[str(v["id"])], v)
-                    if str(v["id"]) in base and str(v["id"]) in old else v for v in current]
-        if not same_value(record, loaded) and not same_value(loaded, current):
+                    if v.get("id") is not None and str(v["id"]) in old else v for v in current]
+        if same_value(record, loaded):
+            return current
+        if (any(isinstance(v, dict) for v in [*record, *loaded, *current])
+                or len(record) != len(loaded) or len(loaded) != len(current)
+                or not same_value(loaded, current)):
             raise ContractRefused("opening_changes", "无法区分没有编号的明细行的页面自动变化与填写变化，请自行核对提交")
-        return record if same_value(loaded, current) else current
+        return [opening_values(a, b, c) for a, b, c in zip(record, loaded, current)]
+    if submit_conversion(record, loaded):
+        return current
     return record if same_value(loaded, current) and not same_value(record, loaded) else current
 
 
@@ -156,8 +219,11 @@ class NativeSubmitMixin:
         """Record each value typed this turn with where it came from, for the value check."""
         ledger = turn.setdefault("source_ledger", SourceLedger())
         for label, value in entered:
-            # A dropdown takes no exception: what was typed into it must itself come from the
-            # person's words (the option it matched is the page's), or a receipt.
+            controls = [e for e in getattr(observation, "elements", ())
+                        if e.attrs.get("form_scope") and e.attrs.get("page_control") != "query"
+                        and str(e.attrs.get("field_label") or e.name).strip() == str(label).strip()]
+            if not controls:
+                continue  # query controls never contribute a business form value
             ledger.add(Entry(str(label), str(value), candidate=False))
 
     def note_receipt(self, turn, field: str, value: str) -> None:
@@ -229,28 +295,37 @@ class NativeSubmitMixin:
                     else self._submit_row(s, element, turn))
         except ContractRefused as exc:
             refused = self._not_sent(s, exc.code, exc.detail)
-            if exc.code != "action_unknown" or form:
+            if exc.code in {"dangerous_unconfirmed", "record_changed", "record_unreadable",
+                            "validation", "no_change", "opening_changes", "credential_field"}:
+                turn["submit_handoff_blocked"] = exc.code
                 return refused
-            # The row and danger precondition were checked before action resolution.
-            # Reuse the application's ordinary target/visibility handoff checks; an
-            # unknown write contract never grants a click or bypasses those checks.
-            handed = self._invoke_tool(s, "highlight", {"index": args["index"]}, turn)
+            return self._submit_handoff(s, element, turn, refused, form=form)
+
+    def _submit_handoff(self, s, element, turn, refused, *, form):
+        if form:
+            handoff = getattr(self, "_default_handoff", None)
+            marked = handoff(s, turn) if handoff else ""
+            handed = LoopToolResult("未能核验本次表单交接，助手未提交。", kind="page",
+                                   state="completed" if marked else "unverified", marked=marked)
+        else:
+            handed = self._invoke_tool(s, "highlight", {"index": int(element.ref[1:])}, turn)
             marked = handed.marked if handed.state == "completed" else ""
             if handed.state == "completed" and not marked:
                 handed = replace(handed, state="unverified", feedback="未能核验本次按钮交接，助手未提交。")
-            s.ledger.append("native_submit_handoff", step=s.step, code=exc.code,
-                            state=handed.state, marked=marked, handoff_error_code=handed.error_code,
-                            dispatched=False, side_effect_possible=False)
-            note = (f"「{marked}」已标出；助手尚未提交，请核对后自己点击。" if marked else handed.feedback)
-            return replace(handed, feedback=refused.feedback + "\n" + note,
-                           error_code=exc.code, marked=marked)
+        s.ledger.append("native_submit_handoff", step=s.step, code=refused.error_code,
+                        state=handed.state, marked=marked, handoff_error_code=handed.error_code,
+                        dispatched=False, side_effect_possible=False)
+        note = (f"「{marked}」已标出；助手尚未提交，请核对后自己点击。" if marked else handed.feedback)
+        return replace(handed, feedback=refused.feedback + "\n" + note,
+                       error_code=refused.error_code, marked=marked)
 
     def _not_sent(self, s, code, detail="") -> LoopToolResult:
         s.ledger.append("native_submit_not_sent", step=s.step, code=code, detail=detail[:300],
                         dispatched=False, side_effect_possible=False)
         names = dict(zip(("button", "target"), detail.split("\x1f"))) if code == "dangerous_unconfirmed" else {}
-        text = MESSAGES.get(code, "没有提交：" + (detail or code)).format(
-            detail=detail, **{"button": "", "target": "", **names})
+        template = MESSAGES.get(code)
+        text = (template.format(detail=detail, **{"button": "", "target": "", **names})
+                if template is not None else "没有提交：" + (detail or code))
         retry = code in {"value_not_from_user", "dangerous_unconfirmed", "validation", "no_change"}
         return LoopToolResult(text, kind="write", state="needs_input" if retry else "refused",
                               error_code=code)
@@ -272,12 +347,9 @@ class NativeSubmitMixin:
         ledger = turn.get("source_ledger") or SourceLedger()
         words = self._said(s.message.text)
         verdicts = check_entries(ledger, words)
-        invented = [v.entry.field for v in verdicts if not v.ok]
         s.ledger.append("native_submit_value_sources", step=s.step,
                         checks=[{"field": v.entry.field, "ok": v.ok, "source": v.source,
-                                 "reason": v.reason} for v in verdicts])
-        if invented:
-            raise ContractRefused("value_not_from_user", "、".join(invented))
+                                 "reason": v.reason, **({"value": v.entry.value} if not v.ok else {})} for v in verdicts])
         requested = self._requested_fields(current, ledger)
         reads = port.recent_reads()
         prefixes = port.prefixes(reads, mode=current.mode, record_id=current.record_id, source=raw.get("source", ""))
@@ -292,8 +364,14 @@ class NativeSubmitMixin:
             earlier = turn.get("form_record_baselines", {}).get(key)
             if earlier is not None and not same_value(strip_volatile(earlier), strip_volatile(baseline)):
                 raise ContractRefused("record_changed", "填写期间目标记录被别人修改，请重新核对")
-            comparison = record_model(baseline, current.model)
-            proposed = opening_values(strip_volatile(comparison), strip_volatile(loaded.model), current.model)
+            try:
+                comparison = record_model(baseline, current.model)
+                conversions = conversion_fields(strip_volatile(comparison), strip_volatile(loaded.model))
+                proposed = opening_values(strip_volatile(comparison), strip_volatile(loaded.model), current.model)
+            except ContractRefused as exc:
+                # An unreadable line identity prevents proving that a handoff would not
+                # carry an opening-only change. It is a hard stop, never a generic handoff.
+                raise ContractRefused("opening_changes", exc.detail or "无法核对页面打开时的明细变化") from exc
             restored = tuple(diff_models(current.model, proposed))
             if restored:
                 values = {c.field: proposed[c.field] for c in restored}
@@ -305,7 +383,9 @@ class NativeSubmitMixin:
                 current = FormData.from_json(raw)
                 if raw.get("invalid") or raw.get("withheld") or not same_value(current.model, proposed):
                     raise ContractRefused("opening_changes", "页面打开时改了字段，还原未通过或页面又改回；保存会改变：" + "、".join(sorted(values)))
-        raw = self._read(s, element, "validate")
+                turn["restored_form_labels"] = frozenset(current.label(c.field) for c in restored)
+        if not restored:
+            raw = self._read(s, element, "validate")
         final = FormData.from_json(raw)
         if final.mode != current.mode or final.record_id != current.record_id or raw.get("withheld"):
             raise ContractRefused("form_data_unreadable", "校验期间表单目标发生变化")
@@ -314,10 +394,14 @@ class NativeSubmitMixin:
         if any(not same_value(final.model.get(c.field), current.model.get(c.field)) for c in restored):
             raise ContractRefused("opening_changes", "页面在还原后又自动改值，请自行核对提交")
         current = final
+        if baseline is not None and conversions:
+            raise ContractRefused("pre_submit_conversion", "表单使用提交前转换，不能把原始记录值写回表单；已保留表单供你核对提交")
         comparison = record_model(baseline, current.model) if baseline is not None else None
         card = build_card(loaded=loaded, form=current, page=self._page_name(s), button=element.name.strip(),
                           mode=current.mode, record_id=current.record_id, requested=requested,
                           record=comparison, restored=restored)
+        card = replace(card, value_sources=tuple((v.entry.field, v.entry.value, v.source)
+                                                for v in verdicts))
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
                                        kind="form", check=raw.get("check", ""), loaded=loaded)
 
@@ -448,6 +532,7 @@ class NativeSubmitMixin:
         s.ledger.append("native_submit_not_sent", step=s.step, code=code, detail=detail,
                         dispatched=False, side_effect_possible=False)
         s.terminal_reason, s.detail = "business_mutation_refused", code
+        turn["submit_handoff_blocked"] = code
         turn["final"] = f"{detail}，这项修改没有执行。请重新发起。"
         return LoopToolResult(turn["final"], kind="write", state="refused", terminal_reason=s.terminal_reason)
 
@@ -544,6 +629,17 @@ class NativeSubmitMixin:
                 text += f"。另有 {permit.duplicates} 次重复请求被拦下，没有重复执行"
             turn["final"] = text
             return LoopToolResult(text, kind="write", state="completed", dispatch="acknowledged")
+        if state == "not_executed" and blocked and all(r.decision in {
+                "body_differs_from_form", "request_not_object", "request_without_card_change",
+                "change_not_on_card", "interface_not_for_target", "action_not_on_card",
+                "action_body_not_on_card", "query_not_on_card", "target_mismatch"} for r in blocked):
+            targets = [e for e in getattr(s.obs, "elements", ()) if e.name.strip() == card.button]
+            anchor = self._anchor(s) if card.mode != "action" else targets[0] if len(targets) == 1 else None
+            if anchor is not None:
+                refused = self._not_sent(s, "request_contract", "应用请求与批准卡不符，写请求已拦下")
+                result = self._submit_handoff(s, anchor, turn, refused, form=card.mode != "action")
+                turn["final"] = result.feedback
+                return result
         if state == "not_executed":
             s.terminal_reason, s.detail = "business_mutation_refused", "no request was released"
             why = (extra or "点击没有发出符合批准卡的请求，页面上的应用校验可能没有通过，").rstrip("，。")

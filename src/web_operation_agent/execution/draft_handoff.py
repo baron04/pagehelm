@@ -105,8 +105,31 @@ def handoff_draft(context, before, expected, submit_label):
     scope, instance = next(iter(scopes))
     old = [e for e in initial if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)]
     now = [e for e in current if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)]
-    old_map, now_map = {field_identity(e): e for e in old}, {field_identity(e): e for e in now}
-    if (len(old_map) != len(old) or len(now_map) != len(now)
+    def comparison_map(fields):
+        # DOM ids distinguish only untouched anonymous controls for before/after
+        # comparison. They never become a field binding or enter the Runtime command.
+        ids = {}
+        for element in fields:
+            identifier = element.attrs.get("id")
+            if isinstance(identifier, str) and identifier.strip():
+                group = (element.role, element.tag, identifier)
+                ids[group] = ids.get(group, 0) + 1
+        mapped = {}
+        for element in fields:
+            key = field_identity(element)
+            if not any(key[3:]):
+                identifier = element.attrs.get("id")
+                if (key in wanted or not isinstance(identifier, str) or not identifier.strip()
+                        or ids.get((element.role, element.tag, identifier)) != 1):
+                    return None
+                key = (*key, "untouched_dom_id", element.tag, identifier)
+            if key in mapped:
+                return None
+            mapped[key] = element
+        return mapped
+
+    old_map, now_map = comparison_map(old), comparison_map(now)
+    if (old_map is None or now_map is None
             or old_map.keys() != now_map.keys() or not wanted.keys() <= now_map.keys()
             or any(not value_matches(now_map[key], value) for key, value in wanted.items())
             or any(field_value(now_map[key]) != field_value(element)
@@ -170,9 +193,10 @@ def handoff_draft(context, before, expected, submit_label):
     if outcome.state != "completed" or outcome.receipt is None:
         return LoopToolResult("表单交接未完成，请核对当前观察。", kind="page", state=outcome.state,
                               dispatch=outcome.dispatch, error_code=outcome.error_code)
-    final = {field_identity(e): e for e in draft_fields(context.obs)
-             if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)}
-    if ((not scrolled and final.keys() != now_map.keys())
+    final = comparison_map([e for e in draft_fields(context.obs)
+             if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)])
+    if (final is None or {key for key in final if len(key) > 6} != {key for key in now_map if len(key) > 6}
+            or (not scrolled and final.keys() != now_map.keys())
             or any(key in final and not value_matches(final[key], value) for key, value in wanted.items())
             or any(key in final and field_value(final[key]) != field_value(e)
                    for key, e in old_map.items() if key not in wanted)):

@@ -1,10 +1,12 @@
 import {afterAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createHash} from 'node:crypto'
+import {execFileSync} from 'node:child_process'
+import {resolve} from 'node:path'
 import {tryOpenAnswerInPlace} from '../src/runtime/answerNavigation'
 import {Page, type PageControllerApi} from '../src/runtime/page'
 import {createRedactor} from '../src/runtime/redaction'
 // @ts-expect-error Framework-free application module is served separately from the Runtime.
-import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage, withTreeQueryControls, withUserStatusControls, readElementFormModel, restoreElementFormModel, boundRecord, boundInput, boundClick} from '../src/integrations/yudao/page-facts.js'
+import {createPageFacts, installPageFacts, disposeInstalledPageFacts, nativeRangeDateCell, nativeRangeDateStep, readElementPageControl, nativeControlElement, openPage, withTreeQueryControls, withUserStatusControls, readElementFormModel, restoreElementFormModel, sameFormStructure, boundRecord, boundInput, boundClick} from '../src/integrations/yudao/page-facts.js'
 
 afterAll(() => disposeInstalledPageFacts())
 beforeEach(() => {
@@ -1324,6 +1326,56 @@ describe('native editor mode is current application state', () => {
     expect(await restoreElementFormModel(input, {expected: {...model}, values: {id: 9}})).toBe(false)
     validate.mockRejectedValueOnce(new Error('application validation'))
     expect(await restoreElementFormModel(input, {expected: {...model}, values: {accountId: 2}})).toBe(false)
+    expect(model.accountId).toBe(3)
+  })
+  it('restores sorted ChannelServer commands and rolls back the complete before-image on failure', async () => {
+    const state = mountedPage('/synthetic/fees/editor', 'SyntheticFees')
+    const form = document.createElement('form'); form.className = 'el-form'
+    const input = document.createElement('input'); form.append(input); state.element.append(form)
+    form.getBoundingClientRect = () => ({width: 500, height: 300} as DOMRect)
+    const model = {z: {two: 2, one: 1}, id: 42, accountId: 8, lines: [2, 1]}
+    const validate = vi.fn(async () => true)
+    const native = {...state.instance, type: {name: 'ElForm'}, props: {model},
+      subTree: {type: 'form', el: form}, vnode: {ctx: state.instance}, exposed: {validate}}
+    state.instance.subTree.children = [{component: native}] as unknown as NativeVNode[]
+    const wire = (expected: unknown, values = {accountId: 3}) => JSON.parse(execFileSync(
+      resolve(process.cwd(), '../.venv/bin/python'), ['-m', 'web_operation_agent.tests.transport.submit_wire'],
+      {cwd: resolve(process.cwd(), '..'), input: JSON.stringify({kind: 'restore', ref: 'e1', expected, values}),
+        env: {...process.env, PYTHONPATH: 'src:examples/yudao/src'}, encoding: 'utf8'}))
+    const request = wire(model)
+    expect(Object.keys(request.expected)).not.toEqual(Object.keys(model))
+    expect(await restoreElementFormModel(input, request)).toBe(true)
+    expect(model.accountId).toBe(3)
+    for (const expected of [{...model, accountId: '3'}, {...model, lines: [1, 2]},
+      {id: 42, accountId: 3, lines: [2, 1]}, {...model, extra: null}]) {
+      expect(await restoreElementFormModel(input, wire(expected))).toBe(false)
+    }
+    const before = structuredClone(model)
+    validate.mockImplementationOnce(async () => { model.z.one = 99; throw new Error('invalid') })
+    expect(await restoreElementFormModel(input, wire(model, {accountId: 7}))).toBe(false)
+    expect(model).toEqual(before)
+    validate.mockImplementationOnce(async () => { model.accountId = 12; return true })
+    expect(await restoreElementFormModel(input, wire(model, {accountId: 7}))).toBe(false)
+    expect(model).toEqual(before)
+    expect(sameFormStructure({a: null}, {})).toBe(false)
+  })
+  it('recognizes the real query form despite more than 8192 unrelated option VNodes', () => {
+    const state = mountedPage('/synthetic/inventory', 'SyntheticInventory')
+    state.element.innerHTML = '<form class="el-form"><div class="el-form-item"><input></div></form><aside></aside>'
+    const form = state.element.querySelector('form')!, itemRoot = form.firstElementChild!
+    const input = form.querySelector('input')!, aside = state.element.querySelector('aside')!
+    const item = {...state.instance, type: {name: 'ElFormItem'}, props: {prop: 'reference'},
+      subTree: {type: 'div', el: itemRoot}}
+    const options = Array.from({length: 24000}, () => ({type: 'option', el: aside}))
+    const component = {...state.instance, type: {name: 'ElForm'},
+      props: {model: {pageNo: 1, pageSize: 10, reference: 'SYN-17'}},
+      subTree: {type: 'form', el: form, children: [{component: item}, ...options]},
+      vnode: {ctx: state.instance}, parent: state.instance}
+    state.instance.subTree.children = [{component}, {type: 'aside', el: aside, children: options}] as unknown as NativeVNode[]
+    expect(readElementPageControl(input)).toEqual({kind: 'query', field: 'reference'})
+    const second = document.createElement('form'); second.className = 'el-form'; state.element.append(second)
+    state.instance.subTree.children.push({component: {...component, subTree: {type: 'form', el: second}}} as unknown as NativeVNode)
+    expect(readElementPageControl(input)).toBeUndefined()
   })
   it('requires the mounted native form model and rendered action to agree, including teleported dialogs', () => {
     const state=mountedPage('/system/user','SystemUser')

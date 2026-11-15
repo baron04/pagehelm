@@ -48,8 +48,19 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
             handoff=lambda fields, submit: self.execute_page("handoff_form", {"fields": fields, "submit": submit}))
 
     def _dispatch(self, state, action, args, **_kwargs):
+        from web_operation_agent.tests.transport.submit_wire import SubmitWire
+        if not hasattr(self, "wire"):
+            self.wire = SubmitWire(state.obs)
+        issued = self.wire.command(action, args)
+        receipt = self._browser(state, action, issued.command.args)
+        returned = self.wire.result(issued, receipt)
+        self._tool_receipts[-1] = returned
+        return returned
+
+    def _browser(self, state, action, args):
         before = state.obs
-        elements = [replace(e, epoch=before.epoch + 1) for e in before.elements]
+        epoch = max(before.epoch, self.wire.current.page_epoch) + 1
+        elements = [replace(e, epoch=epoch) for e in before.elements]
         if action in {"fill", "select"}:
             value = {"value": args["value"], **({"selected_option": args["option_label"]} if action == "select" else {})}
             elements = [replace(e, attrs={**e.attrs, **value})
@@ -59,7 +70,7 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
                                              if key != "form_scope"}) for e in elements]
         if action == "handoff_form" and self.reindex_handoff:
             elements = [replace(e, ref=f"e{i}") for i, e in enumerate(elements, 11)]
-        state.obs = replace(before, epoch=before.epoch + 1, elements=elements)
+        state.obs = replace(before, epoch=epoch, elements=elements)
         receipt = ActionReceipt(1, f"command-{len(self.actions)}", action, args,
             action != "handoff_form" or self.handoff_ok,
             observation=state.obs, url_before=before.url, url_after=state.obs.url,

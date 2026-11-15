@@ -136,52 +136,16 @@ class BusinessHandoffTests(unittest.TestCase):
             off=replace(control,attrs={**control.attrs,"aria-checked":"false"})
             self.assertTrue(procedure._user_status_target(state,off,"启用用户编号7"))
 
-    def test_list_button_requires_a_verified_single_row_and_unique_control(self):
-        button = element(12, "button", "删除", "button")
-        target = "目标供应商"
-        name_digest = hashlib.sha256(json.dumps([target], ensure_ascii=False,
-                                               separators=(",", ":")).encode()).hexdigest()
-        read = {"path": "/admin-api/erp/supplier/page", "query_digest": "a" * 64,
-                "query_fields": {"name": name_digest}, "revision": 1,
-                "page": 1, "page_size": 10, "total": 13, "rows": 10}
-        name_box = element(13, "textbox", "名称", "input", page_control="query",
-                           query_field="name", value=target)
-        page = replace(observation(), elements=[button, name_box], page_route="/orders",
-                       page_query={"path": read["path"], "parameters": {}},
-                       page_read=read)
-        self.assertFalse(_business_handoff_ready(page, button, f"删除{target}"))
-        page = replace(page, page_read={**read, "total": 1, "rows": 1})
-        self.assertFalse(_business_handoff_ready(page, button, "删除另一家供应商"))
-        self.assertTrue(_business_handoff_ready(page, button, f"删除{target}"))
-        self.assertFalse(_business_handoff_ready(replace(page, elements=[button]),
-                                                 button, f"删除{target}"))
-        self.assertFalse(_business_handoff_ready(page, replace(button, tag="span"),
-                                                 f"删除{target}"))
-        self.assertFalse(_business_handoff_ready(
-            replace(page, page_read={**page.page_read, "query_fields": {"name": "c" * 64}}),
-            button, f"删除{target}"))
-        duplicate = replace(button, ref="e14")
-        self.assertFalse(_business_handoff_ready(replace(page, elements=[button, name_box, duplicate]),
-                                                 button, f"删除{target}"))
-
-    def test_business_number_handoff_requires_the_same_live_filter_digest_and_unique_row(self):
-        target = "PO-000017"
-        digest = hashlib.sha256(json.dumps([target], separators=(",", ":")).encode()).hexdigest()
-        button = element(12,"button","审批","button")
-        box = element(13,"textbox","单号","input",page_control="query",query_field="no",value=target)
-        read = {"path":"/admin-api/erp/purchase-order/page","query_digest":"a"*64,
-                "query_fields":{"no":digest},"revision":1,"page":1,"page_size":10,"total":1,"rows":1}
-        page = replace(observation(),elements=[button,box],page_route="/orders",
-                       page_query={"path":read["path"],"parameters":{}},page_read=read)
-        self.assertTrue(_business_handoff_ready(page,button,"审批"+target))
-        for changed in (replace(page,page_read={**read,"total":2,"rows":2}),
-                        replace(page,page_read={**read,"query_fields":{"no":"b"*64}}),
-                        replace(page,elements=[button,replace(box,attrs={**box.attrs,"query_field":"remark"})])):
-            self.assertFalse(_business_handoff_ready(changed,button,"审批"+target))
-        self.assertFalse(_business_handoff_ready(page,button,"审批PO-000018"))
-        for request in ("审批XPO-000017", "审批PO-0000170", "审批PO-000017-A", "审批PO-000017_suffix"):
-            self.assertFalse(_business_handoff_ready(page,button,request))
-        self.assertTrue(_business_handoff_ready(page,button,"审批「PO-000017」，由我提交"))
+    def test_list_button_requires_separate_same_actor_target_verification(self):
+        button = element(12, "button", "审批", "button")
+        page = replace(observation(), elements=[button], page_route="/orders", render_state="ready")
+        self.assertFalse(_business_handoff_ready(page, button, "审批最早的那张"))
+        self.assertTrue(_business_handoff_ready(page, button, "审批最早的那张", list_target=True))
+        self.assertFalse(_business_handoff_ready(replace(page, render_state="pending"), button,
+                                                "审批最早的那张", list_target=True))
+        self.assertFalse(_business_handoff_ready(page, replace(button, tag="span"), "审批最早的那张"))
+        self.assertTrue(_business_handoff_ready(page, replace(button, tag="span"),
+                                               "审批最早的那张", list_target=True))
 
     def test_record_button_requires_a_separately_verified_target(self):
         button = element(12, "button", "审核", "button")
@@ -680,6 +644,20 @@ class KnowledgeTests(unittest.TestCase):
                     self.know.call_api("orders/page", {"pageNo": 1}, fields, row_offset=offset)
         self.assertEqual(self.client.calls, [])
 
+    def test_only_complete_reads_make_current_turn_record_bindings(self):
+        class Paged(Client):
+            def get(self, path, **params):
+                if path != "leads/page":
+                    return super().get(path, **params)
+                start = (params["pageNo"] - 1) * params["pageSize"]
+                rows = [{"id": i, "name": "Synthetic"} for i in range(1, 4)]
+                return {"total": 3, "list": rows[start:start + params["pageSize"]]}
+        know = ActorKnowledge(Paged(), lambda: DOCS)
+        know.call_api("leads/page", {"pageNo": 1, "pageSize": 1})
+        self.assertEqual(know.turn_targets, {})
+        know.call_api("leads/page", {"pageNo": 1, "pageSize": 1}, ["name"])
+        self.assertEqual(know.turn_targets["/admin-api/leads"], {"1", "2", "3"})
+
     def test_the_menu_lists_the_actor_s_visible_pages_with_their_paths(self):
         found = self.know.search_menu("订单")
         self.assertIn("/sale/order  销售 > 订单", found)
@@ -929,6 +907,7 @@ class KnowledgeTests(unittest.TestCase):
         knowledge = ActorKnowledge(RepeatingClient(), lambda: DOCS)
         text = knowledge.call_api("leads/page", {"pageNo": 1, "pageSize": 100}, ["name"])
         self.assertFalse(knowledge.last_read["complete"])
+        self.assertEqual(knowledge.turn_targets, {})
         self.assertIn("没有读完", text)
         self.assertNotIn("已读完所有页", text)
 

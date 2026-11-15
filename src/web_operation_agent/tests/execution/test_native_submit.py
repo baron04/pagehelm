@@ -1,4 +1,4 @@
-"""request_submit end to end over a fake page and a fake application: no model, no browser."""
+"""Native submission over ChannelServer and synthetic page/application: no paid model."""
 from copy import deepcopy
 import json
 from types import SimpleNamespace as NS
@@ -78,8 +78,13 @@ class Executor(NativeSubmitMixin):
                     ledger=NS(append=lambda event, **facts: self.s.events.append((event, facts))))
         self.turn = {"written": [], "form_baselines": {}, "source_ledger": SourceLedger()}
         self.dispatched = []
+        from web_operation_agent.tests.transport.submit_wire import SubmitWire
+        self.wire = SubmitWire(self.s.obs)
 
     def _submit_allowed(self, turn): return True
+    def _invoke_tool(self, s, name, args, turn):
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        return LoopToolResult("目标交接未核验", kind="page", state="refused")
     def _said(self, prompt): return [*self._earlier_words, prompt]
     def _element(self, s, index): return next((e for e in s.obs.elements if e.ref == f"e{index}"), None)
 
@@ -89,6 +94,11 @@ class Executor(NativeSubmitMixin):
                 "invalid": []}
 
     def _dispatch(self, s, action, args, **kw):
+        issued = self.wire.command(action, args)
+        receipt = self._browser(s, action, issued.command.args, **kw)
+        return self.wire.result(issued, receipt)
+
+    def _browser(self, s, action, args, **kw):
         self.dispatched.append((action, args.get("kind")))
         data = None
         if action == "form_model":
@@ -98,7 +108,7 @@ class Executor(NativeSubmitMixin):
                 data = {**self.form_read(), "validation": True}
             elif args["kind"] == "restore":
                 self.form.update(args["values"])
-                data = self.form_read()
+                data = {**self.form_read(), "validation": True}
             elif args["kind"] == "row":
                 data = {"record_id": "7", "name": "张三", "mode": "action", "title": ""}
             else:
@@ -162,14 +172,15 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
         self.assertTrue(self.ex.turn["written"])
         self.assertEqual(self.ex.s.mutation_outcomes[0]["verified"], True)
 
-    def test_a_value_the_person_did_not_give_is_never_carded(self):
+    def test_a_value_without_a_source_is_carded_with_an_explicit_note(self):
         self.ex.form = {**LOADED, "mobile": "13911112222"}
         self.ex.turn["source_ledger"] = SourceLedger()
         entry(self.ex, value="13911112222")
         out = self.run_request()
-        self.assertEqual((out.state, out.error_code), ("needs_input", "value_not_from_user"))
-        self.assertEqual(self.ex.s.approvals.cards, [])
-        self.assertEqual([a for a, _ in self.ex.dispatched].count("form_submit"), 0)
+        self.assertEqual(len(self.ex.s.approvals.cards), 1)
+        details = self.ex.s.approvals.cards[0].details
+        self.assertTrue(any("没在你的话里找到这个值" in d.text for d in details))
+        self.assertEqual([a for a, _ in self.ex.dispatched].count("form_submit"), 1)
 
     def test_declined_card_sends_nothing(self):
         self.ex.s.approvals.approved = False
@@ -245,7 +256,7 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
                 "form_data_unreadable")
         self.ex._read = lambda *a, **kw: broken()
         out = self.run_request()
-        self.assertEqual((out.state, out.error_code), ("refused", "form_data_unreadable"))
+        self.assertEqual((out.state, out.error_code), ("unverified", "form_data_unreadable"))
         self.assertIn("留给你自己", out.feedback)
 
     def test_credential_field_and_failed_validation_are_not_submitted(self):
@@ -266,13 +277,13 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
 
 
 class ReviewRegressionTests(_Setup, unittest.TestCase):
-    def test_a_dropdown_value_the_person_never_named_is_not_carded(self):
+    def test_a_non_candidate_value_is_marked_even_when_the_control_looks_like_a_dropdown(self):
         self.ex.turn["source_ledger"] = SourceLedger()
-        self.ex.s.obs = observation()
         self.ex.note_entries(self.ex.s, self.ex.turn, (("手机", "13911112222"),), self.ex.s.obs)
         self.ex.s.obs.elements[0].attrs["field_label"] = "手机"
         out = self.run_request()
-        self.assertEqual(out.error_code, "value_not_from_user")
+        self.assertEqual(len(self.ex.s.approvals.cards), 1)
+        self.assertTrue(any("没在你的话里找到这个值" in d.text for d in self.ex.s.approvals.cards[0].details))
 
     def test_a_click_that_raises_is_indeterminate_not_a_clean_refusal(self):
         original = self.ex._dispatch
@@ -364,7 +375,8 @@ class OpeningChangeTests(_Setup, unittest.TestCase):
         out = self.run_request()
         self.assertEqual(out.state, "completed", out.feedback)
         kinds = [kind for action, kind in self.ex.dispatched if action == "form_model"]
-        self.assertLess(kinds.index("restore"), kinds.index("validate"))
+        self.assertIn("restore", kinds)
+        self.assertNotIn("validate", kinds)  # restore itself validates transactionally in the browser
 
     def test_private_records_are_opt_in_and_absent_from_the_normal_ledger(self):
         captured = []
@@ -395,6 +407,171 @@ class OpeningChangeTests(_Setup, unittest.TestCase):
         self.assertEqual(out.error_code, "opening_changes")
         self.assertIn("客户=9", out.feedback)
         self.assertEqual(self.ex.s.approvals.cards, [])
+
+
+class ConversionAndHandoffTests(_Setup, unittest.TestCase):
+    def opening(self, record, loaded):
+        self.ex.native_submit.record = {**LOADED, **record}
+        self.ex.form = {**LOADED, **loaded}
+        self.ex.turn["form_baselines"] = {}
+        self.ex.capture_form_baseline(self.ex.s, self.ex.turn, self.ex.s.obs.elements[0])
+        self.ex.form["mobile"] = "13900000000"
+
+    def test_unit_conversion_never_receives_stored_units_and_hands_over(self):
+        self.opening({"fee": 250, "ceiling": 1800}, {"fee": "2.50", "ceiling": "18.00"})
+        self.ex._default_handoff = lambda *_: "保存"
+        out = self.run_request()
+        self.assertEqual((out.error_code, out.marked), ("pre_submit_conversion", "保存"))
+        self.assertEqual(self.ex.form["fee"], "2.50")
+        self.assertEqual(self.ex.s.approvals.cards, [])
+        self.assertNotIn("restore", [kind for _, kind in self.ex.dispatched])
+
+    def test_null_placeholders_are_conversions_but_nonzero_defaults_are_restored(self):
+        for loaded in (0, "0.00", "1970-01-01"):
+            with self.subTest(loaded=loaded):
+                self.setUp()
+                self.opening({"fee": None}, {"fee": loaded})
+                self.assertEqual(self.run_request().error_code, "pre_submit_conversion")
+                self.assertEqual(self.ex.form["fee"], loaded)
+        for stored, opened in ((None, 13), (None, "auto"), (4, 8)):
+            with self.subTest(stored=stored, opened=opened):
+                self.setUp()
+                self.opening({"other": stored}, {"other": opened})
+                self.run_request()
+                self.assertEqual(self.ex.form["other"], stored)
+                self.assertTrue(self.ex.s.approvals.cards)
+
+    def test_empty_string_placeholders_and_reordered_line_conversions_keep_stored_values_out(self):
+        from web_operation_agent.execution.native_submit import conversion_fields, opening_values
+        for value in (0, "0.000", "1970-01-01T00:00:00.000Z"):
+            self.assertTrue(conversion_fields({"fee": ""}, {"fee": value}))
+            self.assertEqual(opening_values({"fee": ""}, {"fee": value}, {"fee": value}), {"fee": value})
+        self.assertFalse(conversion_fields({"fee": ""}, {"fee": ""}))
+        for value in (17, "auto", False):
+            self.assertFalse(conversion_fields({"fee": ""}, {"fee": value}))
+            self.assertEqual(opening_values({"fee": ""}, {"fee": value}, {"fee": value}), {"fee": ""})
+        record = {"lines": [{"id": 1, "fee": 150}, {"id": 2, "fee": 500}]}
+        loaded = {"lines": [{"id": 2, "fee": 500}, {"id": 1, "fee": "1.50"}]}
+        self.assertEqual(conversion_fields(record, loaded), (("lines", "#1", "fee"),))
+        self.assertEqual(opening_values(record, loaded, loaded), loaded)
+
+    def test_line_addition_and_deletion_still_restore_old_line_opening_changes_over_the_channel(self):
+        old = {"id": 1, "fee": 100, "accountId": 3, "qty": 1}
+        opened = {**old, "fee": "1.00", "accountId": 9}
+        removed = {"id": 3, "fee": 200, "accountId": 4, "qty": 2}
+        for addition in ({"id": 2, "fee": "7.00", "accountId": 12}, {"fee": "7.00", "accountId": 12}):
+            for delete in (False, True):
+                with self.subTest(addition=addition, delete=delete):
+                    self.setUp()
+                    self.opening({"lines": [old, removed]}, {"lines": [opened, removed]})
+                    self.ex.form["lines"] = [addition, {**opened, "qty": 5}] + ([] if delete else [removed])
+                    if delete and "id" not in addition:
+                        # Lost old identities plus an unkeyed new row cannot be paired safely.
+                        self.ex._default_handoff = lambda *_: self.fail("ambiguous rows were handed over")
+                        self.assertEqual(self.run_request().error_code, "opening_changes")
+                        continue
+                    self.ex._default_handoff = lambda *_: "保存"
+                    result = self.run_request()
+                    self.assertEqual((result.error_code, result.marked), ("pre_submit_conversion", "保存"))
+                    expected = [addition, {**opened, "accountId": 3, "qty": 5}] + ([] if delete else [removed])
+                    self.assertEqual(self.ex.form["lines"], expected)
+                    restore = [c.args for c in self.ex.wire.commands if c.args.get("kind") == "restore"]
+                    self.assertEqual(restore[0]["values"]["lines"], expected)
+                    self.assertEqual(self.ex.s.approvals.cards, [])
+                    self.assertNotIn("form_submit", [action for action, _ in self.ex.dispatched])
+
+    def test_unmatchable_opening_lines_hard_stop_instead_of_handoff(self):
+        cases = (
+            ([{"id": 1, "accountId": 3}], [{"id": 1, "accountId": 9}],
+             [{"id": 1, "accountId": 9}, {"id": 1, "accountId": 8}]),
+            ([{"accountId": 3}], [{"accountId": 9}], [{"accountId": 9}, {"accountId": 8}]),
+            ([{"id": 1, "accountId": 3}], [], []),
+        )
+        for record, loaded, current in cases:
+            with self.subTest(record=record, loaded=loaded, current=current):
+                self.setUp()
+                self.opening({"lines": record}, {"lines": loaded})
+                self.ex.form["lines"] = current
+                self.ex._default_handoff = lambda *_: self.fail("unmatched page changes were handed over")
+                result = self.run_request()
+                self.assertEqual(result.error_code, "opening_changes")
+                self.assertEqual(self.ex.turn["submit_handoff_blocked"], "opening_changes")
+                self.assertFalse(result.marked)
+                self.assertEqual(self.ex.s.approvals.cards, [])
+
+    def test_a_conversion_does_not_skip_failed_restoration_or_allow_default_handoff(self):
+        self.opening({"fee": 250, "customerId": 3}, {"fee": "2.50", "customerId": 9})
+        browser = self.ex._browser
+        def refuse(s, action, args, **kw):
+            if args.get("kind") == "restore":
+                from dataclasses import replace
+                s.obs = observation(s.obs.epoch + 1)
+                return ActionReceipt(1, "ignored", action, args, False, observation=s.obs,
+                                     url_before=s.obs.url, url_after=s.obs.url, error_code="bad_arguments")
+            return browser(s, action, args, **kw)
+        self.ex._browser = refuse
+        self.ex._default_handoff = lambda *_: self.fail("failed restoration must never mark save")
+        out = self.run_request()
+        self.assertEqual(out.error_code, "opening_changes")
+        self.assertEqual(self.ex.turn["submit_handoff_blocked"], "opening_changes")
+        self.assertEqual(self.ex.form["fee"], "2.50")
+        command = next(c for c in self.ex.wire.commands if c.args.get("kind") == "restore")
+        self.assertEqual(command.args["values"], {"customerId": 3})
+
+    def test_query_inputs_are_not_value_sources_and_relative_or_computed_values_do_not_block(self):
+        from dataclasses import replace
+        query = replace(self.ex.s.obs.elements[0], attrs={"form_scope": "query", "page_control": "query",
+                                                       "field_label": "单据号"})
+        self.ex.note_entries(self.ex.s, self.ex.turn, (("单据号", "SYN-17"),), replace(self.ex.s.obs, elements=[query]))
+        self.assertNotIn("单据号", [e.field for e in self.ex.turn["source_ledger"].entries])
+        for words, value in (("今天到账", "2026-11-15"), ("加一千五", "9500"), ("用刚才读到的值", "合成封面")):
+            with self.subTest(words=words):
+                self.setUp()
+                self.ex.s.message.text = words
+                self.ex.form["mobile"] = value
+                self.ex.turn["source_ledger"] = SourceLedger()
+                entry(self.ex, value=value)
+                self.ex.clicks = [("PUT", PREFIX + "update", self.ex.form)]
+                self.assertEqual(self.run_request().state, "completed")
+                self.assertTrue(any("没在你的话里找到这个值" in d.text for d in self.ex.s.approvals.cards[0].details))
+
+    def test_nested_restore_failure_is_literal_text_and_a_hard_stop(self):
+        self.opening({"lines": [{"id": 1, "qty": 2}]},
+                     {"lines": [{"id": 1, "qty": 2, "computedTotal": 17}]})
+        browser = self.ex._browser
+        def refuse(s, action, args, **kw):
+            if args.get("kind") == "restore":
+                s.obs = observation(s.obs.epoch + 1)
+                return ActionReceipt(1, "ignored", action, args, False, observation=s.obs,
+                                     url_before=s.obs.url, url_after=s.obs.url, error_code="bad_arguments")
+            return browser(s, action, args, **kw)
+        self.ex._browser = refuse
+        self.ex._default_handoff = lambda *_: self.fail("failed nested restoration must not mark Save")
+        result = self.run_request()
+        self.assertEqual((result.error_code, result.state), ("opening_changes", "refused"))
+        self.assertIn("'computedTotal': 17", result.feedback)
+        self.assertIn("{", result.feedback)
+        self.assertEqual(self.ex.turn["submit_handoff_blocked"], "opening_changes")
+        self.assertEqual(self.ex.s.approvals.cards, [])
+        self.assertEqual([c.args.get("kind") for c in self.ex.wire.commands], ["form", "form", "form", "restore"])
+        self.assertNotIn("form_submit", [action for action, _ in self.ex.dispatched])
+
+    def test_handoffable_refusals_share_one_path_and_hard_refusals_do_not(self):
+        from web_operation_agent.execution.submit_contract import ContractRefused
+        for code in ("form_data_unreadable", "entity_unknown", "card_too_large", "pre_submit_conversion"):
+            with self.subTest(code=code):
+                self.setUp()
+                self.ex._submit_form = lambda *_: (_ for _ in ()).throw(ContractRefused(code))
+                self.ex._default_handoff = lambda *_: "保存"
+                out = self.run_request()
+                self.assertEqual(out.marked, "保存")
+                self.assertIn(code, str(self.ex.s.events))
+        for code in ("dangerous_unconfirmed", "record_changed", "validation", "no_change", "opening_changes"):
+            with self.subTest(code=code):
+                self.setUp()
+                self.ex._submit_form = lambda *_: (_ for _ in ()).throw(ContractRefused(code))
+                self.ex._default_handoff = lambda *_: self.fail("hard refusal handed over")
+                self.assertFalse(self.run_request().marked)
 
 
 class RowActionTests(unittest.TestCase):

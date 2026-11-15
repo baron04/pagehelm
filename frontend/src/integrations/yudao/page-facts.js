@@ -745,8 +745,9 @@ function pageComponentForRoot(root, name, allowDialog = false) {
   while (stack.length && seen.size < (allowDialog ? 65536 : 8192)) {
     const node = stack.pop()
     if (!node || seen.has(node)) continue
+    if (!allowDialog && node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root) &&
+        (name !== 'ElForm' || !node.el.matches('form.el-form') && !node.el.querySelector('form.el-form'))) continue
     seen.add(node)
-    if (!allowDialog && name !== 'ElForm' && node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root)) continue
     if (node.component && live(node.component)) {
       if ((node.component.type?.name || node.component.type?.__name) === name &&
           node.component.appContext === owner.appContext) {
@@ -758,6 +759,13 @@ function pageComponentForRoot(root, name, allowDialog = false) {
           instance = node.component
         }
       }
+      // Other top-level forms must still be counted for query ownership. Once a form
+      // has been counted, its input/option trees cannot contain another root form unless
+      // the DOM actually contains one; avoid scanning thousands of unrelated options.
+      if (name === 'ElForm' && (node.component.type?.name || node.component.type?.__name) === 'ElForm' &&
+          node.component.subTree?.el instanceof HTMLElement &&
+          node.component.subTree.el.matches('form.el-form') &&
+          !node.component.subTree.el.querySelector('form.el-form')) continue
       stack.push(node.component.subTree)
     }
     if (Array.isArray(node.children)) stack.push(...node.children)
@@ -902,11 +910,22 @@ export function readElementFormModel(element) {
     mode: hasId ? 'update' : 'create', record_id: hasId ? String(id) : '', source: installed?.readFormSource(hasId ? id : '')}
 }
 
+/** JSON structure equality: property order is immaterial, scalar types and arrays are exact. */
+export function sameFormStructure(left, right) {
+  if (left === right) return true
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right) &&
+    left.length === right.length && left.every((value, index) => sameFormStructure(value, right[index]))
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length && keys.every(key =>
+    Object.hasOwn(right, key) && sameFormStructure(left[key], right[key]))
+}
+
 /** Restore page-opening changes to the same-actor values supplied by the server. */
 export async function restoreElementFormModel(element, request) {
   const before = readElementFormModel(element)
   if (!before || before.unreadable || before.withheld?.length || !request ||
-      JSON.stringify(before.model) !== JSON.stringify(request.expected) ||
+      !sameFormStructure(before.model, request.expected) ||
       !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return false
   const area = element.closest('[role="dialog"],dialog') || element.closest('form.el-form')
   const forms = area?.matches('form.el-form') ? [area] : [...(area?.querySelectorAll('form.el-form') || [])]
@@ -917,11 +936,27 @@ export async function restoreElementFormModel(element, request) {
   if (!model || values.unreadable || values.withheld.length || Object.keys(values.data).some(key =>
       key === 'id' || key === '__proto__' || key === 'constructor' || key === 'prototype' ||
       !Object.hasOwn(model, key))) return false
-  for (const [key, value] of Object.entries(values.data)) model[key] = value
-  await Promise.resolve()
   const validate = bound.instance.exposed?.validate || bound.instance.proxy?.validate
   if (typeof validate !== 'function') return false
-  try { return await validate() !== false } catch { return false }
+  const keys = Object.keys(values.data)
+  const expected = cloneFormModel({...before.model, ...values.data}).data
+  try {
+    for (const key of keys) model[key] = values.data[key]
+    await Promise.resolve()
+    if (await validate() === false) throw new Error('application validation refused')
+    await Promise.resolve()
+    const after = readElementFormModel(element)
+    if (!after || after.unreadable || after.withheld?.length || after.invalid?.length ||
+        !sameFormStructure(after.model, expected)) throw new Error('restored form changed')
+    return true
+  } catch {
+    // Validation and reactive dependencies can modify other fields too. Restore the complete
+    // before-image, never leave a partially restored business form for an accidental save.
+    for (const key of Object.keys(model)) if (!Object.hasOwn(before.model, key)) delete model[key]
+    for (const [key, value] of Object.entries(before.model)) model[key] = value
+    await Promise.resolve()
+    return false
+  }
 }
 
 function rowToggle(element, row) {

@@ -311,6 +311,7 @@ class SubmitCard:
     record: dict | None = None
     restored: tuple[Change, ...] = ()
     action_request: ActionRequest | None = None
+    value_sources: tuple[tuple[str, str, str], ...] = ()
 
     @property
     def changed_fields(self) -> frozenset:
@@ -346,6 +347,10 @@ class SubmitCard:
             label, _ = self._line(change, form)
             out.append(ApprovalDetail("derived", ("页面打开时：" + label)[:200],
                 f"改成了 {_show(change.before)}，已还原为 {_show(change.after)}"))
+        for label, value, source in self.value_sources:
+            if not source:
+                out.append(ApprovalDetail("derived", ("值来源：" + label)[:200],
+                    f"{_show(value)}：没在你的话里找到这个值"))
         return tuple(out)
 
     def effect(self) -> str:

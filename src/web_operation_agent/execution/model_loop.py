@@ -260,8 +260,10 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
             s.budget.check()
             context.require_live(application_id=self.application.descriptor.application_id)
         def execute(action, arguments, *, navigating=False):
-            if not page_actions or action not in {"observe", "wait_for", "scroll", "highlight", "goto", "click", "fill", "select", "handoff_form"}:
+            if not page_actions or action not in {"observe", "wait_for", "scroll", "highlight", "goto", "click", "fill", "select", "handoff_form", "form_model"}:
                 raise BusinessToolRequestError("this procedure cannot dispatch that page action")
+            if action == "form_model" and arguments.get("kind") != "row":
+                raise BusinessToolRequestError("this procedure may only read a control's row")
             if action == "handoff_form" and self.profile.draft_steps is None:
                 raise BusinessToolRequestError("form handoff requires an installed draft port")
             self._dispatch(s, action, arguments, navigating=navigating)

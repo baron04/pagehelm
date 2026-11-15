@@ -1,6 +1,6 @@
 """Where each value the assistant typed into a form came from.
 
-A card shows what will be saved; this decides, before it is shown, whether every value
+A card shows what will be saved; this annotates, before it is shown, whether every value
 the assistant entered this turn is one the person gave, chose or had computed for that
 field. The assistant may not invent a value. Form defaults and what the application
 links on its own are not entered by the assistant and are listed on the card instead.
@@ -15,7 +15,7 @@ A value passes when it is one of:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 import re
 
@@ -60,6 +60,8 @@ class SourceLedger:
     receipts: list = field(default_factory=list)
 
     def add(self, entry: Entry) -> None:
+        if any(e.field == entry.field and e.value == entry.value and e.candidate for e in self.entries):
+            entry = replace(entry, candidate=True)
         self.entries = [e for e in self.entries if e.field != entry.field] + [entry]
 
     def receipt(self, receipt: Receipt) -> None:
@@ -132,7 +134,12 @@ def moments_in(text: str) -> list[tuple]:
     """(month, day, hour|None, minute|None) mentioned in the words; years are not asked for."""
     days = [(int(m), int(d)) for _y, m, d in _DAY.findall(text) if 1 <= int(m) <= 12 and 1 <= int(d) <= 31]
     clocks = []
-    for period, hour, minute in _CLOCK.findall(text):
+    previous_end, inherited = 0, ""
+    for match in _CLOCK.finditer(text):
+        period, hour, minute = match.groups()
+        if not period and re.fullmatch(r"\s*(?:到|至|[-—~～])\s*", text[previous_end:match.start()]):
+            period = inherited
+        inherited, previous_end = period, match.end()
         h = _clock_number(hour)
         if h is None or h > 24:
             continue
@@ -188,7 +195,7 @@ def user_supplied(entry: Entry, words: list[str]) -> bool:
 
 
 def check_entries(ledger: SourceLedger, words: list[str]) -> list[Verdict]:
-    """A verdict per entered value; the first that fails stops the card."""
+    """A source verdict per business form value; missing sources are shown on the card."""
     out = []
     for entry in ledger.entries:
         if not str(entry.value).strip() and not entry.label:

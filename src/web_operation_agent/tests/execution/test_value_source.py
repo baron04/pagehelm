@@ -59,5 +59,15 @@ class ValueSourceTests(unittest.TestCase):
         self.assertIn(20000, {int(v) for v in amounts_in("两万")})
 
 
+class IntervalSourceTests(unittest.TestCase):
+    def test_a_time_interval_inherits_its_preceding_period(self):
+        from web_operation_agent.execution.value_source import Entry, user_supplied
+        words = ["11月12号下午两点到三点"]
+        self.assertTrue(user_supplied(Entry("开始", "2026-11-12 14:00:00"), words))
+        self.assertTrue(user_supplied(Entry("结束", "2026-11-12 15:00:00"), words))
+        self.assertFalse(user_supplied(Entry("结束", "2026-11-12 03:00:00"), words))
+        self.assertFalse(user_supplied(Entry("开始", "2026-11-12 14:00:00"), ["11月12号下午"]))
+
+
 if __name__ == "__main__":
     unittest.main()
