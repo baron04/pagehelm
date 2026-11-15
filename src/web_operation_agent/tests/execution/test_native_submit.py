@@ -412,6 +412,51 @@ class RowActionTests(unittest.TestCase):
         self.assertIn("停用", self.ex.s.approvals.cards[0].effect)
         self.assertEqual(self.ex.native_submit.record["status"], 1)
 
+    def test_unknown_action_uses_verified_handoff_without_a_write_permit(self):
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        self.ex.native_submit.row_request = lambda *a: None
+        handed = []
+        def highlight(s, name, args, turn):
+            handed.append((name, args))
+            turn["marked"] = "停用"
+            return LoopToolResult("已标出", kind="page", dispatch="acknowledged", marked="停用")
+        self.ex._invoke_tool = highlight
+        out = self.run_request()
+        self.assertEqual((out.state, out.error_code, out.marked), ("completed", "action_unknown", "停用"))
+        self.assertEqual(handed, [("highlight", {"index": 3})])
+        self.assertEqual(self.ex.s.approvals.cards, [])
+        self.assertEqual(self.ex.clicks, [("PUT", PREFIX + "update-status", {"id": 7, "status": 1})])
+        self.assertIsNone(self.ex.native_submit.armed)
+        self.assertNotIn("form_submit", [a for a, _ in self.ex.dispatched])
+        self.assertIn("助手尚未提交", out.feedback)
+
+    def test_unknown_action_does_not_claim_a_refused_handoff(self):
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        self.ex.native_submit.row_request = lambda *a: None
+        self.ex.turn["marked"] = "旧控件"
+        self.ex._invoke_tool = lambda *a: LoopToolResult("目标未核验", kind="page", state="refused",
+                                                         error_code="invalid_target")
+        out = self.run_request()
+        self.assertEqual((out.state, out.error_code, out.marked), ("refused", "action_unknown", ""))
+        self.assertNotIn("已标出", out.feedback)
+        self.assertEqual(self.ex.s.events[-1][1]["handoff_error_code"], "invalid_target")
+
+    def test_unknown_dangerous_action_needs_confirmation_before_handoff(self):
+        self.ex.native_submit.row_request = lambda *a: None
+        self.ex.native_submit.dangerous_ = True
+        self.ex._invoke_tool = lambda *a: self.fail("must not highlight before confirmation")
+        out = self.run_request()
+        self.assertEqual(out.error_code, "dangerous_unconfirmed")
+
+    def test_unknown_action_cannot_reuse_an_old_mark_after_an_unproved_completion(self):
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        self.ex.native_submit.row_request = lambda *a: None
+        self.ex.turn["marked"] = "旧控件"
+        self.ex._invoke_tool = lambda *a: LoopToolResult("普通页面反馈", kind="page")
+        out = self.run_request()
+        self.assertEqual((out.state, out.error_code, out.marked), ("unverified", "action_unknown", ""))
+        self.assertNotIn("已标出", out.feedback)
+
     def test_readback_checks_the_action_field_and_reports_other_key_additions_or_removals(self):
         ex = self.ex
         click = ex.click

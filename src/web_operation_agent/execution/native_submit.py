@@ -15,6 +15,7 @@ send what the form holds, is not submitted: the person is handed the filled form
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -227,7 +228,22 @@ class NativeSubmitMixin:
             return (self._submit_form(s, element, turn) if form
                     else self._submit_row(s, element, turn))
         except ContractRefused as exc:
-            return self._not_sent(s, exc.code, exc.detail)
+            refused = self._not_sent(s, exc.code, exc.detail)
+            if exc.code != "action_unknown" or form:
+                return refused
+            # The row and danger precondition were checked before action resolution.
+            # Reuse the application's ordinary target/visibility handoff checks; an
+            # unknown write contract never grants a click or bypasses those checks.
+            handed = self._invoke_tool(s, "highlight", {"index": args["index"]}, turn)
+            marked = handed.marked if handed.state == "completed" else ""
+            if handed.state == "completed" and not marked:
+                handed = replace(handed, state="unverified", feedback="未能核验本次按钮交接，助手未提交。")
+            s.ledger.append("native_submit_handoff", step=s.step, code=exc.code,
+                            state=handed.state, marked=marked, handoff_error_code=handed.error_code,
+                            dispatched=False, side_effect_possible=False)
+            note = (f"「{marked}」已标出；助手尚未提交，请核对后自己点击。" if marked else handed.feedback)
+            return replace(handed, feedback=refused.feedback + "\n" + note,
+                           error_code=exc.code, marked=marked)
 
     def _not_sent(self, s, code, detail="") -> LoopToolResult:
         s.ledger.append("native_submit_not_sent", step=s.step, code=code, detail=detail[:300],
@@ -346,7 +362,7 @@ class NativeSubmitMixin:
             raise ContractRefused("record_unreadable")
         request = port.row_request(prefixes, row, element, baseline)
         if request is None:
-            raise ContractRefused("action_unknown", "无法把这个控件对应到唯一接口和具体字段变化，请自行操作")
+            raise ContractRefused("action_unknown", "无法认定这个控件对应的接口和具体字段变化，助手未提交")
         card = build_card(loaded=None, form=None, page=self._page_name(s), button=button, mode="action",
             target_name=name, record_id=record_id, record=baseline, action_request=request)
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
