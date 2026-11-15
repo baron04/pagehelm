@@ -36,7 +36,7 @@ class FormPort(Port, _Forms):
 
 
 class FormEntryReadinessTests(unittest.TestCase):
-    def setup_form(self, refreshes):
+    def setup_form(self, refreshes, *, execution_trace=None):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         port, ctx = FormPort(), context()
@@ -48,7 +48,7 @@ class FormEntryReadinessTests(unittest.TestCase):
         opened = replace(_observation(epoch=2), page_route=before.page_route)
         opener = ActionReceipt(1, "opener", "click", ok=True,
             args_echo={"ref": entry.control.ref, "epoch": before.epoch},
-            write_guard_held=True, observation=opened)
+            write_guard_held=True, observation=opened, execution_trace=execution_trace)
         tools.acknowledged(entry, before, opener, context=ctx)
         actions = []
         cancelled = [False]
@@ -86,7 +86,11 @@ class FormEntryReadinessTests(unittest.TestCase):
         session, turn, port, opener, actions, _ = self.setup_form([self.fresh(3)])
         self.assertIsNone(self.describe(session, turn).finished)
         self.assertEqual(actions, [("observe", {})])
-        self.assertIs(port.accepted_receipt, opener)
+        self.assertIsNot(port.accepted_receipt, opener)
+        self.assertEqual(port.accepted_receipt.to_json(), opener.to_json(include_diagnostics=False))
+        self.assertEqual((port.accepted_receipt.command_id, port.accepted_receipt.action,
+                          port.accepted_receipt.args_echo, port.accepted_receipt.write_guard_held),
+                         ("opener", "click", opener.args_echo, True))
         self.assertEqual((port.accepted, port.released), (1, 1))
         self.assertEqual(turn.obs.epoch, 3)
         descriptor = json.loads(turn.messages[-1]["content"].split("\n", 1)[1])
@@ -102,6 +106,31 @@ class FormEntryReadinessTests(unittest.TestCase):
                 "values": [{"field_id": field["field_id"], "value": "NovaForge"}]},
                 context=session._approvals.context())
         self.assertEqual(len(session.ledger.of_kind("form_entry_bound")), 1)
+
+    def test_form_admission_preserves_business_facts_but_isolates_private_execution_diagnostics(self):
+        trace = {"trace_id": "private-opener", "events": [
+            {"sequence": 1, "operation": "click", "path": "binding"},
+            {"sequence": 2, "operation": "click", "path": "ordinary"}]}
+        session, turn, port, opener, actions, _ = self.setup_form([self.fresh(3)], execution_trace=trace)
+        original = opener.to_json()
+        self.assertEqual(original["execution_trace"], trace)
+        self.assertIsNone(self.describe(session, turn).finished)
+        self.assertEqual(actions, [("observe", {})])
+        self.assertEqual((port.accepted, port.released), (1, 1))
+        self.assertEqual(turn.obs.epoch, 3)
+        accepted = port.accepted_receipt
+        self.assertIsNot(accepted, opener)
+        self.assertEqual(accepted.to_json(), {key: value for key, value in original.items()
+                                             if key != "execution_trace"})
+        self.assertIsNone(accepted.execution_trace)
+        self.assertNotIn("execution_trace", accepted.to_json())
+        self.assertEqual(opener.execution_trace, trace)
+        self.assertIsNot(accepted.args_echo, opener.args_echo)
+        self.assertIsNot(accepted.observation, opener.observation)
+        self.assertIsNot(accepted.observation.elements[0].attrs, opener.observation.elements[0].attrs)
+        accepted.args_echo["ref"] = "adapter-copy-only"
+        accepted.observation.elements[0].attrs["field"] = "adapter-copy-only"
+        self.assertEqual(opener.to_json(), original)
 
     def test_only_pending_readiness_uses_bounded_read_only_waits(self):
         session, turn, port, _, actions, _ = self.setup_form([

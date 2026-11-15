@@ -18,6 +18,8 @@ from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent_yudao.application import SESSION_HANDOFF_KEYS, YudaoIdentityPort
 from web_operation_agent_yudao.client import YudaoClient, YudaoReadRefused
 from web_operation_agent_yudao.native_server import BootstrapRefused, YudaoHost, YudaoHostConfig
+from web_operation_agent_yudao.guard_proxy import NativeGuardProxy as RealGuardProxy
+from web_operation_agent_yudao.read_only_window_actions import ReadOnlyWindowPageActions
 
 
 class NativeHostTests(unittest.TestCase):
@@ -28,7 +30,8 @@ class NativeHostTests(unittest.TestCase):
         self.addCleanup(lambda: [h.close() for h in self.hosts])
         self.config = YudaoHostConfig(
             api_base="http://yudao.invalid", public_origin="https://yudao.invalid",
-            state_dir=Path(self.tmp.name), gateway_host="127.0.0.1", gateway_port=0, warm_index=False)
+            state_dir=Path(self.tmp.name), gateway_host="127.0.0.1", gateway_port=0, warm_index=False,
+            native_page_admission="reviewed")
         self.config = replace(self._fence(), native_page_policy=self._page_policy())
         self.addCleanup(patch.stopall)
         patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy").start()
@@ -189,12 +192,106 @@ class NativeHostTests(unittest.TestCase):
         self.assertIn('本部署关闭', executor.profile.instructions)
         self.chat.return_value.complete.assert_not_called()
 
-    def test_the_slim_profile_carries_the_closing_number_check(self):
-        from web_operation_agent_yudao.answer_numbers import untraced
+    def test_optional_method_fence_selects_page_policy_and_blocks_every_scanned_write_get(self):
+        from web_operation_agent_yudao.method_fenced_actions import MethodFencedPageActions
+        from web_operation_agent_yudao.page_guard import GuardRefused
+
+        with self.assertRaises(ValueError):
+            replace(self.config, native_page_admission="all-actions")
+        writing_get = "/admin-api/fixture/initializing-list"
+        self.config = self._fence(writing_gets=[writing_get],
+                                  scan={"reasons": {writing_get: "FixtureMapper.insert"}})
+        self.assertNotIn(writing_get, self.host()._fenced)
+        self.config = replace(self.config, native_page_admission="method-fence",
+                              native_page_disabled_handlers=frozenset({"paging"}))
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "method-fence-tab")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertIsInstance(executor.config.action_policy, MethodFencedPageActions)
+        self.assertFalse(host.page_review.permits("query", "/crm/customer"))
+        self.assertTrue(executor.goal_port.review.permits("query", "/crm/customer"))
+        self.assertFalse(executor.goal_port.review.permits("paging", "/crm/customer"))
+        self.assertIn("submit", executor.config.disabled_actions)
+        guard = proxy.call_args.kwargs["guard"]
+        actor = "a" * 64
+        guard.begin(actor, "b" * 64)
+        with guard.request(actor, "GET", "/admin-api/fixture/ordinary-list"):
+            pass
+        for method, path in (("GET", writing_get), ("POST", "/admin-api/fixture/save")):
+            with self.assertRaisesRegex(GuardRefused, "page_write_blocked"), guard.request(actor, method, path):
+                self.fail("write reached dispatch")
+        self.chat.return_value.complete.assert_not_called()
+
+    def test_read_only_window_uses_live_fence_without_route_or_handler_gates(self):
+        from web_operation_agent_yudao.page_guard import NativePageGuard
+        writing_get="/admin-api/fixture/initializing-list"
+        self.config=replace(self._fence(writing_gets=[writing_get],
+            scan={"reasons":{writing_get:"FixtureMapper.insert"}}),
+            native_page_admission="read-only-window",location_bindings=True,
+            native_page_disabled_handlers=frozenset({"query","paging","fields","lines"}))
+        with self.assertRaises(ValueError):
+            replace(self.config,native_writes=True)
+        guard=NativePageGuard(frozenset(),writing_gets=frozenset({writing_get}))
+        proxy=RealGuardProxy(upstream="http://127.0.0.1:9",origin="https://fixture.test",
+            guard=guard,resolve_actor=lambda *_:"a"*64).start()
+        self.addCleanup(proxy.close)
+        proxy.ingress_base=proxy.url
+        proxy.verify_ingress()
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy",return_value=proxy):
+            host=self.host()
+            host.bootstrap("synthetic-a","1","isolated-tab")
+        executor=host._sessions[("1","1")].session.runner.executor
+        self.assertIsInstance(executor.config.action_policy,ReadOnlyWindowPageActions)
+        self.assertIs(executor.config.action_policy.guard_proxy,proxy)
+        self.assertIn(writing_get,host._fenced)
+        self.assertFalse(host.page_review.permits("query","/unregistered"))
+        for handler in ("query","paging","fields","lines"):
+            self.assertTrue(executor.goal_port.review.permits(handler,"/unregistered","unknown"))
+        names={p.schema["function"]["name"] for p in executor.profile.procedures}
+        self.assertTrue({"goto","fill_fields","filter_page","open_record"}<=names)
+        self.chat.return_value.complete.assert_not_called()
+
+    def test_normal_host_budget_and_write_opt_in_reach_the_real_executor(self):
+        from web_operation_agent_yudao.page_guard import NativePageGuard
+        self.config = replace(self.config, native_page_admission="read-only-window", native_writes=True,
+                              native_edit_prefill=False)
+        proxy = RealGuardProxy(upstream="http://127.0.0.1:9", origin="https://fixture.test",
+            guard=NativePageGuard(frozenset(), writing_gets=frozenset()), resolve_actor=lambda *_: "a" * 64).start()
+        self.addCleanup(proxy.close)
+        proxy.ingress_base = proxy.url
+        proxy.verify_ingress()
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy", return_value=proxy):
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "normal-host-defaults")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertEqual(executor.model_steps, 33)
+        self.assertEqual(executor.config.step_budget, 33)
+        self.assertEqual(executor.config.wall_budget_s, 120)
+        self.assertEqual(self.chat.call_args.args[0].run_input_token_abort, 16_000_000)
+        self.assertTrue(host.config.native_submit)
+        self.assertTrue(host.config.native_edit_prefill)
+        self.assertIsNotNone(executor.native_submit)
+        self.assertTrue(callable(executor.procedures.page_reads))
+        self.chat.return_value.complete.assert_not_called()
+
+    def test_native_read_turn_uses_only_table_tools_and_item_delivery(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
         executor = host._sessions[("1", "1")].session.runner.executor
-        self.assertIs(executor.profile.untraced_numbers, untraced)
+        tools = {t["function"]["name"]: t["function"]["parameters"]
+                 for t in executor._tools({})}
+        self.assertTrue({"tables", "sql", "date_range"} <= tools.keys())
+        self.assertNotIn("summary", tools["call_api"]["properties"])
+        self.assertNotIn("deliver", tools["call_api"]["properties"])
+        self.assertNotIn("read_answer", tools["finish"]["properties"])
+        self.assertIn("items", tools["finish"]["required"])
+        self.assertIn("kind", tools["finish"]["properties"]["items"]["items"]["required"])
+        # The untraced-number closing check is wired for row-table turns too
+        # (v1.10): the profile hook is present on every product executor.
+        self.assertIsNotNone(executor.profile.untraced_numbers)
+        self.assertNotIn("call_api.summary", executor.profile.instructions)
+        self.assertIn("date_range", executor.profile.instructions)
 
     def test_native_slim_can_deliver_a_complete_long_roster_without_a_smaller_hidden_text_cap(self):
         host = self.host()
@@ -227,6 +324,50 @@ class NativeHostTests(unittest.TestCase):
         off = self.host()
         off.bootstrap("synthetic-b", "1", "tab")
         self.assertFalse(off._sessions[("1", "2")].session.runner.executor.turn_traces)
+
+    def test_read_only_window_can_prepare_without_binding_or_dispatch(self):
+        from web_operation_agent_yudao.page_guard import NativePageGuard
+        self.config = replace(self.config, native_page_admission="read-only-window",
+                              native_write_preparation=True, location_bindings=False)
+        guard = NativePageGuard(frozenset(), writing_gets=frozenset())
+        proxy = RealGuardProxy(upstream="http://127.0.0.1:9", origin="https://fixture.test",
+                               guard=guard, resolve_actor=lambda *_: "a" * 64).start()
+        self.addCleanup(proxy.close)
+        proxy.ingress_base = proxy.url
+        proxy.verify_ingress()
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy", return_value=proxy):
+            host = self.host()
+            host.bootstrap("synthetic-a", "1", "preparation-window")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertIsInstance(executor.config.action_policy, ReadOnlyWindowPageActions)
+        self.assertTrue(executor.application.business_tools.mutation_tool_names)
+        self.assertFalse(host.config.native_writes)
+        names = {p.schema["function"]["name"] for p in executor.profile.procedures}
+        self.assertTrue({"fill_fields", "highlight"} <= names)
+        self.assertNotIn("filter_page", names)
+        self.assertIsNotNone(executor.profile.draft_steps)
+        self.assertIsNotNone(executor.profile.mutation_prefill)
+        enabled = replace(self.config, native_write_preparation=False, native_writes=True)
+        self.assertTrue(enabled.native_submit)
+        self.assertTrue(enabled.native_edit_prefill)
+        self.chat.return_value.complete.assert_not_called()
+
+    def test_preparation_mode_offers_existing_tools_but_never_enables_native_writes(self):
+        self.config = replace(self.config, native_write_preparation=True)
+        host = self.host()
+        host.bootstrap("synthetic-a", "1", "preparation-host")
+        executor = host._sessions[("1", "1")].session.runner.executor
+        self.assertFalse(host.config.native_writes)
+        self.assertTrue(executor.config.allow_business_mutations)
+        self.assertTrue(executor.application.business_tools.mutation_tool_names)
+        self.assertIn("submit", executor.config.disabled_actions)
+        for value in (True, 1, "true"):
+            with self.assertRaises(ValueError):
+                replace(self.config, native_writes=value)
+        for value in (1, "true", None):
+            with self.assertRaises(ValueError):
+                replace(self.config, native_write_preparation=value)
+        self.chat.return_value.complete.assert_not_called()
 
     def test_native_writes_require_explicit_host_enablement_and_keep_browser_submission_disabled(self):
         self.assertFalse(self.config.native_writes)
@@ -405,6 +546,24 @@ class NativeHostTests(unittest.TestCase):
         return replace(self.config, native_read_policy=policy, native_guard_port=0,
                        source_release="fixture-release")
 
+    def test_location_bindings_are_explicit_and_reach_the_runtime_and_real_profile(self):
+        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.location import LocationProcedures
+        self.config = replace(self._fence(), location_bindings=True)
+        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
+                patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
+                patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+            host = self.host()
+            bootstrap = host.bootstrap("synthetic-a", "1", "native-tab")
+            self.assertTrue(bootstrap["config"]["pageControllerModule"].endswith("?bindings=1"))
+            executor = host._sessions[("1", "1")].session.runner.executor
+            self.assertIsInstance(executor.procedures, LocationProcedures)
+            names = {p.schema["function"]["name"] for p in executor.profile.procedures}
+            self.assertIn("filter_page", names)
+            self.assertIn("fill_fields", names)
+        with self.assertRaises(ValueError):
+            replace(self.config, native_writes=True)
+
     def test_method_fence_binds_live_forms_inside_the_applications_window(self):
         from web_operation_agent_yudao.ui_source import UiSource
         from web_operation_agent_yudao.live_filters import LivePageFilters
@@ -488,7 +647,7 @@ class NativeHostTests(unittest.TestCase):
 
     def test_default_is_shared_loop_and_warmup_can_be_disabled(self):
         from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
-        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor
         from web_operation_agent_yudao.model_page_policy import ModelPageGoalPort
         self.config = replace(self._fence(), native_page_policy=self._page_policy(),
                                ui_source=None, source_root=None)
@@ -497,7 +656,7 @@ class NativeHostTests(unittest.TestCase):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "default")
             executor = host._sessions[("1", "1")].session.runner.executor
-            self.assertIs(type(executor), SlimTurnExecutor)
+            self.assertIs(type(executor), TableReadTurnExecutor)
             self.assertIs(executor._loop.__func__, ModelDrivenTurnExecutor._loop)
             self.assertIsInstance(executor.goal_port, ModelPageGoalPort)
             self.assertNotIn("source", executor.goal_port.capabilities())

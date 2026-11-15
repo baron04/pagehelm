@@ -349,6 +349,40 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
         document.title = 'Vendor desk · Minimal Contacts';
         return;
       }}
+      const edit = /^\\/contacts\\/(edit|edit-locked)\\/([^/]+)$/.exec(location.pathname);
+      if (edit) {{
+        // The edit form reads its collection through the application's read
+        // endpoint on open -- the read is the source a form read may vouch for.
+        // The page paints from its snapshot while the read lands; it also applies
+        // its own display capitalisation to the name, a self-edit the assistant
+        // must restore before any save could be honest. The locked variant
+        // recomputes on every entry, so the restore can never stick.
+        const locked = edit[1] === 'edit-locked';
+        void fetch('/api/contacts', {{cache: 'no-store'}})
+          .then(response => response.ok ? response.json() : null)
+          .then(payload => {{
+            if (payload && Array.isArray(payload.contacts)) contacts = payload.contacts;
+          }});
+        const contact = contacts.find(item => item.id === edit[2]);
+        if (!contact) {{ app.innerHTML = '<h1>Contact not found</h1>'; return; }}
+        app.innerHTML = `<a class="back" href="/contacts" data-route>← All contacts</a>
+          <section class="record" data-page-route="/contacts/${{edit[1]}}/${{contact.id}}">
+          <div class="eyebrow">Edit contact</div><h1>${{contact.name}}</h1>
+          <form id="contact-edit" data-record-id="${{contact.id}}">
+            <label>Name <input name="name" required maxlength="120"></label>
+            <label>Email <input name="email" type="email" required maxlength="200"></label>
+            <button type="submit">Save contact</button><p class="status" role="status"></p>
+          </form></section>`;
+        document.title = `Edit ${{contact.name}} · Minimal Contacts`;
+        const editForm = document.querySelector('#contact-edit');
+        const nameField = editForm.elements.name;
+        nameField.value = contact.name.toUpperCase();
+        editForm.elements.email.value = contact.email;
+        if (locked) nameField.addEventListener('input', () => {{
+          nameField.value = nameField.value.toUpperCase();
+        }});
+        return;
+      }}
       const match = /^\\/contacts\\/([^/]+)$/.exec(location.pathname);
       if (match) {{
         const contact = contacts.find(item => item.id === match[1]);
@@ -405,22 +439,29 @@ def _html(source_contacts: Sequence[Mapping[str, str]], workspace: str, *,
       if (response.ok) {{ history.replaceState({{}}, '', '/contacts'); await refresh(); }}
     }});
     addEventListener('submit', async event => {{
-      if (event.target.id !== 'contact-create') return;
+      if (event.target.id !== 'contact-create' && event.target.id !== 'contact-edit') return;
       event.preventDefault();
       const form = event.target;
       const status = form.querySelector('[role="status"]');
-      const payload = Object.fromEntries(new FormData(form));
+      const editing = form.id === 'contact-edit';
+      const payload = editing
+        ? {{contactId: form.dataset.recordId, ...Object.fromEntries(new FormData(form))}}
+        : Object.fromEntries(new FormData(form));
+      form.setAttribute('aria-busy', 'true');
       try {{
         const response = await fetch('/api/browser/contacts', {{
-          method: 'POST', headers: {{'Content-Type': 'application/json'}},
+          method: editing ? 'PUT' : 'POST',
+          headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify(payload),
         }});
         const result = await response.json();
         if (!response.ok || !result.contact) throw new Error(result.error || 'save_failed');
-        contacts.push(result.contact);
+        if (editing) {{ Object.assign(contacts.find(item => item.id === result.contact.id), result.contact); }}
+        else {{ contacts.push(result.contact); }}
         history.replaceState({{}}, '', `/contacts/${{result.contact.id}}`);
         await refresh();
       }} catch (error) {{ status.textContent = `Could not save: ${{error.message}}`; }}
+      finally {{ form.removeAttribute('aria-busy'); }}
     }});
     render();
   </script>
@@ -495,6 +536,13 @@ class MinimalContactsApplication:
             self.release_post.set()
         self._lock = threading.Lock()
         self._page_windows: dict[str, float] = {}
+        #: Bounded journals the write integration inspects: every page/API write
+        #: attempt (marked or not) and every page-session collection read.
+        self.write_journal: list[dict] = []
+        self.read_journal: list[tuple] = []
+        #: Optional (session, method, path, query, body) -> verdict hook the host
+        #: installs to admit one armed request inside the read-only window.
+        self._write_gate = None
         self._assistant_bootstrap: Callable[[DemoActor, str], dict] | None = None
         self._assistant_revoke: Callable[[DemoActor], None] | None = None
         self._assistant_script: str | None = None
@@ -541,14 +589,14 @@ class MinimalContactsApplication:
                     owner.refused_writes += 1
                 self._reply(status, _json_bytes({"error": error}), "application/json")
 
-            def _create_contact(self, actor: DemoActor) -> None:
+            def _create_contact(self, actor: DemoActor, body: bytes = b"",
+                                gate=None, path: str = "") -> None:
                 """Apply the application's own validation and uniqueness rule once."""
                 with owner._lock:
                     owner.post_requests += 1
                 owner.post_received.set()
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
-                    payload = json.loads(self.rfile.read(min(length, 64 * 1024)) or b"{}")
+                    payload = json.loads(body or b"{}")
                 except (ValueError, OSError):
                     self._reply(400, _json_bytes({"error": "invalid_json"}),
                                 "application/json")
@@ -586,7 +634,46 @@ class MinimalContactsApplication:
                         pass
                     self.connection.close()
                     return
-                self._reply(201, _json_bytes({"contact": record}), "application/json")
+                if path.startswith("/api/browser/"):
+                    with owner._lock:
+                        owner.write_journal.append({"method": "POST", "path": path,
+                            "created_id": record["id"], "marked": bool(
+                                isinstance(gate, dict) and gate.get("marked"))})
+                        del owner.write_journal[:-200]
+                reply = _json_bytes({"contact": record})
+                if isinstance(gate, dict):
+                    gate["settle"](201, reply)
+                self._reply(201, reply, "application/json")
+
+            def _gate_write(self, resolved, method: str, path: str, query: str, body: bytes):
+                """Apply the read-only window to one write request.
+
+                While the assistant holds the window only a request carrying the
+                application's own assistant marker may pass, and only through the
+                host-installed gate: the armed permit admits exactly what the card
+                approved. Anything else under `/api/` still meets the window's 409.
+                Returns the verdict dict for an admitted request (its ``settle``
+                reports the application's answer back to the permit).
+                """
+                marked = self.headers.get("X-WOA-Assistant") == "1"
+                if resolved is None or resolved[1] != "page_session" \
+                        or not path.startswith("/api/"):
+                    return None
+                with owner._lock:
+                    guarded = owner._page_windows.get(resolved[0].session, 0) > time.time()
+                if not guarded:
+                    return None
+                if not marked or owner._write_gate is None:
+                    self._reply(409, _json_bytes({"error": "read_only_window"}),
+                                "application/json")
+                    return "refused"
+                verdict = owner._write_gate(resolved[0].session, method, path, query, body)
+                if not verdict["allowed"]:
+                    self._reply(409, _json_bytes({"error": verdict["code"]}),
+                                "application/json")
+                    return "refused"
+                verdict["marked"] = marked
+                return verdict
 
             def do_POST(self):
                 path = urllib.parse.urlsplit(self.path).path
@@ -608,12 +695,15 @@ class MinimalContactsApplication:
                     self._reply(200, _json_bytes({"active": active, "expires_at": expires}), "application/json")
                     return
                 resolved = self._actor()
-                if resolved is not None and resolved[1] == "page_session":
-                    with owner._lock:
-                        guarded = owner._page_windows.get(resolved[0].session, 0) > time.time()
-                    if guarded and path.startswith("/api/"):
-                        self._reply(409, _json_bytes({"error": "read_only_window"}), "application/json")
-                        return
+                body = b""
+                if path.startswith("/api/"):
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if 0 < length <= 64 * 1024:
+                        body = self.rfile.read(length)
+                gate = self._gate_write(resolved, "POST", path,
+                                        urllib.parse.urlsplit(self.path).query, body)
+                if gate == "refused":
+                    return
                 if path == "/woa/bootstrap":
                     resolved = self._actor()
                     if (owner._assistant_bootstrap is None or resolved is None
@@ -718,7 +808,14 @@ class MinimalContactsApplication:
                             return
                         store[:] = kept
                         owner.records_deleted += 1
-                    self._reply(200, _json_bytes({"deleted": identifier}), "application/json")
+                        owner.write_journal.append({"method": "POST", "path": path,
+                            "record_id": identifier,
+                            "marked": bool(isinstance(gate, dict) and gate.get("marked"))})
+                        del owner.write_journal[:-200]
+                    reply = _json_bytes({"deleted": identifier})
+                    if isinstance(gate, dict):
+                        gate["settle"](200, reply)
+                    self._reply(200, reply, "application/json")
                     return
                 if path == "/api/browser/contacts":
                     # This is the human-owned form endpoint, separate from the delegated
@@ -732,7 +829,7 @@ class MinimalContactsApplication:
                     if "contacts:write" not in actor.permissions:
                         self._refuse_write(403, "forbidden")
                         return
-                    self._create_contact(actor)
+                    self._create_contact(actor, body=body, gate=gate, path=path)
                     return
                 if path != "/api/contacts":
                     self._refuse_write(404, "not_found")
@@ -749,7 +846,68 @@ class MinimalContactsApplication:
                     # integration decided before sending the request.
                     self._refuse_write(403, "forbidden")
                     return
-                self._create_contact(actor)
+                self._create_contact(actor, body=body, gate=gate, path=path)
+
+            def do_PUT(self):
+                """The edit form's own endpoint: browser-session only, same window rules."""
+                path = urllib.parse.urlsplit(self.path).path
+                resolved = self._actor()
+                body = b""
+                if path.startswith("/api/"):
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if 0 < length <= 64 * 1024:
+                        body = self.rfile.read(length)
+                gate = self._gate_write(resolved, "PUT", path,
+                                        urllib.parse.urlsplit(self.path).query, body)
+                if gate == "refused":
+                    return
+                if path != "/api/browser/contacts":
+                    self._refuse_write(404, "not_found")
+                    return
+                with owner._lock:
+                    owner.write_requests += 1
+                if (self.headers.get("Origin") != owner.origin or resolved is None
+                        or resolved[1] != "page_session"):
+                    self._refuse_write(403, "origin_refused")
+                    return
+                actor = resolved[0]
+                if "contacts:write" not in actor.permissions:
+                    self._refuse_write(403, "forbidden")
+                    return
+                try:
+                    payload = json.loads(body or b"{}")
+                except (ValueError, OSError):
+                    self._reply(400, _json_bytes({"error": "invalid_json"}),
+                                "application/json")
+                    return
+                if not isinstance(payload, dict) or set(payload) != {"contactId", "name", "email"}:
+                    self._reply(400, _json_bytes({"error": "update_shape"}),
+                                "application/json")
+                    return
+                name = str(payload["name"]).strip()
+                email = str(payload["email"]).strip().casefold()
+                identifier = str(payload["contactId"])
+                if not name or not email or not identifier:
+                    self._reply(400, _json_bytes({"error": "name_and_email_required"}),
+                                "application/json")
+                    return
+                with owner._lock:
+                    store = owner.workspaces[actor.workspace]
+                    record = next((item for item in store if item["id"] == identifier), None)
+                    if record is None:
+                        self._reply(404, _json_bytes({"error": "not_found"}),
+                                    "application/json")
+                        return
+                    record["name"], record["email"] = name, email
+                    updated = dict(record)
+                    owner.write_journal.append({"method": "PUT", "path": path,
+                        "record_id": identifier,
+                        "marked": bool(gate and gate.get("marked"))})
+                    del owner.write_journal[:-200]
+                reply = _json_bytes({"contact": updated})
+                if isinstance(gate, dict):
+                    gate["settle"](200, reply)
+                self._reply(200, reply, "application/json")
 
             def do_GET(self):
                 path = urllib.parse.urlsplit(self.path).path
@@ -814,6 +972,10 @@ class MinimalContactsApplication:
                                     "application/json; charset=utf-8")
                         return
                     with owner._lock:
+                        if resolved[1] == "page_session":
+                            owner.read_journal.append(
+                                (path, urllib.parse.urlsplit(self.path).query))
+                            del owner.read_journal[:-200]
                         records = [dict(item)
                                    for item in owner.workspaces[resolved[0].workspace]]
                     self._reply(200, _json_bytes({"contacts": records}),

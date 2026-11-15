@@ -1,13 +1,14 @@
 """Model decisions consume typed results and current observations without paid calls."""
+from copy import deepcopy
 from dataclasses import replace
 import json
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
+from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, FINISH_TOOL
 from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
-                                                                VerificationResult)
+                                                                DeliveryFeedback, VerificationResult)
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.answer.answering import StructuredQueryAnswer
 from web_operation_agent.goal.data import DataRefused
@@ -91,6 +92,59 @@ class LoopFixture(ModelDrivenTurnExecutor):
 
 
 class DispatchDiagnosticsTests(unittest.TestCase):
+    def pending_navigation(self, *, stale_waits=1, final_guard=True, foreign=False,
+                           policy=None, operation=None, origin="https://synthetic.test"):
+        events,actions=[],[]
+        class Policy:
+            application_id,required_scope,actions="sample","records:read",frozenset({"click"})
+            def admit(self,intent,**_):
+                return ActionPermit(intent.binding_digest,ActionEffect.READ_ONLY,"review","arrival")
+            def verify(self,*_,**__):return True
+        policy=policy or Policy()
+        operation=operation or context()
+        def observed(epoch=1,**kwargs):
+            value=page(epoch,**kwargs)
+            return replace(value,url=origin+value.url.removeprefix("https://synthetic.test"))
+        executor=ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
+        executor.config=NS(action_policy=policy);executor.profile=NS(draft_steps=None)
+        executor.application=NS(descriptor=NS(application_id=policy.application_id))
+        executor.channel=NS(latest_observation_envelope=None)
+        state=NS(obs=observed(),terminal_reason="",detail="",step=0,run_id="run",
+            cancelled=lambda:False,budget=NS(check=lambda:None),receipt=TurnReceipt(),
+            approvals=NS(confirm_operation=lambda *a,**k:("",""),context=lambda *a,**k:operation,operation_hold_ms=1000),
+            ledger=NS(append=lambda event,**facts:events.append((event,facts))))
+        def dispatch(_s,action,args,**_):
+            before=state.obs;actions.append(action)
+            if action=="click":
+                after=replace(observed(2),render_state="pending")
+                receipt=ActionReceipt(1,"click",action,args,True,url_before=before.url,
+                    url_after=after.url,observation=after,write_guard_held=True)
+            else:
+                after=observed(before.epoch+1,route="/detail/17")
+                if foreign:after=replace(after,url="https://foreign.test/detail/17")
+                stale=actions.count("wait_for")<=stale_waits
+                receipt=ActionReceipt(1,"wait-"+str(len(actions)),action,args,not stale,
+                    error_code="stale_observation" if stale else "",url_before=before.url,
+                    url_after=after.url,observation=after,write_guard_held=False if stale else final_guard)
+            state.obs=after
+            return receipt
+        with patch.object(GoalTurnExecutor,"_dispatch",side_effect=dispatch):
+            executor._dispatch(state,"click",{"ref":"e1"})
+        return executor._page_action_outcome,actions,events
+
+    def test_pending_navigation_rebases_only_a_stale_wait_and_requires_a_new_guarded_receipt(self):
+        outcome,actions,_=self.pending_navigation()
+        self.assertEqual(outcome.state,"completed")
+        self.assertEqual(actions,["click","wait_for","wait_for"])
+
+    def test_pending_navigation_never_promotes_missing_guard_foreign_or_repeated_stale_wait(self):
+        for options in ({"final_guard":False},{"foreign":True},{"stale_waits":3}):
+            with self.subTest(options=options):
+                outcome,actions,_=self.pending_navigation(**options)
+                self.assertEqual(outcome.state,"unverified")
+                self.assertEqual(actions.count("click"),1)
+                self.assertLessEqual(actions.count("wait_for"),2)
+
     def test_stale_draft_receipt_never_dispatches_or_ends_the_turn(self):
         events = []
         class Draft:
@@ -134,7 +188,7 @@ class DispatchDiagnosticsTests(unittest.TestCase):
         self.assertIn("action_effect_no_effect", [event for event, _ in events])
         self.assertNotIn("model_action_unverified", [event for event, _ in events])
 
-    def dispatch(self, *, refused=False):
+    def dispatch(self, *, refused=False, execution_trace=None):
         clock, events = [0.0], []
         def advance(seconds):
             clock[0] += seconds
@@ -166,7 +220,8 @@ class DispatchDiagnosticsTests(unittest.TestCase):
             ledger=NS(append=lambda event, **facts:events.append((event, facts))))
         after = page(2)
         receipt = ActionReceipt(1, "command", "click", {"ref":"e1", "epoch":1}, True,
-            observation=after, url_before=before.url, url_after=after.url, write_guard_held=True)
+            observation=after, url_before=before.url, url_after=after.url, write_guard_held=True,
+            execution_trace=execution_trace)
         def dispatch(*args, **kwargs):
             advance(.75)
             state.obs = after
@@ -175,6 +230,14 @@ class DispatchDiagnosticsTests(unittest.TestCase):
             executor._dispatch(state, "click", {"ref":"e1"})
             result = executor._page_action_outcome
         return result, state.receipt.report(NS(), "run"), events, browser.call_count
+
+    def test_execution_trace_stays_out_of_model_facing_receipt_and_result(self):
+        ordinary, *_ = self.dispatch()
+        diagnostic = {"trace_id":"diagnostic-only", "events":[{"sequence":1,"operation":"click","path":"binding"}]}
+        traced, *_ = self.dispatch(execution_trace=diagnostic)
+        self.assertEqual(traced.receipt_json, ordinary.receipt_json)
+        self.assertIsNone(traced.receipt.execution_trace)
+        self.assertNotIn("diagnostic-only", str(traced))
 
     def test_action_phases_measure_approval_admission_dispatch_and_verification(self):
         result, report, events, dispatched = self.dispatch()
@@ -808,8 +871,103 @@ class ModelLoopTests(unittest.TestCase):
             "identity": "menu:/contacts", "read_ref": "read#1"}])
 
 
+class DeliveryCorrectionTests(unittest.TestCase):
+    def fixture(self,*replies):
+        executor=LoopFixture(list(replies),lambda *_:LoopToolResult("read",kind="read"))
+        tool=deepcopy(FINISH_TOOL)
+        tool["function"]["parameters"]["properties"]["items"]={"type":"array","items":{
+            "type":"object","properties":{"item":{"type":"string"},"kind":{"type":"string"},
+                "status":{"type":"string"},"receipts":{"type":"array","items":{"type":"string"}}},
+            "required":["item","kind","status","receipts"],"additionalProperties":False}}
+        executor._finish_tool=lambda _:tool
+        executor._finish_feedback=lambda *_:DeliveryFeedback("delivery_page_receipt","当前页面回执尚未核实。",(0,))
+        return executor
+
+    def finish(self, count=1):
+        return reply(call("finish",status="done",answer="已打开详情。",items=[
+            {"item":"打开详情","kind":"page","status":"delivered","receipts":["old"]}
+            for _ in range(count)]))
+
+    def test_same_failed_delivery_returns_once_then_closes_without_claiming_success(self):
+        executor=self.fixture(self.finish(),self.finish())
+        answer=executor.run()
+        self.assertEqual(executor.state.terminal_reason,"agent_refused")
+        # The reply goes out as written; the failed item is marked and said once, after it.
+        self.assertTrue(answer.startswith("已打开详情。"))
+        self.assertIn("第 1 项没有通过交付检查，标为未交付",answer)
+        self.assertIn("当前页面回执尚未核实",answer)
+        rows=[facts for event,facts in executor.events if event=="model_delivery_rejected"]
+        self.assertEqual([r["returned"] for r in rows],[True,False])
+        self.assertEqual([r["terminal"] for r in rows],[False,True])
+        self.assertEqual(len(executor.state.chat.seen),2)
+
+    def test_no_remaining_correction_budget_closes_on_the_first_failure(self):
+        executor=self.fixture(self.finish())
+        executor.state.budget.remaining=lambda:0.5
+        answer=executor.run()
+        self.assertIn("标为未交付",answer)
+        self.assertEqual(executor.state.terminal_reason,"agent_refused")
+        self.assertEqual(len(executor.state.chat.seen),1)
+
+    def test_valid_corrected_delivery_can_complete(self):
+        executor=self.fixture(self.finish(),self.finish())
+        feedback=iter((DeliveryFeedback("delivery_page_receipt","当前页面回执尚未核实。",(0,)),""))
+        executor._finish_feedback=lambda *_:next(feedback)
+        self.assertEqual(executor.run(),"已打开详情。")
+        self.assertEqual(executor.state.terminal_reason,"")
+
+    def test_failed_item_set_shrinking_does_not_reset_its_correction(self):
+        ending=self.finish(2)
+        executor=self.fixture(ending,ending)
+        feedback=iter((DeliveryFeedback("delivery_page_receipt","两项尚未核实。",(0,1)),
+                       DeliveryFeedback("delivery_page_receipt","第 1 项仍未核实。",(0,))))
+        executor._finish_feedback=lambda *_:next(feedback)
+        self.assertIn("标为未交付",executor.run())
+        self.assertEqual(len(executor.state.chat.seen),2)
+        events=[facts for event,facts in executor.events if event=="model_delivery_rejected"]
+        self.assertEqual([e["returned"] for e in events],[True,False])
+        self.assertEqual(events[-1]["item_indices"],[0])
+
+    def test_overlapping_failed_item_sets_close_when_any_item_was_already_returned(self):
+        executor=self.fixture(self.finish(2),self.finish(2))
+        feedback=iter((DeliveryFeedback("delivery_page_receipt","尚未核实。",(0,)),
+                       DeliveryFeedback("delivery_page_receipt","仍未核实。",(0,1))))
+        executor._finish_feedback=lambda *_:next(feedback)
+        self.assertIn("标为未交付",executor.run())
+        self.assertEqual(len(executor.state.chat.seen),2)
+
+    def test_repeated_malformed_finish_closes_without_another_model_call(self):
+        bad=reply(call("finish",status="done",answer="已打开详情。",unknown="invalid"))
+        executor=self.fixture(bad,bad)
+        self.assertIn("标为未交付",executor.run())
+        self.assertEqual(executor.state.terminal_reason,"agent_refused")
+        self.assertEqual(len(executor.state.chat.seen),2)
+
+    def test_repeated_invalid_source_delivery_closes_without_another_model_call(self):
+        executor=self.fixture(self.finish(),self.finish())
+        def refuse(*_):raise ValueError("untrusted diagnostic")
+        executor._finish_feedback=refuse
+        answer=executor.run()
+        self.assertIn("标为未交付",answer)
+        self.assertNotIn("untrusted diagnostic",answer)
+        self.assertEqual(len(executor.state.chat.seen),2)
+
+    def test_typed_provider_failure_after_feedback_keeps_an_incomplete_terminal(self):
+        from web_operation_agent.modeling.provider import ProviderError
+        executor=self.fixture(self.finish())
+        original=executor.state.chat.complete_cancellable
+        calls=[]
+        def complete(*args,**kwargs):
+            if calls:raise ProviderError("synthetic unavailable")
+            calls.append(True)
+            return original(*args,**kwargs)
+        executor.state.chat.complete_cancellable=complete
+        self.assertIn("标为未交付",executor.run())
+        self.assertEqual(executor.state.terminal_reason,"agent_refused")
+
+
 class UntracedNumberFeedbackTests(unittest.TestCase):
-    """The closing number check: one send-back with the list, never a gate."""
+    """One numeric correction; unresolved item values close as incomplete."""
 
     def fixture(self, hook, *replies):
         def read(_fixture, _name, _arguments):
@@ -817,6 +975,51 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
         executor = LoopFixture(list(replies), read)
         executor.profile = NS(untraced_numbers=hook)
         return executor
+
+    def test_a_number_only_in_the_deliverable_item_is_checked_and_marks_that_item(self):
+        items=[{"item":"金额负500元","kind":"data","status":"delivered","receipts":[]}]
+        ending=reply(call("finish",status="done",answer="结果见交付项。",items=items))
+        executor=self.fixture(lambda text,sources:("-500",) if "负500" in text else (),ending,ending)
+        tool=DeliveryCorrectionTests().fixture()._finish_tool({})
+        executor._finish_tool=lambda _:tool
+        result=executor.run()
+        self.assertEqual(executor.state.terminal_reason,"agent_refused")
+        self.assertIn("该项与本轮均标为未完成",result)
+        rows=[facts for event,facts in executor.events if event=="untraced_numbers"]
+        self.assertEqual(rows[-1]["undelivered_indices"],[0])
+
+    def test_narrative_number_keeps_done_with_a_warning_when_correction_provider_fails(self):
+        from web_operation_agent.modeling.provider import ProviderError
+        executor=self.fixture(lambda *_:("999",),reply(call("finish",status="done",answer="共999条")))
+        original=executor.state.chat.complete_cancellable
+        def complete(*args,**kwargs):
+            if executor.state.chat.seen:raise ProviderError("synthetic unavailable")
+            return original(*args,**kwargs)
+        executor.state.chat.complete_cancellable=complete
+        result=executor.run()
+        self.assertEqual(executor.state.terminal_reason,"")
+        self.assertIn("以下数值未在本轮读取中找到出处：999",result)
+
+    def test_changed_number_set_does_not_gain_another_correction(self):
+        def ending(value):
+            return reply(call("finish",status="done",answer="结果见交付项。",items=[
+                {"item":f"金额{value}元","kind":"data","status":"delivered","receipts":[]}]))
+        executor=self.fixture(lambda text,_sources:("-500",) if "-500" in text else ("-600",),
+                              ending(-500),ending(-600))
+        executor._finish_tool=DeliveryCorrectionTests().fixture()._finish_tool
+        self.assertIn("该项与本轮均标为未完成",executor.run())
+        self.assertEqual(len(executor.state.chat.seen),2)
+        events=[facts for event,facts in executor.events if event=="untraced_numbers"]
+        self.assertEqual([e["sent_back"] for e in events],[True,False])
+        self.assertEqual(events[-1]["undelivered_indices"],[0])
+
+    def test_narrative_five_does_not_fail_an_adjacent_fifteen_item(self):
+        executor=self.fixture(lambda *_:("5",),reply(call("finish",status="done",answer="另有5条。",items=[
+            {"item":"已读取15条","kind":"data","status":"delivered","receipts":[]}])) )
+        executor._finish_tool=DeliveryCorrectionTests().fixture()._finish_tool
+        executor.state.budget.remaining=lambda:0.5
+        self.assertIn("以下数值未在本轮读取中找到出处：5",executor.run())
+        self.assertEqual(executor.state.terminal_reason,"")
 
     def test_an_untraced_answer_goes_back_to_the_model_once_and_the_second_answer_ends(self):
         def hook(answer, sources):
@@ -838,10 +1041,64 @@ class UntracedNumberFeedbackTests(unittest.TestCase):
         executor = self.fixture(lambda answer, sources: ("999",),
                                 reply(call("finish", status="done", answer="共 999 条")),
                                 reply(call("finish", status="done", answer="就是 999 条")))
-        self.assertEqual((executor.run(), executor.state.terminal_reason), ("就是 999 条", ""))
+        self.assertEqual((executor.run(), executor.state.terminal_reason),
+                         ("就是 999 条\n\n以下数值未在本轮读取中找到出处：999。", ""))
         audits = [facts for event, facts in executor.events if event == "untraced_numbers"]
         self.assertEqual(audits, [{"numbers": ["999"], "sent_back": True},
-                                  {"numbers": ["999"], "sent_back": False}])
+                                  {"numbers": ["999"], "sent_back": False,
+                                   "deliverable": [], "narrative": ["999"]}])
+
+    def test_an_untraced_value_inside_a_deliverable_item_marks_the_turn_incomplete(self):
+        hook = lambda answer, sources: ("999",) if "999" in answer else ()
+        executor = self.fixture(hook,
+            reply(call("finish", status="done", answer="共 999 条")),
+            reply(call("finish", status="done", answer="应收 999 元。",
+                       items=[{"item": "应收 999 元的明细", "kind": "data",
+                               "status": "delivered", "receipts": []}])))
+        tool = deepcopy(FINISH_TOOL)
+        tool["function"]["parameters"]["properties"]["items"] = {
+            "type": "array", "items": {"type": "object", "properties": {
+                "item": {"type": "string"}, "kind": {"type": "string"},
+                "status": {"type": "string"}, "receipts": {"type": "array"}},
+                "required": ["item", "kind", "status", "receipts"],
+                "additionalProperties": False}}
+        executor._finish_tool = lambda turn: tool
+        result, reason = executor.run(), executor.state.terminal_reason
+        self.assertEqual(reason, "agent_refused")
+        self.assertIn("应收 999 元的明细", result)
+        self.assertIn("该项与本轮均标为未完成", result)
+        audits = [facts for event, facts in executor.events if event == "untraced_numbers"]
+        self.assertEqual(audits[-1]["deliverable"], ["应收 999 元的明细"])
+        self.assertEqual(audits[-1]["sent_back"], False)
+
+    def test_a_page_shortcut_answer_without_items_still_fails_closed_on_untraced_values(self):
+        # The page-action shortcut synthesizes finish={status,answer} with no
+        # items; where the turn's contract requires items that bypass must not
+        # turn an untraced deliverable value into a narrative footnote.
+        hook = lambda answer, sources: ("999",)
+        def handler(fixture, name, arguments):
+            fixture._dispatch(fixture.state, "goto", {"url": "https://synthetic.test/list"})
+            return LoopToolResult("opened", kind="page", dispatch="acknowledged")
+        executor = LoopFixture([
+            reply(call("goto", path="/list", answer="共 999 条")),
+            reply(call("goto", path="/list", answer="仍是 999 条"))], handler)
+        executor.profile = NS(untraced_numbers=hook)
+        tool = deepcopy(FINISH_TOOL)
+        tool["function"]["parameters"]["properties"]["items"] = {
+            "type": "array", "items": {"type": "object", "properties": {
+                "item": {"type": "string"}, "kind": {"type": "string"},
+                "status": {"type": "string"}, "receipts": {"type": "array"}},
+                "required": ["item", "kind", "status", "receipts"],
+                "additionalProperties": False}}
+        tool["function"]["parameters"]["required"] = ["status", "answer", "items"]
+        executor._finish_tool = lambda turn: tool
+        result, reason = executor.run(), executor.state.terminal_reason
+        self.assertEqual(reason, "agent_refused")
+        self.assertIn("该项与本轮均标为未完成", result)
+        audits = [facts for event, facts in executor.events if event == "untraced_numbers"]
+        self.assertEqual(audits[-1]["deliverable"], ["答复内容"])
+        self.assertEqual(audits[-1]["narrative"], [])
+        self.assertEqual(audits[-1]["sent_back"], False)
 
     def test_a_fully_traced_answer_ends_without_a_second_reading(self):
         executor = self.fixture(lambda answer, sources: (),
@@ -960,3 +1217,52 @@ class ReadOnlyTurnTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HandoffStaysTests(unittest.TestCase):
+    """A handoff the page shows is not taken down by asking for it again, or by looking."""
+
+    def executor(self):
+        executor = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor)
+        executor.config = NS(action_policy=None)
+        executor.profile = NS(draft_steps=None)
+        executor.application = NS(descriptor=NS(application_id="sample"))
+        executor.channel = NS(latest_observation_envelope=None)
+        self.events, self.sent = [], []
+        self.state = NS(obs=page(), terminal_reason="", detail="", step=0, run_id="run-1",
+            cancelled=lambda: False, budget=NS(check=lambda: None), receipt=TurnReceipt(),
+            approvals=NS(confirm_operation=lambda *a, **k: ("", ""), operation_hold_ms=1000),
+            ledger=NS(append=lambda event, **facts: self.events.append((event, facts))))
+        def dispatch(_s, action, args, **_):
+            self.sent.append(action)
+            before = self.state.obs
+            after = page(before.epoch + (0 if action in {"observe", "form_model"} else 1))
+            receipt = ActionReceipt(1, f"c{len(self.sent)}", action, args, True, url_before=before.url,
+                                    url_after=after.url, observation=after, write_guard_held=False)
+            self.state.obs = after
+            return receipt
+        self.dispatch_patch = patch.object(GoalTurnExecutor, "_dispatch", side_effect=dispatch)
+        return executor
+
+    def test_the_same_handoff_asked_again_on_an_unchanged_page_sends_nothing(self):
+        executor = self.executor()
+        args = {"fields": [{"ref": "e1", "field": "name", "value": "x"}], "submit": {"ref": "e1", "label": "Next", "scope": "s"}}
+        with self.dispatch_patch:
+            first = executor._dispatch(self.state, "handoff_form", args)
+            executor._dispatch(self.state, "observe", {})
+            executor._dispatch(self.state, "form_model", {"ref": "e1", "kind": "form"})
+            again = executor._dispatch(self.state, "handoff_form", args)
+        self.assertIsNotNone(first)
+        self.assertEqual(self.sent, ["handoff_form", "observe", "form_model"])
+        self.assertEqual(again.command_id, first.command_id)
+        self.assertIn("handoff_kept", [e for e, _ in self.events])
+
+    def test_a_changed_page_or_a_different_handoff_is_dispatched_normally(self):
+        executor = self.executor()
+        args = {"fields": [{"ref": "e1", "field": "name", "value": "x"}]}
+        with self.dispatch_patch:
+            executor._dispatch(self.state, "handoff_form", args)
+            executor._dispatch(self.state, "handoff_form", {"fields": [{"ref": "e1", "field": "name", "value": "y"}]})
+            executor._dispatch(self.state, "scroll", {"direction": "down", "pages": 1})
+            executor._dispatch(self.state, "handoff_form", args)
+        self.assertEqual(self.sent, ["handoff_form", "handoff_form", "scroll", "handoff_form"])

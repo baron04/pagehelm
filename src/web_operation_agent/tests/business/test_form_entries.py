@@ -44,6 +44,31 @@ class Port:
 
 
 class FormEntriesContract(unittest.TestCase):
+    def test_entry_hook_gets_business_copy_without_losing_raw_diagnostics_or_exception(self):
+        trace = {"trace_id":"private-entry","events":[{"sequence":1,"operation":"click","path":"binding"}]}
+        for diagnostic in (None,trace):
+            for fails in (False,True):
+                tools,port,before,ctx,opaque = self.setup_entry()
+                entry = tools.plan(before,{"entry_id":opaque},context=ctx)
+                raw = self.receipt(before,execution_trace=diagnostic)
+                seen = []
+                failure = RuntimeError("original application failure")
+                def accept(_entry,_before,receipt,_observation,**kwargs):
+                    seen.append(receipt.execution_trace)
+                    if fails:
+                        raise failure
+                    return "business-form" if receipt.execution_trace is None else "diagnostic-form"
+                port.accept_entry = accept
+                tools.acknowledged(entry,before,raw,context=ctx)
+                if fails:
+                    with self.assertRaises(RuntimeError) as caught:
+                        tools.accept_current(page(3),context=ctx)
+                    self.assertIs(caught.exception,failure)
+                else:
+                    self.assertEqual(tools.accept_current(page(3),context=ctx),"business-form")
+                self.assertEqual(seen,[None])
+                self.assertEqual(raw.execution_trace,diagnostic)
+
     def setup_entry(self):
         port, obs, ctx = Port(), page(), context()
         tools = FormEntryTools(port, application_id="fixture", require_write_guard=True)

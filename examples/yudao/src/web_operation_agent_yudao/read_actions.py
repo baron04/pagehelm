@@ -45,6 +45,12 @@ class NativeReadActions:
     def _index(self, context, bound):
         return bound.index(context=context)
 
+    def _tab_list_routes(self, path, actor_pages):
+        return actor_pages & self.list_tab_routes
+
+    def _unregistered_control(self, intent, element, path):
+        return False
+
     def _form_read(self, checkpoint, call):
         client = self.data._client
         generation = client.read_generation
@@ -154,7 +160,7 @@ class NativeReadActions:
                     expectation = ["branch", target, attrs["aria-expanded"] == "false"]
             elif element.role == "tab" and not attrs.get("href"):
                 routes = {k: v for k, v in self.record_routes.items() if k in pages}
-                if not NativeTabPolicy(routes.values(), pages & self.list_tab_routes).decide(before, element):
+                if not NativeTabPolicy(routes.values(), self._tab_list_routes(path, pages)).decide(before, element):
                     effect = ActionEffect.READ_ONLY
                     expectation = ["tab" if before.record_route == path else "list_tab",
                                    attrs["id"], attrs["aria-controls"], element.name]
@@ -162,6 +168,9 @@ class NativeReadActions:
                 from urllib.parse import urljoin
                 target = self._path(urljoin(before.url, attrs["href"]))
                 expectation = self._record_target(target, index, context, bound)
+            elif self._unregistered_control(intent, element, path):
+                expectation = ["control", path]
+                effect = ActionEffect.READ_ONLY
         if expectation is None:
             raise ActionAdmissionRefused("unreviewed")
         encoded = json.dumps([self.data._client.read_generation, expectation], separators=(",", ":"))
@@ -195,6 +204,9 @@ class NativeReadActions:
             raise ActionResultPending()
         if after.page_route != path:
             return False
+        if expected[0] == "control":
+            return path == expected[1] or path in {p.key for p in index.pages} or (
+                after.record_route == path and self._record_target(path, index, context, bound) is not None)
         if expected[0] == "page":
             return path == expected[1] and path in {p.key for p in index.pages}
         if expected[0] == "record":

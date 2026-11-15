@@ -324,6 +324,19 @@ class _ContactsToolExecutor:
             })
         return rows
 
+    def get(self, path: str, **params) -> dict:
+        """One read under the delegated actor; the write port reads back through this."""
+        if params:
+            path += "?" + urllib.parse.urlencode(params)
+        request = urllib.request.Request(
+            self.origin + path,
+            headers={"Authorization": f"Bearer {self._api_token}"})
+        with urllib.request.urlopen(request, timeout=3) as response:
+            payload = json.load(response)
+        if not isinstance(payload, dict):
+            raise BusinessToolError("the contacts API returned an invalid document")
+        return payload
+
     # -- the write -----------------------------------------------------------------------
     def _post(self, path: str, payload: dict) -> dict:
         from web_operation_agent.business.dispatch_evidence import mutation_transport
@@ -837,6 +850,7 @@ class MinimalContactsAdapter:
         skills.extend(extra_skills)
         executor = _ContactsToolExecutor(origin, api_token=api_token,
                                          allow_mutations=allow_mutations)
+        self._executor = executor
         operations = None
         if standard_skills:
             if extra_skills:
@@ -911,6 +925,10 @@ class MinimalContactsAdapter:
             page_controller_module=origin + "/woa/page-controller.js",
             catalog_sha256=self.business_tools.catalog_sha256,
         )
+
+    def get(self, path: str, **params) -> dict:
+        """One read under the delegated actor; the write port reads back through this."""
+        return self._executor.get(path, **params)
 
     def health(self) -> dict:
         try:

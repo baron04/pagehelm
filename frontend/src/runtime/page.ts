@@ -22,6 +22,7 @@ import {formInstance, localChoiceRemoval} from './formInstance'
 import {ChoiceUnavailable, listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
+import {normalizeFormRead, normalizeRowRead, unreadableReason, type FormModelRead, type RowRecordRead} from './formModel'
 import {suspendPanelHitTargets} from './panelObservation'
 import {createControlGuide, type ControlGuide} from '../handoff/guide'
 
@@ -97,7 +98,14 @@ interface PageControllerModule {
   readPageRead?: () => unknown
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
+  readElementFormModel?: ElementNavigationReader
+  restoreElementFormModel?: (element: unknown, request: unknown) => Promise<boolean>
+  readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
+  acceptReadSource?: (source: string, kind: 'form' | 'row') => boolean
+  readConfirmBox?: (doc: Document) => unknown
+  pressConfirmButton?: (label: string, doc: Document) => boolean
+  readSubmitBusy?: (doc: Document) => boolean
 }
 
 /**
@@ -234,11 +242,65 @@ export class Page {
     try {
       const fingerprint = actionElementFingerprint(this.element(ref)), navigation = this.navigation(ref)
       const form = this.formContext(ref)
-      const contextual = form ? JSON.stringify([fingerprint, form]) : fingerprint
+      const record = this.recordContext(ref)
+      const contextual = form || record ? JSON.stringify([fingerprint, form, record]) : fingerprint
       return navigation ? JSON.stringify([contextual, navigation]) : contextual
     } catch {
       return 'missing'
     }
+  }
+
+  /** Set by the Runtime from the application's controller module; absent means unreadable. */
+  formModelReader: ElementNavigationReader | undefined
+  rowRecordReader: ElementNavigationReader | undefined
+  /** The application's source acceptance; absent means no source is ever forwarded. */
+  sourceAccepter: ((source: string, kind: 'form' | 'row') => boolean) | undefined
+
+  /** Why the last `formModel` read gave nothing, in a word the server can classify. */
+  formUnreadable = ''
+
+  /** The whole data bound to the live form under `ref`; null if the form cannot be read. */
+  formModel(ref: unknown): FormModelRead | null {
+    this.formUnreadable = ''
+    try {
+      const element = this.element(ref)
+      if (!(element instanceof HTMLElement) || !element.isConnected || !this.formModelReader) {
+        this.formUnreadable = 'no_reader'
+        return null
+      }
+      const raw = this.formModelReader(element)
+      const read = normalizeFormRead(raw, {acceptReadSource: this.sourceAccepter})
+      if (read && JSON.stringify(read).length <= browserContract.form_model.max_bytes) return read
+      this.formUnreadable = unreadableReason(raw) || 'not_a_form'
+      return null
+    } catch { this.formUnreadable = 'reader_failed'; return null }
+  }
+
+  /** The table row a row control belongs to, as the table that renders it says. */
+  rowRecord(ref: unknown): RowRecordRead | null {
+    try {
+      const element = this.element(ref)
+      if (!(element instanceof HTMLElement) || !element.isConnected || !this.rowRecordReader) return null
+      return normalizeRowRead(this.rowRecordReader(element), {acceptReadSource: this.sourceAccepter})
+    } catch { return null }
+  }
+
+  /** Application-observed row identity, re-read before dispatch. No effect grant. */
+  private recordContext(ref: unknown): {id: string; table: string; values: string[][]} | undefined {
+    const element = this.element(ref)
+    const fact = this.readElementPageControl?.(element) as
+      {kind?: unknown; id?: unknown; table?: unknown; values?: unknown} | undefined
+    if (fact?.kind !== 'record' || typeof fact.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(fact.id) ||
+        typeof fact.table !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(fact.table) ||
+        !Array.isArray(fact.values) || fact.values.length > 80) return undefined
+    const values: string[][] = []
+    for (const pair of fact.values) {
+      if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== 'string' ||
+          typeof pair[1] !== 'string' || pair[0].length > 80 || pair[1].length > 300 ||
+          this.redactor.isSensitiveName(pair[0]) || this.redactor.redactString(pair[1]) !== pair[1]) return undefined
+      values.push(pair as string[])
+    }
+    return {id: fact.id, table: fact.table, values}
   }
 
   private formContext(ref: unknown): {mode: 'create' | 'update'; recordId: string | null;
@@ -808,9 +870,18 @@ export class Page {
       delete item.attrs.form_mode
       delete item.attrs.form_record_id
       delete item.attrs.form_input_kind
+      delete item.attrs.record_id
+      delete item.attrs.record_table
+      delete item.attrs.record_values
       try {
         const element = this.element(item.ref)
         if (!(element instanceof HTMLElement) || !element.isConnected) continue
+        const record = this.recordContext(item.ref)
+        if (record) {
+          item.attrs.record_id = record.id
+          item.attrs.record_table = record.table
+          item.attrs.record_values = JSON.stringify(record.values)
+        }
         const fact = this.readElementPageControl?.(element) as
           {kind?: unknown; page?: unknown; pageSize?: unknown; field?: unknown; queryValue?: unknown;
             mode?: unknown; recordId?: unknown} | undefined
@@ -1039,7 +1110,14 @@ export interface LoadedPageController {
   readPageRead?: PageQueryReader
   readElementNavigation?: ElementNavigationReader
   readElementPageControl?: ElementNavigationReader
+  readElementFormModel?: ElementNavigationReader
+  restoreElementFormModel?: (element: unknown, request: unknown) => Promise<boolean>
+  readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
+  acceptReadSource?: (source: string, kind: 'form' | 'row') => boolean
+  readConfirmBox?: (doc: Document) => unknown
+  pressConfirmButton?: (label: string, doc: Document) => boolean
+  readSubmitBusy?: (doc: Document) => boolean
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -1112,7 +1190,21 @@ export async function loadPageController(moduleUrl: string | undefined,
       ? {readPageRead: module.readPageRead} : {}),
     ...(typeof module.readElementPageControl === 'function'
       ? {readElementPageControl: module.readElementPageControl} : {}),
+    ...(typeof module.readElementFormModel === 'function'
+      ? {readElementFormModel: module.readElementFormModel} : {}),
+    ...(typeof module.restoreElementFormModel === 'function'
+      ? {restoreElementFormModel: module.restoreElementFormModel} : {}),
+    ...(typeof module.readElementRowRecord === 'function'
+      ? {readElementRowRecord: module.readElementRowRecord} : {}),
     ...(typeof module.readElementNavigation === 'function'
       ? {readElementNavigation: module.readElementNavigation} : {}),
-    ...(typeof module.openPage === 'function' ? {openPage: module.openPage} : {})}
+    ...(typeof module.openPage === 'function' ? {openPage: module.openPage} : {}),
+    ...(typeof module.acceptReadSource === 'function'
+      ? {acceptReadSource: module.acceptReadSource} : {}),
+    ...(typeof module.readConfirmBox === 'function'
+      ? {readConfirmBox: module.readConfirmBox} : {}),
+    ...(typeof module.pressConfirmButton === 'function'
+      ? {pressConfirmButton: module.pressConfirmButton} : {}),
+    ...(typeof module.readSubmitBusy === 'function'
+      ? {readSubmitBusy: module.readSubmitBusy} : {})}
 }

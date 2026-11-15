@@ -32,6 +32,27 @@ serve = load("serve")
 cfg = command.cfg
 
 
+class HostConfigurationTests(unittest.TestCase):
+    def test_normal_factory_has_the_product_admission_and_one_write_opt_in(self):
+        settings = serve.Settings(1, "synthetic", "http://localhost:49111", state=Path("/tmp/synthetic-state"))
+        base = {"AGENT_OPENAI_MODEL": "scripted/no-model"}
+        off = serve.host_config(settings, base)
+        self.assertEqual(off.native_page_admission, "read-only-window")
+        self.assertFalse(off.native_writes)
+        self.assertFalse(off.native_submit)
+        self.assertFalse(off.native_edit_prefill)
+        on = serve.host_config(settings, {**base, "WOA_NATIVE_WRITES": "true"})
+        self.assertTrue(on.native_writes)
+        self.assertTrue(on.native_submit)
+        self.assertTrue(on.native_edit_prefill)
+        self.assertEqual(on.native_page_admission, off.native_page_admission)
+        self.assertEqual(on.native_read_policy, off.native_read_policy)
+        for value in ("1", "yes", "invalid"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                serve.host_config(settings, {**base, "WOA_NATIVE_WRITES": value})
+
+
+
 class LauncherTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

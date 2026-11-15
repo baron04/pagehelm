@@ -46,7 +46,7 @@ class GuardProxyTests(unittest.TestCase):
                     if self.command != "GET" or self.path.endswith("/unsafe-get"):
                         connection.execute("UPDATE records SET name = 'Changed'")
                     name = connection.execute("SELECT name FROM records WHERE id=1").fetchone()[0]
-                payload = json.dumps({"name": name}).encode()
+                payload = json.dumps(getattr(owner, "app_body", None) or {"name": name}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
@@ -123,6 +123,45 @@ class GuardProxyTests(unittest.TestCase):
         self.assertEqual((status, body["name"]), (200, "Changed"))
         # The page the assistant is working is still held.
         self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
+
+    def test_an_accepted_person_write_is_observed_for_the_waiting_turn(self):
+        self.begin()
+        actor = "a" * 64
+        self.assertEqual(self.guard.user_write_mark(actor), 0)
+        self.app_body = {"code": 0, "data": 7}
+        status, _body, _ = self.request("POST", "/admin-api/crm/customer/update",
+                                        body=b'{"id": 7, "name": "x"}', assistant=False)
+        self.assertEqual(status, 200)
+        event = self.guard.user_write_after(actor, 0, ("/admin-api/crm/customer/",), "7")
+        self.assertEqual((event["method"], event["record_id"]), ("POST", "7"))
+        # a different record, an unaccepted answer, and anything before the mark do not wake it
+        self.assertIsNone(self.guard.user_write_after(actor, 0, ("/admin-api/crm/customer/",), "8"))
+        mark = self.guard.user_write_mark(actor)
+        self.app_body = {"code": 500, "msg": "rejected"}
+        self.request("POST", "/admin-api/crm/customer/update", body=b'{"id": 7}', assistant=False)
+        self.assertIsNone(self.guard.user_write_after(actor, mark, ("/admin-api/crm/customer/",), "7"))
+        self.app_body = {"code": 0, "data": {"id": 9}}
+        self.request("POST", "/admin-api/crm/customer/create", body=b'{"name": "y"}', assistant=False)
+        event = self.guard.user_write_after(actor, mark, ("/admin-api/crm/customer/",), "")
+        self.assertEqual(event["record_id"], "9")
+
+    def test_a_create_handoff_ignores_an_unrelated_update_under_the_prefix(self):
+        self.begin()
+        actor = "a" * 64
+        self.app_body = {"code": 0, "data": None}
+        self.request("POST", "/admin-api/crm/customer/update", body=b'{"id": 7}', assistant=False)
+        mark = self.guard.user_write_mark(actor)
+        prefixes = ("/admin-api/crm/customer/",)
+        # An update of some other record under the same prefix is not the create.
+        self.request("POST", "/admin-api/crm/customer/update", body=b'{"id": 4}', assistant=False)
+        self.assertIsNone(self.guard.user_write_after(actor, mark, prefixes, "", create_only=True))
+        # A lookalike that is not the create interface does not count either.
+        self.request("POST", "/admin-api/crm/customer/update-status", body=b'{"id": 4}', assistant=False)
+        self.assertIsNone(self.guard.user_write_after(actor, mark, prefixes, "", create_only=True))
+        self.app_body = {"code": 0, "data": {"id": 11}}
+        self.request("POST", "/admin-api/crm/customer/create", body=b'{"name": "z"}', assistant=False)
+        event = self.guard.user_write_after(actor, mark, prefixes, "", create_only=True)
+        self.assertEqual(event["record_id"], "11")
 
     def windowed(self):
         self.proxy.close()

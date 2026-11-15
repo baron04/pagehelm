@@ -9,6 +9,7 @@ from ..business.forms import (ApplicationFormBindingPort, ApplicationFormOfferPo
 from ..execution.form_tools import apply_form_draft
 from ..modeling.provider import ProviderError
 from ..state.identity import PrincipalError
+from ..schemas import ActionReceipt
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from .bind_fields import choose_labels
 from .ports import capabilities_of
@@ -169,7 +170,8 @@ def _found_entry(executor, s, port, plan, reference) -> str:
                     continue
                 try:
                     with s.receipt.stage("business"):
-                        bound = port.accept_entry(entry, before, receipt, s.obs,
+                        bound = port.accept_entry(entry, before,
+                                                  ActionReceipt.from_json(receipt.to_json(include_diagnostics=False)), s.obs,
                                                   context=context("form_entry_receipt"))
                 except BusinessToolRequestError:
                     # Nothing new that is a form: a menu opened, a tab switched. A form
@@ -248,7 +250,8 @@ def handoff_form(executor, state, plan):
                         return FormOutcome(reason=s.terminal_reason or "agent_refused", detail="the form entry is not ready",
                                            error_code="form_entry_unready")
                     with s.receipt.stage("business"):
-                        reference = port.accept_entry(entry, before, receipt, s.obs,
+                        reference = port.accept_entry(entry, before,
+                                            ActionReceipt.from_json(receipt.to_json(include_diagnostics=False)), s.obs,
                                             context=s.approvals.context(s.step, "form_entry_receipt"))
                 finally:
                     port.discard_entry(entry, context=s.approvals.context(s.step, "form_entry_release"))

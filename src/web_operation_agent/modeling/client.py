@@ -7,6 +7,7 @@ import ipaddress
 import json
 import math
 import re
+import select
 import ssl
 import threading
 import time
@@ -108,9 +109,8 @@ class _ConnectionCache:
     """A few idle provider connections, per destination, for the next call to reuse.
 
     Idle connections older than `IDLE_S` are closed rather than reused: providers and
-    proxies drop idle keep-alive connections on their own schedule, and a stale one costs
-    a failed request before the retry. Two per destination is enough for a turn's
-    sequential calls and a planner call beside it.
+    proxies drop idle keep-alive connections on their own schedule. A socket that
+    is already readable while idle can also be discarded before a new request.
     """
 
     MAX_IDLE = 2
@@ -134,6 +134,17 @@ class _ConnectionCache:
                 stale.append(connection)
         for connection in stale:
             connection.close()
+        if chosen is not None:
+            # An idle HTTP connection should have no pending reads. EOF and
+            # unexpected data both disqualify it before any new bytes are sent.
+            try:
+                readable, _, failed = select.select([chosen.sock], [], [chosen.sock], 0)
+            except (OSError, ValueError):
+                chosen.close()
+                return None
+            if readable or failed:
+                chosen.close()
+                return None
         return chosen
 
     def give(self, key: tuple, connection) -> None:
@@ -407,6 +418,7 @@ class ChatModel(_ConcreteChatProvider):
                     code=error_code,
                     retryable=transient,
                     request_id=request_id,
+                    dispatched=True,
                 ) from e
             except _ProviderHTTPStatus as e:
                 transient = e.status in {408, 425, 429} or 500 <= e.status <= 599
@@ -420,7 +432,7 @@ class ChatModel(_ConcreteChatProvider):
                     request_id=request_id, error_code=error_code)
                 raise ProviderError(
                     f"provider returned HTTP {e.status}", code=error_code,
-                    retryable=transient, request_id=request_id) from e
+                    retryable=transient, request_id=request_id, dispatched=True) from e
             except ProviderError as exc:
                 if guard is not None:
                     guard.record_outcome(self._provider_outcome(exc))
@@ -445,9 +457,11 @@ class ChatModel(_ConcreteChatProvider):
                 self.meter.record_unmetered(
                     provider=self.provider, model=self.model, run_id=run_id,
                     request_id=request_id, error_code=error_code)
+                # A missing reply cannot distinguish a failed send from a lost
+                # response. The ledger keeps the ID and unknown usage.
                 raise ProviderError(
                     f"provider call failed: {type(e).__name__}",
-                    code=error_code, retryable=not deadline,
+                    code=error_code, retryable=False,
                     request_id=request_id, dispatched=True,
                 ) from e
             else:
@@ -524,10 +538,8 @@ class ChatModel(_ConcreteChatProvider):
         cache; a cancelled, failed or deadline-bound call still closes its own connection,
         so the cancellation contract is unchanged.
 
-        Two retries, each at most once, and only where no request can have been processed:
-        a new connection that fails before anything was sent, and a kept connection the
-        provider had already closed (it fails before a status line arrives). Nothing that
-        received a response is ever sent twice.
+        Only a fresh connection failure before a POST starts can be retried here.
+        After transmission starts, a missing status line leaves dispatch uncertain.
         """
         started = time.monotonic()
         parsed = urllib.parse.urlsplit(url)
@@ -639,92 +651,72 @@ class ChatModel(_ConcreteChatProvider):
                     self._transport_retries += 1
             raise AssertionError("unreachable")
 
-        connection = cache.take(key)
-        reused = connection is not None
-        if connection is None:
-            connection = open_new()
-        while True:
-            remaining = timeout_s - (time.monotonic() - started)
-            if remaining <= 0:
-                connection.close()
-                raise ProviderError(
-                    "provider deadline elapsed before dispatch", code="provider_deadline",
-                    retryable=False, dispatched=False)
-            connection.timeout = max(.001, remaining)
-            if connection.sock is not None:
-                connection.sock.settimeout(max(.001, remaining))
-            finished = threading.Event()
-            was_cancelled = threading.Event()
+        connection = cache.take(key) or open_new()
+        remaining = timeout_s - (time.monotonic() - started)
+        if remaining <= 0:
+            connection.close()
+            raise ProviderError(
+                "provider deadline elapsed before dispatch", code="provider_deadline",
+                retryable=False, dispatched=False)
+        connection.timeout = max(.001, remaining)
+        if connection.sock is not None:
+            connection.sock.settimeout(max(.001, remaining))
+        finished = threading.Event()
+        was_cancelled = threading.Event()
 
-            def watch(connection=connection, finished=finished,
-                      was_cancelled=was_cancelled) -> None:
-                while not finished.wait(.05):
-                    if cancelled():
-                        was_cancelled.set()
-                        sock = connection.sock
-                        if sock is not None:
-                            try:
-                                sock.shutdown(2)
-                            except OSError:
-                                pass
-                        connection.close()
-                        return
-
-            watcher = threading.Thread(target=watch, name="woa-provider-cancel", daemon=True)
-            watcher.start()
-            dispatched = False
-            keep = False
-            stale = False
-            try:
+        def watch() -> None:
+            while not finished.wait(.05):
                 if cancelled():
-                    raise ProviderError(
-                        "provider call cancelled before dispatch", code="provider_cancelled",
-                        retryable=False, dispatched=False)
-                dispatched = True
-                try:
-                    connection.request("POST", path, body=payload, headers=headers)
-                    response = connection.getresponse()
-                except (http.client.RemoteDisconnected, ConnectionResetError,
-                        BrokenPipeError) as exc:
-                    # A kept connection the provider closed while it sat idle fails here,
-                    # before any status line: the request was never processed. Anything
-                    # else is the provider's answer and is not retried.
-                    if (reused and not was_cancelled.is_set() and not cancelled()
-                            and time.monotonic() - started < timeout_s):
-                        stale = True
-                    raise
-                if not 200 <= response.status <= 299:
-                    raise _ProviderHTTPStatus(response.status)
-                body = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
-                keep = (not response.will_close and response.isclosed()
-                        and not was_cancelled.is_set() and not cancelled())
-                return body
-            except ProviderError:
-                raise
-            except Exception as exc:
-                if stale:
-                    pass
-                elif was_cancelled.is_set() or cancelled():
-                    raise ProviderError(
-                        "provider call cancelled", code="provider_cancelled",
-                        retryable=False, dispatched=dispatched) from exc
-                elif ChatModel._is_deadline_error(exc):
-                    raise ProviderError(
-                        "provider deadline elapsed", code="provider_deadline",
-                        retryable=False, dispatched=dispatched) from exc
-                else:
-                    raise
-            finally:
-                finished.set()
-                watcher.join(timeout=1)
-                if keep:
-                    cache.give(key, connection)
-                else:
+                    was_cancelled.set()
+                    sock = connection.sock
+                    if sock is not None:
+                        try:
+                            sock.shutdown(2)
+                        except OSError:
+                            pass
                     connection.close()
-            # Only a stale kept connection reaches here: retry once on a new connection.
-            self._stale_retries += 1
-            reused = False
-            connection = open_new()
+                    return
+
+        watcher = threading.Thread(target=watch, name="woa-provider-cancel", daemon=True)
+        watcher.start()
+        dispatched = False
+        keep = False
+        try:
+            if cancelled():
+                raise ProviderError(
+                    "provider call cancelled before dispatch", code="provider_cancelled",
+                    retryable=False, dispatched=False)
+            dispatched = True
+            connection.request("POST", path, body=payload, headers=headers)
+            response = connection.getresponse()
+            if not 200 <= response.status <= 299:
+                raise _ProviderHTTPStatus(response.status)
+            body = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+            keep = (not response.will_close and response.isclosed()
+                    and not was_cancelled.is_set() and not cancelled())
+            return body
+        except ProviderError:
+            raise
+        except Exception as exc:
+            if was_cancelled.is_set() or cancelled():
+                raise ProviderError(
+                    "provider call cancelled", code="provider_cancelled",
+                    retryable=False, dispatched=dispatched) from exc
+            if ChatModel._is_deadline_error(exc):
+                raise ProviderError(
+                    "provider deadline elapsed", code="provider_deadline",
+                    retryable=False, dispatched=dispatched) from exc
+            raise
+        finally:
+            finished.set()
+            watcher.join(timeout=1)
+            # A watcher still parked inside the cancel hook can yet close this
+            # connection under the next caller; only a dead watcher is safe, and
+            # one that already cancelled this call leaves a dead socket behind.
+            if keep and not watcher.is_alive() and not was_cancelled.is_set():
+                cache.give(key, connection)
+            else:
+                connection.close()
 
     def close_connections(self) -> None:
         """Close the idle provider connections this model kept for reuse."""
@@ -737,5 +729,4 @@ class ChatModel(_ConcreteChatProvider):
         if cache is None:
             cache = self.__dict__.setdefault("_connections", _ConnectionCache())
             self.__dict__.setdefault("_transport_retries", 0)
-            self.__dict__.setdefault("_stale_retries", 0)
         return cache

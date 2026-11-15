@@ -13,6 +13,7 @@ from web_operation_agent.schemas import ElementRef, ActionReceipt
 from web_operation_agent.transport.protocol import _remote_args_echo
 from web_operation_agent_yudao.model_page_policy import (NativePageReview, NativeModelReadActions,
     NativeDraftSteps, _unsafe_button)
+from web_operation_agent_yudao.method_fenced_actions import MethodFencedPageActions, MethodFencedPageReview
 from web_operation_agent_yudao.deployment_validation import validate_native_deployment
 from . import test_read_actions as read_fixture
 
@@ -184,6 +185,68 @@ class QueryTests(unittest.TestCase):
         self.runtime = ActionAdmission(self.policy, "yudao")
         self.proof = {"path": "/admin-api/crm/customer/page", "query_digest": "b"*64, "query_fields": {},
                       "revision": 1, "page": 1, "page_size": 10, "rows": 10, "total": 30}
+
+    def method_fenced(self, review=None):
+        data = self.policy.data
+        self.policy = MethodFencedPageActions("https://fixture.test", data, {},
+            NS(outline_index=lambda **kw: data.index(context=kw["context"])),
+            MethodFencedPageReview.from_review(review or self.policy.page_review))
+        self.runtime = ActionAdmission(self.policy, "yudao")
+
+    def test_method_fence_allows_unregistered_ordinary_controls_with_bound_receipts(self):
+        button = ElementRef("e1", "button", "展开摘要", "button", 1)
+        textbox = ElementRef("e1", "textbox", "查找", "input", 1)
+        combo = ElementRef("e1", "combobox", "类型", "select", 1)
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unreviewed"):
+            self.runtime.prepare("click", {"ref": "e1"}, self.page(elements=(button,)),
+                                 context=self.context, checkpoint=lambda: None)
+        self.method_fenced()
+        for element, action, args in ((button, "click", {"ref": "e1"}),
+                                       (textbox, "fill", {"ref": "e1", "value": "synthetic"}),
+                                       (combo, "select", {"ref": "e1", "value": "one", "option_label": "One"})):
+            with self.subTest(action=action):
+                self.runtime = ActionAdmission(self.policy, "yudao")
+                before = self.page(elements=(element,))
+                after = self.page(2, elements=(replace(element, epoch=2),))
+                self.transact(before, after, action, args)
+
+    def test_method_fence_preserves_write_refusals_and_invalid_target_binding(self):
+        self.method_fenced()
+        for label, role, attrs in (("提交", "button", {}), ("审核", "button", {}), ("删除", "button", {}),
+                                   ("Continue", "button", {"native_submit": "true"}),
+                                   ("状态", "switch", {}), ("", "button", {"action_icon": "ep:delete"})):
+            before = self.page(elements=(ElementRef("e1", role, label, "button", 1, attrs),))
+            with self.subTest(label=label), self.assertRaisesRegex(ActionAdmissionRefused, "unsafe_effect"):
+                self.runtime.prepare("click", {"ref": "e1"}, before, context=self.context, checkpoint=lambda: None)
+        valid = ElementRef("e1", "button", "展开摘要", "button", 1)
+        for before, args in ((self.page(elements=(valid,)), {"ref": "e2"}),
+                             (self.page(elements=(valid,)), {"ref": "e1", "epoch": 2}),
+                             (replace(self.page(elements=(valid,)), page_route="/different"), {"ref": "e1"}),
+                             (self.page(elements=(replace(valid, attrs={"disabled": "true"}),)), {"ref": "e1"})):
+            with self.assertRaises(ActionAdmissionRefused):
+                self.runtime.prepare("click", args, before, context=self.context, checkpoint=lambda: None)
+        with self.assertRaises(ActionAdmissionRefused):
+            self.runtime.prepare("goto", {"url": "https://fixture.test/not-in-menu"}, self.page(),
+                                 context=self.context, checkpoint=lambda: None)
+
+    def test_method_fence_allows_an_unregistered_tab_but_checks_the_owned_panel_and_read(self):
+        tab = ElementRef("e1", "tab", "审批历史", "button", 1,
+                         {"id": "tab-2", "aria-controls": "pane-2", "aria-selected": "false"})
+        before = replace(self.page(path="/crm/customer", elements=(tab,)), page_read=self.proof,
+                         page_query={"path": self.proof["path"], "parameters": {"sceneType": "1"}})
+        selected = replace(tab, epoch=2, attrs={**tab.attrs, "aria-selected": "true", "panel_ready": "true"})
+        after = replace(self.page(2, path="/crm/customer", elements=(selected,)),
+                        page_read={**self.proof, "revision": 2, "query_digest": "c" * 64},
+                        page_query={"path": self.proof["path"], "parameters": {"sceneType": "2"}})
+        self.method_fenced()
+        self.transact(before, after, "click", {"ref": "e1"})
+        with self.assertRaises(ActionAdmissionRefused):
+            self.runtime.prepare("click", {"ref": "e1"}, replace(before, elements=[replace(tab, attrs={})]),
+                                 context=self.context, checkpoint=lambda: None)
+        denied = replace(self.policy.page_review, excluded=(("/crm/customer", "tabs"),))
+        self.method_fenced(denied)
+        with self.assertRaises(ActionAdmissionRefused):
+            self.runtime.prepare("click", {"ref": "e1"}, before, context=self.context, checkpoint=lambda: None)
 
     def test_model_list_tab_needs_explicit_handler_review(self):
         tab = ElementRef("e1", "tab", "我参与的", "div", 1,
@@ -507,6 +570,11 @@ class QueryTests(unittest.TestCase):
         first = ElementRef("e2", "textbox", "产品", "input", 1,
                            {**attrs, "title": "明细第1行·产品名称"})
         before = self.page(path="/crm/customer", elements=(button, first))
+        submit = replace(before, elements=[replace(button, attrs={**attrs, "native_submit": "true"}), first])
+        fenced = DraftStepAdmission(NativeDraftSteps(self.policy.data, forms,
+            MethodFencedPageReview.from_review(review)), "yudao")
+        with self.assertRaisesRegex(ActionAdmissionRefused, "unsafe_effect"):
+            fenced.prepare("click", {"ref": "e1"}, submit, context=self.context, checkpoint=lambda: None)
         intent, permit = admission.prepare("click", {"ref": "e1"}, before,
                                            context=self.context, checkpoint=lambda: None)
         self.assertEqual(permit.step, "add_line")

@@ -710,6 +710,22 @@ class BusinessRuntimeValidation(unittest.TestCase):
             self.assertEqual(blocked.exception.reason, "business_key_unresolved")
             self.assertEqual(executors[1].executions, 0)
 
+    def test_preparation_only_refuses_even_exact_approval_before_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = _write_skill(Path(tmp) / "write-skill.json")
+            executor = _MutationExecutor()
+            journal = MemoryMutationJournal()
+            runtime = BusinessToolRuntime((skill,), executor, mutation_journal=journal,
+                                          mutation_dispatch_enabled=False)
+            loaded = {skill.skill_id}
+            proposal = runtime.prepare_mutation("create_company", {"name": "Acme"}, loaded)
+            for digest in ("0" * 64, proposal.content_digest, proposal.content_digest):
+                with self.assertRaises(BusinessMutationBlockedError) as error:
+                    runtime.execute_mutation(proposal, digest, loaded)
+                self.assertEqual(error.exception.reason, "preparation_only")
+            self.assertEqual(executor.executions, 0)
+            self.assertEqual(journal.get(proposal.content_digest).state, "prepared")
+
     def test_mutation_requires_exact_approval_and_is_single_use(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill = _write_skill(Path(tmp) / "write-skill.json")

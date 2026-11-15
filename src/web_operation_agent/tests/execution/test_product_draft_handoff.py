@@ -40,6 +40,26 @@ class DraftHandoffTests(unittest.TestCase):
         self.assertEqual("Save", result.marked)
         self.assertEqual(1, len(calls))
 
+    def test_an_unrestorable_form_never_gets_its_submit_marked(self):
+        from web_operation_agent.execution.draft_handoff import unrestorable_form
+        record = {"scope": "form:entry", "instance": "live", "lifetime": "L1",
+                  "effects": ["结算账户：998036→998031"], "detail": ""}
+        blocked = {("form:entry", "live"): record}
+        self.assertIs(unrestorable_form(blocked, "form:entry", ("live",)), record)
+        self.assertIs(unrestorable_form(blocked, "form:entry", ("L1",)), record)
+        self.assertIs(unrestorable_form(blocked, "form:entry", ()), record)
+        self.assertIsNone(unrestorable_form(blocked, "form:entry", ("other",)))
+        self.assertIsNone(unrestorable_form(blocked, "other-scope", ("live",)))
+        before = page()
+        context = NS(obs=page(2, first="Synthetic"), audit=lambda *a, **k: None)
+        context.page = NS(checkpoint=lambda: None,
+                          handoff=lambda *_: self.fail("a blocked form was handed over"))
+        result = handoff_draft(context, before,
+                               [(field_identity(before.elements[0]), "Synthetic")],
+                               "Save", blocked=blocked)
+        self.assertEqual((result.state, result.error_code), ("refused", "opening_changes"))
+        self.assertIn("结算账户：998036→998031", result.feedback)
+
     def test_missing_value_replaced_form_or_untouched_change_never_hands_off(self):
         for after in (page(2), page(2, first="Synthetic", instance="replaced"),
                       page(2, first="Synthetic", other="unexpected")):
@@ -157,3 +177,93 @@ class DraftHandoffTests(unittest.TestCase):
                 result = add_draft_lines(context, "Add line", 1)
                 self.assertEqual(1, len(calls))
                 self.assertEqual(change == "none", result is None)
+
+
+class AnonymousUntouchedHandoffTests(unittest.TestCase):
+    def run_handoff(self, change="none", *, final_change="none"):
+        from web_operation_agent.tests.transport.submit_wire import SubmitWire
+        def anonymous(observation):
+            attrs = {"form_scope": "form:entry", "form_instance": "live"}
+            return replace(observation, elements=[*observation.elements,
+                ElementRef("e4", "spinbutton", "", "input", observation.epoch,
+                           {**attrs, "id": "synthetic-range-start", "value": "0"}),
+                ElementRef("e5", "spinbutton", "", "input", observation.epoch,
+                           {**attrs, "id": "synthetic-range-end", "value": "30"})])
+        before, after = anonymous(page()), anonymous(page(2, first="Synthetic"))
+        if change in {"missing_id", "duplicate_id"}:
+            identifier = "" if change == "missing_id" else "synthetic-range-start"
+            for observation in (before, after):
+                observation.elements[-1] = replace(observation.elements[-1],
+                    attrs={**observation.elements[-1].attrs, "id": identifier})
+        if change in {"replaced_id", "changed_value", "changed_tag"}:
+            target = after.elements[-1]
+            after.elements[-1] = (replace(target, tag="textarea") if change == "changed_tag" else
+                replace(target, attrs={**target.attrs,
+                    **({"id": "replacement"} if change == "replaced_id" else {"value": "31"})}))
+        if change == "replaced_instance":
+            after = page(2, first="Synthetic", instance="replacement")
+        if change == "reindexed":
+            after.elements[-2:] = [replace(e, ref=ref) for e, ref in zip(after.elements[-2:], ("e44", "e48"))]
+        wire = SubmitWire(before)
+        before = wire.channel.wait_for_observation(timeout_s=0).observation
+        issued = wire.command("fill", {"ref": "e1", "value": "Synthetic"})
+        received = wire.result(issued, ActionReceipt(1, issued.action_id, "fill", issued.command.args,
+            True, observation=after, url_before=before.url, url_after=after.url))
+        if change == "anonymous_filled":
+            # Even an unchanged value entered through a real action cannot promote an
+            # anonymous comparison id into an authorized field binding.
+            issued = wire.command("fill", {"ref": "e5", "value": "30"})
+            entered = replace(received.observation, epoch=received.observation.epoch + 1,
+                elements=[replace(e, epoch=received.observation.epoch + 1) for e in received.observation.elements])
+            received = wire.result(issued, ActionReceipt(1, issued.action_id, "fill", issued.command.args,
+                True, observation=entered, url_before=entered.url, url_after=entered.url))
+        context = NS(obs=received.observation, audit=lambda *_a, **_kw: None)
+        calls = []
+        def dispatch(fields, submit):
+            calls.append((fields, submit))
+            issued = wire.command("handoff_form", {"fields": fields, "submit": submit})
+            final = replace(context.obs, epoch=context.obs.epoch + 1,
+                elements=[replace(e, epoch=context.obs.epoch + 1) for e in context.obs.elements])
+            if final_change == "missing": final.elements.pop()
+            if final_change == "duplicate":
+                final.elements[-1] = replace(final.elements[-1], attrs={**final.elements[-1].attrs,
+                    "id": final.elements[-2].attrs["id"]})
+            if final_change == "value":
+                final.elements[-1] = replace(final.elements[-1], attrs={**final.elements[-1].attrs, "value": "31"})
+            receipt = wire.result(issued, ActionReceipt(1, issued.action_id, "handoff_form", issued.command.args,
+                True, observation=final, url_before=context.obs.url, url_after=final.url))
+            context.obs = receipt.observation
+            return PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(receipt.to_json()))
+        context.page = NS(checkpoint=lambda: None, handoff=dispatch)
+        wanted = [(field_identity(before.elements[0]), "Synthetic")]
+        if change == "anonymous_filled": wanted.append((field_identity(before.elements[-1]), "30"))
+        result = handoff_draft(context, before, wanted, "Save")
+        return result, calls, wire
+
+    def test_unique_dom_ids_only_compare_unchanged_anonymous_fields(self):
+        for change in ("none", "reindexed"):
+            with self.subTest(change=change):
+                result, calls, wire = self.run_handoff(change)
+                self.assertEqual((result.state, result.marked), ("completed", "Save"))
+                self.assertEqual(len(calls), 1)
+                fields = calls[0][0]
+                self.assertEqual([field["field"] for field in fields], ["name"])
+                self.assertNotIn("synthetic-range", json.dumps(wire.commands[-1].args))
+                self.assertEqual(len(field_identity(page().elements[0])), 6)
+
+    def test_anonymous_fills_missing_duplicate_replaced_or_changed_controls_are_refused(self):
+        for change in ("anonymous_filled", "missing_id", "duplicate_id", "replaced_id",
+                       "changed_value", "changed_tag", "replaced_instance"):
+            with self.subTest(change=change):
+                result, calls, wire = self.run_handoff(change)
+                self.assertEqual(result.state, "unverified")
+                self.assertFalse(result.marked)
+                self.assertEqual(calls, [])
+                self.assertNotIn("handoff_form", [command.action for command in wire.commands])
+
+    def test_final_readback_still_rejects_missing_duplicate_or_changed_anonymous_controls(self):
+        for change in ("missing", "duplicate", "value"):
+            with self.subTest(change=change):
+                result, _, _ = self.run_handoff(final_change=change)
+                self.assertEqual(result.state, "unverified")
+                self.assertFalse(result.marked)

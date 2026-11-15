@@ -349,7 +349,7 @@ class NativePostconditions:
                                      {"effects": result.content.get("effects", [])})
 
 
-def native_tools(client, goal_data, *, runtime_dictionary=False):
+def native_tools(client, goal_data, *, runtime_dictionary=False, mutation_dispatch_enabled=True):
     definitions = []
     follow_up_types = None
     if runtime_dictionary:
@@ -420,7 +420,7 @@ def native_tools(client, goal_data, *, runtime_dictionary=False):
     from .write_special import special_tools
     definitions.extend(special_tools(client, goal_data, NativeWriteHandler,
         dictionary_rows=rows if runtime_dictionary else None))
-    return ToolRegistry(tuple(definitions))
+    return ToolRegistry(tuple(definitions), mutation_dispatch_enabled=mutation_dispatch_enabled)
 
 
 class CombinedTools:

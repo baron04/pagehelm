@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from web_operation_agent_yudao.source import EntitySource, YudaoSource
+from web_operation_agent_yudao.source import EntitySource, YudaoSource, _mask, _methods
 
 _JAVA = "server/yudao-module-crm/src/main/java/demo"
 _FILES = {
@@ -277,6 +277,402 @@ class YudaoSourceTests(unittest.TestCase):
         path, start, end = re.match(r"(.+):(\d+)-(\d+)@", refusal.citation).groups()
         cited = (self.root / path).read_text(encoding="utf-8").splitlines()[int(start) - 1:int(end)]
         self.assertTrue(cited[0].strip().startswith("if (") and "throw exception" in cited[-1])
+
+
+_DEMO = "server/yudao-module-mall/yudao-module-demo/src/main/java/cn/iocoder/yudao/module/demo"
+_EXTRA_FILES = {
+    f"{_DEMO}/enums/ErrorCodeConstants.java": """public interface ErrorCodeConstants {
+    ErrorCode DEMO_NOT_EXISTS = new ErrorCode(1_900_000_000, "不存在");
+    ErrorCode DEMO_LOCKED = new ErrorCode(1_900_000_001, "已锁定");
+    ErrorCode DEMO_STATE_BAD = new ErrorCode(1_900_000_002, "状态错误");
+    ErrorCode DEMO_ITEM_BAD = new ErrorCode(1_900_000_003, "明细错误");
+    ErrorCode DEMO_ADMIN_FORBIDDEN = new ErrorCode(1_900_000_004, "管理员禁止");
+    ErrorCode DEMO_SINGLE_BAD = new ErrorCode(1_900_000_005, "单条错误");
+    ErrorCode DEMO_BATCH_BAD = new ErrorCode(1_900_000_006, "批量错误");
+    ErrorCode DEMO_RISKY = new ErrorCode(1_900_000_007, "风险");
+    ErrorCode DEMO_IO_BAD = new ErrorCode(1_900_000_008, "IO错误");
+    ErrorCode DEMO_NESTED = new ErrorCode(1_900_000_009, "嵌套吞没");
+    ErrorCode DEMO_PHANTOM = new ErrorCode(1_900_000_010, "幻影");
+    ErrorCode DEMO_CODE_A = new ErrorCode(1_900_000_011, "调用方A");
+    ErrorCode DEMO_CODE_B = new ErrorCode(1_900_000_012, "调用方B");
+}
+""",
+    f"{_DEMO}/controller/admin/DemoAdminController.java": """@RestController
+@RequestMapping("/demo/thing")
+public class DemoAdminController {
+    @Resource
+    private DemoService demoService;
+
+    @PutMapping("/update")
+    @Operation(summary = "更新")
+    @PreAuthorize("@ss.hasPermission('demo:thing:update')")
+    public CommonResult<Boolean> update(@RequestBody DemoSaveReqVO reqVO) {
+        demoService.updateThing(reqVO);
+        return success(true);
+    }
+
+    @DeleteMapping("/delete")
+    public CommonResult<Boolean> delete(@RequestParam("id") Long id) {
+        demoService.deleteThing(id);
+        return success(true);
+    }
+}
+""",
+    f"{_DEMO}/controller/app/DemoAppController.java": """@RestController
+@RequestMapping("/demo/thing")
+public class DemoAppController {
+    @Resource
+    private DemoService demoService;
+
+    @PostMapping("/app-ping")
+    public CommonResult<Boolean> ping(@RequestParam("id") Long id) {
+        demoService.pingThing(id);
+        return success(true);
+    }
+}
+""",
+    f"{_DEMO}/service/DemoServiceImpl.java": """package cn.iocoder.yudao.module.demo.service;
+import org.flowable.engine.RuntimeService;
+import jakarta.annotation.Resource;
+
+public class DemoServiceImpl implements DemoService {
+    @Resource
+    private RuntimeService runtimeService;
+    @Resource
+    private DemoRelatedService demoRelatedService;
+    @Resource
+    private DemoMapper demoMapper;
+    @Resource
+    private DemoItemMapper demoItemMapper;
+    @Resource
+    private ApplicationEventPublisher eventPublisher;
+
+    @Override
+    public void updateThing(DemoSaveReqVO reqVO) {
+        // throw exception(DEMO_PHANTOM); demoRelatedService.deleteRelated(1L);
+        String note = "throw exception(DEMO_PHANTOM); demoRelatedService.deleteRelated(2L);";
+        DemoDO demo = validateDemoExists(reqVO.getId());
+        this.assertUnlocked(demo);
+        validateUserNotAdmin(reqVO.getId(), DEMO_ADMIN_FORBIDDEN);
+        validateBatch(reqVO.getId());
+        try {
+            if (reqVO.getFlag()) {
+                throw exception(DEMO_RISKY);
+            }
+        } catch (ServiceException ignored) {
+        }
+        try {
+            if (reqVO.getIo()) {
+                throw exception(DEMO_IO_BAD);
+            }
+        } catch (java.io.IOException e) {
+            log.warn("io", e);
+        }
+        try {
+            try {
+                if (reqVO.getNested()) {
+                    throw exception(DEMO_NESTED);
+                }
+            } finally {
+                cleanup();
+            }
+        } catch (Exception e) {
+            log.warn("nested", e);
+        }
+        if (Boolean.TRUE.equals(reqVO.getFlag())) {
+            throw exception(DEMO_STATE_BAD);
+        }
+        if (reqVO.getDanger()) throw exception(DEMO_STATE_BAD);
+        demoRelatedService.updateRelated2(reqVO.getId());
+        for (Long id : new ArrayList<Long>(reqVO.getIds())) {
+            demoRelatedService.updateRelated(id);
+        }
+        if (reqVO.getCascade()) {
+            demoItemMapper.deleteByThingId(reqVO.getId());
+        }
+        eventPublisher.publishEvent(new DemoUpdatedEvent(reqVO.getId()));
+        SpringUtil.getBean(OtherService.class).notifyThing(reqVO.getId());
+        getSelf().pingThing(reqVO.getId());
+        runtimeService.createModelQuery().list();
+        demoMapper.deleteById(reqVO.getId());
+        demoRelatedService.getRelated(reqVO.getId());
+    }
+
+    private DemoService getSelf() {
+        return SpringUtil.getBean(getClass());
+    }
+
+    @Override
+    public void deleteThing(Long id) {
+        validateDemoExists(id);
+        List<DemoItemDO> items = selectItems(id);
+        items.forEach(this::checkItem);
+        validateBatch(new ArrayList<Long>());
+    }
+
+    @Override
+    public void pingThing(Long id) {
+        demoMapper.selectById(id);
+    }
+
+    DemoDO validateDemoExists(Long id) {
+        DemoDO demo = demoMapper.selectById(id);
+        if (demo == null) {
+            throw exception(DEMO_NOT_EXISTS);
+        }
+        return demo;
+    }
+
+    private void assertUnlocked(DemoDO demo) {
+        checkLocked(demo);
+    }
+
+    private void checkLocked(DemoDO demo) {
+        if (demo.getLocked()) {
+            throw exception(DEMO_LOCKED);
+        }
+    }
+
+    private void checkItem(DemoItemDO item) {
+        if (item == null) {
+            throw exception(DEMO_ITEM_BAD);
+        }
+    }
+
+    private void validateUserNotAdmin(Long id, ErrorCode code) {
+        if (id == 1L) {
+            throw exception(code);
+        }
+    }
+
+    private void validateBatch(Long id) {
+        if (id == null) {
+            throw exception(DEMO_SINGLE_BAD);
+        }
+    }
+
+    private void validateBatch(Collection<Long> ids) {
+        if (CollUtil.isEmpty(ids)) {
+            throw exception(DEMO_BATCH_BAD);
+        }
+    }
+}
+""",
+    # Two callers share one parameterized-code validator: whichever caller the
+    # walk reaches second must still recover its own call-site constant.
+    f"{_DEMO}/service/ExtraServiceImpl.java": """package cn.iocoder.yudao.module.demo.service;
+
+public class ExtraServiceImpl implements ExtraService {
+    public void opA(Long id) {
+        first(id);
+        second(id);
+    }
+
+    private void first(Long id) {
+        validate(id, DEMO_CODE_A);
+    }
+
+    private void second(Long id) {
+        validate(id, DEMO_CODE_B);
+    }
+
+    private void validate(Long id, ErrorCode code) {
+        if (id == 1L) {
+            throw exception(code);
+        }
+    }
+}
+""",
+}
+
+
+class YudaoSourceExtractionTests(unittest.TestCase):
+    """The Java extraction itself: nested modules, helper chains, overloads."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        for relative, text in _EXTRA_FILES.items():
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        self.source = YudaoSource(self.root, release="v2026.08")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _codes(self, method):
+        refusals = self.source._refusals(self.source._messages())
+        return {r.code for r in refusals.get(("DemoService", method), ())}
+
+    def _calls(self, method):
+        cascades = self.source._cascades()
+        return {(service, name) for service, name, *rest in
+                cascades.get(("DemoService", method), {}).get("calls", ())}
+
+    def _cascade_entries(self, method):
+        return self.source._cascades().get(("DemoService", method), {})
+
+    def _unknown_kinds(self, method):
+        return {k for k, _p, _l in
+                self._cascade_entries(method).get("untraceable", ())}
+
+    def test_nested_module_is_discovered_and_mapped(self):
+        # A nested module registers under its slash key ("mall/demo").
+        self.assertIn("mall/demo", self.source.modules)
+        base = self.source._module_base("mall/demo")
+        self.assertEqual(base.resolve(),
+                         (self.root / "server/yudao-module-mall/yudao-module-demo/src/main/java").resolve())
+        operations = self.source._operations()
+        self.assertIn("demo/thing/update", operations)
+        service, method, _permission, _summary, verb, path = operations["demo/thing/update"]
+        self.assertEqual((service, method), ("DemoService", "updateThing"))
+        self.assertEqual(verb, "Put")
+        self.assertIn("/controller/admin/", path)
+
+    def test_member_controller_is_kept_out_of_admin_writes(self):
+        operations = self.source._operations()
+        service, method, _p, _s, verb, path = operations["demo/thing/app-ping"]
+        self.assertEqual(verb, "Post")
+        self.assertIn("/controller/app/", path)
+        admin_writes = [url for url, op in operations.items()
+                        if "/controller/admin/" in op[5] and op[4] != "Get"]
+        self.assertEqual(sorted(admin_writes), ["demo/thing/delete", "demo/thing/update"])
+
+    def test_package_private_and_chained_helpers_contribute(self):
+        codes = self._codes("updateThing")
+        # Package-private validateDemoExists, then assertUnlocked -> checkLocked.
+        self.assertIn("DEMO_NOT_EXISTS", codes)
+        self.assertIn("DEMO_LOCKED", codes)
+
+    def test_control_keywords_are_not_parsed_as_methods(self):
+        from web_operation_agent_yudao.source import _methods
+        text = (self.root / f"{_DEMO}/service/DemoServiceImpl.java").read_text()
+        names = {name for name, *_ in _methods(text)}
+        self.assertFalse(names & {"if", "for", "while", "switch", "return", "new", "throw"})
+
+    def test_parameterized_error_code_is_recovered_at_the_call_site(self):
+        self.assertIn("DEMO_ADMIN_FORBIDDEN", self._codes("updateThing"))
+
+    def test_overloaded_helpers_resolve_by_arity_and_argument_shape(self):
+        update = self._codes("updateThing")
+        # updateThing calls validateBatch(reqVO.getId()): only the Long overload.
+        self.assertIn("DEMO_SINGLE_BAD", update)
+        self.assertNotIn("DEMO_BATCH_BAD", update)
+        delete = self._codes("deleteThing")
+        # deleteThing calls validateBatch(new ArrayList<>()): only the Collection overload.
+        self.assertIn("DEMO_BATCH_BAD", delete)
+        self.assertNotIn("DEMO_SINGLE_BAD", delete)
+
+    def test_method_reference_is_followed(self):
+        self.assertIn("DEMO_ITEM_BAD", self._codes("deleteThing"))
+
+    def test_a_swallowed_exception_is_not_a_rule(self):
+        codes = self._codes("updateThing")
+        self.assertNotIn("DEMO_RISKY", codes)    # catch (ServiceException) swallows
+        self.assertNotIn("DEMO_NESTED", codes)   # outer catch (Exception) swallows
+        self.assertIn("DEMO_STATE_BAD", codes)
+        # catch (java.io.IOException) does not cover ServiceException: kept.
+        self.assertIn("DEMO_IO_BAD", codes)
+
+    def test_comments_and_strings_do_not_fabricate_rules(self):
+        codes = self._codes("updateThing")
+        self.assertNotIn("DEMO_PHANTOM", codes)
+        self.assertNotIn(("DemoRelatedService", "deleteRelated"),
+                         {(s, m) for s, m, *_ in self._cascade_entries("updateThing")["calls"]})
+
+    def test_shared_validator_recovers_every_callers_code(self):
+        refusals = self.source._refusals(self.source._messages())
+        codes = {r.code for r in refusals.get(("ExtraService", "opA"), ())}
+        self.assertTrue({"DEMO_CODE_A", "DEMO_CODE_B"} <= codes, codes)
+
+    def test_this_qualified_helper_is_followed(self):
+        # updateThing reaches assertUnlocked -> checkLocked only through `this.`.
+        self.assertIn("DEMO_LOCKED", self._codes("updateThing"))
+
+    def test_cascades_keep_business_services_only(self):
+        # The business service mutation and the item table's mapper write are
+        # other entities; the own-record mapper, the read verb and the foreign
+        # engine service stay out.
+        self.assertEqual(self._calls("updateThing"),
+                         {("DemoRelatedService", "updateRelated"),
+                          ("DemoRelatedService", "updateRelated2"),
+                          ("DemoItemMapper", "deleteByThingId")})
+        # deleteThing mutates nothing else: the mapper write stays with the record.
+        self.assertEqual(self._calls("deleteThing"), set())
+
+    def test_a_cascade_under_a_branch_says_so(self):
+        entries = self._cascade_entries("updateThing")["calls"]
+        item = next(e for e in entries if e[1] == "deleteByThingId")
+        self.assertEqual(item[5], "reqVO.getCascade()")
+        plain = next(e for e in entries if e[1] == "updateRelated")
+        self.assertEqual(plain[5], "")
+        # An unbraced `if (c) throw ...;` ends at its `;`: the following
+        # unconditional call must not inherit the condition.
+        after = next(e for e in entries if e[1] == "updateRelated2")
+        self.assertEqual(after[5], "")
+
+    def test_untraceable_marks_dynamic_paths_but_not_self_lookup(self):
+        kinds = self._unknown_kinds("updateThing")
+        self.assertIn("event", kinds)          # eventPublisher.publishEvent(...)
+        self.assertIn("dynamic-bean", kinds)   # getBean(OtherService.class)
+        self.assertNotIn("async", kinds)
+        # SpringUtil.getBean(getClass()) is a self lookup whose calls stay traced.
+        self.assertEqual(len(kinds), 2)
+
+    def test_cascades_land_on_every_owner_and_nowhere_without_one(self):
+        two = (EntitySource(key="demo/thing", component_dir="demo/thing", api_base="demo/thing",
+                            labels={}, choices={}),
+               EntitySource(key="demo/thing-b", component_dir="demo/thing", api_base="demo/thing",
+                            labels={}, choices={}))
+        rules, _ = self.source.rules(two)
+        for key in ("demo/thing", "demo/thing-b"):
+            cascades = [r for r in rules[key]
+                        if r.kind == "cascade" and r.subject == "demo/thing/update"]
+            self.assertTrue(any("DemoRelated.updateRelated" in r.text for r in cascades))
+            self.assertTrue(any("DemoItem.deleteByThingId" in r.text
+                                and "满足某条件时" in r.text for r in cascades))
+            self.assertTrue(any("未知" in r.text for r in cascades))
+        empty_rules, _ = self.source.rules(())
+        self.assertEqual(empty_rules, {})
+
+
+class MaskedSourceTests(unittest.TestCase):
+    """After masking, a file whose bulk is a text block or long comment still
+    parses in linear time: the blanked region must not hand the signature
+    pattern a quadratic runway (PersonServiceImpl's embedded CSV froze the
+    audit before the bounds existed)."""
+
+    def test_a_file_dominated_by_a_text_block_still_parses_its_methods(self):
+        csv = "\n".join("            " + ",".join(
+            f"cell{i}" for i in range(8)) for _ in range(400))
+        text = ("""public class CsvServiceImpl {
+    private static final String CSV_DATA = \"\"\"
+""" + csv + """
+            \"\"\";
+    public Person getPersonById(Long id) {
+        return personStore.get(id);
+    }
+    public void deletePerson(Long id) {
+        personStore.remove(id);
+    }
+}
+""")
+        import time
+        t0 = time.time()
+        found = [name for name, *_ in _methods(_mask(text))]
+        self.assertLess(time.time() - t0, 5.0)
+        self.assertEqual(found, ["getPersonById", "deletePerson"])
+
+    def test_the_type_name_gap_survives_a_wrapped_signature(self):
+        text = """public class WrapServiceImpl {
+    public Map<String, Integer>
+            computeTotal(Long id) {
+        return null;
+    }
+}
+"""
+        self.assertEqual([name for name, *_ in _methods(_mask(text))], ["computeTotal"])
 
 
 if __name__ == "__main__":

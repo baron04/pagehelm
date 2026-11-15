@@ -80,12 +80,43 @@ def add_draft_lines(context, button, count):
     return None
 
 
-def handoff_draft(context, before, expected, submit_label):
+def unrestorable_form(blocked, scope, instances=()):
+    """The recorded unrestorable opening self-edit for this form, if any.
+
+    `blocked` is the turn's unrestorable-form records (mapping or values); each record
+    carries the form scope and whichever of instance/lifetime was observed. Scope plus
+    any shared identity matches; when either side carries no identity, scope alone is
+    enough -- refusing a mark is always the safe direction."""
+    identities = ({instances} if isinstance(instances, str) else set(instances or ())) - {None, ""}
+    records = blocked.values() if isinstance(blocked, dict) else (blocked or ())
+    for record in records:
+        if not isinstance(record, dict) or record.get("scope") != scope:
+            continue
+        known = {record.get("instance"), record.get("lifetime")} - {None, ""}
+        if not known or not identities or known & identities:
+            return record
+    return None
+
+
+def opening_changes_refusal(record, marked=""):
+    """The answer every handoff path gives when it may not mark the submit control."""
+    effects = "；".join(str(e) for e in (record.get("effects") or ())[:8])
+    detail = effects or str(record.get("detail") or "")
+    return LoopToolResult(
+        ("不能标出提交按钮：这个表单打开时页面自动修改了字段且无法还原，"
+         + (f"直接保存会把 {detail}；" if detail else "直接保存会带入未核对的变化；")
+         + "请核对后自己提交。"),
+        kind="page", state="refused", error_code="opening_changes")
+
+
+def handoff_draft(context, before, expected, submit_label, *, blocked=None):
     """Expected pairs carry actual control identities, never model-given refs.
 
     Refuse if a field disappeared, was replaced, or any previously visible,
     untouched field changed. Offscreen/incomplete forms use ordinary observation
     and handoff instead; this combined procedure makes no completion claim.
+    A form recorded in `blocked` (unrestorable opening self-edits) is never marked:
+    the refusal says what saving it directly would change.
     """
     def refused():
         return LoopToolResult("表单最终回读未通过，尚未交接；请核对当前表单。", kind="page",
@@ -103,10 +134,38 @@ def handoff_draft(context, before, expected, submit_label):
     if len(scopes) != 1:
         return refused()
     scope, instance = next(iter(scopes))
+    lifetimes = {e.attrs.get("form_lifetime") for e in initial
+                 if (e.attrs.get("form_scope"), e.attrs.get("form_instance")) == (scope, instance)}
+    blocked_form = unrestorable_form(blocked, scope, {instance} | lifetimes)
+    if blocked_form is not None:
+        return opening_changes_refusal(blocked_form)
     old = [e for e in initial if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)]
     now = [e for e in current if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)]
-    old_map, now_map = {field_identity(e): e for e in old}, {field_identity(e): e for e in now}
-    if (len(old_map) != len(old) or len(now_map) != len(now)
+    def comparison_map(fields):
+        # DOM ids distinguish only untouched anonymous controls for before/after
+        # comparison. They never become a field binding or enter the Runtime command.
+        ids = {}
+        for element in fields:
+            identifier = element.attrs.get("id")
+            if isinstance(identifier, str) and identifier.strip():
+                group = (element.role, element.tag, identifier)
+                ids[group] = ids.get(group, 0) + 1
+        mapped = {}
+        for element in fields:
+            key = field_identity(element)
+            if not any(key[3:]):
+                identifier = element.attrs.get("id")
+                if (key in wanted or not isinstance(identifier, str) or not identifier.strip()
+                        or ids.get((element.role, element.tag, identifier)) != 1):
+                    return None
+                key = (*key, "untouched_dom_id", element.tag, identifier)
+            if key in mapped:
+                return None
+            mapped[key] = element
+        return mapped
+
+    old_map, now_map = comparison_map(old), comparison_map(now)
+    if (old_map is None or now_map is None
             or old_map.keys() != now_map.keys() or not wanted.keys() <= now_map.keys()
             or any(not value_matches(now_map[key], value) for key, value in wanted.items())
             or any(field_value(now_map[key]) != field_value(element)
@@ -170,9 +229,10 @@ def handoff_draft(context, before, expected, submit_label):
     if outcome.state != "completed" or outcome.receipt is None:
         return LoopToolResult("表单交接未完成，请核对当前观察。", kind="page", state=outcome.state,
                               dispatch=outcome.dispatch, error_code=outcome.error_code)
-    final = {field_identity(e): e for e in draft_fields(context.obs)
-             if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)}
-    if ((not scrolled and final.keys() != now_map.keys())
+    final = comparison_map([e for e in draft_fields(context.obs)
+             if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)])
+    if (final is None or {key for key in final if len(key) > 6} != {key for key in now_map if len(key) > 6}
+            or (not scrolled and final.keys() != now_map.keys())
             or any(key in final and not value_matches(final[key], value) for key, value in wanted.items())
             or any(key in final and field_value(final[key]) != field_value(e)
                    for key, e in old_map.items() if key not in wanted)):

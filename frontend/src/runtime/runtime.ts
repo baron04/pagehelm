@@ -40,6 +40,7 @@ import {renderState, type PendingView} from './renderState'
 import {clearStored, loadSession, writeStored, type SessionState} from './storage'
 import {IdleHandshakeClosed, SessionClient, TransportError, sseBatches} from './transport'
 import {closeWriteGuard, openWriteGuard, releaseWriteGuard} from './writeGuard'
+import {pressConfirmButton, readConfirmBox, sameControlText, waitForSubmitToSettle} from './formModel'
 import type {ApprovalRequest, PanelConfiguration, PanelState} from '../contract/panel'
 import {activityPoint} from './activityPoint'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope, type ActionResultEnvelope,
@@ -53,6 +54,7 @@ const CAPABILITIES = [
   'dom.observe', 'dom.click', 'dom.fill', 'dom.select', 'dom.submit',
   'page.goto', 'page.back', 'page.scroll', 'page.wait', 'page.apply_facet',
   'page.highlight', 'page.handoff_form', 'page.reveal',
+  browserContract.form_model.capability, browserContract.form_submit.capability,
   browserContract.form_handoff.scoped_capability,
 ]
 
@@ -69,7 +71,7 @@ export interface WireEvent {
 interface Freshness { fresh: boolean; reason: string }
 
 /** Commands that only look at the page: they leave it as the person has it. */
-const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll'])
+const PASSIVE_ACTIONS = new Set(['observe', 'wait_for', 'scroll', 'form_model'])
 
 /** How long an application is given to open one of its own pages before it is loaded. */
 const APPLICATION_OPEN_MS = 6_000
@@ -115,7 +117,15 @@ export class EmbeddedWebRuntime {
   readPageRead: PageQueryReader | undefined
   readElementNavigation: ElementNavigationReader | undefined
   readElementPageControl: ElementNavigationReader | undefined
+  readElementFormModel: ElementNavigationReader | undefined
+  restoreElementFormModel: ((element: unknown, request: unknown) => Promise<boolean>) | undefined
+  readElementRowRecord: ElementNavigationReader | undefined
   openPage: PageOpener | undefined
+  /** The application's own form/confirm/settle readers; absent means none exist. */
+  acceptReadSource: ((source: string, kind: 'form' | 'row') => boolean) | undefined
+  confirmBoxReader: ((doc: Document) => unknown) | undefined
+  confirmButtonPresser: ((label: string, doc: Document) => boolean) | undefined
+  submitBusyReader: ((doc: Document) => boolean) | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -244,6 +254,9 @@ export class EmbeddedWebRuntime {
       this.readPageRecordRoute, this.readPageBlocker, this.readActiveView, this.readPageRoute, this.readPageQuery,
       () => false, this.readElementNavigation, this.readPageRead, this.readElementPageControl,
       this.panelContainer ?? undefined)
+    page.formModelReader = this.readElementFormModel
+    page.rowRecordReader = this.readElementRowRecord
+    page.sourceAccepter = this.acceptReadSource
     this.heldPage = {controller: this.controller, lookup: this.getElementByIndex, page}
     return page
   }
@@ -285,7 +298,9 @@ export class EmbeddedWebRuntime {
   async start(): Promise<this> {
     const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
       readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute, readPageQuery,
-      readElementNavigation, readPageRead, readElementPageControl, openPage} = await loadPageController(
+      readElementNavigation, readPageRead, readElementPageControl, readElementFormModel, readElementRowRecord, restoreElementFormModel,
+      openPage, acceptReadSource, readConfirmBox: confirmBoxReader, pressConfirmButton: confirmButtonPresser,
+      readSubmitBusy: submitBusyReader} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
@@ -300,7 +315,14 @@ export class EmbeddedWebRuntime {
     this.readElementNavigation = readElementNavigation
     this.readPageRead = readPageRead
     this.readElementPageControl = readElementPageControl
+    this.readElementFormModel = readElementFormModel
+    this.restoreElementFormModel = restoreElementFormModel
+    this.readElementRowRecord = readElementRowRecord
     this.openPage = openPage
+    this.acceptReadSource = acceptReadSource
+    this.confirmBoxReader = confirmBoxReader
+    this.confirmButtonPresser = confirmButtonPresser
+    this.submitBusyReader = submitBusyReader
     return this._startConnectedRuntime()
   }
 
@@ -968,7 +990,8 @@ export class EmbeddedWebRuntime {
       }
       return {fresh: true, reason: ''}
     }
-    if (!['click', 'fill', 'select', 'submit', 'highlight', 'reveal'].includes(command?.action)) {
+    if (!['click', 'fill', 'select', 'submit', 'highlight', 'reveal', 'form_model', 'form_submit']
+        .includes(command?.action)) {
       return {fresh: true, reason: ''}
     }
     // Old constructed test shells have no map. Every real Runtime replaces this map during
@@ -1043,7 +1066,7 @@ export class EmbeddedWebRuntime {
   private async _rejectWithoutWriteGuard(action: ActionEnvelope): Promise<boolean> {
     // Observation only reads the controller's projection. Opening a write window for it
     // made a successful API query fail whenever that unrelated endpoint was unavailable.
-    if (action.command.action === 'observe') return false
+    if (action.command.action === 'observe' || action.command.action === 'form_model') return false
     const path = this.config?.pageWriteGuard
     if (path === undefined || path === '') return false
     this.writeGuardUntil = 0
@@ -1117,14 +1140,16 @@ export class EmbeddedWebRuntime {
   /** Run the command, and wait for the navigation it was expected to cause. */
   private async _dispatch(action: ActionEnvelope, executing: ActionEnvelope,
                           navigation: NavigationExpectation,
-  ): Promise<{ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean}> {
+  ): Promise<{ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean;
+              execution_trace?: unknown; form_data?: unknown}> {
     // Claiming is a network round trip. Neither the action deadline nor the application's
     // confirmed window may have lapsed while it was pending; reject before page dispatch.
     if (Date.now() >= action.deadline) {
       return {ok: false, code: 'deadline_expired',
         detail: 'the action deadline expired before page dispatch'}
     }
-    if (action.command.action !== 'observe' && this.config?.pageWriteGuard
+    // Reading the form data or the confirmation box changes nothing, so it needs no window either.
+    if (action.command.action !== 'observe' && action.command.action !== 'form_model' && this.config?.pageWriteGuard
         && !(this.writeGuardUntil > Date.now())) {
       return {ok: false, code: 'capability_refused',
         detail: 'page_write_guard_unavailable: the confirmed window expired before page dispatch'}
@@ -1167,6 +1192,7 @@ export class EmbeddedWebRuntime {
         }
       }
       const ok = result?.success !== false
+      const execution_trace = results.executionTraceOf(result, action.command.action)
       if (ok && action.command.action === 'handoff_form' && this.config?.pageWriteGuard) {
         if (!await releaseWriteGuard(this.config.pageWriteGuard)) {
           return {ok: false, code: 'capability_refused',
@@ -1174,10 +1200,27 @@ export class EmbeddedWebRuntime {
         }
         this.writeGuardUntil = 0
       }
+      if (action.command.action === 'form_submit') {
+        await waitForSubmitToSettle(document, sleep,
+          {readSubmitBusy: this.submitBusyReader, readConfirmBox: this.confirmBoxReader})
+      }
+      if (action.command.action === 'form_submit' && this.config?.pageWriteGuard) {
+        // The permit covered this one click. Ending it is what returns the page to its
+        // ordinary, read-only window; an application that does not confirm is reported.
+        const released = await releaseWriteGuard(this.config.pageWriteGuard)
+        this.writeGuardUntil = 0
+        if (!released) {
+          return {ok: false, code: 'capability_refused',
+            detail: 'the application did not acknowledge the end of the approved click'}
+        }
+      }
+      const formData = (result as {form_data?: unknown} | null)?.form_data
       return {
         ok,
         code: ok ? '' : 'element_not_actionable',
         detail: ok ? '' : results.safeErrorDetail(result?.message || '', action.command, this.redactor),
+        ...(execution_trace ? {execution_trace} : {}),
+        ...(formData ? {form_data: formData} : {}),
       }
     } catch (error) {
       if (error instanceof ChoiceUnavailable) {
@@ -1197,7 +1240,8 @@ export class EmbeddedWebRuntime {
 
   /** Observe what the action left behind and report it. */
   private async _settle(executing: ActionEnvelope, before: ObservationEnvelope,
-                        outcome: {ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean}): Promise<void> {
+                        outcome: {ok: boolean; code: string; detail: string; candidate_labels?: string[]; no_effect?: boolean;
+                                  execution_trace?: unknown; form_data?: unknown}): Promise<void> {
     const observation = await this.observe(executing.action_id)
     if (executing.command.action === 'highlight' && outcome.ok &&
         (!this.highlightHandle?.active() ||
@@ -1244,6 +1288,8 @@ export class EmbeddedWebRuntime {
       writeGuardHeld: this.writeGuardUntil > Date.now(),
       ...(outcome.candidate_labels ? {candidateLabels: outcome.candidate_labels} : {}),
       ...(outcome.no_effect ? {noEffect: true} : {}),
+      ...(outcome.execution_trace ? {execution_trace: outcome.execution_trace} : {}),
+      ...(outcome.form_data ? {form_data: outcome.form_data} : {}),
     }, this.redactor)
     await this._deliver(results.completed(executing, receipt, observation))
   }
@@ -1285,6 +1331,64 @@ export class EmbeddedWebRuntime {
           this.stored?.inFlight?.turn_id ?? this.stored?.activeMessageId ?? '')
       }
       return Promise.resolve({success: true, message: 'form fields verified for handoff'})
+    }
+    if (command.action === 'form_model') {
+      // Kind `row` reads the table row a control belongs to, `confirm` the application's
+      // own confirmation box; anything else reads the form.
+      if (command.args?.kind === 'confirm') {
+        if (!this.confirmBoxReader) {
+          return Promise.resolve({success: false, message: 'confirmation box reading unavailable'})
+        }
+        return Promise.resolve({success: true,
+          form_data: readConfirmBox(document, {readConfirmBox: this.confirmBoxReader}),
+          message: 'confirmation box read'})
+      }
+      if (command.args?.kind === 'restore' || command.args?.kind === 'validate') {
+        const element = this.page.element(command.args?.ref)
+        if (!this.restoreElementFormModel) throw new Error('bad_arguments: form restoration unavailable')
+        const validating = command.args?.kind === 'validate'
+        const request = validating ? {expected: this.page.formModel(command.args?.ref)?.model, values: {}} : command.args
+        return this.restoreElementFormModel(element, request).then(ok => {
+          if (!ok && !validating) throw new Error('bad_arguments: form restoration or validation failed')
+          const form = this.page.formModel(command.args?.ref)
+          if (!form) throw new Error('bad_arguments: restored form unreadable')
+          return {success: true, form_data: {...form, validation: ok}, message: validating ? 'application validation checked' : 'page opening changes restored'}
+        })
+      }
+      if (command.args?.kind === 'row') {
+        const row = this.page.rowRecord(command.args?.ref)
+        if (!row) throw new Error('bad_arguments: the table row is not readable')
+        return Promise.resolve({success: true, form_data: row, message: 'row record read'})
+      }
+      const form = this.page.formModel(command.args?.ref)
+      if (!form) throw new Error(`bad_arguments: the form data is not readable (${this.page.formUnreadable || 'unknown'})`)
+      return Promise.resolve({success: true, form_data: form, message: 'form data read'})
+    }
+    if (command.action === 'form_submit') {
+      // The one click an approved card allows. What was approved must still be what is
+      // on the page: the same form data, or the same table row.
+      if (command.args?.kind === 'confirm') {
+        if (!pressConfirmButton(String(command.args?.label ?? ''), document,
+            {pressConfirmButton: this.confirmButtonPresser})) {
+          throw new Error('bad_arguments: the confirmation box does not offer that button')
+        }
+        return sleep(300).then(() => ({success: true, message: 'confirmation button pressed'}))
+      }
+      // The control itself must still be the one the card named, by its own text.
+      const target = this.page.element(command.args?.ref) as {textContent?: string | null} | null | undefined
+      if (!sameControlText(command.args?.label, target?.textContent)) {
+        throw new Error('bad_arguments: the control is no longer the one that was approved')
+      }
+      if (command.args?.kind === 'row') {
+        const row = this.page.rowRecord(command.args?.ref)
+        if (row?.record_id !== String(command.args?.record_id ?? '') || row?.check !== command.args?.row_check) {
+          throw new Error('bad_arguments: the table row changed after approval')
+        }
+      } else if (this.page.formModel(command.args?.ref)?.check !== String(command.args?.check ?? '')) {
+        throw new Error('bad_arguments: the form data changed after approval')
+      }
+      return executeCommand({...command, action: 'click'}, () => this.page, this.config ?? {},
+        this.openPage ? url => this._openInApplication(url) : undefined)
     }
     if (command.action === 'apply_facet' && !this._actionFreshness(command).fresh) {
       throw new Error('bad_arguments: page facet changed before dispatch')

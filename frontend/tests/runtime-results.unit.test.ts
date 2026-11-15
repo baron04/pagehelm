@@ -1,9 +1,47 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import {createRedactor} from '../src/runtime/redaction'
-import {completed, indeterminate, receipt, rejected, safeErrorDetail} from '../src/runtime/results'
-import type {ActionEnvelope, ObservationEnvelope} from '../src/runtime/types'
+import {completed, executionTraceOf, indeterminate, receipt, rejected, safeErrorDetail} from '../src/runtime/results'
+import {EmbeddedWebRuntime} from '../src/runtime/runtime'
+import type {ActionEnvelope, ActionResultEnvelope, ObservationEnvelope} from '../src/runtime/types'
 
 const redactor = createRedactor()
+
+describe('private controller execution diagnostics', () => {
+  const trace = {trace_id:'trace-1',events:[{sequence:1,operation:'fill',path:'ordinary'}]}
+  it('carries the whitelist through dispatch and settlement without changing page observations', async () => {
+    const before = observation(1), after = observation()
+    const sent: ActionResultEnvelope[] = []
+    const command = action()
+    const runtime = Object.assign(Object.create(EmbeddedWebRuntime.prototype, {redactor:{value:redactor}}), {
+      config:undefined, stored:{pageWorked:true,inFlight:command}, writeGuardUntil:0,
+      currentObservation:before, _save:vi.fn(), _mayNavigate:()=>false,
+      _execute:vi.fn(async()=>({success:true,execution_trace:trace})),
+      observe:vi.fn(async()=>after), _deliver:vi.fn(async(result: ActionResultEnvelope)=>{sent.push(result)}),
+    }) as {_dispatch(...args: unknown[]): Promise<unknown>; _settle(...args: unknown[]): Promise<void>}
+    const outcome = await runtime._dispatch(command, command, {})
+    await runtime._settle(command, before, outcome)
+    expect(sent[0]?.receipt?.execution_trace).toEqual(trace)
+    expect(sent[0]?.observation_after).toEqual(after)
+    expect(sent[0]?.receipt?.observation).toEqual(after.observation)
+    expect(JSON.stringify(after)).not.toContain('trace-1')
+  })
+
+  it('drops malformed or failing diagnostics without replacing the business result', () => {
+    const facts = {ok:false,code:'page_error',detail:'original failure',observation:observation(),
+      navigated:false,elapsedMs:1,urlBefore:''}
+    const original = receipt(action(),facts,redactor)
+    for (const diagnostic of [null,7,{...trace,events:[{sequence:1,operation:'click',path:'binding'}]},
+      {...trace,events:[{sequence:1,operation:'fill',path:'unknown'}]}]) {
+      expect(receipt(action(),{...facts,execution_trace:diagnostic},redactor)).toEqual(original)
+    }
+    const broken = {...facts,get execution_trace(): unknown {throw new Error('collector failure')}}
+    expect(receipt(action(),broken,redactor)).toEqual(original)
+    expect(executionTraceOf({get execution_trace(){throw new Error('collector failure')}},'fill')).toBeUndefined()
+    expect(executionTraceOf({execution_trace:trace},'goto')).toBeUndefined()
+    expect(executionTraceOf({execution_trace:{...trace,secret:'discard',events:[{...trace.events[0],secret:'discard'}]}},'fill'))
+      .toEqual(trace)
+  })
+})
 
 function action(overrides: Partial<ActionEnvelope> = {}): ActionEnvelope {
   return {

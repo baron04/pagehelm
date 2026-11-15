@@ -15,44 +15,73 @@ export interface VisibilityGate {
   refusalFor: (event: {isTrusted: boolean}) => string
 }
 
+const CLIP = /(auto|scroll|hidden|clip)/
+
+/**
+ * How much of the panel's screen space the card really occupies, 0..1.
+ *
+ * A confirmation sits in the conversation and has no height cap, so a long one can be
+ * taller than the window it is in: asking for 90% of the card would make it unapprovable,
+ * and asking for nothing would let a sliver of it count. What has to be true either way is
+ * that the part of the screen it occupies is really showing it -- so the denominator is
+ * whichever is smaller: the card, the viewport, or the scrollport it scrolls inside.
+ * The numerator is what shows right now: the observer's own clip when it gives one,
+ * otherwise the card rect clamped by the viewport and every clipping ancestor.
+ */
+function coverage(node: HTMLElement, shownRect?: {width: number; height: number}): number {
+  const box = node.getBoundingClientRect()
+  const viewW = typeof window !== 'undefined' ? window.innerWidth : box.width
+  const viewH = typeof window !== 'undefined' ? window.innerHeight : box.height
+  let coverableWidth = Math.min(box.width, viewW)
+  let coverableHeight = Math.min(box.height, viewH)
+  let left = Math.max(box.left, 0)
+  let top = Math.max(box.top, 0)
+  let right = Math.min(box.right, viewW)
+  let bottom = Math.min(box.bottom, viewH)
+  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent)
+    const clip = parent.getBoundingClientRect()
+    if (CLIP.test(style.overflowY)) {
+      top = Math.max(top, clip.top)
+      bottom = Math.min(bottom, clip.bottom)
+      coverableHeight = Math.min(coverableHeight, clip.height)
+    }
+    if (CLIP.test(style.overflowX)) {
+      left = Math.max(left, clip.left)
+      right = Math.min(right, clip.right)
+      coverableWidth = Math.min(coverableWidth, clip.width)
+    }
+  }
+  const shown = shownRect ? shownRect.width * shownRect.height
+    : Math.max(0, right - left) * Math.max(0, bottom - top)
+  const coverable = coverableWidth * coverableHeight
+  return coverable > 0 ? shown / coverable : 0
+}
+
 export function useVisibilityGate(options: {
   minVisibleRatio: number
   minVisibleMs: number
 }): VisibilityGate {
+  const element = useRef<HTMLElement | null>(null)
+  const mountedAt = useRef(0)
   const visibleSince = useRef(0)
+  const reported = useRef(false)
   const observer = useRef<IntersectionObserver | null>(null)
   const {minVisibleRatio, minVisibleMs} = options
 
   const attach = useCallback((node: HTMLElement | null) => {
     observer.current?.disconnect()
     observer.current = null
+    element.current = node
+    mountedAt.current = node ? performance.now() : 0
     visibleSince.current = 0
+    reported.current = false
     if (!node || typeof IntersectionObserver === 'undefined') return
     const created = new IntersectionObserver(records => {
       const record = records.at(-1)
       if (!record) return
-      // Against the card, or against the window when the card is the taller of the two.
-      // A confirmation now sits in the conversation and has no height cap, so a long one
-      // can be taller than the window it is in: asking for 90% of the card would make it
-      // unapprovable, and asking for nothing would let a sliver of it count. What has to
-      // be true either way is that the part of the screen it occupies is really showing
-      // it -- so the ratio is measured against whichever is smaller.
-      const box = record.boundingClientRect
-      const view = record.rootBounds
-      const shown = record.intersectionRect.width * record.intersectionRect.height
-      let coverableHeight = view ? Math.min(box.height, view.height) : box.height
-      let coverableWidth = view ? Math.min(box.width, view.width) : box.width
-      // The conversation clips a long card inside the window. Measure the part
-      // that can be shown through that scrollport, including its ancestor clips.
-      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
-        const style = getComputedStyle(parent)
-        const clip = parent.getBoundingClientRect()
-        if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) coverableHeight = Math.min(coverableHeight, clip.height)
-        if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) coverableWidth = Math.min(coverableWidth, clip.width)
-      }
-      const coverable = coverableWidth * coverableHeight
-      const ratio = coverable > 0 ? shown / coverable : 0
-      const visible = record.isIntersecting && ratio >= minVisibleRatio
+      reported.current = true
+      const visible = record.isIntersecting && coverage(node, record.intersectionRect) >= minVisibleRatio
       if (visible && !visibleSince.current) visibleSince.current = performance.now()
       if (!visible) visibleSince.current = 0
     }, {threshold: [0, 0.25, 0.5, 0.75, minVisibleRatio, 1]})
@@ -67,11 +96,18 @@ export function useVisibilityGate(options: {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
       return 'panel_not_visible'
     }
-    if (typeof IntersectionObserver === 'undefined') return ''
-    if (!visibleSince.current) return 'panel_not_visible'
-    if (performance.now() - visibleSince.current < minVisibleMs) return 'panel_not_visible'
+    // The click itself is the question: measure what it can see at this instant rather
+    // than trusting observer records, which arrive on a lag a fast honest answer can
+    // outrun. The dwell floor comes from the observer when it has spoken; only before
+    // its first record does mount time stand in -- the earliest the card could have
+    // been read -- so a card hidden until just now still fails the dwell.
+    const node = element.current
+    if (!node || !node.isConnected) return 'panel_not_visible'
+    if (coverage(node) < minVisibleRatio) return 'panel_not_visible'
+    const since = reported.current ? visibleSince.current : mountedAt.current
+    if (!since || performance.now() - since < minVisibleMs) return 'panel_not_visible'
     return ''
-  }, [minVisibleMs])
+  }, [minVisibleRatio, minVisibleMs])
 
   return {attach, refusalFor}
 }

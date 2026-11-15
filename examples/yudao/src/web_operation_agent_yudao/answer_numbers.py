@@ -2,14 +2,15 @@
 
 A closing check the adapter offers the common loop through its profile: every
 amount, count, percentage or mixed letter/digit identifier the answer states must appear in the turn's tool
-results, starting page or the person's own words, after unifying thousand separators,
-trailing decimal zeros and signs for quantities. Identifiers retain every character,
+results, starting page or the person's own words, after unifying thousand separators
+and trailing decimal zeros; the sign stays significant: -500 is not 500. Identifiers retain every character,
 including leading zeros, case and separators. Dates, times, numeric record ids,
 addresses and list markers stay out of the extraction; a
 missed fabrication is cheaper here than a false alarm on a right answer.
 
-The check is feedback, never a gate: nothing is withheld, the common loop sends
-the list back to the same model once and the second answer ends as it is.
+This hook returns feedback only. The common loop sends the list back once,
+then marks unresolved deliverable values incomplete or names narrative values
+in a footer, according to their delivery scope.
 """
 from __future__ import annotations
 
@@ -27,7 +28,8 @@ _ISO_DATETIME = re.compile(r"(?<![A-Za-z0-9_])\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}"
                            r"(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?")
 _PHONES = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
 _LABELED = re.compile(
-    r"(?:编号|单号|序号|编码|代码|ID|Id|id|电话|手机号?|联系方式|邮编|身份证)[：:为是]?\s*[\d,，.\-]{3,}")
+    r"(?:(?<![A-Za-z])(?:ID|Id|id)|编号|单号|序号|编码|代码|电话|手机号?|联系方式|邮编|身份证)"
+    r"[：:为是=]?\s*[\d,，.\-]{3,}")
 #: Calendar and clock readings. A dotted year is a date only with a day part,
 #: so a decimal amount such as 2000.50 stays a value.
 _DATES = re.compile(
@@ -40,13 +42,21 @@ _DATES = re.compile(
 #: Ordinals and list markers position records; they state nothing about them.
 _STRUCTURAL = re.compile(
     r"第\s*\d+(?:\.\d+)?(?:\s*[-–—~～至到]\s*\d+(?:\.\d+)?)?\s*[页行条名位步层章节期届号班排组]?"
-    r"|(?m:^\s*\d+\s*[.、)）](?=\s))|[（(]\d{1,2}[)）]")
+    r"|(?<![\d.])\d+\s*[、.。)）](?![\d.])"
+    r"|[（(]\d{1,2}[)）]")
 _NON_VALUES = (_ADDRESSES, _ISO_DATETIME, _MIXED_IDS, _PHONES, _LABELED, _DATES, _STRUCTURAL)
 
-_NUMBER = re.compile(r"[+\-−]?\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?%?|[+\-−]?\d+(?:\.\d+)?%?")
+#: A `-` counts as a sign only where it cannot be a hyphen: not right after a
+#: digit (ranges "500-600"), a dot, a percent sign, an identifier character
+#: ("PO-000017", "SKU-500") or a slash. The same boundary applies to answers
+#: and sources so a range reads the same numbers on both sides.
+_SIGN_BOUND = r"(?<![\d.%A-Za-z0-9_/])"
+_NUMBER = re.compile(_SIGN_BOUND + r"[+\-−]?\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?%?"
+                     r"|" + _SIGN_BOUND + r"[+\-−]?\d+(?:\.\d+)?%?")
 #: Sources are read permissively: a value shown anywhere in them is a value the
 #: turn saw, whatever context it stood in there.
-_ANY_NUMBER = r"\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+_ANY_NUMBER = (_SIGN_BOUND + r"[+\-−]?\d{1,3}(?:[,，]\d{3})+(?:\.\d+)?"
+               r"|" + _SIGN_BOUND + r"[+\-−]?\d+(?:\.\d+)?")
 
 
 def _canon(token: str) -> str:
@@ -61,9 +71,17 @@ def _canon(token: str) -> str:
     return format(value.normalize(), "f")
 
 
+#: `负 500` states -500: the Chinese minus signs like the ASCII ones do.
+_NEGATIVE = re.compile(r"负\s*(?=\d)")
+
+
+def _signed(text: str) -> str:
+    return _NEGATIVE.sub("-", text)
+
+
 def stated_numbers(text: str) -> list[tuple[str, str]]:
     """The (display token, normalized value) pairs a text states, in order, once each."""
-    cleaned = text
+    cleaned = _signed(text)
     for pattern in _NON_VALUES:
         cleaned = pattern.sub(" ", cleaned)
     pairs, seen = [], set()
@@ -93,11 +111,11 @@ def untraced(answer: str, sources) -> tuple[str, ...]:
         return missing_ids
     shown = set()
     for text in sources:
-        for token in re.findall(_ANY_NUMBER, str(text)):
+        for token in re.findall(_ANY_NUMBER, _signed(str(text))):
             value = _canon(token)
             if value:
-                shown.add(value.lstrip("-"))
-    return (*missing_ids, *(token for token, value in stated if value.lstrip("-") not in shown))
+                shown.add(value)
+    return (*missing_ids, *(token for token, value in stated if value not in shown))
 
 
 __all__ = ["answer_numbers", "stated_numbers", "untraced"]

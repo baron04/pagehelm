@@ -43,6 +43,8 @@
 
 测试按ID去重；收集时导入失败、选中测试集为空，或必需浏览器lane缺依赖导致skip均失败。保留审批、actor隔离、写入仅一次、不确定写入不重试、账本与篡改回归。浏览器改动在集成/合入时跑对应lane。
 
+芋道绑定规范 `frontend/e2e/yudao-*-binding.spec.ts` 还要 `WOA_YUDAO_UI_MODULES` 指向含 vue 与 element-plus 的合格应用依赖目录（本地芋道前端 `node_modules`）以及 `WOA_PAGE_CONTROLLER_MODULE` 指向固定 PageController 产物；未提供时这些用例跳过，不算通过证据。
+
 仅相关代码、输入和环境未变时复用通过结果；修复后只重跑受影响检查。勿重复核心与其子集、两个lane的同一浏览器测试，或为无关改动构建Storybook/安装wheel。交接准确报告执行、失败、跳过和未覆盖范围。
 
 视觉检查保留确认、过期/拒绝、CSP、宿主交互、降低动态效果、GPU失效回退、主题对比度与声明变量；不以固定GPU像素/动画相位或源码关键词、import/CSS拼写代替行为验证。协议、依赖和边界静态不变量仍检查。

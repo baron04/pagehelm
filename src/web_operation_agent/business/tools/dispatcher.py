@@ -50,7 +50,11 @@ class BusinessToolRuntime:
                  forbidden_operations: tuple[ForbiddenOperation, ...] = (),
                  answer_labels: dict[str, dict[str, str]] | None = None,
                  numeric_goal_binding: bool = False,
-                 skill_registry=None, require_skill_for_writes: bool = False):
+                 skill_registry=None, require_skill_for_writes: bool = False,
+                 mutation_dispatch_enabled: bool = True):
+        if type(mutation_dispatch_enabled) is not bool:
+            raise TypeError("mutation_dispatch_enabled must be boolean")
+        self._mutation_dispatch_enabled = mutation_dispatch_enabled
         from ...skills import SkillRegistry
         if not isinstance(require_skill_for_writes, bool):
             raise TypeError("require_skill_for_writes must be boolean")
@@ -539,6 +543,9 @@ class BusinessToolRuntime:
                          loaded_ids: set[str], *,
                          context: OperationContext | None = None,
                          on_claimed: Callable[[], None] | None = None) -> BusinessToolResult:
+        if not self._mutation_dispatch_enabled:
+            raise BusinessMutationBlockedError("mutation dispatch is disabled for preparation",
+                                               reason="preparation_only")
         if not isinstance(proposal, BusinessMutationProposal):
             raise BusinessToolError("business mutation proposal is invalid")
         digest = proposal.content_digest

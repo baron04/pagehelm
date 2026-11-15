@@ -31,6 +31,22 @@ from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProvider
 from web_operation_agent.execution.product import AgentTurnConfig, AgentTurnExecutor
 
 
+def admit_armed_write(armed, method: str, path: str, query: str, body: bytes) -> dict:
+    """The application's gate verdict for one marked write inside its window.
+
+    Only the armed permit may say yes; nothing else the application or the host
+    knows can widen what one approved click may cause.
+    """
+    if armed is None:
+        return {"allowed": False, "code": "not_armed"}
+    decision = armed.admit(method, path, query, body)
+    if not decision.allowed:
+        return {"allowed": False, "code": decision.code}
+    return {"allowed": True, "code": "",
+            "settle": lambda status, body: armed.settle(
+                decision.sequence, status, body)}
+
+
 @dataclass(frozen=True, slots=True)
 class NativeServerConfig:
     state_dir: Path
@@ -49,6 +65,8 @@ class NativeServerConfig:
     adversarial_form_fixture: bool = False
     require_task_contract: bool = False
     model_loop: bool = False
+    #: Off by default: arming the native write contract is the integration's choice.
+    native_submit_writes: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "state_dir", Path(self.state_dir).expanduser())
@@ -112,8 +130,10 @@ class NativeContactsHost:
             public_base_url=config.public_agent_url,
             provider_status=self.provider_guard.status)
         self._sessions: dict[tuple[str, str], tuple[LiveProductSession, object]] = {}
+        self._submit_ports: dict[str, object] = {}
         self._lock = threading.RLock()
         self._closed = False
+        self.application._write_gate = self._admit_write
         self.application.install_assistant(
             bootstrap=self._bootstrap, revoke=self._revoke_actor,
             script_url=self.server.gateway.runtime_url)
@@ -134,6 +154,11 @@ class NativeContactsHost:
             demo_config, run_dir, runtime_guard=self.provider_guard)
         return KeyedLimitedChat(
             chat, self.principal_admission, principal_key), meter
+
+    def _admit_write(self, session_key: str, method: str, path: str,
+                     query: str, body: bytes) -> dict:
+        port = self._submit_ports.get(session_key)
+        return admit_armed_write(getattr(port, "armed", None), method, path, query, body)
 
     def _bootstrap(self, actor: DemoActor, runtime_instance_id: str) -> dict:
         key = (actor.actor, runtime_instance_id)
@@ -215,6 +240,13 @@ class NativeContactsHost:
                     run_id_factory=lambda _message: "native-" + uuid.uuid4().hex[:16],
                     **loop_options,
                 )
+                if self.config.model_loop and self.config.native_submit_writes:
+                    from testapps.contacts.native_submit import ContactsSubmitPort
+                    port = ContactsSubmitPort(adapter,
+                        journal=self.application.write_journal,
+                        reads=self.application.read_journal)
+                    executor.native_submit = port
+                    self._submit_ports[actor.session] = port
                 return LiveConversationRunner(channel, executor=executor)
 
             stable = hashlib.sha256(

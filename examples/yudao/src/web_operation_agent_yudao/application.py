@@ -102,7 +102,11 @@ class YudaoApplication:
                  conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None,
                  native_tabs: bool = False, native_navigation: bool = False, page_write_guard: str = "",
                  forms: ApplicationFormPort | None = None, native_writes: bool = False,
-                 mutation_journal=None):
+                 mutation_journal=None, native_write_preparation: bool = False):
+        if type(native_write_preparation) is not bool:
+            raise TypeError("native_write_preparation must be boolean")
+        if native_write_preparation and native_writes:
+            raise ValueError("preparation and execution modes are mutually exclusive")
         if not isinstance(native_writes, bool):
             raise TypeError("native_writes must be explicitly enabled")
         if not isinstance(native_tabs, bool) or (native_tabs and not page_write_guard):
@@ -167,20 +171,22 @@ class YudaoApplication:
         skills = packaged_skills()
         if any(op not in {t.name for t in reviewed.definitions} for skill in skills.artifacts for op in skill.write_operations):
             raise ValueError("Skill references an unreviewed native operation")
-        registry = native_tools(self.client, self.goal_data, runtime_dictionary=True) if native_writes else ToolRegistry(())
+        registry = native_tools(self.client, self.goal_data, runtime_dictionary=True,
+            mutation_dispatch_enabled=not native_write_preparation) if (native_writes or native_write_preparation) else ToolRegistry(())
         mutation_names = frozenset(t.name for t in registry.definitions)
         data = DeclaredDataClassifier(tuple((name, classes[name]) for name in names) +
             tuple((name, ("business.generic_record", "business.identifier")) for name in sorted(mutation_names)))
         postconditions = NativePostconditions(mutation_names)
         routes = DeclaredRoutePort(APPLICATION_ID, _PAGE_ROUTES,
                                    session_handoff_query_keys=SESSION_HANDOFF_KEYS)
-        self.identity = YudaoIdentityPort(api_base, self.client, native_writes=native_writes)
+        self.identity = YudaoIdentityPort(api_base, self.client, native_writes=native_writes or native_write_preparation)
         self.business_tools = BusinessToolRuntime(
             (), CombinedTools(reads, registry) if registry else reads, application_id=APPLICATION_ID,
             required_scopes={**{name: "yudao.read" for name in names}, **{name: "yudao.write" for name in mutation_names}}, data_classifier=data,
             operations={**{name: ToolOperation("application", "read") for name in names},
                         **{t.name: t.operation for t in registry.definitions}},
             skill_registry=skills, require_skill_for_writes=True, mutation_journal=mutation_journal,
+            mutation_dispatch_enabled=not native_write_preparation,
             postcondition_verifier=postconditions, route_validator=routes)
         self.ports = ApplicationPorts(
             identity=self.identity, routes=routes, postconditions=postconditions,

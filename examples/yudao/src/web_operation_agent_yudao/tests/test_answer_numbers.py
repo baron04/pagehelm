@@ -48,8 +48,11 @@ class TracingTests(unittest.TestCase):
         self.assertEqual(untraced("合计 4,999 元", ("total=12", '{"price": 2440.80}')), ("4,999",))
 
     def test_signs_unify_before_comparison(self):
-        self.assertEqual(untraced("退货 -500 元", ("500",)), ())
-        self.assertEqual(untraced("金额 500 元", ("-500",)), ())
+        # A stated value matches only the same sign: -500 is not provenance for +500.
+        self.assertEqual(untraced("退货 -500 元", ("500",)), ("-500",))
+        self.assertEqual(untraced("金额 500 元", ("-500",)), ("500",))
+        self.assertEqual(untraced("退货 -500 元", ("支出 -500 元",)), ())
+        self.assertEqual(untraced("金额 500 元", ("应收 500 元",)), ())
 
     def test_dates_numeric_ids_and_addresses_in_the_answer_are_not_reported(self):
         self.assertEqual(
@@ -85,6 +88,23 @@ class TracingTests(unittest.TestCase):
 
     def test_an_answer_without_numbers_passes_without_sources(self):
         self.assertEqual(untraced("已打开订单页。", ()), ())
+
+    def test_chinese_enumeration_markers_are_not_stated_values(self):
+        self.assertEqual(untraced("结果如下：\n1、已完成\n2）待处理", ("total=0",)), ())
+        self.assertEqual(untraced("结果：1.甲 2.乙", ("total=0",)), ())
+        # A dotted decimal is not a marker: 3.14 stays a stated value.
+        self.assertEqual(untraced("结果 3.14", ("total=0",)), ("3.14",))
+
+    def test_a_number_after_an_english_id_word_is_not_a_labeled_identifier(self):
+        # "paid" ends in "id" but is not the label "id": 12345 stays a value.
+        self.assertEqual(untraced("paid 12345", ("total=0",)), ("12345",))
+        self.assertEqual(untraced("id：12345", ("total=0",)), ())
+        self.assertEqual(untraced("ID=12345", ("total=0",)), ())
+
+    def test_the_chinese_minus_signs_like_the_ascii_one(self):
+        self.assertEqual(untraced("余额负500元", ("balance=-500",)), ())
+        self.assertEqual(untraced("余额负 500 元", ("balance=-500",)), ())
+        self.assertEqual(untraced("负500元", ("balance=500",)), ("-500",))
 
 
 if __name__ == "__main__":

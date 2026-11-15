@@ -13,6 +13,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import re
 import secrets
 import threading
 import time
@@ -66,6 +67,7 @@ class NativeGuardProxy:
         self._probe = secrets.token_hex(32)
         self.http = ThreadingHTTPServer((host, port), self._handler())
         self._thread = None
+        self._ingress_verified = False
 
     @property
     def url(self):
@@ -77,6 +79,7 @@ class NativeGuardProxy:
         return self
 
     def close(self):
+        self._ingress_verified = False
         if self._thread is not None:
             self.http.shutdown()
             self._thread.join(3)
@@ -84,6 +87,7 @@ class NativeGuardProxy:
 
     def verify_ingress(self) -> None:
         """Require both public routes to reach this process before enabling UI actions."""
+        self._ingress_verified = False
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *_args):
                 return None
@@ -98,6 +102,12 @@ class NativeGuardProxy:
                         raise GuardRefused("guard_ingress_unverified")
             except Exception:
                 raise GuardRefused("guard_ingress_unverified") from None
+        self._ingress_verified = True
+
+    @property
+    def method_fence_ready(self) -> bool:
+        return (self._ingress_verified and self._thread is not None
+                and self._thread.is_alive() and self.guard.writing_gets is not None)
 
     def _handler(self):
         proxy = self
@@ -158,7 +168,17 @@ class NativeGuardProxy:
                     owner = owner or secrets.token_hex(32)
                     ttl = proxy.guard.begin(actor, owner, ttl_s=body.get("ttl_s", 120))
                     state = {"active": True, "expires_at": time.time() + ttl}
-                    if proxy.application_window:
+                    if proxy.guard.permit_active(actor):
+                        # An approved click, not a read-only window: the application's own
+                        # statement guard must be off for the request the card shows. The
+                        # permit still decides every write; nothing else can be sent.
+                        if proxy.application_window:
+                            ended = self.application("end", {})
+                            if not ended or ended.get("active") is True:
+                                proxy.guard.disarm_permit(actor)
+                                raise GuardRefused("application_window_unavailable")
+                        state["guard"] = "approved_submit"
+                    elif proxy.application_window:
                         confirmed = self.application("begin", {"ttl_s": math.ceil(ttl)})
                         if confirmed.get("active") is not True or confirmed.get("guard") != "read_only_statements":
                             proxy.guard.end(actor, owner)
@@ -207,10 +227,23 @@ class NativeGuardProxy:
                 anonymous = path in _PUBLIC and not self.headers.get("Authorization")
                 actor = None if anonymous else self.actor()
                 if actor is None or self.headers.get(ASSISTANT_HEADER) != "1":
-                    self.upstream_request(body)
+                    if actor is not None and self.command == "GET":
+                        try:
+                            proxy.guard.note_read(actor, self.path)
+                        except GuardRefused:
+                            pass          # a full actor table must not stop the person's own read
+                    status, payload = self.upstream_request(body)
+                    if actor is not None and self.command != "GET" \
+                            and _accepted_user_write(status, payload):
+                        wanted, created = _write_ids(body, payload, self.path)
+                        try:
+                            proxy.guard.note_user_write(actor, self.command, self.path,
+                                                        wanted, created)
+                        except GuardRefused:
+                            pass          # a full actor table must not drop the person's own write
                 else:
-                    with proxy.guard.request(actor, self.command, self.path):
-                        self.upstream_request(body)
+                    with proxy.guard.request(actor, self.command, self.path, body) as ticket:
+                        ticket.status, ticket.response = self.upstream_request(body)
 
             def upstream_request(self, body):
                 connect = http.client.HTTPSConnection if proxy.upstream.scheme == "https" else http.client.HTTPConnection
@@ -231,6 +264,7 @@ class NativeGuardProxy:
                     self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
                     self.wfile.write(payload)
+                    return response.status, payload[:65536]
                 finally:
                     connection.close()
 
@@ -264,3 +298,40 @@ class NativeGuardProxy:
 
 
 __all__ = ["NativeGuardProxy", "GUARD_PATH"]
+
+
+def _accepted_user_write(status, payload) -> bool:
+    """This application's own "accepted": HTTP success plus its success code in the body."""
+    if not (isinstance(status, int) and 200 <= status < 300 and payload):
+        return False
+    try:
+        answer = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(answer, dict) and answer.get("code") == 0
+
+
+def _write_ids(request_body, payload, request_path) -> tuple[str, str]:
+    """(id the write named, id the application returned), each "" when absent."""
+    wanted = created = ""
+    try:
+        body = json.loads(request_body)
+    except (ValueError, UnicodeDecodeError):
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("id"), (str, int)) \
+            and not isinstance(body.get("id"), bool):
+        wanted = str(body["id"])
+    if not wanted:
+        match = re.search(r"(?:^|[?&])id=(\d{1,19})(?:&|$)", request_path)
+        if match:
+            wanted = match.group(1)
+    try:
+        data = json.loads(payload).get("data")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        data = None
+    if isinstance(data, (str, int)) and not isinstance(data, bool):
+        created = str(data)
+    elif isinstance(data, dict) and isinstance(data.get("id"), (str, int)) \
+            and not isinstance(data.get("id"), bool):
+        created = str(data["id"])
+    return wanted, created

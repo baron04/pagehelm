@@ -108,6 +108,11 @@ export interface ActionEnvelope {
   [extra: string]: unknown
 }
 
+export interface ExecutionTrace {
+  trace_id: string
+  events: {sequence: number; operation: string; path: string}[]
+}
+
 export interface ActionReceipt {
   schema_version: number
   command_id: string
@@ -128,6 +133,10 @@ export interface ActionReceipt {
   /** Bounded labels from an owned choice list when an exact option was unavailable. */
   candidate_labels?: string[]
   no_effect?: boolean
+  /** Optional private diagnostics; never part of the observed page or authorization. */
+  execution_trace?: ExecutionTrace
+  /** The data bound to a live form, for a `form_model` action only. */
+  form_data?: JsonObject
   observation: PageObservation | null
 }
 

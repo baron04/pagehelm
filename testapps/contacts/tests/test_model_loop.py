@@ -150,13 +150,11 @@ class ContactsModelLoopTests(unittest.TestCase):
                 ("list_contacts", {"name_contains": "Grace Hopper", "summary": {"columns": ["email"]}}),
                 (None, {"content": "The email appears only in this unsent draft."}),
                 ("finish", {"status": "done", "answer": "See above"}),
-                ("finish", {"status": "done", "answer": "Already answered"}),
                 ("finish", {"status": "done", "answer": "", "read_answer": "read-1"})]))
             self.assertEqual(reviewed, [])
             self.assertEqual(result.terminal_reason, "agent_finished")
             self.assertIn("grace@example.test", result.user_answer)
             self.assertNotIn("See above", result.user_answer)
-            self.assertNotIn("Already answered", result.user_answer)
 
     def execute(self, app, actor_id, replies, *, source=None, observation=True, turn_traces=False,
                 inspect=None, number_check=None, prompt="Grace Hopper email?"):

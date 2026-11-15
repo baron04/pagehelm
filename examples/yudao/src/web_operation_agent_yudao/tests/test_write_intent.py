@@ -180,8 +180,10 @@ class WriteIntentTests(unittest.TestCase):
         original = {"path": "orders/page", "fields": ["name"], "deliver": True,
                     "summary": {"columns": ["name"], "order_by": [
                         {"column": "name", "direction": "asc", "nulls": "last"}]}}
-        with patch.object(SlimTurnExecutor.__mro__[1], "_invoke_tool", return_value="ok") as parent:
-            self.assertEqual("ok", executor._invoke_tool(None, "call_api", original, {}))
+        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
+        expected = LoopToolResult("ok")
+        with patch.object(SlimTurnExecutor.__mro__[1], "_invoke_tool", return_value=expected) as parent:
+            self.assertIs(expected, executor._invoke_tool(None, "call_api", original, {}))
             normalized = parent.call_args.args[2]
             self.assertNotIn("deliver", normalized)
             self.assertEqual(original["summary"], normalized["summary"])

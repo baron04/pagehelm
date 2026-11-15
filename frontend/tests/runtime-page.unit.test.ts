@@ -17,6 +17,24 @@ function controller(): PageControllerApi {
   }
 }
 
+describe('application-owned record bindings on a plain HTML grid', () => {
+  it('keeps opaque identifiers and view identity neutral and detects a reused action', () => {
+    const button = document.createElement('button')
+    button.textContent = 'Open'
+    document.body.append(button)
+    let record = {kind:'record',id:'partner:alpha',table:'customers-grid',values:[['Legal name','Alpha']]}
+    const page = new Page(controller(), () => button, createRedactor(), undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, () => record)
+    const first = page.fingerprint('e1')
+    record = {...record,id:'partner:beta'}
+    expect(page.fingerprint('e1')).not.toBe(first)
+    record = {...record,id:'partner:alpha',table:'suppliers-grid'}
+    expect(page.fingerprint('e1')).not.toBe(first)
+    button.remove()
+    expect(page.fingerprint('e1')).not.toBe(first)
+  })
+})
+
 describe('adapter-issued single-choice combobox drafts', () => {
   it('verifies an unnamed line only by its exact current ref, live form instance and value', () => {
     const form = document.createElement('form')

@@ -171,7 +171,7 @@ function rendersList(list, data, totals) {
 
 export function createPageFacts({view = window, doc = document} = {}) {
   let route = '', locationKey = '', generation = 0, record = null, appliedLedger = null, listSerial = 0, disposed = false
-  const reads = new Map()
+  const reads = new Map(), formReads = new Map()
   // The latest list request per endpoint. A list is the page's own query only while a
   // visible table of the page renders its rows (pageList): a cached page refreshing its
   // list on every route change, or another list on the page, never stands in for it.
@@ -182,7 +182,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
     const next = view.location.pathname + view.location.search + view.location.hash
     if (next !== locationKey) {
       locationKey = next; route = view.location.pathname; generation++; record = null; appliedLedger = null
-      reads.clear(); lists.clear()
+      reads.clear(); lists.clear(); formReads.clear()
     }
     return generation
   }
@@ -207,6 +207,7 @@ export function createPageFacts({view = window, doc = document} = {}) {
     try { url = new URL(input, view.location.href) } catch { return null }
     if (url.origin !== view.location.origin || !url.pathname.startsWith('/admin-api/')) return null
     const heldGeneration = current()
+    if (/\/get(?:-[a-z0-9-]+)?$/.test(url.pathname)) formReads.delete(url.pathname)
     readQuery = readQuery === undefined ? listReadQuery(url, view) : readQuery
     const ledger = route === '/fms/ledger/general' && url.pathname === '/admin-api/fms/ledger/general/list'
     const order = route === '/erp/sale/order' && url.pathname === '/admin-api/erp/sale-order/page'
@@ -225,8 +226,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
     }
     // A newer request to an endpoint replaces its earlier list at send, failures included.
     let list = null
-    if (url.pathname.endsWith('/page')) {
-      list = {serial: ++listSerial, query: null, read: null, rows: null, total: null}
+    if (/\/(?:page|list)(?:-[a-z0-9-]+)?$/.test(url.pathname)) {
+      list = {serial: ++listSerial, path: url.pathname, query: null, read: null, rows: null, total: null}
       lists.delete(url.pathname)
       if (lists.size >= 16) lists.delete(lists.keys().next().value)
       lists.set(url.pathname, list)
@@ -262,10 +263,18 @@ export function createPageFacts({view = window, doc = document} = {}) {
       // Concurrent older completions cannot overwrite the newest request's verdict.
       if (latest.serial !== serial) return
       const ok = matchesRecord && status >= 200 && status < 300 && body?.code === 0
+      if (/\/get(?:-[a-z0-9-]+)?$/.test(url.pathname)) {
+        formReads.delete(url.pathname)
+        if (ok && body?.data?.id !== undefined && String(body.data.id) === url.searchParams.get('id')) {
+          if (formReads.size >= 32) formReads.delete(formReads.keys().next().value)
+          formReads.set(url.pathname, String(body.data.id))
+        }
+      }
       latest.failed = !ok
       if (ledger && ok && query && Array.isArray(body?.data)) appliedLedger = query
-      if (list && lists.get(url.pathname) === list && ok && Array.isArray(body?.data?.list)) {
-        list.rows = listRows(body.data.list)
+      const records = Array.isArray(body?.data?.list) ? body.data.list : Array.isArray(body?.data) ? body.data : null
+      if (list && lists.get(url.pathname) === list && ok && records) {
+        list.rows = listRows(records)
         list.total = Number.isSafeInteger(body.data.total) ? body.data.total : null
         list.query = query
       }
@@ -332,6 +341,21 @@ export function createPageFacts({view = window, doc = document} = {}) {
     if (readPageBlocker() || readPageRoute() !== route) return undefined
     const query = appliedLedger || pageList()?.query
     return query ? {path: query.path, parameters: {...query.parameters}} : undefined
+  }
+  function readFormSource(id) {
+    current()
+    if (disposed) return undefined
+    if (!id) return pageList()?.path
+    const paths = [...formReads].filter(([, held]) => held === String(id)).map(([path]) => path)
+    return paths.length === 1 ? paths[0] : undefined
+  }
+  function readRowSource(element) {
+    current()
+    const table = element?.closest?.('.el-table')
+    const data = table && pageComponentForRoot(table, 'ElTable')?.instance?.props?.data
+    if (disposed || !visible(table) || !Array.isArray(data) || readPageBlocker()) return undefined
+    const matching = Array.from(lists.values()).filter(list => list.rows?.ids && rendersList(list, data, []))
+    return matching.length === 1 ? matching[0].path : undefined
   }
   function readPageRead() {
     current()
@@ -444,8 +468,8 @@ export function createPageFacts({view = window, doc = document} = {}) {
     return facts
   }
   return {begin, readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
-    readPageFacets,
-    dispose() {disposed = true; reads.clear(); lists.clear(); record = null; appliedLedger = null}}
+    readPageFacets, readRowSource, readFormSource,
+    dispose() {disposed = true; reads.clear(); lists.clear(); formReads.clear(); record = null; appliedLedger = null}}
 }
 
 /** What this page's own API requests carry while the assistant is working it. */
@@ -721,8 +745,9 @@ function pageComponentForRoot(root, name, allowDialog = false) {
   while (stack.length && seen.size < (allowDialog ? 65536 : 8192)) {
     const node = stack.pop()
     if (!node || seen.has(node)) continue
+    if (!allowDialog && node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root) &&
+        (name !== 'ElForm' || !node.el.matches('form.el-form') && !node.el.querySelector('form.el-form'))) continue
     seen.add(node)
-    if (!allowDialog && name !== 'ElForm' && node.el instanceof HTMLElement && node.el !== root && !node.el.contains(root)) continue
     if (node.component && live(node.component)) {
       if ((node.component.type?.name || node.component.type?.__name) === name &&
           node.component.appContext === owner.appContext) {
@@ -734,6 +759,13 @@ function pageComponentForRoot(root, name, allowDialog = false) {
           instance = node.component
         }
       }
+      // Other top-level forms must still be counted for query ownership. Once a form
+      // has been counted, its input/option trees cannot contain another root form unless
+      // the DOM actually contains one; avoid scanning thousands of unrelated options.
+      if (name === 'ElForm' && (node.component.type?.name || node.component.type?.__name) === 'ElForm' &&
+          node.component.subTree?.el instanceof HTMLElement &&
+          node.component.subTree.el.matches('form.el-form') &&
+          !node.component.subTree.el.querySelector('form.el-form')) continue
       stack.push(node.component.subTree)
     }
     if (Array.isArray(node.children)) stack.push(...node.children)
@@ -785,6 +817,176 @@ function nativeFormContext(element) {
     return {kind: 'form', mode: 'update', recordId: String(id), ...precision}
   }
   return undefined
+}
+
+const FORM_SECRET = /pass(word)?|pwd|secret|token|credential|密码|密钥|令牌/i
+const FORM_LIMITS = {depth: 8, nodes: 6000, bytes: 200000}
+const FORM_ID = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/
+
+/** A plain-data copy of the form's model: bounded, no functions, credentials named and left out. */
+function cloneFormModel(model) {
+  const withheld = [], active = new Set()
+  let nodes = 0
+  const walk = (value, depth, path) => {
+    if (++nodes > FORM_LIMITS.nodes) throw new Error('too_many_values')
+    if (depth > FORM_LIMITS.depth) throw new Error('too_deep')
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+    // As JSON.stringify, which is what the page sends: a number that is not finite is null.
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString()
+    if (typeof value !== 'object') return undefined
+    if (active.has(value)) throw new Error('cyclic')
+    active.add(value)
+    try {
+      if (Array.isArray(value)) return value.map((item, index) => walk(item, depth + 1, path + '.' + index) ?? null)
+      const out = {}
+      for (const key of Object.keys(value)) {
+        if (FORM_SECRET.test(key)) { withheld.push(path ? path + '.' + key : key); continue }
+        const item = walk(value[key], depth + 1, path ? path + '.' + key : key)
+        if (item !== undefined) out[key] = item
+      }
+      return out
+    } finally { active.delete(value) }
+  }
+  try {
+    const data = walk(model, 0, '')
+    return JSON.stringify(data).length <= FORM_LIMITS.bytes ? {data, withheld} : {unreadable: 'too_large'}
+  } catch (error) { return {unreadable: String(error?.message || 'not_data').slice(0, 40)} }
+}
+
+function shownIn(root) {
+  const parts = []
+  for (const node of root.querySelectorAll('.el-select__selected-item,.el-radio.is-checked,.el-checkbox.is-checked,.el-tag')) {
+    const text = (node.textContent || '').replace(/\s+/g, ' ').trim()
+    if (text) parts.push(text)
+  }
+  for (const node of root.querySelectorAll('input:not([type="hidden"]):not([type="password"]),textarea')) {
+    if (node.closest('.el-select')) continue
+    const text = String(node.value || '').trim()
+    if (text) parts.push(text)
+  }
+  return [...new Set(parts)].join('、').slice(0, 200)
+}
+
+/**
+ * The whole data bound to the native editor the element sits in: the ElForm's model (hidden
+ * fields, related ids and lines included), each form item's label and what it shows, and
+ * whether the editor creates a record or changes one. This is a read of the mounted
+ * component, never a grant; the server decides what it may be used for.
+ */
+export function readElementFormModel(element) {
+  if (!(element instanceof HTMLElement) || !element.isConnected) return undefined
+  const dialog = element.closest('[role="dialog"],dialog') || element.closest('form.el-form')
+  if (!dialog) return undefined
+  const shown = node => node.getBoundingClientRect().width && node.getBoundingClientRect().height
+  const forms = (dialog.matches('form.el-form') ? [dialog] : Array.from(dialog.querySelectorAll('form.el-form'))).filter(shown)
+  const roots = forms.filter(form => !forms.some(other => other !== form && other.contains(form)))
+  if (Array.from(dialog.querySelectorAll('.el-loading-mask')).some(shown)) return {unreadable: 'still_loading'}
+  if (forms.length > 32 || roots.length !== 1) return {unreadable: roots.length ? 'several_forms' : 'no_form'}
+  const form = roots[0], bound = pageComponentForRoot(form, 'ElForm', true)
+  if (!bound) return {unreadable: 'form_component_not_found'}
+  const model = bound.instance.props?.model
+  if (!model || typeof model !== 'object' || Array.isArray(model)) return {unreadable: 'model_not_an_object'}
+  const copy = cloneFormModel(model)
+  if (copy.unreadable) return {unreadable: copy.unreadable}
+  const id = model.id
+  const hasId = id !== undefined && id !== null && id !== ''
+  if (hasId && !(typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+      || typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id))) return {unreadable: 'record_id_not_plain'}
+  const items = [], invalid = []
+  for (const node of liveVNodes(bound.instance)) {
+    const component = node.component
+    if (!component || (component.type?.name || component.type?.__name) !== 'ElFormItem') continue
+    const prop = component.props?.prop, root = component.subTree?.el
+    if (typeof prop !== 'string' || !prop || !(root instanceof HTMLElement) || !root.isConnected) continue
+    const label = String(component.props.label || root.querySelector('.el-form-item__label')?.textContent || '')
+      .replace(/\s+/g, ' ').trim().slice(0, 120)
+    items.push({prop, label, display: shown(root) ? shownIn(root) : ''})
+    if (root.classList.contains('is-error')) invalid.push(prop)
+    if (items.length >= 400) break
+  }
+  const title = (dialog.querySelector('.el-dialog__header')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+  return {model: copy.data, withheld: copy.withheld, invalid: invalid.slice(0, 40), items, title,
+    mode: hasId ? 'update' : 'create', record_id: hasId ? String(id) : '', source: installed?.readFormSource(hasId ? id : '')}
+}
+
+/** JSON structure equality: property order is immaterial, scalar types and arrays are exact. */
+export function sameFormStructure(left, right) {
+  if (left === right) return true
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right) &&
+    left.length === right.length && left.every((value, index) => sameFormStructure(value, right[index]))
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length && keys.every(key =>
+    Object.hasOwn(right, key) && sameFormStructure(left[key], right[key]))
+}
+
+/** Restore page-opening changes to the same-actor values supplied by the server. */
+export async function restoreElementFormModel(element, request) {
+  const before = readElementFormModel(element)
+  if (!before || before.unreadable || before.withheld?.length || !request ||
+      !sameFormStructure(before.model, request.expected) ||
+      !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return false
+  const area = element.closest('[role="dialog"],dialog') || element.closest('form.el-form')
+  const forms = area?.matches('form.el-form') ? [area] : [...(area?.querySelectorAll('form.el-form') || [])]
+  const root = forms.find(form => !forms.some(other => other !== form && other.contains(form)))
+  const bound = root && pageComponentForRoot(root, 'ElForm', true)
+  const model = bound?.instance.props?.model
+  const values = cloneFormModel(request.values)
+  if (!model || values.unreadable || values.withheld.length || Object.keys(values.data).some(key =>
+      key === 'id' || key === '__proto__' || key === 'constructor' || key === 'prototype' ||
+      !Object.hasOwn(model, key))) return false
+  const validate = bound.instance.exposed?.validate || bound.instance.proxy?.validate
+  if (typeof validate !== 'function') return false
+  const keys = Object.keys(values.data)
+  const expected = cloneFormModel({...before.model, ...values.data}).data
+  try {
+    for (const key of keys) model[key] = values.data[key]
+    await Promise.resolve()
+    if (await validate() === false) throw new Error('application validation refused')
+    await Promise.resolve()
+    const after = readElementFormModel(element)
+    if (!after || after.unreadable || after.withheld?.length || after.invalid?.length ||
+        !sameFormStructure(after.model, expected)) throw new Error('restored form changed')
+    return true
+  } catch {
+    // Validation and reactive dependencies can modify other fields too. Restore the complete
+    // before-image, never leave a partially restored business form for an accidental save.
+    for (const key of Object.keys(model)) if (!Object.hasOwn(before.model, key)) delete model[key]
+    for (const [key, value] of Object.entries(before.model)) model[key] = value
+    await Promise.resolve()
+    return false
+  }
+}
+
+function rowToggle(element, row) {
+  const area = element.closest('.el-switch'), tableRoot = area?.closest('.el-table')
+  const binding = area && pageComponentForRoot(area, 'ElSwitch')
+  const table = tableRoot && pageComponentForRoot(tableRoot, 'ElTable')
+  if (!binding || !table || binding.owner !== table.owner || binding.instance.props?.disabled) return undefined
+  const cell = area.closest('td')
+  const store = table.instance.store || table.instance.proxy?.store || table.instance.setupState?.store
+  const column = store?.states?.columns?.value?.find(c => cell?.classList.contains(c.id))
+  const field = column?.property
+  const records = store?.states?.data?.value
+  const record = Array.isArray(records) && records.find(r => String(r.id) === row.id)
+  const props = binding.instance.props
+  const scalar = value => ['string', 'boolean', 'number'].includes(typeof value) &&
+    (typeof value !== 'number' || Number.isFinite(value))
+  if (typeof field !== 'string' || !/^[a-z][A-Za-z0-9]{0,59}$/.test(field) || !record ||
+      !scalar(props.activeValue) || !scalar(props.inactiveValue) || props.activeValue === props.inactiveValue ||
+      props.modelValue !== record[field] || ![props.activeValue, props.inactiveValue].includes(record[field])) return undefined
+  return {field, before: record[field], after: record[field] === props.activeValue ? props.inactiveValue : props.activeValue,
+    label: String(column.label || field).slice(0, 80), checked: record[field] === props.activeValue}
+}
+
+/** The table row a row control belongs to, read from the table that renders it. */
+export function readElementRowRecord(element) {
+  const row = element instanceof HTMLElement ? boundRecord(element) : undefined
+  if (!row || !FORM_ID.test(row.id)) return undefined
+  const named = row.values.find(([label]) => /名称|名字|标题|姓名|name/i.test(label))
+  return {id: row.id, name: named ? named[1].slice(0, 200) : '', values: row.values.slice(0, 40),
+    source: installed?.readRowSource(element), toggle: rowToggle(element, row)}
 }
 
 /** Local binding facts only; application effect review still owns action authority. */
@@ -936,6 +1138,19 @@ export function withUserStatusControls(selectorMap, html, root = document) {
     const index = ++top
     selectorMap.set(index, {ref: area, tagName: 'div', isInteractive: true, highlightIndex: index})
     lines.push(`[${index}]<div role=switch id=woa-user-status-${record.id} aria-checked=${record.status === 0}>${label} />`)
+  }
+  // Other native scalar switches expose their mounted column property and exact values.
+  for (const area of root.querySelectorAll('.el-table .el-switch')) {
+    if (lines.length >= 32) break
+    if ([...selectorMap.values()].some(value => value.ref === area)) continue
+    const rect = area.getBoundingClientRect()
+    if (!rect.width || !rect.height || rect.bottom <= 0 || rect.top >= window.innerHeight) continue
+    const row = boundRecord(area), toggle = row && rowToggle(area, row)
+    if (!toggle) continue
+    const label = `${toggle.label}开关：编号 ${row.id}`
+    const index = ++top
+    selectorMap.set(index, {ref: area, tagName: 'div', isInteractive: true, highlightIndex: index})
+    lines.push(`[${index}]<div role=switch aria-label="${label}" aria-checked=${toggle.checked}>${label} />`)
   }
   return lines.length ? lines.join('\n') + '\n' + html : html
 }
@@ -1170,4 +1385,245 @@ export function nativeRangeDateStep(element, value) {
     ? left.querySelector('button.arrow-left[aria-label="上个月"]')
     : target > last ? right.querySelector('button.arrow-right[aria-label="下个月"]') : null
   return button instanceof HTMLButtonElement && !button.disabled && button.isConnected ? button : null
+}
+
+// Fixed component operations. The server still admits every ordinary action and
+// checks the application's request/arrival receipts. These functions hold no plan,
+// permissions, API client or source rules.
+function liveVNodes(owner = currentPageComponent()) {
+  if (!owner) return []
+  const stack = [owner.subTree], seen = new Set(), nodes = []
+  while (stack.length && seen.size < 65536) {
+    const node = stack.pop()
+    if (!node || seen.has(node)) continue
+    seen.add(node)
+    nodes.push(node)
+    const c = node.component
+    if (c?.isMounted && !c.isUnmounted && !c.isDeactivated && c.appContext === owner.appContext) stack.push(c.subTree)
+    if (Array.isArray(node.children)) stack.push(...node.children)
+    if (node.suspense?.activeBranch) stack.push(node.suspense.activeBranch)
+  }
+  return stack.length ? [] : nodes
+}
+
+function available(element) {
+  return element instanceof HTMLElement && element.isConnected && element.getBoundingClientRect().width > 0
+    && element.getBoundingClientRect().height > 0 && !element.matches(':disabled,.is-disabled,[aria-disabled="true"]')
+    && !element.closest('[hidden],[aria-hidden="true"]')
+}
+
+/** Read a row from the same mounted table that renders it. A row index alone
+ * never survives sorting, filtering, replacement or a credential/page change. */
+export function boundRecord(element) {
+  const row = element?.closest?.('.el-table__body-wrapper tbody > tr')
+  const table = row?.closest('.el-table')
+  if (!row || !available(element) || !available(row) || table.closest('form,[role="dialog"],dialog')) return undefined
+  const binding = pageComponentForRoot(table, 'ElTable')
+  // Vue may have queued new rows while callbacks still close over the old row.
+  if (!binding || binding.owner.next || binding.instance.next ||
+      !Number.isInteger(binding.owner.job?.flags) || !Number.isInteger(binding.instance.job?.flags) ||
+      binding.owner.job?.flags & 1 || binding.instance.job?.flags & 1) return undefined
+  // The body renders the store's filtered/sorted rows, not the input props.
+  // Require the mounted body and the exact store it was rendered with.
+  const bodies = [...table.querySelectorAll('.el-table__body-wrapper tbody')]
+    .filter(item => item.closest('.el-table') === table)
+  const body = bodies.length === 1 && pageComponentForRoot(bodies[0], 'ElTableBody')
+  if (!body || body.owner !== binding.owner || body.instance.next ||
+      !Number.isInteger(body.instance.job?.flags) || body.instance.job.flags & 1) return undefined
+  const store = body.instance.props?.store
+  const stores = [binding.instance.store, binding.instance.proxy?.store, binding.instance.setupState?.store].filter(Boolean)
+  if (!store || stores.some(item => item !== store)) return undefined
+  const data = store.states?.data?.value
+  const rows = [...table.querySelectorAll('.el-table__body-wrapper tbody > tr')]
+    .filter(item => item.closest('.el-table') === table)
+  const index = rows.indexOf(row)
+  // Tree/expanded/virtual tables need their own component contract. Never align
+  // a DOM row against a differently shaped data array.
+  if (!Array.isArray(data) || rows.length !== data.length || index < 0 ||
+      rows.some(item => item.matches('.el-table__row[class*="el-table__row--level-"]') ||
+        item.querySelector(':scope > .el-table__expanded-cell')) ||
+      !Number.isSafeInteger(data[index]?.id) || data[index].id < 1 ||
+      data.filter(item => item?.id === data[index].id).length !== 1) return undefined
+  const heads = [...table.querySelectorAll('.el-table__header-wrapper thead tr:last-child th')]
+  const cells = [...row.children]
+  if (heads.length !== cells.length || heads.length > 80) return undefined
+  const text = item => (item.textContent || '').replace(/\s+/g, ' ').trim()
+  const scalars = Object.values(data[index]).filter(value => ['string', 'number'].includes(typeof value)).map(String)
+  const values = heads.flatMap((head, i) => {
+    const label = text(head), value = text(cells[i])
+    return label && label.length <= 80 && value.length <= 300 &&
+      !/password|token|secret|credential|密码|密钥|令牌/i.test(label) &&
+      !cells[i].querySelector('button,input,textarea,select') &&
+      (!cells[i].querySelector('a') || scalars.includes(value)) ? [[label, value]] : []
+  })
+  return {id: String(data[index].id), table: String(binding.instance.uid), values}
+}
+
+async function boundRangeInput(element, text, invoked) {
+  const root = element.closest('.el-date-editor--daterange,.el-date-editor--datetimerange')
+  if (!root) return false
+  const binding = pageComponentForRoot(root, 'PickerRangeTrigger')
+  const inputs = [...root.querySelectorAll(':scope > .el-range-input')]
+  const end = inputs.indexOf(element)
+  if (!binding || inputs.length !== 2 || end < 0) return false
+  let picker = binding.instance.parent
+  for (let depth = 0; picker && depth < 12 && picker.type?.name !== 'ElDatePicker'; depth++) picker = picker.parent
+  if (picker?.type?.name !== 'ElDatePicker' || !['daterange', 'datetimerange'].includes(picker.props?.type) ||
+      !picker.isMounted || picker.isUnmounted || picker.isDeactivated ||
+      typeof picker.exposed?.handleOpen !== 'function') return false
+  const datetime = picker.props.type === 'datetimerange'
+  const parts = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}):(\d{2}))?$/.exec(text)
+  if (!parts) throw new Error('the native date range requires a date or full date and time')
+  const [year, month, day] = parts.slice(1, 4).map(Number)
+  if (new Date(Date.UTC(year, month - 1, day)).toISOString().slice(0, 10) !== text.slice(0, 10) ||
+      parts[4] && (!datetime || Number(parts[4]) > 23 || Number(parts[5]) > 59 || Number(parts[6]) > 59)) {
+    throw new Error('the native date range refuses this date or time')
+  }
+  // Opening and selecting are real component callbacks, not synthetic DOM clicks.
+  // The range panel owns formatting and real update/change events. Date-only
+  // queries on a datetime range mean inclusive natural days, not native defaults.
+  try { invoked() } catch { /* Diagnostics cannot stop the component callback. */ }
+  picker.exposed.handleOpen()
+  await Promise.resolve()
+  // The component's opening watcher saves its pre-edit model on nextTick.
+  // Let that native baseline settle before pick closes the range again.
+  await new Promise(resolve => window.requestAnimationFrame(resolve))
+  const tables = liveVNodes(binding.owner).filter(node => {
+    if (node.component?.type?.__name !== 'basic-date-table' || !node.component.isMounted ||
+        node.component.isUnmounted || node.component.isDeactivated ||
+        node.component.props?.selectionMode !== 'range' || typeof node.props?.onPick !== 'function') return false
+    let parent = node.component.parent
+    for (let depth = 0; parent && depth < 12; depth++, parent = parent.parent) if (parent === picker) return true
+    return false
+  })
+  const handlers = new Set(tables.map(node => node.props.onPick))
+  if (!available(element) || element.readOnly || currentPageComponent() !== binding.owner ||
+      readElementPageControl(element)?.kind !== 'query' || handlers.size !== 1 || !tables.length) {
+    throw new Error('the mounted native date range contract changed after opening')
+  }
+  const props = tables[0].component.props
+  const base = props.date
+  if (props.disabled || typeof base?.startOf !== 'function' || typeof base?.toDate !== 'function') {
+    throw new Error('the mounted native date range is unavailable')
+  }
+  let value = base.startOf('day').date(1).year(year).month(month - 1).date(day)
+  const time = parts[4] ? parts.slice(4).map(Number) : [end === 1 ? 23 : 0, end === 1 ? 59 : 0, end === 1 ? 59 : 0]
+  if (datetime) value = value.hour(time[0]).minute(time[1]).second(time[2])
+  if (!value.isValid() || value.format(parts[4] ? 'YYYY-MM-DD HH:mm:ss' : 'YYYY-MM-DD') !== text ||
+      props.disabledDate?.(value.toDate())) {
+    throw new Error('the native date range refuses this date')
+  }
+  const selected = {minDate: end === 0 ? value : props.minDate, maxDate: end === 1 ? value : props.maxDate}
+  if (!selected.minDate) throw new Error('the native date range has no selected start date')
+  if (end === 1 && selected.maxDate.isBefore(selected.minDate)) throw new Error('the native date range ends before it starts')
+  // A datetime panel can also have calendar time defaults. Its own time editor
+  // callbacks retain the exact query times after calendar selection applies them.
+  let timeEditors, panel
+  if (datetime && picker.props.defaultTime) {
+    panel = tables[0].component.parent
+    if (panel?.type?.__name !== 'panel-date-range' ||
+        picker.props.format && picker.props.format !== 'YYYY-MM-DD HH:mm:ss' ||
+        picker.props.timeFormat && picker.props.timeFormat !== 'HH:mm:ss') {
+      throw new Error('the native datetime range time contract is unavailable')
+    }
+    const wraps = [...panel.subTree.el.querySelectorAll('.el-date-range-picker__time-header .el-date-range-picker__editors-wrap')]
+    const nodes = liveVNodes(binding.owner)
+    timeEditors = wraps.map(wrap => {
+      const root = wrap.querySelectorAll('.el-input')[1]
+      const matches = nodes.filter(node => node.el === root && node.component?.type?.name === 'ElInput'
+        && node.component.parent === panel && node.component.isMounted &&
+        !node.component.isUnmounted && !node.component.isDeactivated)
+      return matches.length === 1 ? matches[0] : undefined
+    })
+    if (timeEditors.length !== 2 || timeEditors.some(editor => typeof editor?.props?.onInput !== 'function' ||
+        typeof editor.props?.onChange !== 'function')) {
+      throw new Error('the native datetime range time editors are unavailable')
+    }
+  }
+  try { invoked() } catch { /* Diagnostics cannot stop the component callback. */ }
+  await tables[0].props.onPick(selected, datetime ? !!timeEditors : true)
+  if (timeEditors) {
+    for (const [i, date] of [selected.minDate, selected.maxDate].entries()) {
+      if (date) {
+        if (timeEditors[i].component.props.disabled || timeEditors[i].component.props.readonly ||
+            !timeEditors[i].el.isConnected || timeEditors[i].el.closest('[hidden],[aria-hidden="true"]') ||
+            currentPageComponent() !== binding.owner) {
+          throw new Error('the native datetime range time editor changed after selection')
+        }
+        try { invoked() } catch { /* Diagnostics cannot stop the component callback. */ }
+        await timeEditors[i].component.vnode.props.onInput(date.format('HH:mm:ss'))
+      }
+    }
+    if (selected.maxDate) {
+      for (const editor of timeEditors) {
+        try { invoked() } catch { /* Diagnostics cannot stop the component callback. */ }
+        await editor.component.vnode.props.onChange()
+      }
+      await Promise.resolve()
+      const buttons = [...panel.subTree.el.querySelectorAll('.el-picker-panel__footer button.is-plain')]
+      const confirms = liveVNodes(binding.owner).filter(node => node.el === buttons[0] &&
+        node.component?.type?.name === 'ElButton' && node.component.parent === panel && node.component.isMounted &&
+        !node.component.isUnmounted && !node.component.isDeactivated && !node.component.props.disabled)
+      if (buttons.length !== 1 || confirms.length !== 1 || !buttons[0].isConnected ||
+          buttons[0].closest('[hidden],[aria-hidden="true"]') ||
+          typeof confirms[0].props?.onClick !== 'function' || currentPageComponent() !== binding.owner) {
+        throw new Error('the native datetime range confirmation is unavailable')
+      }
+      try { invoked() } catch { /* Diagnostics cannot stop the component callback. */ }
+      await confirms[0].props.onClick()
+    }
+  }
+  await Promise.resolve()
+  return true
+}
+
+/** Invoke the exact rendered handler, including component update/change hooks.
+ * Unknown structures return false and use the existing admitted DOM path. */
+export async function boundInput(element, text, invoked = () => {}) {
+  if (!available(element) || element.readOnly || readElementPageControl(element)?.kind !== 'query' ||
+      !element.matches('input:not([type="password"]):not([type="file"]),textarea')) return false
+  if (element.matches('.el-date-editor--daterange > .el-range-input,.el-date-editor--datetimerange > .el-range-input')) {
+    return boundRangeInput(element, text, invoked)
+  }
+  if (element.getAttribute('role') === 'combobox') return false
+  const nodes = liveVNodes().filter(node => typeof node.type === 'string' && node.el === element
+    && typeof node.props?.onInput === 'function')
+  if (nodes.length !== 1) return false
+  const node = nodes[0]
+  try { invoked() } catch { /* Diagnostic collection is not part of the input. */ }
+  element.value = text
+  const event = new Event('input', {bubbles: false})
+  Object.defineProperties(event, {target: {value: element}, currentTarget: {value: element}})
+  await node.props.onInput(event)
+  if (typeof node.props.onChange === 'function') await node.props.onChange(event)
+  await Promise.resolve()
+  return true
+}
+
+export async function boundClick(element, invoked = () => {}) {
+  if (!available(element)) return false
+  const query = readElementPageControl(element)
+  const row = boundRecord(element)
+  const list = element.closest('[role="listbox"]')
+  const owners = list?.id ? [...document.querySelectorAll('input[role="combobox"][aria-controls]')]
+    .filter(input => input.getAttribute('aria-controls') === list.id && available(input) &&
+      ['query', 'page_size'].includes(readElementPageControl(input)?.kind)) : []
+  const family = element.closest('[role="tab"],.el-pagination') || query?.kind === 'query'
+    || row && element.matches('button,a') || element.getAttribute('role') === 'option' && owners.length === 1
+  // Modal editors, business controls and unclassified structures retain the
+  // ordinary path; binding cannot widen their server-side admission.
+  if (!family || element.closest('[role="dialog"],dialog')) return false
+  const nodes = liveVNodes().filter(node => typeof node.type === 'string' &&
+    node.el instanceof HTMLElement && (node.el === element || node.el.contains(element)) &&
+    typeof node.props?.onClick === 'function')
+    .sort((a, b) => a.el === b.el ? 0 : a.el.contains(b.el) ? 1 : -1)
+  if (!nodes.length || nodes.length > 1 && nodes[0].el === nodes[1].el) return false
+  const node = nodes[0]
+  const event = new MouseEvent('click', {bubbles: false, cancelable: true})
+  Object.defineProperties(event, {target: {value: element}, currentTarget: {value: node.el}})
+  try { invoked() } catch { /* Diagnostic collection is not part of the click. */ }
+  await node.props.onClick(event)
+  // A callback may navigate; never replay it when arrival is still pending.
+  await Promise.resolve()
+  return true
 }

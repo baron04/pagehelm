@@ -224,6 +224,40 @@ class AtomicActions(unittest.TestCase):
 
 
 class ActionResults(unittest.TestCase):
+    def test_execution_diagnostics_round_trip_without_changing_business_identity(self):
+        original = _completed_result()
+        self.assertNotIn("execution_trace", original.receipt.to_json())
+        before = original.observation_after.observation.content_digest
+        for mode in ("binding", "ordinary"):
+            trace = {"trace_id":"trace-1", "events":[{"sequence":1,"operation":"click","path":mode}]}
+            changed = dataclasses.replace(original, receipt=dataclasses.replace(original.receipt, execution_trace=trace))
+            replay = S.ActionResultEnvelope.from_json(changed.to_json())
+            self.assertEqual(replay.receipt.execution_trace, trace)
+            self.assertEqual(replay.content_digest, original.content_digest)
+            self.assertEqual(replay.receipt.to_json(include_diagnostics=False), original.receipt.to_json())
+            self.assertEqual(replay.observation_after.observation.content_digest, before)
+            self.assertEqual(replay.receipt, original.receipt)
+
+    def test_malformed_or_failing_diagnostic_is_dropped_while_business_fields_stay_strict(self):
+        class Broken(dict):
+            def get(self, *args):
+                raise RuntimeError("collector failed")
+        original = _completed_result().receipt
+        bad = (None, 7, Broken(), {"trace_id":"bad id","events":[]},
+               {"trace_id":"trace","events":[{"sequence":1,"operation":"fill","path":"binding"}]},
+               {"trace_id":"trace","events":[{"sequence":1,"operation":"click","path":"unknown"}]})
+        for trace in bad:
+            with self.subTest(trace_type=type(trace).__name__):
+                replay = S.ActionReceipt.from_json({**original.to_json(), "execution_trace":trace})
+                self.assertIsNone(replay.execution_trace)
+                self.assertEqual(replay.to_json(), original.to_json())
+        trace = {"trace_id":"trace", "private":"discard", "events":[
+            {"sequence":1,"operation":"click","path":"ordinary","private":"discard"}]}
+        replay = S.ActionReceipt.from_json({**original.to_json(),"execution_trace":trace})
+        self.assertNotIn("private", str(replay.execution_trace))
+        with self.assertRaises(ValueError):
+            S.ActionReceipt.from_json({**original.to_json(),"ok":"yes","execution_trace":trace})
+
     def test_completed_result_round_trips_as_the_same_idempotent_value(self):
         result = _completed_result()
         replay = S.ActionResultEnvelope.from_json(result.to_json())
