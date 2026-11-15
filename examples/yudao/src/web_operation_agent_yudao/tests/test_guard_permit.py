@@ -5,6 +5,7 @@ import json
 import threading
 import unittest
 
+from web_operation_agent_yudao.native_submit import YUDAO_SUBMIT_CONVENTIONS
 from web_operation_agent.execution.submit_contract import FormData, SubmitPermit, build_card
 from web_operation_agent_yudao.guard_proxy import GUARD_PATH, NativeGuardProxy
 from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
@@ -18,7 +19,8 @@ LOADED = {"id": 7, "name": "张三", "mobile": "1"}
 def card(mobile="2"):
     form = lambda m: FormData.from_json({"model": m, "mode": "update", "record_id": "7"})
     return build_card(loaded=form(LOADED), form=form({**LOADED, "mobile": mobile}), page="/crm/contact",
-                      button="保存", mode="update", record_id="7", target_name="张三")
+                      button="保存", mode="update", record_id="7", target_name="张三",
+                      conventions=YUDAO_SUBMIT_CONVENTIONS)
 
 
 class PermitProxyTests(unittest.TestCase):
@@ -82,7 +84,8 @@ class PermitProxyTests(unittest.TestCase):
         return response.status, payload
 
     def arm(self, mobile="2"):
-        permit = SubmitPermit(ACTOR, card(mobile), (PREFIX,), CATALOG, dict(LOADED), lambda: dict(self.record))
+        permit = SubmitPermit(ACTOR, card(mobile), (PREFIX,), CATALOG, dict(LOADED),
+                              lambda: dict(self.record), conventions=YUDAO_SUBMIT_CONVENTIONS)
         self.guard.arm_permit(ACTOR, permit)
         return permit
 

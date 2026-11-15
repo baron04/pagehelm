@@ -61,6 +61,8 @@ Adapter 与 turn policy 默认都关闭写入。启用写入的 Adapter 在生�
 
 一次已确认的 dispatch 完成后，由后置条件端口决定 mutation 能否记录为 completed。缺少或未通过后置条件会得到 indeterminate 结果，系统不会自动重试。当前保守 reconciler 会把不确定写入留给人工处理；持久 reconciliation key、后台恢复和跨 session 在途业务键互斥属于后续可靠性工作。
 
+原生表单提交由 `SubmitPort` 适配器承担，并由其 `contract()` 声明应用的提交约定 `SubmitConventions`：应用自行维护、回写时忽略的字段集合 `volatile_keys`；请求里命名目标记录的键 `record_key`；明细行的身份键 `line_key`；毫秒时间值解读时区 `epoch_zone`；以及把一次写响应判定为接受并取回新建编号的 `decode_write`。核心不给这些约定默认值；适配器未声明时，提交以类型化拒绝关闭。接入时要让共享提交合同测试在本适配器和另一个声明结构不同的应用上各跑一遍。
+
 ## 临时表单交接
 
 表单预填是可选能力，不是通用的浏览器权限。专用 typed tool 仍可为特定流程返回`FormDraft`。作为无 Skill 兜底时，由 Adapter 实现 `ApplicationFormPort`：`describe_form`返回当前路由下同 actor 的可写字段元数据，`prepare_form` 校验选定值并返回准确草稿。用`AgentTurnConfig.allow_form_prefill=True` 启用。

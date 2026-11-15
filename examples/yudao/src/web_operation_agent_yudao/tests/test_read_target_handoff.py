@@ -9,7 +9,7 @@ from unittest.mock import patch
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.tests.execution.test_native_submit import observation
 from web_operation_agent.tests.transport.submit_wire import SubmitWire
-from web_operation_agent_yudao.slim_loop import YudaoLoopProcedures, _CURRENT_REQUEST
+from web_operation_agent_yudao.slim_loop import YudaoLoopProcedures, _CURRENT_REQUEST, _EXECUTOR_TURN
 
 PATH = "/admin-api/synthetic/entry/page"
 
@@ -95,9 +95,12 @@ class ReadTargetHandoffTests(unittest.TestCase):
         self.wire = SubmitWire(self.state.obs)
         self.state.obs = self.wire.channel.wait_for_observation(timeout_s=0).observation
         token = _CURRENT_REQUEST.set("处理本轮选出的那条记录")
+        turn = {"marked": ""}
+        turn_token = _EXECUTOR_TURN.set(turn)
         try:
-            return self.proc._tool(self.state, "highlight", {"index": 3}, {"marked": ""})
+            return self.proc._tool(self.state, "highlight", {"index": 3}, turn)
         finally:
+            _EXECUTOR_TURN.reset(turn_token)
             _CURRENT_REQUEST.reset(token)
 
     def test_unlisted_action_words_use_the_real_row_binding_before_highlight(self):

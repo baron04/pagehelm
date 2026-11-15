@@ -10,9 +10,12 @@ documentation, which names every write interface under that prefix.
 """
 from __future__ import annotations
 
+import json
 import re
+from datetime import timedelta, timezone
 
-from web_operation_agent.execution.submit_contract import ActionRequest, SubmitPermit, same_value
+from web_operation_agent.execution.submit_contract import (ActionRequest, SubmitConventions,
+                                                           SubmitPermit, same_value)
 
 from .client import YudaoReadRefused
 
@@ -23,8 +26,35 @@ _MISSING = re.compile(r"不存在|未找到|找不到")
 _DANGER = re.compile(r"删除|移除|清除|作废|关闭|撤销|取消|注销|清空|反审|退款|终止|重置密码")
 
 
+def _decode_write(status, body):
+    """Yudao's response envelope: a 2xx whose `code` is not 0 refused inside the 200;
+    the created record's id arrives as a scalar `data`."""
+    answer = None
+    if body and status is not None and 200 <= status < 300:
+        try:
+            envelope = json.loads(body.decode("utf-8"))
+            answer = envelope.get("data") if isinstance(envelope, dict) else None
+            if isinstance(envelope, dict) and envelope.get("code") not in (0, None):
+                status = 500       # the application refused inside a 200
+            if isinstance(answer, (dict, list)):
+                answer = None
+        except (UnicodeDecodeError, ValueError):
+            pass
+    return status, answer
+
+
+YUDAO_SUBMIT_CONVENTIONS = SubmitConventions(
+    volatile_keys=frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version"}),
+    record_key="id", line_key="id",
+    epoch_zone=timezone(timedelta(hours=8)),
+    decode_write=_decode_write)
+
+
 class YudaoSubmitPort:
     """`SubmitPort` for one signed-in person's session."""
+
+    def contract(self):
+        return YUDAO_SUBMIT_CONVENTIONS
 
     def __init__(self, client, proxy, api_docs, *, private_evidence=None):
         if private_evidence is not None and not callable(private_evidence):
@@ -74,7 +104,9 @@ class YudaoSubmitPort:
             field, before, after = toggle.get("field"), toggle.get("before"), toggle.get("after")
             if not isinstance(field, str) or not re.fullmatch(r"[a-z][A-Za-z0-9]{0,59}", field):
                 return None
-            if not same_value(record.get(field), before) or same_value(before, after):
+            if not same_value(record.get(field), before,
+                              zone=YUDAO_SUBMIT_CONVENTIONS.epoch_zone) \
+                    or same_value(before, after, zone=YUDAO_SUBMIT_CONVENTIONS.epoch_zone):
                 return None
         else:
             field, before = "status", record.get("status")

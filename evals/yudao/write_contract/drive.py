@@ -18,6 +18,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 from web_operation_agent.execution.native_submit import record_model, opening_values
+from web_operation_agent_yudao.native_submit import YUDAO_SUBMIT_CONVENTIONS as CONV
 from web_operation_agent.privacy import redact_sensitive_assignments
 
 from web_operation_agent.execution.submit_contract import (
@@ -323,7 +324,7 @@ class Driver:
             raise ContractRefused("form_data_unreadable", (raw or {}).get("unreadable", "after_typing"))
         if raw.get("withheld"): raise ContractRefused("credential_field")
         current = FormData.from_json(raw)
-        changed = diff_models(loaded.model, current.model)
+        changed = diff_models(loaded.model, current.model, conventions=CONV)
         out.changed = sorted({c.field for c in changed})
         requested = frozenset(item.prop.split(".")[0] for item in current.items if item.label == label)
         button = self.submit_button()
@@ -332,9 +333,9 @@ class Driver:
             return
         comparison, restored = None, ()
         if operation == "update":
-            comparison = record_model(baseline, current.model)
-            proposed = opening_values(comparison, loaded.model, current.model)
-            restored = tuple(diff_models(current.model, proposed))
+            comparison = record_model(baseline, current.model, CONV)
+            proposed = opening_values(comparison, loaded.model, current.model, CONV)
+            restored = tuple(diff_models(current.model, proposed, conventions=CONV))
             if restored:
                 values = {c.field: proposed[c.field] for c in restored}
                 ok = self.page.locator('[data-w46-editor="1"]').evaluate("async (e,r) => (await import('/woa/page-facts.js')).restoreElementFormModel(e,r)",
@@ -345,8 +346,9 @@ class Driver:
         if not valid:
             raise ContractRefused("apparatus_uncovered_required" if operation == "create" else "validation", "application validation did not pass")
         current = FormData.from_json(self.read_form())
-        comparison = record_model(baseline, current.model) if baseline is not None else None
+        comparison = record_model(baseline, current.model, CONV) if baseline is not None else None
         card = build_card(loaded=loaded, form=current, page=entry["route"], button=re.sub(r"\s+", "", button.inner_text()),
+                          conventions=CONV,
                           mode=operation, record_id=current.record_id, requested=requested, record=comparison, restored=restored)
         out.evidence = redact_sensitive_assignments({"loaded": loaded.model, "submitted": current.model, "record": baseline,
             "application_invalid": raw.get("invalid", []), "restored": [c.field for c in restored],
@@ -359,7 +361,7 @@ class Driver:
         if not prefixes:
             raise ContractRefused("entity_unknown", "the page made no read that names the entity")
 
-        permit = SubmitPermit(actor, card, prefixes, port.catalog(prefixes), baseline,
+        permit = SubmitPermit(actor, card, prefixes, port.catalog(prefixes), conventions=CONV, baseline=
                               (lambda: port.read_record(prefixes, card.record_id)) if card.mode == "update" else None,
                               dry_run=True)
         port.arm(permit)

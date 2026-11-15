@@ -16,7 +16,7 @@ interface catalogue and the same-actor record reads.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, tzinfo
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -34,10 +34,24 @@ MAX_MODEL_BYTES = 200_000
 MAX_CHANGES = 150
 MODES = frozenset({"create", "update", "action"})
 _TOKEN = re.compile(r"[0-9a-f]{32}")
-#: Keys the application maintains itself; a record that differs only in these is unchanged.
-VOLATILE_KEYS = frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version"})
 _DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$")
-_BEIJING = timezone(timedelta(hours=8))
+
+
+@dataclass(frozen=True)
+class SubmitConventions:
+    """The application's record conventions, declared through its ``SubmitPort``.
+
+    The core holds none of these itself: a port that cannot say what its records look
+    like cannot submit. ``epoch_zone`` is the zone epoch-millisecond values are read
+    in; ``None`` keeps epoch numbers opaque. ``decode_write`` maps an HTTP status and
+    response body to the status a release counts as accepted and the scalar the
+    application returned (the new record's identity on a create, else ``None``).
+    """
+    volatile_keys: frozenset       # record keys the application maintains itself
+    record_key: str                # request body/query field naming the target record
+    line_key: str                  # identity field of a line inside a collection
+    epoch_zone: tzinfo | None      # zone epoch-millisecond values are read in; None keeps them opaque
+    decode_write: Callable         # (status: int | None, body: bytes) -> (status, answer)
 
 
 class ContractRefused(RuntimeError):
@@ -68,12 +82,14 @@ def _decimal(value) -> Decimal | None:
     return parsed if parsed.is_finite() else None
 
 
-def _datetime(value) -> datetime | None:
+def _datetime(value, *, zone=None) -> datetime | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)) and abs(value) >= 10 ** 11:
+        if zone is None:
+            return None
         try:
-            return datetime.fromtimestamp(value / 1000, _BEIJING).replace(tzinfo=None)
+            return datetime.fromtimestamp(value / 1000, zone).replace(tzinfo=None)
         except (OverflowError, OSError, ValueError):
             return None
     if isinstance(value, str):
@@ -109,7 +125,7 @@ def _plain_number(text: str) -> Decimal | None:
     return _decimal(text) if re.fullmatch(r"-?(?:0|[1-9]\d*)(?:\.\d+)?", text.strip()) else None
 
 
-def same_scalar(left, right) -> bool:
+def same_scalar(left, right, *, zone=None) -> bool:
     if scalar_text(left) == scalar_text(right):
         return True
     # A number the page holds as text, or the other way round: "5" and 5, but not "007" and 7.
@@ -119,8 +135,8 @@ def same_scalar(left, right) -> bool:
         known = _decimal(number)
         if parsed is not None and known is not None and parsed == known:
             return True
-    # A timestamp the page sends for a date the person sees.
-    first, second = _datetime(left), _datetime(right)
+    # A timestamp the page sends for a date the person sees, in the declared zone.
+    first, second = _datetime(left, zone=zone), _datetime(right, zone=zone)
     if first is None or second is None:
         return False
     if isinstance(left, (int, float)) != isinstance(right, (int, float)):
@@ -134,30 +150,32 @@ def is_empty(value) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
 
-def same_value(left, right) -> bool:
+def same_value(left, right, *, zone=None) -> bool:
     if isinstance(left, dict) and isinstance(right, dict):
-        return all(same_value(left.get(key), right.get(key)) for key in set(left) | set(right))
+        return all(same_value(left.get(key), right.get(key), zone=zone)
+                   for key in set(left) | set(right))
     if isinstance(left, list) and isinstance(right, list):
-        return len(left) == len(right) and all(same_value(a, b) for a, b in zip(left, right))
+        return len(left) == len(right) and all(
+            same_value(a, b, zone=zone) for a, b in zip(left, right))
     if is_empty(left) and is_empty(right):
         return True
     if isinstance(left, (dict, list)) or isinstance(right, (dict, list)):
         return False
-    return same_scalar(left, right)
+    return same_scalar(left, right, zone=zone)
 
 
-def same_payload(left, right):
+def same_payload(left, right, *, zone=None):
     """Field presence is part of an authorized payload, including empty/nullable fields."""
     if isinstance(left, dict) or isinstance(right, dict):
         return isinstance(left, dict) and isinstance(right, dict) and left.keys() == right.keys() and all(
-            same_payload(left[k], right[k]) for k in left)
+            same_payload(left[k], right[k], zone=zone) for k in left)
     if isinstance(left, list) or isinstance(right, list):
         return isinstance(left, list) and isinstance(right, list) and len(left) == len(right) and all(
-            same_payload(a, b) for a, b in zip(left, right))
-    return same_value(left, right)
+            same_payload(a, b, zone=zone) for a, b in zip(left, right))
+    return same_value(left, right, zone=zone)
 
 
-def strip_volatile(record, keys=VOLATILE_KEYS):
+def strip_volatile(record, keys):
     if isinstance(record, dict):
         return {key: strip_volatile(value, keys) for key, value in record.items() if key not in keys}
     if isinstance(record, list):
@@ -242,40 +260,45 @@ class Change:
         return str(self.path[0])
 
 
-def _line_key(items) -> list | None:
+def _line_key(items, key: str) -> list | None:
     keys = []
     for item in items:
-        if not isinstance(item, dict) or is_empty(item.get("id")):
+        if not isinstance(item, dict) or is_empty(item.get(key)):
             return None
-        keys.append(scalar_text(item["id"]))
+        keys.append(scalar_text(item[key]))
     return keys if len(set(keys)) == len(keys) else None
 
 
-def diff_models(before, after, path: tuple = ()) -> list[Change]:
-    """Every field that differs, hidden ones included; lines pair by id, else by position."""
+def diff_models(before, after, path: tuple = (), *, conventions: SubmitConventions) -> list[Change]:
+    """Every field that differs, hidden ones included; lines pair by their declared key,
+    else by position."""
     if isinstance(before, dict) and isinstance(after, dict):
         out: list[Change] = []
         for key in sorted(set(before) | set(after), key=str):
-            out += diff_models(before.get(key), after.get(key), path + (key,))
+            out += diff_models(before.get(key), after.get(key), path + (key,),
+                             conventions=conventions)
         return out
     if isinstance(before, list) and isinstance(after, list):
-        old, new = _line_key(before), _line_key(after)
+        old, new = (_line_key(before, conventions.line_key),
+                    _line_key(after, conventions.line_key))
         out = []
         if old is not None and new is not None:
             by_old, by_new = dict(zip(old, before)), dict(zip(new, after))
             for key in new:
-                out += diff_models(by_old.get(key), by_new[key], path + (f"#{key}",))
+                out += diff_models(by_old.get(key), by_new[key], path + (f"#{key}",),
+                                 conventions=conventions)
             for key in old:
                 if key not in by_new:
                     out.append(Change(path + (f"#{key}",), by_old[key], None))
             return out
         for index in range(max(len(before), len(after))):
             out += diff_models(before[index] if index < len(before) else None,
-                               after[index] if index < len(after) else None, path + (index,))
+                               after[index] if index < len(after) else None, path + (index,),
+                               conventions=conventions)
         return out
     if isinstance(before, dict) and before and after is None or isinstance(after, dict) and after and before is None:
         return [Change(path, before, after)]
-    return [] if same_value(before, after) else [Change(path, before, after)]
+    return [] if same_value(before, after, zone=conventions.epoch_zone) else [Change(path, before, after)]
 
 
 def _show(value) -> str:
@@ -374,9 +397,9 @@ class SubmitCard:
 
 
 def build_card(*, loaded: FormData | None, form: FormData | None, page: str, button: str,
-               mode: str, target_name: str = "", record_id: str = "",
-               requested: frozenset = frozenset(), record: dict | None = None,
-               restored: tuple[Change, ...] = (),
+               mode: str, conventions: SubmitConventions, target_name: str = "",
+               record_id: str = "", requested: frozenset = frozenset(),
+               record: dict | None = None, restored: tuple[Change, ...] = (),
                action_request: ActionRequest | None = None) -> SubmitCard:
     """The card for a form. `requested` names the top-level fields the person asked for;
     everything else that differs lands in its own list rather than being hidden."""
@@ -384,19 +407,23 @@ def build_card(*, loaded: FormData | None, form: FormData | None, page: str, but
         raise ContractRefused("form_data_unreadable", "unknown submit mode")
     if mode == "action":
         label = f"{target_name or record_id or '所选记录'}（编号 {record_id}）" if record_id else target_name
-        changes = tuple(diff_models({k: (record or {}).get(k) for k in action_request.body if k != "id"},
-                                    {k: v for k, v in action_request.body.items() if k != "id"})) if action_request else ()
+        key = conventions.record_key
+        changes = tuple(diff_models({k: (record or {}).get(k) for k in action_request.body if k != key},
+                                    {k: v for k, v in action_request.body.items() if k != key},
+                                    conventions=conventions)) if action_request else ()
         return SubmitCard("action", page, label.strip(), record_id, changes, (), button, None, None,
                           action_request=action_request)
     if form is None or (mode == "update" and loaded is None):
         raise ContractRefused("form_data_unreadable", "the form was not read")
     if mode == "create":
         base = loaded.model if loaded is not None else {}
-        changes = [c for c in diff_models({}, form.model) if not is_empty(c.after)]
-        initial = {c.path: c.after for c in diff_models({}, base)}
+        changes = [c for c in diff_models({}, form.model, conventions=conventions)
+                   if not is_empty(c.after)]
+        initial = {c.path: c.after for c in diff_models({}, base, conventions=conventions)}
         requested_changes, other = [], []
         for change in changes:
-            default = change.path in initial and same_value(initial[change.path], change.after)
+            default = change.path in initial and same_value(
+                initial[change.path], change.after, zone=conventions.epoch_zone)
             (other if default or (requested and change.field not in requested)
              else requested_changes).append(change)
         title = (loaded.title if loaded is not None and loaded.title else "").strip()
@@ -404,7 +431,8 @@ def build_card(*, loaded: FormData | None, form: FormData | None, page: str, but
         card = SubmitCard("create", page, target, "", tuple(requested_changes), tuple(other),
                           button, form, loaded)
     else:
-        changes = diff_models(record if record is not None else loaded.model, form.model)
+        changes = diff_models(record if record is not None else loaded.model, form.model,
+                              conventions=conventions)
         asked = [c for c in changes if not requested or c.field in requested]
         rest = [c for c in changes if requested and c.field not in requested]
         name = target_name or loaded.display("name") or str(loaded.model.get("name") or "")
@@ -465,10 +493,10 @@ def _json_body(body: bytes):
         raise ContractRefused("request_not_json") from None
 
 
-def _id_of(path_query: dict, body):
+def _id_of(path_query: dict, body, key: str):
     """The record id a request names. The body and the query string must not name two."""
-    in_body = scalar_text(body["id"]) if isinstance(body, dict) and not is_empty(body.get("id")) else ""
-    in_query = scalar_text(path_query["id"]) if not is_empty(path_query.get("id")) else ""
+    in_body = scalar_text(body[key]) if isinstance(body, dict) and not is_empty(body.get(key)) else ""
+    in_query = scalar_text(path_query[key]) if not is_empty(path_query.get(key)) else ""
     if in_body and in_query and in_body != in_query:
         raise ContractRefused("target_mismatch")
     return in_body or in_query
@@ -482,6 +510,7 @@ class SubmitPermit:
     card: SubmitCard
     prefixes: tuple[str, ...]
     catalog: frozenset                   # {(METHOD, path)} of documented write interfaces
+    conventions: SubmitConventions = field(kw_only=True)   # the adapter's declared record conventions
     baseline: object = None              # the record as read before the click (update/action)
     reread: Callable[[], object] | None = None
     reread_observer: Callable[[object], None] | None = None
@@ -527,6 +556,7 @@ class SubmitPermit:
         if not any(path.startswith(prefix) for prefix in self.prefixes) or (method, path) not in self.catalog:
             return self._refuse(method, path, "interface_not_for_target", body)
         pairs = dict(parse_qsl(query, keep_blank_values=True))
+        conventions, zone = self.conventions, self.conventions.epoch_zone
         try:
             parsed = _json_body(body)
         except ContractRefused as exc:
@@ -536,10 +566,11 @@ class SubmitPermit:
         card = self.card
         if card.mode in {"create", "update"} and method == "DELETE":
             return self._refuse(method, path, "interface_not_for_target", body)
-        if set(pairs) - {"id"}:
-            return self._refuse(method, path, "query_not_on_card", body, set(pairs) - {"id"})
+        if set(pairs) - {conventions.record_key}:
+            return self._refuse(method, path, "query_not_on_card", body,
+                                set(pairs) - {conventions.record_key})
         try:
-            target = _id_of(pairs, parsed)
+            target = _id_of(pairs, parsed, conventions.record_key)
         except ContractRefused as exc:
             return self._refuse(method, path, exc.code, body)
         fields = tuple(sorted(parsed)) if isinstance(parsed, dict) else ()
@@ -562,15 +593,19 @@ class SubmitPermit:
             expected = card.action_request
             if expected is None or method != expected.method or path != expected.path:
                 return self._refuse(method, path, "action_not_on_card", body)
-            if not same_payload(parsed, expected.body):
+            if not same_payload(parsed, expected.body, zone=zone):
                 return self._refuse(method, path, "action_body_not_on_card", body)
             covered = set(card.changed_fields)
         if card.mode in {"create", "update"}:
             if parsed is None or card.form is None:
                 return self._refuse(method, path, "body_differs_from_form", body)
             form = card.form.model
-            sent = {k: v for k, v in parsed.items() if k not in VOLATILE_KEYS}
-            differs = [k for k, v in sent.items() if k not in form or not same_payload(v, form[k])]
+            # The record key is addressing — it names the card's target like the query's id,
+            # whatever the application calls it — so it is never itself a change.
+            sent = {k: v for k, v in parsed.items()
+                    if k not in conventions.volatile_keys and k != conventions.record_key}
+            differs = [k for k, v in sent.items()
+                       if k not in form or not same_payload(v, form[k], zone=zone)]
             if differs:
                 return self._refuse(method, path, "body_differs_from_form", body, differs)
             if card.mode == "update":
@@ -585,14 +620,14 @@ class SubmitPermit:
                     # record's own unchanged-ness is checked on its own terms, before the click and
                     # again before release.
                     return card.record.get(key) if card.record is not None else (loaded.get(key) if card.loaded is not None else base.get(key))
-                moved = {k for k, v in sent.items() if not same_value(before(k, v), v)}
+                moved = {k for k, v in sent.items() if not same_value(before(k, v), v, zone=zone)}
                 # A plain value the record holds now, that the request would put something else
                 # over without the card saying so, is someone else's change about to be undone.
                 # An empty side (null for 0, "" for none) is the shapes' difference, not a change.
                 overwritten = {k for k, v in sent.items()
                                if k not in card.changed_fields and not isinstance(v, (list, dict))
                                and not isinstance(base.get(k), (list, dict)) and not is_empty(v)
-                               and not is_empty(base.get(k)) and not same_value(base.get(k), v)}
+                               and not is_empty(base.get(k)) and not same_value(base.get(k), v, zone=zone)}
                 if not (moved & card.changed_fields):
                     # A write that carries none of what the card shows is not the card's.
                     return self._refuse(method, path, "request_without_card_change", body)
@@ -611,13 +646,13 @@ class SubmitPermit:
                 return self._refuse(method, path, "record_unreadable", body)
             if self.reread_observer is not None:
                 self.reread_observer(current)
-            released = self._covered | {"id"}
-            held = {k: v for k, v in (strip_volatile(current) or {}).items() if k not in released} \
-                if isinstance(current, dict) else current
-            kept = {k: v for k, v in (strip_volatile(self.baseline) or {}).items() if k not in released} \
-                if isinstance(self.baseline, dict) else self.baseline
-            reread_digest = digest(strip_volatile(current))[:16]
-            if not same_value(held, kept):
+            released = self._covered | {conventions.record_key}
+            held = {k: v for k, v in (strip_volatile(current, conventions.volatile_keys) or {}).items()
+                    if k not in released} if isinstance(current, dict) else current
+            kept = {k: v for k, v in (strip_volatile(self.baseline, conventions.volatile_keys) or {}).items()
+                    if k not in released} if isinstance(self.baseline, dict) else self.baseline
+            reread_digest = digest(strip_volatile(current, conventions.volatile_keys))[:16]
+            if not same_value(held, kept, zone=zone):
                 return self._refuse(method, path, "record_changed", body, ("reread:" + reread_digest,))
         with self._lock:
             self._seen.add(key)
@@ -648,17 +683,7 @@ class SubmitPermit:
         return [item for item in self.log if item.decision != "allowed"]
 
     def settle(self, sequence: int, status: int | None, response: bytes = b"") -> None:
-        answer = None
-        if response and status is not None and 200 <= status < 300:
-            try:
-                envelope = json.loads(response.decode("utf-8"))
-                answer = envelope.get("data") if isinstance(envelope, dict) else None
-                if isinstance(envelope, dict) and envelope.get("code") not in (0, None):
-                    status = 500       # the application refused inside a 200
-                if isinstance(answer, (dict, list)):
-                    answer = None
-            except (UnicodeDecodeError, ValueError):
-                pass
+        status, answer = self.conventions.decode_write(status, response)
         with self._lock:
             for item in self.log:
                 if item.sequence == sequence:

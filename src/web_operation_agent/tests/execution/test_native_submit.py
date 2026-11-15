@@ -1,12 +1,13 @@
 """Native submission over ChannelServer and synthetic page/application: no paid model."""
 from copy import deepcopy
+from datetime import timedelta, timezone
 import json
 from types import SimpleNamespace as NS
 import unittest
 
 from web_operation_agent.business.approvals import MutationApproval
 from web_operation_agent.execution.native_submit import NativeSubmitMixin
-from web_operation_agent.execution.submit_contract import SubmitPermit
+from web_operation_agent.execution.submit_contract import SubmitConventions, SubmitPermit
 from web_operation_agent.execution.value_source import SourceLedger
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 
@@ -28,10 +29,33 @@ def observation(epoch=1):
         render_state="ready", page_route="/crm/contact")
 
 
+def _decode(status, body):
+    answer = None
+    if body and status is not None and 200 <= status < 300:
+        try:
+            envelope = json.loads(body.decode("utf-8"))
+            answer = envelope.get("data") if isinstance(envelope, dict) else None
+            if isinstance(envelope, dict) and envelope.get("code") not in (0, None):
+                status = 500
+            if isinstance(answer, (dict, list)):
+                answer = None
+        except (UnicodeDecodeError, ValueError):
+            pass
+    return status, answer
+
+
+CONVENTIONS = SubmitConventions(
+    volatile_keys=frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version"}),
+    record_key="id", line_key="id", epoch_zone=timezone(timedelta(hours=8)),
+    decode_write=_decode)
+
+
 class Port:
     def __init__(self):
         self.record, self.armed, self.exists = deepcopy(LOADED), None, True
         self.dangerous_ = False
+
+    def contract(self): return CONVENTIONS
 
     def recent_reads(self): return ((PREFIX + "get", "id=7"),)
     def prefixes(self, reads, *, mode, record_id, source=""): return (PREFIX,)
@@ -268,6 +292,15 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
         self.assertEqual((out.error_code, out.state), ("validation", "needs_input"))
         self.assertEqual(self.ex.s.approvals.cards, [])
 
+    def test_a_port_without_declared_conventions_cannot_submit(self):
+        self.ex.native_submit = NS(contract=lambda: None)
+        out = self.run_request()
+        self.assertEqual((out.state, out.error_code), ("unverified", "conventions_undeclared"))
+        self.assertNotIn("form_submit", [a for a, _ in self.ex.dispatched])
+        del self.ex.native_submit.contract
+        out = self.run_request()
+        self.assertEqual((out.state, out.error_code), ("unverified", "conventions_undeclared"))
+
     def test_no_change_makes_no_card(self):
         self.ex.form = {**LOADED}
         self.ex.turn["source_ledger"] = SourceLedger()
@@ -388,8 +421,8 @@ class OpeningChangeTests(_Setup, unittest.TestCase):
         base = {"lines": [{"id": 2, "qty": 20, "computed": 4}, {"id": 1, "qty": 10}]}
         loaded = {"lines": [{"id": 1, "qty": 10}, {"id": 2, "qty": 21}]}
         current = {"lines": [{"id": 2, "qty": 21}, {"id": 1, "qty": 11}]}
-        projected = record_model(base, current)
-        self.assertEqual(opening_values(projected, loaded, current),
+        projected = record_model(base, current, CONVENTIONS)
+        self.assertEqual(opening_values(projected, loaded, current, CONVENTIONS),
                          {"lines": [{"id": 2, "qty": 20}, {"id": 1, "qty": 11}]})
 
     def test_invalid_opening_value_is_restored_before_application_validation(self):
@@ -473,16 +506,19 @@ class ConversionAndHandoffTests(_Setup, unittest.TestCase):
     def test_empty_string_placeholders_and_reordered_line_conversions_keep_stored_values_out(self):
         from web_operation_agent.execution.native_submit import conversion_fields, opening_values
         for value in (0, "0.000", "1970-01-01T00:00:00.000Z"):
-            self.assertTrue(conversion_fields({"fee": ""}, {"fee": value}))
-            self.assertEqual(opening_values({"fee": ""}, {"fee": value}, {"fee": value}), {"fee": value})
-        self.assertFalse(conversion_fields({"fee": ""}, {"fee": ""}))
+            self.assertTrue(conversion_fields({"fee": ""}, {"fee": value}, conventions=CONVENTIONS))
+            self.assertEqual(opening_values({"fee": ""}, {"fee": value}, {"fee": value}, CONVENTIONS),
+                             {"fee": value})
+        self.assertFalse(conversion_fields({"fee": ""}, {"fee": ""}, conventions=CONVENTIONS))
         for value in (17, "auto", False):
-            self.assertFalse(conversion_fields({"fee": ""}, {"fee": value}))
-            self.assertEqual(opening_values({"fee": ""}, {"fee": value}, {"fee": value}), {"fee": ""})
+            self.assertFalse(conversion_fields({"fee": ""}, {"fee": value}, conventions=CONVENTIONS))
+            self.assertEqual(opening_values({"fee": ""}, {"fee": value}, {"fee": value}, CONVENTIONS),
+                             {"fee": ""})
         record = {"lines": [{"id": 1, "fee": 150}, {"id": 2, "fee": 500}]}
         loaded = {"lines": [{"id": 2, "fee": 500}, {"id": 1, "fee": "1.50"}]}
-        self.assertEqual(conversion_fields(record, loaded), (("lines", "#1", "fee"),))
-        self.assertEqual(opening_values(record, loaded, loaded), loaded)
+        self.assertEqual(conversion_fields(record, loaded, conventions=CONVENTIONS),
+                         (("lines", "#1", "fee"),))
+        self.assertEqual(opening_values(record, loaded, loaded, CONVENTIONS), loaded)
 
     def test_line_addition_and_deletion_still_restore_old_line_opening_changes_over_the_channel(self):
         old = {"id": 1, "fee": 100, "accountId": 3, "qty": 1}

@@ -59,12 +59,16 @@ MESSAGES = {
                              "并用 finish(need_input) 请用户明确确认；用户确认后下一轮再请求。",
     "value_not_from_user": "这些值不是用户给的，也不是用户选定的候选，不能写入：{detail}。"
                            "请用 finish(need_input) 向用户确认这些值，不要自己编。",
+    "conventions_undeclared": "当前集成没有声明应用的记录约定，不能由助手提交。",
 }
 
 
 class SubmitPort(Protocol):
     """What the application contributes; every method acts as the signed-in person."""
 
+    def contract(self):
+        """The application's declared record conventions, or None when it cannot submit."""
+        return None
     def recent_reads(self) -> tuple: ...
     def prefixes(self, reads: tuple, *, mode: str, record_id: str, source: str = "") -> tuple[str, ...]: ...
     def row_prefixes(self, reads: tuple, row: dict) -> tuple[str, ...]: ...
@@ -106,32 +110,34 @@ def _control_label(element) -> str:
     return (element.name.splitlines()[0][:40] if element.name else "") or element.role
 
 
-def _contains(held, wanted) -> bool:
+def _contains(held, wanted, *, zone=None) -> bool:
     """The record holds what the form held. Lines and other nested data may carry keys of their
     own (computed, display), so for them only the keys the form has must agree."""
     if isinstance(wanted, dict) and isinstance(held, dict):
-        return all(_contains(held.get(key), value) for key, value in wanted.items())
+        return all(_contains(held.get(key), value, zone=zone) for key, value in wanted.items())
     if isinstance(wanted, list) and isinstance(held, list):
-        return len(wanted) == len(held) and all(_contains(a, b) for a, b in zip(held, wanted))
-    return same_value(held, wanted)
+        return len(wanted) == len(held) and all(
+            _contains(a, b, zone=zone) for a, b in zip(held, wanted))
+    return same_value(held, wanted, zone=zone)
 
 
-def record_model(record, shape):
+def record_model(record, shape, conventions):
     """Compare submitted fields; extra read-only record/line keys are not submitted."""
+    key = conventions.line_key
     if isinstance(record, dict) and isinstance(shape, dict):
-        return {k: record_model(record.get(k), v) for k, v in shape.items()}
+        return {k: record_model(record.get(k), v, conventions) for k, v in shape.items()}
     if isinstance(record, list) and isinstance(shape, list):
-        keyed = (all(isinstance(v, dict) and v.get("id") is not None for v in record)
+        keyed = (all(isinstance(v, dict) and v.get(key) is not None for v in record)
                  and all(isinstance(v, dict) for v in shape))
         if keyed:
-            by_id = {str(v["id"]): v for v in record}
-            shape_ids = [str(v["id"]) for v in shape if v.get("id") is not None]
+            by_id = {str(v[key]): v for v in record}
+            shape_ids = [str(v[key]) for v in shape if v.get(key) is not None]
             if len(by_id) != len(record) or len(set(shape_ids)) != len(shape_ids):
                 raise ContractRefused("form_data_unreadable", "duplicate line identities")
-            paired = [(by_id.pop(str(v["id"])), v) for v in shape
-                      if v.get("id") is not None and str(v["id"]) in by_id]
-            return [record_model(a, b) for a, b in paired] + list(by_id.values())
-        return [record_model(value, shape[index] if index < len(shape) else value)
+            paired = [(by_id.pop(str(v[key])), v) for v in shape
+                      if v.get(key) is not None and str(v[key]) in by_id]
+            return [record_model(a, b, conventions) for a, b in paired] + list(by_id.values())
+        return [record_model(value, shape[index] if index < len(shape) else value, conventions)
                 for index, value in enumerate(record)]
     return record
 
@@ -162,57 +168,63 @@ def submit_conversion(record, loaded) -> bool:
     return False
 
 
-def conversion_fields(record, loaded, path=()):
+def conversion_fields(record, loaded, path=(), *, conventions):
+    key = conventions.line_key
     if isinstance(record, dict) and isinstance(loaded, dict):
-        return tuple(field for key in record.keys() & loaded.keys()
-                     for field in conversion_fields(record[key], loaded[key], (*path, key)))
+        return tuple(field for key_ in record.keys() & loaded.keys()
+                     for field in conversion_fields(record[key_], loaded[key_],
+                                                    (*path, key_), conventions=conventions))
     if isinstance(record, list) and isinstance(loaded, list):
-        if all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *loaded]):
-            old = {str(v["id"]): v for v in loaded}
-            if len(old) != len(loaded) or len({str(v["id"]) for v in record}) != len(record):
+        if all(isinstance(v, dict) and v.get(key) is not None for v in [*record, *loaded]):
+            old = {str(v[key]): v for v in loaded}
+            if len(old) != len(loaded) or len({str(v[key]) for v in record}) != len(record):
                 raise ContractRefused("form_data_unreadable", "duplicate line identities")
-            return tuple(field for row in record if str(row["id"]) in old
-                         for field in conversion_fields(row, old[str(row["id"])], (*path, "#" + str(row["id"]))))
+            return tuple(field for row in record if str(row[key]) in old
+                         for field in conversion_fields(row, old[str(row[key])],
+                                                      (*path, "#" + str(row[key])),
+                                                      conventions=conventions))
         if len(record) == len(loaded):
             return tuple(field for index, (a, b) in enumerate(zip(record, loaded))
-                         for field in conversion_fields(a, b, (*path, index)))
+                         for field in conversion_fields(a, b, (*path, index),
+                                                      conventions=conventions))
     return (path,) if path and submit_conversion(record, loaded) else ()
 
 
-def opening_values(record, loaded, current):
+def opening_values(record, loaded, current, conventions):
     """Undo opening-only differences while preserving subsequent edits at each leaf."""
+    key, zone = conventions.line_key, conventions.epoch_zone
     if isinstance(record, dict) and isinstance(loaded, dict) and isinstance(current, dict):
-        return {k: opening_values(record[k], loaded[k], v) if k in record and k in loaded else v
-                for k, v in current.items()}
+        return {k: opening_values(record[k], loaded[k], v, conventions)
+                if k in record and k in loaded else v for k, v in current.items()}
     if isinstance(record, list) and isinstance(loaded, list) and isinstance(current, list):
-        keyed = all(isinstance(v, dict) and v.get("id") is not None for v in [*record, *loaded])
+        keyed = all(isinstance(v, dict) and v.get(key) is not None for v in [*record, *loaded])
         if keyed:
-            old = {str(v["id"]): v for v in loaded}
-            base = {str(v["id"]): v for v in record}
-            ids = [str(v["id"]) for v in current if isinstance(v, dict) and v.get("id") is not None]
+            old = {str(v[key]): v for v in loaded}
+            base = {str(v[key]): v for v in record}
+            ids = [str(v[key]) for v in current if isinstance(v, dict) and v.get(key) is not None]
             if len(old) != len(loaded) or len(base) != len(record) or len(set(ids)) != len(ids):
                 raise ContractRefused("opening_changes", "明细编号重复，无法核对页面自动变化，请自行核对提交")
             if base.keys() != old.keys():
                 raise ContractRefused("opening_changes", "页面打开时增删了明细，无法安全还原，请自行核对提交")
             if any(not isinstance(v, dict) for v in current) or (
                     len(ids) != len(current) and not old.keys() <= set(ids)):
-                if not same_value(record, loaded):
+                if not same_value(record, loaded, zone=zone):
                     raise ContractRefused("opening_changes", "明细身份无法对应，不能区分页面自动变化与填写变化，请自行核对提交")
                 return current
             # Current membership/order is the assistant's edit. Match every retained old
             # line independently, even when rows were added or removed after opening.
-            return [opening_values(base[str(v["id"])], old[str(v["id"])], v)
-                    if v.get("id") is not None and str(v["id"]) in old else v for v in current]
-        if same_value(record, loaded):
+            return [opening_values(base[str(v[key])], old[str(v[key])], v, conventions)
+                    if v.get(key) is not None and str(v[key]) in old else v for v in current]
+        if same_value(record, loaded, zone=zone):
             return current
         if (any(isinstance(v, dict) for v in [*record, *loaded, *current])
                 or len(record) != len(loaded) or len(loaded) != len(current)
-                or not same_value(loaded, current)):
+                or not same_value(loaded, current, zone=zone)):
             raise ContractRefused("opening_changes", "无法区分没有编号的明细行的页面自动变化与填写变化，请自行核对提交")
-        return [opening_values(a, b, c) for a, b, c in zip(record, loaded, current)]
+        return [opening_values(a, b, c, conventions) for a, b, c in zip(record, loaded, current)]
     if submit_conversion(record, loaded):
         return current
-    return record if same_value(loaded, current) and not same_value(record, loaded) else current
+    return record if same_value(loaded, current, zone=zone) and not same_value(record, loaded, zone=zone) else current
 
 
 def _confirm_words(text: str) -> bool:
@@ -461,6 +473,9 @@ class NativeSubmitMixin:
         same actor. Returns the answer note; "" when nothing was handed over, the adapter
         cannot observe the person's writes, or the turn was cancelled."""
         port = self.native_submit
+        contract_fn = getattr(port, "contract", None) if port is not None else None
+        conventions = contract_fn() if callable(contract_fn) else None
+        zone = conventions.epoch_zone if conventions is not None else None
         targets = turn.get("submit_targets") or {}
         target = targets.get(turn.get("handoff_target_key")) or {}
         marked = str(turn.get("handoff_button") or "")
@@ -514,7 +529,7 @@ class NativeSubmitMixin:
         if record is None:
             return (f"已看到你点击「{marked}」，应用已接受这次写入；"
                     "但按同一账号回读记录没有成功，请到应用里核对结果。")
-        changes = _readback_changes(target.get("baseline"), record)
+        changes = _readback_changes(target.get("baseline"), record, zone=zone)
         if changes:
             return (f"已看到你点击「{marked}」，应用已接受写入；同一账号回读核对到变化："
                     + "、".join(changes) + "。")
@@ -522,9 +537,18 @@ class NativeSubmitMixin:
             return f"已看到你点击「{marked}」，应用已接受写入，回读到新记录（编号 {new_id}）。"
         return f"已看到你点击「{marked}」，应用已接受写入；同一账号回读未发现待核对的变化。"
 
+    # -- the adapter's declared record conventions --------------------------------------
+    def _conventions(self, port):
+        contract_fn = getattr(port, "contract", None)
+        conventions = contract_fn() if callable(contract_fn) else None
+        if conventions is None:
+            raise ContractRefused("conventions_undeclared")
+        return conventions
+
     # -- forms ------------------------------------------------------------------------
     def _submit_form(self, s, element, turn) -> LoopToolResult:
         port = self.native_submit
+        conventions = self._conventions(port)
         current, raw = self._read_form(s, element)
         if raw.get("withheld"):
             raise ContractRefused("credential_field")
@@ -565,18 +589,25 @@ class NativeSubmitMixin:
                 raise ContractRefused("record_unreadable")
             turn["submit_targets"][target_key]["baseline"] = baseline
             earlier = turn.get("form_record_baselines", {}).get(key)
-            if earlier is not None and not same_value(strip_volatile(earlier), strip_volatile(baseline)):
+            if earlier is not None and not same_value(
+                    strip_volatile(earlier, conventions.volatile_keys),
+                    strip_volatile(baseline, conventions.volatile_keys),
+                    zone=conventions.epoch_zone):
                 raise ContractRefused("record_changed", "填写期间目标记录被别人修改，请重新核对")
             try:
-                comparison = record_model(baseline, current.model)
-                conversions = conversion_fields(strip_volatile(comparison), strip_volatile(loaded.model))
-                proposed = opening_values(strip_volatile(comparison), strip_volatile(loaded.model), current.model)
+                comparison = record_model(baseline, current.model, conventions)
+                conversions = conversion_fields(strip_volatile(comparison, conventions.volatile_keys),
+                                                strip_volatile(loaded.model, conventions.volatile_keys),
+                                                conventions=conventions)
+                proposed = opening_values(strip_volatile(comparison, conventions.volatile_keys),
+                                          strip_volatile(loaded.model, conventions.volatile_keys),
+                                          current.model, conventions)
             except ContractRefused as exc:
                 # An unreadable line identity prevents proving that a handoff would not
                 # carry an opening-only change. It is a hard stop, never a generic handoff.
                 self._note_unrestorable(turn, key, element, exc.detail)
                 raise ContractRefused("opening_changes", exc.detail or "无法核对页面打开时的明细变化") from exc
-            restored = tuple(diff_models(current.model, proposed))
+            restored = tuple(diff_models(current.model, proposed, conventions=conventions))
             if restored:
                 values = {c.field: proposed[c.field] for c in restored}
                 effects = [f"{current.label(k)}：{proposed[k]}→{current.model[k]}" for k in sorted(values)]
@@ -587,7 +618,8 @@ class NativeSubmitMixin:
                     raise ContractRefused("opening_changes", "页面自动变化还原失败，请自行核对提交；保存可能改为：" +
                                           "、".join(f"{current.label(k)}={current.model[k]}" for k in sorted(values))) from None
                 current = FormData.from_json(raw)
-                if raw.get("invalid") or raw.get("withheld") or not same_value(current.model, proposed):
+                if raw.get("invalid") or raw.get("withheld") or not same_value(
+                        current.model, proposed, zone=conventions.epoch_zone):
                     self._note_unrestorable(turn, key, element, "页面打开时改了字段，还原未通过", effects)
                     raise ContractRefused("opening_changes", "页面打开时改了字段，还原未通过或页面又改回；保存会改变：" + "、".join(sorted(values)))
                 turn["restored_form_labels"] = frozenset(current.label(c.field) for c in restored)
@@ -598,19 +630,21 @@ class NativeSubmitMixin:
             raise ContractRefused("form_data_unreadable", "校验期间表单目标发生变化")
         if raw.get("validation") is not True or raw.get("invalid"):
             raise ContractRefused("validation", "、".join(str(p) for p in raw.get("invalid", [])[:8]) or "应用没有确认校验通过")
-        if any(not same_value(final.model.get(c.field), current.model.get(c.field)) for c in restored):
+        if any(not same_value(final.model.get(c.field), current.model.get(c.field),
+                              zone=conventions.epoch_zone) for c in restored):
             changed = [f"{current.label(c.field)}：{current.model.get(c.field)}→{final.model.get(c.field)}"
                        for c in restored
-                       if not same_value(final.model.get(c.field), current.model.get(c.field))]
+                       if not same_value(final.model.get(c.field), current.model.get(c.field),
+                                         zone=conventions.epoch_zone)]
             self._note_unrestorable(turn, key, element, "页面在还原后又自动改值", changed)
             raise ContractRefused("opening_changes", "页面在还原后又自动改值，请自行核对提交")
         current = final
         if baseline is not None and conversions:
             raise ContractRefused("pre_submit_conversion", "表单使用提交前转换，不能把原始记录值写回表单；已保留表单供你核对提交")
-        comparison = record_model(baseline, current.model) if baseline is not None else None
+        comparison = record_model(baseline, current.model, conventions) if baseline is not None else None
         card = build_card(loaded=loaded, form=current, page=self._page_name(s), button=element.name.strip(),
                           mode=current.mode, record_id=current.record_id, requested=requested,
-                          record=comparison, restored=restored)
+                          record=comparison, restored=restored, conventions=conventions)
         card = replace(card, value_sources=tuple((v.entry.field, v.entry.value, v.source)
                                                 for v in verdicts))
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
@@ -663,7 +697,8 @@ class NativeSubmitMixin:
         if request is None:
             raise ContractRefused("action_unknown", "无法认定这个控件对应的接口和具体字段变化，助手未提交")
         card = build_card(loaded=None, form=None, page=self._page_name(s), button=button, mode="action",
-            target_name=name, record_id=record_id, record=baseline, action_request=request)
+            target_name=name, record_id=record_id, record=baseline, action_request=request,
+            conventions=self._conventions(port))
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
                                        kind="row", record_id=record_id, row_check=str(row.get("check") or ""))
 
@@ -671,6 +706,7 @@ class NativeSubmitMixin:
     def _approve_and_press(self, s, element, turn, card: SubmitCard, prefixes, baseline, *,
                            kind, check="", record_id="", loaded=None, row_check="") -> LoopToolResult:
         port = self.native_submit
+        conventions = self._conventions(port)
         step = s.step
         context = s.approvals.context(step, "native_submit", hold_ms=s.approvals.approval_hold_ms)
         proposal = card.proposal(context_digest=context.binding_digest if context is not None else "")
@@ -709,7 +745,9 @@ class NativeSubmitMixin:
             if card.mode != "create":
                 if now is None:
                     return self._stopped(s, turn, "record_unreadable", "没能重新读取目标记录")
-                if not same_value(strip_volatile(now), strip_volatile(baseline)):
+                if not same_value(strip_volatile(now, conventions.volatile_keys),
+                                  strip_volatile(baseline, conventions.volatile_keys),
+                                  zone=conventions.epoch_zone):
                     return self._stopped(s, turn, "record_changed", "批准之后这条记录被别人改过")
         except ContractRefused as exc:
             return self._stopped(s, turn, exc.code, exc.detail or "核对没有通过")
@@ -719,7 +757,8 @@ class NativeSubmitMixin:
                         dispatched=False, side_effect_possible=False)
         self._private_submit_record(s, "before_click", record=now)
         permit = SubmitPermit(
-            actor="", card=card, prefixes=prefixes, catalog=port.catalog(prefixes), baseline=baseline,
+            actor="", card=card, prefixes=prefixes, catalog=port.catalog(prefixes),
+            conventions=conventions, baseline=baseline,
             reread=(lambda: port.read_record(prefixes, card.record_id)) if card.mode != "create" else None,
             reread_observer=lambda record: self._private_submit_record(s, "before_release", record=record))
         s.ledger.append("native_submit_approved", step=step, approval_id=approval.approval_id,
@@ -889,19 +928,25 @@ class NativeSubmitMixin:
             return True
         if now is None:
             return True
+        conventions = self._conventions(self.native_submit)
+        zone = conventions.epoch_zone
         if card.mode == "action":
-            return not same_value(strip_volatile(now), strip_volatile(baseline))
+            return not same_value(strip_volatile(now, conventions.volatile_keys),
+                                  strip_volatile(baseline, conventions.volatile_keys), zone=zone)
         # An edit: our write is in the record if a field the card changed now holds the new value
         # it did not hold before. Another person's change to some other field is not ours.
         form = card.form.model
-        return any(isinstance(now, dict) and same_value(now.get(f), form.get(f))
-                   and not same_value(baseline.get(f), form.get(f)) for f in card.changed_fields)
+        return any(isinstance(now, dict) and same_value(now.get(f), form.get(f), zone=zone)
+                   and not same_value(baseline.get(f), form.get(f), zone=zone)
+                   for f in card.changed_fields)
 
     _last_readback = None
 
     def _readback(self, card: SubmitCard, permit: SubmitPermit, prefixes, baseline):
         """(True|False|None, notes): the record as the same person reads it after the click."""
         port = self.native_submit
+        conventions = self._conventions(port)
+        zone = conventions.epoch_zone
         if not permit.allowed():
             return None, []
         record_id = card.record_id or permit.created_id()
@@ -916,10 +961,13 @@ class NativeSubmitMixin:
             expected = card.action_request
             if expected is None or not isinstance(now, dict):
                 return None, ["无法回读动作要求的字段"]
-            wrong = [k for k, v in expected.body.items() if k != "id" and not same_value(now.get(k), v)]
-            previous, latest = strip_volatile(baseline), strip_volatile(now)
+            wrong = [k for k, v in expected.body.items()
+                     if k != conventions.record_key and not same_value(now.get(k), v, zone=zone)]
+            previous = strip_volatile(baseline, conventions.volatile_keys)
+            latest = strip_volatile(now, conventions.volatile_keys)
             other = sorted(k for k in previous.keys() | latest.keys() if k not in card.changed_fields
-                           and (k not in previous or k not in latest or not same_value(previous[k], latest[k])))
+                           and (k not in previous or k not in latest
+                                or not same_value(previous[k], latest[k], zone=zone)))
             return not wrong, (["回读时动作字段不符：" + "、".join(wrong)] if wrong else []) + (
                 ["回读时其它字段与点击前不同：" + "、".join(other)] if other else [])
         if now is None:
@@ -931,12 +979,14 @@ class NativeSubmitMixin:
             if top not in now:
                 continue
             checked += 1
-            if not _contains(now.get(top), form.get(top)):
+            if not _contains(now.get(top), form.get(top), zone=zone):
                 wrong.append(card.form.label(top))
         notes = []
         if card.mode == "update" and isinstance(baseline, dict):
             moved = [k for k in now if k not in card.changed_fields and k in baseline
-                     and not same_value(strip_volatile({k: baseline[k]}), strip_volatile({k: now[k]}))]
+                     and not same_value(strip_volatile({k: baseline[k]}, conventions.volatile_keys),
+                                        strip_volatile({k: now[k]}, conventions.volatile_keys),
+                                        zone=zone)]
             if moved:
                 notes.append("回读时其它字段与点击前不同：" + "、".join(card.form.label(k) for k in moved[:6]))
         if wrong:
@@ -945,7 +995,7 @@ class NativeSubmitMixin:
         return (True if checked else None), notes
 
 
-def _readback_changes(baseline, record) -> list:
+def _readback_changes(baseline, record, *, zone=None) -> list:
     """"label：before→after" pairs between the baseline and the same-actor readback."""
     if not isinstance(baseline, dict) or not isinstance(record, dict):
         return []
@@ -954,7 +1004,7 @@ def _readback_changes(baseline, record) -> list:
         if not isinstance(key, str) or key.startswith("_"):
             continue
         before = baseline.get(key)
-        if same_value(before, after) or (is_empty(before) and is_empty(after)):
+        if same_value(before, after, zone=zone) or (is_empty(before) and is_empty(after)):
             continue
         out.append(f"{key}：{before}→{after}")
         if len(out) >= 8:

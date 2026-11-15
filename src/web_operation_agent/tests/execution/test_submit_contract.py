@@ -1,9 +1,33 @@
 """The approval contract: complete cards, requests that match them, one effect once."""
+from datetime import timedelta, timezone
 import json
 import unittest
 
 from web_operation_agent.execution.submit_contract import (
-    ActionRequest, ContractRefused, FormData, SubmitPermit, build_card, diff_models, same_value, terminal_state)
+    ActionRequest, ContractRefused, FormData, SubmitConventions, SubmitPermit,
+    build_card, diff_models, same_value, terminal_state)
+
+
+def _decode(status, body):
+    """The synthetic application's envelope: {code: 0, data: <id>}, refused otherwise."""
+    answer = None
+    if body and status is not None and 200 <= status < 300:
+        try:
+            envelope = json.loads(body.decode("utf-8"))
+            answer = envelope.get("data") if isinstance(envelope, dict) else None
+            if isinstance(envelope, dict) and envelope.get("code") not in (0, None):
+                status = 500
+            if isinstance(answer, (dict, list)):
+                answer = None
+        except (UnicodeDecodeError, ValueError):
+            pass
+    return status, answer
+
+
+CONVENTIONS = SubmitConventions(
+    volatile_keys=frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version"}),
+    record_key="id", line_key="id", epoch_zone=timezone(timedelta(hours=8)),
+    decode_write=_decode)
 
 PREFIX = "/admin-api/crm/contact/"
 CATALOG = frozenset({("POST", PREFIX + "create"), ("PUT", PREFIX + "update"),
@@ -20,13 +44,13 @@ def form(model, mode="update", record="7"):
 
 def update_card(**changes):
     model = {**LOADED, **changes}
-    return build_card(loaded=form(LOADED), form=form(model), page="/crm/contact", button="保存",
+    return build_card(conventions=CONVENTIONS, loaded=form(LOADED), form=form(model), page="/crm/contact", button="保存",
                       mode="update", record_id="7", target_name="张三")
 
 
 def permit(card, baseline=None, reread=None, **kw):
     return SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, baseline if baseline is not None else LOADED,
-                        reread, **kw)
+                        reread, conventions=CONVENTIONS, **kw)
 
 
 def body(**changes):
@@ -37,7 +61,7 @@ class DiffTests(unittest.TestCase):
     def test_hidden_related_and_line_changes_are_all_found(self):
         after = {**LOADED, "mobile": "13900000000", "customerId": 4, "ownerUserId": 2,
                  "lines": [{"id": 1, "sku": "A", "qty": 3}, {"id": 3, "sku": "C", "qty": 1}]}
-        changes = {"/".join(map(str, c.path)) for c in diff_models(LOADED, after)}
+        changes = {"/".join(map(str, c.path)) for c in diff_models(LOADED, after, conventions=CONVENTIONS)}
         self.assertEqual(changes, {"mobile", "customerId", "ownerUserId", "lines/#1/qty",
                                    "lines/#2", "lines/#3", "lines/#3/id" if False else "lines/#3"})
 
@@ -45,9 +69,12 @@ class DiffTests(unittest.TestCase):
         self.assertTrue(same_value({"a": None, "b": "5", "c": ""}, {"a": "", "b": 5.0, "c": None}))
         self.assertFalse(same_value({"a": 1}, {"a": 2}))
 
-    def test_timestamp_and_date_text_are_one_value(self):
-        self.assertTrue(same_value("2026-11-12", 1794412800000))
-        self.assertFalse(same_value("2026-11-13", 1794412800000))
+    def test_timestamp_and_date_text_are_one_value_in_the_declared_zone(self):
+        self.assertTrue(same_value("2026-11-12", 1794412800000,
+                                   zone=CONVENTIONS.epoch_zone))
+        self.assertFalse(same_value("2026-11-13", 1794412800000,
+                                    zone=CONVENTIONS.epoch_zone))
+        self.assertFalse(same_value("2026-11-12", 1794412800000))
 
 
 class CardTests(unittest.TestCase):
@@ -60,7 +87,7 @@ class CardTests(unittest.TestCase):
         self.assertEqual(card.proposal().tool, "native_form_update")
 
     def test_changes_the_person_did_not_ask_for_are_listed_apart(self):
-        card = build_card(loaded=form(LOADED), form=form({**LOADED, "mobile": "1", "ownerUserId": 9}),
+        card = build_card(conventions=CONVENTIONS, loaded=form(LOADED), form=form({**LOADED, "mobile": "1", "ownerUserId": 9}),
                           page="/crm/contact", button="保存", mode="update", record_id="7",
                           requested=frozenset({"mobile"}))
         labels = [d.label for d in card.details()]
@@ -69,7 +96,7 @@ class CardTests(unittest.TestCase):
 
     def test_create_card_marks_form_defaults(self):
         loaded = form({"status": 0, "name": ""}, "create", "")
-        card = build_card(loaded=loaded, form=form({"status": 0, "name": "新客户", "level": "A"}, "create", ""),
+        card = build_card(conventions=CONVENTIONS, loaded=loaded, form=form({"status": 0, "name": "新客户", "level": "A"}, "create", ""),
                           page="/crm/customer", button="确定", mode="create")
         self.assertEqual({c.field for c in card.other}, {"status"})
         self.assertEqual({c.field for c in card.changes}, {"name", "level"})
@@ -142,52 +169,55 @@ class PermitTests(unittest.TestCase):
 
     def test_create_admits_no_target_and_matches_form(self):
         loaded = form({"name": ""}, "create", "")
-        card = build_card(loaded=loaded, form=form({"name": "新", "level": "A"}, "create", ""),
+        card = build_card(conventions=CONVENTIONS, loaded=loaded, form=form({"name": "新", "level": "A"}, "create", ""),
                           page="/crm/customer", button="确定", mode="create")
-        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG)
+        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, conventions=CONVENTIONS)
         self.assertTrue(permit_.admit("POST", PREFIX + "create", "",
                                       json.dumps({"name": "新", "level": "A"}).encode()).allowed)
         self.assertTrue(permit_.complete())
-        self.assertFalse(SubmitPermit("a" * 64, card, (PREFIX,), CATALOG).admit(
+        self.assertFalse(SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, conventions=CONVENTIONS).admit(
             "POST", PREFIX + "create", "", json.dumps({"id": 5, "name": "新", "level": "A"}).encode()).allowed)
 
     def test_double_create_is_released_once(self):
         loaded = form({"name": ""}, "create", "")
-        card = build_card(loaded=loaded, form=form({"name": "新"}, "create", ""), page="p", button="b", mode="create")
-        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG)
+        card = build_card(conventions=CONVENTIONS, loaded=loaded, form=form({"name": "新"}, "create", ""), page="p", button="b", mode="create")
+        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, conventions=CONVENTIONS)
         payload = json.dumps({"name": "新"}).encode()
         results = [permit_.admit("POST", PREFIX + "create", "", payload).allowed for _ in range(2)]
         self.assertEqual(results, [True, False])
         self.assertEqual(permit_.duplicates, 1)
 
     def test_row_action_needs_the_target_and_one_documented_interface(self):
-        card = build_card(loaded=None, form=None, page="/crm/contact", button="停用", mode="action",
+        card = build_card(conventions=CONVENTIONS, loaded=None, form=None, page="/crm/contact", button="停用", mode="action",
                           target_name="张三", record_id="7", record=LOADED,
                           action_request=ActionRequest("PUT", PREFIX + "update-status", {"id": 7, "status": 1}))
-        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
+        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED,
+                     conventions=CONVENTIONS)
         self.assertFalse(permit_.admit("PUT", PREFIX + "update-status", "",
                                        json.dumps({"id": 8, "status": 1}).encode()).allowed)
         self.assertTrue(permit_.admit("PUT", PREFIX + "update-status", "",
                                       json.dumps({"id": 7, "status": 1}).encode()).allowed)
 
     def test_same_entity_other_action_or_extra_field_is_never_this_card(self):
-        card = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7",
+        card = build_card(conventions=CONVENTIONS, loaded=None, form=None, page="p", button="停用", mode="action", record_id="7",
             record=LOADED, action_request=ActionRequest("PUT", PREFIX + "update-status", {"id": 7, "status": 1}))
         for path, payload, code in [
             (PREFIX + "update", {"id": 7, "status": 1}, "action_not_on_card"),
             (PREFIX + "update-status", {"id": 8, "status": 1}, "target_mismatch"),
             (PREFIX + "update-status", {"id": 7, "status": 0}, "action_body_not_on_card"),
             (PREFIX + "update-status", {"id": 7, "status": 1, "name": "extra"}, "action_body_not_on_card")]:
-            p = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
+            p = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED,
+                     conventions=CONVENTIONS)
             self.assertEqual(p.admit("PUT", path, "", json.dumps(payload).encode()).code, code)
-        unbound = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7")
-        self.assertFalse(SubmitPermit("a" * 64, unbound, (PREFIX,), CATALOG).admit("PUT", PREFIX + "update-status", "", b'{"id":7,"status":1}').allowed)
+        unbound = build_card(conventions=CONVENTIONS, loaded=None, form=None, page="p", button="停用", mode="action", record_id="7")
+        self.assertFalse(SubmitPermit("a" * 64, unbound, (PREFIX,), CATALOG, conventions=CONVENTIONS).admit("PUT", PREFIX + "update-status", "", b'{"id":7,"status":1}').allowed)
 
     def test_empty_extra_fields_are_not_part_of_an_action_or_form_payload(self):
         for empty in (None, "", [], {}):
-            card = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7",
+            card = build_card(conventions=CONVENTIONS, loaded=None, form=None, page="p", button="停用", mode="action", record_id="7",
                 record=LOADED, action_request=ActionRequest("PUT", PREFIX + "update-status", {"id": 7, "status": 1}))
-            p = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
+            p = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED,
+                     conventions=CONVENTIONS)
             self.assertEqual(p.admit("PUT", PREFIX + "update-status", "", json.dumps({"id": 7, "status": 1, "extra": empty}).encode()).code,
                              "action_body_not_on_card")
             p = permit(update_card(mobile="1"))
@@ -199,7 +229,7 @@ class PermitTests(unittest.TestCase):
     def test_restoration_notes_count_toward_the_card_limit(self):
         from web_operation_agent.execution.submit_contract import Change
         with self.assertRaises(ContractRefused) as raised:
-            build_card(loaded=form(LOADED), form=form({**LOADED, "mobile": "1"}), page="p", button="保存",
+            build_card(conventions=CONVENTIONS, loaded=form(LOADED), form=form({**LOADED, "mobile": "1"}), page="p", button="保存",
                 mode="update", record_id="7", restored=tuple(Change((f"f{i}",), 1, 0) for i in range(151)))
         self.assertEqual(raised.exception.code, "card_too_large")
 
@@ -219,7 +249,8 @@ class LinesTests(unittest.TestCase):
         permit_ = permit(card, baseline=record, reread=lambda: record)
         self.assertTrue(permit_.admit("PUT", PREFIX + "update", "", body(lines=changed)).allowed)
         # lines the card does not show are refused even though the record's shape differs
-        other = SubmitPermit("a" * 64, update_card(mobile="1"), (PREFIX,), CATALOG, record, lambda: record)
+        other = SubmitPermit("a" * 64, update_card(mobile="1"), (PREFIX,), CATALOG, record, lambda: record,
+                      conventions=CONVENTIONS)
         sent = {**LOADED, "mobile": "1", "lines": changed}
         self.assertEqual(other.admit("PUT", PREFIX + "update", "", json.dumps(sent).encode()).code, "body_differs_from_form")
 
@@ -232,17 +263,19 @@ class LinesTests(unittest.TestCase):
     def test_a_record_that_shapes_a_value_differently_from_the_form_is_not_a_change(self):
         record = {**LOADED, "accountId": None}
         loaded = {**LOADED, "accountId": 0}
-        card = build_card(loaded=form(loaded), form=form({**loaded, "mobile": "1"}), page="p", button="保存", mode="update", record_id="7")
-        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, record, lambda: record)
+        card = build_card(conventions=CONVENTIONS, loaded=form(loaded), form=form({**loaded, "mobile": "1"}), page="p", button="保存", mode="update", record_id="7")
+        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, record, lambda: record,
+                               conventions=CONVENTIONS)
         sent = json.dumps({**loaded, "mobile": "1"}).encode()
         self.assertTrue(permit_.admit("PUT", PREFIX + "update", "", sent).allowed)
 
 
 class ReviewRegressionTests(unittest.TestCase):
     def test_a_query_id_that_differs_from_the_body_id_or_extra_query_keys_are_refused(self):
-        card = build_card(loaded=None, form=None, page="p", button="停用", mode="action", record_id="7", record=LOADED,
+        card = build_card(conventions=CONVENTIONS, loaded=None, form=None, page="p", button="停用", mode="action", record_id="7", record=LOADED,
                           action_request=ActionRequest("PUT", PREFIX + "update-status", {"status": 1}))
-        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED)
+        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, LOADED, lambda: LOADED,
+                     conventions=CONVENTIONS)
         self.assertEqual(permit_.admit("PUT", PREFIX + "update-status", "id=999", b'{"id": 7, "status": 1}').code, "target_mismatch")
         self.assertEqual(permit_.admit("PUT", PREFIX + "update-status", "id=7&force=1", b'{"id": 7}').code, "query_not_on_card")
         self.assertTrue(permit_.admit("PUT", PREFIX + "update-status", "id=7", b'{"status": 1}').allowed)
@@ -251,7 +284,7 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertFalse(same_value("007", "7"))
         self.assertFalse(same_value("0012.50", "12.5"))
         self.assertTrue(same_value("5", 5) and same_value(12.5, "12.5") and same_value("", None))
-        code = diff_models({"code": "0012"}, {"code": "12"})
+        code = diff_models({"code": "0012"}, {"code": "12"}, conventions=CONVENTIONS)
         self.assertEqual([c.field for c in code], ["code"])
 
     def test_a_second_request_of_a_two_part_update_is_not_refused_for_the_first_ones_own_effect(self):
@@ -269,8 +302,8 @@ class ReviewRegressionTests(unittest.TestCase):
 
     def test_a_create_is_one_effect_whatever_else_differs_in_the_second_body(self):
         loaded = form({"name": ""}, "create", "")
-        card = build_card(loaded=loaded, form=form({"name": "新"}, "create", ""), page="p", button="b", mode="create")
-        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG)
+        card = build_card(conventions=CONVENTIONS, loaded=loaded, form=form({"name": "新"}, "create", ""), page="p", button="b", mode="create")
+        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, conventions=CONVENTIONS)
         bodies = [{"name": "新"}, {"name": "新", "remark": ""}, {"name": "新", "a": None}]
         decisions = [permit_.admit("POST", PREFIX + "create", "", json.dumps(b).encode()) for b in bodies]
         self.assertEqual([d.allowed for d in decisions], [True, False, False])
