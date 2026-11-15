@@ -256,7 +256,11 @@ class NativeSubmitMixin:
         calls with the accumulated `entered` list do not re-judge older fills.
         """
         ledger = turn.setdefault("source_ledger", SourceLedger())
+        # Classified fills are remembered two ways: (field, value) pairs so one
+        # field's fill never stands in for another's, and bare values so the same
+        # fill is not re-judged under the model's own shorter label for it.
         covered = turn.setdefault("source_checked", set())
+        covered_values = turn.setdefault("source_checked_values", set())
         observed = observation
         for receipt in receipts or ():
             if receipt.action not in {"fill", "select"}:
@@ -272,7 +276,7 @@ class NativeSubmitMixin:
             if target is not None \
                     and not (target.attrs.get("form_scope")
                              and target.attrs.get("page_control") != "query"):
-                covered.add(value)
+                covered_values.add(value)
                 continue      # a query/filter control is not a business form value
             if target is None:
                 ledger.add(Entry("", value, placed=False))
@@ -285,29 +289,31 @@ class NativeSubmitMixin:
                             and e.attrs.get("selected_option")]
                 if len(selected) == 1:
                     value = str(selected[0].attrs["selected_option"])
-            covered.add(value)
-            covered.add(str(receipt.args_echo.get("value") or ""))
+            covered.add((label, value))
+            covered.add((label, str(receipt.args_echo.get("value") or "")))
+            covered_values.add(value)
             ledger.add(Entry(label, value, kind="select" if (
                     receipt.action == "select" or target.role in _SELECT_ROLES) else "text"))
         for label, value in entered:
             shown = str(value)
-            if shown in covered or any(e.value == shown for e in ledger.entries):
-                continue
-            parts = [part.strip() for part in _RANGE_FILL.split(shown) if part.strip()]
-            if len(parts) > 1 and all(part in covered for part in parts):
-                continue      # a range written into paired controls, each end covered
             wanted = str(label).rstrip(":：").strip()[:40]
             matches = [e for e in getattr(observation, "elements", ())
                        if _control_label(e) == wanted]
             business = [e for e in matches if e.attrs.get("form_scope")
                         and e.attrs.get("page_control") != "query"]
             if business:
-                covered.add(shown)
+                if (wanted, shown) in covered or any(
+                        e.field == wanted and e.value == shown for e in ledger.entries):
+                    continue
                 ledger.add(Entry(wanted, shown, kind="select" if (
                     business[0].role in _SELECT_ROLES) else "text"))
             elif matches:
-                covered.add(shown)      # every match is a query/filter control
+                continue              # every match is a query/filter control
             else:
+                parts = [part.strip() for part in _RANGE_FILL.split(shown) if part.strip()]
+                if shown in covered_values or (len(parts) > 1
+                        and all(part in covered_values for part in parts)):
+                    continue  # already classified under the controls' own labels
                 # A reported fill with no business field it could have gone into:
                 # check it anyway and let the source check refuse it.
                 ledger.add(Entry(wanted, shown, placed=False))

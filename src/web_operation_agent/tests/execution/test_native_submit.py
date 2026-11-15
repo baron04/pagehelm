@@ -752,6 +752,24 @@ class EntryPlacementTests(_Setup, unittest.TestCase):
         self.assertFalse(self.ex.turn["source_ledger"].entries[-1].placed)
         self.assertEqual(self.run_request().error_code, "value_not_from_user")
 
+    def test_a_same_valued_query_fill_does_not_cover_the_business_fill(self):
+        # A value written into a query/filter control covers only that fill: a
+        # business field filled with the same value is still entered and checked.
+        self.ex.turn["source_ledger"] = SourceLedger()
+        e_query = ElementRef("e_q", "input", "单据号", "input", 9,
+                             {"form_scope": "form:list", "page_control": "query"})
+        e_business = ElementRef("e_b", "input", "", "input", 9,
+                                {"form_scope": "form:crm/contact/update",
+                                 "field_label": "备注"})
+        obs = NS(elements=[e_query, e_business])
+        self.ex.note_entries(self.ex.s, self.ex.turn,
+                             (("单据号", "SYN-17"), ("备注", "SYN-17")), obs,
+                             receipts=[receipt(ref="e_q", value="SYN-17")])
+        entries = self.ex.turn["source_ledger"].entries
+        self.assertEqual([(e.field, e.value, e.placed) for e in entries],
+                         [("备注", "SYN-17", True)])
+        self.assertEqual(self.run_request().error_code, "value_not_from_user")
+
 
 class CandidateSourceTests(_Setup, unittest.TestCase):
     def _entry(self, value="13911112222", kind="text"):

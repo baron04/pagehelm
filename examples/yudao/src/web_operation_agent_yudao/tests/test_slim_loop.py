@@ -1471,6 +1471,9 @@ class DraftChoiceTests(unittest.TestCase):
         def handoff(_state, _before, fields, _button, **_kw):
             expected.extend(fields)
             return LoopToolResult("已交接", kind="page", marked="确定")
+        from web_operation_agent_yudao.slim_loop import _EXECUTOR_TURN
+        token = _EXECUTOR_TURN.set({})
+        self.addCleanup(_EXECUTOR_TURN.reset, token)
         with patch("web_operation_agent.execution.draft_handoff.handoff_draft", handoff):
             self.procedures._fill_fields(self.state, [{"label":"客户级别", "value":"A（重点客户）"}],
                 "", {"touched":[],"trace":[]}, then_highlight="确定")
@@ -3514,6 +3517,33 @@ class SqlCandidateTests(unittest.TestCase):
         # Even a real row the model read through its own query is not a source
         # the person offered: sql rows are never candidates.
         procedures._tool(NS(), "sql", {"query": "SELECT mobile FROM t1"}, turn)
+        self.assertNotIn("source_ledger", turn)
+
+
+class ExecutorTurnTests(unittest.TestCase):
+    def test_a_mark_without_the_executor_turn_is_refused(self):
+        procedures = object.__new__(YudaoLoopProcedures)
+        procedures.knowledge = NS()
+        s = NS(obs=NS(content="[1]<button 保存>",
+                      elements=[ElementRef("e1", "button", "保存", "button", 1,
+                                           {"form_scope": "form:x",
+                                            "form_instance": "i1"})]))
+        # Called outside _invoke_tool there is no policy state to check against:
+        # a mark attempt refuses rather than guessing the form is safe.
+        result = procedures._tool(s, "highlight", {"index": 1}, {})
+        self.assertEqual("refused", result.state)
+        self.assertEqual("turn_state_missing", result.error_code)
+
+    def test_a_table_read_without_the_executor_turn_seeds_no_receipt(self):
+        from web_operation_agent_yudao.slim_loop import _TURN_TABLES
+        token = _TURN_TABLES.set((NS(), "2026-11-14", "Asia/Shanghai"))
+        self.addCleanup(_TURN_TABLES.reset, token)
+        procedures = object.__new__(YudaoLoopProcedures)
+        procedures.knowledge = NS()
+        turn = {}
+        result = procedures._tool(NS(), "date_range",
+                                  {"unit": "day", "offset": 1}, turn)
+        self.assertEqual("completed", result.state, result.feedback)
         self.assertNotIn("source_ledger", turn)
 
 

@@ -2073,7 +2073,10 @@ class YudaoLoopProcedures:
 
     def _tool(self, s, name: str, args: dict, turn: dict) -> LoopToolResult:
         know = self.knowledge
-        policy_turn = _EXECUTOR_TURN.get() or turn
+        # The executor's real turn (ContextVar set by _invoke_tool); without it there
+        # is no trustworthy policy state: receipts/candidates are dropped and any
+        # mark attempt must refuse rather than guess at blocked forms.
+        policy_turn = _EXECUTOR_TURN.get()
         table_context = _TURN_TABLES.get()
         if name in _TABLE_TOOLS and table_context is not None:
             store, today, zone = table_context
@@ -2087,7 +2090,8 @@ class YudaoLoopProcedures:
                 else:
                     data = date_range(today=today, zone=zone, **args)
                     for value in (data or {}).values():
-                        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                        if policy_turn is not None and isinstance(value, (str, int, float)) \
+                                and not isinstance(value, bool):
                             note_receipt(policy_turn, "", value)
                 return LoopToolResult(fenced(json.dumps(data, ensure_ascii=False)), kind="read")
             except TurnReadError as exc:
@@ -2128,7 +2132,8 @@ class YudaoLoopProcedures:
             except QueryParametersError as exc:
                 return LoopToolResult("查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
                                       kind="read", state="refused", error_code="invalid_arguments")
-            note_candidates(policy_turn, (("", value) for value in found))
+            if policy_turn is not None:
+                note_candidates(policy_turn, (("", value) for value in found))
             return LoopToolResult(text, kind="read", answer_targets=tuple(targets))
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
@@ -2195,7 +2200,8 @@ class YudaoLoopProcedures:
                     if named:
                         text += "\n本页表格列名（接口字段→页面列）：" + "、".join(named)
             if know.last_read:
-                note_candidates(policy_turn, know.last_read.get("values") or ())
+                if policy_turn is not None:
+                    note_candidates(policy_turn, know.last_read.get("values") or ())
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
                 self._note(s, stage="read_done", tool=name,
@@ -2316,6 +2322,10 @@ class YudaoLoopProcedures:
         elif name == "highlight":
             from web_operation_agent.execution.draft_handoff import (opening_changes_refusal,
                                                                      unrestorable_form)
+            if policy_turn is None:
+                return LoopToolResult("程序没有本轮状态可核对，不能标出控件。",
+                                      kind="page", state="refused",
+                                      error_code="turn_state_missing")
             blocked_form = unrestorable_form(policy_turn.get("unrestorable_forms"),
                                              element.attrs.get("form_scope"),
                                              (element.attrs.get("form_lifetime"),
@@ -2552,7 +2562,11 @@ class YudaoLoopProcedures:
             # this last batch found it, and what the batch put in.
             self.form_fill = {"before": before, "expected": list(expected)}
         if then_highlight and not then_click and not incomplete and not failure:
-            policy_turn = _EXECUTOR_TURN.get() or turn
+            policy_turn = _EXECUTOR_TURN.get()
+            if policy_turn is None:
+                return LoopToolResult(text + "程序没有本轮状态可核对，不标出提交按钮。",
+                                      kind="page", state="refused",
+                                      error_code="turn_state_missing")
             if policy_turn.get("submit_handoff_blocked"):
                 return LoopToolResult(text + "提交已被拒绝，不标出提交按钮。", kind="page",
                                       state="refused",
