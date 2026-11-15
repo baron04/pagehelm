@@ -27,6 +27,7 @@ from web_operation_agent.modeling.client import (KeyedLimitedChat, KeyedProvider
                                        ProviderRuntimeGuard)
 from web_operation_agent.composition.operations import create_state_backup, restore_state_backup
 from web_operation_agent.transport import RemoteProtocolError
+from web_operation_agent.execution.native_submit import NativeSubmitMixin
 
 
 def _chromium_launches() -> bool:
@@ -1616,6 +1617,383 @@ class NativeContactsBrowserTests(unittest.TestCase):
                         first.close()
                     browser.close()
 
+
+
+
+class _ContactsWireApprovals:
+    """The approvals surface `_submit_form` needs, answered as the tests say."""
+
+    approval_hold_ms = 500
+
+    def __init__(self, approved=True):
+        self.approved, self.cards = approved, []
+
+    def context(self, step, tool, hold_ms=0):
+        from types import SimpleNamespace as NS
+        return NS(binding_digest="a" * 64, audit_projection=lambda: {})
+
+    def approve_mutation(self, proposal, **_):
+        from web_operation_agent.business.approvals import MutationApproval
+        self.cards.append(proposal)
+        return (MutationApproval("ap-1", proposal.content_digest) if self.approved
+                else MutationApproval(reason="approval_denied", detail="no"))
+
+    def awaiting_person(self):
+        import contextlib
+        return contextlib.nullcontext()
+
+
+class _ContactsWireHost(NativeSubmitMixin):
+    """The minimal executor host for contacts: real mixin, real ChannelServer codecs,
+    real application writes behind the app's own window gate."""
+
+    def __init__(self, application, port, obs, message):
+        from types import SimpleNamespace as NS
+        from web_operation_agent.tests.transport.submit_wire import SubmitWire
+        self.native_submit = port
+        self.application = application
+        self.events = []
+        self.s = NS(obs=obs, step=0, terminal_reason="", detail="", write_intent=False,
+                    mutation_outcomes=[], message=NS(text=message),
+                    approvals=_ContactsWireApprovals(True),
+                    ledger=NS(append=lambda event, **facts: self.events.append((event, facts))))
+        self.turn = {"written": [], "form_baselines": {}}
+        self.dispatched = []
+        self.wire = SubmitWire(obs)
+        self.form = dict(CONTACTS_LOADED_FORM)
+        self._earlier_words = []
+
+    def _submit_allowed(self, turn):
+        return True
+
+    def _said(self, prompt):
+        return [prompt]
+
+    def _element(self, s, index):
+        return next((e for e in s.obs.elements if e.ref == "e" + str(index)), None)
+
+    def _dispatch(self, s, action, args, **kw):
+        issued = self.wire.command(action, args)
+        return self.wire.result(issued, self._browser(s, action, issued.command.args))
+
+    def form_read(self):
+        return {"model": dict(self.form), "mode": "update",
+                "record_id": "grace-hopper", "title": "Grace Hopper",
+                "items": [{"prop": "name", "label": "Name"},
+                          {"prop": "email", "label": "Email"}],
+                "check": json.dumps(self.form, sort_keys=True),
+                "withheld": [], "invalid": [],
+                "source": "/api/contacts"}
+
+    def _browser(self, s, action, args):
+        from web_operation_agent.schemas import ActionReceipt
+        data = None
+        if action == "form_model":
+            if args["kind"] in {"form", "validate"}:
+                data = {**self.form_read(),
+                        **({"validation": True} if args["kind"] == "validate" else {})}
+            elif args["kind"] == "restore":
+                # The application's own write-back: plain inputs take the value.
+                self.form.update(args["values"])
+                data = {**self.form_read(), "validation": True}
+        elif action == "form_submit" and args.get("kind") != "confirm":
+            self._press_put()
+        self.dispatched.append((action, args.get("kind")))
+        s.obs = _contacts_observation(s.obs.epoch + 1)
+        return ActionReceipt(1, f"c{len(self.dispatched)}", action, args, True,
+                             observation=s.obs, url_before=s.obs.url,
+                             url_after=s.obs.url, form_data=data)
+
+    def _press_put(self):
+        """The page's own save: a real marked PUT through the app's window gate."""
+        body = json.dumps({"contactId": "grace-hopper",
+                           **self.form}).encode()
+        request = urllib.request.Request(
+            self.application.origin + "/api/browser/contacts", body, method="PUT",
+            headers={"Content-Type": "application/json",
+                     "Origin": self.application.origin,
+                     "Cookie": f"{DEMO_SESSION_COOKIE}={ADA.session}",
+                     "X-WOA-Assistant": "1"})
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                self.status, self.answer = response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            self.status, self.answer = exc.code, exc.read()
+
+
+ADA = next(actor for actor in DEMO_ACTORS if actor.actor == "ada-lovelace")
+CONTACTS_LOADED_FORM = {"name": "GRACE HOPPER", "email": "grace@example.test"}
+
+
+def _contacts_observation(epoch=1):
+    from web_operation_agent.schemas import ElementRef, PageObservation
+    return PageObservation(1, epoch, "http://contacts/contacts/edit/grace-hopper",
+                           "Edit Grace Hopper", [], [
+        ElementRef("e1", "textbox", "Name", "input", epoch,
+                   {"form_scope": "form:contact-edit", "form_instance": "i1",
+                    "field_label": "Name"}),
+        ElementRef("e2", "textbox", "Email", "input", epoch,
+                   {"form_scope": "form:contact-edit", "form_instance": "i1",
+                    "field_label": "Email"}),
+        ElementRef("e3", "button", "Save contact", "button", epoch,
+                   {"form_scope": "form:contact-edit", "form_instance": "i1"})],
+        render_state="ready", page_route="/contacts/edit/grace-hopper")
+
+
+class ContactsWireSubmitTests(unittest.TestCase):
+    """_request_submit end to end on the second application: real ChannelServer codecs,
+    real contacts port and application, approval, one armed press, same-actor readback."""
+
+    def _host(self, application, port, message):
+        host = _ContactsWireHost(application, port, _contacts_observation(), message)
+        # The page's own collection read, as the page session recorded it.
+        host.native_submit.note_read("/api/contacts")
+        # The form as loaded: the page's self-edit is already in the baseline.
+        host.capture_form_baseline(host.s, host.turn, host.s.obs.elements[2])
+        return host
+
+    def test_approved_update_goes_once_through_the_real_window_gate_and_reads_back(self):
+        from testapps.contacts.adapter import MinimalContactsAdapter
+        from testapps.contacts.app import MinimalContactsApplication
+        from testapps.contacts.native_submit import ContactsSubmitPort
+        from testapps.contacts.server import admit_armed_write
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
+            port = ContactsSubmitPort(adapter, journal=application.write_journal,
+                                      reads=application.read_journal)
+            application._write_gate = lambda session, method, path, query, body: (
+                admit_armed_write(port.armed, method, path, query, body))
+            host = self._host(application, port,
+                              "Change Grace's email to grace.new@example.test")
+            # The page's own read, as the page made it: the form's source exists.
+            request = urllib.request.Request(
+                application.origin + "/api/contacts",
+                headers={"Cookie": f"{DEMO_SESSION_COOKIE}={ADA.session}"})
+            with urllib.request.urlopen(request, timeout=3) as response:
+                self.assertEqual(response.status, 200)
+            # Open the application's read-only window, the way the runtime does
+            # before an action: inside it only the armed request may pass.
+            begin = urllib.request.Request(
+                application.origin + "/api/page-window/begin",
+                b"{}", method="POST",
+                headers={"Content-Type": "application/json",
+                         "Origin": application.origin,
+                         "Cookie": f"{DEMO_SESSION_COOKIE}={ADA.session}"})
+            with urllib.request.urlopen(begin, timeout=3) as response:
+                self.assertEqual(response.status, 200)
+            # The model typed the person's new email into the Email field.
+            host.form["email"] = "grace.new@example.test"
+            host.note_entries(host.s, host.turn,
+                              (("Email", "grace.new@example.test"),), host.s.obs)
+            result = host._request_submit(host.s, {"index": 3}, host.turn)
+            self.assertEqual(result.state, "completed", (result.feedback, host.events))
+            self.assertIn("共 1 项变化", result.feedback)
+            self.assertEqual(200, host.status, host.answer)
+            record = next(item for item in application.contacts
+                          if item["id"] == "grace-hopper")
+            self.assertEqual(
+                {"id": "grace-hopper", "name": "Grace Hopper",
+                 "email": "grace.new@example.test"}, record)
+            journal = [entry for entry in application.write_journal
+                       if entry["method"] == "PUT"]
+            self.assertEqual(1, len(journal), application.write_journal)
+            self.assertTrue(journal[0]["marked"])
+            self.assertEqual("grace-hopper", journal[0]["record_id"])
+            # The one approved click produced exactly one write the app accepted.
+            self.assertEqual(1, len(application.write_journal),
+                             application.write_journal)
+
+    def test_unrestorable_self_edit_refuses_before_the_card(self):
+        from testapps.contacts.adapter import MinimalContactsAdapter
+        from testapps.contacts.app import MinimalContactsApplication
+        from testapps.contacts.native_submit import ContactsSubmitPort
+        from testapps.contacts.server import admit_armed_write
+        with MinimalContactsApplication() as application:
+            adapter = MinimalContactsAdapter(application.origin, api_token=DEMO_API_TOKEN)
+            port = ContactsSubmitPort(adapter, journal=application.write_journal,
+                                      reads=application.read_journal)
+            application._write_gate = lambda session, method, path, query, body: (
+                admit_armed_write(port.armed, method, path, query, body))
+            host = self._host(application, port,
+                              "Change Grace's email to grace.new@example.test")
+            host.native_submit.note_read("/api/contacts")
+            host.form["email"] = "grace.new@example.test"
+            # Restore cannot take: the page recomputes the name on every write-back.
+            original = host._browser
+            def locked_restore(s, action, args):
+                receipt = original(s, action, args)
+                if action == "form_model" and args.get("kind") == "restore":
+                    host.form["name"] = host.form["name"].upper()
+                    data = {**host.form_read(), "validation": True}
+                    from dataclasses import replace
+                    receipt = replace(receipt, form_data=data)
+                return receipt
+            host._browser = locked_restore
+            host.form["email"] = "grace.new@example.test"
+            host.note_entries(host.s, host.turn,
+                              (("Email", "grace.new@example.test"),), host.s.obs)
+            result = host._request_submit(host.s, {"index": 3}, host.turn)
+            self.assertEqual(result.state, "refused", (result.feedback, host.events))
+            self.assertEqual("opening_changes", result.error_code)
+            self.assertEqual([], application.write_journal)
+            self.assertEqual(0, application.records_deleted)
+            record = next(item for item in application.contacts
+                          if item["id"] == "grace-hopper")
+            self.assertEqual("grace@example.test", record["email"])
+
+
+@browser_only
+class ContactsNativeSubmitBrowserTests(unittest.TestCase):
+    """The whole contract on the second application's own pages in a real browser:
+    the contacts integration hooks serve the form reads, the app's window gate
+    admits exactly the armed request, and the same actor reads the result back."""
+
+    class _SubmitScript(ScriptedDemoChat):
+        """Resolve the page's own Save control index from each fresh observation."""
+
+        def __init__(self, replies, button="Save contact"):
+            super().__init__(replies)
+            self.button = button
+
+        def complete(self, messages, tools, run_id, **kwargs):
+            if self.calls < len(self.replies) \
+                    and self.replies[self.calls][0] in {"request_submit", "highlight"}:
+                import re as _re
+                self.calls += 1
+                self.seen.append(json.dumps({"messages": messages, "tools": tools},
+                                            ensure_ascii=False, default=str))
+                found = _re.findall(
+                    rf'"index": "e(\d+)", "role": "button", "name": "{_re.escape(self.button)}"',
+                    messages[-1]["content"])
+                if len(found) != 1:
+                    return {"tool_calls": [{"id": "scripted-fail",
+                        "function": {"name": "finish",
+                        "arguments": json.dumps({"status": "cannot",
+                            "answer": f"no unique {self.button}: {found}"})}}]}
+                name, args = self.replies[self.calls - 1]
+                return {"tool_calls": [{"id": "scripted-call",
+                    "function": {"name": name,
+                    "arguments": json.dumps({**args, "index": int(found[0])})}}]}
+            return super().complete(messages, tools, run_id, **kwargs)
+
+    def _open(self, host, playwright, path):
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 1000})
+        page.goto(host.origin + "/demo/login/ada-lovelace")
+        page.goto(host.origin + path)
+        page.evaluate(_CONNECTED)
+        return browser, page
+
+    def _approve(self, page, card):
+        """Approve a card the way a person does: scroll it fully into view first.
+
+        A tall card can land clipped by the thread scrollport; the visibility gate
+        then refuses the click with a notice and keeps the card answerable, so the
+        honest retry is scroll-then-click, never a blind second click.
+        """
+        for _ in range(6):
+            if not card.count():
+                return
+            card.scroll_into_view_if_needed()
+            page.wait_for_timeout(700)
+            card.locator('[data-testid="woa-approve"]').click()
+            page.wait_for_timeout(900)
+            if not card.count():
+                return
+            if not card.locator('.woa-approval__blocked').count():
+                # Not refused as hidden; the decision may still be in flight.
+                page.wait_for_timeout(900)
+                if not card.count():
+                    return
+        self.fail("approval card never accepted a trusted click")
+
+    def test_edit_form_card_approve_press_and_same_actor_readback(self):
+        if not _chromium_launches():
+            self.skipTest("Chromium is not launchable")
+        from playwright.sync_api import sync_playwright
+        email = "grace.new@example.test"
+        chat = self._SubmitScript((
+            ("fill_fields", {"fields": [{"label": "Email", "value": email}]}),
+            ("request_submit", {"index": 0}),
+            ("finish", {"status": "done", "answer": "updated"})))
+        with tempfile.TemporaryDirectory() as directory,                 patch("testapps.contacts.server._chat", return_value=(chat, None)),                 NativeContactsHost(NativeServerConfig(
+                    Path(directory), port=0, scripted=False, model_loop=True,
+                    allow_mutations=True, native_submit_writes=True)) as host,                 sync_playwright() as playwright:
+            browser, page = self._open(host, playwright, "/contacts/edit/grace-hopper")
+            try:
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(
+                    _SUBMIT, f"Change Grace's email to {email}.")
+                # The turn may first ask ordinary leave to work the page.
+                any_card = page.locator('section.woa-approval')
+                any_card.first.wait_for(state="visible", timeout=20_000)
+                operate = page.locator('section.woa-approval[data-kind="operate"]')
+                if operate.count():
+                    self._approve(page, operate)
+                card = page.locator('section.woa-approval[data-kind="write"]')
+                card.wait_for(state="visible", timeout=20_000)
+                text = card.inner_text()
+                self.assertIn("grace.new@example.test", text)
+                # The page's opening self-edit is on the card as restored, never as a change.
+                self.assertIn("GRACE HOPPER", text)
+                self._approve(page, card)
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error, outcome.error)
+                self.assertEqual("agent_finished", outcome.result.terminal_reason,
+                                 outcome.result.user_answer)
+                record = next(item for item in host.application.contacts
+                              if item["id"] == "grace-hopper")
+                self.assertEqual({"id": "grace-hopper", "name": "Grace Hopper",
+                                  "email": email}, record)
+                journal = [row for row in host.application.write_journal
+                           if row["method"] == "PUT"]
+                self.assertEqual(1, len(journal), host.application.write_journal)
+                self.assertTrue(journal[0]["marked"])
+                self.assertEqual("grace-hopper", journal[0]["record_id"])
+            finally:
+                browser.close()
+
+    def test_unrestorable_opening_changes_never_reach_a_save_control(self):
+        if not _chromium_launches():
+            self.skipTest("Chromium is not launchable")
+        from playwright.sync_api import sync_playwright
+        email = "grace.new@example.test"
+        chat = self._SubmitScript((
+            ("fill_fields", {"fields": [{"label": "Email", "value": email}]}),
+            ("request_submit", {"index": 0}),
+            ("highlight", {"index": 0}),
+            ("finish", {"status": "cannot", "answer": "cannot safely save"})))
+        with tempfile.TemporaryDirectory() as directory,                 patch("testapps.contacts.server._chat", return_value=(chat, None)),                 NativeContactsHost(NativeServerConfig(
+                    Path(directory), port=0, scripted=False, model_loop=True,
+                    allow_mutations=True, native_submit_writes=True)) as host,                 sync_playwright() as playwright:
+            browser, page = self._open(host, playwright, "/contacts/edit-locked/grace-hopper")
+            try:
+                session = next(iter(host._sessions.values()))[0]
+                page.evaluate(_SUBMIT, f"Change Grace's email to {email}.")
+                any_card = page.locator('section.woa-approval')
+                try:
+                    any_card.first.wait_for(state="visible", timeout=8_000)
+                    operate = page.locator('section.woa-approval[data-kind="operate"]')
+                    if operate.count():
+                        self._approve(page, operate)
+                except Exception:
+                    pass
+                outcome = session.runner.next_outcome(timeout_s=30)
+                self.assertIsNotNone(outcome)
+                self.assertFalse(outcome.error, outcome.error)
+                self.assertEqual("agent_refused", outcome.result.terminal_reason,
+                                 outcome.result.user_answer)
+                # No write card, no marked save control, no write at all.
+                self.assertEqual(0, page.locator(
+                    'section.woa-approval[data-kind="write"]').count())
+                self.assertEqual(0, page.locator(".woa-submit-guide").count())
+                self.assertEqual([], host.application.write_journal)
+                record = next(item for item in host.application.contacts
+                              if item["id"] == "grace-hopper")
+                self.assertEqual("grace@example.test", record["email"])
+            finally:
+                browser.close()
 
 if __name__ == "__main__":
     unittest.main()

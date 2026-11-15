@@ -14,6 +14,7 @@ async function install(page: Page, times: number[][] | null = [[0, 0, 0], [23, 5
     ['/element.css', join(modules!, 'element-plus/dist/index.css')],
     ['/woa/page-facts.js', new URL('../src/integrations/yudao/page-facts.js', import.meta.url)],
     ['/woa/yudao-page-controller.js', new URL('../src/integrations/yudao/yudao-page-controller.js', import.meta.url)],
+    ['/woa/form-surface.js', new URL('../src/integrations/yudao/form-surface.js', import.meta.url)],
     ...(generic ? [['/woa/page-controller.js', generic] as [string, string]] : []),
   ])
   await page.route('**/*', async route => {

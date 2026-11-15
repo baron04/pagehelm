@@ -50,6 +50,7 @@ class SubmitConventions:
     volatile_keys: frozenset       # record keys the application maintains itself
     record_key: str                # request body/query field naming the target record
     line_key: str                  # identity field of a line inside a collection
+    name_key: str                  # record field that names a target on the card
     epoch_zone: tzinfo | None      # zone epoch-millisecond values are read in; None keeps them opaque
     decode_write: Callable         # (status: int | None, body: bytes) -> (status, answer)
 
@@ -435,7 +436,8 @@ def build_card(*, loaded: FormData | None, form: FormData | None, page: str, but
                               conventions=conventions)
         asked = [c for c in changes if not requested or c.field in requested]
         rest = [c for c in changes if requested and c.field not in requested]
-        name = target_name or loaded.display("name") or str(loaded.model.get("name") or "")
+        name = target_name or loaded.display(conventions.name_key) \
+            or str(loaded.model.get(conventions.name_key) or "")
         target = f"编号 {record_id}" + (f"「{name}」" if name else "")
         card = SubmitCard("update", page, target, record_id, tuple(asked), (), button, form, loaded,
                           unrequested=tuple(rest), record=record, restored=restored)

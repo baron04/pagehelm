@@ -45,7 +45,7 @@ def _decode_write(status, body):
 
 YUDAO_SUBMIT_CONVENTIONS = SubmitConventions(
     volatile_keys=frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version"}),
-    record_key="id", line_key="id",
+    record_key="id", line_key="id", name_key="name",
     epoch_zone=timezone(timedelta(hours=8)),
     decode_write=_decode_write)
 

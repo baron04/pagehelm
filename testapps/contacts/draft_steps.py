@@ -17,12 +17,18 @@ class ContactsDraftSteps:
         self.actor = ContactsReadActions(adapter)
         self._prepared = {}
 
+    @staticmethod
+    def _draft_route(route):
+        return (route == "/contacts/new"
+                or route.startswith("/contacts/edit/") or route.startswith("/contacts/edit-locked/"))
+
     def handles(self, intent):
-        return intent.action in self.actions and intent.observation.page_route == "/contacts/new"
+        return intent.action in self.actions and self._draft_route(intent.observation.page_route)
 
     @staticmethod
     def _controls(observation):
-        return [e for e in observation.elements if e.attrs.get("form_scope") == "form:contact-create"]
+        return [e for e in observation.elements
+                if e.attrs.get("form_scope") in {"form:contact-create", "form:contact-edit"}]
 
     def prepare_step(self, intent, *, context, checkpoint):
         self.actor._actor(context, checkpoint)
@@ -59,7 +65,7 @@ class ContactsDraftSteps:
     def verify_step(self, permit, intent, receipt, *, observation, context, checkpoint):
         self.actor._actor(context, checkpoint)
         expected = self._prepared.get(intent.binding_digest)
-        if expected is None or observation.page_route != "/contacts/new":
+        if expected is None or not self._draft_route(observation.page_route):
             return False
         step, label, value, instance, count, lifetime = expected
         controls = [e for e in self._controls(observation) if e.attrs.get("form_instance") == instance]
@@ -78,7 +84,7 @@ class ContactsDraftSteps:
         self.actor._actor(context, checkpoint)
         from web_operation_agent.execution.draft_handoff import draft_fields, field_identity, field_value
         if (intent.action != "select" or not receipt.no_effect or observation.url != intent.observation.url
-                or observation.page_route != "/contacts/new"):
+                or not self._draft_route(observation.page_route)):
             return False
         def state(obs):
             return sorted((field_identity(e), field_value(e), e.attrs.get("aria-controls", ""))
@@ -91,4 +97,4 @@ class ContactsDraftSteps:
         # This synthetic form persists only on Save, which this port never admits.
         return (intent.binding_digest in self._prepared
                 and observation.url == intent.observation.url
-                and observation.page_route == "/contacts/new")
+                and self._draft_route(observation.page_route))

@@ -121,6 +121,11 @@ export class EmbeddedWebRuntime {
   restoreElementFormModel: ((element: unknown, request: unknown) => Promise<boolean>) | undefined
   readElementRowRecord: ElementNavigationReader | undefined
   openPage: PageOpener | undefined
+  /** The application's own form/confirm/settle readers; absent means none exist. */
+  acceptReadSource: ((source: string, kind: 'form' | 'row') => boolean) | undefined
+  confirmBoxReader: ((doc: Document) => unknown) | undefined
+  confirmButtonPresser: ((label: string, doc: Document) => boolean) | undefined
+  submitBusyReader: ((doc: Document) => boolean) | undefined
   panelEnabled = true
   panelContainer: HTMLDivElement | null = null
   panelHost: PanelHost | null = null
@@ -251,6 +256,7 @@ export class EmbeddedWebRuntime {
       this.panelContainer ?? undefined)
     page.formModelReader = this.readElementFormModel
     page.rowRecordReader = this.readElementRowRecord
+    page.sourceAccepter = this.acceptReadSource
     this.heldPage = {controller: this.controller, lookup: this.getElementByIndex, page}
     return page
   }
@@ -293,7 +299,8 @@ export class EmbeddedWebRuntime {
     const {controller, lookup, readPageFacets, readFacetCandidates, applyPageFacet,
       readPageRecordRoute, readPageBlocker, readActiveView, readPageRoute, readPageQuery,
       readElementNavigation, readPageRead, readElementPageControl, readElementFormModel, readElementRowRecord, restoreElementFormModel,
-      openPage} = await loadPageController(
+      openPage, acceptReadSource, readConfirmBox: confirmBoxReader, pressConfirmButton: confirmButtonPresser,
+      readSubmitBusy: submitBusyReader} = await loadPageController(
       this.config.pageControllerModule, this.panelContainer ? [this.panelContainer] : [])
     this.controller = controller
     this.getElementByIndex = lookup
@@ -312,6 +319,10 @@ export class EmbeddedWebRuntime {
     this.restoreElementFormModel = restoreElementFormModel
     this.readElementRowRecord = readElementRowRecord
     this.openPage = openPage
+    this.acceptReadSource = acceptReadSource
+    this.confirmBoxReader = confirmBoxReader
+    this.confirmButtonPresser = confirmButtonPresser
+    this.submitBusyReader = submitBusyReader
     return this._startConnectedRuntime()
   }
 
@@ -1189,7 +1200,10 @@ export class EmbeddedWebRuntime {
         }
         this.writeGuardUntil = 0
       }
-      if (action.command.action === 'form_submit') await waitForSubmitToSettle()
+      if (action.command.action === 'form_submit') {
+        await waitForSubmitToSettle(document, sleep,
+          {readSubmitBusy: this.submitBusyReader, readConfirmBox: this.confirmBoxReader})
+      }
       if (action.command.action === 'form_submit' && this.config?.pageWriteGuard) {
         // The permit covered this one click. Ending it is what returns the page to its
         // ordinary, read-only window; an application that does not confirm is reported.
@@ -1322,7 +1336,12 @@ export class EmbeddedWebRuntime {
       // Kind `row` reads the table row a control belongs to, `confirm` the application's
       // own confirmation box; anything else reads the form.
       if (command.args?.kind === 'confirm') {
-        return Promise.resolve({success: true, form_data: readConfirmBox(), message: 'confirmation box read'})
+        if (!this.confirmBoxReader) {
+          return Promise.resolve({success: false, message: 'confirmation box reading unavailable'})
+        }
+        return Promise.resolve({success: true,
+          form_data: readConfirmBox(document, {readConfirmBox: this.confirmBoxReader}),
+          message: 'confirmation box read'})
       }
       if (command.args?.kind === 'restore' || command.args?.kind === 'validate') {
         const element = this.page.element(command.args?.ref)
@@ -1349,7 +1368,8 @@ export class EmbeddedWebRuntime {
       // The one click an approved card allows. What was approved must still be what is
       // on the page: the same form data, or the same table row.
       if (command.args?.kind === 'confirm') {
-        if (!pressConfirmButton(String(command.args?.label ?? ''))) {
+        if (!pressConfirmButton(String(command.args?.label ?? ''), document,
+            {pressConfirmButton: this.confirmButtonPresser})) {
           throw new Error('bad_arguments: the confirmation box does not offer that button')
         }
         return sleep(300).then(() => ({success: true, message: 'confirmation button pressed'}))

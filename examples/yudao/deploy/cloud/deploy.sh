@@ -40,6 +40,7 @@ for f in "$JAR" "$YUDAO_CACHE/ui/dist-cloud/index.html" "$YUDAO_CACHE/woa/page-c
 done
 for f in "$REPO/frontend/src/integrations/yudao/page-facts.js" \
          "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js" \
+         "$REPO/frontend/src/integrations/yudao/form-surface.js" \
          "$REPO/src/web_operation_agent/web_runtime/assistant.js" \
          "$REPO/src/web_operation_agent/web_runtime/trace_replay.html"; do
   [ -f "$f" ] || { echo "missing native page artifact: $f" >&2; exit 1; }
@@ -71,7 +72,8 @@ rsync -az --delete "$YUDAO_CACHE/ui/dist-cloud/" "$TARGET:$DIR/ui/"
 rsync -az --delete "$YUDAO_CACHE/woa/" "$TARGET:$DIR/woa/"
 rsync -az "$HERE/yudao-loader.js" "$TARGET:$DIR/woa/"
 rsync -az "$REPO/frontend/src/integrations/yudao/page-facts.js" \
-  "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js" "$TARGET:$DIR/woa/"
+  "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js" \
+  "$REPO/frontend/src/integrations/yudao/form-surface.js" "$TARGET:$DIR/woa/"
 rsync -az "$WHEELS/" "$TARGET:$DIR/agent/wheels/"
 rsync -az "$HERE/agent.Dockerfile" "$TARGET:$DIR/agent/"
 rsync -az --delete "$HERE/native-policy/" "$TARGET:$DIR/native-policy/"

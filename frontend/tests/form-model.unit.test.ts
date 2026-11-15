@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest'
-import {canonicalJson, formCheck, normalizeFormRead, normalizeRowRead, sameControlText} from '../src/runtime/formModel'
+import {canonicalJson, formCheck, normalizeFormRead, normalizeRowRead, pressConfirmButton,
+  readConfirmBox, sameControlText, waitForSubmitToSettle} from '../src/runtime/formModel'
 
 const read = (model: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
   model, items: [{prop: 'name', label: '姓名', display: '张三'}], mode: 'update', record_id: '7', title: '编辑', ...extra})
@@ -40,6 +41,36 @@ describe('form model reading', () => {
     expect(normalizeRowRead({id: '../x'})).toBeNull()
     expect(normalizeRowRead(undefined)).toBeNull()
     expect(formCheck('a')).not.toBe(formCheck('b'))
+  })
+
+  it('forwards a read source only when the integration vouches for it', () => {
+    const sourced = read({a: 1}, {source: '/api/contacts'})
+    expect(normalizeFormRead(sourced)!.source).toBeUndefined()
+    const accept = {acceptReadSource: (source: string, kind: string) =>
+      kind === 'form' && source === '/api/contacts'}
+    expect(normalizeFormRead(sourced, accept)!.source).toBe('/api/contacts')
+    const other = read({a: 1}, {source: '/api/other'})
+    expect(normalizeFormRead(other, accept)!.source).toBeUndefined()
+  })
+
+  it('vouches a row source as a row, never as a form', () => {
+    const row = {id: 'grace-hopper', name: 'Grace', source: '/api/contacts'}
+    const seen: string[] = []
+    const accept = {acceptReadSource: (source: string, kind: string) => {
+      seen.push(kind)
+      return kind === 'row' && source === '/api/contacts'
+    }}
+    expect(normalizeRowRead(row, accept)!.source).toBe('/api/contacts')
+    expect(normalizeRowRead(row)!.source).toBeUndefined()
+    expect(seen).toEqual(['row'])
+  })
+
+  it('fails closed on confirmation and settle facts without an integration', async () => {
+    expect(readConfirmBox().open).toBe(false)
+    expect(pressConfirmButton('确 定')).toBe(false)
+    await expect(waitForSubmitToSettle()).rejects.toThrow('settle detection')
+    expect(readConfirmBox(undefined,
+      {readConfirmBox: () => ({open: true, title: 't', text: 'x', buttons: ['确定']})}).open).toBe(true)
   })
 
   it('compares a control with the card by its own text, and binds one with no text otherwise', () => {

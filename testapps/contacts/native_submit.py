@@ -17,6 +17,10 @@ from datetime import timezone
 _PREFIX = "/api/contacts"
 _CREATE = ("POST", _PREFIX)
 _UPDATE = ("PUT", _PREFIX)
+#: The page's own form endpoint, separate from the delegated API the prefix names.
+_BROWSER = "/api/browser/contacts"
+_BROWSER_CREATE = ("POST", _BROWSER)
+_BROWSER_UPDATE = ("PUT", _BROWSER)
 _DANGER = re.compile(r"删除|移除|清除|作废|delete|remove|trash|clear", re.IGNORECASE)
 
 
@@ -40,7 +44,7 @@ CONTACTS_SUBMIT_CONVENTIONS = SubmitConventions(
     # The application stamps its own bookkeeping fields; the identity fields are not
     # "id" in requests or in lines, and epoch-millisecond values are UTC instants.
     volatile_keys=frozenset({"modified", "modifiedBy"}),
-    record_key="contactId", line_key="lineId",
+    record_key="contactId", line_key="lineId", name_key="name",
     epoch_zone=timezone.utc,
     decode_write=_decode_write)
 
@@ -53,8 +57,11 @@ class ContactsSubmitPort:
     ``record_id`` for the targeted record, and ``created_id`` for a created record.
     """
 
-    def __init__(self, client, journal=()):
+    def __init__(self, client, journal=(), reads=None):
         self.client, self._journal = client, journal
+        #: `reads` may be the application's live page-read journal; entries are
+        #: ``(path, query)`` tuples recorded as the page made them.
+        self._reads_source = reads
         self.armed, self._reads = None, ()
 
     def contract(self):
@@ -62,7 +69,7 @@ class ContactsSubmitPort:
 
     # -- what the page itself read -----------------------------------------------------
     def recent_reads(self):
-        return self._reads
+        return (*self._reads, *(self._reads_source or ()))
 
     def note_read(self, path, query=""):
         """Record one read the page made; the form's entity comes from its own source."""
@@ -77,7 +84,7 @@ class ContactsSubmitPort:
             return ()
         if mode == "update" and not record_id:
             return ()
-        return (_PREFIX,)
+        return (_PREFIX, _BROWSER)
 
     def row_prefixes(self, reads, row):
         source = row.get("source")
@@ -96,7 +103,7 @@ class ContactsSubmitPort:
         """The application's documented writes under the contacts surface."""
         if _PREFIX not in prefixes:
             return frozenset()
-        found = {_CREATE, _UPDATE}
+        found = {_CREATE, _UPDATE, _BROWSER_CREATE, _BROWSER_UPDATE}
         for item in self._records():
             if item.get("id"):
                 found.add(("POST", f"/api/browser/contacts/{item['id']}/delete"))

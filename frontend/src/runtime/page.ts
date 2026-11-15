@@ -102,6 +102,10 @@ interface PageControllerModule {
   restoreElementFormModel?: (element: unknown, request: unknown) => Promise<boolean>
   readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
+  acceptReadSource?: (source: string, kind: 'form' | 'row') => boolean
+  readConfirmBox?: (doc: Document) => unknown
+  pressConfirmButton?: (label: string, doc: Document) => boolean
+  readSubmitBusy?: (doc: Document) => boolean
 }
 
 /**
@@ -249,6 +253,8 @@ export class Page {
   /** Set by the Runtime from the application's controller module; absent means unreadable. */
   formModelReader: ElementNavigationReader | undefined
   rowRecordReader: ElementNavigationReader | undefined
+  /** The application's source acceptance; absent means no source is ever forwarded. */
+  sourceAccepter: ((source: string, kind: 'form' | 'row') => boolean) | undefined
 
   /** Why the last `formModel` read gave nothing, in a word the server can classify. */
   formUnreadable = ''
@@ -263,7 +269,7 @@ export class Page {
         return null
       }
       const raw = this.formModelReader(element)
-      const read = normalizeFormRead(raw)
+      const read = normalizeFormRead(raw, {acceptReadSource: this.sourceAccepter})
       if (read && JSON.stringify(read).length <= browserContract.form_model.max_bytes) return read
       this.formUnreadable = unreadableReason(raw) || 'not_a_form'
       return null
@@ -275,7 +281,7 @@ export class Page {
     try {
       const element = this.element(ref)
       if (!(element instanceof HTMLElement) || !element.isConnected || !this.rowRecordReader) return null
-      return normalizeRowRead(this.rowRecordReader(element))
+      return normalizeRowRead(this.rowRecordReader(element), {acceptReadSource: this.sourceAccepter})
     } catch { return null }
   }
 
@@ -1108,6 +1114,10 @@ export interface LoadedPageController {
   restoreElementFormModel?: (element: unknown, request: unknown) => Promise<boolean>
   readElementRowRecord?: ElementNavigationReader
   openPage?: PageOpener
+  acceptReadSource?: (source: string, kind: 'form' | 'row') => boolean
+  readConfirmBox?: (doc: Document) => unknown
+  pressConfirmButton?: (label: string, doc: Document) => boolean
+  readSubmitBusy?: (doc: Document) => boolean
 }
 
 /** The fixed extraction policy qualified by the product Runtime. */
@@ -1188,5 +1198,13 @@ export async function loadPageController(moduleUrl: string | undefined,
       ? {readElementRowRecord: module.readElementRowRecord} : {}),
     ...(typeof module.readElementNavigation === 'function'
       ? {readElementNavigation: module.readElementNavigation} : {}),
-    ...(typeof module.openPage === 'function' ? {openPage: module.openPage} : {})}
+    ...(typeof module.openPage === 'function' ? {openPage: module.openPage} : {}),
+    ...(typeof module.acceptReadSource === 'function'
+      ? {acceptReadSource: module.acceptReadSource} : {}),
+    ...(typeof module.readConfirmBox === 'function'
+      ? {readConfirmBox: module.readConfirmBox} : {}),
+    ...(typeof module.pressConfirmButton === 'function'
+      ? {pressConfirmButton: module.pressConfirmButton} : {}),
+    ...(typeof module.readSubmitBusy === 'function'
+      ? {readSubmitBusy: module.readSubmitBusy} : {})}
 }

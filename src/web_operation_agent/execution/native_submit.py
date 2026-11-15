@@ -103,7 +103,7 @@ _SELECT_ROLES = {"combobox", "select", "radiogroup", "listbox"}
 def _control_label(element) -> str:
     """What a person would call this control: its form label, its place in a line
     table, else its own text."""
-    for key in ("field_label", "title", "placeholder"):
+    for key in ("field_label", "field", "title", "placeholder"):
         value = str(element.attrs.get(key) or "").rstrip(":：").strip()
         if value:
             return value[:40]
@@ -274,6 +274,10 @@ class NativeSubmitMixin:
         covered = turn.setdefault("source_checked", set())
         covered_values = turn.setdefault("source_checked_values", set())
         observed = observation
+        # The wire never echoes typed values (args_echo redacts "value"), so a
+        # fill receipt over a real channel proves the element and its kind, not
+        # the text: the value has to come from the model's declared fills below.
+        deferred: dict[str, tuple[str, str]] = {}
         for receipt in receipts or ():
             if receipt.action not in {"fill", "select"}:
                 observed = receipt.observation or observed
@@ -301,20 +305,31 @@ class NativeSubmitMixin:
                             and e.attrs.get("selected_option")]
                 if len(selected) == 1:
                     value = str(selected[0].attrs["selected_option"])
+            kind = "select" if (receipt.action == "select"
+                                or target.role in _SELECT_ROLES) else "text"
+            if value == "[redacted]":
+                deferred[label.casefold()] = (label, kind)
+                continue
             covered.add((label, value))
             covered.add((label, str(receipt.args_echo.get("value") or "")))
             covered_values.add(value)
-            ledger.add(Entry(label, value, kind="select" if (
-                    receipt.action == "select" or target.role in _SELECT_ROLES) else "text"))
+            ledger.add(Entry(label, value, kind=kind))
         for label, value in entered:
             shown = str(value)
             wanted = str(label).rstrip(":：").strip()[:40]
             matches = [e for e in getattr(observation, "elements", ())
-                       if _control_label(e) == wanted]
+                       if _control_label(e).casefold() == wanted.casefold()]
             business = [e for e in matches if e.attrs.get("form_scope")
                         and e.attrs.get("page_control") != "query"]
             if business:
-                if (wanted, shown) in covered or any(
+                own = _control_label(business[0])
+                if own.casefold() in deferred:
+                    kind = deferred.pop(own.casefold())[1]
+                    covered.add((own, shown))
+                    covered_values.add(shown)
+                    ledger.add(Entry(own, shown, kind=kind))
+                    continue
+                if (wanted, shown) in covered or (own, shown) in covered or any(
                         e.field == wanted and e.value == shown for e in ledger.entries):
                     continue
                 ledger.add(Entry(wanted, shown, kind="select" if (
@@ -329,6 +344,10 @@ class NativeSubmitMixin:
                 # A reported fill with no business field it could have gone into:
                 # check it anyway and let the source check refuse it.
                 ledger.add(Entry(wanted, shown, placed=False))
+        # A redacted-echo fill nobody declared a value for cannot be checked:
+        # record it as itself so the source check fails closed, never open.
+        for own, kind in deferred.values():
+            ledger.add(Entry(own, "[redacted]", kind=kind))
 
     def note_receipt(self, turn, field: str, value: str) -> None:
         note_receipt(turn, field, value)

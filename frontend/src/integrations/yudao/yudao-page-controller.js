@@ -179,3 +179,4 @@ export function readElementPageControl(element) {
 }
 export {readPageBlocker, readPageRecordRoute, readPageRoute, readPageQuery, readPageRead,
   readElementNavigation, readElementFormModel, restoreElementFormModel, readElementRowRecord, openPage} from './page-facts.js'
+export {acceptReadSource, readConfirmBox, pressConfirmButton, readSubmitBusy} from './form-surface.js'

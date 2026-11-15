@@ -46,7 +46,7 @@ def _decode(status, body):
 
 CONVENTIONS = SubmitConventions(
     volatile_keys=frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version"}),
-    record_key="id", line_key="id", epoch_zone=timezone(timedelta(hours=8)),
+    record_key="id", line_key="id", name_key="name", epoch_zone=timezone(timedelta(hours=8)),
     decode_write=_decode)
 
 

@@ -61,7 +61,8 @@ class PageControllerClickTests(unittest.TestCase):
         self.addCleanup(context.close)
         files = {"/woa/page-controller.js":GENERIC,
                  "/woa/yudao-page-controller.js":OWNED / "yudao-page-controller.js",
-                 "/woa/page-facts.js":OWNED / "page-facts.js"}
+                 "/woa/page-facts.js":OWNED / "page-facts.js",
+                 "/woa/form-surface.js": OWNED / "form-surface.js"}
         def serve(route):
             path = urlsplit(route.request.url).path
             route.fulfill(body=files[path].read_bytes() if path in files else PAGE,
@@ -109,7 +110,8 @@ class PageControllerClickTests(unittest.TestCase):
         self.addCleanup(browser.close)
         files = {"/woa/page-controller.js": GENERIC,
                  "/woa/yudao-page-controller.js": OWNED / "yudao-page-controller.js",
-                 "/woa/page-facts.js": OWNED / "page-facts.js"}
+                 "/woa/page-facts.js": OWNED / "page-facts.js",
+                 "/woa/form-surface.js": OWNED / "form-surface.js"}
         results = []
         for mode in ("generic", "owned"):
             context = browser.new_context()
@@ -137,7 +139,8 @@ class PageControllerClickTests(unittest.TestCase):
 
     def drive(self, browser, mode):
         files = {"/woa/page-controller.js": GENERIC, "/woa/yudao-page-controller.js": OWNED / "yudao-page-controller.js",
-                 "/woa/page-facts.js": OWNED / "page-facts.js"}
+                 "/woa/page-facts.js": OWNED / "page-facts.js",
+                 "/woa/form-surface.js": OWNED / "form-surface.js"}
         context = browser.new_context(viewport={"width": 1000, "height": 700})
         self.addCleanup(context.close)
 

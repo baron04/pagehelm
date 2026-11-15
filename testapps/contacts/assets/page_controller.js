@@ -135,3 +135,96 @@ export class PageController {
     this.selectorMap.clear()
   }
 }
+
+// -- the application's own form surface -----------------------------------------
+//: What this application vouches for: its one records read, its native form
+//: fields, its own busy indicator. Core runtime carries none of this; without
+//: these exports a form read has no vouched source and submits fail closed.
+export function acceptReadSource(source, kind) {
+  return (kind === 'form' || kind === 'row') && source === '/api/contacts'
+}
+
+export function readElementFormModel(element) {
+  const form = element && (element.form || element.closest('form'))
+  if (!form || !form.isConnected) return null
+  const model = {}
+  const items = []
+  const withheld = []
+  for (const control of form.elements) {
+    if (!control.name) continue
+    const label = control.labels && control.labels[0]
+      ? control.labels[0].textContent.replace(/\s+/g, ' ').trim() : control.name
+    if (control.type === 'password') { withheld.push(control.name); continue }
+    if (control.type === 'submit' || control.type === 'button') continue
+    const value = control.type === 'checkbox' ? control.checked : control.value
+    model[control.name] = value
+    items.push({prop: control.name, label, display: String(value)})
+  }
+  const recordId = form.dataset.recordId || ''
+  const heading = (form.closest('section') || form.ownerDocument).querySelector('h1')
+  return {
+    model, items,
+    mode: recordId ? 'update' : 'create',
+    record_id: recordId,
+    title: heading ? heading.textContent.replace(/\s+/g, ' ').trim() : '',
+    source: '/api/contacts',
+    withheld,
+    invalid: [...form.elements]
+      .filter(item => item.name && item.willValidate && !item.checkValidity())
+      .map(item => item.name),
+  }
+}
+
+export function restoreElementFormModel(element, request) {
+  const form = element && (element.form || element.closest('form'))
+  if (!form || !request || typeof request !== 'object') return Promise.resolve(false)
+  const values = request.values && typeof request.values === 'object' && !Array.isArray(request.values)
+    ? request.values : {}
+  const keys = Object.keys(values).slice(0, 40)
+  if (!keys.length) return Promise.resolve(form.checkValidity())
+  for (const key of keys) {
+    const control = form.elements.namedItem(key)
+    if (!control || !control.name || control.type === 'password') return Promise.resolve(false)
+    const value = String(values[key] ?? '')
+    if (control.value !== value) {
+      control.value = value
+      control.dispatchEvent(new Event('input', {bubbles: true}))
+      control.dispatchEvent(new Event('change', {bubbles: true}))
+    }
+  }
+  // The write's truth is the model reread the runtime takes next; this answer
+  // only vouches that the written value still stands in every named control.
+  return Promise.resolve(keys.every(key => {
+    const control = form.elements.namedItem(key)
+    return Boolean(control) && control.value === String(values[key] ?? '')
+  }))
+}
+
+export function readSubmitBusy(doc) {
+  return Boolean((doc || document).querySelector('form[aria-busy="true"]'))
+}
+
+//: While the application's own read-only window is open, its writes carry the
+//: marker the server armed -- the same convention the gateway documents.
+if (typeof window !== 'undefined' && typeof window.fetch === 'function' && !window.__contactsFetchMarked) {
+  window.__contactsFetchMarked = true
+  let assistantWorking = false
+  const realFetch = window.fetch.bind(window)
+  window.fetch = (input, init) => {
+    const url = typeof input === 'string' ? input : (input && input.url) || ''
+    const marked = assistantWorking && url.startsWith('/api/') && init &&
+      typeof init.method === 'string' && init.method.toUpperCase() !== 'GET'
+    if (marked) {
+      const headers = new Headers(init.headers || {})
+      if (!headers.has('X-WOA-Assistant')) headers.set('X-WOA-Assistant', '1')
+      init = {...init, headers}
+    }
+    const response = realFetch(input, init)
+    if (url === '/api/page-window/begin') {
+      response.then(reply => { if (reply.ok) assistantWorking = true }).catch(() => {})
+    } else if (url === '/api/page-window/end') {
+      assistantWorking = false
+    }
+    return response
+  }
+}

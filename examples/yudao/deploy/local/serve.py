@@ -99,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
             name = path.removeprefix("/woa/")
             assets = {"yudao-loader.js": cfg.ROOT / "examples/yudao/deploy/cloud/yudao-loader.js",
                       **{n: cfg.ROOT / "frontend/src/integrations/yudao" / n
-                         for n in ("page-facts.js", "yudao-page-controller.js")}}
+                         for n in ("page-facts.js", "yudao-page-controller.js", "form-surface.js")}}
             policy = json.loads((cfg.ROOT / "src/web_operation_agent/policies/page_controller.json").read_text())
             assets.update({n: cfg.CACHE / "woa" / n for n in policy["served_files"]})
             file = assets.get(name)

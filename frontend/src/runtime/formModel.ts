@@ -56,7 +56,26 @@ export function unreadableReason(raw: unknown): string {
   return typeof reason === 'string' ? reason.replace(/[^a-z_]/g, '').slice(0, 40) : ''
 }
 
-export function normalizeFormRead(raw: unknown): FormModelRead | null {
+/**
+ * The application facts a form read may carry but core does not presume: the page
+ * controller module supplies these, core stays empty-handed. Without a hook the
+ * answer fails closed -- a read without a vouched source reaches the server with
+ * none, and no confirmation or settle handling exists at all.
+ */
+export interface FormIntegration {
+  /** Whether the application vouches for `source` naming one of its own read
+   * endpoints for this kind of read. Absent: no source is ever forwarded. */
+  acceptReadSource?: ((source: string, kind: 'form' | 'row') => boolean) | undefined
+  /** The application's own confirmation box, if it has one: its raw read is
+   * bounded here like any other untrusted page fact. */
+  readConfirmBox?: ((doc: Document) => unknown) | undefined
+  /** Press one button of the open confirmation box by its label. */
+  pressConfirmButton?: ((label: string, doc: Document) => boolean) | undefined
+  /** Whether the application still shows its own submit-in-flight indicator. */
+  readSubmitBusy?: ((doc: Document) => boolean) | undefined
+}
+
+export function normalizeFormRead(raw: unknown, integration?: FormIntegration): FormModelRead | null {
   if (!raw || typeof raw !== 'object') return null
   const read = raw as {model?: unknown; items?: unknown; mode?: unknown; record_id?: unknown;
     title?: unknown; withheld?: unknown; invalid?: unknown; source?: unknown}
@@ -78,15 +97,17 @@ export function normalizeFormRead(raw: unknown): FormModelRead | null {
   return {model: read.model as Record<string, unknown>, items, mode: read.mode, invalid,
     record_id: read.mode === 'update' ? clip(read.record_id, 40) : '', title: clip(read.title, 120),
     check: formCheck(text + '|' + JSON.stringify(withheld)), withheld,
-    ...(typeof read.source === 'string' && /^\/admin-api\/(?:[A-Za-z0-9_-]+\/)+(?:get|page|list)(?:-[a-z0-9-]+)?$/.test(read.source) ? {source: read.source} : {})}
+    ...(typeof read.source === 'string' && integration?.acceptReadSource?.(read.source, 'form') === true
+      ? {source: read.source} : {})}
 }
 
-export function normalizeRowRead(raw: unknown): RowRecordRead | null {
+export function normalizeRowRead(raw: unknown, integration?: FormIntegration): RowRecordRead | null {
   if (!raw || typeof raw !== 'object') return null
   const {id, name, source, toggle} = raw as {id?: unknown; name?: unknown; source?: unknown; toggle?: RowRecordRead["toggle"]}
   if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:@-]{0,119}$/.test(id)) return null
   return {record_id: id, name: clip(name, 200), title: '', mode: 'action', check: formCheck(canonicalJson({id, source, toggle})),
-    ...(typeof source === 'string' && /^\/admin-api\/(?:[A-Za-z0-9_-]+\/)+(?:page|list)(?:-[a-z0-9-]+)?$/.test(source) ? {source} : {}),
+    ...(typeof source === 'string' && integration?.acceptReadSource?.(source, 'row') === true
+      ? {source} : {}),
     ...(toggle && typeof toggle.field === 'string' && /^[a-z][A-Za-z0-9]{0,59}$/.test(toggle.field) &&
       ['string', 'number', 'boolean'].includes(typeof toggle.before) &&
       ['string', 'number', 'boolean'].includes(typeof toggle.after)
@@ -95,49 +116,47 @@ export function normalizeRowRead(raw: unknown): RowRecordRead | null {
 
 export interface ConfirmBoxRead {open: boolean; title: string; text: string; buttons: string[]}
 
-const BOX = '.el-message-box'
+const CLOSED: ConfirmBoxRead = {open: false, title: '', text: '', buttons: []}
 
-/** The application's own confirmation box, if one is open: what it says and what it offers. */
-export function readConfirmBox(doc: Document = document): ConfirmBoxRead {
-  const box = Array.from(doc.querySelectorAll<HTMLElement>(BOX)).find(node => {
-    const rect = node.getBoundingClientRect()
-    return rect.width > 0 && rect.height > 0
-  })
-  if (!box) return {open: false, title: '', text: '', buttons: []}
-  const text = (selector: string) => clip((box.querySelector(selector)?.textContent ?? '').replace(/\s+/g, ' ').trim(), 400)
-  return {open: true, title: text('.el-message-box__title'), text: text('.el-message-box__message'),
-    buttons: Array.from(box.querySelectorAll<HTMLElement>('.el-message-box__btns button'))
-      .map(button => clip((button.textContent ?? '').replace(/\s+/g, ' ').trim(), 40)).filter(Boolean).slice(0, 4)}
+/** An application's raw confirmation read, bounded like any page fact. */
+export function normalizeConfirmRead(raw: unknown): ConfirmBoxRead {
+  const read = raw as {open?: unknown; title?: unknown; text?: unknown; buttons?: unknown} | null | undefined
+  if (!read || read.open !== true) return CLOSED
+  const buttons = (Array.isArray(read.buttons) ? read.buttons : [])
+    .map(button => clip(String(button ?? '').replace(/\s+/g, ' ').trim(), 40)).filter(Boolean).slice(0, 4)
+  return {open: true, title: clip(String(read.title ?? '').replace(/\s+/g, ' ').trim(), 400),
+    text: clip(String(read.text ?? '').replace(/\s+/g, ' ').trim(), 400), buttons}
 }
 
-/** Press one button of the open confirmation box by its label; false if it is not offered. */
-export function pressConfirmButton(label: string, doc: Document = document): boolean {
-  const box = Array.from(doc.querySelectorAll<HTMLElement>(BOX)).find(node => node.getBoundingClientRect().width > 0)
-  const matches = Array.from(box?.querySelectorAll<HTMLButtonElement>('.el-message-box__btns button') ?? [])
-    .filter(button => (button.textContent ?? '').replace(/\s+/g, ' ').trim() === label && !button.disabled)
-  if (matches.length !== 1) return false
-  matches[0]!.click()
-  return true
+/** The application's own confirmation box, if its integration can read one. */
+export function readConfirmBox(doc: Document = document, integration?: FormIntegration): ConfirmBoxRead {
+  return integration?.readConfirmBox ? normalizeConfirmRead(integration.readConfirmBox(doc)) : CLOSED
 }
 
-const shown = (node: Element) => {
-  const rect = node.getBoundingClientRect()
-  return rect.width > 0 && rect.height > 0
+/** Press one button of the open confirmation box by its label; without an integration
+ * presser no confirmation can ever be pressed, so the request fails closed. */
+export function pressConfirmButton(label: string, doc: Document = document,
+                                   integration?: FormIntegration): boolean {
+  return integration?.pressConfirmButton ? integration.pressConfirmButton(label, doc) === true : false
 }
 
 /**
  * After the approved click, give the application the time its own submit takes: validation,
  * the request, its answer. Done when nothing is loading and a quiet moment has passed, or
  * when a confirmation box is waiting for the person's answer; bounded either way.
+ * Without the application's own busy reader there is no honest settle detection:
+ * the action fails rather than pretend the click settled.
  */
 export async function waitForSubmitToSettle(doc: Document = document,
-                                            pause: (ms: number) => Promise<void> = sleep): Promise<void> {
+                                            pause: (ms: number) => Promise<void> = sleep,
+                                            integration?: FormIntegration): Promise<void> {
+  if (!integration?.readSubmitBusy) throw new Error('submit settle detection unavailable')
   const until = Date.now() + 6000
   await pause(2200)
   let quiet = 0
   while (Date.now() < until && quiet < 4) {
-    const busy = Array.from(doc.querySelectorAll('.el-loading-mask')).some(shown)
-    const asking = Array.from(doc.querySelectorAll('.el-message-box')).some(shown)
+    const busy = integration.readSubmitBusy(doc) === true
+    const asking = integration.readConfirmBox ? normalizeConfirmRead(integration.readConfirmBox(doc)).open : false
     if (asking) return
     quiet = busy ? 0 : quiet + 1
     await pause(150)

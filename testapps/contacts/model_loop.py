@@ -133,7 +133,10 @@ class ContactsProcedure:
                     return failed
             before, expected = context.obs, []
             for field in arguments["fields"]:
-                matches = [e for e in context.obs.elements if e.attrs.get("field_label") == field["label"]]
+                wanted = str(field["label"])
+                matches = [e for e in context.obs.elements if wanted.lower() in {
+                    str(value).lower() for value in
+                    (e.attrs.get("field_label"), e.attrs.get("field"), e.name) if value}]
                 if len(matches) != 1:
                     return LoopToolResult("No unique current field.", kind="page", state="refused",
                                           error_code="invalid_target")

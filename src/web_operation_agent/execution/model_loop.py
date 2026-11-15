@@ -37,6 +37,7 @@ from .action_admission import (ADMITTED_ACTIONS, ActionAdmission,
 from ..business.draft_steps import DraftStepAdmission
 from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTRUCTIONS, source_finish_tool
 from .native_submit import NativeSubmitMixin, REQUEST_SUBMIT_TOOL
+from .draft_handoff import unrestorable_form
 from ..transport.browser import TransportError
 from .product import page_observation_failure
 from ..answer.answering import render_structured_query_answer
@@ -251,7 +252,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         self._trace, self._trace_steps = None, []
         self._messages, self._earlier_words, self._carried_skills = [], [], ()
 
-    def _procedure_context(self, s, name, *, page_actions=True, operation_context=None):
+    def _procedure_context(self, s, name, *, page_actions=True, operation_context=None,
+                           turn=None):
         context = operation_context or s.approvals.context(s.step, name)
         def checkpoint():
             if s.cancelled():
@@ -266,6 +268,27 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 raise BusinessToolRequestError("this procedure may only read a control's row")
             if action == "handoff_form" and self.profile.draft_steps is None:
                 raise BusinessToolRequestError("form handoff requires an installed draft port")
+            if action in {"highlight", "handoff_form"}:
+                # One shared check: a form whose opening self-edits could not be
+                # restored never gets its submit control marked, on any handoff path.
+                ref = arguments.get("ref") or (
+                    (arguments.get("submit") or {}).get("ref") or "")
+                marked = next((e for e in (s.obs.elements if s.obs else ())
+                               if e.ref == ref), None)
+                blocked = unrestorable_form(
+                    (turn or {}).get("unrestorable_forms"),
+                    marked.attrs.get("form_scope") if marked is not None else "",
+                    {identity for identity in (
+                        getattr(marked, "lifetime", None), getattr(marked, "instance", None),
+                        marked.attrs.get("form_instance") if marked is not None else None,
+                        marked.attrs.get("form_lifetime") if marked is not None else None)
+                     if identity}) if marked is not None or turn is not None else None
+                if (blocked is not None and (marked is None
+                        or marked.role in {"button", "switch", "link", "menuitem", "tag"}
+                        or marked.tag in {"button", "a"})):
+                    outcome = PageActionOutcome("refused", "not_dispatched", "opening_changes")
+                    self._page_action_outcome = outcome
+                    return outcome
             self._dispatch(s, action, arguments, navigating=navigating)
             return self._page_action_outcome
         page = _ProcedurePage(lambda: PageObservation.from_json(s.obs.to_json()), execute,
@@ -507,7 +530,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         procedure = next((p for p in self.profile.procedures if p.schema["function"]["name"] == name), None)
         if procedure is None:
             return LoopToolResult("当前应用没有提供这个工具。", state="unavailable", error_code="tool_unavailable")
-        context = self._procedure_context(s, name, page_actions=procedure.kind == "page")
+        context = self._procedure_context(s, name, page_actions=procedure.kind == "page",
+                                          turn=turn)
         context.operation.require_live(application_id=self.application.descriptor.application_id,
                                        required_scope=procedure.scope)
         required = procedure.required_capabilities | (procedure.requirements(args, context.obs)
@@ -516,9 +540,20 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
             return LoopToolResult("当前应用没有提供这个能力：" + ", ".join(sorted(required - capabilities_of(self.goal_port))),
                                   state="unavailable", error_code="capability_unavailable")
         context.page.checkpoint()
+        before = s.obs
+        if self.native_submit is not None and before is not None:
+            business = next((e for e in before.elements
+                             if e.attrs.get("form_scope")
+                             and e.attrs.get("page_control") != "query"), None)
+            if business is not None:
+                self.capture_form_baseline(s, turn, business)
         with s.receipt.stage("business" if procedure.kind == "read" else "ui"):
             result = procedure.handler.execute(args, context=context)
         context.page.checkpoint()
+        if (self.native_submit is not None and before is not None
+                and isinstance(result, LoopToolResult) and result.entered):
+            self.note_entries(s, turn, result.entered, before,
+                              receipts=tuple(getattr(self, "_tool_receipts", ())))
         if isinstance(result, LoopToolResult):
             turn["touched"].extend(result.entered)
             turn["trace"].extend(result.trace)
