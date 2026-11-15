@@ -86,4 +86,37 @@ test.describe('approval visibility', () => {
     expect(await panel.calls()).toEqual([])
     expect(panel.errors).toEqual([])
   })
+
+  test('a covered card is refused at click time before the first observer record', async ({open}) => {
+    const panel = await open(snapshot())
+    // A dead observer means no record can ever arrive; the dwell falls back to
+    // mount time, so only the synchronous coverage measurement at the instant of
+    // the click can refuse an occluded card.
+    await panel.page.evaluate(() => {
+      const Original = window.IntersectionObserver
+      window.IntersectionObserver = class extends Original {
+        constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          super(() => undefined, options)
+        }
+      } as typeof IntersectionObserver
+    })
+    await panel.raiseApproval({details: ROWS(10)})
+    await panel.page.evaluate(() => {
+      const root = (document.querySelector('#woa-assistant') as HTMLElement).shadowRoot!
+      const card = root.querySelector('.woa-approval') as HTMLElement
+      const thread = root.querySelector('.woa-thread') as HTMLElement
+      const spacer = document.createElement('div')
+      spacer.style.height = '600px'
+      card.after(spacer)
+      thread.scrollTop = card.offsetTop + 480
+    })
+    await panel.page.waitForTimeout(presentation.approval_visibility.min_visible_ms + 200)
+    const box = await panel.page.getByTestId('woa-approve').boundingBox()
+    expect(box).not.toBeNull()
+    await panel.page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2)
+    await expect(panel.page.locator('.woa-approval__blocked'))
+      .toContainText(labels.approvalObscured)
+    expect(await panel.calls()).toEqual([])
+    expect(panel.errors).toEqual([])
+  })
 })

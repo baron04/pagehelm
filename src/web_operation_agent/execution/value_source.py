@@ -35,7 +35,9 @@ class Entry:
     value: str
     label: str = ""                 # what the person sees for it (an option's label)
     candidate: bool = False         # chosen from options the page really offered
-    kind: str = "text"              # text | datetime | number
+    kind: str = "text"              # text | select (a reference/selection control)
+    placed: bool = True             # resolved to the business field it was typed into
+    seq: int = 0                    # when it was entered, for source ordering
 
 
 @dataclass(frozen=True)
@@ -54,27 +56,45 @@ class Verdict:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class Candidate:
+    """A cell the actor read this turn, bound to the one field it may source.
+
+    binding="" marks a record's own name/id: it may source a reference/selection
+    field only. A non-empty binding (the column's label) sources a field of the
+    same name only; seq orders the read against the entry's fill so a read that
+    came after can never explain it.
+    """
+
+    binding: str
+    value: str
+    seq: int = 0
+
+
 @dataclass
 class SourceLedger:
     entries: list = field(default_factory=list)
     receipts: list = field(default_factory=list)
-    #: _plain-normalized values from records the actor read this turn; a typed value
-    #: equal to one of these counts as a candidate the person could have chosen.
-    candidates: set = field(default_factory=set)
+    candidates: list = field(default_factory=list)
+    _seq: int = 0
 
     def add(self, entry: Entry) -> None:
         if any(e.field == entry.field and e.value == entry.value and e.candidate for e in self.entries):
             entry = replace(entry, candidate=True)
-        self.entries = [e for e in self.entries if e.field != entry.field] + [entry]
+        self._seq += 1
+        self.entries = [e for e in self.entries if e.field != entry.field] + [
+            replace(entry, seq=self._seq)]
 
     def receipt(self, receipt: Receipt) -> None:
         self.receipts.append(receipt)
 
-    def add_candidates(self, values) -> None:
-        for value in values:
+    def add_candidates(self, items) -> None:
+        for binding, value in items:
             plain = _plain(value)
             if plain and len(plain) <= 200 and len(self.candidates) < 4000:
-                self.candidates.add(plain)
+                self._seq += 1
+                self.candidates.append(
+                    Candidate(str(binding or "")[:80], str(value)[:200], self._seq))
 
 
 def _plain(text: str) -> str:
@@ -103,9 +123,9 @@ def note_receipt(turn: dict, field: str, value) -> None:
         ledger.receipt(Receipt(str(field or ""), str(value)))
 
 
-def note_candidates(turn: dict, values) -> None:
-    """Record cell/display values the actor read this turn as selectable candidates."""
-    turn.setdefault("source_ledger", SourceLedger()).add_candidates(values or ())
+def note_candidates(turn: dict, items) -> None:
+    """Record (binding, value) candidates the actor read this turn; see Candidate."""
+    turn.setdefault("source_ledger", SourceLedger()).add_candidates(items or ())
 
 
 def cn_number(text: str) -> int | None:
@@ -153,7 +173,8 @@ def amounts_in(text: str) -> set[Decimal]:
             continue
         scale = {"万": 10_000, "千": 1_000, "百": 100, "k": 1_000, "K": 1_000}.get(unit, 1)
         out.add((base * scale).normalize())
-        out.add(base.normalize())
+        if not unit:
+            out.add(base.normalize())
     return out
 
 
@@ -193,11 +214,19 @@ def moments_in(text: str) -> list[tuple]:
     return out
 
 
+_TIME_PART = re.compile(r"[T\s]\d{1,2}[:：]\d{2}")
+
+
+def _has_time(value) -> bool:
+    """The string carries an explicit clock component -- even midnight counts."""
+    return isinstance(value, str) and bool(_TIME_PART.search(value.strip()))
+
+
 def _datetime_matches(value: str, words: list[str]) -> bool:
     stamp = _datetime(value)
     if stamp is None:
         return False
-    timed = len(value.strip()) > 10 and (stamp.hour or stamp.minute or stamp.second)
+    timed = _has_time(value)
     for text in words:
         for month, day, hour, minute in moments_in(text):
             if month is not None and (stamp.month, stamp.day) != (month, day):
@@ -212,11 +241,16 @@ def _datetime_matches(value: str, words: list[str]) -> bool:
     return False
 
 
+_BARE_NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+
+
 def user_supplied(entry: Entry, words: list[str]) -> bool:
     plain_words = [_plain(w) for w in words]
     for candidate in {entry.value, entry.label}:
         shown = _plain(candidate)
-        if shown and any(shown in w for w in plain_words):
+        # A bare number compares by meaning below: "3" inside "3千" is not the
+        # person's 3, it is part of their 3000.
+        if shown and not _BARE_NUMBER.fullmatch(shown) and any(shown in w for w in plain_words):
             return True
     if _datetime(entry.value) is not None and _datetime_matches(entry.value, words):
         return True
@@ -230,20 +264,80 @@ def user_supplied(entry: Entry, words: list[str]) -> bool:
     return False
 
 
+_RANGE = re.compile(r"\s*(?:~|～|—|至|到)\s*")
+
+
+def _range_parts(value: str) -> tuple[str, str] | None:
+    """A "start ~ end" entry value split into its two ends, if it is one."""
+    if not isinstance(value, str):
+        return None
+    parts = [part.strip() for part in _RANGE.split(value) if part.strip()]
+    return (parts[0], parts[1]) if len(parts) == 2 and all(
+        _datetime(part) is not None for part in parts) else None
+
+
+def _candidate_match(entry: Entry, ledger: SourceLedger) -> bool:
+    """A bound candidate read this turn before the value was entered."""
+    if entry.candidate:
+        return True
+    for cand in ledger.candidates:
+        if cand.seq >= entry.seq:
+            continue                      # read after the fill cannot source it
+        if cand.binding:
+            if _plain(cand.binding) != _plain(entry.field):
+                continue                  # a column's cell sources its own field only
+        elif entry.kind != "select":
+            continue                      # a record's name/id sources selections only
+        if _same_value(cand.value, entry.value) \
+                or (entry.label and _same_value(cand.value, entry.label)):
+            return True
+    return False
+
+
+def _receipt_match(entry: Entry, ledger: SourceLedger, fieldless: dict) -> bool:
+    """A typed receipt sources the entry; a fieldless one binds on first use only."""
+    for receipt in ledger.receipts:
+        if _has_time(entry.value) and not _has_time(receipt.value):
+            continue                      # a date alone does not give a time of day
+        if not _same_value(receipt.value, entry.value):
+            continue
+        if receipt.field:
+            if receipt.field == entry.field:
+                return True
+            continue
+        bound = fieldless.get(id(receipt))
+        if bound is None:
+            fieldless[id(receipt)] = entry
+            return True
+        if bound is entry:
+            return True
+    return False
+
+
+def _verdict(entry: Entry, ledger: SourceLedger, words: list[str], fieldless: dict) -> Verdict:
+    parts = _range_parts(entry.value)
+    if parts is not None:
+        verdicts = [_verdict(replace(entry, value=part), ledger, words, fieldless)
+                    for part in parts]
+        if all(v.ok for v in verdicts):
+            source = verdicts[0].source if all(v.source == verdicts[0].source
+                                               for v in verdicts) else "mixed"
+            return Verdict(entry, True, source)
+        return Verdict(entry, False, "", "not_from_the_person")
+    if not entry.placed:
+        return Verdict(entry, False, "", "unplaced_fill")
+    if not str(entry.value).strip() and not entry.label:
+        return Verdict(entry, True, "user_text")
+    if user_supplied(entry, words):
+        return Verdict(entry, True, "user_text")
+    if _candidate_match(entry, ledger):
+        return Verdict(entry, True, "candidate")
+    if _receipt_match(entry, ledger, fieldless):
+        return Verdict(entry, True, "receipt")
+    return Verdict(entry, False, "", "not_from_the_person")
+
+
 def check_entries(ledger: SourceLedger, words: list[str]) -> list[Verdict]:
     """A source verdict per business form value; missing sources are shown on the card."""
-    out = []
-    for entry in ledger.entries:
-        if not str(entry.value).strip() and not entry.label:
-            out.append(Verdict(entry, True, "user_text"))
-        elif user_supplied(entry, words):
-            out.append(Verdict(entry, True, "user_text"))
-        elif entry.candidate or _plain(entry.value) in ledger.candidates \
-                or _plain(entry.label) in ledger.candidates:
-            out.append(Verdict(entry, True, "candidate"))
-        elif any((not r.field or r.field == entry.field) and _same_value(r.value, entry.value)
-                 for r in ledger.receipts):
-            out.append(Verdict(entry, True, "receipt"))
-        else:
-            out.append(Verdict(entry, False, "", "not_from_the_person"))
-    return out
+    fieldless: dict = {}
+    return [_verdict(entry, ledger, words, fieldless) for entry in ledger.entries]

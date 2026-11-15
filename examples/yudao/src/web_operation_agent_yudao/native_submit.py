@@ -161,11 +161,12 @@ class YudaoSubmitPort:
         except Exception:  # noqa: BLE001 -- a missing observation degrades to no wait
             return None
 
-    def user_write_event(self, prefixes, record_id, mark):
+    def user_write_event(self, prefixes, record_id, mark, create=False):
         if mark is None:
             return None
         try:
             return self.proxy.guard.user_write_after(self._actor(), int(mark),
-                                                     tuple(prefixes), str(record_id or ""))
+                                                     tuple(prefixes), str(record_id or ""),
+                                                     create_only=bool(create))
         except Exception:  # noqa: BLE001 -- a missing observation degrades to no event
             return None

@@ -145,6 +145,24 @@ class GuardProxyTests(unittest.TestCase):
         event = self.guard.user_write_after(actor, mark, ("/admin-api/crm/customer/",), "")
         self.assertEqual(event["record_id"], "9")
 
+    def test_a_create_handoff_ignores_an_unrelated_update_under_the_prefix(self):
+        self.begin()
+        actor = "a" * 64
+        self.app_body = {"code": 0, "data": None}
+        self.request("POST", "/admin-api/crm/customer/update", body=b'{"id": 7}', assistant=False)
+        mark = self.guard.user_write_mark(actor)
+        prefixes = ("/admin-api/crm/customer/",)
+        # An update of some other record under the same prefix is not the create.
+        self.request("POST", "/admin-api/crm/customer/update", body=b'{"id": 4}', assistant=False)
+        self.assertIsNone(self.guard.user_write_after(actor, mark, prefixes, "", create_only=True))
+        # A lookalike that is not the create interface does not count either.
+        self.request("POST", "/admin-api/crm/customer/update-status", body=b'{"id": 4}', assistant=False)
+        self.assertIsNone(self.guard.user_write_after(actor, mark, prefixes, "", create_only=True))
+        self.app_body = {"code": 0, "data": {"id": 11}}
+        self.request("POST", "/admin-api/crm/customer/create", body=b'{"name": "z"}', assistant=False)
+        event = self.guard.user_write_after(actor, mark, prefixes, "", create_only=True)
+        self.assertEqual(event["record_id"], "11")
+
     def windowed(self):
         self.proxy.close()
         self.proxy = NativeGuardProxy(upstream=f"http://127.0.0.1:{self.app.server_port}",

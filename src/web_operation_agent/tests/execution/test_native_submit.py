@@ -289,8 +289,9 @@ class ReviewRegressionTests(_Setup, unittest.TestCase):
     def test_a_value_from_a_record_read_this_turn_counts_as_a_candidate(self):
         self.ex.form = {**LOADED, "mobile": "13911112222"}
         self.ex.turn["source_ledger"] = SourceLedger()
+        self.ex.turn["source_ledger"].add_candidates(
+            [("手机", "13911112222"), ("手机", "别的记录")])
         entry(self.ex, value="13911112222")
-        self.ex.turn["source_ledger"].add_candidates(["13911112222", "别的记录"])
         self.ex.clicks = [("PUT", PREFIX + "update", {**LOADED, "mobile": "13911112222"})]
         out = self.run_request()
         self.assertEqual(out.state, "completed", out.feedback)
@@ -560,11 +561,12 @@ class ConversionAndHandoffTests(_Setup, unittest.TestCase):
                 self.ex.s.message.text = words
                 self.ex.form["mobile"] = value
                 self.ex.turn["source_ledger"] = SourceLedger()
-                entry(self.ex, value=value)
                 if source == "receipt":
                     self.ex.note_receipt(self.ex.turn, "", value)      # date_range / arithmetic result
                 else:
-                    self.ex.turn["source_ledger"].add_candidates([value])  # a record read this turn
+                    self.ex.turn["source_ledger"].add_candidates(
+                        [("手机", value)])  # a cell in the 手机 column read this turn
+                entry(self.ex, value=value)
                 self.ex.clicks = [("PUT", PREFIX + "update", self.ex.form)]
                 self.assertEqual(self.run_request().state, "completed")
 
@@ -721,6 +723,112 @@ class RowActionTests(unittest.TestCase):
         self.assertEqual(self.ex.native_submit.record["status"], 0)
 
 
+def receipt(action="fill", ref="e1", value="", observation=None):
+    """A dispatched fill/select receipt as _invoke_tool would hand note_entries."""
+    return NS(action=action, ok=True,
+              args_echo={"ref": ref, "value": value, "option_label": value},
+              observation=observation)
+
+
+class EntryPlacementTests(_Setup, unittest.TestCase):
+    def test_a_title_named_line_cell_fill_is_source_checked(self):
+        self.ex.turn["source_ledger"] = SourceLedger()
+        line = ElementRef("e9", "spinbutton", "", "input", 1,
+                          {"form_scope": "dialog:编辑", "form_instance": "i1",
+                           "title": "明细第1行·本次付款"})
+        obs = NS(elements=[line])
+        self.ex.note_entries(self.ex.s, self.ex.turn, (("本次付款", "9.99"),), obs,
+                             receipts=[receipt(ref="e9", value="9.99")])
+        entries = self.ex.turn["source_ledger"].entries
+        self.assertEqual([(e.field, e.value, e.placed) for e in entries],
+                         [("明细第1行·本次付款", "9.99", True)])
+        self.assertEqual(self.run_request().error_code, "value_not_from_user")
+
+    def test_an_unplaceable_fill_fails_closed(self):
+        self.ex.turn["source_ledger"] = SourceLedger()
+        self.ex.note_entries(self.ex.s, self.ex.turn, (("看不见的字段", "9.99"),),
+                             NS(elements=[]))
+        self.assertTrue(self.ex.turn["source_ledger"].entries)
+        self.assertFalse(self.ex.turn["source_ledger"].entries[-1].placed)
+        self.assertEqual(self.run_request().error_code, "value_not_from_user")
+
+
+class CandidateSourceTests(_Setup, unittest.TestCase):
+    def _entry(self, value="13911112222", kind="text"):
+        from web_operation_agent.execution.value_source import Entry
+        entry = Entry("手机", value, kind=kind)
+        self.ex.turn["source_ledger"].add(entry)
+        return entry
+
+    def test_a_candidate_read_after_the_fill_does_not_count(self):
+        self._entry()
+        from web_operation_agent.execution.value_source import check_entries
+        self.ex.turn["source_ledger"].add_candidates([("手机", "13911112222")])
+        verdicts = check_entries(self.ex.turn["source_ledger"], [])
+        self.assertFalse(verdicts[0].ok)
+
+    def test_a_candidate_cell_bound_to_another_field_is_refused(self):
+        self._entry()
+        from web_operation_agent.execution.value_source import check_entries
+        self.ex.turn["source_ledger"].add_candidates([("别的字段", "13911112222")])
+        verdicts = check_entries(self.ex.turn["source_ledger"], [])
+        self.assertFalse(verdicts[0].ok)
+
+    def test_a_record_name_sources_only_a_selection_field(self):
+        self._entry()
+        from web_operation_agent.execution.value_source import check_entries
+        self.ex.turn["source_ledger"].add_candidates([("", "13911112222")])
+        self.assertFalse(check_entries(self.ex.turn["source_ledger"], [])[0].ok)
+        self.ex.turn["source_ledger"] = SourceLedger()
+        self.ex.turn["source_ledger"].add_candidates([("", "13911112222")])
+        self._entry(kind="select")
+        self.assertTrue(check_entries(self.ex.turn["source_ledger"], [])[0].ok)
+
+
+class ValueMeaningTests(_Setup, unittest.TestCase):
+    def _verdict(self, value, words, label="手机"):
+        from web_operation_agent.execution.value_source import Entry, check_entries
+        ledger = SourceLedger()
+        ledger.add(Entry(label, value))
+        return check_entries(ledger, words)[0]
+
+    def test_a_scaled_amount_does_not_also_source_the_base(self):
+        self.assertTrue(self._verdict("3000", ["预付款3千"]).ok)
+        self.assertFalse(self._verdict("3", ["预付款3千"]).ok)
+
+    def test_a_period_word_without_a_clock_sources_no_timed_value(self):
+        self.assertFalse(self._verdict("2026-11-20 00:00:00", ["改到明天下午"]).ok)
+        self.assertTrue(self._verdict("2026-11-20 14:00:00", ["改到明天下午两点"]).ok)
+
+    def test_a_date_receipt_cannot_source_a_timed_value(self):
+        from web_operation_agent.execution.value_source import Entry, check_entries, note_receipt
+        turn = {}
+        note_receipt(turn, "", "2026-11-20")
+        ledger = turn["source_ledger"]
+        ledger.add(Entry("时间", "2026-11-20 00:00:00"))
+        self.assertFalse(check_entries(ledger, ["改到明天下午"])[0].ok)
+        turn = {}
+        note_receipt(turn, "", "2026-11-20 14:00:00")
+        turn["source_ledger"].add(Entry("时间", "2026-11-20 14:00:00"))
+        self.assertTrue(check_entries(turn["source_ledger"], [])[0].ok)
+
+    def test_a_date_range_needs_both_ends_sourced(self):
+        self.assertTrue(self._verdict("2026-11-20 ~ 2026-11-22",
+                                      ["从11月20号到11月22号"]).ok)
+        self.assertFalse(self._verdict("2026-11-20 ~ 2026-11-22",
+                                       ["从11月20号开始"]).ok)
+
+    def test_a_fieldless_receipt_binds_the_first_entry_only(self):
+        from web_operation_agent.execution.value_source import Entry, check_entries, note_receipt
+        turn = {}
+        note_receipt(turn, "", "13911112222")
+        ledger = turn["source_ledger"]
+        ledger.add(Entry("手机", "13911112222"))
+        ledger.add(Entry("备用手机", "13911112222"))
+        verdicts = check_entries(ledger, [])
+        self.assertEqual([v.ok for v in verdicts], [True, False])
+
+
 class HandoffWaitTests(_Setup, unittest.TestCase):
     """After a handoff marks a control, the turn waits (outside its clock) for the
     person's own press, then reads the record back with the same actor."""
@@ -735,9 +843,11 @@ class HandoffWaitTests(_Setup, unittest.TestCase):
         self.ex.s.approvals.awaiting_person = waiting
         self.ex.s.cancelled = lambda: False
         self.ex.native_submit.user_write_mark = lambda: mark
-        self.ex.native_submit.user_write_event = lambda prefixes, record_id, m: event
-        self.ex.turn["submit_target"] = {"kind": "form", "prefixes": [PREFIX],
-                                         "record_id": "7", "baseline": deepcopy(LOADED)}
+        self.ex.native_submit.user_write_event = lambda *a, **kw: event
+        self.ex.turn["submit_targets"] = {("dialog:编辑", "i1"): {
+            "kind": "form", "mode": "update", "prefixes": [PREFIX],
+            "record_id": "7", "baseline": deepcopy(LOADED)}}
+        self.ex.turn["handoff_target_key"] = ("dialog:编辑", "i1")
         self.ex.turn["handoff_button"] = "保存"
 
     def test_a_press_is_seen_and_the_change_is_read_back(self):
@@ -773,6 +883,22 @@ class HandoffWaitTests(_Setup, unittest.TestCase):
         self.arm_wait(event=None)
         self.ex.s.cancelled = lambda: True
         self.assertEqual(self.ex._await_handoff_press(self.ex.s, self.ex.turn), "")
+
+    def test_a_create_handoff_waits_only_for_the_create_interface(self):
+        seen = []
+
+        def event_fn(prefixes, record_id, mark, **kw):
+            seen.append(kw.get("create"))
+            return {"method": "POST", "path": PREFIX + "create", "status": 200,
+                    "record_id": "9"}
+        self.arm_wait(mark=0)
+        self.ex.native_submit.user_write_event = event_fn
+        self.ex.turn["submit_targets"][("dialog:编辑", "i1")] = {
+            "kind": "form", "mode": "create", "prefixes": [PREFIX], "record_id": ""}
+        self.ex.native_submit.record = {**LOADED, "id": 9}
+        note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+        self.assertEqual(seen, [True])
+        self.assertIn("已接受", note)
 
 
 if __name__ == "__main__":

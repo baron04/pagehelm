@@ -3497,6 +3497,26 @@ class WriteTurnTests(unittest.TestCase):
         self.assertIn("当前应用没有提供这个工具", executor._messages[3]["content"])
 
 
+class SqlCandidateTests(unittest.TestCase):
+    def test_a_model_authored_sql_result_never_seeds_value_candidates(self):
+        from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
+        from web_operation_agent_yudao.slim_loop import _TURN_TABLES
+        from web_operation_agent_yudao.turn_tables import TurnTables
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        self.addCleanup(tables.close)
+        tables.add(path="example/list", params={},
+                   rows=[{"id": 1, "mobile": "13900000000"}], total=1, complete=True)
+        token = _TURN_TABLES.set((tables, "2026-11-14", "Asia/Shanghai"))
+        self.addCleanup(_TURN_TABLES.reset, token)
+        procedures = object.__new__(YudaoLoopProcedures)
+        procedures.knowledge = NS()
+        turn = {}
+        # Even a real row the model read through its own query is not a source
+        # the person offered: sql rows are never candidates.
+        procedures._tool(NS(), "sql", {"query": "SELECT mobile FROM t1"}, turn)
+        self.assertNotIn("source_ledger", turn)
+
+
 class HostConfigTests(unittest.TestCase):
     def test_slim_is_refused_without_the_reviewed_guard(self):
         from web_operation_agent_yudao.deployment_validation import validate_native_deployment

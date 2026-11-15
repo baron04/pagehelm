@@ -79,15 +79,31 @@ class SubmitPort(Protocol):
     def user_write_mark(self):
         """An opaque position in the actor's observed accepted user writes; never raises."""
         return None
-    def user_write_event(self, prefixes: tuple[str, ...], record_id: str, mark):
+    def user_write_event(self, prefixes: tuple[str, ...], record_id: str, mark,
+                         create: bool = False):
         """The first accepted user-originated write under `prefixes` after `mark`, or None.
 
         Observation only: the adapter says what accepted means and never holds or changes
         the person's request. A body `id` matching `record_id` binds the write to the
-        handed-off target; an empty `record_id` accepts any write under the prefixes.
-        The returned dict may carry `record_id` (the write's own or the response's new id).
+        handed-off target; an empty `record_id` with `create=True` accepts only a write
+        the adapter identifies as the create interface for the prefix, and the returned
+        dict then carries the new record's id in `record_id`.
         """
         return None
+
+
+_RANGE_FILL = re.compile(r"\s*(?:~|～|—|至|到)\s*")
+_SELECT_ROLES = {"combobox", "select", "radiogroup", "listbox"}
+
+
+def _control_label(element) -> str:
+    """What a person would call this control: its form label, its place in a line
+    table, else its own text."""
+    for key in ("field_label", "title", "placeholder"):
+        value = str(element.attrs.get(key) or "").rstrip(":：").strip()
+        if value:
+            return value[:40]
+    return (element.name.splitlines()[0][:40] if element.name else "") or element.role
 
 
 def _contains(held, wanted) -> bool:
@@ -229,16 +245,72 @@ class NativeSubmitMixin:
         return True
 
     # -- what the turn typed ----------------------------------------------------------
-    def note_entries(self, s, turn, entered, observation) -> None:
-        """Record each value typed this turn with where it came from, for the value check."""
+    def note_entries(self, s, turn, entered, observation, receipts=()) -> None:
+        """Record each value typed this turn keyed on the field it was actually typed into.
+
+        A fill/select receipt names its element by ref: the entry gets that element's
+        own label and kind, so line-table cells and title-named controls are checked
+        like any other field. A fill whose element cannot be resolved is still
+        recorded and fails closed; query/filter controls are not business values.
+        `turn["source_checked"]` remembers every fill already classified, so later
+        calls with the accumulated `entered` list do not re-judge older fills.
+        """
         ledger = turn.setdefault("source_ledger", SourceLedger())
+        covered = turn.setdefault("source_checked", set())
+        observed = observation
+        for receipt in receipts or ():
+            if receipt.action not in {"fill", "select"}:
+                observed = receipt.observation or observed
+                continue
+            target = next((e for e in getattr(observed, "elements", ())
+                           if e.ref == receipt.args_echo.get("ref")), None)
+            observed = receipt.observation or observed
+            if not receipt.ok:
+                continue
+            value = str(receipt.args_echo.get("option_label")
+                        or receipt.args_echo.get("value") or "")
+            if target is not None \
+                    and not (target.attrs.get("form_scope")
+                             and target.attrs.get("page_control") != "query"):
+                covered.add(value)
+                continue      # a query/filter control is not a business form value
+            if target is None:
+                ledger.add(Entry("", value, placed=False))
+                continue
+            label = _control_label(target)
+            if receipt.action == "select":
+                selected = [e for e in getattr(receipt.observation, "elements", ())
+                            if e.attrs.get("form_scope") == target.attrs.get("form_scope")
+                            and _control_label(e) == label
+                            and e.attrs.get("selected_option")]
+                if len(selected) == 1:
+                    value = str(selected[0].attrs["selected_option"])
+            covered.add(value)
+            covered.add(str(receipt.args_echo.get("value") or ""))
+            ledger.add(Entry(label, value, kind="select" if (
+                    receipt.action == "select" or target.role in _SELECT_ROLES) else "text"))
         for label, value in entered:
-            controls = [e for e in getattr(observation, "elements", ())
-                        if e.attrs.get("form_scope") and e.attrs.get("page_control") != "query"
-                        and str(e.attrs.get("field_label") or e.name).strip() == str(label).strip()]
-            if not controls:
-                continue  # query controls never contribute a business form value
-            ledger.add(Entry(str(label), str(value), candidate=False))
+            shown = str(value)
+            if shown in covered or any(e.value == shown for e in ledger.entries):
+                continue
+            parts = [part.strip() for part in _RANGE_FILL.split(shown) if part.strip()]
+            if len(parts) > 1 and all(part in covered for part in parts):
+                continue      # a range written into paired controls, each end covered
+            wanted = str(label).rstrip(":：").strip()[:40]
+            matches = [e for e in getattr(observation, "elements", ())
+                       if _control_label(e) == wanted]
+            business = [e for e in matches if e.attrs.get("form_scope")
+                        and e.attrs.get("page_control") != "query"]
+            if business:
+                covered.add(shown)
+                ledger.add(Entry(wanted, shown, kind="select" if (
+                    business[0].role in _SELECT_ROLES) else "text"))
+            elif matches:
+                covered.add(shown)      # every match is a query/filter control
+            else:
+                # A reported fill with no business field it could have gone into:
+                # check it anyway and let the source check refuse it.
+                ledger.add(Entry(wanted, shown, placed=False))
 
     def note_receipt(self, turn, field: str, value: str) -> None:
         note_receipt(turn, field, value)
@@ -258,6 +330,7 @@ class NativeSubmitMixin:
             baselines[key], raw = self._read_form(s, element)
             form = baselines[key]
             port = self.native_submit
+            record = None
             prefixes = port.prefixes(port.recent_reads(), mode=form.mode,
                                      record_id=form.record_id, source=raw.get("source", ""))
             if form.mode == "update":
@@ -269,9 +342,11 @@ class NativeSubmitMixin:
                 turn.setdefault("form_record_baselines", {})[key] = record
             if prefixes:
                 # Where the person's own press would land if this form is handed over.
-                turn["submit_target"] = {"kind": "form", "prefixes": list(prefixes),
-                                         "record_id": form.record_id,
-                                         "baseline": record if form.mode == "update" else None}
+                turn.setdefault("submit_targets", {})[
+                    key or (form.mode, "")] = {"kind": "form", "mode": form.mode,
+                                               "prefixes": list(prefixes),
+                                               "record_id": form.record_id,
+                                               "baseline": record if form.mode == "update" else None}
             s.ledger.append("native_submit_baseline", captured=True, mode=baselines[key].mode,
                             record_id=baselines[key].record_id, digest=baselines[key].digest)
         except ContractRefused as exc:
@@ -301,6 +376,11 @@ class NativeSubmitMixin:
                 record["effects"].append(effect)
         if not record["detail"]:
             record["detail"] = str(detail or "")[:300]
+        # A mark made before this block was discovered must not pair the wait with
+        # this form's saved target anymore.
+        turn.get("submit_targets", {}).pop(key, None)
+        if turn.get("handoff_target_key") == key:
+            turn["handoff_target_key"] = None
 
     # -- reads through the browser ----------------------------------------------------
     def _read(self, s, element, kind, **extra):
@@ -375,7 +455,8 @@ class NativeSubmitMixin:
         same actor. Returns the answer note; "" when nothing was handed over, the adapter
         cannot observe the person's writes, or the turn was cancelled."""
         port = self.native_submit
-        target = turn.get("submit_target") or {}
+        targets = turn.get("submit_targets") or {}
+        target = targets.get(turn.get("handoff_target_key")) or {}
         marked = str(turn.get("handoff_button") or "")
         mark_fn = getattr(port, "user_write_mark", None)
         event_fn = getattr(port, "user_write_event", None)
@@ -384,6 +465,8 @@ class NativeSubmitMixin:
             return ""
         prefixes = tuple(target["prefixes"])
         record_id = str(target.get("record_id") or "")
+        create = target.get("mode") == "create" or (target.get("kind") == "form"
+                                                  and not record_id)
         mark = turn.get("handoff_mark")
         if mark is None:
             mark = mark_fn()
@@ -396,7 +479,7 @@ class NativeSubmitMixin:
         event = None
         with s.approvals.awaiting_person():
             while event is None and not s.cancelled():
-                event = event_fn(prefixes, record_id, mark)
+                event = event_fn(prefixes, record_id, mark, create=create)
                 if event is None:
                     left = deadline - time.monotonic()
                     if left <= 0:
@@ -464,16 +547,17 @@ class NativeSubmitMixin:
         prefixes = port.prefixes(reads, mode=current.mode, record_id=current.record_id, source=raw.get("source", ""))
         if not prefixes:
             raise ContractRefused("entity_unknown")
-        turn["submit_target"] = {"kind": "form", "prefixes": list(prefixes),
-                                 "record_id": current.record_id,
-                                 "button": element.name.strip()}
+        target_key = key or (current.mode, "")
+        turn.setdefault("submit_targets", {})[target_key] = {
+            "kind": "form", "mode": current.mode, "prefixes": list(prefixes),
+            "record_id": current.record_id, "button": element.name.strip()}
         baseline = None
         comparison, restored = None, ()
         if current.mode == "update":
             baseline = port.read_record(prefixes, current.record_id)
             if baseline is None:
                 raise ContractRefused("record_unreadable")
-            turn["submit_target"]["baseline"] = baseline
+            turn["submit_targets"][target_key]["baseline"] = baseline
             earlier = turn.get("form_record_baselines", {}).get(key)
             if earlier is not None and not same_value(strip_volatile(earlier), strip_volatile(baseline)):
                 raise ContractRefused("record_changed", "填写期间目标记录被别人修改，请重新核对")
@@ -562,12 +646,13 @@ class NativeSubmitMixin:
         prefixes = port.row_prefixes(reads, row)
         if not prefixes:
             raise ContractRefused("entity_unknown")
-        turn["submit_target"] = {"kind": "row", "prefixes": list(prefixes),
-                                 "record_id": record_id, "button": button}
+        turn.setdefault("submit_targets", {})["row"] = {
+            "kind": "row", "prefixes": list(prefixes), "record_id": record_id,
+            "button": button}
         baseline = port.read_record(prefixes, record_id)
         if baseline is None:
             raise ContractRefused("record_unreadable")
-        turn["submit_target"]["baseline"] = baseline
+        turn["submit_targets"]["row"]["baseline"] = baseline
         request = port.row_request(prefixes, row, element, baseline)
         if request is None:
             raise ContractRefused("action_unknown", "无法认定这个控件对应的接口和具体字段变化，助手未提交")

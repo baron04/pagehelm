@@ -280,16 +280,20 @@ class NativePageGuard:
             state.user_writes.append((state.write_count, str(method)[:8], str(path)[:200],
                                       str(record_id)[:80], str(created_id)[:80]))
 
-    def user_write_after(self, actor: str, mark: int, prefixes, record_id: str):
+    def user_write_after(self, actor: str, mark: int, prefixes, record_id: str,
+                         create_only: bool = False):
         """The first accepted user write under `prefixes` after `mark`, or None.
 
-        When `record_id` is given the write must name or return that id; otherwise any
-        accepted write under the prefixes counts."""
+        When `record_id` is given the write must name or return that id; with
+        `create_only` only this application's create interface counts and the
+        returned event carries the new id."""
         with self._condition:
             for sequence, method, path, wanted, created in self._actor(actor).user_writes:
                 if sequence <= mark or not any(path.startswith(prefix) for prefix in prefixes):
                     continue
                 if record_id and record_id not in {wanted, created}:
+                    continue
+                if create_only and path.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] != "create":
                     continue
                 return {"seq": sequence, "method": method, "path": path,
                         "record_id": created or wanted or record_id}
