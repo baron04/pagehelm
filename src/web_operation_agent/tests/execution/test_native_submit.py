@@ -172,15 +172,16 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
         self.assertTrue(self.ex.turn["written"])
         self.assertEqual(self.ex.s.mutation_outcomes[0]["verified"], True)
 
-    def test_a_value_without_a_source_is_carded_with_an_explicit_note(self):
+    def test_a_value_without_a_source_is_refused_before_the_card(self):
         self.ex.form = {**LOADED, "mobile": "13911112222"}
         self.ex.turn["source_ledger"] = SourceLedger()
         entry(self.ex, value="13911112222")
         out = self.run_request()
-        self.assertEqual(len(self.ex.s.approvals.cards), 1)
-        details = self.ex.s.approvals.cards[0].details
-        self.assertTrue(any("没在你的话里找到这个值" in d.text for d in details))
-        self.assertEqual([a for a, _ in self.ex.dispatched].count("form_submit"), 1)
+        self.assertEqual((out.state, out.error_code), ("needs_input", "value_not_from_user"))
+        self.assertIn("手机=13911112222", out.feedback)
+        self.assertEqual(self.ex.s.approvals.cards, [])
+        self.assertNotIn("form_submit", [a for a, _ in self.ex.dispatched])
+        self.assertEqual(self.ex.turn["submit_handoff_blocked"], "value_not_from_user")
 
     def test_declined_card_sends_nothing(self):
         self.ex.s.approvals.approved = False
@@ -277,13 +278,37 @@ class NativeSubmitTests(_Setup, unittest.TestCase):
 
 
 class ReviewRegressionTests(_Setup, unittest.TestCase):
-    def test_a_non_candidate_value_is_marked_even_when_the_control_looks_like_a_dropdown(self):
+    def test_a_non_candidate_value_is_refused_even_when_the_control_looks_like_a_dropdown(self):
         self.ex.turn["source_ledger"] = SourceLedger()
         self.ex.note_entries(self.ex.s, self.ex.turn, (("手机", "13911112222"),), self.ex.s.obs)
         self.ex.s.obs.elements[0].attrs["field_label"] = "手机"
         out = self.run_request()
-        self.assertEqual(len(self.ex.s.approvals.cards), 1)
-        self.assertTrue(any("没在你的话里找到这个值" in d.text for d in self.ex.s.approvals.cards[0].details))
+        self.assertEqual((out.state, out.error_code), ("needs_input", "value_not_from_user"))
+        self.assertEqual(self.ex.s.approvals.cards, [])
+
+    def test_a_value_from_a_record_read_this_turn_counts_as_a_candidate(self):
+        self.ex.form = {**LOADED, "mobile": "13911112222"}
+        self.ex.turn["source_ledger"] = SourceLedger()
+        entry(self.ex, value="13911112222")
+        self.ex.turn["source_ledger"].add_candidates(["13911112222", "别的记录"])
+        self.ex.clicks = [("PUT", PREFIX + "update", {**LOADED, "mobile": "13911112222"})]
+        out = self.run_request()
+        self.assertEqual(out.state, "completed", out.feedback)
+        checks = [f for e, f in self.ex.s.events if e == "native_submit_value_sources"][0]["checks"]
+        self.assertEqual(checks[0]["source"], "candidate")
+
+    def test_a_receipt_for_another_field_does_not_source_a_value(self):
+        self.ex.form = {**LOADED, "mobile": "13911112222"}
+        self.ex.turn["source_ledger"] = SourceLedger()
+        entry(self.ex, value="13911112222")
+        self.ex.note_receipt(self.ex.turn, "别的字段", "13911112222")
+        self.assertEqual(self.run_request().error_code, "value_not_from_user")
+        # and an unnamed receipt -- a conversion result not bound to a field -- does
+        self.ex.turn["source_ledger"] = SourceLedger()
+        entry(self.ex, value="13911112222")
+        self.ex.note_receipt(self.ex.turn, "", "13911112222")
+        self.ex.clicks = [("PUT", PREFIX + "update", {**LOADED, "mobile": "13911112222"})]
+        self.assertEqual(self.run_request().state, "completed")
 
     def test_a_click_that_raises_is_indeterminate_not_a_clean_refusal(self):
         original = self.ex._dispatch
@@ -407,6 +432,9 @@ class OpeningChangeTests(_Setup, unittest.TestCase):
         self.assertEqual(out.error_code, "opening_changes")
         self.assertIn("客户=9", out.feedback)
         self.assertEqual(self.ex.s.approvals.cards, [])
+        blocked = next(iter(self.ex.turn["unrestorable_forms"].values()))
+        self.assertEqual(blocked["scope"], "dialog:编辑")
+        self.assertIn("客户：3→9", blocked["effects"])
 
 
 class ConversionAndHandoffTests(_Setup, unittest.TestCase):
@@ -524,16 +552,21 @@ class ConversionAndHandoffTests(_Setup, unittest.TestCase):
                                                        "field_label": "单据号"})
         self.ex.note_entries(self.ex.s, self.ex.turn, (("单据号", "SYN-17"),), replace(self.ex.s.obs, elements=[query]))
         self.assertNotIn("单据号", [e.field for e in self.ex.turn["source_ledger"].entries])
-        for words, value in (("今天到账", "2026-11-15"), ("加一千五", "9500"), ("用刚才读到的值", "合成封面")):
+        for words, value, source in (("今天到账", "2026-11-15", "receipt"),
+                                     ("加一千五", "9500", "receipt"),
+                                     ("用刚才读到的值", "合成封面", "candidate")):
             with self.subTest(words=words):
                 self.setUp()
                 self.ex.s.message.text = words
                 self.ex.form["mobile"] = value
                 self.ex.turn["source_ledger"] = SourceLedger()
                 entry(self.ex, value=value)
+                if source == "receipt":
+                    self.ex.note_receipt(self.ex.turn, "", value)      # date_range / arithmetic result
+                else:
+                    self.ex.turn["source_ledger"].add_candidates([value])  # a record read this turn
                 self.ex.clicks = [("PUT", PREFIX + "update", self.ex.form)]
                 self.assertEqual(self.run_request().state, "completed")
-                self.assertTrue(any("没在你的话里找到这个值" in d.text for d in self.ex.s.approvals.cards[0].details))
 
     def test_nested_restore_failure_is_literal_text_and_a_hard_stop(self):
         self.opening({"lines": [{"id": 1, "qty": 2}]},
@@ -686,6 +719,60 @@ class RowActionTests(unittest.TestCase):
         out = self.run_request()
         self.assertEqual(out.state, "refused")
         self.assertEqual(self.ex.native_submit.record["status"], 0)
+
+
+class HandoffWaitTests(_Setup, unittest.TestCase):
+    """After a handoff marks a control, the turn waits (outside its clock) for the
+    person's own press, then reads the record back with the same actor."""
+
+    def arm_wait(self, event=None, mark=0):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def waiting():
+            yield
+
+        self.ex.s.approvals.awaiting_person = waiting
+        self.ex.s.cancelled = lambda: False
+        self.ex.native_submit.user_write_mark = lambda: mark
+        self.ex.native_submit.user_write_event = lambda prefixes, record_id, m: event
+        self.ex.turn["submit_target"] = {"kind": "form", "prefixes": [PREFIX],
+                                         "record_id": "7", "baseline": deepcopy(LOADED)}
+        self.ex.turn["handoff_button"] = "保存"
+
+    def test_a_press_is_seen_and_the_change_is_read_back(self):
+        self.arm_wait(event={"method": "PUT", "path": PREFIX + "update",
+                             "status": 200, "record_id": "7"})
+        self.ex.native_submit.record = {**LOADED, "mobile": "13900000000"}
+        note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+        self.assertIn("已接受", note)
+        self.assertIn("mobile：13800000000→13900000000", note)
+        kinds = [e for e, _ in self.ex.s.events]
+        self.assertEqual(kinds[-2:], ["handoff_wait", "handoff_wait_result"])
+
+    def test_no_press_by_the_limit_says_so(self):
+        self.arm_wait(event=None)
+        note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+        self.assertIn("没有看到你点击", note)
+        self.assertIn("表单未提交", note)
+
+    def test_a_press_without_a_readback_still_reports_acceptance(self):
+        self.arm_wait(event={"method": "PUT", "path": PREFIX + "update",
+                             "status": 200, "record_id": "7"})
+        self.ex.native_submit.exists = False
+        note = self.ex._await_handoff_press(self.ex.s, self.ex.turn)
+        self.assertIn("已接受", note)
+        self.assertIn("回读", note)
+
+    def test_without_a_marked_submit_control_there_is_no_wait(self):
+        self.arm_wait(event={"method": "PUT", "path": PREFIX + "update", "status": 200})
+        self.ex.turn.pop("handoff_button")
+        self.assertEqual(self.ex._await_handoff_press(self.ex.s, self.ex.turn), "")
+
+    def test_a_cancelled_turn_stops_waiting(self):
+        self.arm_wait(event=None)
+        self.ex.s.cancelled = lambda: True
+        self.assertEqual(self.ex._await_handoff_press(self.ex.s, self.ex.turn), "")
 
 
 if __name__ == "__main__":

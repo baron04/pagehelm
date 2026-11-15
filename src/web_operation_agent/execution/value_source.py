@@ -58,6 +58,9 @@ class Verdict:
 class SourceLedger:
     entries: list = field(default_factory=list)
     receipts: list = field(default_factory=list)
+    #: _plain-normalized values from records the actor read this turn; a typed value
+    #: equal to one of these counts as a candidate the person could have chosen.
+    candidates: set = field(default_factory=set)
 
     def add(self, entry: Entry) -> None:
         if any(e.field == entry.field and e.value == entry.value and e.candidate for e in self.entries):
@@ -67,9 +70,42 @@ class SourceLedger:
     def receipt(self, receipt: Receipt) -> None:
         self.receipts.append(receipt)
 
+    def add_candidates(self, values) -> None:
+        for value in values:
+            plain = _plain(value)
+            if plain and len(plain) <= 200 and len(self.candidates) < 4000:
+                self.candidates.add(plain)
+
 
 def _plain(text: str) -> str:
     return _PUNCT.sub("", str(text)).casefold()
+
+
+def _same_value(left, right) -> bool:
+    """Equal by meaning: datetimes as points in time, numbers normalized, else plain text."""
+    left_stamp, right_stamp = _datetime(str(left)), _datetime(str(right))
+    if left_stamp is not None or right_stamp is not None:
+        return left_stamp is not None and left_stamp == right_stamp
+    try:
+        left_num, right_num = Decimal(scalar_text(left)), Decimal(scalar_text(right))
+    except (InvalidOperation, ValueError, TypeError):
+        left_num = right_num = None
+    if left_num is not None and right_num is not None \
+            and left_num.is_finite() and right_num.is_finite():
+        return left_num == right_num
+    return _plain(left) == _plain(right)
+
+
+def note_receipt(turn: dict, field: str, value) -> None:
+    """A tool result this turn may serve as the source of one typed value."""
+    ledger = turn.setdefault("source_ledger", SourceLedger())
+    if len(ledger.receipts) < 200:
+        ledger.receipt(Receipt(str(field or ""), str(value)))
+
+
+def note_candidates(turn: dict, values) -> None:
+    """Record cell/display values the actor read this turn as selectable candidates."""
+    turn.setdefault("source_ledger", SourceLedger()).add_candidates(values or ())
 
 
 def cn_number(text: str) -> int | None:
@@ -202,10 +238,10 @@ def check_entries(ledger: SourceLedger, words: list[str]) -> list[Verdict]:
             out.append(Verdict(entry, True, "user_text"))
         elif user_supplied(entry, words):
             out.append(Verdict(entry, True, "user_text"))
-        elif entry.candidate:
+        elif entry.candidate or _plain(entry.value) in ledger.candidates \
+                or _plain(entry.label) in ledger.candidates:
             out.append(Verdict(entry, True, "candidate"))
-        elif any(r.field == entry.field and (_plain(r.value) == _plain(entry.value)
-                                             or scalar_text(r.value) == scalar_text(entry.value))
+        elif any((not r.field or r.field == entry.field) and _same_value(r.value, entry.value)
                  for r in ledger.receipts):
             out.append(Verdict(entry, True, "receipt"))
         else:

@@ -40,6 +40,26 @@ class DraftHandoffTests(unittest.TestCase):
         self.assertEqual("Save", result.marked)
         self.assertEqual(1, len(calls))
 
+    def test_an_unrestorable_form_never_gets_its_submit_marked(self):
+        from web_operation_agent.execution.draft_handoff import unrestorable_form
+        record = {"scope": "form:entry", "instance": "live", "lifetime": "L1",
+                  "effects": ["结算账户：998036→998031"], "detail": ""}
+        blocked = {("form:entry", "live"): record}
+        self.assertIs(unrestorable_form(blocked, "form:entry", ("live",)), record)
+        self.assertIs(unrestorable_form(blocked, "form:entry", ("L1",)), record)
+        self.assertIs(unrestorable_form(blocked, "form:entry", ()), record)
+        self.assertIsNone(unrestorable_form(blocked, "form:entry", ("other",)))
+        self.assertIsNone(unrestorable_form(blocked, "other-scope", ("live",)))
+        before = page()
+        context = NS(obs=page(2, first="Synthetic"), audit=lambda *a, **k: None)
+        context.page = NS(checkpoint=lambda: None,
+                          handoff=lambda *_: self.fail("a blocked form was handed over"))
+        result = handoff_draft(context, before,
+                               [(field_identity(before.elements[0]), "Synthetic")],
+                               "Save", blocked=blocked)
+        self.assertEqual((result.state, result.error_code), ("refused", "opening_changes"))
+        self.assertIn("结算账户：998036→998031", result.feedback)
+
     def test_missing_value_replaced_form_or_untouched_change_never_hands_off(self):
         for after in (page(2), page(2, first="Synthetic", instance="replaced"),
                       page(2, first="Synthetic", other="unexpected")):

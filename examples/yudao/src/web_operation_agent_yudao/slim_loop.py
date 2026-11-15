@@ -44,7 +44,8 @@ from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, hi
 from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, LoopToolResult,
     DeliveryFeedback, VerificationResult, ModelLoopProfile, LoopProcedure)
 from web_operation_agent.execution.read_summary import (SummaryRefused, parse_summary_spec,
-                                                       summary_schema)
+                                                        summary_schema)
+from web_operation_agent.execution.value_source import note_candidates, note_receipt
 from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
 from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS, MAX_SCROLL_PAGES
 from web_operation_agent.business.tools.contracts import form_control_unavailable
@@ -134,6 +135,20 @@ _RELATION_NAMES = {"system/dept/list": {"leaderUserId": ("system/user/simple-lis
 
 class QueryParametersError(ValueError):
     """Safe structural correction, generated only from installed parameter names."""
+
+
+def _cell_values(rows, cap=400):
+    """Scalar cell values of rows the actor read this turn -- value-source candidates."""
+    out = []
+    for row in rows or ():
+        cells = row.values() if isinstance(row, dict) else row if isinstance(row, (list, tuple)) else ()
+        for cell in cells:
+            if isinstance(cell, (dict, list, tuple)) or cell is None or isinstance(cell, bool):
+                continue
+            out.append(cell)
+            if len(out) >= cap:
+                return out
+    return out
 
 
 class ActorKnowledge:
@@ -538,7 +553,8 @@ class ActorKnowledge:
                 rows, total, whole = [data], 1, True
                 declared_total = 1
             self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
-                              "complete": whole if rows is not None else None, "declared_total": declared_total}
+                              "complete": whole if rows is not None else None, "declared_total": declared_total,
+                              "values": _cell_values(rows if rows is not None else [data])}
             self.last_keys = tuple(dict.fromkeys(key for row in rows or () if isinstance(row, dict) for key in row))
             self.last_query_answer = summarize(path=relative, filters=filters, fields=fields, props=props,
                 deref=self._deref, rows=rows, total=total, whole=whole, requests=requests,
@@ -596,7 +612,8 @@ class ActorKnowledge:
                 out[:0] = scope_lines
         self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
                           "complete": whole if rows is not None else None,
-                          "declared_total": declared_total}
+                          "declared_total": declared_total,
+                          "values": _cell_values(rows if rows is not None else [data])}
         if rows is None:
             keys = list(data.keys()) if isinstance(data, dict) else []
         else:
@@ -2044,8 +2061,17 @@ class YudaoLoopProcedures:
                     data = store.describe()
                 elif name == "sql":
                     data = store.query(args["query"])
+                    rows = data.get("rows") if isinstance(data, dict) else None
+                    if rows:
+                        note_candidates(turn, (cell for row in rows[:200]
+                                               if isinstance(row, (list, tuple))
+                                               for cell in row
+                                               if not isinstance(cell, (dict, list, tuple))))
                 else:
                     data = date_range(today=today, zone=zone, **args)
+                    for value in (data or {}).values():
+                        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                            note_receipt(turn, "", value)
                 return LoopToolResult(fenced(json.dumps(data, ensure_ascii=False)), kind="read")
             except TurnReadError as exc:
                 return LoopToolResult(str(exc), kind="read", state="refused", error_code=exc.code)
@@ -2078,12 +2104,14 @@ class YudaoLoopProcedures:
         if name == "find_record":
             self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
             targets: list[AnswerTarget] = []
+            found: list = []
             try:
                 text = self._find_record(s, args["name"].strip(), args.get("kind", "").strip(),
-                                         answer_targets=targets)
+                                         answer_targets=targets, found_values=found)
             except QueryParametersError as exc:
                 return LoopToolResult("查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
                                       kind="read", state="refused", error_code="invalid_arguments")
+            note_candidates(turn, found)
             return LoopToolResult(text, kind="read", answer_targets=tuple(targets))
         if name == "call_api":
             self._note(s, stage="tool", tool=name, arguments=said)
@@ -2149,9 +2177,12 @@ class YudaoLoopProcedures:
                     named = [f"{key}→{labels[key]}" for key in know.last_keys if key in labels][:30]
                     if named:
                         text += "\n本页表格列名（接口字段→页面列）：" + "、".join(named)
+            if know.last_read:
+                note_candidates(turn, know.last_read.get("values") or ())
             turn["reads"].append((json.dumps(args, ensure_ascii=False)[:160], text[:1500]))
             if know.last_read:
-                self._note(s, stage="read_done", tool=name, **know.last_read)
+                self._note(s, stage="read_done", tool=name,
+                           **{k: v for k, v in know.last_read.items() if k != "values"})
             return LoopToolResult(text, kind="read", state="completed" if know.last_read else "refused",
                                   query_answer=getattr(know, "last_query_answer", None)
                                   if args.get("deliver") or "summary" in args else None,
@@ -2266,6 +2297,20 @@ class YudaoLoopProcedures:
             text = ("滚动了，但屏幕上的内容没有变化：这个方向已经到头，或者该换一个区域滚动。"
                     if _shown(s.obs) == before else "已滚动。")
         elif name == "highlight":
+            from web_operation_agent.execution.draft_handoff import (opening_changes_refusal,
+                                                                     unrestorable_form)
+            blocked_form = unrestorable_form(turn.get("unrestorable_forms"),
+                                             element.attrs.get("form_scope"),
+                                             (element.attrs.get("form_lifetime"),
+                                              element.attrs.get("form_instance")))
+            if blocked_form is not None and plain(element.name) in SUBMIT_WORDS:
+                return opening_changes_refusal(blocked_form)
+            blocked_code = turn.get("submit_handoff_blocked")
+            if blocked_code and plain(element.name) in SUBMIT_WORDS \
+                    and element.attrs.get("form_scope"):
+                return LoopToolResult("不能标出提交按钮：本轮这项提交的请求已被拒绝，"
+                                      "按反馈处理后再请求提交。", kind="page",
+                                      state="refused", error_code=blocked_code)
             request = _CURRENT_REQUEST.get()
             needs_target = _record_handoff_control(element)
             detail_target = (self._detail_handoff_target(s, request)
@@ -2490,9 +2535,14 @@ class YudaoLoopProcedures:
             # this last batch found it, and what the batch put in.
             self.form_fill = {"before": before, "expected": list(expected)}
         if then_highlight and not then_click and not incomplete and not failure:
+            if turn.get("submit_handoff_blocked"):
+                return LoopToolResult(text + "提交已被拒绝，不标出提交按钮。", kind="page",
+                                      state="refused",
+                                      error_code=str(turn["submit_handoff_blocked"]))
             from .draft_readback import product_price_readback
             expected = product_price_readback(s, before, expected, self.goal_port.data)
-            result = handoff_draft(s, before, expected, then_highlight)
+            result = handoff_draft(s, before, expected, then_highlight,
+                                   blocked=turn.get("unrestorable_forms"))
             if result.marked:
                 turn["marked"] = result.marked
             return replace(result, feedback=text + result.feedback)
@@ -2507,7 +2557,8 @@ class YudaoLoopProcedures:
                 LoopToolResult(text, kind="page", state="unverified" if incomplete else "completed"))
 
     def _find_record(self, s, name: str, kind: str = "", *,
-                     answer_targets: list[AnswerTarget] | None = None) -> str:
+                     answer_targets: list[AnswerTarget] | None = None,
+                     found_values: list | None = None) -> str:
         """Where the application has a record of this name, through the goal port's own
         "records found by name": every entity a page shows, read as the actor. With the
         person's word for the kind of record, only the entities whose name, other names or
@@ -2619,6 +2670,9 @@ class YudaoLoopProcedures:
                     + self.knowledge.search_api(name), self.knowledge.handoffs)
         told, lists, several = [], [], False
         for entity, records in hits:
+            if found_values is not None:
+                found_values += [value for rid, display, _address in records
+                                 for value in (rid, display) if value]
             page = pages.get(entity, "")
             path = self.knowledge.page_path(page) if page else ""
             head = f"{labels.get(entity, entity)}（{entity}；页面：{page or '无'}{' ' + path if path else ''}）"
@@ -2940,7 +2994,19 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                 s.ledger.append("native_submit_baseline", captured=False, reason="no_business_form_on_the_page",
                                 sample=[{k: str(v)[:40] for k, v in e.attrs.items() if k.startswith(("form", "field", "page_c"))}
                                         for e in before.elements if e.attrs.get("field_label")][:4])
+        marked_before = str(turn.get("marked") or "")
         result = super()._invoke_tool(s, name, args, turn)
+        if self.native_submit is not None and "handoff_button" not in turn:
+            marked_now = str(turn.get("marked") or getattr(result, "marked", None) or "")
+            target = turn.get("submit_target") or {}
+            if (marked_now and marked_now != marked_before
+                    and (target.get("kind") == "row" or plain(marked_now) in SUBMIT_WORDS)):
+                # A save/confirm control or a record action the person may now press:
+                # the closing waits on the application's acceptance of that press.
+                turn["handoff_button"] = marked_now
+                mark_fn = getattr(self.native_submit, "user_write_mark", None)
+                if callable(mark_fn):
+                    turn["handoff_mark"] = mark_fn()
         if self.native_submit is not None and result.entered:
             self.note_entries(s, turn, result.entered, before)
             ledger = turn.get("source_ledger")
@@ -3036,35 +3102,62 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                 if _control_name(e) in restored and field_identity(e) in now else e for e in before.elements])
         try:
             expected = product_price_readback(context, before, fill["expected"], self.goal_port.data)
-            result = handoff_draft(context, before, expected, next(iter(labels)))
+            result = handoff_draft(context, before, expected, next(iter(labels)),
+                                   blocked=turn.get("unrestorable_forms"))
         except Exception as exc:  # noqa: BLE001 -- the reply then says it was not done
             s.ledger.append("default_handoff_failed", error_type=type(exc).__name__)
             return ""
         s.ledger.append("default_handoff", marked=result.marked, state=result.state,
-                        command=result.completion_command)
+                        command=result.completion_command, code=result.error_code)
         if result.marked and result.state == "completed":
             turn["handoff"] = (self._page_fingerprint(s.obs), result.marked)
             turn["marked"] = result.marked
+            if self.native_submit is not None:
+                turn.setdefault("handoff_button", str(result.marked))
+                mark_fn = getattr(self.native_submit, "user_write_mark", None)
+                if callable(mark_fn):
+                    turn.setdefault("handoff_mark", mark_fn())
             return result.marked
         return ""
 
     def _closing(self, s, turn, args):
         args = super()._closing(s, turn, args)
-        if (not getattr(getattr(self, "procedures", None), "form_fill", None) or turn.get("submit_started")
-                or turn.get("written") or turn.get("submit_handoff_blocked")):
-            return args
-        label = self._default_handoff(s, turn)
+        if (getattr(getattr(self, "procedures", None), "form_fill", None) and not turn.get("submit_started")
+                and not turn.get("written") and not turn.get("submit_handoff_blocked")):
+            label = self._default_handoff(s, turn)
+            said = str(args.get("answer") or "")
+            if not ("尚未提交" in said or "还没有提交" in said or "没有提交" in said):
+                note = (f"表单已按你的要求填好并核验，「{label}」已标出；尚未提交，请核对后自己点击。" if label else
+                        "表单已按你的要求填写，但程序没能核验并标出提交按钮；尚未提交，请核对表单后自己提交。")
+                args = {**args, "answer": (said.rstrip() + "\n\n" + note).strip()}
+        return self._close_with_notes(s, turn, args)
+
+    def _close_with_notes(self, s, turn, args):
+        """The two additions a closing answer may still need: what an unrestorable form
+        would save, and the wait for the person's own press on a marked control."""
+        unrestorable = next(iter((turn.get("unrestorable_forms") or {}).values()), None)
         said = str(args.get("answer") or "")
-        if "尚未提交" in said or "还没有提交" in said or "没有提交" in said:
-            return args
-        note = (f"表单已按你的要求填好并核验，「{label}」已标出；尚未提交，请核对后自己点击。" if label else
-                "表单已按你的要求填写，但程序没能核验并标出提交按钮；尚未提交，请核对表单后自己提交。")
-        return {**args, "answer": (said.rstrip() + "\n\n" + note).strip()}
+        if unrestorable is not None and "无法还原" not in said:
+            effects = "；".join(str(e) for e in (unrestorable.get("effects") or ())[:8]) \
+                      or str(unrestorable.get("detail") or "")
+            args = {**args, "answer": (said.rstrip()
+                    + "\n\n未标出提交按钮：表单打开时页面自动修改了字段且无法还原，"
+                    + (f"直接保存会把 {effects}；" if effects else "直接保存会带入未核对的变化；")
+                    + "请核对后自己提交。").strip()}
+        pressed = self._await_handoff_press(s, turn) if args.get("status") == "done" else ""
+        if pressed:
+            args = {**args, "answer": (str(args.get("answer") or "").rstrip() + "\n\n" + pressed).strip()}
+        return args
 
     def _finish_feedback(self, s, turn, args):
         if not turn.get("submit_started") and not turn.get("written"):
             self._default_handoff(s, turn)
         entered = turn.get("draft_form_entries")
+        if entered and turn.get("unrestorable_forms"):
+            from web_operation_agent.execution.draft_handoff import unrestorable_form
+            entered = {binding for binding in entered
+                       if not (isinstance(binding, tuple) and len(binding) >= 5
+                               and unrestorable_form(turn["unrestorable_forms"], binding[2], binding[4]))}
         if args.get("status") == "done" and entered and not turn.get("submit_handoff_blocked"):
             handoff = turn.get("handoff")
             if (not handoff or handoff[0] != self._page_fingerprint(s.obs) or not turn.get("draft_handoff_form")

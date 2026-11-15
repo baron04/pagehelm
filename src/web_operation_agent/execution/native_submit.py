@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 import re
+import time
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -25,7 +26,7 @@ from .model_loop_contracts import LoopToolResult
 from .submit_contract import (ContractRefused, FormData, SubmitCard, SubmitPermit, build_card,
                               diff_models, digest, is_empty, same_value, strip_volatile, terminal_state)
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
-from .value_source import Entry, Receipt, SourceLedger, check_entries
+from .value_source import Entry, SourceLedger, check_entries, note_receipt
 
 #: The control the model names; the program decides everything else.
 REQUEST_SUBMIT_TOOL = {"type": "function", "function": {
@@ -74,6 +75,19 @@ class SubmitPort(Protocol):
     def arm(self, permit: SubmitPermit) -> None: ...
     def disarm(self) -> None: ...
     def settled(self) -> None: ...
+    # -- the person's own press after a handoff -------------------------------------------
+    def user_write_mark(self):
+        """An opaque position in the actor's observed accepted user writes; never raises."""
+        return None
+    def user_write_event(self, prefixes: tuple[str, ...], record_id: str, mark):
+        """The first accepted user-originated write under `prefixes` after `mark`, or None.
+
+        Observation only: the adapter says what accepted means and never holds or changes
+        the person's request. A body `id` matching `record_id` binds the write to the
+        handed-off target; an empty `record_id` accepts any write under the prefixes.
+        The returned dict may carry `record_id` (the write's own or the response's new id).
+        """
+        return None
 
 
 def _contains(held, wanted) -> bool:
@@ -227,7 +241,7 @@ class NativeSubmitMixin:
             ledger.add(Entry(str(label), str(value), candidate=False))
 
     def note_receipt(self, turn, field: str, value: str) -> None:
-        turn.setdefault("source_ledger", SourceLedger()).receipt(Receipt(field, value))
+        note_receipt(turn, field, value)
 
     def capture_form_baseline(self, s, turn, element) -> None:
         """The form as loaded, read before the first value is typed into it."""
@@ -243,15 +257,21 @@ class NativeSubmitMixin:
         try:
             baselines[key], raw = self._read_form(s, element)
             form = baselines[key]
+            port = self.native_submit
+            prefixes = port.prefixes(port.recent_reads(), mode=form.mode,
+                                     record_id=form.record_id, source=raw.get("source", ""))
             if form.mode == "update":
-                port = self.native_submit
-                prefixes = port.prefixes(port.recent_reads(), mode=form.mode, record_id=form.record_id, source=raw.get("source", ""))
                 if not prefixes:
                     raise ContractRefused("entity_unknown")
                 record = port.read_record(prefixes, form.record_id)
                 if record is None:
                     raise ContractRefused("record_unreadable")
                 turn.setdefault("form_record_baselines", {})[key] = record
+            if prefixes:
+                # Where the person's own press would land if this form is handed over.
+                turn["submit_target"] = {"kind": "form", "prefixes": list(prefixes),
+                                         "record_id": form.record_id,
+                                         "baseline": record if form.mode == "update" else None}
             s.ledger.append("native_submit_baseline", captured=True, mode=baselines[key].mode,
                             record_id=baselines[key].record_id, digest=baselines[key].digest)
         except ContractRefused as exc:
@@ -264,6 +284,23 @@ class NativeSubmitMixin:
         scope = attrs.get("form_scope")
         instance = attrs.get("form_lifetime") or attrs.get("form_instance")
         return (scope, instance) if scope and instance else None
+
+    @staticmethod
+    def _note_unrestorable(turn, key, element, detail, effects=()) -> None:
+        """A form whose opening self-edits could not be restored or proven: saving it
+        directly would carry those edits, so no handoff may mark its submit control.
+        `effects` are "label：before→after" as the person would check them."""
+        if key is None:
+            return
+        blocked = turn.setdefault("unrestorable_forms", {})
+        record = blocked.setdefault(key, {
+            "scope": key[0], "instance": element.attrs.get("form_instance"),
+            "lifetime": element.attrs.get("form_lifetime"), "effects": [], "detail": ""})
+        for effect in effects or ():
+            if effect not in record["effects"]:
+                record["effects"].append(effect)
+        if not record["detail"]:
+            record["detail"] = str(detail or "")[:300]
 
     # -- reads through the browser ----------------------------------------------------
     def _read(self, s, element, kind, **extra):
@@ -296,7 +333,8 @@ class NativeSubmitMixin:
         except ContractRefused as exc:
             refused = self._not_sent(s, exc.code, exc.detail)
             if exc.code in {"dangerous_unconfirmed", "record_changed", "record_unreadable",
-                            "validation", "no_change", "opening_changes", "credential_field"}:
+                            "validation", "no_change", "opening_changes", "credential_field",
+                            "value_not_from_user"}:
                 turn["submit_handoff_blocked"] = exc.code
                 return refused
             return self._submit_handoff(s, element, turn, refused, form=form)
@@ -330,6 +368,71 @@ class NativeSubmitMixin:
         return LoopToolResult(text, kind="write", state="needs_input" if retry else "refused",
                               error_code=code)
 
+    # -- waiting for the person's own press ---------------------------------------------
+    def _await_handoff_press(self, s, turn) -> str:
+        """A handoff marked a control: wait for the person to press it, the way approval
+        waits are counted (outside the turn clock), then read the record back with the
+        same actor. Returns the answer note; "" when nothing was handed over, the adapter
+        cannot observe the person's writes, or the turn was cancelled."""
+        port = self.native_submit
+        target = turn.get("submit_target") or {}
+        marked = str(turn.get("handoff_button") or "")
+        mark_fn = getattr(port, "user_write_mark", None)
+        event_fn = getattr(port, "user_write_event", None)
+        if (port is None or not marked or not target.get("prefixes")
+                or not callable(mark_fn) or not callable(event_fn)):
+            return ""
+        prefixes = tuple(target["prefixes"])
+        record_id = str(target.get("record_id") or "")
+        mark = turn.get("handoff_mark")
+        if mark is None:
+            mark = mark_fn()
+        if mark is None:
+            return ""           # without a position, observed history cannot be bounded
+        deadline = time.monotonic() + max(1.0, s.approvals.approval_hold_ms / 1000)
+        s.ledger.append("handoff_wait", step=s.step, marked=marked[:80],
+                        kind=str(target.get("kind") or ""), record_id=record_id[:80],
+                        prefixes=list(prefixes)[:4], dispatched=False, side_effect_possible=False)
+        event = None
+        with s.approvals.awaiting_person():
+            while event is None and not s.cancelled():
+                event = event_fn(prefixes, record_id, mark)
+                if event is None:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    time.sleep(min(0.3, left))
+        if s.cancelled():
+            return ""
+        if event is None:
+            s.ledger.append("handoff_wait_result", step=s.step, result="no_press",
+                            dispatched=False, side_effect_possible=False)
+            return (f"已标出「{marked}」，等待时间内没有看到你点击它；表单未提交，"
+                    "仍可自己核对后点击。")
+        s.ledger.append("handoff_wait_result", step=s.step, result="pressed",
+                        method=str(event.get("method") or ""), path=str(event.get("path") or "")[:200],
+                        status=int(event.get("status") or 0),
+                        dispatched=False, side_effect_possible=False)
+        new_id = str(event.get("record_id") or record_id)
+        record = None
+        if new_id:
+            try:
+                record = port.read_record(prefixes, new_id)
+            except Exception as exc:  # noqa: BLE001 -- readback failure is reported, not hidden
+                s.ledger.append("handoff_readback_failed", step=s.step,
+                                error_type=type(exc).__name__,
+                                dispatched=False, side_effect_possible=False)
+        if record is None:
+            return (f"已看到你点击「{marked}」，应用已接受这次写入；"
+                    "但按同一账号回读记录没有成功，请到应用里核对结果。")
+        changes = _readback_changes(target.get("baseline"), record)
+        if changes:
+            return (f"已看到你点击「{marked}」，应用已接受写入；同一账号回读核对到变化："
+                    + "、".join(changes) + "。")
+        if not record_id and new_id:
+            return f"已看到你点击「{marked}」，应用已接受写入，回读到新记录（编号 {new_id}）。"
+        return f"已看到你点击「{marked}」，应用已接受写入；同一账号回读未发现待核对的变化。"
+
     # -- forms ------------------------------------------------------------------------
     def _submit_form(self, s, element, turn) -> LoopToolResult:
         port = self.native_submit
@@ -350,17 +453,27 @@ class NativeSubmitMixin:
         s.ledger.append("native_submit_value_sources", step=s.step,
                         checks=[{"field": v.entry.field, "ok": v.ok, "source": v.source,
                                  "reason": v.reason, **({"value": v.entry.value} if not v.ok else {})} for v in verdicts])
+        missing = [v for v in verdicts if not v.ok]
+        if missing:
+            # An unsourced value is refused before the card: the model must ask the
+            # person instead of presenting invented values for approval.
+            raise ContractRefused("value_not_from_user",
+                                  "、".join(f"{v.entry.field}={v.entry.value}" for v in missing))
         requested = self._requested_fields(current, ledger)
         reads = port.recent_reads()
         prefixes = port.prefixes(reads, mode=current.mode, record_id=current.record_id, source=raw.get("source", ""))
         if not prefixes:
             raise ContractRefused("entity_unknown")
+        turn["submit_target"] = {"kind": "form", "prefixes": list(prefixes),
+                                 "record_id": current.record_id,
+                                 "button": element.name.strip()}
         baseline = None
         comparison, restored = None, ()
         if current.mode == "update":
             baseline = port.read_record(prefixes, current.record_id)
             if baseline is None:
                 raise ContractRefused("record_unreadable")
+            turn["submit_target"]["baseline"] = baseline
             earlier = turn.get("form_record_baselines", {}).get(key)
             if earlier is not None and not same_value(strip_volatile(earlier), strip_volatile(baseline)):
                 raise ContractRefused("record_changed", "填写期间目标记录被别人修改，请重新核对")
@@ -371,17 +484,21 @@ class NativeSubmitMixin:
             except ContractRefused as exc:
                 # An unreadable line identity prevents proving that a handoff would not
                 # carry an opening-only change. It is a hard stop, never a generic handoff.
+                self._note_unrestorable(turn, key, element, exc.detail)
                 raise ContractRefused("opening_changes", exc.detail or "无法核对页面打开时的明细变化") from exc
             restored = tuple(diff_models(current.model, proposed))
             if restored:
                 values = {c.field: proposed[c.field] for c in restored}
+                effects = [f"{current.label(k)}：{proposed[k]}→{current.model[k]}" for k in sorted(values)]
                 try:
                     raw = self._read(s, element, "restore", expected=current.model, values=values)
                 except ContractRefused:
-                    effects = "、".join(f"{current.label(k)}={current.model[k]}" for k in sorted(values))
-                    raise ContractRefused("opening_changes", "页面自动变化还原失败，请自行核对提交；保存可能改为：" + effects) from None
+                    self._note_unrestorable(turn, key, element, "页面自动变化还原失败", effects)
+                    raise ContractRefused("opening_changes", "页面自动变化还原失败，请自行核对提交；保存可能改为：" +
+                                          "、".join(f"{current.label(k)}={current.model[k]}" for k in sorted(values))) from None
                 current = FormData.from_json(raw)
                 if raw.get("invalid") or raw.get("withheld") or not same_value(current.model, proposed):
+                    self._note_unrestorable(turn, key, element, "页面打开时改了字段，还原未通过", effects)
                     raise ContractRefused("opening_changes", "页面打开时改了字段，还原未通过或页面又改回；保存会改变：" + "、".join(sorted(values)))
                 turn["restored_form_labels"] = frozenset(current.label(c.field) for c in restored)
         if not restored:
@@ -392,6 +509,10 @@ class NativeSubmitMixin:
         if raw.get("validation") is not True or raw.get("invalid"):
             raise ContractRefused("validation", "、".join(str(p) for p in raw.get("invalid", [])[:8]) or "应用没有确认校验通过")
         if any(not same_value(final.model.get(c.field), current.model.get(c.field)) for c in restored):
+            changed = [f"{current.label(c.field)}：{current.model.get(c.field)}→{final.model.get(c.field)}"
+                       for c in restored
+                       if not same_value(final.model.get(c.field), current.model.get(c.field))]
+            self._note_unrestorable(turn, key, element, "页面在还原后又自动改值", changed)
             raise ContractRefused("opening_changes", "页面在还原后又自动改值，请自行核对提交")
         current = final
         if baseline is not None and conversions:
@@ -441,9 +562,12 @@ class NativeSubmitMixin:
         prefixes = port.row_prefixes(reads, row)
         if not prefixes:
             raise ContractRefused("entity_unknown")
+        turn["submit_target"] = {"kind": "row", "prefixes": list(prefixes),
+                                 "record_id": record_id, "button": button}
         baseline = port.read_record(prefixes, record_id)
         if baseline is None:
             raise ContractRefused("record_unreadable")
+        turn["submit_target"]["baseline"] = baseline
         request = port.row_request(prefixes, row, element, baseline)
         if request is None:
             raise ContractRefused("action_unknown", "无法认定这个控件对应的接口和具体字段变化，助手未提交")
@@ -728,3 +852,20 @@ class NativeSubmitMixin:
             notes.append("回读与批准卡不一致：" + "、".join(wrong[:6]))
             return False, notes
         return (True if checked else None), notes
+
+
+def _readback_changes(baseline, record) -> list:
+    """"label：before→after" pairs between the baseline and the same-actor readback."""
+    if not isinstance(baseline, dict) or not isinstance(record, dict):
+        return []
+    out = []
+    for key, after in record.items():
+        if not isinstance(key, str) or key.startswith("_"):
+            continue
+        before = baseline.get(key)
+        if same_value(before, after) or (is_empty(before) and is_empty(after)):
+            continue
+        out.append(f"{key}：{before}→{after}")
+        if len(out) >= 8:
+            break
+    return out

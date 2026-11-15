@@ -80,6 +80,10 @@ class _Actor:
     #: (sequence, path, query) of the assistant-marked reads the page made.
     reads: deque = field(default_factory=lambda: deque(maxlen=_READS_KEPT))
     read_count: int = 0
+    #: (sequence, method, path, named id, returned id) of the person's own writes the
+    #: proxy saw the application accept; observation only, never admission data.
+    user_writes: deque = field(default_factory=lambda: deque(maxlen=64))
+    write_count: int = 0
     #: Until when a page the assistant is opening may make the GETs its own loading needs,
     #: even those the release scan lists as writing; and what was let through that way.
     page_load_until: float = 0.0
@@ -260,6 +264,36 @@ class NativePageGuard:
             if state.read_count - mark > len(state.reads):
                 raise GuardRefused("read_evidence_incomplete")
             return tuple((path, query) for sequence, path, query in state.reads if sequence > mark)
+
+    def user_write_mark(self, actor: str) -> int:
+        """A position after every user write observed so far, for `user_write_after`."""
+        with self._condition:
+            return self._actor(actor).write_count
+
+    def note_user_write(self, actor: str, method: str, path: str,
+                        record_id: str = "", created_id: str = "") -> None:
+        """The application accepted the person's own request; recorded so a handoff
+        turn can notice and read back. Nothing here admits or holds anything."""
+        with self._condition:
+            state = self._actor(actor)
+            state.write_count += 1
+            state.user_writes.append((state.write_count, str(method)[:8], str(path)[:200],
+                                      str(record_id)[:80], str(created_id)[:80]))
+
+    def user_write_after(self, actor: str, mark: int, prefixes, record_id: str):
+        """The first accepted user write under `prefixes` after `mark`, or None.
+
+        When `record_id` is given the write must name or return that id; otherwise any
+        accepted write under the prefixes counts."""
+        with self._condition:
+            for sequence, method, path, wanted, created in self._actor(actor).user_writes:
+                if sequence <= mark or not any(path.startswith(prefix) for prefix in prefixes):
+                    continue
+                if record_id and record_id not in {wanted, created}:
+                    continue
+                return {"seq": sequence, "method": method, "path": path,
+                        "record_id": created or wanted or record_id}
+            return None
 
     def begin(self, actor: str, owner: str, *, ttl_s: float = 120,
               wait_s: float = 10) -> float:

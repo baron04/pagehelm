@@ -1468,7 +1468,7 @@ class DraftChoiceTests(unittest.TestCase):
         self.procedures.goal_port = NS(data=NS(choice_label=lambda route, label, value:
             "A （重点客户）" if label == "客户级别" else value))
         expected = []
-        def handoff(_state, _before, fields, _button):
+        def handoff(_state, _before, fields, _button, **_kw):
             expected.extend(fields)
             return LoopToolResult("已交接", kind="page", marked="确定")
         with patch("web_operation_agent.execution.draft_handoff.handoff_draft", handoff):

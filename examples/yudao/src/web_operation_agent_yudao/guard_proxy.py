@@ -13,6 +13,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import re
 import secrets
 import threading
 import time
@@ -231,7 +232,15 @@ class NativeGuardProxy:
                             proxy.guard.note_read(actor, self.path)
                         except GuardRefused:
                             pass          # a full actor table must not stop the person's own read
-                    self.upstream_request(body)
+                    status, payload = self.upstream_request(body)
+                    if actor is not None and self.command != "GET" \
+                            and _accepted_user_write(status, payload):
+                        wanted, created = _write_ids(body, payload, self.path)
+                        try:
+                            proxy.guard.note_user_write(actor, self.command, self.path,
+                                                        wanted, created)
+                        except GuardRefused:
+                            pass          # a full actor table must not drop the person's own write
                 else:
                     with proxy.guard.request(actor, self.command, self.path, body) as ticket:
                         ticket.status, ticket.response = self.upstream_request(body)
@@ -289,3 +298,40 @@ class NativeGuardProxy:
 
 
 __all__ = ["NativeGuardProxy", "GUARD_PATH"]
+
+
+def _accepted_user_write(status, payload) -> bool:
+    """This application's own "accepted": HTTP success plus its success code in the body."""
+    if not (isinstance(status, int) and 200 <= status < 300 and payload):
+        return False
+    try:
+        answer = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(answer, dict) and answer.get("code") == 0
+
+
+def _write_ids(request_body, payload, request_path) -> tuple[str, str]:
+    """(id the write named, id the application returned), each "" when absent."""
+    wanted = created = ""
+    try:
+        body = json.loads(request_body)
+    except (ValueError, UnicodeDecodeError):
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("id"), (str, int)) \
+            and not isinstance(body.get("id"), bool):
+        wanted = str(body["id"])
+    if not wanted:
+        match = re.search(r"(?:^|[?&])id=(\d{1,19})(?:&|$)", request_path)
+        if match:
+            wanted = match.group(1)
+    try:
+        data = json.loads(payload).get("data")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        data = None
+    if isinstance(data, (str, int)) and not isinstance(data, bool):
+        created = str(data)
+    elif isinstance(data, dict) and isinstance(data.get("id"), (str, int)) \
+            and not isinstance(data.get("id"), bool):
+        created = str(data["id"])
+    return wanted, created

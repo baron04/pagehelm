@@ -153,3 +153,19 @@ class YudaoSubmitPort:
 
     def settled(self) -> None:
         self.proxy.guard.wait_idle(self._actor(), 5.0)
+
+    # -- the person's own press after a handoff -------------------------------------------
+    def user_write_mark(self):
+        try:
+            return self.proxy.guard.user_write_mark(self._actor())
+        except Exception:  # noqa: BLE001 -- a missing observation degrades to no wait
+            return None
+
+    def user_write_event(self, prefixes, record_id, mark):
+        if mark is None:
+            return None
+        try:
+            return self.proxy.guard.user_write_after(self._actor(), int(mark),
+                                                     tuple(prefixes), str(record_id or ""))
+        except Exception:  # noqa: BLE001 -- a missing observation degrades to no event
+            return None
