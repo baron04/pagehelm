@@ -7,4 +7,4 @@
   - 单据审批状态 `status`：`10`=未审核、`20`=已审核；已审核单据通常禁止直接修改或删除（用 `entity_rules` 核对）。
   - 价格、金额单位为**元**（不换算为分）；重量单位为 kg，保质期为天。
   - 采购/销售单据按单号 `no` 查询或定位，明细行在 `/get` 详情的 `items` 中。
-- **可用类型化写入**：`erp-supplier-maintenance`、`erp-warehouse-maintenance`、`erp-customer-maintenance`、`erp-product-maintenance`、以及 ERP 计量单位与单据审批/反审操作。
+- **可用类型化写入**：`erp-supplier-maintenance`、`erp-customer-maintenance`、`erp-product-maintenance`（含 ERP 产品与计量单位 `erp_product_unit_create`/`update`）、`erp-warehouse-maintenance`（含仓库、结算账户与 12 类单据状态流转 `erp_document_status`）。

@@ -20,7 +20,7 @@
 
 ## 模型驱动回合（芋道唯一执行器 `slim`）
 
-模型在同一段对话里**逐步**从一组固定工具中选择下一步，每个工具结果和新的页面观察都回到同一段对话。不带写入时这组工具是十三个：`search_menu`、`find_record`、`goto`、`observe`、`click`、`input`、`select`、`fill_fields`、`scroll`、`search_api`、`call_api`、`highlight`、`finish`。开启写入后另加 `load_skill` 与 `read_skill_resource`，已加载 Skill 的每个写入操作各成为一个带已安装输入 schema 的工具。
+模型在同一段对话里**逐步**从一组固定工具中选择下一步，每个工具结果和新的页面观察都回到同一段对话。不带写入时基础工具集是十五个：`search_menu`、`find_record`、`goto`、`observe`、`click`、`input`、`select`、`fill_fields`、`scroll`、`search_api`、`entity_rules`、`load_domain_guide`、`call_api`、`highlight`、`finish`（其中 `entity_rules` 按部署编译期规则读取拒绝与连带影响，`load_domain_guide` 读取八大业务域的只读消歧与口径说明；行表执行器另带同轮 `tables`、`sql`、`date_range`）。开启写入后另加 `load_skill` 与 `read_skill_resource`，已加载 Skill 的每个写入操作各成为一个带已安装输入 schema 的工具。
 
 芋道在每轮原话上判断草稿与保存意图：明确要求先填的回合隐藏 Skill 写入工具，明确要求保存的回合提示使用已安装的 Skill；未命中词表时不改变工具集。草稿交接后的字段修改仍按草稿处理，除非用户明确要求提交。页面预填工具不受该判断影响，写入仍须逐项批准。
 

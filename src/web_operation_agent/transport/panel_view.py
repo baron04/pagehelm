@@ -129,7 +129,7 @@ _PAGE_TOOLS = frozenset({
 
 
 #: What a turn may say it is looking for, and how much of the word it looks for is shown.
-_SEARCHED = {"page": "页面", "source": "数据来源", "record": "记录"}
+_SEARCHED = {"page": "页面", "source": "数据来源", "record": "记录", "rules": "业务规则", "guide": "业务域说明"}
 _SEARCH_TERM_CHARS = 24
 
 

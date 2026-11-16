@@ -32,26 +32,49 @@ ERP_DOCUMENT_ENTITIES = {
     "收款单": "erp/finance-receipt",
     "付款单": "erp/finance-payment",
 }
+_ERP_SIDE_EFFECTS = {
+    "采购订单": "变更订单审批状态，决定后续能否生成关联采购入库或退货单据",
+    "销售订单": "变更订单审批状态，决定后续能否生成关联销售出库或退货单据",
+    "采购入库单": "按单据明细同步变动对应仓库产品库存及关联采购订单入库数量",
+    "采购退货单": "按单据明细同步变动对应仓库产品库存及关联采购订单退货数量",
+    "销售出库单": "按单据明细同步变动对应仓库产品库存及关联销售订单出库数量",
+    "销售退货单": "按单据明细同步变动对应仓库产品库存及关联销售订单退货数量",
+    "其它入库单": "按单据明细同步增加对应仓库产品库存",
+    "其它出库单": "按单据明细同步扣减对应仓库产品库存",
+    "库存调拨单": "按单据明细同步调增调入仓、调减调出仓的产品库存",
+    "库存盘点单": "按盘点盈亏明细同步调整对应仓库产品库存",
+    "收款单": "同步更新关联销售出库/退货单据的已核销收款金额",
+    "付款单": "同步更新关联采购入库/退货单据的已核销付款金额",
+}
 _ERP_STATUS_LABELS = {10: "未审核", 20: "已审核"}
 _PROMO_STATUS_LABELS = {0: "开启", 1: "关闭"}
 
 
 class StatusEffects:
     def __init__(self, operation: str):
+        if operation not in {
+            "erp_document_status",
+            "promotion_coupon_template_status",
+            "promotion_seckill_activity_close",
+        }:
+            raise ValueError(f"unknown status operation: {operation}")
         self.operation = operation
 
     def project_inputs(self, inputs: dict) -> RequestedEffect:
         if self.operation == "erp_document_status":
             entity = ERP_DOCUMENT_ENTITIES[inputs["document_type"]]
+            target_label = "已审核" if inputs["action"] == "审批" else "未审核"
             return RequestedEffect(entity, "state_change", entity, inputs["no"],
-                                   canonical({"status": inputs["action"]}))
+                                   canonical({"status": target_label}))
         if self.operation == "promotion_coupon_template_status":
             return RequestedEffect("promotion/coupon-template", "state_change",
                                    "promotion/coupon-template", inputs["target"],
                                    canonical({"status": inputs["status"]}))
-        return RequestedEffect("promotion/seckill-activity", "state_change",
-                               "promotion/seckill-activity", inputs["target"],
-                               canonical({"status": "关闭"}))
+        if self.operation == "promotion_seckill_activity_close":
+            return RequestedEffect("promotion/seckill-activity", "state_change",
+                                   "promotion/seckill-activity", inputs["target"],
+                                   canonical({"status": "关闭"}))
+        raise ValueError(f"unknown status operation: {self.operation}")
 
 
 class _StatusHandler:
@@ -92,7 +115,8 @@ class _StatusHandler:
     def prepare(self, inputs: dict, *, context=None) -> BusinessMutationSpec:
         actor = self.base._actor(context)
         if self.operation == "erp_document_status":
-            entity = ERP_DOCUMENT_ENTITIES[inputs["document_type"]]
+            doc_type = inputs["document_type"]
+            entity = ERP_DOCUMENT_ENTITIES[doc_type]
             record = self._find_erp_doc(entity, inputs["no"])
             target_code = 20 if inputs["action"] == "审批" else 10
             if record.get("status") == target_code:
@@ -102,13 +126,14 @@ class _StatusHandler:
                 )
             before_label = _ERP_STATUS_LABELS.get(record.get("status"), str(record.get("status")))
             after_label = _ERP_STATUS_LABELS[target_code]
-            summary = f"{inputs['action']}{inputs['document_type']}「{record.get('no')}」"
+            summary = f"{inputs['action']}{doc_type}「{record.get('no')}」"
             details = (
-                ApprovalDetail("preserved", "单据类型", inputs["document_type"]),
+                ApprovalDetail("preserved", "单据类型", doc_type),
                 ApprovalDetail("preserved", "单号", str(record.get("no"))),
                 ApprovalDetail("change", "审批状态", f"{before_label} → {after_label}"),
+                ApprovalDetail("side_effect", "连带业务影响", _ERP_SIDE_EFFECTS[doc_type]),
             )
-            change = RequestedEffect(entity, "state_change", entity, str(record.get("no")), canonical({"status": inputs["action"]}))
+            change = RequestedEffect(entity, "state_change", entity, str(record.get("no")), canonical({"status": after_label}))
             preserved = {k: record[k] for k in ("no", "accountId", "totalPrice") if k in record}
             effect = EffectProjection(change, canonical([]), canonical(preserved), canonical({}),
                                       ("record", "unrelated_field_preservation"), preserves_unmentioned=True)
@@ -170,6 +195,7 @@ class _StatusHandler:
         details = (
             ApprovalDetail("preserved", "秒杀活动", str(record.get("name"))),
             ApprovalDetail("change", "活动状态", f"{before_label} → 关闭"),
+            ApprovalDetail("side_effect", "不可逆影响", "活动关闭后立即停止秒杀且不可重新开启"),
         )
         change = RequestedEffect(entity, "state_change", entity, str(record.get("name")), canonical({"status": "关闭"}))
         preserved = {k: record[k] for k in ("name", "spuId") if k in record}
@@ -190,7 +216,7 @@ class _StatusHandler:
 
     def dispatch(self, args: dict, *, context=None) -> BusinessToolResult:
         actor = self.base._actor(context)
-        if str(actor["id"]) != args["actor"] or args["operation"] != self.operation:
+        if str(actor["id"]) != args.get("actor") or args.get("operation") != self.operation:
             raise BusinessToolPermissionError("prepared transition has a different actor or operation")
         entity = args["entity"]
         record_id = args["record_id"]
@@ -232,7 +258,7 @@ class _StatusHandler:
         )
 
 
-def status_tools(client, goal_data, handler_factory, special_handler_cls):
+def status_tools(client, goal_data, handler_factory):
     return [
         ToolDefinition(
             "erp_document_status",
@@ -243,9 +269,9 @@ def status_tools(client, goal_data, handler_factory, special_handler_cls):
                 "action": {"type": "string", "enum": ["审批", "反审批"]},
             }, ("document_type", "no", "action"))),
             "write", "yudao.write", ToolOperation("erp_document", "update"),
-            special_handler_cls(_StatusHandler(client, "erp_document_status", goal_data, handler_factory)) if False else _StatusHandler(client, "erp_document_status", goal_data, handler_factory),
+            _StatusHandler(client, "erp_document_status", goal_data, handler_factory),
             reference_inputs=("no",),
-            input_fields=(("action", "erp/document", "status"),),
+            input_fields=(),
             effect_contract=StatusEffects("erp_document_status"),
             scope_entities=tuple(ERP_DOCUMENT_ENTITIES.values()),
             preserves_unmentioned=True,

@@ -116,12 +116,14 @@ from web_operation_agent_yudao.client import YudaoAccount
 from web_operation_agent_yudao.native_server import YudaoHost
 from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
 from web_operation_agent_yudao.repository import repository_source
+from web_operation_agent_yudao.skill_packages import domain_playbooks
 from importlib.resources import files
 app = YudaoApplication("http://127.0.0.1:48080", YudaoAccount("synthetic", "synthetic"), {})
 assert app.business_tools.tool_names == frozenset({
     "discover_entities", "describe_entity", "query_entity_records",
     "resolve_record_reference", "find_page_entries", "resolve_goal_candidates"})
 assert app.business_tools.mutation_tool_names == frozenset()
+assert len(domain_playbooks()) == 8
 assert REFERENCE_CONVENTIONS.is_file() and YudaoHost
 assert files("web_operation_agent_yudao").joinpath("policies/repository.json").is_file()
 assert not repository_source(None, "").runtime_source

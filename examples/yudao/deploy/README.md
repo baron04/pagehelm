@@ -519,7 +519,7 @@ field entry and submit remain disabled until their separate form qualification.
 - `YudaoSource` optionally compiles the deployment's rules from the bound release's server and admin UI (`--source-root` holding `server/` and `ui/`, `--source-release` naming the release): when a button shows (its `v-if` and `v-hasPermi`), when a form field cannot be changed (its input's `:disabled` condition on the record or on how the form was opened; conditions on the page's own state are left out), and what the operation a button calls refuses (the service method's `throw exception(...)` under its `if`, with the module's error message), both tied to the operation's URL and cited as `path:lines@release sha256:...`. The rules are shown to the model only for a question about how the application behaves; a question about data is read with the same index as without them.
 
 `YudaoApplication` composes generic read tools under `yudao.read`. Mutations are off
-by default; the host's explicit `--native-writes` (goal or slim executor) enables thirty reviewed CRM, ERP, system organisation/notice, mall catalog, member tag/group and workflow category
+by default; the host's explicit `--native-writes` (goal or slim executor) enables thirty-nine reviewed CRM, ERP (including units, settlement accounts and twelve document status transitions), system organisation/notice, mall catalog/promotion status, member tag/group, OA announcement and workflow category
 operations with a persistent mutation journal, supporting Skill, fresh visible approval
 and same-actor readback. It does not enable browser submission. The identity port refuses
 unless the browser token and the server reader

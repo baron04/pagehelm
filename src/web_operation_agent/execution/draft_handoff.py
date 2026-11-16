@@ -34,7 +34,9 @@ def value_matches(element, value):
             return left.is_finite() and right.is_finite() and left == right
         except InvalidOperation:
             return False
-    return shown == value
+    if shown == value:
+        return True
+    return element.role == "combobox" and element.attrs.get("selected_option_path") == value
 
 
 def add_draft_lines(context, button, count):

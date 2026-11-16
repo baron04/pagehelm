@@ -406,7 +406,8 @@ class NativeModelReadActions(NativeReadActions):
             if len(controls) != 1:
                 return False
             shown = controls[0].attrs.get("selected_option") if expected["option"] else controls[0].attrs.get("value", "")
-            if shown != (expected["option"] or expected["value"]):
+            wanted = expected["option"] or expected["value"]
+            if shown != wanted and not (expected["option"] and controls[0].attrs.get("selected_option_path") == wanted):
                 return False
             digests = expected["digests"]
             if expected.get("choice_readback"):
@@ -649,7 +650,10 @@ class NativeDraftSteps:
                 return actual.is_finite() and requested.is_finite() and actual == requested
             except (InvalidOperation, ValueError):
                 return False
-        return shown == (expected["option"] or expected["value"])
+        wanted = expected["option"] or expected["value"]
+        if shown == wanted:
+            return True
+        return bool(expected["option"] and matches[0].attrs.get("selected_option_path") == wanted)
 
     def verify_no_effect(self, permit, intent, receipt, *, observation, context, checkpoint):
         BoundDataReads(self.data, context, checkpoint)

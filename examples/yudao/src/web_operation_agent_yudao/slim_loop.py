@@ -1233,6 +1233,10 @@ SYSTEM_NO_SOURCE = """
 
 本部署不提供源码或实现说明。用户问某功能的代码实现、内部逻辑、源码规则或提交历史时，用固定答复说明：本部署不提供源码说明；不要凭记忆或猜测描述实现细节。请求里能用应用数据回答的部分，照常读取接口作答。"""
 
+SYSTEM_COMPILED_RULES_ONLY = """
+
+本部署不提供代码实现细节或提交历史浏览；用户问代码实现或提交历史时说明：本部署不提供源码说明。涉及业务操作能否执行（状态拒绝条件）、按钮可见条件或删除变更连带影响的，照常用 entity_rules 查询编译期规则并结合接口现值回答。"""
+
 VERIFY_SYSTEM = """你是验收员。下面是用户的原话、助手的答复，以及页面此刻的真实状态（由程序读取，不是助手自述）。
 逐项核对用户原话里的每一个要求是否真的满足：
 - 要求打开/筛选/翻页/切页签的：页面路径、弹窗、页签、页面生效的查询是否就是用户要的那个对象和条件；打开的记录名称是否与用户说的完全一致。
@@ -1267,7 +1271,7 @@ def skills_text(catalog, *, knowledge: bool = True) -> str:
 
 
 def system_text(*, user: str, date: str, tz: str, conventions=(), catalog=(), knowledge: bool = True,
-                runtime_source: bool = True) -> str:
+                runtime_source: bool = True, compiled_rules: bool = False) -> str:
     """What the model is told once a conversation. The part about writes is there only when
     this actor is offered an operation; without it the text is the read-only turn's.
     Without runtime source reading the fixed reply about implementation questions is
@@ -1286,7 +1290,7 @@ def system_text(*, user: str, date: str, tz: str, conventions=(), catalog=(), kn
         text = text.replace("你能做三类事", "你能做四类事", 1).replace(
             "\n\n通用规则：", WRITE_RULES + skills_text(catalog, knowledge=knowledge) + "\n\n通用规则：", 1)
     if not runtime_source:
-        text += SYSTEM_NO_SOURCE
+        text += SYSTEM_COMPILED_RULES_ONLY if compiled_rules else SYSTEM_NO_SOURCE
     return text + conventions_text(conventions)
 
 
@@ -2148,6 +2152,7 @@ class YudaoLoopProcedures:
         if name == "load_domain_guide":
             from .skill_packages import domain_playbooks
             domain = str(args.get("domain") or "").strip()
+            self._note(s, stage="search", what="guide", term=domain, tool=name, arguments=said)
             guide = domain_playbooks().get(domain)
             if not guide:
                 return LoopToolResult(f"未知业务域：{domain}", kind="read", state="refused", error_code="unknown_domain")
@@ -2645,17 +2650,23 @@ class YudaoLoopProcedures:
         kind_order = {"refusal": 0, "cascade": 1, "visibility": 2, "editability": 3}
         for _, entity in scored[:3]:
             rules = sorted(entity.rules, key=lambda r: (kind_order.get(r.kind, 9), r.subject, r.about))
+            note = ""
             if op_filter:
                 filtered = [r for r in rules if op_filter in r.about.casefold()
                             or op_filter in (r.subject or "").casefold()
                             or op_filter in r.text.casefold()]
                 if filtered:
                     rules = filtered
-            lines.append(f"【{entity.label}（{entity.key}）编译期源码规则】")
+                else:
+                    note = f"（未命中操作词“{operation.strip()}”，以下展示该对象全部主要规则）"
+            lines.append(f"【{entity.label}（{entity.key}）编译期源码规则】{note}")
             for rule in rules[:15]:
                 subj = f" [{rule.subject}]" if rule.subject else ""
                 lines.append(f"- ({rule.kind}) {rule.about}{subj}: {rule.text}")
-        return "\n".join(lines)
+        output = "\n".join(lines)
+        if len(output) > 12_000:
+            output = output[:11_900].rsplit("\n", 1)[0] + "\n…（其余规则已省略，请指定更具体的 target 或 operation 缩小范围）"
+        return output
 
     def _find_record(self, s, name: str, kind: str = "", *,
                      answer_targets: list[AnswerTarget] | None = None,
@@ -2867,7 +2878,7 @@ class YudaoLoopProcedures:
         from .bound_data_reads import BoundDataReads
         turn = {"reads": [], "marked": "", "trace": [], "touched": []}
         context.page.checkpoint()
-        if name in {"search_menu", "search_api", "find_record", "call_api"}:
+        if name in {"search_menu", "search_api", "entity_rules", "find_record", "call_api"}:
             bound = BoundDataReads(self.goal_port.data, context.operation, context.page.checkpoint)
             with self.knowledge.client.read_window(bound._check):
                 result = self._tool(context, name, arguments, turn)
@@ -3354,17 +3365,19 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             schemas = location_schemas(schemas)
         procedures = tuple(LoopProcedure(json.dumps(schema, ensure_ascii=False),
             _Procedure(owner, schema["function"]["name"]),
-            "read" if schema["function"]["name"] in {"call_api", "find_record"} | _TABLE_TOOLS else
+            "read" if schema["function"]["name"] in {"call_api", "find_record", "entity_rules", "load_domain_guide"} | _TABLE_TOOLS else
             "metadata" if schema["function"]["name"] in {"search_menu", "search_api"} else "page",
             "yudao.read", frozenset({"handoffs"}) if schema["function"]["name"] == "highlight" else frozenset(),
             lambda arguments, observation, name=schema["function"]["name"]:
                 _requirements(name, arguments, observation, getattr(goal_port, "review", None)))
                 for schema in schemas if schema["function"]["name"] != "finish")
+        has_compiled_rules = "source" in getattr(goal_port, "capabilities", lambda: frozenset())()
         profile = ModelLoopProfile(
             system_text(user=actor_name or "当前用户", date=_today(today, time_zone), tz=time_zone,
                         conventions=conventions,
                         runtime_source=bool(getattr(getattr(kwargs.get("config"), "source", None),
-                                                    "runtime_source", False)))
+                                                    "runtime_source", False)),
+                        compiled_rules=has_compiled_rules)
                 .replace(SYSTEM_READ, SYSTEM_READ if self.program_read_delivery else TABLE_READ_RULES)
                 + page_scope_notice(review) + ("\n当前仅定位：filter_page一次导航、切页签和筛选；"
                     "open_record按当前行的record_id或精确列值打开详情；page_section/page_number切页签和分页。"

@@ -1170,7 +1170,8 @@ export function nativeControlElement(element) {
         && item.querySelectorAll('input[role="combobox"]').length === 1
         && /^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(control.id)
         && document.querySelectorAll(`[id="${control.id}"]`).length === 1
-        && control.getAttribute('role') === 'combobox' && control.getAttribute('aria-haspopup') === 'listbox'
+        && control.getAttribute('role') === 'combobox'
+        && ['listbox', 'tree'].includes(control.getAttribute('aria-haspopup'))
         && !control.disabled && control.getAttribute('aria-disabled') !== 'true'
         && control.closest('.el-select__wrapper')?.classList.contains('is-disabled') === false) return control
   }

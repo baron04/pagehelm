@@ -72,8 +72,14 @@ def packaged_skills():
 def domain_playbooks() -> dict[str, str]:
     """Read-only domain playbooks available across read, navigation and write turns."""
     root = resources.files("web_operation_agent_yudao").joinpath("domain_playbooks")
+    try:
+        if not root.is_dir():
+            return {}
+        entries = sorted(root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return {}
     out = {}
-    for entry in sorted(root.iterdir(), key=lambda p: p.name):
+    for entry in entries:
         if entry.is_file() and entry.name.endswith(".md"):
             out[entry.name.removesuffix(".md")] = entry.read_text(encoding="utf-8")
     return out

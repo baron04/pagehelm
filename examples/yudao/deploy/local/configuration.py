@@ -157,6 +157,11 @@ def source_mounts(config: Configuration) -> list[dict]:
         "requirements.lock")]
     paths += sorted(p for p in (ROOT / "frontend").iterdir() if p.is_file() and p.suffix in {".json", ".ts"})
     paths += [CACHE / "ui/src", CACHE / "woa"]
+    if (CACHE / "server").is_dir():
+        paths += sorted(
+            p / "src/main/java" for p in (CACHE / "server").rglob("yudao-module-*")
+            if p.is_dir() and (p / "src/main/java").is_dir()
+        )
     mounts = [{"type": "bind", "source": str(path), "target": "/workspace/" + str(path.relative_to(ROOT)),
                "read_only": True, "bind": {"create_host_path": False}} for path in paths]
     mounts.append({"type": "bind", "source": str(config.state / "state"), "target": "/var/lib/woa-yudao",
