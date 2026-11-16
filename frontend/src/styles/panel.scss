@@ -1622,10 +1622,74 @@ ul.woa-md__list {
 .woa-approval__inner {
   padding: 12px 14px;
 }
-.woa-approval__detail pre {
+.woa-approval__details {
+  margin: 10px 0 0;
+  padding: 0;
+}
+.woa-approval__detail {
+  display: grid;
+  grid-template-columns: 6.5em minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 6px 0;
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
+}
+.woa-approval__detail + .woa-approval__detail:not([data-kind="side_effect"]) {
+  border-top: 1px solid var(--woa-line);
+}
+.woa-approval__detail[data-kind="side_effect"] + .woa-approval__detail:not([data-kind="side_effect"]) {
+  border-top: 0;
+  margin-top: 4px;
+}
+.woa-approval__detail-label {
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
+  color: var(--woa-ink-muted);
+  overflow-wrap: anywhere;
+}
+.woa-approval__detail-label strong {
+  font: inherit;
+}
+.woa-approval__detail-value {
+  margin: 0;
+  min-width: 0;
+  color: var(--woa-ink);
+}
+.woa-approval__detail-value pre {
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
+}
+.woa-approval__detail[data-kind="change"] .woa-approval__detail-value {
+  font-weight: 500;
+}
+.woa-approval__detail[data-kind="side_effect"] {
+  margin: 4px -8px 0;
+  padding: 7px 8px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-warning-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--woa-warning) 24%, transparent);
+}
+.woa-approval__detail[data-kind="side_effect"] .woa-approval__detail-label {
+  color: var(--woa-warning);
+  font-weight: 600;
+}
+.woa-approval__detail[data-layout="block"] {
+  display: block;
+}
+.woa-approval__detail[data-layout="block"] .woa-approval__detail-label {
+  display: block;
+  margin-bottom: 4px;
+}
+.woa-approval__detail[data-layout="block"]:not([data-kind="side_effect"]) .woa-approval__detail-value pre {
+  padding: 6px 10px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height-code);
 }
 
 /* The header is a caption, not a headline: the effect below it is what is being asked. */
@@ -1672,6 +1736,9 @@ ul.woa-md__list {
   /* The dark theme's muted surface is within a shade of the card's; the hairline keeps the
      record a block of its own in both. */
   box-shadow: inset 0 0 0 1px var(--woa-line);
+}
+.woa-approval__targets:empty {
+  display: none;
 }
 .woa-approval__targets li {
   font-family: var(--woa-mono-stack);
@@ -1721,8 +1788,9 @@ ul.woa-md__list {
      so the header and the time left are not pushed out of view to reach it. */
   position: sticky;
   bottom: 0;
-  margin: 4px -14px -12px;
-  padding: 8px 14px 12px;
+  margin: 10px -14px -12px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--woa-line);
   background: var(--woa-surface-raised);
 }
 .woa-approval__actions .woa-btn {
@@ -2264,6 +2332,10 @@ ul.woa-md__list {
 
 /* ─────────────────────────────────────────────── narrow and reduced motion */
 @media (max-width: 360px) {
+  .woa-approval__detail {
+    grid-template-columns: 6em minmax(0, 1fr);
+    column-gap: 10px;
+  }
   /* Stacked, with the safe answer last -- nearest the thumb. */
   .woa-approval__actions {
     flex-direction: column;
@@ -2307,6 +2379,10 @@ ul.woa-md__list {
   .woa-empty h3 {
     background: none;
     -webkit-text-fill-color: CanvasText;
+  }
+  .woa-approval__detail[data-kind="side_effect"],
+  .woa-approval__detail[data-layout="block"]:not([data-kind="side_effect"]) .woa-approval__detail-value pre {
+    border: 1px solid CanvasText;
   }
 }
 

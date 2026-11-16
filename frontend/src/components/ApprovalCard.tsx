@@ -143,12 +143,24 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
             <li key={`${index}-${target}`}>{target}</li>
           ))}
         </ul>
-        {approval.details?.map((detail, index) => (
-          <div className="woa-approval__detail" data-kind={detail.kind} key={index}>
-            <strong>{detail.label}</strong>
-            <pre>{detail.text}</pre>
-          </div>
-        ))}
+        {approval.details && approval.details.length > 0 && (
+          <dl className="woa-approval__details">
+            {approval.details.map((detail, index) => {
+              const multiline = detail.kind === 'body' || detail.text.includes('\n')
+              return (
+                <div className="woa-approval__detail"
+                     data-kind={detail.kind}
+                     data-layout={multiline ? 'block' : undefined}
+                     key={index}>
+                  <dt className="woa-approval__detail-label"><strong>{detail.label}</strong></dt>
+                  <dd className="woa-approval__detail-value">
+                    <pre>{detail.text}</pre>
+                  </dd>
+                </div>
+              )
+            })}
+          </dl>
+        )}
         {blocked
           ? (
             <p className="woa-approval__blocked">
