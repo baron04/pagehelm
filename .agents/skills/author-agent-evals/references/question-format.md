@@ -46,3 +46,7 @@
 运行目录里每道题一份记录，三种放法都认：`<题号>/result.json`、`<题号>/worker-receipt.json`、`attempts/<题号>.json`。记录里读这些字段：`answer`（或各轮 `turns[].answer`）、`status` 或 `outcome`、`passed` 或 `success`、`reasons`、`elapsed_s` 或 `seconds`。有 `judgement` 时，通过与否以判定文件为准：`完整成功` 和 `正确拒绝` 算通过。
 
 运行目录通常在不入库的 `raw/` 下。换一台机器后页面仍显示题目，批次标为“无记录”。
+
+## 校验
+
+封存或登记运行前，用查看器把这套题过一遍格式检查：`python .workbench/question-sets/build.py --check <题集目录，从 .workbench/ 写起>`（校验逻辑就是查看器读取用的同一份代码）。有报告项的题集不封存、不登记运行；要改题面或字段，回到出题流程的对应层改，不在校验器里绕过。
