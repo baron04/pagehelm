@@ -51,7 +51,7 @@ GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "session_behavior.json
 
 #: Wall-clock and provider-timing fields. They are behaviour, but not *reproducible*
 #: behaviour, and a gold standard that is red at random teaches a team to stop reading it.
-_VOLATILE_LEDGER_FIELDS = frozenset({"t", "elapsed_s", "duration_ms", "latency_ms"})
+_VOLATILE_LEDGER_FIELDS = frozenset({"t", "elapsed_s", "duration_ms", "latency_ms", "wall_seconds"})
 _VOLATILE_RESULT_FIELDS = frozenset({"wall_seconds"})
 _HEX32 = re.compile(r"\b[0-9a-f]{32}\b")
 #: A mutation proposal is bound to a single-use nonce, so its digest is different on every

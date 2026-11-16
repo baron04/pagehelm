@@ -215,12 +215,6 @@ The two arms' answers reach the evaluator through different channels: PageAgent'
 
 Everything runs from the repository root with `PYTHONPATH=src:examples/odoo/src:.`. Private inputs, seeds, the held-out set, the fixture archives, ledgers and evidence live under `.private/p74-odoo-v1/`, which Git ignores. The live steps need Docker, the pinned PageAgent bundle (`npm ci && npm run build` in `evals/pageagent`) and Playwright Chromium.
 
-Offline tests, with the stack, the fixture, the browser runner and the evaluator process faked and everything else real:
-
-```bash
-python scripts/offline_suite.py --start-dir evals/odoo/tests --top-level . --shards 4
-```
-
 Provision the isolated `woa-p74-*` stack and its fixture. `--reuse-fixture` rebuilds only the candidate and keeps a fixture that still matches its manifest; `--destroy-first` rebuilds the fixture; `--population heldout` seeds the held-out split instead of the development one.
 
 ```bash
@@ -264,7 +258,7 @@ A held-out batch keeps what protects its conclusion. The task set was sealed and
 
 ## How it works
 
-The apparatus is grouped by responsibility; its tests use the same groups:
+The apparatus is grouped by responsibility:
 
 | Package | Responsibility |
 | --- | --- |

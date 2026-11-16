@@ -1,6 +1,7 @@
 """Selection must skip unrelated work without silently accepting broken collection."""
 from pathlib import Path
 import importlib.util
+import io
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -102,8 +103,8 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn('--module', command)
 
     def test_evaluation_changes_only_run_their_own_suite(self):
-        names, plan = self.names(['evals/odoo/reporting/summary.py'])
-        self.assertIn('evals/odoo apparatus', names)
+        names, plan = self.names(['evals/yudao/run_goals.py'])
+        self.assertIn('evals/yudao apparatus', names)
         self.assertNotIn('core regression', names)
         self.assertFalse(plan['needs_python_browser'] or plan['needs_node_browser'])
 
@@ -152,6 +153,44 @@ class SelectionTests(unittest.TestCase):
         names, _ = self.names(['examples/yudao/src/web_operation_agent_yudao/skills/query/SKILL.md'])
         self.assertIn('Yudao contracts', names)
         self.assertNotIn('documentation links', names)
+
+    def test_local_yudao_source_change_runs_only_tests_that_import_it(self):
+        _, plan = self.names([check.YUDAO_SRC + 'web_operation_agent_yudao/write_special.py'], 'dev')
+        command = next(c['argv'] for c in plan['checks'] if c['name'] == 'Yudao contracts')
+        modules = [command[i + 1] for i, value in enumerate(command) if value == '--module']
+        self.assertIn('web_operation_agent_yudao.tests.test_special_writes', modules)
+        self.assertNotIn('web_operation_agent_yudao.tests.test_deploy_commands', modules)
+
+    def test_yudao_selection_falls_back_to_all_tests(self):
+        for paths, profile in [([check.YUDAO_SRC + 'web_operation_agent_yudao/write_special.py'], 'ci'),
+                               (['examples/yudao/deploy/local/configuration.py'], 'dev'),
+                               ([check.YUDAO_SRC + 'web_operation_agent_yudao/skills/query/SKILL.md'], 'dev'),
+                               ([check.YUDAO_SRC + 'web_operation_agent_yudao/deleted.py'], 'dev')]:
+            _, plan = self.names(paths, profile)
+            command = next(c['argv'] for c in plan['checks'] if c['name'] == 'Yudao contracts')
+            self.assertNotIn('--module', command, paths)
+
+    def test_builders_run_first_browsers_alone_and_failures_stop_later_waves(self):
+        order = []
+
+        def fake_run(argv, **_kwargs):
+            order.append(argv[-1])
+            return check.subprocess.CompletedProcess(argv, 1 if argv[-1] == 'core' else 0)
+
+        checks = [{'name': name, 'argv': ['true', name], 'cwd': '.'}
+                  for name in ('core', 'runtime assets', 'panel Chromium', 'lint')]
+        with patch.object(check.subprocess, 'run', side_effect=fake_run), patch('sys.stdout', io.StringIO()):
+            self.assertEqual(check.execute(checks, {}, jobs=1, parallel=True, keep_going=False), 1)
+        self.assertEqual(order[0], 'runtime assets')
+        self.assertEqual(set(order[1:]), {'core', 'lint'})
+        order.clear()
+        with patch.object(check.subprocess, 'run', side_effect=fake_run), patch('sys.stdout', io.StringIO()):
+            self.assertEqual(check.execute(checks, {}, jobs=1, parallel=True, keep_going=True), 1)
+        self.assertEqual(order[-1], 'panel Chromium')
+
+    def test_only_unknown_check_is_refused(self):
+        with patch.object(check, 'changed_paths', return_value=(['README.md'], 'test')), patch('sys.stderr', io.StringIO()):
+            self.assertEqual(check.main(['--only', 'core regression']), 2)
 
     def test_missing_markdown_link_fails(self):
         with tempfile.TemporaryDirectory() as directory:

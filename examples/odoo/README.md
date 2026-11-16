@@ -514,10 +514,4 @@ ProviderEgressPolicy(session_handoff_keys=adapter.ports.routes.session_handoff_q
 
 ## Tests
 
-```bash
-PYTHONPATH=src:examples/odoo/src python -m unittest discover \
-  -s examples/odoo/src/web_operation_agent_odoo/tests -t examples/odoo/src
-```
-
-Every case runs against a fake JSON-RPC transport or an invented two-module source tree. No
-test in this package requires a reachable Odoo; the live checks are the opt-in gate above.
+This reference adapter no longer has an offline test suite; only the opt-in live checks above remain.

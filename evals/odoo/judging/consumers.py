@@ -2,12 +2,11 @@
 
 The rule this apparatus turns on is that a source nobody could read is a different fact from a
 source read as empty. The rule holds only where every consumer of a source applies it, so the
-consumers are written down here rather than left to be found. The registry is data: the tests
-check the code against it, and a reviewer reads it to follow a source to the decisions it
+consumers are written down here rather than left to be found. The registry is data: a reviewer reads it to follow a source to the decisions it
 reaches without first having to find them.
 
 A function that reads one of :data:`evals.odoo.judging.capture.SOURCES` and is not listed here is a
-consumer nobody checked; :mod:`evals.odoo.tests.judging.test_consumers` refuses one.
+consumer nobody checked; no test enforces this since the offline suite was removed.
 """
 from __future__ import annotations
 
