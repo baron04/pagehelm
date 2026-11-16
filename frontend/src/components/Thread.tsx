@@ -89,6 +89,32 @@ interface Turn {
   running: boolean
 }
 
+function isToolReadPair(prev: TimelineEntry | undefined, next: TimelineEntry): boolean {
+  const p = prev?.step
+  const n = next.step
+  return Boolean(p && n && p.stage === 'tool' && n.stage === 'read_done' && p.tool && p.tool === n.tool)
+}
+
+function mergeReadSteps(steps: TimelineEntry[]): TimelineEntry[] {
+  const merged: TimelineEntry[] = []
+  for (const entry of steps) {
+    const prev = merged.at(-1)
+    if (prev && isToolReadPair(prev, entry)) {
+      // Collapse a `tool` start line into its matching `read_done` result while keeping both
+      // the call's starting timestamp and its arguments alongside the returned summary.
+      merged[merged.length - 1] = {
+        ...entry,
+        id: prev.id,
+        at: prev.at || entry.at,
+        step: {...prev.step, ...entry.step},
+      }
+      continue
+    }
+    merged.push(entry)
+  }
+  return merged
+}
+
 function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   const turns: Turn[] = []
   // A turn keeps its place even when another's lines arrive between its own -- two pages of
@@ -110,8 +136,9 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   if (last && busy && last.outcome === null) last.running = true
   // A line that only says the assistant is working is true while nothing newer has happened.
   for (const turn of turns) {
-    turn.steps = turn.steps.filter((step, index) => !step.transient
+    const visible = turn.steps.filter((step, index) => !step.transient
       || (turn.running && index === turn.steps.length - 1))
+    turn.steps = mergeReadSteps(visible)
   }
   return turns
 }
@@ -235,7 +262,7 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
         {/* Keyed by the step, so each new one arrives rather than overwriting the last. */}
         {stopping
           ? <span className="woa-work__now" key="stopping">{labels.statusStopping}</span>
-          : <span className="woa-work__now" key={current.id}>{current.text}</span>}
+          : <span className="woa-work__now" key={`${current.id}:${current.text}`}>{current.text}</span>}
         <ChevronDown {...iconProps(14)} className="woa-work__chevron" />
         {total && <span className="woa-work__clock">{total}</span>}
       </button>

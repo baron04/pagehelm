@@ -1103,19 +1103,21 @@ test.describe('the work process', () => {
     await panel.page.locator('.woa-launcher').click()
     await panel.page.locator('.woa-work__summary').click()
     await panel.page.locator('.woa-step').first().waitFor()
-    await expect(panel.page.locator('.woa-step')).toHaveCount(2)
-    await expect(panel.page.locator(".woa-step[data-status='done']")).toHaveCount(2)
+    await expect(panel.page.locator('.woa-step')).toHaveCount(1)
+    await expect(panel.page.locator(".woa-step[data-status='done']")).toHaveCount(1)
+    await expect(panel.page.locator('.woa-step__text')).toHaveText('已读取 3 条：未确认、未取消的报价单')
     // A node that opens says so; how long it took is inside, not in a column beside it.
-    await expect(panel.page.locator('.woa-step__chevron')).toHaveCount(2)
-    await expect(panel.page.locator('.woa-work__steps')).not.toContainText('3s')
-    // Opening a node shows what was called, with what, and for how long -- the panel invents
-    // none of it; every field is projected and bounded by the server.
+    await expect(panel.page.locator('.woa-step__chevron')).toHaveCount(1)
+    await expect(panel.page.locator('.woa-work__steps')).not.toContainText('4s')
+    // Opening a node shows what was called, with what, what came back, and for how long --
+    // the panel invents none of it; every field is projected and bounded by the server.
     await panel.page.locator('.woa-step__line').first().click()
     const detail = panel.page.locator('.woa-step__detail').first()
     await detail.waitFor()
     await expect(detail).toContainText('query_quotations')
     await expect(detail).toContainText('limit=50')
-    await expect(detail).toContainText(`${labels.stepDuration}3s`)
+    await expect(detail).toContainText('3 条 · 未确认、未取消的报价单')
+    await expect(detail).toContainText(`${labels.stepDuration}4s`)
     expect(panel.errors).toEqual([])
   })
 
