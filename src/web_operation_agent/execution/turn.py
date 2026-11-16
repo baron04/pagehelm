@@ -84,6 +84,8 @@ class AgentTurnExecutor:
                  ledger_factory: LedgerFactory = SessionLedger,
                  conversation_state: ConversationState | None = None, turn_events=None):
         self.channel = channel
+        if hasattr(channel, "read_only_mode"):
+            channel.read_only_mode = not bool(config.allow_business_mutations)
         self.turn_events = turn_events
         self.config = config
         # Checked here, not on the first model call: a wrong chat shape is a wiring error and

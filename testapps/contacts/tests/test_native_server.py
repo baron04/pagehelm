@@ -554,6 +554,48 @@ class NativeContactsHostTests(unittest.TestCase):
                 self.assertEqual(unresolved[0].state, "dispatching")
                 self.assertEqual(recovered.application.post_requests, 0)
 
+    def test_hello_panel_configuration_projects_read_only_mode_over_channel(self):
+        from web_operation_agent.schemas import BROWSER_ACTIONS, SCHEMA_VERSIONS, ClientHello
+
+        cookie = f"{DEMO_SESSION_COOKIE}=session-ada-northstar"
+        for allow_mutations, native_submit_writes, expected in (
+            (False, False, True),
+            (True, False, False),
+            (False, True, False),
+        ):
+            with self.subTest(allow_mutations=allow_mutations, native_submit_writes=native_submit_writes), \
+                    tempfile.TemporaryDirectory() as directory, NativeContactsHost(
+                    NativeServerConfig(Path(directory), port=0, scripted=True, model_loop=True,
+                                       allow_mutations=allow_mutations,
+                                       native_submit_writes=native_submit_writes)) as host:
+                status, bootstrap, _ = _request(
+                    host.origin + "/woa/bootstrap",
+                    body={"runtime_instance_id": "ro-tab-1"}, cookie=cookie, origin=host.origin)
+                self.assertEqual(status, 200)
+                cfg = bootstrap["config"]
+                hello_payload = ClientHello(
+                    schema_version=SCHEMA_VERSIONS["ClientHello"],
+                    session_id=cfg["sessionId"],
+                    client_id="synthetic-client",
+                    runtime_instance_id="ro-tab-1",
+                    runtime="embedded-web",
+                    capabilities=tuple(sorted(BROWSER_ACTIONS)),
+                    page_origin=host.origin,
+                    application_id=cfg["applicationId"],
+                    principal_digest=cfg["principalBinding"],
+                ).to_json()
+                req = urllib.request.Request(
+                    f"{cfg['endpoint']}/v1/sessions/{cfg['sessionId']}/hello",
+                    data=json.dumps(hello_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json",
+                             "Authorization": f"Bearer {cfg['clientToken']}",
+                             "Origin": host.origin},
+                    method="POST")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    hello = json.loads(resp.read().decode("utf-8"))
+                self.assertIs(hello["panel"]["read_only_mode"], expected)
+                self.assertEqual(hello["panel"]["labels"]["readOnlyMode"], "只读模式")
+
 
 @browser_only
 class NativeContactsBrowserTests(unittest.TestCase):

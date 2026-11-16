@@ -233,6 +233,39 @@ class TurnTablesTest(unittest.TestCase):
             self.tables.query("SELECT name FROM t1 WHERE name GLOB 'A*'")["rows"],
             [["Alice"], ["Alicia"]])
 
+    def test_small_complete_api_reads_inline_all_rows_while_large_or_partial_reads_stay_sampled(self):
+        from web_operation_agent_yudao.slim_loop import ActorKnowledge
+        from web_operation_agent_yudao.tests.test_slim_loop import Client, DOCS
+
+        knowledge = ActorKnowledge(Client(), lambda: DOCS)
+        small = knowledge.call_api("orders/page", {"pageNo": 1, "pageSize": 10},
+                                   ["no", "status"], row_sink=self.tables.add)
+        self.assertIn("全部行（共 2 行，已读完所有页", small)
+        self.assertNotIn("样例（不是全表）", small)
+
+        many_client = Client()
+        many_rows = [{"id": i, "no": f"S{i}", "status": 1} for i in range(1, 36)]
+        orig = many_client.get
+        many_client.get = lambda path, **params: (
+            {"list": many_rows, "total": 35} if path == "orders/page" else orig(path, **params))
+        large = ActorKnowledge(many_client, lambda: DOCS).call_api(
+            "orders/page", {"pageNo": 1, "pageSize": 50}, ["no", "status"], row_sink=self.tables.add)
+        self.assertIn("样例（不是全表）", large)
+        self.assertNotIn("全部行（共", large)
+
+    def test_scalar_min_and_max_queries_report_tied_extrema(self):
+        self.tables.add(path="scores/page", params={}, rows=[
+            {"id": 1, "name": "A", "duration": 180},
+            {"id": 2, "name": "B", "duration": 180},
+            {"id": 3, "name": "C", "duration": 90},
+        ], total=3, complete=True)
+        tied = self.tables.query("SELECT MAX(duration) FROM t1")
+        self.assertEqual(tied["rows"], [[180]])
+        self.assertIn("共有 2 行同值并列", tied["tie_note"])
+        unique = self.tables.query("SELECT MIN(duration) FROM t1")
+        self.assertEqual(unique["rows"], [[90]])
+        self.assertNotIn("tie_note", unique)
+
     def test_a_quoted_alias_cannot_inject_sql_into_the_tie_probe(self):
         self.tables.add(path="items", params={}, rows=[
             {"v": i} for i in range(1, 8)], total=7, complete=True)

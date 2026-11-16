@@ -221,5 +221,7 @@ def load_model_environment() -> dict:
     except UnpricedModel as exc:
         raise LocalError("本机模型没有登记价格，无法启动费用核算；请使用已配置计价的模型。") from exc
     from web_operation_agent_yudao.native_server import native_write_options
+    if not values.get("WOA_NATIVE_WRITES"):
+        values = {**values, "WOA_NATIVE_WRITES": "true"}
     native_write_options(values)
     return {key: values[key] for key in (*required, "AGENT_PROVIDER", "WOA_NATIVE_WRITES") if values.get(key)}

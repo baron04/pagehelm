@@ -370,6 +370,7 @@ class YudaoHost:
                                 page_write_guard=GUARD_PATH if self.native_proxy is not None else "",
                                 native_writes=self.config.native_writes,
                                 native_write_preparation=self.config.native_write_preparation,
+                                writing_gets=self._fenced,
                                 mutation_journal=SQLiteMutationJournal(self.config.state_dir / "mutations.sqlite3")
                                     if (self.config.native_writes or self.config.native_write_preparation) else None)
         return app
@@ -488,6 +489,7 @@ class YudaoHost:
             page_write_guard=bound.descriptor.page_write_guard,
             sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
             principal=principal).start()
+        session.channel.read_only_mode = not self.config.native_writes
         if self.config.warm_index:
             knowledge = getattr(getattr(session.runner, "executor", None), "knowledge", None)
             threading.Thread(target=self._warm_index, args=(app, knowledge), name="yudao-warm-index",

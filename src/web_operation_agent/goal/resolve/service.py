@@ -88,7 +88,7 @@ class DataGoalPort:
             if isinstance(found, Ambiguous):
                 shown = set(found)
                 refs = [r for r in resolver._find(entity, text, 8) if r.display in shown]
-            elif isinstance(found, tuple) and _begins(resolver, text, found):
+            elif isinstance(found, tuple) and _holds(resolver, text, found):
                 refs = [found.ref]
             else:
                 return None
@@ -130,7 +130,9 @@ class DataGoalPort:
             index = self.index(context=context)
             make = lambda: self._resolver(index)  # noqa: E731
         shown = tuple(dict.fromkeys(p.entity for p in index.pages if p.entity))
-        entities = tuple(e for e in shown if e in entities) if entities else shown
+        searchable = getattr(self.data, "name_searchable", None) if not entities else None
+        entities = (tuple(e for e in shown if e in entities) if entities else
+                    tuple(e for e in shown if searchable(e, text)) if callable(searchable) else shown)
         serial_resolver = make() if self.reference_workers == 1 else None
 
         def find(entity):
@@ -215,3 +217,13 @@ def _begins(resolver, text: str, found) -> bool:
     own = norm(found.personal)
     return (shown == wanted or shown.startswith(wanted) or norm(found[2]).startswith(wanted)
             or own == wanted or own.startswith(wanted))
+
+
+def _holds(resolver, text: str, found) -> bool:
+    """Whether the one record found carries the name or shorthand asked for."""
+    wanted = norm(text)
+    if not wanted:
+        return False
+    shown = norm(resolver._own_name(found[2]))
+    own = norm(found.personal)
+    return wanted in shown or wanted in norm(found[2]) or (bool(own) and wanted in own)

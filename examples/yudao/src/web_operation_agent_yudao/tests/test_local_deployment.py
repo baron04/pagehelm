@@ -51,6 +51,20 @@ class HostConfigurationTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 serve.host_config(settings, {**base, "WOA_NATIVE_WRITES": value})
 
+    def test_local_launcher_defaults_native_writes_on_while_respecting_explicit_false(self):
+        base_env = {
+            "AGENT_OPENAI_BASE_URL": "https://api.deepseek.com/v1",
+            "AGENT_OPENAI_API_KEY": "synthetic-key",
+            "AGENT_OPENAI_MODEL": "deepseek-flash",
+        }
+        with patch("web_operation_agent.modeling.client.load_env", return_value=dict(base_env)):
+            loaded = cfg.load_model_environment()
+        self.assertEqual(loaded["WOA_NATIVE_WRITES"], "true")
+        with patch("web_operation_agent.modeling.client.load_env",
+                   return_value={**base_env, "WOA_NATIVE_WRITES": "false"}):
+            disabled = cfg.load_model_environment()
+        self.assertEqual(disabled["WOA_NATIVE_WRITES"], "false")
+
 
 
 class LauncherTests(unittest.TestCase):

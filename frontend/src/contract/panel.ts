@@ -118,6 +118,7 @@ export interface PanelConfiguration {
   lapse_codes: string[]
   session_expires_at: number
   principal_expires_at: number
+  read_only_mode?: boolean
 }
 
 // One generated integer, shared with the Runtime (`runtime/panelHost.ts`) so the two sides
@@ -136,6 +137,7 @@ export const DEFAULT_CONFIGURATION: PanelConfiguration = {
   lapse_codes: [...raw.lapse_codes],
   session_expires_at: 0,
   principal_expires_at: 0,
+  read_only_mode: false,
 }
 
 export function toneOf(state: PanelState): Tone {

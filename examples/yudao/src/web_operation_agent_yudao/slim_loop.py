@@ -349,7 +349,7 @@ class ActorKnowledge:
         return tuple((str(row["id"]), row["name"]) for row in data.get("list") or ()
                      if isinstance(row, dict) and type(row.get("id")) is int and row["id"] > 0
                      and isinstance(row.get("name"), str)
-                     and row["name"].strip().casefold() == wanted)[:5]
+                     and wanted in row["name"].strip().casefold())[:5]
 
     def suggest(self, sentence: str) -> str:
         """Pages and lists whose own names the person's words contain, found without a
@@ -698,7 +698,13 @@ class ActorKnowledge:
             out.append(json.dumps(info, ensure_ascii=False))
             if table_rows:
                 data_lines.add(len(out))
-                out.append("样例（不是全表）：" + json.dumps(table_rows[:3], ensure_ascii=False)[:2600])
+                inline = (json.dumps(table_rows, ensure_ascii=False)
+                          if info["complete"] and len(table_rows) <= 30 else "")
+                if inline and len(inline) <= 9000:
+                    out.append(f"全部行（共 {len(table_rows)} 行，已读完所有页；单表查看或名单可直接引用上方读取回执交付，"
+                               f"无需再调 tables/sql 重复取行；需多行聚合、差额、分组或排序极值时再用 sql）：" + inline)
+                else:
+                    out.append("样例（不是全表）：" + json.dumps(table_rows[:3], ensure_ascii=False)[:2600])
             return self._told(out, data_lines)
         if rows is None:
             shown = self._row(data) if isinstance(data, dict) else data
@@ -965,10 +971,10 @@ def _tool(name, description, properties, required):
 TOOLS = [
     _tool("search_menu", "按业务词查找后台菜单页面，返回页面路径。", {
         "keyword": {"type": "string", "description": "业务词，如 采购入库、会员等级"}}, ["keyword"]),
-    _tool("find_record", "按名称查这条记录在哪些模块里（客户、合同、商机、产品、订单……）。"
-          "用户给了记录名却没说它是什么，或者你不确定它属于哪个模块时，先用它。"
+    _tool("find_record", "按名称或简称查这条记录在哪些模块里（客户、合同、商机、产品、订单……）。"
+          "用户给了记录全称或简称却没说它是什么，或者你不确定它属于哪个模块时，先用它。"
           "新增表单里类型已明确的关联字段直接填写用户给的名称，不用此工具预查下拉名称。", {
-        "name": {"type": "string", "description": "记录名称，照用户原话；编号查询用call_api已发布的编号参数"},
+        "name": {"type": "string", "description": "记录名称或用户给出的简称，照用户原话；编号查询用call_api已发布的编号参数"},
         "kind": {"type": "string", "description":
                  "用户说了这是哪一类记录（员工、供应商、销售退货单……）时，照用户的说法填这个词：只在名称里有这个词的模块中查，"
                  "快得多。用户没说就不给"}}, ["name"]),
@@ -1083,8 +1089,8 @@ SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call
 - “查看某字段/数量/名单”直接交付；“查看某记录/详情/页面”进入相应位置。纯查询不额外操作页面。金额由程序按已核验单位填入，未核验的标“单位未核验”，不自行换算或补单位。
 - 无权限结论只能来自指向它本身的确切读取被拒。某次查询被拒不等于整类不可读；已读结果能回答时照常作答。
 """
-TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按确切名称找记录，kind 限定类型，编号用对应编号参数。
-1）交付中的值须来自本轮回执。先 tables 看行表、查询范围、实读数、总数和完整性，再用 sql 计算；说明依据回执、条件、口径和算法。
+TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按名称或简称找记录，kind 限定类型，编号用对应编号参数。
+1）交付中的值须来自本轮回执。call_api 若已完整内联全部行（≤30 行）且无需二次聚合、差额或排序，可直接引用其读取回执交付，省去多余的 tables/sql 调用；跨页、聚合、差额、分组或极值排名先看行表完整性再用 sql 计算；说明依据条件、口径和算法。
 2）相对日期先用 date_range 换成具体范围，再写入 API 参数或 SQL 筛选。已发生事项的本周、本月、本季度、今年默认截至当天；计划、预算用scope=planned覆盖完整自然周期。近N天含当天共N个自然日，用unit=rolling_days及days=N；最近一个月为近30天，上个月为上一个自然月。用户明确起止日期优先，用unit=range及start_date/end_date，首尾均含。按用户动词选真实时间列；创建时间不代替业务日期。SQL 表保留接口原值或已核验的显示单位；时间戳用换算结果中的毫秒阈值，ISO 日期用日期范围。
 3）找不到接口、字段或记录，或读取失败，说明缺什么；不能核实时用 cannot 或追问。不把已提交的参数当作返回行确已满足条件的证明；用已读字段核对。范围未读全不能报全量合计、极值、完整名单或不存在。
 4）同名时按组织用语约定和所在模块消歧；仍有多条，列候选并追问，不缩短名称或穷举模块。关联对象先按确切名称解析同账号编号，条件和分组用编号，名称用于展示。
@@ -1098,7 +1104,9 @@ TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，ca
 """
 
 PAGE_DELIVERY_RULES = """
-用户要求定位、打开记录详情、切页签、点树节点或在列表筛选时，结果必须落在发起请求的用户页上。接口结果、记录地址和文字建议不能代替页面落点。
+用户要求定位、调出、打开记录详情、切页签、点树节点或在列表筛选时，结果必须落在发起请求的用户页上。接口结果、记录地址和文字建议不能代替页面落点。
+- “调出”某类记录：必须在用户页的列表上按条件筛好并停在列表页；接口数据和文字名单不能代替，也不点进单条记录。
+- 若用户当前已在具体业务页或弹窗上，并用“这单、当前页、这个”指代，直接以当前页面观察中的路由、记录或弹窗为上下文，不要脱离当前页重头盲搜。
 - 用现有通用页面动作操作。每一步查看最新观察和回执，核对记录、详情标题、选中页签或树节点。只到列表不能交付指定记录详情。
 - 筛选须同时核对页面自己发出的请求条件和当前渲染行。用观察中的应用查询回执核对条件，用可见表格的行和值核对结果；0行时说明已核验的条件与空结果。缺少条件或行的证明时如实报告尚未核验，不称筛选成功。
 - 页面定位动作完成后先看回执，再用 finish 交付，不在动作上带 answer。finish.items 的 kind 分别用 data、page、write。页面交付用 kind=page，receipts 可为空；程序按用户页的实际状态核对（不在首页、没有无关残留弹窗、说已交接的交接仍在）。最后核对用户页仍在该状态，混合请求逐项交付。
@@ -3109,10 +3117,18 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                     turn.pop("draft_handoff_form", None)
                     submit = receipt.args_echo.get("submit", {})
                     targets = [e for e in receipt.observation.elements if isinstance(submit, dict) and e.role == "button"
-                               and e.name.strip() == str(submit.get("label") or "").strip()
+                               and plain(e.name) == plain(str(submit.get("label") or ""))
                                and e.attrs.get("form_scope") == submit.get("scope")]
                     if len(targets) == 1:
-                        turn["draft_handoff_form"] = _draft_form_binding(receipt.observation, targets[0])
+                        carrier = next(
+                            (e for e in receipt.observation.elements
+                             if e.role in FORM_INPUT_CONTROLS
+                             and e.attrs.get("form_scope") == targets[0].attrs.get("form_scope")
+                             and e.attrs.get("form_instance") == targets[0].attrs.get("form_instance")
+                             and e.attrs.get("form_lifetime")),
+                            targets[0],
+                        )
+                        turn["draft_handoff_form"] = _draft_form_binding(receipt.observation, carrier)
         return result
 
     def _default_handoff(self, s, turn) -> str:
@@ -3219,10 +3235,18 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                     if receipt is not None:
                         submit = receipt.args_echo.get("submit", {})
                         targets = [e for e in receipt.observation.elements if isinstance(submit, dict)
-                                   and e.role == "button" and e.name.strip() == str(submit.get("label") or "").strip()
+                                   and e.role == "button" and plain(e.name) == plain(str(submit.get("label") or ""))
                                    and e.attrs.get("form_scope") == submit.get("scope")]
                         if len(targets) == 1:
-                            turn["draft_handoff_form"] = _draft_form_binding(receipt.observation, targets[0])
+                            carrier = next(
+                                (e for e in receipt.observation.elements
+                                 if e.role in FORM_INPUT_CONTROLS
+                                 and e.attrs.get("form_scope") == targets[0].attrs.get("form_scope")
+                                 and e.attrs.get("form_instance") == targets[0].attrs.get("form_instance")
+                                 and e.attrs.get("form_lifetime")),
+                                targets[0],
+                            )
+                            turn["draft_handoff_form"] = _draft_form_binding(receipt.observation, carrier)
                 if (not turn.get("handoff") or turn["handoff"][0] != self._page_fingerprint(s.obs)
                         or entered != {turn.get("draft_handoff_form")}):
                     return DeliveryFeedback("draft_handoff_required",
@@ -3281,7 +3305,51 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         super().__init__(profile=profile, **kwargs)
         if native_submit is not None:
             self.native_submit = native_submit
+            if hasattr(self.channel, "read_only_mode"):
+                self.channel.read_only_mode = False
             self.profile = replace(self.profile, instructions=self.profile.instructions + NATIVE_SUBMIT_RULES)
+
+    def _with_not_executed(self, s, turn, answer):
+        handoffs = getattr(getattr(self, "knowledge", None), "handoffs", BASELINE_SESSION_HANDOFFS)
+        return _clean_user_answer(super()._with_not_executed(s, turn, answer), handoffs)
+
+
+_RECEIPT_PAREN = re.compile(
+    r"[（(][^（）()\n]{0,24}?\b(?:ev_[0-9a-f]{12}_\d+|行表\s*t\d{1,2})\b[^（）()\n]{0,48}?[）)]"
+)
+_RECEIPT_INLINE = re.compile(
+    r"(?:[，,；;、]\s*)?(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具|页面状态)?回执"
+    r"(?:号|编号)?[:：=\s]*`?\bev_[0-9a-f]{12}_\d+\b`?(?:[、,，/\s]+`?\bev_[0-9a-f]{12}_\d+\b`?)*"
+)
+_BARE_RECEIPT = re.compile(r"`?\bev_[0-9a-f]{12}_\d+\b`?")
+_TABLE_TOKEN = re.compile(r"(?:本轮)?行表\s*`?\bt\d{1,2}\b`?")
+_PAGE_OBLIGATION = re.compile(
+    r"调出|(?:帮我|请)?(?:打开|进入|跳转到?|定位到?|切到|切换到)[^，。；！？?\n]{0,24}"
+    r"(?:页面|列表|详情|台账|看板|页签|栏目|菜单|视图|界面)"
+    r"|在(?:当前)?(?:页面|列表)(?:上|里|中)?(?:筛选|过滤|按条件筛)"
+)
+_META_PAGE_QUESTION = re.compile(r"(?:怎么|如何|怎样|能否|能不能|是否|为什么)[^，。；！？?\n]{0,12}(?:打开|调出|进入|跳转|切到)")
+_ALREADY_SATISFIED = re.compile(r"已是|已经为|已经是|无需修改|原本就是|保持一致|未发生变化")
+
+
+def _requires_page_delivery(prompt: str) -> bool:
+    said = _words(prompt or "").strip()
+    if not said or _META_PAGE_QUESTION.search(said):
+        return False
+    return bool(_PAGE_OBLIGATION.search(said))
+
+
+def _clean_user_answer(answer: str, handoffs) -> str:
+    if not answer:
+        return answer
+    cleaned = redacted(answer, handoffs)
+    cleaned = _RECEIPT_PAREN.sub("", cleaned)
+    cleaned = _RECEIPT_INLINE.sub("", cleaned)
+    cleaned = _BARE_RECEIPT.sub("", cleaned)
+    cleaned = _TABLE_TOKEN.sub("本轮读取数据", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([，。；：！？])", r"\1", cleaned)
+    return cleaned.strip()
 
 
 
@@ -3376,6 +3444,24 @@ class TableReadTurnExecutor(SlimTurnExecutor):
                     if facts["masked"] and not delivered_dialog:
                         raise TurnReadError("delivery_page_masked",
                                             "当前页面仍有弹窗遮罩未关闭；等页面落定后再标为已交付。")
+                elif item["kind"] == "write" and item["status"] == "delivered":
+                    if (not turn.get("written") and not turn.get("handoff")
+                            and not _ALREADY_SATISFIED.search(str(args.get("answer") or ""))):
+                        raise TurnReadError("delivery_write_unverified",
+                                            "交付项声明为已完成写入（kind=write），但本轮没有已核验的写入结果或表单交接；"
+                                            "请先完成批准提交或如实标为 undelivered / cannot。")
+            if (args.get("status") == "done"
+                    and "goto" not in getattr(getattr(self, "config", None), "disabled_actions", frozenset())
+                    and not turn.get("written") and not turn.get("handoff")
+                    and _requires_page_delivery(getattr(getattr(s, "message", None), "text", ""))):
+                facts = page_facts()
+                has_page_item = any(item.get("kind") == "page" and item.get("status") == "delivered"
+                                    for item in args["items"])
+                if facts["home"] or not has_page_item:
+                    raise TurnReadError("delivery_page_obligation",
+                                        "用户的请求要求在页面上调出、打开或筛选，不能仅用接口文字代替页面落点。"
+                                        "请在用户页完成对应导航与筛选并加入 kind=page 的交付项；"
+                                        "若页面本身无对应入口或筛选控件，将该页面项标为 undelivered 并以 status=cannot 如实说明。")
             if (args.get("status") == "done"
                     and any(item["status"] != "delivered" for item in args["items"])):
                 raise TurnReadError("delivery_incomplete",
@@ -3383,6 +3469,8 @@ class TableReadTurnExecutor(SlimTurnExecutor):
         except TurnReadError as exc:
             if exc.code.startswith(("delivery_page_", "delivery_dialog_")):
                 affected = tuple(i for i, item in enumerate(args["items"]) if item["kind"] == "page")
+            elif exc.code == "delivery_write_unverified":
+                affected = tuple(i for i, item in enumerate(args["items"]) if item["kind"] == "write")
             elif exc.code == "delivery_incomplete":
                 affected = tuple(i for i, item in enumerate(args["items"]) if item["status"] != "delivered")
             else:

@@ -85,10 +85,12 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
                  principal: PrincipalContext | None = None,
                  limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
-                 principal_validator: Callable[[PrincipalContext], None] | None = None):
+                 principal_validator: Callable[[PrincipalContext], None] | None = None,
+                 read_only_mode: bool = False):
         self.session_id = session_id
         self.allowed_origins = frozenset(allowed_origins)
         self.principal = principal
+        self.read_only_mode = bool(read_only_mode)
         if principal_validator is not None and not callable(principal_validator):
             raise TypeError("principal_validator must be callable or None")
         if principal_validator is not None and principal is None:

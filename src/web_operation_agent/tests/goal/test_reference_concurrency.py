@@ -131,6 +131,46 @@ class ReferenceConcurrencyTests(unittest.TestCase):
         self.assertEqual(failures, (('refused', False, False),))
         self.assertEqual(port.records_named('2026-10-01'), ())
 
+    def test_records_named_accepts_shorthand_substrings_and_honors_searchable_scope(self):
+        keys = ('customer', 'coupon', 'unindexed')
+        index = ApplicationIndex(entities=tuple(IndexEntity(k, k) for k in keys),
+                                 pages=tuple(IndexPage('/' + k, k, k, k) for k in keys))
+        visited = []
+        port = DataGoalPort(SimpleNamespace(
+            index=lambda **kw: index,
+            record_address=lambda entity, rid: f'/{entity}/{rid}',
+            name_searchable=lambda entity, _text: entity != 'unindexed',
+        ))
+
+        class Reader:
+            def view(self, entity):
+                return object()
+
+            def _find_record(self, entity, text):
+                visited.append(entity)
+                if entity == 'customer':
+                    return Found(Ref('customer', '12', '深圳远辰启源工程技术有限责任公司'))
+                if entity == 'coupon':
+                    return Found(Ref('coupon', '5', '青屿满99减15新人专享券'))
+                if entity == 'unindexed':
+                    return Found(Ref('unindexed', '99', '深圳远辰日志'))
+                return None
+
+            def _own_name(self, display):
+                return display
+
+        with patch.object(port, '_resolver', side_effect=lambda _index: Reader()):
+            found = port.records_named('远辰')
+            # Prefix-strict locate_reference stays conservative for implicit goal declarations.
+            implicit = port.locate_reference('远辰')
+            visited.clear()
+            explicit = port.records_named('远辰', entities=('unindexed',))
+        self.assertEqual(found, (('customer', (('12', '深圳远辰启源工程技术有限责任公司', '/customer/12'),)),))
+        self.assertNotIn('unindexed', ['customer', 'coupon'])
+        self.assertEqual(implicit, ())
+        self.assertEqual(explicit, (('unindexed', (('99', '深圳远辰日志', '/unindexed/99'),)),))
+        self.assertEqual(visited, ['unindexed'])
+
     def test_worker_configuration_is_bounded_and_default_is_sequential(self):
         data = object()
         self.assertEqual(DataGoalPort(data).reference_workers, 1)
