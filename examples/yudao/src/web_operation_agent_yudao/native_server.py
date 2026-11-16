@@ -216,6 +216,25 @@ class _Active:
     delegation_id: str
 
 
+class _PageWindow:
+    """Resolves the guard window a session's work belongs to at call time.
+
+    A turn's page-load passes, read evidence, refusals and submit permits are the
+    ones the page holding the turn names as its runtime instance. Before the
+    session's channel exists -- or once no page's lease is active -- the window is
+    the page that opened the session.
+    """
+
+    def __init__(self, instance: str):
+        self.instance = instance
+        self.channel = None
+
+    def __call__(self) -> str:
+        channel = self.channel
+        active = channel.active_instance if channel is not None else ""
+        return active or self.instance
+
+
 class YudaoHost:
     def __init__(self, config: YudaoHostConfig):
         from .deployment_validation import validate_native_deployment
@@ -333,7 +352,8 @@ class YudaoHost:
             # dictionary choices are read from yudao during application construction.
             page = YudaoIdentityPort(self.config.api_base, client).page_identity(token)
             key = (tenant, page.actor_id, instance)
-            app = self._application(client, window=instance)
+            page_window = _PageWindow(instance)
+            app = self._application(client, window=page_window)
             with self._lock:
                 active = self._sessions.get(key)
                 if active is not None:
@@ -344,7 +364,7 @@ class YudaoHost:
                         self._sessions.pop(key, None)
                     else:
                         # The same person, the page's newer token: the session goes on reading
-                        # as them.
+                        # as them, under this page's own lease.
                         active.client.renew(token)
                         principal = app.ports.identity.bind(
                             page, delegation_id=active.delegation_id,
@@ -358,7 +378,7 @@ class YudaoHost:
                 principal = app.ports.identity.bind(
                     page, delegation_id="yudao-" + uuid.uuid4().hex,
                     lifetime_s=self.config.principal_lifetime_s)
-                session = self._open(app, principal, key)
+                session = self._open(app, principal, key, page_window)
                 self._sessions[key] = _Active(session=session, client=client,
                                               delegation_id=principal.delegation_id)
                 return self._browser_bootstrap(session)
@@ -371,7 +391,7 @@ class YudaoHost:
                 raise BootstrapRefused(403, "access_denied") from exc
             raise
 
-    def _application(self, client: YudaoClient, *, window: str = "") -> YudaoApplication:
+    def _application(self, client: YudaoClient, *, window: str | _PageWindow = "") -> YudaoApplication:
         from .guard_proxy import GUARD_PATH
         from web_operation_agent.business.mutation import SQLiteMutationJournal
         forms = None
@@ -404,7 +424,7 @@ class YudaoHost:
         from web_operation_agent.execution.turn_trace import prune_turn_traces
         prune_turn_traces(self.config.state_dir / "runs", self.config.turn_trace_days)
 
-    def _open(self, app: YudaoApplication, principal, key):
+    def _open(self, app: YudaoApplication, principal, key, page_window: _PageWindow):
         bound = bind_application(app)
         stable = hashlib.sha256("\0".join(key).encode()).hexdigest()[:40]
         session_id = "yudao-" + stable
@@ -427,6 +447,9 @@ class YudaoHost:
                              session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
 
         def runner_factory(channel):
+            # The window every page this session is opened on works through is the one
+            # the turn's own page carries; resolve it against the channel once it exists.
+            page_window.channel = channel
             from .page_goals import NativePageGoalPort
             if isinstance(app.goal_port, NativePageGoalPort):
                 from web_operation_agent.transport import RemoteProtocolError
@@ -464,7 +487,7 @@ class YudaoHost:
                 page_review = ReadOnlyWindowPageReview.from_review(page_review)
                 page_actions = ReadOnlyWindowPageActions
                 action_options["guard_proxy"] = self.native_proxy
-                action_options["window"] = key[2]
+                action_options["window"] = page_window
             model_goal = ModelPageGoalPort(app.goal_port, page_review)
             action_policy = page_actions(app.origin, app.goal_data,
                 self.ui.records if self.ui is not None else {}, model_goal, page_review, **action_options)
@@ -479,7 +502,7 @@ class YudaoHost:
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
             from .native_submit import YudaoSubmitPort
             submit_port = YudaoSubmitPort(app.client, self.native_proxy, self._load_api_docs,
-                                          window=key[2])
+                                          window=page_window)
             native_submit = submit_port if self.config.native_submit else None
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
                 max_user_answer_chars=panel_limits()["result_max_chars"])
@@ -583,7 +606,10 @@ def _handler(host: YudaoHost):
                 length = int(self.headers.get("Content-Length") or 0)
                 if length > _MAX_BODY:
                     raise BootstrapRefused(413, "too_large")
-                body = json.loads(self.rfile.read(length) or b"{}")
+                try:
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                except json.JSONDecodeError:
+                    raise BootstrapRefused(400, "invalid_request")
                 auth = self.headers.get("Authorization") or ""
                 token = auth[7:].strip() if auth.startswith("Bearer ") else ""
                 payload = host.bootstrap(token, str(self.headers.get("tenant-id") or ""),

@@ -43,6 +43,17 @@ class ChannelState:
             return self._last_client_activity_ms
 
     @property
+    def active_instance(self) -> str:
+        """The runtime instance of the page the current (or last) turn runs on.
+
+        The window a turn's reads, refusals and permits belong to is the one the
+        page that asked carries as its runtime instance id.
+        """
+        with self._condition:
+            hello = self._lease_hellos.get(self._active_lease_id or "")
+            return hello.runtime_instance_id if hello is not None else ""
+
+    @property
     def idle(self) -> bool:
         """Nothing queued and nothing in flight: closing now drops no work the page asked for."""
         with self._condition:
@@ -221,8 +232,8 @@ class ChannelState:
             principal.require_live(now_ms=now_ms)
             if principal.issued_at < previous.issued_at:
                 raise PrincipalError("renewed principal was issued before the current principal")
-            if principal.expires_at <= previous.expires_at:
-                raise PrincipalError("renewed principal does not extend the current principal")
+            if principal.expires_at < previous.expires_at:
+                raise PrincipalError("renewed principal shortens the current principal")
             blocker = ("turn" if self._active_message_id else
                        "action" if self._pending_action_id else
                        "approval" if self._pending_approval_id else "")
@@ -256,6 +267,12 @@ class ChannelState:
         if not isinstance(lease_id, str) or not lease_id:
             raise RemoteProtocolError("X-WOA-Lease is required", code="invalid_lease", status=401)
         if lease_id not in self._lease_hellos:
+            if lease_id in self._evicted_leases:
+                raise RemoteProtocolError(
+                    "the runtime lease was evicted to make room for another page",
+                    code="lease_evicted",
+                    status=409,
+                )
             raise RemoteProtocolError(
                 "the runtime lease is no longer held by this session",
                 code="runtime_replaced",
@@ -282,7 +299,7 @@ class ChannelState:
         self._latest_observation = self._lease_observations.get(lease_id)
         self._condition.notify_all()
 
-    def _release_lease(self, lease_id: str) -> None:
+    def _release_lease(self, lease_id: str, *, evicted: bool = False) -> None:
         """Forget one page's lease; the caller holds the condition."""
         for instance, held in list(self._runtime_leases.items()):
             if held == lease_id:
@@ -290,6 +307,10 @@ class ChannelState:
         self._lease_hellos.pop(lease_id, None)
         self._lease_observations.pop(lease_id, None)
         self._lease_seen.pop(lease_id, None)
+        if evicted:
+            self._evicted_leases[lease_id] = self._now_ms()
+            while len(self._evicted_leases) > self.limits.max_runtime_instances:
+                self._evicted_leases.pop(next(iter(self._evicted_leases)))
 
     def validate_lease(self, lease_id: str) -> None:
         with self._condition:

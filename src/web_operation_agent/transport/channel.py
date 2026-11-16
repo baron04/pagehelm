@@ -112,6 +112,9 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._active_lease_id = ""
         self._runtime_leases: dict[str, str] = {}
         self._retired_runtime_instances: set[str] = set()
+        #: Leases registry pressure evicted -- not taken over: such a page may hello
+        #: again for a fresh lease where a replaced document must never come back.
+        self._evicted_leases: dict[str, int] = {}
         self._lease_clients: dict[str, str] = {}
         self._lease_hellos: dict[str, ClientHello] = {}
         self._lease_observations: dict[str, ObservationEnvelope] = {}

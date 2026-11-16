@@ -28,7 +28,8 @@ MAX_EVENT_BYTES = 4096
 MAX_EVENT_LIFETIME_MS = 60_000
 MAX_CLOCK_SKEW_MS = 5_000
 _OPAQUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,199}\Z")
-_INSTANCE = re.compile(r"[a-f0-9]{32}\Z")
+# A page instance is the runtime's <tab>.<epoch> name; hex-only ids predate it.
+_INSTANCE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 _NONCE = re.compile(r"[a-f0-9]{32,64}\Z")
 _SIGNATURE = re.compile(r"[a-f0-9]{64}\Z")
 

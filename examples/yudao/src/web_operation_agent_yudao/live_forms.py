@@ -109,7 +109,9 @@ class FenceEvidence:
             raise TypeError("fence evidence needs the deployment guard and its actor")
         self._guard, self._actor = guard, actor
         #: Only this window's refusals (plus unattributed ones) attest its page's work.
-        self._window = str(window or "")
+        #: A callable resolves it when the guard is asked -- a shared conversation names
+        #: the page the turn is running on, which can change per turn.
+        self._window = window
 
     def mark(self) -> int:
         try:
@@ -119,8 +121,9 @@ class FenceEvidence:
 
     def since(self, mark: int) -> tuple[tuple[str, str], ...]:
         try:
+            window = self._window() if callable(self._window) else self._window
             return self._guard.refused_since(self._actor(), mark,
-                                             window=self._window or None)
+                                             window=str(window or "") or None)
         except GuardRefused as exc:
             raise BusinessToolRequestError("the page fence evidence is incomplete") from exc
 

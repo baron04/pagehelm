@@ -1,8 +1,15 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {DEFAULT_CONFIGURATION} from '../src/contract/panel'
 import {PanelHost} from '../src/runtime/panelHost'
+import {loadPageController} from '../src/runtime/page'
+import type * as PageModule from '../src/runtime/page'
 import {EmbeddedWebRuntime} from '../src/runtime/runtime'
-import {IdleHandshakeClosed, TransportError} from '../src/runtime/transport'
+import {IdleHandshakeClosed, SessionClient, TransportError} from '../src/runtime/transport'
+
+vi.mock('../src/runtime/page', async importOriginal => ({
+  ...await importOriginal<typeof PageModule>(),
+  loadPageController: vi.fn(),
+}))
 
 const runtimes: EmbeddedWebRuntime[] = []
 function setup() {
@@ -145,5 +152,68 @@ describe('bounded live catch-up and independent history requests', () => {
     await pending
     expect(host.snapshot().entries).toEqual([])
     expect(host.snapshot().hasOlder).toBe(false)
+  })
+})
+
+describe('the page names its channel presence by its guard window', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  it('starts with the window name as its runtime instance id', async () => {
+    const runtime = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
+      sessionId: 's1', clientToken: 'token', sessionGeneration: 'g',
+      panel: false}, null, {windowToken: async () => 'tab-1.3'})
+    runtimes.push(runtime)
+    runtime.panelConfiguration = DEFAULT_CONFIGURATION
+    const controllerStub = new Proxy({controller: {dispose: vi.fn()}} as Record<PropertyKey, unknown>,
+      {get: (target: Record<PropertyKey, unknown>, prop) =>
+        prop === 'then' ? undefined : (target[prop] ??= vi.fn())})
+    vi.mocked(loadPageController).mockResolvedValue(controllerStub as never)
+    vi.spyOn(runtime, '_startConnectedRuntime').mockResolvedValue(runtime)
+    await runtime.start()
+    expect(runtime.runtimeInstanceId).toBe('tab-1.3')
+  })
+
+  it('sends that name as the hello runtime instance id', async () => {
+    const runtime = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
+      sessionId: 's1', clientToken: 'token', sessionGeneration: 'g',
+      panel: false})
+    runtimes.push(runtime)
+    runtime.panelConfiguration = DEFAULT_CONFIGURATION
+    runtime.runtimeInstanceId = 'tab-1.0'
+    const post = vi.spyOn(SessionClient.prototype, 'post')
+      .mockResolvedValue({lease_id: 'L1', panel: DEFAULT_CONFIGURATION} as never)
+    await runtime._hello()
+    expect(vi.mocked(post).mock.calls[0]?.[1])
+      .toMatchObject({runtime_instance_id: 'tab-1.0'})
+  })
+})
+
+describe('a lease evicted to make room recovers where a taken-over one cannot', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  it('re-hellos for a fresh lease and retries the request once', async () => {
+    const runtime = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
+      sessionId: 's1', clientToken: 'token', sessionGeneration: 'g',
+      panel: false})
+    runtimes.push(runtime)
+    runtime.panelConfiguration = DEFAULT_CONFIGURATION
+    const post = vi.spyOn(SessionClient.prototype, 'post')
+    post.mockRejectedValueOnce(new TransportError('evicted', 'lease_evicted', 409))
+      .mockResolvedValueOnce({lease_id: 'L2', panel: DEFAULT_CONFIGURATION} as never)
+      .mockResolvedValueOnce({done: true} as never)
+    await expect(runtime._post('/observations', {x: 1})).resolves.toEqual({done: true})
+    expect(post.mock.calls.map(call => call[0]))
+      .toEqual(['/observations', '/hello', '/observations'])
+    expect(runtime.leaseId).toBe('L2')
+  })
+
+  it('never re-hellos from inside a hello', async () => {
+    const runtime = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
+      sessionId: 's1', clientToken: 'token', sessionGeneration: 'g',
+      panel: false})
+    runtimes.push(runtime)
+    const post = vi.spyOn(SessionClient.prototype, 'post')
+      .mockRejectedValue(new TransportError('evicted', 'lease_evicted', 409))
+    await expect(runtime._post('/hello', {}, {includeLease: false}))
+      .rejects.toMatchObject({code: 'lease_evicted'})
+    expect(post).toHaveBeenCalledOnce()
   })
 })

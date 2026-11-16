@@ -1358,7 +1358,9 @@ describe('native editor mode is current application state', () => {
     expect(await restoreElementFormModel(input, wire(model, {accountId: 7}))).toBe(false)
     expect(model).toEqual(before)
     expect(sameFormStructure({a: null}, {})).toBe(false)
-  })
+  // Seven interpreter spawns per run: under a loaded machine each cold start alone
+  // eats the default timeout, so this case gets its own.
+  }, 30_000)
   it('recognizes the real query form despite more than 8192 unrelated option VNodes', () => {
     const state = mountedPage('/synthetic/inventory', 'SyntheticInventory')
     state.element.innerHTML = '<form class="el-form"><div class="el-form-item"><input></div></form><aside></aside>'

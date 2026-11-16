@@ -269,6 +269,21 @@ class ChannelTests(unittest.TestCase):
                 channel.renew_principal(dataclasses.replace(
                     renewed, actor_id="actor-2", expires_at=182_000))
 
+    def test_a_renewal_equal_to_the_current_principal_is_a_no_op_not_a_refusal(self):
+        initial = principal(1_000)
+        with mock.patch("web_operation_agent.transport.channel._now_ms", return_value=2_000), \
+             mock.patch("web_operation_agent.transport.registry._now_ms", return_value=2_000):
+            registry = RemoteSessionRegistry(limits=RemoteSessionLimits(session_ttl_s=300))
+            _grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="equal-renewal", principal=initial)
+            # Two of a person's pages can bootstrap in the same millisecond: an
+            # identical grant is keep-existing, never a sign-in refusal.
+            channel.renew_principal(dataclasses.replace(initial, expires_at=initial.expires_at))
+            self.assertEqual(channel.principal.expires_at, initial.expires_at)
+            with self.assertRaisesRegex(Exception, "shortens"):
+                channel.renew_principal(dataclasses.replace(
+                    initial, expires_at=initial.expires_at - 1))
+
     def test_principal_renewal_refuses_an_active_turn(self):
         now = int(time.time() * 1000)
         initial = principal(now)
@@ -1071,6 +1086,19 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(self.channel.wait_for_client(1).runtime_instance_id,
                          "runtime-document-2")
 
+    def test_the_active_page_names_the_window_its_turn_works_through(self):
+        self.assertEqual(self.channel.active_instance, "runtime-document-1")
+        second = self.channel.accept_hello(hello(
+            self.grant.session_id, runtime_instance_id="runtime-document-2",
+            client_id="browser-tab-2"))["lease_id"]
+        # Joining the conversation does not take the window; the page whose message
+        # runs next does, so the shared session's guard work stays its page's own.
+        self.assertEqual(self.channel.active_instance, "runtime-document-1")
+        self.channel.accept_message({"message_id": "m-second", "text": "two",
+                                     "page_url": ORIGIN + "/other"}, lease_id=second)
+        self.channel.wait_for_message(timeout_s=1)
+        self.assertEqual(self.channel.active_instance, "runtime-document-2")
+
     def test_asking_from_another_page_stops_a_turn_waiting_for_confirmation(self):
         self.channel.accept_message({"message_id": "m-first", "text": "one",
                                      "page_url": ORIGIN + "/start"}, lease_id=self.lease)
@@ -1135,8 +1163,26 @@ class ChannelTests(unittest.TestCase):
         channel.accept_hello(hello(grant.session_id, runtime_instance_id="runtime-document-3", client_id="browser-tab-3"))
         # The first page is the active one and stays; the idle second one made room.
         channel.validate_lease(first)
-        with self.assertRaisesRegex(RemoteProtocolError, "no longer held"):
+        # Registry pressure is not a takeover: the page may hello again for a fresh
+        # lease where a replaced document must never come back.
+        with self.assertRaises(RemoteProtocolError) as caught:
             channel.validate_lease(second)
+        self.assertEqual(caught.exception.code, "lease_evicted")
+        returned = channel.accept_hello(hello(
+            grant.session_id, runtime_instance_id="runtime-document-2",
+            client_id="browser-tab-2"))["lease_id"]
+        channel.validate_lease(returned)
+        self.assertNotEqual(returned, second)
+
+    def test_a_taken_over_page_stays_replaced(self):
+        registry = RemoteSessionRegistry()
+        grant, channel = registry.create(allowed_origins=[ORIGIN], session_id="takeover")
+        first = channel.accept_hello(hello(grant.session_id))["lease_id"]
+        channel.accept_hello(hello(
+            grant.session_id, runtime_instance_id="runtime-document-2"))
+        with self.assertRaises(RemoteProtocolError) as caught:
+            channel.validate_lease(first)
+        self.assertEqual(caught.exception.code, "runtime_replaced")
 
     def test_same_lease_claim_retry_survives_deadline_after_response_loss(self):
         action = action_for(self.grant.session_id, self.first)

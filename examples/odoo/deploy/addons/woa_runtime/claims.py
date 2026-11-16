@@ -9,7 +9,8 @@ import secrets
 import time
 
 
-_INSTANCE = re.compile(r"[a-f0-9]{32}\Z")
+# A page instance is the runtime's <tab>.<epoch> name; hex-only ids predate it.
+_INSTANCE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
 
 def session_event(*, event, database, company_id, actor_id,

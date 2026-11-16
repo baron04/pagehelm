@@ -175,7 +175,6 @@ class NativeContactsHost:
                     self._sessions.pop(key, None)
                 else:
                     return self._browser_bootstrap(session)
-
             adapter = MinimalContactsAdapter(
                 self.application.origin, api_token=actor.token,
                 allow_mutations=self.config.allow_mutations,
@@ -252,6 +251,9 @@ class NativeContactsHost:
 
             stable = hashlib.sha256(
                 f"{actor.session}\0{runtime_instance_id}".encode()).hexdigest()[:40]
+            # A session let go without being closed here is replaced by the one it
+            # becomes again -- the same pre-open sweep the yudao host does.
+            self.server.close_session("contacts-" + stable)
             session = self.server.create_session(
                 allowed_origin=bound.descriptor.origin,
                 page_controller_module=bound.descriptor.page_controller_module,

@@ -275,7 +275,15 @@ export class EmbeddedWebRuntime {
 
   _post<T = JsonObject>(path: string, body: unknown,
                         options: {includeLease?: boolean} = {}): Promise<T> {
-    return this.client.post<T>(path, body, options)
+    return this.client.post<T>(path, body, options).catch(async (error: unknown) => {
+      // Registry pressure may evict a quiet page's lease where a taken-over one is
+      // terminal: the session is still this page's, so hello again for a fresh lease
+      // and retry the request once.
+      if ((error as {code?: unknown})?.code !== 'lease_evicted'
+          || options.includeLease === false) throw error
+      await this._hello()
+      return this.client.post<T>(path, body, options)
+    })
   }
 
   /** One place where a failed request becomes a panel state and a stop-or-retry decision. */
@@ -327,6 +335,10 @@ export class EmbeddedWebRuntime {
     this.confirmButtonPresser = confirmButtonPresser
     this.submitBusyReader = submitBusyReader
     this.guardWindow = await this.hooks.windowToken?.() ?? ''
+    // The page names itself to the session's channel by the name its guard window
+    // carries, so the channel's active page resolves to the window its turn's
+    // evidence, refusals and permits belong to.
+    if (this.guardWindow) this.runtimeInstanceId = this.guardWindow
     return this._startConnectedRuntime()
   }
 

@@ -419,12 +419,16 @@ export class Supervisor {
 
 /** The epoch when storage refuses to keep it: memory still outlasts nothing but this document. */
 let epochMemory = 0
+/** Set once a storage write or remove failed: reads then prefer memory over a stale store. */
+let epochStorage = true
 
 /** The conversation counter this tab is on; 0 before its first "new conversation". */
 export function conversationEpoch(): number {
+  if (!epochStorage) return epochMemory
   try {
     return Math.max(0, Math.floor(Number(sessionStorage.getItem(EPOCH_KEY) || 0)) || 0)
   } catch {
+    epochStorage = false
     return epochMemory
   }
 }
@@ -441,7 +445,8 @@ export async function pageInstanceId(): Promise<string> {
 /** The next conversation this tab is on, persisted so a reload rejoins that new one. */
 function nextConversationEpoch(): void {
   epochMemory = conversationEpoch() + 1
-  try { sessionStorage.setItem(EPOCH_KEY, String(epochMemory)) } catch { /* memory only */ }
+  try { sessionStorage.setItem(EPOCH_KEY, String(epochMemory)) }
+  catch { epochStorage = false /* memory only */ }
 }
 
 /** Every `woa.remote.*` session residue and stale identity keys a fresh start must drop. */
@@ -548,9 +553,11 @@ export function autoBoot(win: Window = window): Supervisor | null {
       // so the old session keeps its history under its own id rather than being resumed.
       // `waiting` goes with it: a message no conversation took belongs to the old one.
       waiting = ''
-      nextConversationEpoch()
       engagement.clear()
+      // Storage is freed before the epoch write it may be too full to take: under
+      // quota pressure the stale epoch would silently rejoin the old conversation.
       clearPageStorage()
+      nextConversationEpoch()
       shell.host.clearTimeline()
       shell.host.clearNotice()
     },
@@ -563,7 +570,7 @@ export function autoBoot(win: Window = window): Supervisor | null {
     engagement.clear()
     clearPageStorage()
     epochMemory = 0
-    try { sessionStorage.removeItem(EPOCH_KEY) } catch { /* memory only */ }
+    try { sessionStorage.removeItem(EPOCH_KEY) } catch { epochStorage = false }
     shell.host.clearTimeline()
     shell.host.clearNotice()
     shell.host.rest()

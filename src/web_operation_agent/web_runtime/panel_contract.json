@@ -170,6 +170,7 @@
     "connect_failed": "无法连接助手服务，请检查网络后重试。",
     "offline": "当前网络不可用，恢复后会自动重连。你的任务不会被重复执行。",
     "reconnecting": "与助手的连接断开了，正在自动重连。你的任务不会被重复执行。",
+    "lease_evicted": "这一页的连接为其它页面让位断开了，正在自动重连。你的任务不会被重复执行。",
     "unexpected": "助手服务出错了，这一步没有执行。可以重试。",
     "gateway_error": "助手服务出错了，这一步没有执行。可以重试。",
     "invalid_message": "这次请求助手无法处理，没有执行任何操作。",
@@ -214,7 +215,8 @@
   ],
   "nonterminal_error_states": {
     "turn_in_flight": "ready",
-    "business_authentication": "ready"
+    "business_authentication": "ready",
+    "lease_evicted": "reconnecting"
   },
   "terminal_panel_state_by_code": {
     "session_closed": "ended",

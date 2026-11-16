@@ -61,9 +61,14 @@ class YudaoSubmitPort:
             raise TypeError("private_evidence must be callable")
         self.client, self.proxy, self._api_docs = client, proxy, api_docs
         self._private_evidence = private_evidence
-        #: Which of the actor's guard windows this session's page works through. Read
-        #: evidence is scoped to it, so two pages' reads never explain each other's.
-        self._window = str(window or "")
+        #: Which of the actor's guard windows the page the current turn runs on works
+        #: through. Read evidence is scoped to it, so two pages' reads never explain each
+        #: other's. A callable resolves it when the guard is asked -- a shared
+        #: conversation names the page the turn is running on, which can change per turn.
+        self._window = window
+
+    def _window_name(self) -> str:
+        return str(self._window() if callable(self._window) else self._window or "")
 
     def record_private(self, event, fields):
         """Explicit, integration-owned local collector; disabled in ordinary deployments."""
@@ -76,7 +81,7 @@ class YudaoSubmitPort:
 
     # -- what the page itself read -----------------------------------------------------
     def recent_reads(self) -> tuple:
-        return self.proxy.guard.recent_reads(self._actor(), window=self._window or None)
+        return self.proxy.guard.recent_reads(self._actor(), window=self._window_name() or None)
 
     def prefixes(self, reads, *, mode, record_id, source=""):
         """One observed source, identified by the mounted form's own route generation."""
@@ -181,7 +186,7 @@ class YudaoSubmitPort:
     def arm(self, permit: SubmitPermit) -> None:
         actor = self._actor()
         permit.actor = actor
-        self.proxy.guard.arm_permit(actor, permit, owner=self._window)
+        self.proxy.guard.arm_permit(actor, permit, owner=self._window_name())
 
     def disarm(self) -> None:
         self.proxy.guard.disarm_permit(self._actor())

@@ -76,7 +76,8 @@ class ChannelIngress:
                 idle = [lease for lease in self._lease_hellos if lease != self._active_lease_id]
                 if not idle:
                     self._capacity_exhausted("runtime_instance")
-                self._release_lease(min(idle, key=lambda lease: self._lease_seen.get(lease, 0)))
+                self._release_lease(min(idle, key=lambda lease: self._lease_seen.get(lease, 0)),
+                                    evicted=True)
             lease_id = secrets.token_urlsafe(24)
             self._runtime_leases[runtime_instance_id] = lease_id
             self._lease_clients[lease_id] = hello.client_id
