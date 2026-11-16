@@ -3120,16 +3120,36 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                                and plain(e.name) == plain(str(submit.get("label") or ""))
                                and e.attrs.get("form_scope") == submit.get("scope")]
                     if len(targets) == 1:
-                        carrier = next(
-                            (e for e in receipt.observation.elements
-                             if e.role in FORM_INPUT_CONTROLS
-                             and e.attrs.get("form_scope") == targets[0].attrs.get("form_scope")
-                             and e.attrs.get("form_instance") == targets[0].attrs.get("form_instance")
-                             and e.attrs.get("form_lifetime")),
-                            targets[0],
-                        )
-                        turn["draft_handoff_form"] = _draft_form_binding(receipt.observation, carrier)
+                        turn["draft_handoff_form"] = self._handoff_form_binding(receipt.observation, targets[0])
         return result
+
+    def _handoff_form_binding(self, observation, target):
+        scope = target.attrs.get("form_scope")
+        instance = target.attrs.get("form_instance")
+        carrier = next(
+            (e for e in observation.elements
+             if e.role in FORM_INPUT_CONTROLS
+             and e.attrs.get("form_scope") == scope
+             and e.attrs.get("form_instance") == instance
+             and e.attrs.get("form_lifetime")),
+            None,
+        )
+        if carrier is None and not target.attrs.get("form_lifetime"):
+            for past in reversed(getattr(self, "_tool_receipts", ())):
+                past_obs = getattr(past, "observation", None)
+                if past_obs is None:
+                    continue
+                carrier = next(
+                    (e for e in past_obs.elements
+                     if e.role in FORM_INPUT_CONTROLS
+                     and e.attrs.get("form_scope") == scope
+                     and e.attrs.get("form_instance") == instance
+                     and e.attrs.get("form_lifetime")),
+                    None,
+                )
+                if carrier is not None:
+                    return _draft_form_binding(past_obs, carrier)
+        return _draft_form_binding(observation, carrier or target)
 
     def _default_handoff(self, s, turn) -> str:
         """A filled business form that nothing submitted gets its submit control marked by
@@ -3238,15 +3258,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                                    and e.role == "button" and plain(e.name) == plain(str(submit.get("label") or ""))
                                    and e.attrs.get("form_scope") == submit.get("scope")]
                         if len(targets) == 1:
-                            carrier = next(
-                                (e for e in receipt.observation.elements
-                                 if e.role in FORM_INPUT_CONTROLS
-                                 and e.attrs.get("form_scope") == targets[0].attrs.get("form_scope")
-                                 and e.attrs.get("form_instance") == targets[0].attrs.get("form_instance")
-                                 and e.attrs.get("form_lifetime")),
-                                targets[0],
-                            )
-                            turn["draft_handoff_form"] = _draft_form_binding(receipt.observation, carrier)
+                            turn["draft_handoff_form"] = self._handoff_form_binding(receipt.observation, targets[0])
                 if (not turn.get("handoff") or turn["handoff"][0] != self._page_fingerprint(s.obs)
                         or entered != {turn.get("draft_handoff_form")}):
                     return DeliveryFeedback("draft_handoff_required",
@@ -3313,21 +3325,25 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         stripped = _TABLE_TOKEN.sub("", _BARE_RECEIPT.sub("", answer or ""))
         return super()._untraced_numbers(prompt, stripped, turn)
 
-    def _with_not_executed(self, s, turn, answer):
+    def _clean_answer(self, answer: str) -> str:
         handoffs = getattr(getattr(self, "knowledge", None), "handoffs", BASELINE_SESSION_HANDOFFS)
-        return _clean_user_answer(super()._with_not_executed(s, turn, answer), handoffs)
+        return _clean_user_answer(answer, handoffs)
+
+    def _with_not_executed(self, s, turn, answer):
+        return self._clean_answer(super()._with_not_executed(s, turn, answer))
 
 
 _RECEIPT_PAREN = re.compile(
-    r"[（(][^（）()\n]{0,24}?\b(?:ev_[0-9a-f]{12}_\d+|行表\s*t\d{1,2})\b[^（）()\n]{0,48}?[）)]"
+    r"[（(][^（）()\n]{0,32}?(?:ev_[0-9a-f]{12}_\d+|(?:本轮)?行表\s*`?t\d{1,2}`?)[^（）()\n]{0,120}?[）)]"
 )
 _RECEIPT_INLINE = re.compile(
     r"(?:[，,；;、]\s*)?(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具|页面状态)?回执"
-    r"(?:号|编号)?[:：=\s]*`?\bev_[0-9a-f]{12}_\d+\b`?(?:[、,，/\s]+`?\bev_[0-9a-f]{12}_\d+\b`?)*"
+    r"(?:号|编号)?[:：=\s]*`?ev_[0-9a-f]{12}_\d+`?(?:[、,，/\s]+`?ev_[0-9a-f]{12}_\d+`?)*"
 )
-_BARE_RECEIPT = re.compile(r"`?\bev_[0-9a-f]{12}_\d+\b`?")
+_BARE_RECEIPT = re.compile(r"`?ev_[0-9a-f]{12}_\d+`?")
 _RECEIPT_STUB = re.compile(r"[（(]\s*(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具)?回执[，,、\s]*(?:详见)?(?:本轮读取数据)?\s*[）)]")
-_TABLE_TOKEN = re.compile(r"(?:本轮)?行表\s*`?\bt\d{1,2}\b`?")
+_EMPTY_PARENS = re.compile(r"[（(]\s*[）)]")
+_TABLE_TOKEN = re.compile(r"(?:本轮)?行表\s*`?t\d{1,2}`?")
 _PAGE_OBLIGATION = re.compile(
     r"调出|(?:帮我|请)?(?:打开|进入|跳转到?|定位到?|切到|切换到)[^，。；！？?\n]{0,24}"
     r"(?:页面|列表|详情|台账|看板|页签|栏目|菜单|视图|界面)"
@@ -3335,6 +3351,7 @@ _PAGE_OBLIGATION = re.compile(
 )
 _META_PAGE_QUESTION = re.compile(r"(?:怎么|如何|怎样|能否|能不能|是否|为什么)[^，。；！？?\n]{0,12}(?:打开|调出|进入|跳转|切到)")
 _ALREADY_SATISFIED = re.compile(r"已是|已经为|已经是|无需修改|原本就是|保持一致|未发生变化")
+_WRITE_UNEXECUTED = re.compile(r"未(?:执行|完成|成功|提交|保存|修改|写入)|尚未|未能")
 
 
 def _requires_page_delivery(prompt: str) -> bool:
@@ -3353,6 +3370,7 @@ def _clean_user_answer(answer: str, handoffs) -> str:
     cleaned = _BARE_RECEIPT.sub("", cleaned)
     cleaned = _TABLE_TOKEN.sub("本轮读取数据", cleaned)
     cleaned = _RECEIPT_STUB.sub("", cleaned)
+    cleaned = _EMPTY_PARENS.sub("", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\s+([，。；：！？])", r"\1", cleaned)
     return cleaned.strip()
@@ -3451,8 +3469,9 @@ class TableReadTurnExecutor(SlimTurnExecutor):
                         raise TurnReadError("delivery_page_masked",
                                             "当前页面仍有弹窗遮罩未关闭；等页面落定后再标为已交付。")
                 elif item["kind"] == "write" and item["status"] == "delivered":
-                    if (not turn.get("written") and not turn.get("handoff")
-                            and not _ALREADY_SATISFIED.search(str(args.get("answer") or ""))):
+                    ans = str(args.get("answer") or "")
+                    satisfied = bool(_ALREADY_SATISFIED.search(ans) and not _WRITE_UNEXECUTED.search(ans))
+                    if not turn.get("written") and not turn.get("handoff") and not satisfied:
                         raise TurnReadError("delivery_write_unverified",
                                             "交付项声明为已完成写入（kind=write），但本轮没有已核验的写入结果或表单交接；"
                                             "请先完成批准提交或如实标为 undelivered / cannot。")

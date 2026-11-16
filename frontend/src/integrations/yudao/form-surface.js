@@ -63,10 +63,15 @@ function installSubmitTracker(win) {
       const method = (init && init.method) || (input && input.method) || 'GET'
       const tracked = isAdminWrite(url, method)
       if (tracked) submitRequestsInFlight++
-      const promise = originalFetch(input, init)
-      return tracked ? promise.finally(() => {
-        submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
-      }) : promise
+      try {
+        const promise = originalFetch(input, init)
+        return tracked ? promise.finally(() => {
+          submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
+        }) : promise
+      } catch (err) {
+        if (tracked) submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
+        throw err
+      }
     }
   }
   if (typeof win.XMLHttpRequest === 'function') {
@@ -77,17 +82,22 @@ function installSubmitTracker(win) {
       return open.call(this, method, url, ...rest)
     }
     proto.send = function(...args) {
+      const done = () => {
+        if (!this.__woaAdminWriteCounted) return
+        this.__woaAdminWriteCounted = false
+        submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
+      }
       if (this.__woaAdminWrite && !this.__woaAdminWriteCounted) {
         this.__woaAdminWriteCounted = true
         submitRequestsInFlight++
-        const done = () => {
-          if (!this.__woaAdminWriteCounted) return
-          this.__woaAdminWriteCounted = false
-          submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
-        }
         this.addEventListener('loadend', done, {once: true})
       }
-      return send.apply(this, args)
+      try {
+        return send.apply(this, args)
+      } catch (err) {
+        done()
+        throw err
+      }
     }
   }
 }

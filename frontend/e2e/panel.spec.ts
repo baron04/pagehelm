@@ -361,6 +361,22 @@ test.describe('the default state', () => {
     expect(panel.errors).toEqual([])
   })
 
+  test('title bar shows read-only badge only when server projects read_only_mode=true', async ({open}) => {
+    const writable = await open(snapshot())
+    await writable.page.locator('.woa-launcher').click()
+    await expect(writable.page.locator('.woa-readonly-badge')).toHaveCount(0)
+    expect(writable.errors).toEqual([])
+
+    const readonly = await open(snapshot(), {
+      configuration: {...CONFIGURATION, read_only_mode: true},
+    })
+    await readonly.page.locator('.woa-launcher').click()
+    const badge = readonly.page.locator('.woa-readonly-badge')
+    await expect(badge).toBeVisible()
+    await expect(badge).toHaveText(labels.readOnlyMode)
+    expect(readonly.errors).toEqual([])
+  })
+
   test('entering a conversation keeps the input node, draft and caret while docking it below the thread', async ({open}) => {
     const panel = await open(snapshot())
     const page = panel.page

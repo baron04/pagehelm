@@ -265,6 +265,8 @@ class TurnTablesTest(unittest.TestCase):
         unique = self.tables.query("SELECT MIN(duration) FROM t1")
         self.assertEqual(unique["rows"], [[90]])
         self.assertNotIn("tie_note", unique)
+        aliased_limit = self.tables.query("SELECT MAX(duration) max_d FROM t1 LIMIT 1")
+        self.assertIn("共有 2 行同值并列", aliased_limit["tie_note"])
 
     def test_a_quoted_alias_cannot_inject_sql_into_the_tie_probe(self):
         self.tables.add(path="items", params={}, rows=[

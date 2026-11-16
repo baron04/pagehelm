@@ -335,8 +335,10 @@ class TurnTables:
         stmt = _strip_comments(statement).rstrip().rstrip(";").rstrip()
         if re.search(r"\bGROUP\s+BY\b", stmt, re.IGNORECASE):
             return ""
+        stmt = re.sub(r"(?is)\s+(?:ORDER\s+BY\b.*|LIMIT\s+\d+(?:\s*,\s*\d+|\s+OFFSET\s+\d+)?)\s*$", "", stmt)
         m = re.match(r"(?is)^\s*SELECT\s+(?:MIN|MAX)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*|\"[^\"]+\")\s*\)"
-                     r"(?:\s+AS\s+\S+)?\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+WHERE\s+(.+))?\s*$", stmt)
+                     r"(?:\s+(?:AS\s+)?(?:\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*))?\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)"
+                     r"(?:\s+WHERE\s+(.+))?\s*$", stmt)
         if m is None:
             return ""
         col, table, where = m.group(1), m.group(2), m.group(3)

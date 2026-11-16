@@ -155,6 +155,32 @@ class DraftHandoffTests(unittest.TestCase):
                 if extra:
                     self.assertIn("final_untouched_set", reasons)
 
+        # Even after scrolling, adding a labelled field during handoff is refused.
+        before, filled = observation(1, value=""), observation(2)
+        reasons = []
+        context = NS(obs=filled, terminal_reason="", audit=lambda event, **kw: reasons.append(kw.get("reason")))
+        context.page = NS(
+            checkpoint=lambda: None,
+            execute=lambda action, args: (
+                setattr(context, "obs", observation(3, footer=True))
+                or PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(
+                    ActionReceipt(1, "scroll", "scroll", args, True, observation=context.obs,
+                                  url_before=filled.url, url_after=filled.url).to_json()))
+            ),
+            handoff=lambda fields, submit: (
+                setattr(context, "obs", replace(observation(4, footer=True), elements=[
+                    *observation(4, footer=True).elements,
+                    ElementRef("e10", "textbox", "Added", "input", 4, {**attrs, "field_label": "Added", "value": ""}),
+                ]))
+                or PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(
+                    ActionReceipt(1, "ready", "handoff_form", {}, True, observation=context.obs,
+                                  url_before=filled.url, url_after=filled.url).to_json()))
+            ),
+        )
+        refused = handoff_draft(context, before, [(field_identity(before.elements[0]), "Synthetic")], "Save")
+        self.assertEqual(refused.state, "unverified")
+        self.assertIn("final_field_set", reasons)
+
     def test_adapter_completion_id_must_name_this_tools_actual_fresh_handoff_receipt(self):
         executor, state = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor), NS(obs=page(3, first="Synthetic"))
         receipt = ActionReceipt(1, "actual", "handoff_form", {}, True, observation=state.obs, url_after=state.obs.url)

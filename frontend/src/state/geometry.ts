@@ -77,21 +77,24 @@ export function avoidRect(current: Geometry,
   let bestOverlap = overlapArea(current, target)
   let bestMove = Number.POSITIVE_INFINITY
   for (const size of sizes) {
+    const w = Math.min(Math.max(MIN_WIDTH, size.width), Math.max(240, view.width))
+    const h = Math.min(Math.max(MIN_HEIGHT, size.height), Math.max(240, view.height))
+    const fit = (left: number, top: number): Geometry => ({
+      width: w,
+      height: h,
+      left: Math.min(Math.max(0, left), Math.max(0, view.width - w)),
+      top: Math.min(Math.max(0, top), Math.max(0, view.height - h)),
+    })
     const candidates: Geometry[] = [
-      clamp({left: target.left - gap - size.width, top: current.top, ...size}, size),
-      clamp({left: target.right + gap, top: current.top, ...size}, size),
-      clamp({left: DOCK_INSET, top: current.top, ...size}, size),
-      clamp({left: view.width - size.width - DOCK_INSET, top: current.top, ...size}, size),
-      clamp({left: current.left, top: target.top - gap - size.height, ...size}, size),
-      clamp({left: current.left, top: target.bottom + gap, ...size}, size),
-      clamp({left: DOCK_INSET, top: DOCK_INSET, ...size}, size),
-      clamp({left: view.width - size.width - DOCK_INSET, top: DOCK_INSET, ...size}, size),
-    ].map(c => ({
-      width: Math.min(Math.max(MIN_WIDTH, size.width), Math.max(240, view.width)),
-      height: Math.min(Math.max(MIN_HEIGHT, size.height), Math.max(240, view.height)),
-      left: Math.min(Math.max(0, c.left), Math.max(0, view.width - Math.min(Math.max(MIN_WIDTH, size.width), Math.max(240, view.width)))),
-      top: Math.min(Math.max(0, c.top), Math.max(0, view.height - Math.min(Math.max(MIN_HEIGHT, size.height), Math.max(240, view.height)))),
-    }))
+      fit(target.left - gap - w, current.top),
+      fit(target.right + gap, current.top),
+      fit(DOCK_INSET, current.top),
+      fit(view.width - w - DOCK_INSET, current.top),
+      fit(current.left, target.top - gap - h),
+      fit(current.left, target.bottom + gap),
+      fit(DOCK_INSET, DOCK_INSET),
+      fit(view.width - w - DOCK_INSET, DOCK_INSET),
+    ]
     for (const candidate of candidates) {
       const area = overlapArea(candidate, target)
       const move = Math.abs(candidate.left - current.left) + Math.abs(candidate.top - current.top)

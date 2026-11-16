@@ -253,7 +253,7 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
         return refused("final_untouched_set", scrolled=scrolled,
                        added=[list(map(str, key[-2:])) for key in final_untouched - now_untouched][:8],
                        missing=[list(map(str, key[-2:])) for key in now_untouched - final_untouched][:8])
-    if not scrolled and final.keys() != now_map.keys():
+    if final.keys() != baseline.keys():
         return refused("final_field_set")
     if any(key in final and not value_matches(final[key], value) for key, value in wanted.items()):
         return refused("final_requested_value")

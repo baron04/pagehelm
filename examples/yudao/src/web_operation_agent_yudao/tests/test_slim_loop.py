@@ -3573,6 +3573,12 @@ class Phase47Step1BaseTests(unittest.TestCase):
             "已填好名称（依据回执 ev_535105f0d0ba_3，详见本轮行表 t1），尚未提交。", BASELINE_SESSION_HANDOFFS))
         self.assertEqual("已填好名称，尚未提交。", _clean_user_answer(
             "已填好名称（依据回执，详见本轮读取数据），尚未提交。", BASELINE_SESSION_HANDOFFS))
+        self.assertEqual("已填好名称，尚未提交。", _clean_user_answer(
+            "已填好名称（详见行表t1），尚未提交。", BASELINE_SESSION_HANDOFFS))
+        self.assertEqual("共 3 条，请核对。", _clean_user_answer(
+            "共 3 条（依据 ev_535105f0d0ba_1、ev_535105f0d0ba_2、ev_535105f0d0ba_3 核对），请核对。",
+            BASELINE_SESSION_HANDOFFS))
+        self.assertNotIn("Admin@2026", _clean_user_answer("初始密码 | Admin@2026", BASELINE_SESSION_HANDOFFS))
         page_row = redacted("用户管理-账号初始密码 | sys.user.init-password | Admin@2026", BASELINE_SESSION_HANDOFFS)
         self.assertNotIn("Admin@2026", page_row)
         self.assertIn("[redacted]", page_row)
@@ -3617,6 +3623,27 @@ class Phase47Step1BaseTests(unittest.TestCase):
         self.assertEqual("cannot", closed["status"])
         self.assertIn("等待退款共 5 单。", closed["answer"])
         self.assertIn("未交付", closed["answer"])
+
+        # Negative write-unexecuted wording cannot bypass kind=write verification via _ALREADY_SATISFIED.
+        bad_write = {"status": "done", "answer": "记录状态未发生变化，本次未执行写入。",
+                     "items": [{"item": "更新状态", "kind": "write", "status": "delivered", "receipts": [ref]}]}
+        self.assertEqual("delivery_write_unverified", executor._finish_feedback(read_state, {}, bad_write).code)
+
+    def test_handoff_form_binding_recovers_lifetime_from_prior_receipts_when_inputs_scrolled_out(self):
+        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+
+        executor = object.__new__(SlimTurnExecutor)
+        input_obs = PageObservation(1, 1, "https://synthetic.test/coupon", "优惠券", [], [
+            ElementRef("e1", "textbox", "名称", "input", 1,
+                       {"form_scope": "dialog:coupon", "form_instance": "inst-1", "form_lifetime": "life-1"}),
+        ], content="优惠券", render_state="ready", page_route="/coupon")
+        footer_obs = PageObservation(1, 2, "https://synthetic.test/coupon", "优惠券", [], [
+            ElementRef("e9", "button", "确 定", "button", 2,
+                       {"form_scope": "dialog:coupon", "form_instance": "inst-1"}),
+        ], content="优惠券", render_state="ready", page_route="/coupon")
+        executor._tool_receipts = [NS(observation=input_obs)]
+        binding = executor._handoff_form_binding(footer_obs, footer_obs.elements[0])
+        self.assertEqual(binding, ("https://synthetic.test/coupon", "/coupon", "dialog:coupon", "lifetime", "life-1"))
 
     def test_internal_tokens_are_not_reported_as_untraced_numbers(self):
         from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
