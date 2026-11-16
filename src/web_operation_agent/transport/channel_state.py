@@ -42,6 +42,25 @@ class ChannelState:
         with self._condition:
             return self._last_client_activity_ms
 
+    @property
+    def idle(self) -> bool:
+        """Nothing queued and nothing in flight: closing now drops no work the page asked for."""
+        with self._condition:
+            return (not self._closed and not self._active_message_id
+                    and not self._pending_approval_id and not self._pending_action_id
+                    and not self._messages)
+
+    def close_if_idle(self, reason: str) -> bool:
+        """Close only while still idle: the check and the close share one condition hold."""
+        with self._condition:
+            if self._closed:
+                return True
+            if (self._active_message_id or self._pending_approval_id
+                    or self._pending_action_id or self._messages):
+                return False
+            self._terminate(reason)
+            return True
+
     def touch_client_activity(self, *, now_ms: int | None = None) -> None:
         """Record an authenticated browser request, never an internal owner heartbeat."""
         now = self._now_ms() if now_ms is None else now_ms
@@ -213,6 +232,12 @@ class ChannelState:
                     code=f"session_busy_{blocker}", status=409)
             if self._principal_validator is not None:
                 self._principal_validator(principal)
+            self._principal_grace[previous.binding_digest] = previous.expires_at
+            for digest in [digest for digest, until in self._principal_grace.items()
+                           if until <= now_ms]:
+                del self._principal_grace[digest]
+            while len(self._principal_grace) > 4:
+                self._principal_grace.pop(next(iter(self._principal_grace)))
             self.principal = principal
             self.expires_at = min(
                 now_ms + self.limits.session_ttl_s * 1000, principal.expires_at)

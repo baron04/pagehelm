@@ -102,12 +102,14 @@ def _core(label: str, entity_label: str) -> str:
 
 
 class FenceEvidence:
-    """What the deployment's guard refused for one actor, as positions and paths."""
+    """What the deployment's guard refused for one actor's window, as positions and paths."""
 
-    def __init__(self, guard, actor):
+    def __init__(self, guard, actor, window=""):
         if not callable(actor) or not callable(getattr(guard, "refused_since", None)):
             raise TypeError("fence evidence needs the deployment guard and its actor")
         self._guard, self._actor = guard, actor
+        #: Only this window's refusals (plus unattributed ones) attest its page's work.
+        self._window = str(window or "")
 
     def mark(self) -> int:
         try:
@@ -117,7 +119,8 @@ class FenceEvidence:
 
     def since(self, mark: int) -> tuple[tuple[str, str], ...]:
         try:
-            return self._guard.refused_since(self._actor(), mark)
+            return self._guard.refused_since(self._actor(), mark,
+                                             window=self._window or None)
         except GuardRefused as exc:
             raise BusinessToolRequestError("the page fence evidence is incomplete") from exc
 

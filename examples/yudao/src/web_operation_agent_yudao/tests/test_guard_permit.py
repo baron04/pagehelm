@@ -124,6 +124,8 @@ class PermitProxyTests(unittest.TestCase):
         self.assertEqual(self.record["mobile"], "1")
 
     def test_another_open_window_blocks_the_permit(self):
+        # Ordinary read-only windows of the actor may coexist, but an approved click
+        # still asks for exclusivity while it decides every write on its own card.
         other = self.guard.begin(ACTOR, "e" * 64)
         self.assertGreater(other, 0)
         self.arm()

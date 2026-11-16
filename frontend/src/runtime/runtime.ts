@@ -145,8 +145,11 @@ export class EmbeddedWebRuntime {
   private clientInstance: SessionClient | null = null
   /** A message the person sent in place of an unanswered confirmation. */
   private replacementText = ''
+  /** The guard window name this page's assistant work carries; '' until resolved. */
+  private guardWindow = ''
 
-  constructor(config: RuntimeConfig, shell: PanelShell | null = null) {
+  constructor(config: RuntimeConfig, shell: PanelShell | null = null,
+              private readonly hooks: RuntimeHooks = {}) {
     if (!config?.endpoint || !config?.sessionId || !config?.clientToken) {
       throw new Error('endpoint, sessionId and clientToken are required')
     }
@@ -323,6 +326,7 @@ export class EmbeddedWebRuntime {
     this.confirmBoxReader = confirmBoxReader
     this.confirmButtonPresser = confirmButtonPresser
     this.submitBusyReader = submitBusyReader
+    this.guardWindow = await this.hooks.windowToken?.() ?? ''
     return this._startConnectedRuntime()
   }
 
@@ -427,13 +431,15 @@ export class EmbeddedWebRuntime {
         detach('decide', this._postApproval(request, decision).catch(error => this._raise(error)))
       },
       newConversation: () => {
-        detach('new conversation', this._post('/conversation', {action: 'new'})
-          .then(() => {
-            this.panelHost?.clearTimeline()
-            this.panelHost?.clearNotice()
-            return this._refreshTimeline()
-          })
-          .catch(error => this._raise(error)))
+        detach('new conversation', (async () => {
+          // The page may start a fresh session entirely: this Runtime's session keeps
+          // its history on the server, and the next message opens a new one.
+          if (this.hooks.onNewConversation?.()) return
+          await this._post('/conversation', {action: 'new'})
+          this.panelHost?.clearTimeline()
+          this.panelHost?.clearNotice()
+          await this._refreshTimeline()
+        })().catch(error => this._raise(error)))
       },
       loadOlder: before => {
         detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
@@ -864,7 +870,7 @@ export class EmbeddedWebRuntime {
     const guard = this.config?.pageWriteGuard
     if (guard && this.writeGuardUntil > 0 && this.stored.activeMessageId === turnId) {
       this.writeGuardUntil = 0
-      detach('close page write guard', closeWriteGuard(guard))
+      detach('close page write guard', closeWriteGuard(guard, fetch, this.guardWindow))
     }
     this.stored.taskInFlight = false
     this.stored.activeMessageId = ''
@@ -907,7 +913,7 @@ export class EmbeddedWebRuntime {
     const guard = this.config?.pageWriteGuard
     if (guard && this.writeGuardUntil > Date.now()) {
       this.writeGuardUntil = 0
-      detach('close page write guard for the person', closeWriteGuard(guard))
+      detach('close page write guard for the person', closeWriteGuard(guard, fetch, this.guardWindow))
     }
   }
 
@@ -1070,7 +1076,7 @@ export class EmbeddedWebRuntime {
     const path = this.config?.pageWriteGuard
     if (path === undefined || path === '') return false
     this.writeGuardUntil = 0
-    const expiresAt = await openWriteGuard(path)
+    const expiresAt = await openWriteGuard(path, fetch, this.guardWindow)
     if (expiresAt !== null) {
       // Kept so the receipt can say whether the window still covered the action when it
       // settled. A window that lapsed mid-action proves nothing about what the action did.
@@ -1155,7 +1161,7 @@ export class EmbeddedWebRuntime {
         detail: 'page_write_guard_unavailable: the confirmed window expired before page dispatch'}
     }
     if (action.command.action === 'highlight' && this.config?.pageWriteGuard) {
-      if (!await releaseWriteGuard(this.config.pageWriteGuard)) {
+      if (!await releaseWriteGuard(this.config.pageWriteGuard, fetch, this.guardWindow)) {
         return {ok: false, code: 'capability_refused',
           detail: 'the application did not acknowledge release of its read-only window'}
       }
@@ -1194,7 +1200,7 @@ export class EmbeddedWebRuntime {
       const ok = result?.success !== false
       const execution_trace = results.executionTraceOf(result, action.command.action)
       if (ok && action.command.action === 'handoff_form' && this.config?.pageWriteGuard) {
-        if (!await releaseWriteGuard(this.config.pageWriteGuard)) {
+        if (!await releaseWriteGuard(this.config.pageWriteGuard, fetch, this.guardWindow)) {
           return {ok: false, code: 'capability_refused',
             detail: 'the application did not acknowledge release of its read-only window'}
         }
@@ -1207,7 +1213,7 @@ export class EmbeddedWebRuntime {
       if (action.command.action === 'form_submit' && this.config?.pageWriteGuard) {
         // The permit covered this one click. Ending it is what returns the page to its
         // ordinary, read-only window; an application that does not confirm is reported.
-        const released = await releaseWriteGuard(this.config.pageWriteGuard)
+        const released = await releaseWriteGuard(this.config.pageWriteGuard, fetch, this.guardWindow)
         this.writeGuardUntil = 0
         if (!released) {
           return {ok: false, code: 'capability_refused',
@@ -1524,10 +1530,24 @@ export class EmbeddedWebRuntime {
  * page's shell stays and says why (`boot.ts`), and a shell of the Runtime's own goes with it,
  * since one left behind would be a second assistant root the next attempt cannot see.
  */
+/**
+ * What the page around a Runtime supplies when it knows more than the Runtime does.
+ *
+ * `windowToken` names the page's window to the application's write guard, so two pages
+ * of one person hold -- and end -- theirs independently. `onNewConversation` lets the
+ * page switch to a fresh session entirely; it answers whether it did, and a `false`
+ * falls back to asking the session to renew its conversation in place.
+ */
+export interface RuntimeHooks {
+  windowToken?: () => Promise<string>
+  onNewConversation?: () => boolean
+}
+
 export async function startEmbeddedRuntime(config: RuntimeConfig,
-                                           shell: PanelShell | null = null): Promise<EmbeddedWebRuntime | null> {
+                                           shell: PanelShell | null = null,
+                                           hooks: RuntimeHooks = {}): Promise<EmbeddedWebRuntime | null> {
   if (window.__WOA_EMBEDDED_RUNTIME_STARTED__) return null
-  const runtime = new EmbeddedWebRuntime(config, shell)
+  const runtime = new EmbeddedWebRuntime(config, shell, hooks)
   window.__WOA_EMBEDDED_RUNTIME_STARTED__ = runtime
   try {
     return await runtime.start()

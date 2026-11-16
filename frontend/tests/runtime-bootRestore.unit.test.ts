@@ -27,24 +27,28 @@ afterEach(() => {
 })
 
 describe('the first panel state depends on a locally saved session', () => {
-  it('shows the default immediately and opening creates no session without an ID', () => {
+  it('shows the default immediately and opening creates no session without an ID', async () => {
     const supervisor = autoBoot()
     const host = vi.mocked(createShell).mock.results[0]!.value.host
+    // What the tab is settles first; the panel states itself once it has.
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(host.snapshot().connection.state).toBe('ready')
     host.panelVisibility(true)
     expect(supervisor?.state.kind).toBe('idle')
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('keeps the greeting hidden while opening restores a saved session', () => {
+  it('keeps the greeting hidden while opening restores a saved session', async () => {
     engagementRecord().remember('actor-session')
     const supervisor = autoBoot()
     const host = vi.mocked(createShell).mock.results[0]!.value.host
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(host.snapshot().connection.state).toBe('connecting')
     expect(fetch).not.toHaveBeenCalled()
     host.panelVisibility(true)
     expect(supervisor?.state.kind).toBe('starting')
     expect(host.snapshot().connection.state).toBe('connecting')
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(fetch).toHaveBeenCalledOnce()
   })
 })

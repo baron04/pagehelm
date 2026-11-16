@@ -52,20 +52,29 @@ describe('how far a tab has gone with the assistant', () => {
     expect(record.read()).toBe('engaged')
   })
 
-  it('lets a new tab know there is a conversation, but not that a turn is under way', () => {
+  it('keeps each tab on its own conversation and removes a legacy site session', () => {
     const make = () => {
       const store = new Map<string, string>()
       return {
         getItem: (key: string) => store.get(key) ?? null,
         setItem: (key: string, value: string) => { store.set(key, value) },
+        removeItem: (key: string) => { store.delete(key) },
       } as unknown as Storage
     }
     const site = make()
     const first = engagementRecord(make(), site)
     first.remember('session-1')
     first.note(snapshot({}, {busy: true}), true)
-    expect(engagementRecord(make(), site).read()).toBe('engaged')
-    expect(engagementRecord(make(), site).sessionId()).toBe('session-1')
+    // A new tab -- its own sessionStorage over the same site -- has no conversation of
+    // its own; another tab's session is never handed to it.
+    expect(engagementRecord(make(), site).read()).toBe('none')
+    expect(engagementRecord(make(), site).sessionId()).toBe('')
+    // A session an older version left in site storage is dropped, not restored.
+    site.setItem('woa.assistant.session.v1', 'old-shared-session')
+    const tab = engagementRecord(make(), site)
+    expect(tab.read()).toBe('none')
+    expect(tab.sessionId()).toBe('')
+    expect(site.getItem('woa.assistant.session.v1')).toBeNull()
     expect(engagementRecord(make(), make()).read()).toBe('none')
   })
 

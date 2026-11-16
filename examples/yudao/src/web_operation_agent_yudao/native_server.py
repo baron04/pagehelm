@@ -8,11 +8,12 @@ token is held in memory for the session only: it is not written to disk or logge
 renewal installs the page's newer one. Writes are offered only where the deployment enables
 them (`--native-writes`): reviewed typed operations, each after its own approval.
 
-A person has one session, whichever pages they have it open on: one conversation, which any
-of those pages may ask in, each turn running on the page that asked it. The session's
-history and the conversation the model reads are kept on disk under the session's stable
-identifier, so a session that was let go -- its sign-in lapsed while nobody was using it, or
-the host restarted -- comes back as it was the next time the person asks.
+Each page a person asks from holds its own session and its own conversation, so two pages,
+two browsers or two devices signed in as them work at the same time without taking each
+other's turn. The session's history and the conversation the model reads are kept on disk
+under the session's stable identifier, so a session that was let go -- its sign-in lapsed
+while nobody was using it, or the host restarted -- comes back as it was the next time that
+page asks.
 
 The runtime and the session traffic go through the core's gateway; nginx publishes both the
 gateway and this bootstrap endpoint on the site's own origin.
@@ -114,6 +115,9 @@ class YudaoHostConfig:
     #: One per signed-in person; a session is about a megabyte. What bounds use is model
     #: spend, which the daily allowance bounds per person.
     max_sessions: int = 300
+    #: Live sessions one person may hold across pages, browsers and devices. Beyond it the
+    #: least recently active idle one is let go; busy ones are never taken away.
+    sessions_per_actor: int = 8
     #: What one person may spend on the model per day, in CNY, counted on Beijing time.
     daily_allowance_cny: float = 5.0
     principal_lifetime_s: int = 600
@@ -195,6 +199,12 @@ class YudaoHostConfig:
         if (isinstance(self.turn_trace_days, bool) or not isinstance(self.turn_trace_days, int)
                 or not 0 <= self.turn_trace_days <= 90):
             raise ValueError("turn_trace_days must be a whole number of days from 0 to 90")
+        if (isinstance(self.sessions_per_actor, bool)
+                or not isinstance(self.sessions_per_actor, int)
+                or not 1 <= self.sessions_per_actor <= 64):
+            raise ValueError("sessions_per_actor must be a whole number from 1 to 64")
+        if self.sessions_per_actor > self.max_sessions:
+            raise ValueError("sessions_per_actor cannot exceed max_sessions")
 
 
 @dataclass
@@ -251,12 +261,12 @@ class YudaoHost:
                 raise
         self.store = SQLiteSessionStore(config.state_dir / "session-store.sqlite3")
         self.server = LiveProductServer(
-            max_sessions=config.max_sessions, max_sessions_per_actor=1,
+            max_sessions=config.max_sessions, max_sessions_per_actor=config.sessions_per_actor,
             host=config.gateway_host, port=config.gateway_port,
             public_base_url=config.public_agent_url or None,
             allow_private_network_bind=True, durable_store=self.store)
-        #: (tenant, actor) -> that person's session.
-        self._sessions: dict[tuple[str, str], _Active] = {}
+        #: (tenant, actor, page instance) -> that page's session.
+        self._sessions: dict[tuple[str, str, str], _Active] = {}
         self.ledger = config.state_dir / "model-spend.jsonl"
         self.allowance = DailyAllowance(config.daily_allowance_cny, utc_offset_minutes=8 * 60)
         self.allowance.load(self.ledger)
@@ -309,16 +319,21 @@ class YudaoHost:
             return self._api_documents
 
     def bootstrap(self, token: str, tenant: str, instance: str) -> dict:
-        # `instance` names the page asking; the session is the person's, whichever page.
-        if not token or not tenant.isdigit() or not instance or len(instance) > 80:
+        from .page_guard import WINDOW_KEY
+        # `instance` names the page asking: each page keeps its own conversation, so two
+        # pages -- or two browsers, or two devices -- of one person never take each other's.
+        # The name is also the page's guard window, so it must fit the window charset here
+        # rather than fail every guarded request it later makes.
+        if (not token or not tenant.isdigit() or not isinstance(instance, str)
+                or len(instance) > 80 or not WINDOW_KEY.fullmatch(instance)):
             raise BootstrapRefused(401, "sign_in_required")
         client = YudaoClient.for_token(self.config.api_base, token, tenant)
         try:
             # Verify the browser token before assembling optional write tools: their
             # dictionary choices are read from yudao during application construction.
             page = YudaoIdentityPort(self.config.api_base, client).page_identity(token)
-            app = self._application(client)
-            key = (tenant, page.actor_id)
+            key = (tenant, page.actor_id, instance)
+            app = self._application(client, window=instance)
             with self._lock:
                 active = self._sessions.get(key)
                 if active is not None:
@@ -356,7 +371,7 @@ class YudaoHost:
                 raise BootstrapRefused(403, "access_denied") from exc
             raise
 
-    def _application(self, client: YudaoClient) -> YudaoApplication:
+    def _application(self, client: YudaoClient, *, window: str = "") -> YudaoApplication:
         from .guard_proxy import GUARD_PATH
         from web_operation_agent.business.mutation import SQLiteMutationJournal
         forms = None
@@ -364,7 +379,8 @@ class YudaoHost:
             from .live_forms import FenceEvidence, LiveFormPort
             proxy = self.native_proxy
             forms = LiveFormPort(FenceEvidence(
-                proxy.guard, lambda: proxy.resolve_actor(client._login(), client.tenant)))
+                proxy.guard, lambda: proxy.resolve_actor(client._login(), client.tenant),
+                window))
         app = YudaoApplication(self.config.public_origin, None, self._load_api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
                                 source=self.rule_source,
@@ -399,9 +415,9 @@ class YudaoHost:
                    / (time.strftime("%Y%m%d-%H%M%S") + "-" + stable[:8] + "-" + uuid.uuid4().hex[:6]))
         run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.prune_turn_traces()
-        # All of a person's tabs draw on one allowance, keyed by an opaque digest of who
+        # All of a person's pages draw on one allowance, keyed by an opaque digest of who
         # they are, never their name.
-        person = hashlib.sha256("\0".join(key).encode()).hexdigest()[:24]
+        person = hashlib.sha256("\0".join(key[:2]).encode()).hexdigest()[:24]
         meter = SpendMeter(ledger=self.ledger, batch_id=f"yudao-native-{run_dir.name}",
                            allowance=self.allowance, allowance_key=person,
                            run_input_token_abort=16_000_000)
@@ -448,6 +464,7 @@ class YudaoHost:
                 page_review = ReadOnlyWindowPageReview.from_review(page_review)
                 page_actions = ReadOnlyWindowPageActions
                 action_options["guard_proxy"] = self.native_proxy
+                action_options["window"] = key[2]
             model_goal = ModelPageGoalPort(app.goal_port, page_review)
             action_policy = page_actions(app.origin, app.goal_data,
                 self.ui.records if self.ui is not None else {}, model_goal, page_review, **action_options)
@@ -461,7 +478,8 @@ class YudaoHost:
                 from .mutation_prefill import YudaoMutationPrefill
                 mutation_prefill = YudaoMutationPrefill(app.client, app.ports.forms, self.page_review)
             from .native_submit import YudaoSubmitPort
-            submit_port = YudaoSubmitPort(app.client, self.native_proxy, self._load_api_docs)
+            submit_port = YudaoSubmitPort(app.client, self.native_proxy, self._load_api_docs,
+                                          window=key[2])
             native_submit = submit_port if self.config.native_submit else None
             turn_config = replace(turn_config, action_policy=action_policy, click_policy=None,
                 max_user_answer_chars=panel_limits()["result_max_chars"])

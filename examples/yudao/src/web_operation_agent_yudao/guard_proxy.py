@@ -20,13 +20,16 @@ import time
 from urllib.parse import urlsplit
 import urllib.request
 
-from .page_guard import GuardRefused, NativePageGuard
+from .page_guard import GuardRefused, NativePageGuard, WINDOW_KEY
 
 GUARD_PATH = "/woa/page-guard"
 #: What the page's own API requests carry while the assistant is working that page
 #: (frontend/src/integrations/yudao/page-facts.js). Only these are fenced: another tab,
 #: another device and the person's own actions never carry it and are never held.
 ASSISTANT_HEADER = "X-WOA-Assistant"
+#: Which of the actor's windows a marked request belongs to. It scopes guard evidence
+#: to the page that made it; it never travels upstream.
+WINDOW_HEADER = "X-WOA-Window"
 _COOKIE = "woa_native_window"
 _MAX_BODY = 20 * 1024 * 1024
 _PUBLIC = frozenset({"/admin-api/system/auth/login", "/admin-api/system/auth/refresh-token",
@@ -161,13 +164,25 @@ class NativeGuardProxy:
                 except Exception:
                     raise GuardRefused("invalid_browser") from None
                 owner = cookie[proxy.cookie_name].value if proxy.cookie_name in cookie else ""
+                # The cookie is this proxy's own generated token; a value it never issued
+                # is refused rather than trusted as a window name.
+                if owner and not re.fullmatch(r"[a-f0-9]{64}", owner):
+                    raise GuardRefused("invalid_browser")
                 body = json.loads(self.body(8192) or b"{}")
                 if not isinstance(body, dict):
                     raise GuardRefused("invalid_window")
+                named = body.get("window")
+                if named is not None and (not isinstance(named, str) or not WINDOW_KEY.fullmatch(named)):
+                    raise GuardRefused("invalid_window")
                 if self.path == GUARD_PATH + "/begin":
-                    owner = owner or secrets.token_hex(32)
+                    # A page that names its window gets its own: one tab's begin/end never
+                    # opens or closes another tab's, as one shared cookie made them do.
+                    # It gets no window cookie either -- a name is what it already carries,
+                    # and a planted copy of it would fail this handler's own token check.
+                    issued = named is None
+                    owner = named or owner or secrets.token_hex(32)
                     ttl = proxy.guard.begin(actor, owner, ttl_s=body.get("ttl_s", 120))
-                    state = {"active": True, "expires_at": time.time() + ttl}
+                    state = {"active": True, "expires_at": time.time() + ttl, "window": owner}
                     if proxy.guard.permit_active(actor):
                         # An approved click, not a read-only window: the application's own
                         # statement guard must be off for the request the card shows. The
@@ -184,15 +199,18 @@ class NativeGuardProxy:
                             proxy.guard.end(actor, owner)
                             raise GuardRefused("application_window_unavailable")
                         state["guard"] = "read_only_statements"
-                    self.reply(200, state, cookie=owner)
+                    self.reply(200, state, cookie=owner if issued else "")
                 elif self.path == GUARD_PATH + "/end":
+                    owner = named or owner
                     if not owner:
                         raise GuardRefused("invalid_browser")
                     proxy.guard.end(actor, owner)
                     if proxy.application_window and not proxy.guard.protected(actor):
                         # The application's window also ends by its own clock.
                         self.application("end", {})
-                    self.reply(200, {"active": proxy.guard.protected(actor)})
+                    # "Released" is about the window this page held: another page's still
+                    # open one keeps the actor fenced but never blocks this page's release.
+                    self.reply(200, {"active": proxy.guard.active(actor, owner)})
                 else:
                     raise GuardRefused("unknown_guard_operation")
 
@@ -242,7 +260,10 @@ class NativeGuardProxy:
                         except GuardRefused:
                             pass          # a full actor table must not drop the person's own write
                 else:
-                    with proxy.guard.request(actor, self.command, self.path, body) as ticket:
+                    named = self.headers.get(WINDOW_HEADER) or ""
+                    window = named if WINDOW_KEY.fullmatch(named) else ""
+                    with proxy.guard.request(actor, self.command, self.path, body,
+                                             window=window) as ticket:
                         ticket.status, ticket.response = self.upstream_request(body)
 
             def upstream_request(self, body):

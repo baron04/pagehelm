@@ -131,6 +131,9 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._result_digests: dict[str, str] = {}
         self._action_claims: dict[str, str] = {}
         self._pending_action_id = ""
+        #: Recently replaced principal digests, honoured until their own expiry: a hello
+        #: already in flight when this page renewed is not refused for being one behind.
+        self._principal_grace: dict[str, int] = {}
         self._events: list[TaskEvent] = []
         self._messages: deque[dict] = deque()
         self.turn_events = None

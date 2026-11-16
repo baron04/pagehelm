@@ -328,7 +328,9 @@ class NativeContactsHostTests(unittest.TestCase):
             NativeServerConfig(
                 Path("unused"), adversarial_form_fixture=1)  # type: ignore[arg-type]
 
-    def test_reference_admission_refuses_a_fourth_session_for_one_actor(self):
+    def test_reference_admission_evicts_an_idle_session_for_one_actor(self):
+        # Busy pages keep their slots (the all-busy refusal is covered at the server
+        # level); an idle page gives its slot up, so a fourth page of one actor opens.
         with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
                 NativeServerConfig(Path(directory), port=0, scripted=True,
                                    max_sessions=10)) as host:
@@ -343,10 +345,12 @@ class NativeContactsHostTests(unittest.TestCase):
                 host.origin + "/woa/bootstrap",
                 body={"runtime_instance_id": "capacity-tab-overflow"},
                 cookie=cookie, origin=host.origin)
-            self.assertEqual(status, 429)
-            self.assertEqual(payload, {
-                "error": "assistant_capacity", "retryable": True,
-            })
+            self.assertEqual(status, 200, payload)
+            self.assertEqual(host.server.session_count, 3)
+            evicted = [instance for (_actor, instance), (session, _principal)
+                       in host._sessions.items()
+                       if session.channel.close_reason == "actor_capacity_replaced"]
+            self.assertEqual(evicted, ["capacity-tab-00"])
 
     def test_reference_admission_allows_ten_actors_sessions_and_refuses_global_overflow(self):
         with tempfile.TemporaryDirectory() as directory, NativeContactsHost(
