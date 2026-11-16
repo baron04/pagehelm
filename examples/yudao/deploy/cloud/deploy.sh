@@ -81,11 +81,11 @@ rsync -az --delete "$HERE/native-policy/" "$TARGET:$DIR/native-policy/"
 # the pages' .vue and .ts files, and every module's Java.
 rsync -az --prune-empty-dirs --include='*/' --include='*.vue' --include='*.ts' --exclude='*' \
   "$YUDAO_CACHE/ui/src" "$TARGET:$DIR/source/ui/"
-for module in $(cd "$YUDAO_CACHE/server" && ls -d yudao-module-*/src/main/java 2>/dev/null \
-                 | sed 's#^yudao-module-##; s#/src/main/java$##'); do
-  ssh "$TARGET" "mkdir -p $DIR/source/server/yudao-module-$module/src/main/java"
-  rsync -az "$YUDAO_CACHE/server/yudao-module-$module/src/main/java/" \
-    "$TARGET:$DIR/source/server/yudao-module-$module/src/main/java/"
+for module in $(cd "$YUDAO_CACHE/server" && find . -path '*/yudao-module-*/src/main/java' -type d 2>/dev/null \
+                 | sed 's#^\./##; s#/src/main/java$##' | sort); do
+  ssh "$TARGET" "mkdir -p $DIR/source/server/$module/src/main/java"
+  rsync -az "$YUDAO_CACHE/server/$module/src/main/java/" \
+    "$TARGET:$DIR/source/server/$module/src/main/java/"
 done
 
 ssh "$TARGET" sh -s -- "$RELEASE" "${WOA_PUBLIC_ORIGIN:-}" < "$HERE/activate.sh"

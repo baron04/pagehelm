@@ -23,14 +23,19 @@ export function validWriteGuardPath(value: unknown): value is string {
 /**
  * Open the window, and report when it expires so the caller can say afterwards whether it
  * still covered the action. Null means the application did not confirm one.
+ *
+ * `window` names the page's own window to the guard: two pages of one person then open
+ * and close theirs independently, and each one's evidence is kept apart. Without it the
+ * application's cookie names the browser's window, as older integrations did.
  */
-export async function openWriteGuard(path: string, fetcher: Fetch = fetch): Promise<number | null> {
+export async function openWriteGuard(path: string, fetcher: Fetch = fetch,
+                                     window = ''): Promise<number | null> {
   if (!validWriteGuardPath(path)) return null
   try {
     const response = await fetcher(`${path}/begin`, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ttl_s: WRITE_GUARD_TTL_S}),
+      body: JSON.stringify({ttl_s: WRITE_GUARD_TTL_S, ...(window ? {window} : {})}),
     })
     if (!response.ok) return null
     const body = await response.json() as {active?: unknown; expires_at?: unknown} | null
@@ -42,12 +47,14 @@ export async function openWriteGuard(path: string, fetcher: Fetch = fetch): Prom
   }
 }
 
-export async function closeWriteGuard(path: string, fetcher: Fetch = fetch): Promise<void> {
+export async function closeWriteGuard(path: string, fetcher: Fetch = fetch,
+                                      window = ''): Promise<void> {
   if (!validWriteGuardPath(path)) return
   try {
     await fetcher(`${path}/end`, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store', keepalive: true,
-      headers: {'Content-Type': 'application/json'}, body: '{}',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(window ? {window} : {}),
     })
   } catch {
     // The window closes itself when it expires.
@@ -55,12 +62,14 @@ export async function closeWriteGuard(path: string, fetcher: Fetch = fetch): Pro
 }
 
 /** A handoff is ready only after the application acknowledges that writes are enabled. */
-export async function releaseWriteGuard(path: string, fetcher: Fetch = fetch): Promise<boolean> {
+export async function releaseWriteGuard(path: string, fetcher: Fetch = fetch,
+                                        window = ''): Promise<boolean> {
   if (!validWriteGuardPath(path)) return false
   try {
     const response = await fetcher(`${path}/end`, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: {'Content-Type': 'application/json'}, body: '{}',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(window ? {window} : {}),
     })
     if (!response.ok) return false
     const body = await response.json() as {active?: unknown} | null

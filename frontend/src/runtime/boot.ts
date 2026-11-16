@@ -18,9 +18,11 @@ import {detach, later, listen, report, type Cancel} from './contain'
 import {engagementRecord} from './engagement'
 import {examplesFromPage, watchForExamples} from './examples'
 import {startEmbeddedRuntime} from './runtime'
+import {tabId, whenTabIdRotated} from './tabid'
 import {IdleHandshakeClosed, TransportError} from './transport'
 import {createShell} from './shell'
 import {START_TEXT, panelStartStatus, type StartStatus} from './startStatus'
+import {forgetStored} from './storage'
 import type {RuntimeConfig} from './types'
 
 /** A capped ladder: connection faults retry for the life of the page without request storms. */
@@ -39,7 +41,18 @@ export const RENEW_RETRY_MS = 5000
  */
 export const STABLE_MS = 10_000
 
+/**
+ * Keys a duplicated tab clones that it must not keep. `woa.runtime.instance.v1` was an
+ * older page identity; it is dropped so no code path can still read it.
+ */
 const INSTANCE_KEY = 'woa.runtime.instance.v1'
+/**
+ * Which conversation this tab is on, as a counter on the page's own identity
+ * (`tabid.ts`): the bootstrap instance it sends is `tabId.epoch`. A same-tab reload keeps
+ * both and rejoins its conversation; a "new conversation" click bumps the epoch so the
+ * page's next session is a new one while the old keeps its history on the server.
+ */
+const EPOCH_KEY = 'woa.assistant.epoch.v1'
 
 /** What a bootstrap endpoint answers: a Runtime configuration, and when to renew it. */
 export interface Bootstrap {
@@ -88,7 +101,8 @@ export function endpointSource({bootstrap, identity = null, instanceId,
                                 fetchImpl = (...args) => globalThis.fetch(...args)}: {
   bootstrap: string
   identity?: string | null
-  instanceId: string
+  /** The page's identity, or what resolves it once the tab's own claim settles. */
+  instanceId: string | (() => string | Promise<string>)
   fetchImpl?: typeof fetch
 }): SessionSource {
   const post = async (url: string, body: unknown): Promise<unknown> => {
@@ -111,7 +125,8 @@ export function endpointSource({bootstrap, identity = null, instanceId,
   return {
     renewable: true,
     async obtain() {
-      const request = {runtime_instance_id: instanceId}
+      const request = {runtime_instance_id: typeof instanceId === 'function'
+        ? await instanceId() : instanceId}
       const payload = await post(bootstrap, identity ? await post(identity, request) : request)
       if (!isBootstrap(payload)) {
         throw new BootFailure('the bootstrap carried no Runtime configuration', null)
@@ -156,8 +171,13 @@ export interface SupervisorDeps {
    * a session that ends is not replaced until the person next sends something.
    */
   eager?(): boolean
-  /** Told of every Runtime that comes up. */
-  onRunning?(runtime: Supervised): void
+  /** Told of every Runtime that comes up, with the session it came up on. */
+  onRunning?(runtime: Supervised, config: RuntimeConfig): void
+  /**
+   * Forget which conversation this tab was on -- the session pointer, the panel's
+   * timeline and the conversation counter -- so `newConversation` leaves a clean page.
+   */
+  resetConversation?(): void
 }
 
 export class Supervisor {
@@ -182,7 +202,7 @@ export class Supervisor {
     // The panel decides what to show while this takes: nothing at first, then a skeleton.
     if (kind === 'idle') this.deps.status.connecting()
     this.current = {kind: 'starting', attempt}
-    detach('start', this.attempt(attempt))
+    detach('start', this.attempt(attempt, this.current))
   }
 
   /** The person asked: start over from the bottom of the ladder. */
@@ -214,7 +234,28 @@ export class Supervisor {
 
   private get eager(): boolean { return this.deps.eager?.() ?? true }
 
-  private async attempt(attempt: number): Promise<void> {
+  /**
+   * The person asked for a fresh conversation: this tab forgets the session it held and
+   * lets the next message open a new one, leaving the old session's history on the
+   * server. A turn under way refuses -- it is stopped explicitly first -- so the
+   * panel's action can fall back to the session's own refusal.
+   */
+  newConversation(): boolean {
+    const runtime = this.current.kind === 'running' ? this.current.runtime : null
+    if (runtime && !runtime.canRenewSession()) return false
+    this.current = {kind: 'idle'}
+    this.cancel('pending')
+    this.cancel('renewal')
+    this.cancel('unwatch')
+    if (runtime) {
+      try { runtime.stop() } catch (error) { report('new conversation', error) }
+    }
+    this.deps.resetConversation?.()
+    this.deps.status.rested()
+    return true
+  }
+
+  private async attempt(attempt: number, mine: BootState): Promise<void> {
     let runtime: Supervised | null
     let bootstrap: Bootstrap
     try {
@@ -230,13 +271,24 @@ export class Supervisor {
         runtime = await this.deps.start(bootstrap.config)
       }
     } catch (error) {
+      // A stale attempt answers for nothing: a newer start or a new conversation owns
+      // the state now, and this one's failure must not rewrite it.
+      if (this.current !== mine) return
       this.failed(BootFailure.from(error), attempt)
       return
     }
     // `null` means another Runtime holds the page. It is not one to watch or renew, and it
     // is not a reason to show nothing either: it is a failed start like any other.
     if (!runtime) {
+      if (this.current !== mine) return
       this.failed(new BootFailure('the assistant Runtime did not start', null), attempt)
+      return
+    }
+    // A start that resolved after the page moved on -- a new conversation was asked for
+    // while it was in flight, or another start already ran -- belongs to nobody: let it
+    // go rather than present the session it was made for.
+    if (this.current !== mine) {
+      try { runtime.stop() } catch (error) { report('start', error) }
       return
     }
     this.running(runtime, bootstrap)
@@ -263,7 +315,7 @@ export class Supervisor {
       }
     }
     this.scheduleRenewal(runtime, bootstrap)
-    this.deps.onRunning?.(runtime)
+    this.deps.onRunning?.(runtime, bootstrap.config)
   }
 
   private failed(failure: BootFailure, attempt: number): void {
@@ -365,18 +417,41 @@ export class Supervisor {
   }
 }
 
-/** A stable id for this tab, so a reload rejoins its own session rather than starting another. */
-export function runtimeInstanceId(): string {
-  const fresh = () => crypto.randomUUID().replaceAll('-', '')
+/** The epoch when storage refuses to keep it: memory still outlasts nothing but this document. */
+let epochMemory = 0
+
+/** The conversation counter this tab is on; 0 before its first "new conversation". */
+export function conversationEpoch(): number {
   try {
-    const known = sessionStorage.getItem(INSTANCE_KEY)
-    if (known) return known
-    const id = fresh()
-    sessionStorage.setItem(INSTANCE_KEY, id)
-    return id
+    return Math.max(0, Math.floor(Number(sessionStorage.getItem(EPOCH_KEY) || 0)) || 0)
   } catch {
-    return fresh()
+    return epochMemory
   }
+}
+
+/**
+ * The identity this page asks sessions for: the tab's own, qualified by which
+ * conversation it is on. It is what lets one person's two pages, browsers or devices
+ * each hold their own session, and a reload rejoin its own.
+ */
+export async function pageInstanceId(): Promise<string> {
+  return `${await tabId()}.${conversationEpoch()}`
+}
+
+/** The next conversation this tab is on, persisted so a reload rejoins that new one. */
+function nextConversationEpoch(): void {
+  epochMemory = conversationEpoch() + 1
+  try { sessionStorage.setItem(EPOCH_KEY, String(epochMemory)) } catch { /* memory only */ }
+}
+
+/** Every `woa.remote.*` session residue and stale identity keys a fresh start must drop. */
+function clearPageStorage(): void {
+  forgetStored()
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith('woa.remote.') || key === INSTANCE_KEY) sessionStorage.removeItem(key)
+    }
+  } catch { /* storage denied: the page still boots on its fresh identity */ }
 }
 
 /** A URL the page declared, accepted only on the page's own origin. */
@@ -404,7 +479,7 @@ export function sourceFromPage(doc: Document = document, win: Window = window): 
   const declaredIdentity = tag.dataset.woaIdentity
   const identity = declaredIdentity === undefined ? null : sameOrigin(declaredIdentity)
   if (!bootstrap || (declaredIdentity !== undefined && !identity)) return null
-  return endpointSource({bootstrap, identity, instanceId: runtimeInstanceId()})
+  return endpointSource({bootstrap, identity, instanceId: pageInstanceId})
 }
 
 /**
@@ -440,7 +515,10 @@ export function autoBoot(win: Window = window): Supervisor | null {
     panelVisibility(open) {
       if (open && engagement.read() !== 'none') supervisor.connect()
     },
-    cancel() {}, decide() {}, newConversation() {}, loadOlder() {},
+    cancel() {}, decide() {},
+    // With no Runtime bound, a new conversation is just this tab forgetting the one it had.
+    newConversation() { supervisor.newConversation() },
+    loadOlder() {},
   }, DEFAULT_CONFIGURATION,
   examplesFromPage(win.document, DEFAULT_CONFIGURATION.limits.goal_max_chars))
   // Loaded ahead of the page -- as a harness injects it -- the tag that declares the examples
@@ -449,22 +527,47 @@ export function autoBoot(win: Window = window): Supervisor | null {
     examples => shell.host.offerExamples(examples))
   const supervisor: Supervisor = new Supervisor({
     source,
-    start: async config => {
-      const runtime = await startEmbeddedRuntime(config, shell)
-      if (runtime) engagement.remember(config.sessionId)
-      return runtime
-    },
+    start: async config => await startEmbeddedRuntime(config, shell, {
+        windowToken: pageInstanceId,
+        onNewConversation: () => supervisor.newConversation(),
+      }),
     status: panelStartStatus(shell.host),
     eager,
-    onRunning: runtime => {
+    onRunning: (runtime, config) => {
+      // Only a start the Supervisor accepted reaches here: remembering the session in
+      // `start` would write it back even for one a new conversation already abandoned.
+      engagement.remember(config.sessionId)
       settle(runtime)
       if (!waiting) return
       const text = waiting
       waiting = ''
       shell.host.submit(text)
     },
+    resetConversation: () => {
+      // The next session is a new conversation: another epoch on this tab's identity,
+      // so the old session keeps its history under its own id rather than being resumed.
+      // `waiting` goes with it: a message no conversation took belongs to the old one.
+      waiting = ''
+      nextConversationEpoch()
+      engagement.clear()
+      clearPageStorage()
+      shell.host.clearTimeline()
+      shell.host.clearNotice()
+    },
   })
   win.__WOA_ASSISTANT__ = supervisor
+  // A tab duplicated by the browser holds this tab's identity and session pointer. The
+  // lock `tabId` claims settles which tab keeps it; the duplicate's cloned state drops,
+  // and the panel -- cloned session and all -- goes back to its resting page.
+  whenTabIdRotated(() => {
+    engagement.clear()
+    clearPageStorage()
+    epochMemory = 0
+    try { sessionStorage.removeItem(EPOCH_KEY) } catch { /* memory only */ }
+    shell.host.clearTimeline()
+    shell.host.clearNotice()
+    shell.host.rest()
+  })
   // Keep the tab's record current, and let a session go once it has had nothing to do for a
   // while: every change the panel shows while it is idle starts the wait again.
   let resting: Cancel | null = null
@@ -487,16 +590,22 @@ export function autoBoot(win: Window = window): Supervisor | null {
     const kind = supervisor.state.kind
     if (eager() && (kind === 'retrying' || kind === 'unavailable')) supervisor.retry()
   })
-  if (!eager()) {
-    // This identifier hints at history; the server still authenticates the current actor.
-    // Keep the greeting hidden until that actor's timeline has arrived.
-    if (!engagement.sessionId()) shell.host.rest()
-    return supervisor
-  }
-  if (win.document.readyState === 'loading') {
-    listen('boot', win.document, 'DOMContentLoaded', () => supervisor.start(), {once: true})
-  } else {
-    supervisor.start()
-  }
+  // A same-tab reload finds its lock free and keeps its identity -- and its session. A
+  // duplicated tab does not; what it does next must wait for that decision, which is why
+  // everything that depends on which tab this is starts inside the resolution.
+  detach('boot', tabId().then(() => {
+    if (!eager()) {
+      // This identifier hints at history; the server still authenticates the current actor.
+      // Keep the greeting hidden until that actor's timeline has arrived. A start the
+      // person already asked for keeps its connecting state.
+      if (!engagement.sessionId() && supervisor.state.kind !== 'starting') shell.host.rest()
+      return
+    }
+    if (win.document.readyState === 'loading') {
+      listen('boot', win.document, 'DOMContentLoaded', () => supervisor.start(), {once: true})
+    } else {
+      supervisor.start()
+    }
+  }))
   return supervisor
 }

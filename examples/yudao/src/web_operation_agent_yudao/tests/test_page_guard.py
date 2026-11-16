@@ -1,5 +1,6 @@
 """No models, tokens or production accounts; verify native API admission and fencing."""
 import threading
+import types
 import unittest
 import tempfile
 from pathlib import Path
@@ -254,6 +255,157 @@ class MethodFenceTests(unittest.TestCase):
         with self.assertRaises(GuardRefused):
             with reviewed.request(A, "GET", "/admin-api/hrm/employee/page"):
                 self.fail("the reviewed window must not widen")
+
+
+class WindowIsolationTests(unittest.TestCase):
+    """Two open pages of one actor keep their own evidence: reads, refusals and the
+    page-load pass are each the window's own, never shared or taken."""
+
+    def setUp(self):
+        self.now = 0
+        self.guard = NativePageGuard(frozenset(), clock=lambda: self.now,
+                                     writing_gets=frozenset({"/admin-api/project/project/{id}"}))
+        self.guard.begin(A, OWNER)
+        self.guard.begin(A, OTHER)
+
+    def test_each_window_s_reads_and_refusals_are_its_own(self):
+        with self.guard.request(A, "GET", READ + "?id=1", window=OWNER):
+            pass
+        with self.guard.request(A, "GET", READ + "?id=2", window=OTHER):
+            pass
+        with self.assertRaises(GuardRefused):
+            with self.guard.request(A, "POST", "/admin-api/crm/customer/create", window=OWNER):
+                pass
+        self.assertEqual(self.guard.recent_reads(A, window=OWNER), ((READ, "id=1"),))
+        self.assertEqual(self.guard.recent_reads(A, window=OTHER), ((READ, "id=2"),))
+        self.assertEqual(self.guard.refused_since(A, 0, window=OTHER), ())
+        self.assertEqual(self.guard.refused_since(A, 0, window=OWNER),
+                         (("POST", "/admin-api/crm/customer/create"),))
+        # Actor-wide queries still see everything the actor's windows did.
+        self.assertEqual(len(self.guard.recent_reads(A)), 2)
+        self.assertEqual(len(self.guard.refused_since(A, 0)), 1)
+
+    def test_a_page_load_pass_belongs_to_the_window_it_was_armed_for(self):
+        self.guard.arm_page_load(A, window=OWNER)
+        with self.assertRaises(GuardRefused):
+            with self.guard.request(A, "GET", "/admin-api/project/project/17", window=OTHER):
+                pass
+        with self.guard.request(A, "GET", "/admin-api/project/project/17", window=OWNER):
+            pass
+        self.assertEqual([path for _n, path in self.guard.page_loads_since(A, 0, window=OWNER)],
+                         ["/admin-api/project/project/17"])
+        self.assertEqual(self.guard.page_loads_since(A, 0, window=OTHER), ())
+
+    def test_ending_one_window_clears_only_its_page_load_arm(self):
+        self.guard.arm_page_load(A, window=OWNER)
+        self.guard.arm_page_load(A, window=OTHER)
+        self.guard.end(A, OWNER)
+        # The ended window's pass is gone: a request in its name is fenced again.
+        with self.assertRaises(GuardRefused):
+            with self.guard.request(A, "GET", "/admin-api/project/project/17", window=OWNER):
+                pass
+        # The surviving window kept its own arm.
+        with self.guard.request(A, "GET", "/admin-api/project/project/17", window=OTHER):
+            pass
+
+    def test_unnamed_requests_merge_into_every_window_s_view_but_not_into_each_other(self):
+        with self.guard.request(A, "GET", READ + "?id=0"):
+            pass
+        with self.guard.request(A, "GET", READ + "?id=1", window=OWNER):
+            pass
+        self.assertEqual(self.guard.recent_reads(A, window=OWNER),
+                         ((READ, "id=0"), (READ, "id=1")))
+        self.assertEqual(self.guard.recent_reads(A, window=OTHER), ((READ, "id=0"),))
+
+    def test_a_page_instance_name_with_a_dot_is_a_real_window(self):
+        # The browser's page instance id -- "<tab id>.<conversation epoch>" -- is the
+        # name the runtime actually sends; refusing it would close every guarded page
+        # action in production.
+        instance = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3.2"
+        self.guard.begin(A, instance)
+        self.assertTrue(self.guard.active(A, instance))
+        with self.guard.request(A, "GET", READ + "?id=1", window=instance):
+            pass
+        self.assertEqual(self.guard.recent_reads(A, window=instance), ((READ, "id=1"),))
+        self.guard.end(A, instance)
+        self.assertFalse(self.guard.active(A, instance))
+
+    def test_a_request_naming_a_window_that_is_not_open_is_unattributed_evidence(self):
+        # `X-WOA-Window` is self-asserted: a well-formed name no page opened must not get
+        # a bucket of its own that no window query would ever merge.
+        with self.assertRaises(GuardRefused):
+            with self.guard.request(A, "POST", "/admin-api/crm/customer/create",
+                                    window="ghost-window"):
+                pass
+        for window in (OWNER, OTHER):
+            with self.subTest(window=window):
+                self.assertEqual(self.guard.refused_since(A, 0, window=window),
+                                 (("POST", "/admin-api/crm/customer/create"),))
+
+
+class _StubPermit:
+    """The least a permit does for the guard: decide, carry a ttl, be settled."""
+    def __init__(self):
+        self.ttl_s = 30
+        self.settled = []
+
+    def admit(self, method, path, _query, _body):
+        return types.SimpleNamespace(
+            allowed=(method == "PUT" and path == "/admin-api/crm/customer/update"),
+            sequence=1)
+
+    def settle(self, sequence, status, _response):
+        self.settled.append((sequence, status))
+
+
+class PermitWindowTests(unittest.TestCase):
+    """An approved click's permit belongs to the window the approval was given in."""
+
+    def setUp(self):
+        self.guard = NativePageGuard(frozenset({READ}))
+        self.permit = _StubPermit()
+
+    def test_a_sibling_page_cannot_claim_the_pending_permit(self):
+        self.guard.arm_permit(A, self.permit, owner=OWNER)
+        with self.assertRaises(GuardRefused) as refused:
+            self.guard.begin(A, OTHER)
+        self.assertEqual(refused.exception.code, "other_window_open")
+        self.guard.begin(A, OWNER)
+        self.assertTrue(self.guard.permit_active(A))
+
+    def test_while_the_permit_decides_other_windows_writes_are_refused(self):
+        self.guard.begin(A, OTHER)
+        self.guard.arm_permit(A, self.permit, owner=OWNER)
+        # The permit's exclusivity still holds: its owner cannot claim while a sibling is open.
+        with self.assertRaises(GuardRefused):
+            self.guard.begin(A, OWNER)
+        self.guard.end(A, OTHER)
+        self.guard.begin(A, OWNER)
+        self.assertTrue(self.guard.permit_active(A))
+        # A sibling may open while the permit decides, but its marked writes are refused.
+        self.guard.begin(A, OTHER)
+        with self.assertRaises(GuardRefused):
+            with self.guard.request(A, "PUT", "/admin-api/crm/customer/update", window=OTHER):
+                pass
+        with self.guard.request(A, "PUT", "/admin-api/crm/customer/update", window=OWNER) as ticket:
+            ticket.status = 200
+        self.assertEqual(self.permit.settled, [(1, 200)])
+
+    def test_only_the_permit_s_own_window_releases_it(self):
+        self.guard.arm_permit(A, self.permit, owner=OWNER)
+        self.guard.begin(A, OWNER)
+        self.guard.begin(A, OTHER)
+        self.guard.end(A, OTHER)
+        self.assertTrue(self.guard.permit_active(A))
+        self.guard.end(A, OWNER)
+        self.assertFalse(self.guard.permit_active(A))
+        self.assertIs(self.guard.finished_permit(A), self.permit)
+
+    def test_disarming_the_permit_frees_the_pending_owner(self):
+        self.guard.arm_permit(A, self.permit, owner=OWNER)
+        self.assertIsNotNone(self.guard.disarm_permit(A))
+        self.guard.begin(A, OTHER)
+        self.assertTrue(self.guard.active(A, OTHER))
 
 
 if __name__ == "__main__":

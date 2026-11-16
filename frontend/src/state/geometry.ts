@@ -53,6 +53,63 @@ export interface Geometry {
   height: number
 }
 
+export const AVOID_TARGET_EVENT = 'woa:avoid-target'
+
+function overlapArea(a: Geometry, b: {left: number; top: number; right: number; bottom: number}, pad = 8): number {
+  const w = Math.max(0, Math.min(a.left + a.width, b.right + pad) - Math.max(a.left, b.left - pad))
+  const h = Math.max(0, Math.min(a.top + a.height, b.bottom + pad) - Math.max(a.top, b.top - pad))
+  return w * h
+}
+
+/** Reposition a floating window inside the viewport so it clears a marked page control. */
+export function avoidRect(current: Geometry,
+                          target: {left: number; top: number; right: number; bottom: number},
+                          view: {width: number; height: number} = viewport()): Geometry {
+  if (overlapArea(current, target, 0) === 0) return current
+  const gap = 16
+  const sizes: {width: number; height: number}[] = [
+    {width: current.width, height: current.height},
+    {width: Math.max(MIN_WIDTH, Math.min(current.width, Math.floor(Math.max(target.left - gap - DOCK_INSET, view.width - target.right - gap - DOCK_INSET)))), height: current.height},
+    {width: current.width, height: Math.max(MIN_HEIGHT, Math.min(current.height, Math.floor(Math.max(target.top - gap - DOCK_INSET, view.height - target.bottom - gap - DOCK_INSET))))},
+    {width: MIN_WIDTH, height: MIN_HEIGHT},
+  ]
+  let best = current
+  let bestOverlap = overlapArea(current, target)
+  let bestMove = Number.POSITIVE_INFINITY
+  for (const size of sizes) {
+    const w = Math.min(Math.max(MIN_WIDTH, size.width), Math.max(240, view.width))
+    const h = Math.min(Math.max(MIN_HEIGHT, size.height), Math.max(240, view.height))
+    const fit = (left: number, top: number): Geometry => ({
+      width: w,
+      height: h,
+      left: Math.min(Math.max(0, left), Math.max(0, view.width - w)),
+      top: Math.min(Math.max(0, top), Math.max(0, view.height - h)),
+    })
+    const candidates: Geometry[] = [
+      fit(target.left - gap - w, current.top),
+      fit(target.right + gap, current.top),
+      fit(DOCK_INSET, current.top),
+      fit(view.width - w - DOCK_INSET, current.top),
+      fit(current.left, target.top - gap - h),
+      fit(current.left, target.bottom + gap),
+      fit(DOCK_INSET, DOCK_INSET),
+      fit(view.width - w - DOCK_INSET, DOCK_INSET),
+    ]
+    for (const candidate of candidates) {
+      const area = overlapArea(candidate, target)
+      const move = Math.abs(candidate.left - current.left) + Math.abs(candidate.top - current.top)
+        + (current.width - candidate.width) * 2 + (current.height - candidate.height) * 2
+      if (area < bestOverlap || (area === bestOverlap && move < bestMove)) {
+        best = candidate
+        bestOverlap = area
+        bestMove = move
+      }
+    }
+    if (bestOverlap === 0) break
+  }
+  return best
+}
+
 // Visibility follows this tab across refreshes and page navigation. A different tab starts
 // with its own choice; no conversation, capability or approval is stored here.
 const OPEN_KEY = 'woa.panel.open.v1'
@@ -228,6 +285,24 @@ export function useWindowGeometry(enabled: boolean): WindowGeometry {
       cancelAnimationFrame(frame.current)
     }
   }, [settle])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !enabled || fullScreen) return
+    const onAvoid = (event: Event) => {
+      const detail = (event as CustomEvent<{left: number; top: number; right: number; bottom: number}>).detail
+      if (!detail || typeof detail.left !== 'number' || typeof detail.right !== 'number') return
+      if (mode === 'drawer' && !pushes) {
+        setMode('float')
+        setPlaced(avoidRect(defaultGeometry(), detail))
+        return
+      }
+      if (mode === 'float') {
+        setPlaced(current => avoidRect(current ?? docked, detail))
+      }
+    }
+    window.addEventListener(AVOID_TARGET_EVENT, onAvoid)
+    return () => window.removeEventListener(AVOID_TARGET_EVENT, onAvoid)
+  }, [enabled, fullScreen, mode, pushes, docked])
 
   // Every switch starts the other mode from its defaults: what was set in one mode says
   // nothing about where the other should be.

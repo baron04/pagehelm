@@ -89,10 +89,12 @@ class _QueryScope:
 class YudaoGoalData:
     def __init__(self, client: YudaoClient, api_docs: dict | Callable[[], dict], *, ui: UiSource | None = None,
                  modules: tuple[str, ...] = MODULES, time_zone: str = "Asia/Shanghai",
-                 max_rows: int = _MAX_ROWS, native_sections: bool = False, read_workers: int = 1):
+                 max_rows: int = _MAX_ROWS, native_sections: bool = False, read_workers: int = 1,
+                 writing_gets: frozenset[str] = frozenset()):
         if not isinstance(native_sections, bool):
             raise TypeError("native sections must be explicitly enabled")
         self._native_sections = native_sections
+        self._writing_gets = frozenset(writing_gets)
         if isinstance(read_workers, bool) or not isinstance(read_workers, int) or not 1 <= read_workers <= 8:
             raise ValueError("read_workers must be an integer between 1 and 8")
         #: How many of the metadata's own reads may be under way at once. They are the
@@ -200,10 +202,10 @@ class YudaoGoalData:
         out = []
         for key, spec in self._entities.items():
             entity = schema.entity(key)
-            if entity is None or not spec.component:
+            if entity is None:
                 continue
             out.append(EntitySource(
-                key=key, component_dir=spec.component.rsplit("/", 1)[0],
+                key=key, component_dir=spec.component.rsplit("/", 1)[0] if spec.component else "",
                 api_base=spec.list_path.rsplit("/", 1)[0],
                 labels={f.key: f.label for f in entity.fields},
                 choices={f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}))
@@ -1168,6 +1170,9 @@ class YudaoGoalData:
 
     def _fetch_pages(self, entity: str, spec: "_Entity", params: dict,
                      *, scenes: tuple[int | None, ...] | None = None) -> list[dict]:
+        full_path = "/admin-api/" + spec.list_path.lstrip("/")
+        if full_path in self._writing_gets or spec.list_path in self._writing_gets:
+            raise DataRefused("writing GET refused in goal lookup")
         if "id" not in spec.props:
             if spec.has_get or not _unpaged(self._docs, spec.list_path):
                 raise DataRefused("identifier-free tables require a complete unpaged read", read_failed=True)
@@ -1290,11 +1295,35 @@ class YudaoGoalData:
         rows = self._client.get(path) or []
         return [{"id": r["id"], "name": r.get("nickname") or r.get("name") or str(r["id"])} for r in rows]
 
+    def name_searchable(self, entity: str, text: str) -> bool:
+        """Whether an unscoped lookup across every entity can check `entity` without
+        unbounded full-table pagination or writing GET side effects."""
+        if entity in (_USERS, _DEPTS):
+            return True
+        spec = self._entities.get(entity)
+        if spec is None:
+            return False
+        full_path = "/admin-api/" + spec.list_path.lstrip("/")
+        if full_path in self._writing_gets or spec.list_path in self._writing_gets:
+            return False
+        if self._narrowing(entity, text) is not EVERYTHING:
+            return True
+        return (full_path in (self._docs.get("paths") or {})
+                and _unpaged(self._docs, spec.list_path)
+                and not (set(spec.required) - set(spec.fixed_params)))
+
     def _narrowing(self, entity: str, text: str) -> Cond:
         """A name search pushed down where the list has a name or number parameter."""
         spec = self._entities.get(entity)
-        if spec is not None and spec.name_field in spec.params:
-            return Compare(spec.name_field, "contains", text)
+        if spec is None:
+            return EVERYTHING
+        candidates = [spec.name_field, "name", "title", "nickname", "subject"]
+        if re.fullmatch(r"[A-Za-z0-9_-]{3,64}", text.strip()):
+            candidates.extend(("no", "code", "username", "sn"))
+        for key in dict.fromkeys(c for c in candidates if c):
+            if key in spec.params and (key == spec.name_field or (
+                    key in spec.props and spec.params[key].get("type") in (None, "string"))):
+                return Compare(key, "contains", text)
         return EVERYTHING
 
     def _pushdown(self, spec: "_Entity", where: Cond) -> dict:

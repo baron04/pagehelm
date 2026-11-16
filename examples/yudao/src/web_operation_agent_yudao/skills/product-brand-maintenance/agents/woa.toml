@@ -1,3 +1,8 @@
 schema_version = 1
-scope_entities = ["product/brand"]
-write_operations = ["product_brand_create", "product_brand_update"]
+write_operations = [
+  "product_brand_create",
+  "product_brand_update",
+  "promotion_coupon_template_status",
+  "promotion_seckill_activity_close",
+]
+scope_entities = ["product/brand", "promotion/coupon-template", "promotion/seckill-activity"]

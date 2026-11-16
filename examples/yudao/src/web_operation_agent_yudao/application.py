@@ -102,7 +102,8 @@ class YudaoApplication:
                  conventions: Path | None = REFERENCE_CONVENTIONS, client: YudaoClient | None = None,
                  native_tabs: bool = False, native_navigation: bool = False, page_write_guard: str = "",
                  forms: ApplicationFormPort | None = None, native_writes: bool = False,
-                 mutation_journal=None, native_write_preparation: bool = False):
+                 mutation_journal=None, native_write_preparation: bool = False,
+                 writing_gets: frozenset[str] = frozenset()):
         if type(native_write_preparation) is not bool:
             raise TypeError("native_write_preparation must be boolean")
         if native_write_preparation and native_writes:
@@ -122,7 +123,8 @@ class YudaoApplication:
         # The data port's own reads of application metadata go out four at a time, as its
         # lookups by name do (`reference_workers` below).
         self.goal_data = YudaoGoalData(self.client, api_docs, ui=ui, time_zone=time_zone,
-                                      native_sections=native_tabs, read_workers=4)
+                                      native_sections=native_tabs, read_workers=4,
+                                      writing_gets=writing_gets)
         from .native_tabs import NativeTabPolicy
         self.native_tab_policy = NativeTabPolicy((ui or UiSource.none()).records.values()) if native_tabs else None
         if native_navigation:

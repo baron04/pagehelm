@@ -73,6 +73,23 @@ describe('form model reading', () => {
       {readConfirmBox: () => ({open: true, title: 't', text: 'x', buttons: ['确定']})}).open).toBe(true)
   })
 
+  it('settles promptly when idle or asking for confirmation, while waiting out active busy work', async () => {
+    const pauses: number[] = []
+    await waitForSubmitToSettle(undefined, async ms => { pauses.push(ms) }, {
+      readSubmitBusy: () => false,
+      readConfirmBox: () => ({open: true, title: '确认', text: '确定审批吗？', buttons: ['确定', '取消']}),
+    })
+    expect(pauses).toEqual([120])
+
+    pauses.length = 0
+    let busyChecks = 0
+    await waitForSubmitToSettle(undefined, async ms => { pauses.push(ms) }, {
+      readSubmitBusy: () => ++busyChecks <= 2,
+    })
+    expect(busyChecks).toBe(5)
+    expect(pauses.reduce((a, b) => a + b, 0)).toBeLessThan(700)
+  })
+
   it('compares a control with the card by its own text, and binds one with no text otherwise', () => {
     expect(sameControlText('确 定', '确定')).toBe(true)
     expect(sameControlText('确定', '取消')).toBe(false)

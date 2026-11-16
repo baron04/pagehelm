@@ -526,18 +526,45 @@ class LiveProductSessionTests(unittest.TestCase):
         server = LiveProductServer(
             max_sessions=4, max_sessions_per_actor=2, sse_wait_s=.01)
         try:
+            principals = [actor("actor-1", f"delegation-{index}") for index in range(2)]
             sessions = [server.create_session(
                 allowed_origin=ORIGIN,
                 page_controller_module=ORIGIN + "/page-controller.js",
                 runner_factory=lambda _channel: _Runner(),
-                principal=actor("actor-1", f"delegation-{index}"),
+                principal=principals[index],
                 session_id=f"actor-capacity-{index}") for index in range(2)]
+            # A page with nothing under way gives its slot up: the new page opens.
+            fresh = actor("actor-1", "fresh-delegation")
+            replacement = server.create_session(
+                allowed_origin=ORIGIN,
+                page_controller_module=ORIGIN + "/page-controller.js",
+                runner_factory=lambda _channel: _Runner(),
+                principal=fresh,
+                session_id="actor-capacity-new")
+            self.assertEqual(replacement.grant.session_id, "actor-capacity-new")
+            self.assertEqual(server.session_count, 2)
+            self.assertFalse(server.close_session("actor-capacity-0"))
+            # Pages that are busy keep their slots: the cap still bites when every
+            # session of the actor has work in flight.
+            for session, principal, tag in (
+                    (sessions[1], principals[1], "one"), (replacement, fresh, "two")):
+                lease = session.channel.accept_hello(ClientHello(
+                    schema_version=SCHEMA_VERSIONS["ClientHello"],
+                    session_id=session.grant.session_id,
+                    client_id=f"busy-tab-{tag}",
+                    runtime="test-runtime/1",
+                    runtime_instance_id=f"busy-document-{tag}",
+                    capabilities=("dom.observe",),
+                    page_origin=ORIGIN,
+                    application_id="sample",
+                    principal_digest=principal.binding_digest))["lease_id"]
+                session.channel.accept_message(_message(1), lease_id=lease)
             with self.assertRaisesRegex(RuntimeError, "actor session capacity"):
                 server.create_session(
                     allowed_origin=ORIGIN,
                     page_controller_module=ORIGIN + "/page-controller.js",
                     runner_factory=lambda _channel: _Runner(),
-                    principal=actor("actor-1", "fresh-delegation"),
+                    principal=actor("actor-1", "later-delegation"),
                     session_id="actor-capacity-refused")
             other = server.create_session(
                 allowed_origin=ORIGIN,

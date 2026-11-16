@@ -3555,5 +3555,142 @@ class HostConfigTests(unittest.TestCase):
                             state_dir=Path(tmp)))
 
 
+class Phase47Step1BaseTests(unittest.TestCase):
+    def test_clean_user_answer_strips_internal_receipts_and_redacts_initial_passwords(self):
+        from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
+        from web_operation_agent_yudao.slim_loop import _clean_user_answer
+        from web_operation_agent_yudao.api_content import redacted
+
+        raw = ("共找到 2 条订单（依据回执 ev_535105f0d0ba_1、ev_535105f0d0ba_2），详见本轮行表 t1。"
+               "系统配置账号初始密码为 123456，总金额为 123456 元，请自己填写初始密码后提交。")
+        cleaned = _clean_user_answer(raw, BASELINE_SESSION_HANDOFFS)
+        self.assertNotIn("ev_535105f0d0ba", cleaned)
+        self.assertNotIn("行表 t1", cleaned)
+        self.assertIn("账号初始密码为 [redacted]", cleaned)
+        self.assertIn("总金额为 123456 元", cleaned)
+        self.assertIn("请自己填写初始密码后提交", cleaned)
+        self.assertEqual("已填好名称，尚未提交。", _clean_user_answer(
+            "已填好名称（依据回执 ev_535105f0d0ba_3，详见本轮行表 t1），尚未提交。", BASELINE_SESSION_HANDOFFS))
+        self.assertEqual("已填好名称，尚未提交。", _clean_user_answer(
+            "已填好名称（依据回执，详见本轮读取数据），尚未提交。", BASELINE_SESSION_HANDOFFS))
+        self.assertEqual("已填好名称，尚未提交。", _clean_user_answer(
+            "已填好名称（详见行表t1），尚未提交。", BASELINE_SESSION_HANDOFFS))
+        self.assertEqual("共 3 条，请核对。", _clean_user_answer(
+            "共 3 条（依据 ev_535105f0d0ba_1、ev_535105f0d0ba_2、ev_535105f0d0ba_3 核对），请核对。",
+            BASELINE_SESSION_HANDOFFS))
+        self.assertNotIn("Admin@2026", _clean_user_answer("初始密码 | Admin@2026", BASELINE_SESSION_HANDOFFS))
+        page_row = redacted("用户管理-账号初始密码 | sys.user.init-password | Admin@2026", BASELINE_SESSION_HANDOFFS)
+        self.assertNotIn("Admin@2026", page_row)
+        self.assertIn("[redacted]", page_row)
+
+    def test_pull_up_page_obligation_rejects_home_text_only_once_then_discloses_while_pure_reads_pass(self):
+        from unittest.mock import Mock
+        from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
+        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
+        from web_operation_agent_yudao.turn_tables import TurnTables
+
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        self.addCleanup(tables.close)
+        ref = tables.issue_receipt()
+        token = _TURN_TABLES.set((tables, "2026-10-25", "Asia/Shanghai"))
+        self.addCleanup(_TURN_TABLES.reset, token)
+
+        executor = object.__new__(TableReadTurnExecutor)
+        executor.config = NS(disabled_actions=frozenset({"submit"}), max_user_answer_chars=4000)
+        executor.model_steps = 8
+        executor._tool_receipts = []
+        home_obs = PageObservation(1, 1, "https://synthetic.test/index", "首页", [], [],
+                                   content="首页", render_state="ready", page_route="/index")
+
+        # Pure read with tricky word "添加" must pass on /index with zero false rejection.
+        read_state = NS(obs=home_obs, ledger=Mock(), budget=NS(remaining=lambda: 5),
+                        message=NS(text="查一下今年添加的供应商有哪些"))
+        read_args = {"status": "done", "answer": "共有 2 家供应商。",
+                     "items": [{"item": "供应商名单", "kind": "data", "status": "delivered", "receipts": [ref]}]}
+        self.assertEqual("", executor._finish_feedback(read_state, {}, read_args))
+
+        # "调出" request left on /index triggers single retry, then keeps data and appends honest disclosure.
+        pull_state = NS(obs=home_obs, ledger=Mock(), budget=NS(remaining=lambda: 5),
+                        message=NS(text="把等待退款的售后单调出来"))
+        pull_turn = {"model_calls": 2}
+        pull_args = {"status": "done", "answer": "等待退款共 5 单。",
+                     "items": [{"item": "售后单列表", "kind": "data", "status": "delivered", "receipts": [ref]}]}
+        first = executor._finish_feedback(pull_state, pull_turn, pull_args)
+        self.assertEqual("delivery_page_obligation", first.code)
+        self.assertIsNone(executor._delivery_correction(pull_state, pull_turn, pull_args, first))
+        second = executor._finish_feedback(pull_state, pull_turn, pull_args)
+        closed = executor._delivery_correction(pull_state, pull_turn, pull_args, second)
+        self.assertEqual("cannot", closed["status"])
+        self.assertIn("等待退款共 5 单。", closed["answer"])
+        self.assertIn("未交付", closed["answer"])
+
+        # Negative write-unexecuted wording cannot bypass kind=write verification via _ALREADY_SATISFIED.
+        bad_write = {"status": "done", "answer": "记录状态未发生变化，本次未执行写入。",
+                     "items": [{"item": "更新状态", "kind": "write", "status": "delivered", "receipts": [ref]}]}
+        self.assertEqual("delivery_write_unverified", executor._finish_feedback(read_state, {}, bad_write).code)
+
+    def test_handoff_form_binding_recovers_lifetime_from_prior_receipts_when_inputs_scrolled_out(self):
+        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+
+        executor = object.__new__(SlimTurnExecutor)
+        input_obs = PageObservation(1, 1, "https://synthetic.test/coupon", "优惠券", [], [
+            ElementRef("e1", "textbox", "名称", "input", 1,
+                       {"form_scope": "dialog:coupon", "form_instance": "inst-1", "form_lifetime": "life-1"}),
+        ], content="优惠券", render_state="ready", page_route="/coupon")
+        footer_obs = PageObservation(1, 2, "https://synthetic.test/coupon", "优惠券", [], [
+            ElementRef("e9", "button", "确 定", "button", 2,
+                       {"form_scope": "dialog:coupon", "form_instance": "inst-1"}),
+        ], content="优惠券", render_state="ready", page_route="/coupon")
+        executor._tool_receipts = [NS(observation=input_obs)]
+        binding = executor._handoff_form_binding(footer_obs, footer_obs.elements[0])
+        self.assertEqual(binding, ("https://synthetic.test/coupon", "/coupon", "dialog:coupon", "lifetime", "life-1"))
+
+    def test_internal_tokens_are_not_reported_as_untraced_numbers(self):
+        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+        seen = []
+        executor = object.__new__(SlimTurnExecutor)
+        executor._earlier_words = ()
+        executor.profile = NS(untraced_numbers=lambda answer, sources: seen.append(answer) or ())
+        executor._untraced_numbers("问", "共 5 条（依据回执 ev_535105f0d0ba_1，详见本轮行表 t1）", {})
+        self.assertNotIn("ev_", seen[0])
+        self.assertNotIn("t1", seen[0])
+        self.assertIn("5", seen[0])
+
+    def test_goal_data_name_searchable_skips_writing_gets_and_unfiltered_paged_logs(self):
+        from web_operation_agent_yudao.goal import YudaoGoalData, _Entity
+
+        data = YudaoGoalData(Client(), lambda: DOCS,
+                             writing_gets=frozenset({"/admin-api/report/writing/page"}))
+        data._entities = {
+            "crm/customer": _Entity(
+                key="crm/customer", module="crm", resource="customer", label="客户",
+                list_path="crm/customer/page", name_field="name",
+                params={"name": {"type": "string"}, "pageNo": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset(), fixed_params=(), has_get=True, operations=(), view=None,
+                lists=frozenset(), money={},
+            ),
+            "system/login-log": _Entity(
+                key="system/login-log", module="system", resource="login-log", label="登录日志",
+                list_path="system/login-log/page", name_field="",
+                params={"pageNo": {"type": "integer"}, "pageSize": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "userIp": {"type": "string"}},
+                required=frozenset(), fixed_params=(), has_get=False, operations=(), view=None,
+                lists=frozenset(), money={},
+            ),
+            "report/writing": _Entity(
+                key="report/writing", module="report", resource="writing", label="报表",
+                list_path="report/writing/page", name_field="name",
+                params={"name": {"type": "string"}},
+                props={"id": {"type": "integer"}, "name": {"type": "string"}},
+                required=frozenset(), fixed_params=(), has_get=False, operations=(), view=None,
+                lists=frozenset(), money={},
+            ),
+        }
+        self.assertTrue(data.name_searchable("crm/customer", "远辰"))
+        self.assertFalse(data.name_searchable("system/login-log", "远辰"))
+        self.assertFalse(data.name_searchable("report/writing", "远辰"))
+
+
 if __name__ == "__main__":
     unittest.main()

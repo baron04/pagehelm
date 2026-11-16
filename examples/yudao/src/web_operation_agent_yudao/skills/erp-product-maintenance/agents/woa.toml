@@ -1,3 +1,8 @@
 schema_version = 1
+write_operations = [
+  "erp_product_create",
+  "erp_product_update",
+  "erp_product_unit_create",
+  "erp_product_unit_update",
+]
 scope_entities = ["erp/product", "erp/product-category", "erp/product-unit"]
-write_operations = ["erp_product_create", "erp_product_update"]

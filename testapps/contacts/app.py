@@ -535,7 +535,10 @@ class MinimalContactsApplication:
         if write_fault != "hold_before_commit":
             self.release_post.set()
         self._lock = threading.Lock()
-        self._page_windows: dict[str, float] = {}
+        #: (login session, window name) -> expiry. Any open window takes the session
+        #: read-only, but a page's begin/end pair is its own: one tab releasing its
+        #: window never lifts another's. Callers naming no window share the "" one.
+        self._page_windows: dict[tuple[str, str], float] = {}
         #: Bounded journals the write integration inspects: every page/API write
         #: attempt (marked or not) and every page-session collection read.
         self.write_journal: list[dict] = []
@@ -660,7 +663,10 @@ class MinimalContactsApplication:
                         or not path.startswith("/api/"):
                     return None
                 with owner._lock:
-                    guarded = owner._page_windows.get(resolved[0].session, 0) > time.time()
+                    now = time.time()
+                    guarded = any(until > now for (session, _window), until
+                                  in owner._page_windows.items()
+                                  if session == resolved[0].session)
                 if not guarded:
                     return None
                 if not marked or owner._write_gate is None:
@@ -687,12 +693,21 @@ class MinimalContactsApplication:
                     if not 0 < length <= 100:
                         self._reply(400, _json_bytes({"error": "invalid_window"}), "application/json")
                         return
-                    self.rfile.read(length)
+                    try:
+                        window = json.loads(self.rfile.read(length)).get("window") or ""
+                    except (ValueError, UnicodeDecodeError, AttributeError):
+                        window = ""
+                    if not isinstance(window, str) or len(window) > 128:
+                        window = ""
                     active = path.endswith("/begin")
-                    expires = time.time() + 120 if active else 0
                     with owner._lock:
-                        owner._page_windows[resolved[0].session] = expires
-                    self._reply(200, _json_bytes({"active": active, "expires_at": expires}), "application/json")
+                        now = time.time()
+                        owner._page_windows = {key: until for key, until
+                                               in owner._page_windows.items() if until > now}
+                        expires = now + 120 if active else 0
+                        owner._page_windows[(resolved[0].session, window)] = expires
+                    self._reply(200, _json_bytes({"active": active, "expires_at": expires}),
+                                "application/json")
                     return
                 resolved = self._actor()
                 body = b""
@@ -726,7 +741,7 @@ class MinimalContactsApplication:
                         if (set(payload) != {"runtime_instance_id"}
                                 or not isinstance(instance_id, str)
                                 or not 8 <= len(instance_id) <= 128
-                                or any(not (char.isalnum() or char in "-_")
+                                or any(not (char.isalnum() or char in "-_.")
                                        for char in instance_id)):
                             raise ValueError()
                         bootstrap = owner._assistant_bootstrap(resolved[0], instance_id)

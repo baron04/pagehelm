@@ -703,3 +703,29 @@ class WindowTests(unittest.TestCase):
             self.assertEqual((409, "read_only_window"), (status, error["error"]))
             self.assertEqual((0, 0), (app.write_requests, app.records_created))
             self.assertEqual(200, post("/api/page-window/end", cookie, {"ttl_ms": 60000})[0])
+
+    def test_one_page_releasing_its_window_keeps_another_s(self):
+        import urllib.error
+        import urllib.request
+        actor = ACTORS_BY_ID["ada-lovelace"]
+        with MinimalContactsApplication() as app:
+            def post(path, headers, body):
+                request = urllib.request.Request(app.origin + path, method="POST",
+                    headers={"Content-Type": "application/json", **headers}, data=json.dumps(body).encode())
+                try:
+                    with urllib.request.urlopen(request, timeout=5) as response:
+                        return response.status, json.load(response)
+                except urllib.error.HTTPError as error:
+                    return error.code, json.load(error)
+
+            cookie = {"Cookie": f"{DEMO_SESSION_COOKIE}={actor.session}", "Origin": app.origin}
+            self.assertEqual(200, post("/api/page-window/begin", cookie, {"window": "tab-a.0"})[0])
+            self.assertEqual(200, post("/api/page-window/begin", cookie, {"window": "tab-b.0"})[0])
+            # One page ending its window must not lift the other's: the session stays read-only.
+            self.assertEqual(200, post("/api/page-window/end", cookie, {"window": "tab-a.0"})[0])
+            status, error = post("/api/browser/contacts", cookie,
+                {"name": "Synthetic guarded contact", "email": "guard@example.test"})
+            self.assertEqual((409, "read_only_window"), (status, error["error"]))
+            self.assertEqual(200, post("/api/page-window/end", cookie, {"window": "tab-b.0"})[0])
+            self.assertEqual(201, post("/api/browser/contacts", cookie,
+                {"name": "Synthetic guarded contact", "email": "guard@example.test"})[0])

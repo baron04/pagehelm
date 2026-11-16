@@ -41,7 +41,71 @@ export function pressConfirmButton(label, doc = document) {
   return true
 }
 
-/** Element Plus's own submit-in-flight indicator. */
+const BUSY_SELECTORS = '.el-loading-mask, .el-button.is-loading, [aria-busy="true"]'
+let submitRequestsInFlight = 0
+
+function installSubmitTracker(win) {
+  if (!win || win.__woaYudaoSubmitTrackerInstalled) return
+  win.__woaYudaoSubmitTrackerInstalled = true
+  const isAdminWrite = (url, method) => {
+    if (!method || String(method).toUpperCase() === 'GET') return false
+    try {
+      const parsed = new URL(String(url || ''), win.location?.href || 'http://localhost')
+      return parsed.pathname.startsWith('/admin-api/')
+    } catch {
+      return String(url || '').startsWith('/admin-api/')
+    }
+  }
+  if (typeof win.fetch === 'function') {
+    const originalFetch = win.fetch.bind(win)
+    win.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || ''
+      const method = (init && init.method) || (input && input.method) || 'GET'
+      const tracked = isAdminWrite(url, method)
+      if (tracked) submitRequestsInFlight++
+      try {
+        const promise = originalFetch(input, init)
+        return tracked ? promise.finally(() => {
+          submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
+        }) : promise
+      } catch (err) {
+        if (tracked) submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
+        throw err
+      }
+    }
+  }
+  if (typeof win.XMLHttpRequest === 'function') {
+    const proto = win.XMLHttpRequest.prototype
+    const open = proto.open, send = proto.send
+    proto.open = function(method, url, ...rest) {
+      this.__woaAdminWrite = isAdminWrite(url, method)
+      return open.call(this, method, url, ...rest)
+    }
+    proto.send = function(...args) {
+      const done = () => {
+        if (!this.__woaAdminWriteCounted) return
+        this.__woaAdminWriteCounted = false
+        submitRequestsInFlight = Math.max(0, submitRequestsInFlight - 1)
+      }
+      if (this.__woaAdminWrite && !this.__woaAdminWriteCounted) {
+        this.__woaAdminWriteCounted = true
+        submitRequestsInFlight++
+        this.addEventListener('loadend', done, {once: true})
+      }
+      try {
+        return send.apply(this, args)
+      } catch (err) {
+        done()
+        throw err
+      }
+    }
+  }
+}
+
+if (typeof window !== 'undefined') installSubmitTracker(window)
+
+/** Element Plus's own submit-in-flight indicators and active admin-api write requests. */
 export function readSubmitBusy(doc = document) {
-  return Array.from(doc.querySelectorAll('.el-loading-mask')).some(shown)
+  installSubmitTracker(doc?.defaultView)
+  return submitRequestsInFlight > 0 || Array.from(doc.querySelectorAll(BUSY_SELECTORS)).some(shown)
 }

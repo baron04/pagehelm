@@ -67,11 +67,15 @@ class ReadOnlyWindowPageActions(NativeReadActions):
 
     actions = frozenset({"goto", "click", "fill", "select"})
 
-    def __init__(self, origin, data, record_routes, goal_port, review, *, guard_proxy):
+    def __init__(self, origin, data, record_routes, goal_port, review, *, guard_proxy,
+                 window=""):
         if not isinstance(guard_proxy, NativeGuardProxy) or not guard_proxy.method_fence_ready:
             raise ValueError("read-only-window requires the running, ingress-verified method fence")
         super().__init__(origin, data, record_routes, review="read-only-window/v1")
         self.guard_proxy = guard_proxy
+        #: Which guard window this session's page works through; page-load passes are
+        #: armed and cleared for it alone, so two open pages never borrow each other's.
+        self._window = str(window or "")
 
     def _guard(self):
         if not self.guard_proxy.method_fence_ready:
@@ -114,10 +118,10 @@ class ReadOnlyWindowPageActions(NativeReadActions):
         if intent.action == "goto" or (intent.action == "click" and (
                 element.attrs.get("href") or element.attrs.get("navigation_kind"))):
             # The page this opens loads itself; its own GETs pass, even scan-listed ones.
-            self.guard_proxy.guard.arm_page_load(actor, 10.0)
+            self.guard_proxy.guard.arm_page_load(actor, 10.0, window=self._window)
         else:
             # Any other action is not that page's loading: nothing earlier carries over to it.
-            self.guard_proxy.guard.clear_page_load(actor)
+            self.guard_proxy.guard.clear_page_load(actor, window=self._window)
         postcondition = json.dumps([self.data._client.read_generation,
             hashlib.sha256(target.encode()).hexdigest() if target else ""], separators=(",", ":"))
         return ActionPermit(intent.binding_digest, ActionEffect.READ_ONLY,
@@ -130,7 +134,9 @@ class ReadOnlyWindowPageActions(NativeReadActions):
         if generation != self.data._client.read_generation or not receipt.write_guard_held:
             return False
         actor = self.guard_proxy.resolve_actor(self.data._client._login(), self.data._client.tenant)
-        if not self.guard_proxy.guard.window_held(actor):
+        held = (self.guard_proxy.guard.active(actor, self._window) if self._window
+                else self.guard_proxy.guard.window_held(actor))
+        if not held:
             return False
         self._same_origin(observation.url)
         if observation.render_state == "pending":

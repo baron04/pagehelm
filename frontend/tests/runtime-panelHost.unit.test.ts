@@ -41,6 +41,13 @@ describe('classifyTransportError reads the server own table, once', () => {
       {terminal: false, retryable: true, state: 'reconnecting'})
   })
 
+  it('adopts server read_only_mode from the hello configuration', () => {
+    const host = new PanelHost({configuration: DEFAULT_CONFIGURATION, actions: actions()})
+    expect(host.configuration.read_only_mode).toBe(false)
+    host.adoptServerConfiguration({...DEFAULT_CONFIGURATION, read_only_mode: true})
+    expect(host.configuration.read_only_mode).toBe(true)
+  })
+
   it('honours the server configured terminal codes over the built-in status table', () => {
     const configured = {
       ...DEFAULT_CONFIGURATION,

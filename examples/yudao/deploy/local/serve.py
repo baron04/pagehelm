@@ -204,6 +204,7 @@ def host_config(settings: Settings, env: dict) -> native.YudaoHostConfig:
         bootstrap_host="127.0.0.1", bootstrap_port=settings.ports[2],
         native_guard_port=settings.ports[3], native_ingress_base=f"http://127.0.0.1:{settings.ports[0]}",
         ui_source=cfg.CACHE / "ui",
+        source_root=cfg.CACHE if (cfg.CACHE / "server").is_dir() else None,
         source_release=cfg.RELEASE, native_read_policy=cfg.POLICIES / "fence.json",
         native_page_policy=cfg.POLICIES / "pages.json",
         native_money_policy=cfg.POLICIES / "verified-money.json",

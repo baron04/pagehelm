@@ -321,7 +321,42 @@ class TurnTables:
                 reason = ("来源行表未读全或结果已截断，" if (not out["sources_complete"] or truncated)
                           else "")
                 out["tie_note"] = (f"{reason}第 {tie['at']} 行之外无法核对并列；排名与并列均标为未查全。")
+        else:
+            extremum_note = self._scalar_extremum_note(conn, statement, sources, result, authorize, deadline)
+            if extremum_note:
+                out["tie_note"] = extremum_note
         return out
+
+    def _scalar_extremum_note(self, conn, statement, sources, rows_out, authorize, deadline) -> str:
+        """When a scalar ``SELECT MIN(col)`` or ``MAX(col)`` on one table matches multiple rows,
+        remind the caller so a follow-up answer never silently drops tied winners."""
+        if len(sources) != 1 or len(rows_out) != 1 or not rows_out[0]:
+            return ""
+        stmt = _strip_comments(statement).rstrip().rstrip(";").rstrip()
+        if re.search(r"\bGROUP\s+BY\b", stmt, re.IGNORECASE):
+            return ""
+        stmt = re.sub(r"(?is)\s+(?:ORDER\s+BY\b.*|LIMIT\s+\d+(?:\s*,\s*\d+|\s+OFFSET\s+\d+)?)\s*$", "", stmt)
+        m = re.match(r"(?is)^\s*SELECT\s+(?:MIN|MAX)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*|\"[^\"]+\")\s*\)"
+                     r"(?:\s+(?:AS\s+)?(?:\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*))?\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)"
+                     r"(?:\s+WHERE\s+(.+))?\s*$", stmt)
+        if m is None:
+            return ""
+        col, table, where = m.group(1), m.group(2), m.group(3)
+        value = rows_out[0][0]
+        if value is None or table.casefold() not in {name.casefold() for name in self.tables}:
+            return ""
+        sql = f"SELECT COUNT(*) FROM {table} WHERE ({col}) = ?" + (f" AND ({where})" if where else "")
+        conn.set_authorizer(authorize)
+        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 500)
+        try:
+            count = conn.execute(sql, (value,)).fetchone()[0]
+        except sqlite3.Error:
+            return ""
+        finally:
+            conn.set_progress_handler(None, 0)
+            conn.set_authorizer(None)
+        return (f"该极值对应的记录在 {table} 中共有 {count} 行同值并列；若需列出对应记录，须完整给出全部 {count} 行并列项。"
+                if isinstance(count, int) and count >= 2 else "")
 
     def _tie_boundary(self, conn, statement, authorize, deadline):
         """Top-level ``ORDER BY <terms> LIMIT <k>``: fetch row k+1 and, when it ties

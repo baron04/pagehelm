@@ -25,10 +25,18 @@ REDACTED = "[redacted]"
 #: name it, and what a name says when the value beside it is a credential.
 _SETTING_NAMES = ("key", "configKey", "name")
 _SECRET_WORD = re.compile(r"密码|密钥|口令")
+_SECRET_PROSE = re.compile(
+    r"((?:初始|默认|账号)密码(?:\s*(?:配置|项|值|为|是|[|｜：:=]))+\s*(?:[a-z]+(?:\.[a-z0-9_-]+)+\s*[|｜：:=]\s*)?|"
+    r"(?:init[-_]?password|default[-_]?password)(?:\s*[|｜：:=\s])+\s*)"
+    r"(?!\[redacted\])([A-Za-z0-9!@#$%^&*._\-]{4,64})",
+    re.IGNORECASE,
+)
 _MARKER = re.compile(r"(BEGIN|END)_UNTRUSTED_")
 
 
 def _blank(value):
+    if isinstance(value, str):
+        return _SECRET_PROSE.sub(r"\1" + REDACTED, value)
     if isinstance(value, dict):
         out = {}
         for key, item in value.items():

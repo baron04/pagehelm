@@ -72,6 +72,7 @@
     "locale": "zh-CN",
     "assistant": "AI 助手",
     "product": "AI 助手",
+    "readOnlyMode": "只读模式",
     "timeline": "任务进度",
     "relatedLinks": "相关页面",
     "input": "向 AI 助手提问",

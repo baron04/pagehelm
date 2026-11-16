@@ -56,11 +56,14 @@ class YudaoSubmitPort:
     def contract(self):
         return YUDAO_SUBMIT_CONVENTIONS
 
-    def __init__(self, client, proxy, api_docs, *, private_evidence=None):
+    def __init__(self, client, proxy, api_docs, *, private_evidence=None, window=""):
         if private_evidence is not None and not callable(private_evidence):
             raise TypeError("private_evidence must be callable")
         self.client, self.proxy, self._api_docs = client, proxy, api_docs
         self._private_evidence = private_evidence
+        #: Which of the actor's guard windows this session's page works through. Read
+        #: evidence is scoped to it, so two pages' reads never explain each other's.
+        self._window = str(window or "")
 
     def record_private(self, event, fields):
         """Explicit, integration-owned local collector; disabled in ordinary deployments."""
@@ -73,7 +76,7 @@ class YudaoSubmitPort:
 
     # -- what the page itself read -----------------------------------------------------
     def recent_reads(self) -> tuple:
-        return self.proxy.guard.recent_reads(self._actor())
+        return self.proxy.guard.recent_reads(self._actor(), window=self._window or None)
 
     def prefixes(self, reads, *, mode, record_id, source=""):
         """One observed source, identified by the mounted form's own route generation."""
@@ -178,7 +181,7 @@ class YudaoSubmitPort:
     def arm(self, permit: SubmitPermit) -> None:
         actor = self._actor()
         permit.actor = actor
-        self.proxy.guard.arm_permit(actor, permit)
+        self.proxy.guard.arm_permit(actor, permit, owner=self._window)
 
     def disarm(self) -> None:
         self.proxy.guard.disarm_permit(self._actor())

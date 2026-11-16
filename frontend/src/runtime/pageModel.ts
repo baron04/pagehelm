@@ -11,7 +11,7 @@ import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formLifetime, formInstance} from './formInstance'
-import {listboxCombobox, selectedOption} from './combobox'
+import {listboxCombobox, selectedComboboxOption, selectedTreeChoice} from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, selectedRadio} from './radio'
 
 /** Maximum live controls one observation may expose across the browser boundary. */
@@ -460,9 +460,15 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
         continue
       }
       if (listboxCombobox(element)) {
-        const selected = selectedOption(element)
+        const treeChoice = selectedTreeChoice(element)
+        const selected = treeChoice ? treeChoice.label : selectedComboboxOption(element)
         if (selected && selected.length <= browserContract.form_handoff.max_label_chars &&
             redactor.redactString(selected) === selected) item.attrs.selected_option = selected
+        if (treeChoice && treeChoice.path !== selected &&
+            treeChoice.path.length <= browserContract.form_handoff.max_label_chars &&
+            redactor.redactString(treeChoice.path) === treeChoice.path) {
+          item.attrs.selected_option_path = treeChoice.path
+        }
       }
       const label = formControlLabel(element)
       if (scope && !rawField && label && redactor.redactString(label) === label) {

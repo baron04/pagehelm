@@ -85,10 +85,12 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
                  principal: PrincipalContext | None = None,
                  limits: RemoteSessionLimits | None = None,
                  durable_store: SQLiteSessionStore | None = None,
-                 principal_validator: Callable[[PrincipalContext], None] | None = None):
+                 principal_validator: Callable[[PrincipalContext], None] | None = None,
+                 read_only_mode: bool = False):
         self.session_id = session_id
         self.allowed_origins = frozenset(allowed_origins)
         self.principal = principal
+        self.read_only_mode = bool(read_only_mode)
         if principal_validator is not None and not callable(principal_validator):
             raise TypeError("principal_validator must be callable or None")
         if principal_validator is not None and principal is None:
@@ -129,6 +131,9 @@ class RemoteSessionChannel(ChannelIngress, ChannelPanel, ChannelServer, ChannelS
         self._result_digests: dict[str, str] = {}
         self._action_claims: dict[str, str] = {}
         self._pending_action_id = ""
+        #: Recently replaced principal digests, honoured until their own expiry: a hello
+        #: already in flight when this page renewed is not refused for being one behind.
+        self._principal_grace: dict[str, int] = {}
         self._events: list[TaskEvent] = []
         self._messages: deque[dict] = deque()
         self.turn_events = None

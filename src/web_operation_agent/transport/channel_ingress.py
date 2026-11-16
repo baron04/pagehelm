@@ -30,7 +30,9 @@ class ChannelIngress:
                         "session has no principal binding",
                         code="principal_mismatch", status=403)
             elif (hello.application_id != self.principal.application_id
-                  or hello.principal_digest != self.principal.binding_digest):
+                  or (hello.principal_digest != self.principal.binding_digest
+                      and self._principal_grace.get(hello.principal_digest, 0)
+                          <= self._now_ms())):
                 raise RemoteProtocolError(
                     "runtime principal binding does not match the session",
                     code="principal_mismatch", status=403)

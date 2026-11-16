@@ -610,6 +610,24 @@ button:disabled {
   user-select: none;
 }
 
+.woa-readonly-badge {
+  margin-right: auto;
+  padding: 2px 8px;
+  border-radius: var(--woa-radius-pill);
+  border: var(--woa-border-width) solid var(--woa-line);
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink-muted);
+  font-size: var(--woa-font-size-meta);
+  line-height: 1.4;
+  user-select: none;
+}
+.woa-brand + .woa-readonly-badge {
+  margin-left: -6px;
+}
+.woa-brand:has(+ .woa-readonly-badge) {
+  margin-right: 12px;
+}
+
 .woa-icon-button {
   width: 28px;
   height: 28px;

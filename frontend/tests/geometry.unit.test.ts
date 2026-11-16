@@ -1,6 +1,6 @@
 import {describe, expect, it, vi} from 'vitest'
 import {
-  DOCK_INSET, DRAWER_MIN_WIDTH, MIN_HEIGHT, MIN_WIDTH, clamp, clampDrawer, defaultGeometry,
+  DOCK_INSET, DRAWER_MIN_WIDTH, MIN_HEIGHT, MIN_WIDTH, avoidRect, clamp, clampDrawer, defaultGeometry,
   drawerPushes, loadOpen, rememberOpen,
 } from '../src/state/geometry'
 
@@ -128,5 +128,18 @@ describe('a drawer', () => {
   it('narrows the page only on a viewport wide enough to share', () => {
     withViewport(1440, 900, () => expect(drawerPushes()).toBe(true))
     withViewport(800, 600, () => expect(drawerPushes()).toBe(false))
+  })
+})
+
+describe('collision avoidance for marked page controls', () => {
+  it('moves a floating panel off an occluded dialog submit button while staying inside the viewport', () => {
+    const current = {left: 836, top: 176, width: 420, height: 600}
+    const button = {left: 920, top: 680, right: 1008, bottom: 718}
+    const moved = avoidRect(current, button, {width: 1280, height: 800})
+    const overlaps = Math.min(moved.left + moved.width, button.right) > Math.max(moved.left, button.left)
+      && Math.min(moved.top + moved.height, button.bottom) > Math.max(moved.top, button.top)
+    expect(overlaps).toBe(false)
+    expect(moved.left).toBeGreaterThanOrEqual(0)
+    expect(moved.left + moved.width).toBeLessThanOrEqual(1280)
   })
 })

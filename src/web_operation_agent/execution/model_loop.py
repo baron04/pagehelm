@@ -1467,8 +1467,9 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                     return self._loop(s, prompt, turn, verified=True)
             if status == "need_input":
                 s.terminal_reason = "needs_clarification"
+                cleaned_question = self._clean_answer(answer or "请补充信息。")
                 s.clarification = {"schema_version": 1, "clarification_id": f"{s.run_id}-ask"[:100],
-                                   "task_id": s.run_id[:100], "question": (answer or "请补充信息。")[:500],
+                                   "task_id": s.run_id[:100], "question": (cleaned_question or "请补充信息。")[:500],
                                    "response_kind": "free_text", "choices": []}
             elif status == "cannot":
                 s.terminal_reason = "agent_refused"
@@ -1527,6 +1528,10 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         if name == "goto":
             return str(args.get("path") or "")[:80]
         return ModelDrivenTurnExecutor._target_name(target)[:40] if target is not None else ""
+
+    @staticmethod
+    def _clean_answer(answer: str) -> str:
+        return answer
 
     def _with_not_executed(self, s, turn, answer):
         """The page steps a read-only turn asked for and the deployment did not perform,

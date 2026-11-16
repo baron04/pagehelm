@@ -258,6 +258,9 @@ export function PanelWindow({host, allowedOrigins}: {
         {!welcome && <span className="woa-brand">
           <img className="woa-brand__face" src={avatar} alt="" aria-hidden="true" />
           <span className="woa-brand__word">{labels.product}</span></span>}
+        {host.configuration.read_only_mode && (
+          <span className="woa-readonly-badge">{labels.readOnlyMode}</span>
+        )}
         <button type="button" className="woa-icon-button" aria-label={labels.newChat}
                 data-tip={labels.newChat} onClick={newConversation}>
           <Plus {...iconProps(16, TITLE_INK)} />

@@ -152,14 +152,14 @@ export async function waitForSubmitToSettle(doc: Document = document,
                                             integration?: FormIntegration): Promise<void> {
   if (!integration?.readSubmitBusy) throw new Error('submit settle detection unavailable')
   const until = Date.now() + 6000
-  await pause(2200)
+  await pause(120)
   let quiet = 0
-  while (Date.now() < until && quiet < 4) {
-    const busy = integration.readSubmitBusy(doc) === true
+  while (Date.now() < until && quiet < 3) {
     const asking = integration.readConfirmBox ? normalizeConfirmRead(integration.readConfirmBox(doc)).open : false
     if (asking) return
+    const busy = integration.readSubmitBusy(doc) === true
     quiet = busy ? 0 : quiet + 1
-    await pause(150)
+    if (quiet < 3) await pause(100)
   }
 }
 

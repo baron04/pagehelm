@@ -149,9 +149,9 @@ export const PENDING = {
   expires_at: 0, principal_digest: '', turn_id: 'turn-1', operation_id: 'op-1',
 }
 
-function serve(state: Snapshot, csp: string): Promise<Server> {
+function serve(state: Snapshot, csp: string, configuration: typeof CONFIGURATION = CONFIGURATION): Promise<Server> {
   const page = DRIVER_HTML
-    .replace('__CONFIGURATION__', JSON.stringify(CONFIGURATION))
+    .replace('__CONFIGURATION__', JSON.stringify(configuration))
     .replace('__EXAMPLES__', JSON.stringify(SAMPLE_EXAMPLES))
     .replace('__SNAPSHOT__', JSON.stringify(state))
   const bundle = readFileSync(PANEL_BUNDLE)
@@ -184,6 +184,7 @@ export interface OpenOptions {
   deviceScaleFactor?: number
   /** Let the page read and write the clipboard, so a copy can be read back. */
   clipboard?: boolean
+  configuration?: typeof CONFIGURATION
 }
 
 /** One mounted panel: the page, the uncaught errors it raised, and the host's record. */
@@ -258,7 +259,7 @@ export const test = base.extend<{open: (state: Snapshot, options?: OpenOptions) 
       if (!existsSync(PANEL_BUNDLE)) {
         throw new Error(`the assistant panel is not built at ${PANEL_BUNDLE}; run npm run build`)
       }
-      const server = await serve(state, options.csp ?? '')
+      const server = await serve(state, options.csp ?? '', options.configuration ?? CONFIGURATION)
       cleanups.push(() => new Promise(done => server.close(done)))
       const context = await browser.newContext({
         viewport: {width: options.width ?? 1280, height: options.height ?? 800},

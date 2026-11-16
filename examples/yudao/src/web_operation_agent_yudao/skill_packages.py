@@ -67,3 +67,19 @@ def packaged_skills():
             files[path] = shared[path.split("/", 1)[1]]
         artifacts.append(SkillArtifact.from_files("yudao", files))
     return SkillRegistry(tuple(artifacts))
+
+
+def domain_playbooks() -> dict[str, str]:
+    """Read-only domain playbooks available across read, navigation and write turns."""
+    root = resources.files("web_operation_agent_yudao").joinpath("domain_playbooks")
+    try:
+        if not root.is_dir():
+            return {}
+        entries = sorted(root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return {}
+    out = {}
+    for entry in entries:
+        if entry.is_file() and entry.name.endswith(".md"):
+            out[entry.name.removesuffix(".md")] = entry.read_text(encoding="utf-8")
+    return out

@@ -71,7 +71,7 @@ class GuardProxyTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def request(self, method, path, *, token="synthetic-a", cookie=None, origin=None, body=b"{}", visit_tenant="",
-                assistant=True):
+                assistant=True, window=""):
         connection = http.client.HTTPConnection("127.0.0.1", self.proxy.http.server_port, timeout=3)
         headers = {"tenant-id": "1", "Origin": origin or self.origin,
                    "Content-Type": "application/json"}
@@ -82,6 +82,8 @@ class GuardProxyTests(unittest.TestCase):
         if assistant:
             # What the page the assistant is working puts on its own API requests.
             headers["X-WOA-Assistant"] = "1"
+        if window:
+            headers["X-WOA-Window"] = window
         selected = self.cookie if cookie is None else cookie
         if selected:
             headers["Cookie"] = selected
@@ -218,10 +220,67 @@ class GuardProxyTests(unittest.TestCase):
         self.begin()
         _, _, other_cookie = self.request("POST", GUARD_PATH + "/begin", cookie="")
         _, body, _ = self.request("POST", GUARD_PATH + "/end")
-        self.assertTrue(body["active"])
+        # `active` answers about the window this request ended; the other browser's stays.
+        self.assertFalse(body["active"])
         self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
         _, body, _ = self.request("POST", GUARD_PATH + "/end", cookie=other_cookie.split(";", 1)[0])
         self.assertFalse(body["active"])
+
+    def test_a_named_window_opens_ends_and_accounts_for_itself(self):
+        # A page names its own window: its begin/end is never another page's, whatever
+        # cookie the browser happens to carry.
+        _, payload, cookie = self.request("POST", GUARD_PATH + "/begin", body=b'{"window": "page-1"}')
+        self.assertEqual(payload["window"], "page-1")
+        # Naming it plants no window cookie -- the name is what the page already carries.
+        self.assertIsNone(cookie)
+        _, payload, _ = self.request("POST", GUARD_PATH + "/begin", body=b'{"window": "page-2"}')
+        self.assertEqual(payload["window"], "page-2")
+        _, payload, _ = self.request("POST", GUARD_PATH + "/end", body=b'{"window": "page-1"}')
+        self.assertFalse(payload["active"])
+        # The still-open window still fences marked writes.
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 403)
+        _, payload, _ = self.request("POST", GUARD_PATH + "/end", body=b'{"window": "page-2"}')
+        self.assertFalse(payload["active"])
+        self.assertEqual(self.request("POST", "/admin-api/crm/customer/update")[0], 200)
+
+    def test_a_window_cookie_the_proxy_never_issued_is_refused(self):
+        # A copy of a window name planted in a cookie is not trusted as one; only the
+        # proxy's own generated token is, and it is always hex.
+        status, _, _ = self.request("POST", GUARD_PATH + "/end",
+                                    cookie=f"{self.proxy.cookie_name}=page-1",
+                                    body=b'{"window": "page-1"}')
+        self.assertEqual(status, 403)
+
+    def test_marked_requests_carry_their_window_into_its_evidence(self):
+        self.request("POST", GUARD_PATH + "/begin", body=b'{"window": "page-1"}')
+        self.request("POST", GUARD_PATH + "/begin", body=b'{"window": "page-2"}')
+        self.request("GET", READ + "?id=1", window="page-1")
+        self.request("GET", READ + "?id=2", window="page-2")
+        actor = "a" * 64
+        self.assertEqual(self.guard.recent_reads(actor, window="page-1"), ((READ, "id=1"),))
+        self.assertEqual(self.guard.recent_reads(actor, window="page-2"), ((READ, "id=2"),))
+        # A malformed window name is unattributed evidence, visible to all, owned by none.
+        self.request("GET", READ + "?id=3", window="not a window")
+        self.assertEqual(self.guard.recent_reads(actor, window="page-1"),
+                         ((READ, "id=1"), (READ, "id=3")))
+        self.assertEqual(self.guard.recent_reads(actor, window="page-2"),
+                         ((READ, "id=2"), (READ, "id=3")))
+        self.assertEqual(self.guard.recent_reads(actor), (
+            (READ, "id=1"), (READ, "id=2"), (READ, "id=3")))
+
+    def test_a_page_instance_name_with_a_dot_is_a_real_window(self):
+        # The runtime's real window name is "<tab id>.<conversation epoch>": the guard
+        # must take the shape pages actually send, not only dash-safe fixture names.
+        name = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3.2"
+        _, payload, cookie = self.request("POST", GUARD_PATH + "/begin",
+                                          body=json.dumps({"window": name}).encode())
+        self.assertEqual(payload.get("window"), name)
+        self.assertIsNone(cookie)
+        self.request("GET", READ + "?id=1", window=name)
+        self.assertEqual(self.guard.recent_reads("a" * 64, window=name), ((READ, "id=1"),))
+        _, payload, _ = self.request("POST", GUARD_PATH + "/end",
+                                     body=json.dumps({"window": name}).encode())
+        self.assertEqual(payload.get("active"), False)
 
     def test_another_actor_is_not_given_the_first_actors_window(self):
         self.begin()

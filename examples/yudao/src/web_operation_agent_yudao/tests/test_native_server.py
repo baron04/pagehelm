@@ -70,7 +70,7 @@ class NativeHostTests(unittest.TestCase):
     def test_two_minute_turn_deadline_reaches_model_and_executor(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "source-only")
-        session = host._sessions[("1", "1")].session
+        session = host._sessions[("1", "1", "source-only")].session
         self.assertEqual(self.config.turn_timeout_s, 120)
         self.assertEqual(self.chat.call_args.kwargs["timeout"], 120)
         self.assertEqual(session.runner.executor.config.wall_budget_s, 120)
@@ -118,7 +118,7 @@ class NativeHostTests(unittest.TestCase):
                 side_effect=AssertionError("browser transport is unavailable")):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "source-only")
-            session = host._sessions[("1", "1")].session
+            session = host._sessions[("1", "1", "source-only")].session
             result = session.runner.executor.execute({"message_id": "source-question",
                 "text": question, "page_url": self.config.public_origin + "/crm/customer"})
         self.assertEqual(result.terminal_reason, "agent_finished")
@@ -149,22 +149,42 @@ class NativeHostTests(unittest.TestCase):
         self.assertTrue(enabled.config.source.runtime_source)
         self.assertNotIn("本部署不提供源码说明", enabled.profile.instructions)
 
-    def test_tabs_share_the_actor_s_session_and_renew_only_its_token(self):
+    def test_pages_hold_their_own_sessions_and_a_renewal_keeps_its_page_s(self):
         host = self.host()
         first = host.bootstrap("synthetic-a", "1", "tab-a")
-        active = host._sessions[("1", "1")]
-        renewed = host.bootstrap("synthetic-a-new", "1", "tab-b")
+        second = host.bootstrap("synthetic-a", "1", "tab-b")
+        # Two pages of one person are two conversations, not two owners of one.
+        self.assertNotEqual(first["config"]["sessionId"], second["config"]["sessionId"])
+        renewed = host.bootstrap("synthetic-a-new", "1", "tab-a")
         self.assertEqual(first["config"]["sessionId"], renewed["config"]["sessionId"])
-        self.assertIs(host._sessions[("1", "1")], active)
+        active = host._sessions[("1", "1", "tab-a")]
         self.assertEqual(active.client._token, "synthetic-a-new")
         self.assertEqual(active.session.channel.principal.delegation_id, active.delegation_id)
-        self.assertEqual(host.server.session_count, 1)
+        self.assertIsNot(host._sessions[("1", "1", "tab-b")].session, active.session)
+        self.assertEqual(host.server.session_count, 2)
         self.chat.return_value.complete.assert_not_called()
+
+    def test_an_actor_s_extra_page_lets_the_least_recent_idle_one_go(self):
+        for value in (0, 65, True, "8"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                replace(self.config, sessions_per_actor=value)
+        self.config = replace(self.config, sessions_per_actor=1)
+        host = self.host()
+        first = host.bootstrap("synthetic-a", "1", "tab-a")
+        second = host.bootstrap("synthetic-a", "1", "tab-b")
+        self.assertNotEqual(first["config"]["sessionId"], second["config"]["sessionId"])
+        # The idle session gave its slot; the busy cap stays the actor's own problem.
+        self.assertEqual(host.server.session_count, 1)
+        # The page it left recovers the conversation the next time it asks: the stable
+        # session id is re-derived from its key and history comes back with it.
+        third = host.bootstrap("synthetic-a", "1", "tab-a")
+        self.assertEqual(third["config"]["sessionId"], first["config"]["sessionId"])
+        self.assertEqual(host.server.session_count, 1)
 
     def test_sole_loop_does_not_require_source(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
-        executor = host._sessions[("1", "1")].session.runner.executor
+        executor = host._sessions[("1", "1", "tab")].session.runner.executor
         self.assertIsInstance(executor, GoalTurnExecutor)
         self.assertFalse(executor.config.source.runtime_source)
         self.assertIsNotNone(executor.goal_port)
@@ -180,7 +200,7 @@ class NativeHostTests(unittest.TestCase):
             native_edit_prefill=False)
         host = self.host()
         host.bootstrap('synthetic-a', '1', 'scoped-tab')
-        executor = host._sessions[('1', '1')].session.runner.executor
+        executor = host._sessions[('1', '1', 'scoped-tab')].session.runner.executor
         self.assertEqual(host.page_review.disabled_handlers, self.config.native_page_disabled_handlers)
         self.assertIs(executor.goal_port.review, host.page_review)
         self.assertFalse(host.page_review.allow_edit_prefill)
@@ -207,7 +227,7 @@ class NativeHostTests(unittest.TestCase):
         with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
             host = self.host()
             host.bootstrap("synthetic-a", "1", "method-fence-tab")
-        executor = host._sessions[("1", "1")].session.runner.executor
+        executor = host._sessions[("1", "1", "method-fence-tab")].session.runner.executor
         self.assertIsInstance(executor.config.action_policy, MethodFencedPageActions)
         self.assertFalse(host.page_review.permits("query", "/crm/customer"))
         self.assertTrue(executor.goal_port.review.permits("query", "/crm/customer"))
@@ -241,7 +261,7 @@ class NativeHostTests(unittest.TestCase):
         with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy",return_value=proxy):
             host=self.host()
             host.bootstrap("synthetic-a","1","isolated-tab")
-        executor=host._sessions[("1","1")].session.runner.executor
+        executor=host._sessions[("1","1","isolated-tab")].session.runner.executor
         self.assertIsInstance(executor.config.action_policy,ReadOnlyWindowPageActions)
         self.assertIs(executor.config.action_policy.guard_proxy,proxy)
         self.assertIn(writing_get,host._fenced)
@@ -264,7 +284,7 @@ class NativeHostTests(unittest.TestCase):
         with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy", return_value=proxy):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "normal-host-defaults")
-        executor = host._sessions[("1", "1")].session.runner.executor
+        executor = host._sessions[("1", "1", "normal-host-defaults")].session.runner.executor
         self.assertEqual(executor.model_steps, 33)
         self.assertEqual(executor.config.step_budget, 33)
         self.assertEqual(executor.config.wall_budget_s, 120)
@@ -278,7 +298,7 @@ class NativeHostTests(unittest.TestCase):
     def test_native_read_turn_uses_only_table_tools_and_item_delivery(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
-        executor = host._sessions[("1", "1")].session.runner.executor
+        executor = host._sessions[("1", "1", "tab")].session.runner.executor
         tools = {t["function"]["name"]: t["function"]["parameters"]
                  for t in executor._tools({})}
         self.assertTrue({"tables", "sql", "date_range"} <= tools.keys())
@@ -296,7 +316,7 @@ class NativeHostTests(unittest.TestCase):
     def test_native_slim_can_deliver_a_complete_long_roster_without_a_smaller_hidden_text_cap(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
-        executor = host._sessions[("1", "1")].session.runner.executor
+        executor = host._sessions[("1", "1", "tab")].session.runner.executor
         long_answer = "\n".join(f"{i}. Synthetic contact full name {i:03d}" for i in range(180))
         declared = executor._finish_tool({})["function"]["parameters"]["properties"]["answer"]["maxLength"]
         self.assertLessEqual(len(long_answer), declared)
@@ -318,12 +338,12 @@ class NativeHostTests(unittest.TestCase):
         host = self.host()
         self.assertEqual((False, True), (old.exists(), audit.exists()))
         host.bootstrap("synthetic-a", "1", "tab")
-        self.assertTrue(host._sessions[("1", "1")].session.runner.executor.turn_traces)
+        self.assertTrue(host._sessions[("1", "1", "tab")].session.runner.executor.turn_traces)
         host.close()
         self.config = replace(self.config, turn_trace_days=0)
         off = self.host()
         off.bootstrap("synthetic-b", "1", "tab")
-        self.assertFalse(off._sessions[("1", "2")].session.runner.executor.turn_traces)
+        self.assertFalse(off._sessions[("1", "2", "tab")].session.runner.executor.turn_traces)
 
     def test_read_only_window_can_prepare_without_binding_or_dispatch(self):
         from web_operation_agent_yudao.page_guard import NativePageGuard
@@ -338,7 +358,7 @@ class NativeHostTests(unittest.TestCase):
         with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy", return_value=proxy):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "preparation-window")
-        executor = host._sessions[("1", "1")].session.runner.executor
+        executor = host._sessions[("1", "1", "preparation-window")].session.runner.executor
         self.assertIsInstance(executor.config.action_policy, ReadOnlyWindowPageActions)
         self.assertTrue(executor.application.business_tools.mutation_tool_names)
         self.assertFalse(host.config.native_writes)
@@ -356,7 +376,7 @@ class NativeHostTests(unittest.TestCase):
         self.config = replace(self.config, native_write_preparation=True)
         host = self.host()
         host.bootstrap("synthetic-a", "1", "preparation-host")
-        executor = host._sessions[("1", "1")].session.runner.executor
+        executor = host._sessions[("1", "1", "preparation-host")].session.runner.executor
         self.assertFalse(host.config.native_writes)
         self.assertTrue(executor.config.allow_business_mutations)
         self.assertTrue(executor.application.business_tools.mutation_tool_names)
@@ -377,7 +397,7 @@ class NativeHostTests(unittest.TestCase):
         self.config = replace(self.config, native_writes=True)
         host = self.host()
         host.bootstrap("synthetic-a", "1", "skill-write-host")
-        active = host._sessions[("1", "1")]
+        active = host._sessions[("1", "1", "skill-write-host")]
         executor = active.session.runner.executor
         self.assertIsInstance(executor, GoalTurnExecutor)
         self.assertTrue(executor.config.allow_business_mutations)
@@ -386,9 +406,11 @@ class NativeHostTests(unittest.TestCase):
             "crm_customer_create", "crm_customer_update", "crm_contact_create", "crm_contact_update",
             "crm_follow_up_create", "erp_supplier_create", "erp_supplier_update",
             "erp_warehouse_create", "erp_warehouse_update", "erp_customer_create", "erp_customer_update",
-            "system_post_create", "member_tag_create", "member_group_create", "bpm_category_create",
+            "system_post_create", "system_post_update", "member_tag_create", "member_group_create", "bpm_category_create",
             "crm_clue_create", "crm_clue_update", "erp_product_create", "erp_product_update",
-            "system_dept_create", "product_brand_create", "product_brand_update", "product_category_create",
+            "erp_product_unit_create", "erp_product_unit_update", "erp_account_create", "erp_account_update",
+            "erp_document_status", "promotion_coupon_template_status", "promotion_seckill_activity_close",
+            "system_dept_create", "system_dept_update", "product_brand_create", "product_brand_update", "product_category_create",
             "crm_customer_put_pool", "crm_customer_receive", "crm_customer_lock", "crm_customer_deal_status",
             "crm_receivable_plan_create"}))
         # Required dictionary choices are absent in this actor fixture: these
@@ -420,7 +442,7 @@ class NativeHostTests(unittest.TestCase):
         # current path; its next ordinary push then falls back to origin + undefined.
         for response in (first, renewed):
             self.assertEqual(response["config"]["navigationMode"], "document")
-        self.assertEqual(host._sessions[("1", "1")].session.navigation_mode, "document")
+        self.assertEqual(host._sessions[("1", "1", "tab-a")].session.navigation_mode, "document")
         self.chat.return_value.complete.assert_not_called()
 
     def test_actors_and_tenants_get_separate_sessions_and_tokens_never_reach_disk(self):
@@ -438,12 +460,12 @@ class NativeHostTests(unittest.TestCase):
     def test_restart_recovers_history_with_a_new_capability_without_replaying_a_turn(self):
         host = self.host()
         first = host.bootstrap("synthetic-a", "1", "tab")
-        session = host._sessions[("1", "1")].session
+        session = host._sessions[("1", "1", "tab")].session
         session.channel.publish("progress", {"state": "finished", "message": "synthetic previous answer"}, turn_id="previous")
         host.close()
         restored = self.host()
-        second = restored.bootstrap("synthetic-a", "1", "tab-new")
-        recovered = restored._sessions[("1", "1")].session
+        second = restored.bootstrap("synthetic-a", "1", "tab")
+        recovered = restored._sessions[("1", "1", "tab")].session
         self.assertEqual(first["config"]["sessionId"], second["config"]["sessionId"])
         self.assertNotEqual(first["config"]["clientToken"], second["config"]["clientToken"])
         self.assertTrue(recovered.channel.recovered_history)
@@ -508,14 +530,14 @@ class NativeHostTests(unittest.TestCase):
     def test_expired_token_during_existing_session_renewal_is_a_bootstrap_401(self):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
-        active = host._sessions[("1", "1")]
+        active = host._sessions[("1", "1", "tab")]
         with patch.object(YudaoIdentityPort, "bind",
                           side_effect=YudaoReadRefused("synthetic expired", code=401)):
             with self.assertRaises(BootstrapRefused) as refused:
                 host.bootstrap("synthetic-a-new", "1", "tab")
         self.assertEqual((refused.exception.status, refused.exception.code),
                          (401, "sign_in_required"))
-        self.assertIs(host._sessions[("1", "1")], active)
+        self.assertIs(host._sessions[("1", "1", "tab")], active)
         self.assertEqual(host.server.session_count, 1)
 
     def test_page_identity_preserves_application_auth_and_availability_results(self):
@@ -556,7 +578,7 @@ class NativeHostTests(unittest.TestCase):
             host = self.host()
             bootstrap = host.bootstrap("synthetic-a", "1", "native-tab")
             self.assertTrue(bootstrap["config"]["pageControllerModule"].endswith("?bindings=1"))
-            executor = host._sessions[("1", "1")].session.runner.executor
+            executor = host._sessions[("1", "1", "native-tab")].session.runner.executor
             self.assertIsInstance(executor.procedures, LocationProcedures)
             names = {p.schema["function"]["name"] for p in executor.profile.procedures}
             self.assertIn("filter_page", names)
@@ -585,7 +607,7 @@ class NativeHostTests(unittest.TestCase):
             from web_operation_agent_yudao.guard_proxy import GUARD_PATH
             self.assertEqual(bootstrap["config"]["pageWriteGuard"], GUARD_PATH)
             self.assertTrue(bootstrap["config"]["pageControllerModule"].endswith("/woa/yudao-page-controller.js"))
-            executor = host._sessions[("1", "1")].session.runner.executor
+            executor = host._sessions[("1", "1", "native-tab")].session.runner.executor
             self.assertIsInstance(executor.goal_port._goal_port, LiveFormsGoalPort)
             self.assertIsInstance(executor.goal_port.page_filters, LivePageFilters)
             self.assertIsInstance(executor.application.ports.forms, LiveFormPort)
@@ -613,11 +635,11 @@ class NativeHostTests(unittest.TestCase):
             host.bootstrap("synthetic-a", "1", "warm")
             self.assertTrue(done.wait(5))
             # The index built is the one this actor's turns will read.
-            executor = host._sessions[("1", "1")].session.runner.executor
+            executor = host._sessions[("1", "1", "warm")].session.runner.executor
             self.assertIs(built[0].goal_port, executor.goal_port._goal_port)
             # The sole loop warms its own menu/API knowledge as well.
             self.assertIs(read[0], executor.knowledge)
-            host.bootstrap("synthetic-a", "1", "another page")     # the same session: not built again
+            host.bootstrap("synthetic-a", "1", "warm")             # the same session: not built again
             self.assertEqual(len(built), 1)
         # What a slim turn searches is read first, then the outline its lookups read, not
         # the whole index; one that fails ahead of time is not an error of the session and
@@ -655,7 +677,7 @@ class NativeHostTests(unittest.TestCase):
                 patch.object(YudaoHost, "_warm_index") as warm:
             host = self.host()
             host.bootstrap("synthetic-a", "1", "default")
-            executor = host._sessions[("1", "1")].session.runner.executor
+            executor = host._sessions[("1", "1", "default")].session.runner.executor
             self.assertIs(type(executor), TableReadTurnExecutor)
             self.assertIs(executor._loop.__func__, ModelDrivenTurnExecutor._loop)
             self.assertIsInstance(executor.goal_port, ModelPageGoalPort)
@@ -694,7 +716,7 @@ class NativeHostTests(unittest.TestCase):
                                       state_dir=Path(self.tmp.name) / str(enabled))
                 host = self.host()
                 host.bootstrap("synthetic-a", "1", "slim-tab")
-                executor = host._sessions[("1", "1")].session.runner.executor
+                executor = host._sessions[("1", "1", "slim-tab")].session.runner.executor
                 self.assertIsInstance(executor, SlimTurnExecutor)
                 self.assertIs(executor.config.allow_business_mutations, enabled)
                 self.assertTrue(executor.skill_knowledge)
@@ -718,7 +740,7 @@ class NativeHostTests(unittest.TestCase):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "slim-tab")
             self.assertTrue(done.wait(5))
-            self.assertIs(read[0], host._sessions[("1", "1")].session.runner.executor.knowledge)
+            self.assertIs(read[0], host._sessions[("1", "1", "slim-tab")].session.runner.executor.knowledge)
         self.chat.return_value.complete.assert_not_called()
 
     def test_inside_the_applications_window_only_reads_it_cannot_refuse_stay_fenced(self):

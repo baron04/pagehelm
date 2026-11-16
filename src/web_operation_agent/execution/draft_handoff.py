@@ -34,7 +34,9 @@ def value_matches(element, value):
             return left.is_finite() and right.is_finite() and left == right
         except InvalidOperation:
             return False
-    return shown == value
+    if shown == value:
+        return True
+    return element.role == "combobox" and element.attrs.get("selected_option_path") == value
 
 
 def add_draft_lines(context, button, count):
@@ -43,7 +45,10 @@ def add_draft_lines(context, button, count):
     The application proves the line effect. Lifetime binds additions to one live
     form while its instance (the control set) is allowed to grow.
     """
-    def refused():
+    def refused(reason="readback"):
+        audit = getattr(context, "audit", None)
+        if callable(audit):
+            audit("page_handoff_refused", reason=reason)
         return LoopToolResult("明细建行未通过核验，尚未填写或交接。", kind="page",
                               state="unverified", error_code="stale_binding")
     for _ in range(count):
@@ -118,7 +123,10 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
     A form recorded in `blocked` (unrestorable opening self-edits) is never marked:
     the refusal says what saving it directly would change.
     """
-    def refused():
+    def refused(reason="readback", **detail):
+        audit = getattr(context, "audit", None)
+        if callable(audit):
+            audit("page_handoff_refused", reason=reason, **detail)
         return LoopToolResult("表单最终回读未通过，尚未交接；请核对当前表单。", kind="page",
                               state="unverified", error_code="unverified")
 
@@ -171,9 +179,10 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
             or any(field_value(now_map[key]) != field_value(element)
                    for key, element in old_map.items() if key not in wanted)):
         return refused()
-    buttons = [e for e in after.elements if e.role == "button" and e.name.strip() == submit_label.strip()
+    plain_submit = "".join((submit_label or "").split())
+    buttons = [e for e in after.elements if e.role == "button" and "".join((e.name or "").split()) == plain_submit
                and e.attrs.get("form_scope") == scope and e.attrs.get("form_instance") == instance]
-    scrolled = False
+    scrolled, scrolled_map = False, None
     if not buttons and scope.startswith("dialog"):
         # A tall modal can show every requested field while its footer is below
         # the viewport. Read back the whole draft first, then bring the footer
@@ -192,8 +201,14 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
         at_submit = context.obs
         if at_submit.url != after.url or at_submit.page_route != after.page_route:
             return refused()
+        # Controls lower in the dialog first appear here; the handoff itself
+        # must leave this view unchanged.
+        scrolled_map = comparison_map([e for e in draft_fields(at_submit)
+            if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)])
+        if scrolled_map is None:
+            return refused("scrolled_ambiguous")
         buttons = [e for e in at_submit.elements if e.role == "button"
-                   and e.name.strip() == submit_label.strip()
+                   and "".join((e.name or "").split()) == plain_submit
                    and e.attrs.get("form_scope") == scope
                    and e.attrs.get("form_instance") == instance]
     if len(buttons) != 1:
@@ -231,12 +246,22 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
                               dispatch=outcome.dispatch, error_code=outcome.error_code)
     final = comparison_map([e for e in draft_fields(context.obs)
              if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)])
-    if (final is None or {key for key in final if len(key) > 6} != {key for key in now_map if len(key) > 6}
-            or (not scrolled and final.keys() != now_map.keys())
-            or any(key in final and not value_matches(final[key], value) for key, value in wanted.items())
-            or any(key in final and field_value(final[key]) != field_value(e)
-                   for key, e in old_map.items() if key not in wanted)):
-        return refused()
+    if final is None:
+        return refused("final_ambiguous")
+    baseline = scrolled_map if scrolled else now_map
+    final_untouched = {key for key in final if len(key) > 6}
+    now_untouched = {key for key in baseline if len(key) > 6}
+    if final_untouched != now_untouched:
+        return refused("final_untouched_set", scrolled=scrolled,
+                       added=[list(map(str, key[-2:])) for key in final_untouched - now_untouched][:8],
+                       missing=[list(map(str, key[-2:])) for key in now_untouched - final_untouched][:8])
+    if final.keys() != baseline.keys():
+        return refused("final_field_set")
+    if any(key in final and not value_matches(final[key], value) for key, value in wanted.items()):
+        return refused("final_requested_value")
+    if any(key in final and field_value(final[key]) != field_value(e)
+           for key, e in {**baseline, **old_map}.items() if key not in wanted):
+        return refused("final_untouched_value")
     context.audit("page_handoff_ready", observation_epoch=context.obs.epoch, submitted=False, persisted=False)
     return LoopToolResult("表单已核验，提交按钮已标出。", kind="page", dispatch="acknowledged",
                           marked=buttons[0].name[:200], completion_command=outcome.receipt.command_id)

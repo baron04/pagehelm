@@ -1,3 +1,15 @@
 schema_version = 1
-scope_entities = ["erp/warehouse"]
-write_operations = ["erp_warehouse_create", "erp_warehouse_update"]
+write_operations = [
+  "erp_warehouse_create",
+  "erp_warehouse_update",
+  "erp_account_create",
+  "erp_account_update",
+  "erp_document_status",
+]
+scope_entities = [
+  "erp/warehouse", "erp/account",
+  "erp/purchase-order", "erp/purchase-in", "erp/purchase-return",
+  "erp/sale-order", "erp/sale-out", "erp/sale-return",
+  "erp/stock-in", "erp/stock-out", "erp/stock-move", "erp/stock-check",
+  "erp/finance-receipt", "erp/finance-payment",
+]

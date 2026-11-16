@@ -1,5 +1,6 @@
 /** One browser-local guide to an exact handoff target; it never operates it. */
 import {contained, listen} from '../runtime/contain'
+import {AVOID_TARGET_EVENT} from '../state/geometry'
 import {clippedBox, targetView, type Box, type Direction} from './visibility'
 
 export interface ControlGuide {
@@ -49,7 +50,7 @@ export function createControlGuide(options: {target: HTMLElement; container: HTM
   hint.setAttribute('role', 'status'); hint.setAttribute('aria-live', 'polite')
   overlay.append(svg, hint)
   root.append(overlay)
-  let alive = true, frame = 0
+  let alive = true, frame = 0, avoidedKey = ''
   const originalUrl = win.location.href
   const dialog = target.closest('[role="dialog"],dialog')
   const stops: (() => void)[] = []
@@ -101,10 +102,23 @@ export function createControlGuide(options: {target: HTMLElement; container: HTM
       return
     }
     if (view.kind !== 'visible') {
+      if (view.kind === 'assistant' && panel.dataset.mode !== 'full') {
+        const tr = target.getBoundingClientRect()
+        const key = `${Math.round(tr.left)}:${Math.round(tr.top)}:${Math.round(tr.right)}:${Math.round(tr.bottom)}`
+        if (avoidedKey !== key) {
+          avoidedKey = key
+          win.dispatchEvent(new win.CustomEvent(AVOID_TARGET_EVENT, {
+            detail: {left: tr.left, top: tr.top, right: tr.right, bottom: tr.bottom},
+          }))
+          schedule()
+          return
+        }
+      }
       showHint(messages[view.kind], p.left+20,
         clamp((sourceRect?.bottom ?? p.bottom-170)+12, p.top+70, p.bottom-130), p.width-40, view.kind)
       return
     }
+    avoidedKey = ''
     hint.hidden = true
     if (!sourceRect || !sourceRect.width || !sourceRect.height || answer?.querySelector('.woa-md__caret')) {
       attr(svg, 'hidden', ''); return

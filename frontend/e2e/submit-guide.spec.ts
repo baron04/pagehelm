@@ -68,7 +68,7 @@ test('submit guide follows nested scrolling in all four directions without scrol
   expect(panel.errors).toEqual([])
 })
 
-test('submit guide handles assistant occlusion, other overlays, disabled and hidden controls', async ({open}) => {
+test('submit guide automatically steps aside from occluded controls so they remain clickable, and handles overlays, disabled and hidden controls', async ({open}) => {
   const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
   await setup(panel)
   const guide = panel.page.locator('.woa-submit-guide'), line = guide.locator('svg')
@@ -77,10 +77,15 @@ test('submit guide handles assistant occlusion, other overlays, disabled and hid
     const panel = document.querySelector('#woa-assistant')!.shadowRoot!.querySelector('.woa-window')!.getBoundingClientRect()
     form.style.left=panel.left-260+'px';form.style.top=panel.top+20+'px'
   })
-  await expect(guide).toHaveAttribute('data-state','assistant')
-  await expect(guide.locator('[role=status]')).toContainText('被助手遮挡')
-  await expect(line).toBeHidden()
-  await panel.page.evaluate(() => {const f=document.querySelector('#synthetic-room') as HTMLElement;f.style.left='40px';f.style.top='100px'})
+  await expect(line).toBeVisible()
+  await panel.page.locator('#submit-room').click()
+  expect(await panel.page.evaluate(() => (window as unknown as {__submitCount:number}).__submitCount)).toBe(1)
+  await panel.page.evaluate(() => {
+    const state = window as unknown as {__submitCount:number; __guide:{clear():void}; __runtime:{page:{guideSubmit(ref:string,turn:string):{clear():void}}}}
+    state.__submitCount = 0
+    const f=document.querySelector('#synthetic-room') as HTMLElement;f.style.left='40px';f.style.top='100px'
+    state.__guide = state.__runtime.page.guideSubmit('e1', 'turn-1')
+  })
   await expect(line).toBeVisible()
   await panel.page.evaluate(() => {
     const r=document.querySelector('#submit-room')!.getBoundingClientRect(), cover=document.createElement('div')
@@ -99,22 +104,22 @@ test('submit guide handles assistant occlusion, other overlays, disabled and hid
   expect(panel.errors).toEqual([])
 })
 
-test('business control handoff warns about assistant occlusion and follows moving the panel without clicking', async ({open}) => {
-  const panel = await open(snapshot(), {width:1440,height:1000,reducedMotion:'reduce'})
+test('business control handoff steps aside on desktop, warns in full-screen mode when unavoidable, and clears on label change', async ({open}) => {
+  const panel = await open(snapshot(), {width:560,height:800,reducedMotion:'reduce'})
   await setup(panel)
   await panel.page.evaluate(() => {
     const state = window as unknown as {__guide:{clear():void};__runtime:{page:{highlight(ref:string,turn:string):{clear():void}}}}
     state.__guide.clear()
     document.querySelector('#submit-room')!.textContent = '停用'
     const form = document.querySelector('#synthetic-room') as HTMLElement
-    const p = document.querySelector('#woa-assistant')!.shadowRoot!.querySelector('.woa-window')!.getBoundingClientRect()
-    form.style.left = p.left-260+'px'; form.style.top = p.top+20+'px'
+    form.style.left = '20px'; form.style.top = '80px'
     state.__guide = state.__runtime.page.highlight('e1','turn-1')
   })
   const guide = panel.page.locator('.woa-submit-guide')
   await expect(guide).toHaveAttribute('data-state','assistant')
   await expect(guide.locator('[role=status]')).toContainText('操作位置被助手遮挡')
   await expect(guide.locator('svg')).toBeHidden()
+  await panel.page.setViewportSize({width: 1440, height: 1000})
   await panel.page.evaluate(() => {
     const form = document.querySelector('#synthetic-room') as HTMLElement
     form.style.left='40px';form.style.top='100px'

@@ -246,6 +246,7 @@ class NativeContactsHost:
                         journal=self.application.write_journal,
                         reads=self.application.read_journal)
                     executor.native_submit = port
+                    channel.read_only_mode = False
                     self._submit_ports[actor.session] = port
                 return LiveConversationRunner(channel, executor=executor)
 
@@ -261,6 +262,8 @@ class NativeContactsHost:
                 sensitive_query_keys=bound.ports.routes.session_handoff_query_keys,
                 principal=principal,
             ).start()
+            session.channel.read_only_mode = not (
+                self.config.allow_mutations or (self.config.model_loop and self.config.native_submit_writes))
             self._sessions[key] = (session, principal)
             return self._browser_bootstrap(session)
 

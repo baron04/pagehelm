@@ -70,6 +70,15 @@ export function clearStored(sessionId: string): void {
   }
 }
 
+/**
+ * Drop every mirrored copy. The mirror outlives sessionStorage writes that were refused,
+ * so a new conversation or a rotated tab must clear it too or the state it was dropping
+ * would answer the next read anyway.
+ */
+export function forgetStored(): void {
+  mirror.clear()
+}
+
 /** The stored state for this incarnation, normalized and written back. */
 export function loadSession(sessionId: string, sessionGeneration: string,
                             redactor: Redactor): SessionState {

@@ -505,12 +505,25 @@ class LiveProductServer:
                 raise LiveProductCapacityError(
                     "live product server session capacity is exhausted")
             if principal is not None:
-                actor_sessions = sum(
-                    existing.channel.principal is not None
+                actor_sessions = [
+                    existing for existing in self._sessions.values()
+                    if existing.channel.principal is not None
                     and existing.channel.principal.actor_authority_digest
-                    == principal.actor_authority_digest
-                    for existing in self._sessions.values())
-                if actor_sessions >= self.max_sessions_per_actor:
+                    == principal.actor_authority_digest]
+                if len(actor_sessions) >= self.max_sessions_per_actor:
+                    # A busy page keeps its slot; the least recently active idle one gives way.
+                    idle = sorted(
+                        (existing for existing in actor_sessions if existing.channel.idle),
+                        key=lambda existing: existing.channel.last_client_activity_ms)
+                    evicted = None
+                    for candidate in idle:
+                        if candidate.channel.close_if_idle("actor_capacity_replaced"):
+                            evicted = candidate
+                            break
+                    if evicted is not None:
+                        evicted.close("actor_capacity_replaced")
+                        actor_sessions.remove(evicted)
+                if len(actor_sessions) >= self.max_sessions_per_actor:
                     raise LiveProductCapacityError(
                         "live product server actor session capacity is exhausted")
             session = LiveProductSession(

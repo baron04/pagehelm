@@ -70,6 +70,7 @@ function harness(src: SessionSource, runtimes: Array<FakeRuntime | null | Error>
   const status = new FakeStatus()
   const started: FakeRuntime[] = []
   const running: Supervised[] = []
+  const reset = vi.fn()
   const supervisor = new Supervisor({
     source: src,
     status,
@@ -81,8 +82,9 @@ function harness(src: SessionSource, runtimes: Array<FakeRuntime | null | Error>
       return next ?? null
     },
     onRunning: runtime => { running.push(runtime) },
+    resetConversation: reset,
   })
-  return {supervisor, status, started, running}
+  return {supervisor, status, started, running, reset}
 }
 
 /** Let promises and microtasks settle without moving the clock. */
@@ -435,5 +437,88 @@ describe('with nothing under way, a session is made when asked for and let go wh
     h.supervisor.connect()
     await flush()
     expect(src.calls).toBe(1)
+  })
+})
+
+describe('a fresh conversation', () => {
+  it('lets the running session go, forgets it and rests the panel', async () => {
+    const src = source([{config: config('old')}, {config: config('fresh')}])
+    const h = harness(src)
+    h.supervisor.start()
+    await flush()
+    const runtime = h.started[0]!
+    expect(h.supervisor.newConversation()).toBe(true)
+    expect(h.supervisor.state.kind).toBe('idle')
+    expect(runtime.stopCalls).toBe(1)
+    expect(h.reset).toHaveBeenCalledOnce()
+    expect(h.status.log.at(-1)).toBe('rested')
+    // What the person sends next opens a new session, never rejoins the old one.
+    h.supervisor.connect()
+    await flush()
+    expect(src.calls).toBe(2)
+    expect(h.supervisor.state.kind).toBe('running')
+    expect(h.started).toHaveLength(2)
+  })
+
+  it('refuses while a turn is under way: the session is stopped explicitly first', async () => {
+    const h = harness(source([{config: config()}]))
+    h.supervisor.start()
+    await flush()
+    h.started[0]!.renewable = false
+    expect(h.supervisor.newConversation()).toBe(false)
+    expect(h.supervisor.state.kind).toBe('running')
+    expect(h.started[0]!.stopCalls).toBe(0)
+    expect(h.reset).not.toHaveBeenCalled()
+  })
+
+  it('abandons a start still in flight: its session belongs to nobody', async () => {
+    let finish: (value: Bootstrap) => void = () => {}
+    const slow = new Promise<Bootstrap>(resolve => { finish = resolve })
+    const src = source([slow, {config: config('fresh')}])
+    const h = harness(src)
+    h.supervisor.start()
+    expect(h.supervisor.newConversation()).toBe(true)
+    expect(h.supervisor.state.kind).toBe('idle')
+    finish({config: config('late')})
+    await flush()
+    // The landing Runtime is let go, not presented as the new conversation's session.
+    expect(h.supervisor.state.kind).toBe('idle')
+    expect(h.started).toHaveLength(1)
+    expect(h.started[0]!.stopCalls).toBe(1)
+    h.supervisor.connect()
+    await flush()
+    expect(src.calls).toBe(2)
+    expect(h.supervisor.state.kind).toBe('running')
+  })
+
+  it('never adopts the abandoned start once the new conversation connected its own', async () => {
+    let finish: (value: Bootstrap) => void = () => {}
+    const slow = new Promise<Bootstrap>(resolve => { finish = resolve })
+    const src = source([slow, {config: config('fresh')}])
+    const h = harness(src)
+    h.supervisor.start()
+    expect(h.supervisor.newConversation()).toBe(true)
+    h.supervisor.connect()
+    await flush()
+    // The new conversation's own start is running before the abandoned one lands.
+    expect(h.supervisor.state.kind).toBe('running')
+    finish({config: config('old')})
+    await flush()
+    expect(h.supervisor.state.kind).toBe('running')
+    expect(h.started).toHaveLength(2)
+    // The successor keeps running; the abandoned Runtime is let go, never presented.
+    expect(h.started[0]!.stopCalls).toBe(0)
+    expect(h.started[1]!.stopCalls).toBe(1)
+    expect(src.calls).toBe(2)
+    h.supervisor.connect()
+    await flush()
+    expect(src.calls).toBe(2)
+  })
+
+  it('forgets an idle session pointer and leaves the rested page ready', () => {
+    const h = harness(source([{config: config()}]), [], false)
+    expect(h.supervisor.newConversation()).toBe(true)
+    expect(h.reset).toHaveBeenCalledOnce()
+    expect(h.status.log.at(-1)).toBe('rested')
   })
 })

@@ -474,6 +474,10 @@ export function createPageFacts({view = window, doc = document} = {}) {
 
 /** What this page's own API requests carry while the assistant is working it. */
 export const ASSISTANT_HEADER = 'X-WOA-Assistant'
+/** Which of the actor's guard windows a marked request belongs to. */
+export const WINDOW_HEADER = 'X-WOA-Window'
+/** The window names the guard accepts (`WINDOW_KEY` in page_guard.py). */
+const WINDOW_KEY = /^[A-Za-z0-9._-]{1,128}$/
 
 export function installPageFacts(view = window, doc = document) {
   const facts = createPageFacts({view, doc})
@@ -485,7 +489,8 @@ export function installPageFacts(view = window, doc = document) {
   // those are held read-only by the deployment. The mark starts when the window is
   // confirmed and stops the moment its end is asked for; another tab, another device and
   // this page before or after never carry it, so a person's own saves are never held.
-  let assistantUntil = 0
+  // The window name travels with the mark so one page's guard work is never another's.
+  let assistantUntil = 0, assistantWindow = ''
   const assistantWorking = () => Date.now() < assistantUntil
   const guardStep = url => {
     try {
@@ -497,7 +502,16 @@ export function installPageFacts(view = window, doc = document) {
   const fetch = async function(input, init) {
     const url = typeof input === 'string' || input instanceof URL ? String(input) : input.url
     const step = guardStep(url)
-    if (step === 'end') assistantUntil = 0
+    if (step === 'end') {
+      // Only an end of this page's own window lifts the mark; an end another window
+      // asked for, or one that cannot be read, leaves it -- and an unreadable body
+      // may be ours, in which case not lifting is the unsafe direction.
+      let ending = ''
+      try { ending = JSON.parse(init?.body || '{}')?.window ?? '' } catch { ending = null }
+      if (ending === null || ending === assistantWindow) {
+        assistantUntil = 0; assistantWindow = ''
+      }
+    }
     const settle = facts.begin(url, init?.method || input?.method || 'GET')
     if (!step && assistantWorking()) {
       try {
@@ -505,6 +519,7 @@ export function installPageFacts(view = window, doc = document) {
         if (target.origin === view.location.origin && target.pathname.startsWith('/admin-api/')) {
           const headers = new view.Headers(init?.headers || (typeof input === 'object' && input.headers) || {})
           headers.set(ASSISTANT_HEADER, '1')
+          if (assistantWindow) headers.set(WINDOW_HEADER, assistantWindow)
           init = {...init, headers}
         }
       } catch { /* the original implementation owns invalid requests */ }
@@ -516,6 +531,8 @@ export function installPageFacts(view = window, doc = document) {
         try { window_ = response.ok ? await response.clone().json() : null } catch { window_ = null }
         assistantUntil = window_?.active === true && typeof window_.expires_at === 'number'
           ? window_.expires_at * 1000 : 0
+        assistantWindow = assistantUntil && typeof window_.window === 'string'
+            && WINDOW_KEY.test(window_.window) ? window_.window : ''
       }
       if (settle) {
         let body
@@ -564,7 +581,10 @@ export function installPageFacts(view = window, doc = document) {
       settle(this.status, body)
     }, {once: true})
     if (request && assistantWorking()) {
-      try { this.setRequestHeader(ASSISTANT_HEADER, '1') } catch { /* the request is already sent */ }
+      try {
+        this.setRequestHeader(ASSISTANT_HEADER, '1')
+        if (assistantWindow) this.setRequestHeader(WINDOW_HEADER, assistantWindow)
+      } catch { /* the request is already sent */ }
     }
     try { return originalSend.apply(this, args) } catch (error) {settle?.(0, null); throw error}
   }
@@ -1170,7 +1190,8 @@ export function nativeControlElement(element) {
         && item.querySelectorAll('input[role="combobox"]').length === 1
         && /^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(control.id)
         && document.querySelectorAll(`[id="${control.id}"]`).length === 1
-        && control.getAttribute('role') === 'combobox' && control.getAttribute('aria-haspopup') === 'listbox'
+        && control.getAttribute('role') === 'combobox'
+        && ['listbox', 'tree'].includes(control.getAttribute('aria-haspopup'))
         && !control.disabled && control.getAttribute('aria-disabled') !== 'true'
         && control.closest('.el-select__wrapper')?.classList.contains('is-disabled') === false) return control
   }
@@ -1182,9 +1203,12 @@ export function nativeControlElement(element) {
     return radios.length === 1 && radios[0].closest('.el-radio,.el-radio-button') === element
       ? radios[0] : element
   }
+  if (element instanceof HTMLElement && element.matches('.el-tree-node[role="treeitem"]')) {
+    return element.querySelector(':scope > .el-tree-node__content') ?? element
+  }
   if (!(element instanceof HTMLElement) || !element.matches('.el-select__wrapper') ||
       element.classList.contains('is-disabled') || element.getAttribute('aria-disabled') === 'true') return element
-  const inputs = element.querySelectorAll('input[role="combobox"][aria-haspopup="listbox"][aria-controls]')
+  const inputs = element.querySelectorAll('input[role="combobox"][aria-haspopup="listbox"][aria-controls],input[role="combobox"][aria-haspopup="tree"][aria-controls]')
   return inputs.length === 1 && inputs[0].closest('.el-select__wrapper') === element
     ? inputs[0] : element
 }
