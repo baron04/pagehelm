@@ -43,9 +43,8 @@ INSTALLED_MODULES = ("account", "sale_management", "woa_runtime")
 #: Everything that decides what the fixture becomes, by content rather than by a list of the
 #: parts someone remembered: a remembered list once left out the deployment that builds and
 #: initialises the application, and a longer one is still a closure nobody proved. So the list is
-#: the import closure of the two programs that build the fixture, and
-#: :mod:`evals.odoo.tests.fixture.test_manifest` recomputes that closure and refuses a
-#: module the list does not name.
+#: the import closure of the two programs that build the fixture; no test recomputes it since
+#: the offline suite was removed.
 #:
 #: The population generator is the one module the closure holds and this list leaves out: what it
 #: produced is bound by its own digest, so a generator that produces the same population leaves

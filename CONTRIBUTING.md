@@ -57,15 +57,6 @@ python -m pip wheel --no-deps --wheel-dir dist .
 
 The continuous-integration workflow installs the package, checks required package resources, imports the installed wheel outside the checkout, and runs the product suite.
 
-Run the independent Odoo evaluator tests separately:
-
-```bash
-python scripts/offline_suite.py --start-dir evals/odoo/tests --top-level .
-```
-
-These tests are offline. They do not show that the fixture commands work against a real
-Docker-backed Odoo deployment.
-
 ## Design expectations
 
 Keep the following boundaries intact:

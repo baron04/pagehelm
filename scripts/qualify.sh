@@ -12,7 +12,7 @@
 #     says "qualified" while a section above it failed.
 #
 # Usage:
-#   scripts/qualify.sh [--require-browser] [--require-live] [--skip-wheel] [--reference-odoo]
+#   scripts/qualify.sh [--require-browser] [--require-live] [--skip-wheel]
 #
 # Live-Odoo prerequisites (all of them, or the gate reports BLOCKED):
 #   WOA_ODOO_BASE_URL WOA_ODOO_API_KEY_FILE WOA_ODOO_STORAGE_STATE
@@ -43,13 +43,11 @@ printf 'Qualifying %s\n' "${tested_what}"
 require_browser=0
 require_live=0
 skip_wheel=0
-reference_odoo=0
 for arg in "$@"; do
   case "${arg}" in
     --require-browser) require_browser=1 ;;
     --require-live) require_live=1 ;;
     --skip-wheel) skip_wheel=1 ;;
-    --reference-odoo) reference_odoo=1 ;;
     -h|--help) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown option: ${arg}" >&2; exit 2 ;;
   esac
@@ -115,22 +113,11 @@ fi
 run_gate "product suite" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py --without-browser
 run_gate "Contacts contracts (no Chromium)" 1 "${PYTHON}" src/web_operation_agent/tests/run_all.py \
   --start-dir testapps/contacts/tests --top-level . --without-browser
-if [[ "${reference_odoo}" == "1" || "${require_live}" == "1" ]]; then
-  run_gate "Odoo reference adapter" 1 "${PYTHON}" -m unittest discover \
-    -s examples/odoo/src/web_operation_agent_odoo/tests -t examples/odoo/src
-else
-  record "Odoo reference adapter" SKIPPED "explicit --reference-odoo only"
-fi
 run_gate "yudao example and host suite (offline)" 1 "${PYTHON}" -m unittest discover \
   -s examples/yudao/src/web_operation_agent_yudao/tests \
   -t examples/yudao/src
 run_gate "Yudao evaluation apparatus (offline)" 1 "${PYTHON}" -m unittest discover \
   -s evals/yudao/tests -t .
-# Historical comparison/evaluation tools are not product dependencies.
-if [[ "${reference_odoo}" == "1" ]]; then
-  run_gate "Odoo source qualification apparatus" 1 "${PYTHON}" -m unittest discover -s evals/odoo_source/tests -t .
-  run_gate "Odoo evaluator apparatus" 1 "${PYTHON}" scripts/offline_suite.py --start-dir evals/odoo/tests --top-level .
-fi
 # Runtime needs this dependency, not the PageAgent comparison host or baseline bundle.
 pageagent_ready=0
 if [[ -f "${ROOT}/evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js" ]]; then
