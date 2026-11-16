@@ -1,3 +1,3 @@
 schema_version = 1
+write_operations = ["system_post_create", "system_post_update"]
 scope_entities = ["system/post"]
-write_operations = ["system_post_create"]

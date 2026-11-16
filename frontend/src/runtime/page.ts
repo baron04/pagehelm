@@ -19,7 +19,10 @@ import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
 import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance, localChoiceRemoval} from './formInstance'
-import {ChoiceUnavailable, listboxCombobox, ownedListbox, optionText, selectedOption, visibleElement} from './combobox'
+import {
+  ChoiceUnavailable, listboxCombobox, optionText, ownedListbox, ownedTree,
+  selectedOption, selectedTreeOption, treeItemChoices, visibleElement,
+} from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
 import {sleep} from './contain'
 import {normalizeFormRead, normalizeRowRead, unreadableReason, type FormModelRead, type RowRecordRead} from './formModel'
@@ -514,9 +517,12 @@ export class Page {
       listboxCombobox(element) && formControlScope(element) === scope && formInstance(element) === instance &&
       formControlLabel(element) === labelBefore && formFieldName(element) === fieldBefore
     const list = ownedListbox(element)
-    if (!list || !scope || !instance || !current()) {
+    const tree = list ? null : ownedTree(element)
+    const popup = list ?? tree
+    if (!popup || !scope || !instance || !current()) {
       throw new Error('bad_arguments: combobox has no unique current form listbox')
     }
+    const readSelected = () => (list ? selectedOption(element) : selectedTreeOption(element))
     // Keep values browser-local. Equality of this complete local draft, together
     // with the fact no option was clicked, is stronger than an unchanged label.
     const draft = () => [...document.querySelectorAll('input,textarea,select,[role="radiogroup"],[role="textbox"],[contenteditable="true"]')]
@@ -525,10 +531,13 @@ export class Page {
         (node as HTMLInputElement).value ?? '', (node as HTMLInputElement).checked ?? false,
         node.matches('[contenteditable="true"],[role="textbox"]') ? node.textContent : null,
         node.getAttribute('aria-checked'), node.getAttribute('aria-selected'),
-        node instanceof HTMLInputElement && listboxCombobox(node) ? selectedOption(node) : null,
+        node instanceof HTMLInputElement && listboxCombobox(node)
+          ? (ownedListbox(node) ? selectedOption(node) : selectedTreeOption(node)) : null,
       ])}))
     const beforeDraft = draft()
-    if (selectedOption(element) === label) {
+    if (readSelected() === label || (tree && selectedTreeOption(element) !== null &&
+        treeItemChoices(tree).some(c => (c.path === label || c.leaf === label) &&
+          (c.item.getAttribute('aria-selected') === 'true' || c.item.classList.contains('is-current'))))) {
       this.rememberEntered(element)
       return {success: true}
     }
@@ -543,20 +552,50 @@ export class Page {
     // that result once more; the final inspection may choose, but never scrolls.
     for (let attempt = 0; attempt <= 8; attempt++) {
       const state = await this.read()
-      if (!current() || ownedListbox(element) !== list) {
+      if (!current() || (list ? ownedListbox(element) !== list : ownedTree(element) !== tree)) {
         throw new Error('execution_failed: combobox changed before selection')
       }
-      if (visibleElement(list)) {
-        const matches = [...list.querySelectorAll('[role="option"]')].filter(option =>
-          option.closest('[role="listbox"]') === list && optionText(option) === label)
+      if (visibleElement(popup)) {
+        const treeEntries = tree ? treeItemChoices(tree) : []
+        const matches = list
+          ? [...list.querySelectorAll('[role="option"]')].filter(option =>
+            option.closest('[role="listbox"]') === list && optionText(option) === label)
+          : (() => {
+            const byPath = treeEntries.filter(c => c.path === label).map(c => c.item)
+            if (byPath.length) return byPath
+            return treeEntries.filter(c => c.leaf === label).map(c => c.item)
+          })()
         if (matches.length === 0) {
-          const candidate_labels = [...list.querySelectorAll('[role="option"]')]
-            .filter(option => option.closest('[role="listbox"]') === list &&
-              option.getAttribute('aria-disabled') !== 'true' && !option.hasAttribute('disabled'))
-            .map(option => optionText(option).trim())
-            .filter(label => label.length > 0)
+          if (tree && attempt < 4) {
+            const parts = label.split('/').map(s => s.trim()).filter(Boolean)
+            const expand = parts.length > 1
+              ? treeEntries.find(c => parts.slice(0, -1).includes(c.leaf) &&
+                  c.item.getAttribute('aria-expanded') === 'false')
+              : undefined
+            if (expand) {
+              const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
+              const expIdx = indexed.find(i => {
+                const n = this.lookup(this.controller.selectorMap, i)
+                return n === expand.item || n === expand.item.querySelector(':scope > .el-tree-node__content')
+              })
+              if (expIdx !== undefined) {
+                await this.controller.clickElement(expIdx)
+                await sleep(80)
+                continue
+              }
+            }
+          }
+          const candidate_labels = (list
+            ? [...list.querySelectorAll('[role="option"]')]
+              .filter(option => option.closest('[role="listbox"]') === list &&
+                option.getAttribute('aria-disabled') !== 'true' && !option.hasAttribute('disabled'))
+              .map(option => optionText(option).trim())
+            : treeEntries
+              .filter(c => c.item.getAttribute('aria-disabled') !== 'true' && !c.item.hasAttribute('disabled'))
+              .map(c => c.path))
+            .filter(textLabel => textLabel.length > 0)
             .slice(0, browserContract.choice_failure.max_candidates)
-            .map(label => label.slice(0, browserContract.choice_failure.max_label_chars))
+            .map(textLabel => textLabel.slice(0, browserContract.choice_failure.max_label_chars))
           // Try the current control to dismiss the list. Some widgets only open on
           // input clicks: an open popup alone is not a changed draft or selection.
           if (element.getAttribute('aria-expanded') === 'true') {
@@ -571,7 +610,7 @@ export class Page {
             }
           }
           const afterDraft = draft()
-          const bound = current() && ownedListbox(element) === list
+          const bound = current() && (list ? ownedListbox(element) === list : ownedTree(element) === tree)
           const unchanged = beforeDraft.length === afterDraft.length &&
             beforeDraft.every((item, i) => item.node === afterDraft[i]!.node && item.state === afterDraft[i]!.state)
           throw new ChoiceUnavailable(candidate_labels, bound && unchanged,
@@ -583,23 +622,30 @@ export class Page {
           throw new Error('execution_failed: combobox option is absent, ambiguous, or disabled')
         }
         const option = matches[0]!
+        const hitArea = tree ? option.querySelector(':scope > .el-tree-node__content') ?? option : option
         const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
-        const indexes = indexed.filter(i => this.lookup(this.controller.selectorMap, i) === option)
+        const indexes = indexed.filter(i => {
+          const n = this.lookup(this.controller.selectorMap, i)
+          return n === hitArea || n === option
+        })
         if (indexes.length === 0) {
           if (attempt === 8) break
           // Reuse PageController's scoped scroll. Anchor it to an indexed option in
           // this owned menu; never scroll an unrelated popup or choose an old index.
           const anchors = indexed.filter(i => {
             const node = this.lookup(this.controller.selectorMap, i)
-            return node instanceof Element && node.getAttribute('role') === 'option' &&
-              node.closest('[role="listbox"]') === list && visibleElement(node)
+            return node instanceof Element &&
+              (list
+                ? node.getAttribute('role') === 'option' && node.closest('[role="listbox"]') === list
+                : tree!.contains(node) && (node.getAttribute('role') === 'treeitem' || node.classList.contains('el-tree-node__content'))) &&
+              visibleElement(node)
           })
           if (!anchors.length || !current()) {
             throw new Error('execution_failed: combobox menu has no current scroll target')
           }
           // Ask for the distance that brings the option into the menu's visible part, so
           // a long menu is reached in a few scrolls rather than a page at a time.
-          const view = scrollViewport(option, list).getBoundingClientRect()
+          const view = scrollViewport(option, popup).getBoundingClientRect()
           const before = option.getBoundingClientRect()
           const down = before.top >= view.top
           const away = down ? before.bottom - view.bottom : view.top - before.top
@@ -618,7 +664,13 @@ export class Page {
         const result = await this.controller.clickElement(indexes[0]!)
         if (!result || (result as {success?: unknown}).success !== true) return result
         await sleep(50)
-        if (!current() || ownedListbox(element) !== list || selectedOption(element) !== label) {
+        const selected = readSelected()
+        const verified = list
+          ? selected === label
+          : Boolean(selected === label || (tree && treeItemChoices(tree).some(c =>
+            (c.path === label || c.leaf === label) &&
+            (c.item.getAttribute('aria-selected') === 'true' || c.item.classList.contains('is-current')))))
+        if (!current() || (list ? ownedListbox(element) !== list : ownedTree(element) !== tree) || !verified) {
           throw new Error('execution_failed: combobox selection was not verified')
         }
         this.rememberEntered(element)

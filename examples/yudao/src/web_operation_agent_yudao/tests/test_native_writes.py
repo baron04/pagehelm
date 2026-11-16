@@ -269,7 +269,8 @@ class NativeWriteTests(unittest.TestCase):
                 result = self.tools.execute_mutation(prefix + "_create", prepared.args, context=context())
                 self.assertTrue(result.content["verified"])
                 self.assertEqual(self.client.writes[before:], [("POST", entity + "/create", expected)])
-                self.assertNotIn(prefix + "_update", {t.name for t in self.tools.definitions})
+                if prefix != "system_post":
+                    self.assertNotIn(prefix + "_update", {t.name for t in self.tools.definitions})
                 self.assertNotIn(prefix + "_delete", {t.name for t in self.tools.definitions})
 
     def test_definition_missing_values_lengths_and_extra_effects_fail_before_write(self):

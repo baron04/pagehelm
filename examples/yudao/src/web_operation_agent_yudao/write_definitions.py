@@ -84,6 +84,9 @@ BRAND_FIELDS = {"name": text(description="商城商品品牌名称。"),
     "picUrl": text(2000, description="用户提供的已有图片地址；不上传、生成或下载图片。"),
     "sort": SUPPLIER_FIELDS["sort"], "status": STATUS, "description": text()}
 PRODUCT_CATEGORY_FIELDS = {**BRAND_FIELDS, "name": text(description="商城商品分类名称；不是 ERP 产品分类。")}
+PRODUCT_UNIT_FIELDS = {"name": text(description="ERP 产品计量单位名称。"), "status": STATUS}
+ACCOUNT_FIELDS = {"name": text(description="ERP 结算账户名称。"), "no": text(description="账户编码。"),
+    "remark": DETAIL_FIELDS["remark"], "status": STATUS, "sort": SUPPLIER_FIELDS["sort"]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +141,7 @@ RECORD_CONTRACTS = (
     RecordContract("erp_customer", "erp/customer", "ERP 客户", json.dumps(ERP_CUSTOMER_FIELDS),
         ("name", "sort", "status")),
     RecordContract("system_post", "system/post", "系统岗位", json.dumps(POST_FIELDS),
-        ("name", "code", "sort", "status"), operations=("create",)),
+        ("name", "code", "sort", "status"), operations=("create", "update")),
     RecordContract("member_tag", "member/tag", "会员标签", json.dumps(TAG_FIELDS),
         ("name",), operations=("create",)),
     RecordContract("member_group", "member/group", "会员分组", json.dumps(GROUP_FIELDS),
@@ -155,7 +158,7 @@ RECORD_CONTRACTS = (
             RecordRelation("category", "categoryId", "erp/product-category", "erp/product-category/list"),
             RecordRelation("unit", "unitId", "erp/product-unit", "erp/product-unit/simple-list"))),
     RecordContract("system_dept", "system/dept", "系统部门", json.dumps(DEPT_FIELDS),
-        ("name", "parentId", "sort", "status"), operations=("create",), relations=(
+        ("name", "parentId", "sort", "status"), operations=("create", "update"), relations=(
             RecordRelation("parent", "parentId", "system/dept", "system/dept/simple-list", root=True),
             RecordRelation("leader", "leaderUserId", "system/user", "system/user/simple-list", name_field="nickname"))),
     RecordContract("system_notice", "system/notice", "系统通知公告", json.dumps(NOTICE_FIELDS),
@@ -166,6 +169,10 @@ RECORD_CONTRACTS = (
     RecordContract("product_category", "product/category", "商品分类", json.dumps(PRODUCT_CATEGORY_FIELDS),
         ("name", "parentId", "picUrl", "sort", "status"), operations=("create",), relations=(
             RecordRelation("parent", "parentId", "product/category", "product/category/list", root=True),)),
+    RecordContract("erp_product_unit", "erp/product-unit", "ERP 计量单位", json.dumps(PRODUCT_UNIT_FIELDS),
+        ("name", "status")),
+    RecordContract("erp_account", "erp/account", "ERP 结算账户", json.dumps(ACCOUNT_FIELDS),
+        ("name", "status", "sort"), extra_preserved=("defaultStatus",)),
 )
 RECORD_OPERATIONS = MappingProxyType({contract.prefix + "_" + operation: contract
                      for contract in RECORD_CONTRACTS for operation in contract.operations})
@@ -196,6 +203,15 @@ BACKEND_WRITE_ATOMICITY = MappingProxyType({
     "erp_product_create": (False, "ErpProductServiceImpl#createProduct"),
     "erp_product_update": (False, "ErpProductServiceImpl#updateProduct"),
     "system_dept_create": (False, "DeptServiceImpl#createDept"),
+    "system_dept_update": (False, "DeptServiceImpl#updateDept"),
+    "system_post_update": (False, "PostServiceImpl#updatePost"),
+    "erp_product_unit_create": (False, "ErpProductUnitServiceImpl#createProductUnit"),
+    "erp_product_unit_update": (False, "ErpProductUnitServiceImpl#updateProductUnit"),
+    "erp_account_create": (False, "ErpAccountServiceImpl#createAccount"),
+    "erp_account_update": (False, "ErpAccountServiceImpl#updateAccount"),
+    "erp_document_status": (True, "ErpDocumentServiceImpl#updateStatus"),
+    "promotion_coupon_template_status": (False, "CouponTemplateServiceImpl#updateCouponTemplateStatus"),
+    "promotion_seckill_activity_close": (False, "SeckillActivityServiceImpl#closeSeckillActivity"),
     "system_notice_create": (False, "NoticeServiceImpl#createNotice"),
     "product_brand_create": (False, "ProductBrandServiceImpl#createBrand"),
     "product_brand_update": (False, "ProductBrandServiceImpl#updateBrand"),

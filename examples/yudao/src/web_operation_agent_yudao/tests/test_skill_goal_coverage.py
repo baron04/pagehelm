@@ -23,15 +23,15 @@ GOAL_PACKAGES = {
     "crm-follow-up": ("crm_follow_up_create",),
     "crm-receivable-planning": ("crm_receivable_plan_create",),
     "erp-supplier-maintenance": ("erp_supplier_create", "erp_supplier_update"),
-    "erp-warehouse-maintenance": ("erp_warehouse_create", "erp_warehouse_update"),
+    "erp-warehouse-maintenance": ("erp_warehouse_create", "erp_warehouse_update", "erp_account_create", "erp_account_update", "erp_document_status"),
     "erp-customer-maintenance": ("erp_customer_create", "erp_customer_update"),
-    "erp-product-maintenance": ("erp_product_create", "erp_product_update"),
-    "system-post-creation": ("system_post_create",),
-    "system-dept-creation": ("system_dept_create",),
+    "erp-product-maintenance": ("erp_product_create", "erp_product_update", "erp_product_unit_create", "erp_product_unit_update"),
+    "system-post-creation": ("system_post_create", "system_post_update"),
+    "system-dept-creation": ("system_dept_create", "system_dept_update"),
     "system-notice-maintenance": ("system_notice_create",),
     "member-tag-creation": ("member_tag_create",),
     "member-group-creation": ("member_group_create",),
-    "product-brand-maintenance": ("product_brand_create", "product_brand_update"),
+    "product-brand-maintenance": ("product_brand_create", "product_brand_update", "promotion_coupon_template_status", "promotion_seckill_activity_close"),
     "product-category-creation": ("product_category_create",),
     "bpm-category-maintenance": ("bpm_category_create",),
     "oa-announcement-publication": ("oa_announcement_create",),
@@ -50,11 +50,13 @@ class SkillGoalCoverage(unittest.TestCase):
             for operation in skill.write_operations:
                 self.assertNotIn(operation, covered, "operation is mapped by two goals")
                 covered[operation] = skill.name
-        self.assertEqual(len(covered), 30)
+        self.assertEqual(len(covered), 39)
         self.assertEqual(set(covered), set(RECORD_OPERATIONS) | {
             "crm_customer_put_pool", "crm_customer_receive", "crm_customer_lock",
             "crm_customer_deal_status", "crm_follow_up_create",
-            "crm_receivable_plan_create", "oa_announcement_create"})
+            "crm_receivable_plan_create", "oa_announcement_create",
+            "erp_document_status", "promotion_coupon_template_status",
+            "promotion_seckill_activity_close"})
 
     def test_each_goal_declares_completion_conditions_and_adjacent_goals(self):
         for skill in packaged_skills().artifacts:

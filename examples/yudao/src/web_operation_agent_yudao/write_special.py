@@ -401,4 +401,6 @@ def special_tools(client, goal_data, handler_factory, *, dictionary_rows=None):
             NativeSpecialHandler(handler_factory(client, name, goal_data)), reference_inputs=references,
             literal_inputs=literals, input_fields=tuple((k, entity, {"owner": "ownerUserId", "contract": "contractId"}.get(k, k)) for k in fields),
             effect_contract=SpecialEffects(name), scope_entities=scopes))
+    from .write_status_ops import status_tools
+    definitions.extend(status_tools(client, goal_data, handler_factory, NativeSpecialHandler))
     return definitions

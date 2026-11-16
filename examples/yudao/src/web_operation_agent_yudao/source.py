@@ -721,7 +721,7 @@ class YudaoSource:
         """(entity key -> its rules, entity key -> the controls its pages show)."""
         operations, refusals, cascades = self._server_rules()
         buttons, form_fields = self._ui_rules()
-        by_dir = sorted(entities, key=lambda e: -len(e.component_dir))
+        by_dir = sorted((e for e in entities if e.component_dir), key=lambda e: -len(e.component_dir))
         out: dict[str, list[IndexRule]] = {e.key: [] for e in entities}
         controls: dict[str, list[str]] = {e.key: [] for e in entities}
         labels_by_url: dict[tuple[str, str], str] = {}

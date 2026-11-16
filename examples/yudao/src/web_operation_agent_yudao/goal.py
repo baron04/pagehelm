@@ -202,10 +202,10 @@ class YudaoGoalData:
         out = []
         for key, spec in self._entities.items():
             entity = schema.entity(key)
-            if entity is None or not spec.component:
+            if entity is None:
                 continue
             out.append(EntitySource(
-                key=key, component_dir=spec.component.rsplit("/", 1)[0],
+                key=key, component_dir=spec.component.rsplit("/", 1)[0] if spec.component else "",
                 api_base=spec.list_path.rsplit("/", 1)[0],
                 labels={f.key: f.label for f in entity.fields},
                 choices={f.key: {c.key: c.label for c in f.choices} for f in entity.fields if f.choices}))

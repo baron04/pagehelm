@@ -386,9 +386,11 @@ class NativeHostTests(unittest.TestCase):
             "crm_customer_create", "crm_customer_update", "crm_contact_create", "crm_contact_update",
             "crm_follow_up_create", "erp_supplier_create", "erp_supplier_update",
             "erp_warehouse_create", "erp_warehouse_update", "erp_customer_create", "erp_customer_update",
-            "system_post_create", "member_tag_create", "member_group_create", "bpm_category_create",
+            "system_post_create", "system_post_update", "member_tag_create", "member_group_create", "bpm_category_create",
             "crm_clue_create", "crm_clue_update", "erp_product_create", "erp_product_update",
-            "system_dept_create", "product_brand_create", "product_brand_update", "product_category_create",
+            "erp_product_unit_create", "erp_product_unit_update", "erp_account_create", "erp_account_update",
+            "erp_document_status", "promotion_coupon_template_status", "promotion_seckill_activity_close",
+            "system_dept_create", "system_dept_update", "product_brand_create", "product_brand_update", "product_category_create",
             "crm_customer_put_pool", "crm_customer_receive", "crm_customer_lock", "crm_customer_deal_status",
             "crm_receivable_plan_create"}))
         # Required dictionary choices are absent in this actor fixture: these

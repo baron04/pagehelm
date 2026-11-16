@@ -223,6 +223,10 @@ class YudaoHost:
         self.source = repository_source(config.source_root, config.source_release,
                                         commits=config.source_commits,
                                         runtime=config.runtime_source)
+        self.rule_source = None
+        if config.source_root and config.source_release and (Path(config.source_root) / "server").is_dir():
+            from .source import YudaoSource
+            self.rule_source = YudaoSource(config.source_root, release=config.source_release)
         self.native_proxy = None
         self.live_forms = False
         self._fenced = frozenset()
@@ -363,6 +367,7 @@ class YudaoHost:
                 proxy.guard, lambda: proxy.resolve_actor(client._login(), client.tenant)))
         app = YudaoApplication(self.config.public_origin, None, self._load_api_docs,
                                 api_base_url=self.config.api_base, ui=self.ui,
+                                source=self.rule_source,
                                 conventions=REFERENCE_CONVENTIONS, client=client,
                                 native_tabs=self.native_proxy is not None,
                                 native_navigation=False,

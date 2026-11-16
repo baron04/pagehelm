@@ -1018,6 +1018,17 @@ TOOLS = [
         "down": {"type": "boolean"}, "index": {"type": "integer"}}, ["down"]),
     _tool("search_api", "按业务词查找应用的只读数据接口。", {
         "keyword": {"type": "string"}}, ["keyword"]),
+    _tool("entity_rules", "查询某个业务对象在应用源码中的拒绝条件、跨表连带影响、操作可见与字段可改规则。"
+          "涉及删除/作废/关闭/归档、状态限制或按钮为什么不可用时使用。", {
+        "target": {"type": "string", "description": "业务对象名或接口前缀，如 秒杀活动、月度工资表、promotion/seckill-activity"},
+        "operation": {"type": "string", "description": "可选：筛选特定操作词，如 删除、关闭、审批、delete"}}, ["target"]),
+    _tool("load_domain_guide", "读取某个业务域的只读口径与消歧说明（读写定位通用，不构成写入授权）。"
+          "可选域：crm-sales、erp-trade-stock、erp-finance、mall-catalog-promo、"
+          "mall-trade-aftersale、hrm-org-salary、fms-accounting、oa-bpm-system。", {
+        "domain": {"type": "string", "enum": [
+            "crm-sales", "erp-trade-stock", "erp-finance", "mall-catalog-promo",
+            "mall-trade-aftersale", "hrm-org-salary", "fms-accounting", "oa-bpm-system",
+        ]}}, ["domain"]),
     _tool("call_api", "以当前用户身份调用一个只读接口（GET）。分页接口必须带 pageNo 和 pageSize。", {
         "path": {"type": "string"},
         "params": {"type": "string", "maxLength": 8000, "description": "查询参数的 JSON 对象字符串，例如 {\"pageNo\":1,\"pageSize\":20}"},
@@ -1087,6 +1098,7 @@ SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call
 - 收到read_answer后用finish(status=done,answer="",read_answer=引用)交付服务端正文；不手抄事实、名单或重算。它只覆盖该次条件和数据，不能代替用户另要的页面、表单或交接。
 - CRM sceneType只在用户限定负责/参与/下属范围时按接口定义使用；全范围与当前页签不同，空结果只说明实际查询范围。后续指代需重新读取，历史助手文字不是当前事实。
 - “查看某字段/数量/名单”直接交付；“查看某记录/详情/页面”进入相应位置。纯查询不额外操作页面。金额由程序按已核验单位填入，未核验的标“单位未核验”，不自行换算或补单位。
+- 删改/作废/归档或问限制与影响，先用 entity_rules 查源码规则再用 call_api 核对现值；跨模块消歧或单位口径用 load_domain_guide。
 - 无权限结论只能来自指向它本身的确切读取被拒。某次查询被拒不等于整类不可读；已读结果能回答时照常作答。
 """
 TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按名称或简称找记录，kind 限定类型，编号用对应编号参数。
@@ -2130,6 +2142,16 @@ class YudaoLoopProcedures:
         if name == "search_api":
             self._note(s, stage="search", what="source", term=args["keyword"], tool=name, arguments=said)
             return LoopToolResult(know.search_api(args["keyword"]))
+        if name == "entity_rules":
+            self._note(s, stage="search", what="rules", term=args["target"], tool=name, arguments=said)
+            return LoopToolResult(self._entity_rules(s, args["target"], args.get("operation", "")), kind="read")
+        if name == "load_domain_guide":
+            from .skill_packages import domain_playbooks
+            domain = str(args.get("domain") or "").strip()
+            guide = domain_playbooks().get(domain)
+            if not guide:
+                return LoopToolResult(f"未知业务域：{domain}", kind="read", state="refused", error_code="unknown_domain")
+            return LoopToolResult(guide, kind="read")
         if name == "find_record":
             self._note(s, stage="search", what="record", term=args["name"], tool=name, arguments=said)
             targets: list[AnswerTarget] = []
@@ -2596,6 +2618,45 @@ class YudaoLoopProcedures:
         return (replace(failure, feedback=text) if failure else
                 LoopToolResult(text, kind="page", state="unverified" if incomplete else "completed"))
 
+    def _entity_rules(self, s, target: str, operation: str = "") -> str:
+        index = self.goal_port.index(context=s.operation)
+        query = (target or "").strip().casefold()
+        op_filter = (operation or "").strip().casefold()
+        if not query:
+            return "请提供要查询的业务对象名或接口前缀。"
+        scored = []
+        for entity in index.entities:
+            if not entity.rules:
+                continue
+            hay = " ".join((entity.key, entity.label, *entity.aliases)).casefold()
+            if query == entity.key.casefold() or query == entity.label.casefold():
+                score = 0
+            elif query in hay or any(query in (r.subject or "").casefold() for r in entity.rules):
+                score = 1
+            else:
+                continue
+            scored.append((score, entity))
+        if not scored:
+            if not any(e.rules for e in index.entities):
+                return "当前部署未附带编译期源码规则。"
+            return f"未找到与“{target}”匹配的源码规则。"
+        scored.sort(key=lambda item: (item[0], item[1].key))
+        lines = []
+        kind_order = {"refusal": 0, "cascade": 1, "visibility": 2, "editability": 3}
+        for _, entity in scored[:3]:
+            rules = sorted(entity.rules, key=lambda r: (kind_order.get(r.kind, 9), r.subject, r.about))
+            if op_filter:
+                filtered = [r for r in rules if op_filter in r.about.casefold()
+                            or op_filter in (r.subject or "").casefold()
+                            or op_filter in r.text.casefold()]
+                if filtered:
+                    rules = filtered
+            lines.append(f"【{entity.label}（{entity.key}）编译期源码规则】")
+            for rule in rules[:15]:
+                subj = f" [{rule.subject}]" if rule.subject else ""
+                lines.append(f"- ({rule.kind}) {rule.about}{subj}: {rule.text}")
+        return "\n".join(lines)
+
     def _find_record(self, s, name: str, kind: str = "", *,
                      answer_targets: list[AnswerTarget] | None = None,
                      found_values: list | None = None) -> str:
@@ -2912,7 +2973,7 @@ def _new_form_draft_request(text: str) -> bool:
     return _draft_only_request(text) and not re.search(r"编辑|修改|已有|原值|当前值|改成|改为", text)
 
 
-_STATUS_READ_TOOLS = frozenset({"find_record", "search_api", "call_api", "finish"})
+_STATUS_READ_TOOLS = frozenset({"find_record", "search_api", "call_api", "entity_rules", "load_domain_guide", "finish"})
 
 
 def _read_only_status_question(text: str) -> bool:

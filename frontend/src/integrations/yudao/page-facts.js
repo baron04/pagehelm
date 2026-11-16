@@ -1182,9 +1182,12 @@ export function nativeControlElement(element) {
     return radios.length === 1 && radios[0].closest('.el-radio,.el-radio-button') === element
       ? radios[0] : element
   }
+  if (element instanceof HTMLElement && element.matches('.el-tree-node[role="treeitem"]')) {
+    return element.querySelector(':scope > .el-tree-node__content') ?? element
+  }
   if (!(element instanceof HTMLElement) || !element.matches('.el-select__wrapper') ||
       element.classList.contains('is-disabled') || element.getAttribute('aria-disabled') === 'true') return element
-  const inputs = element.querySelectorAll('input[role="combobox"][aria-haspopup="listbox"][aria-controls]')
+  const inputs = element.querySelectorAll('input[role="combobox"][aria-haspopup="listbox"][aria-controls],input[role="combobox"][aria-haspopup="tree"][aria-controls]')
   return inputs.length === 1 && inputs[0].closest('.el-select__wrapper') === element
     ? inputs[0] : element
 }
