@@ -3569,6 +3569,10 @@ class Phase47Step1BaseTests(unittest.TestCase):
         self.assertIn("账号初始密码为 [redacted]", cleaned)
         self.assertIn("总金额为 123456 元", cleaned)
         self.assertIn("请自己填写初始密码后提交", cleaned)
+        self.assertEqual("已填好名称，尚未提交。", _clean_user_answer(
+            "已填好名称（依据回执 ev_535105f0d0ba_3，详见本轮行表 t1），尚未提交。", BASELINE_SESSION_HANDOFFS))
+        self.assertEqual("已填好名称，尚未提交。", _clean_user_answer(
+            "已填好名称（依据回执，详见本轮读取数据），尚未提交。", BASELINE_SESSION_HANDOFFS))
         page_row = redacted("用户管理-账号初始密码 | sys.user.init-password | Admin@2026", BASELINE_SESSION_HANDOFFS)
         self.assertNotIn("Admin@2026", page_row)
         self.assertIn("[redacted]", page_row)
@@ -3613,6 +3617,17 @@ class Phase47Step1BaseTests(unittest.TestCase):
         self.assertEqual("cannot", closed["status"])
         self.assertIn("等待退款共 5 单。", closed["answer"])
         self.assertIn("未交付", closed["answer"])
+
+    def test_internal_tokens_are_not_reported_as_untraced_numbers(self):
+        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
+        seen = []
+        executor = object.__new__(SlimTurnExecutor)
+        executor._earlier_words = ()
+        executor.profile = NS(untraced_numbers=lambda answer, sources: seen.append(answer) or ())
+        executor._untraced_numbers("问", "共 5 条（依据回执 ev_535105f0d0ba_1，详见本轮行表 t1）", {})
+        self.assertNotIn("ev_", seen[0])
+        self.assertNotIn("t1", seen[0])
+        self.assertIn("5", seen[0])
 
     def test_goal_data_name_searchable_skips_writing_gets_and_unfiltered_paged_logs(self):
         from web_operation_agent_yudao.goal import YudaoGoalData, _Entity

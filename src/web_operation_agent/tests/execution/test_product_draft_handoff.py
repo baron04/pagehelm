@@ -117,6 +117,44 @@ class DraftHandoffTests(unittest.TestCase):
         result = handoff_draft(context, before, [(field_identity(before.elements[0]), "Synthetic")], "Save")
         self.assertEqual(result.state, "unverified")
 
+    def test_scrolled_footer_baseline_is_the_scrolled_view_and_handoff_may_not_change_it(self):
+        attrs = {"form_scope": "dialog:editor", "form_instance": "live"}
+        def observation(epoch, *, footer=False, value="Synthetic", extra=False):
+            name = ElementRef("e1", "textbox", "Name", "input", epoch, {**attrs, "field_label": "Name", "value": value})
+            range_start = ElementRef("e4", "spinbutton", "", "input", epoch,
+                                     {**attrs, "id": "synthetic-range-start", "value": "0"})
+            fields = [name, range_start]
+            if footer:
+                fields = [ElementRef("e3", "button", "Sa ve", "button", epoch, attrs),
+                          ElementRef("e8", "spinbutton", "", "input", epoch,
+                                     {**attrs, "id": "synthetic-lower", "value": "7"})]
+                if extra:
+                    fields.append(ElementRef("e9", "spinbutton", "", "input", epoch,
+                                             {**attrs, "id": "synthetic-new", "value": "1"}))
+            return PageObservation(1, epoch, "http://app.test/new", "New", [], fields,
+                                   "form", page_route="/new", render_state="ready")
+        for extra, expected in ((False, "completed"), (True, "unverified")):
+            with self.subTest(extra=extra):
+                before, filled = observation(1, value=""), observation(2)
+                reasons = []
+                context = NS(obs=filled, terminal_reason="",
+                             audit=lambda event, **kw: reasons.append(kw.get("reason")))
+                def scroll(action, args):
+                    context.obs = observation(3, footer=True)
+                    receipt = ActionReceipt(1, "scroll", "scroll", args, True, observation=context.obs,
+                                            url_before=filled.url, url_after=filled.url)
+                    return PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(receipt.to_json()))
+                def handoff(fields, submit):
+                    context.obs = observation(4, footer=True, extra=extra)
+                    receipt = ActionReceipt(1, "ready", "handoff_form", {}, True, observation=context.obs,
+                                            url_before=filled.url, url_after=filled.url)
+                    return PageActionOutcome("completed", "acknowledged", receipt_json=json.dumps(receipt.to_json()))
+                context.page = NS(checkpoint=lambda: None, execute=scroll, handoff=handoff)
+                result = handoff_draft(context, before, [(field_identity(before.elements[0]), "Synthetic")], "Save")
+                self.assertEqual(result.state, expected)
+                if extra:
+                    self.assertIn("final_untouched_set", reasons)
+
     def test_adapter_completion_id_must_name_this_tools_actual_fresh_handoff_receipt(self):
         executor, state = ModelDrivenTurnExecutor.__new__(ModelDrivenTurnExecutor), NS(obs=page(3, first="Synthetic"))
         receipt = ActionReceipt(1, "actual", "handoff_form", {}, True, observation=state.obs, url_after=state.obs.url)

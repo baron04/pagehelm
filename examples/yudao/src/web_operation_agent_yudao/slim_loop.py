@@ -3309,6 +3309,10 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                 self.channel.read_only_mode = False
             self.profile = replace(self.profile, instructions=self.profile.instructions + NATIVE_SUBMIT_RULES)
 
+    def _untraced_numbers(self, prompt, answer, turn):
+        stripped = _TABLE_TOKEN.sub("", _BARE_RECEIPT.sub("", answer or ""))
+        return super()._untraced_numbers(prompt, stripped, turn)
+
     def _with_not_executed(self, s, turn, answer):
         handoffs = getattr(getattr(self, "knowledge", None), "handoffs", BASELINE_SESSION_HANDOFFS)
         return _clean_user_answer(super()._with_not_executed(s, turn, answer), handoffs)
@@ -3322,6 +3326,7 @@ _RECEIPT_INLINE = re.compile(
     r"(?:号|编号)?[:：=\s]*`?\bev_[0-9a-f]{12}_\d+\b`?(?:[、,，/\s]+`?\bev_[0-9a-f]{12}_\d+\b`?)*"
 )
 _BARE_RECEIPT = re.compile(r"`?\bev_[0-9a-f]{12}_\d+\b`?")
+_RECEIPT_STUB = re.compile(r"[（(]\s*(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具)?回执[，,、\s]*(?:详见)?(?:本轮读取数据)?\s*[）)]")
 _TABLE_TOKEN = re.compile(r"(?:本轮)?行表\s*`?\bt\d{1,2}\b`?")
 _PAGE_OBLIGATION = re.compile(
     r"调出|(?:帮我|请)?(?:打开|进入|跳转到?|定位到?|切到|切换到)[^，。；！？?\n]{0,24}"
@@ -3347,6 +3352,7 @@ def _clean_user_answer(answer: str, handoffs) -> str:
     cleaned = _RECEIPT_INLINE.sub("", cleaned)
     cleaned = _BARE_RECEIPT.sub("", cleaned)
     cleaned = _TABLE_TOKEN.sub("本轮读取数据", cleaned)
+    cleaned = _RECEIPT_STUB.sub("", cleaned)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r"\s+([，。；：！？])", r"\1", cleaned)
     return cleaned.strip()
