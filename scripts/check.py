@@ -10,7 +10,9 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +33,50 @@ GROUPS = {
     'state': ('state', 'execution', 'transport'),
     'transport': ('transport', 'execution', 'composition'),
 }
+# Builders write the assets later checks read, so they run first and in order.
+ASSET_CHECKS = ('runtime assets', 'sync runtime assets', 'sync trace assets')
+
+
+YUDAO_SRC = 'examples/yudao/src/'
+YUDAO_TESTS = YUDAO_SRC + 'web_operation_agent_yudao/tests/'
+
+
+def yudao_modules(paths: list[str]) -> list[str] | None:
+    """Yudao test modules importing a changed module, directly or transitively; None means all."""
+    package = ROOT / YUDAO_SRC / 'web_operation_agent_yudao'
+    if not package.is_dir() or any(not (f.startswith(YUDAO_SRC + 'web_operation_agent_yudao/') and f.endswith('.py')
+                                         and (ROOT / f).is_file()) for f in paths):
+        return None
+    name = lambda f: Path(f).relative_to(ROOT / YUDAO_SRC).with_suffix('').as_posix().replace('/', '.').removesuffix('.__init__')
+    imports = {}
+    for path in package.rglob('*.py'):
+        module, edges = name(path), set()
+        parts = module.split('.')
+        if parts[-1] != 'web_operation_agent_yudao':
+            edges.add('.'.join(parts[:-1]))  # importing a submodule runs its package
+        current = parts if path.name == '__init__.py' else parts[:-1]
+        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+            targets = []
+            if isinstance(node, ast.Import):
+                targets = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                base = '.'.join(current[:len(current) - node.level + 1] + ([node.module] if node.module else [])) \
+                    if node.level else node.module or ''
+                targets = [base] + [f'{base}.{alias.name}' for alias in node.names]
+            edges.update(t for t in targets if t.startswith('web_operation_agent_yudao'))
+        imports[module] = edges
+    changed = {name(ROOT / f) for f in paths}
+    tests = []
+    for module in sorted(m for m in imports if m.startswith('web_operation_agent_yudao.tests.test_')):
+        seen, stack = set(), [module]
+        while stack:
+            item = stack.pop()
+            if item not in seen:
+                seen.add(item)
+                stack.extend(imports.get(item, ()))
+        if seen & changed:
+            tests.append(module)
+    return tests or None
 
 
 def git(*args: str) -> bytes:
@@ -111,9 +157,8 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
                                   CORE + 'tests/transport/', CORE + 'tests/state/test_traceview.py')) for f in p)
     contacts = any(f.startswith('testapps/contacts/') for f in p) or broad or (profile == 'ci' and python_dependencies)
     yudao = any(f.startswith('examples/yudao/') for f in p) or broad or (profile == 'ci' and python_dependencies)
-    odoo = any(f.startswith('examples/odoo/') for f in p)
     if profile == 'compat':
-        if core or yudao or odoo or tooling:
+        if core or yudao or tooling:
             assets()
             add('Python compatibility', ['@python', RUNNER, '--without-browser'], needs_python_packages=True)
         plan['needs_node'] = plan['needs_frontend']
@@ -156,12 +201,13 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
         add('Contacts contracts', ['@python', RUNNER, '--start-dir', 'testapps/contacts/tests',
                                   '--top-level', '.', '--without-browser'], needs_python_packages=True)
     if yudao:
-        add('Yudao contracts', ['@python', RUNNER, '--start-dir', 'examples/yudao/src/web_operation_agent_yudao/tests',
-                               '--top-level', 'examples/yudao/src', '--without-browser'], needs_python_packages=True)
+        command = ['@python', RUNNER, '--start-dir', YUDAO_TESTS.rstrip('/'), '--top-level', YUDAO_SRC.rstrip('/'),
+                   '--without-browser']
+        selected = yudao_modules([f for f in p if f.startswith('examples/yudao/')]) if profile == 'dev' and not broad else None
+        for module in selected or ():
+            command += ['--module', module]
+        add('Yudao contracts', command, needs_python_packages=True)
         plan['needs_nginx'] = any('/deploy/' in f or 'nginx' in f for f in p) or broad
-    if odoo:
-        add('Odoo reference adapter', ['@python', RUNNER, '--start-dir', 'examples/odoo/src/web_operation_agent_odoo/tests',
-                                      '--top-level', 'examples/odoo/src', '--without-browser'], needs_python_packages=True)
     # Expensive browser integration follows browser/session boundaries, never copy edits.
     if profile == 'ci' and (runtime or transport or contacts or broad):
         assets()
@@ -172,9 +218,7 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
                                  '--only-browser', '--strict-skips'], needs_python_packages=True,
             needs_page_controller=True, needs_python_browser=True)
     # Evaluators are development tools with their own owners, not product dependencies.
-    for prefix, directory, top in [('evals/odoo/', 'evals/odoo/tests', '.'),
-                                    ('evals/odoo_source/', 'evals/odoo_source/tests', '.'),
-                                    ('evals/yudao/', 'evals/yudao/tests', '.')]:
+    for prefix, directory, top in [('evals/yudao/', 'evals/yudao/tests', '.')]:
         if any(f.startswith(prefix) for f in p):
             add(prefix.rstrip('/') + ' apparatus', ['@python', '-m', 'unittest', 'discover', '-s', directory,
                                                     '-t', top], needs_python_packages=True)
@@ -236,6 +280,10 @@ def main(argv=None) -> int:
     parser.add_argument('--head', help='explicit commit-only comparison; otherwise include local changes')
     parser.add_argument('--path', action='append', default=[])
     parser.add_argument('--plan', action='store_true')
+    parser.add_argument('--only', action='append', default=[], help='run only this planned check (repeatable)')
+    parser.add_argument('--keep-going', action='store_true', help='run every check even after a failure')
+    parser.add_argument('--serial', action='store_true', help='run checks one at a time with live output')
+    parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1, help='parallel test modules per Python suite')
     parser.add_argument('--syntax-only', nargs='+', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.syntax_only:
@@ -252,16 +300,70 @@ def main(argv=None) -> int:
     environment['PYTHONPATH'] = os.pathsep.join(str(ROOT / f) for f in ('src', 'examples/odoo/src', 'examples/yudao/src', '.'))
     if plan['needs_page_controller']:
         environment['WOA_PAGE_CONTROLLER_MODULE'] = str(ROOT / 'evals/pageagent/node_modules/@page-agent/page-controller/dist/lib/page-controller.js')
+    checks = [c for c in plan['checks'] if not args.only or c['name'] in args.only]
+    if unknown := sorted(set(args.only) - {c['name'] for c in plan['checks']}):
+        print(f'--only names not in the plan: {unknown}', file=sys.stderr)
+        return 2
+    return execute(checks, environment, jobs=args.jobs, parallel=not args.serial, keep_going=args.keep_going)
+
+
+def execute(checks: list[dict], environment: dict, *, jobs: int, parallel: bool, keep_going: bool) -> int:
+    """Run asset builders, then the other checks concurrently, then each browser lane alone."""
     started = time.monotonic()
-    for check in plan['checks']:
-        command = [sys.executable if value == '@python' else value for value in check['argv']]
+    failed = []
+
+    def command(check, share):
+        argv = [sys.executable if value == '@python' else value for value in check['argv']]
+        return argv + ['--jobs', str(share)] if RUNNER in argv and share > 1 else argv
+
+    def run(check, log, share=jobs):
         before = time.monotonic()
-        print(f"\n[{check['name']}]", flush=True)
-        result = subprocess.run(command, cwd=ROOT / check['cwd'], env=environment)
-        print(f"{check['name']}: exit {result.returncode}, {time.monotonic() - before:.2f}s", flush=True)
-        if result.returncode:
-            return result.returncode
-    print(f'Completed {len(plan["checks"])} selected checks in {time.monotonic() - started:.2f}s')
+        result = subprocess.run(command(check, share), cwd=ROOT / check['cwd'], env=environment,
+                                stdout=log, stderr=subprocess.STDOUT)
+        return result.returncode, time.monotonic() - before
+
+    def report(check, code, seconds, log=None):
+        if log is not None:
+            log.seek(0)
+            print(f"\n[{check['name']}]\n" + log.read().decode(errors='replace'), end='', flush=True)
+        print(f"{check['name']}: exit {code}, {seconds:.2f}s", flush=True)
+        if code:
+            failed.append(check['name'])
+
+    builders = [c for c in checks if c['name'] in ASSET_CHECKS]
+    rest = [c for c in checks if c['name'] not in ASSET_CHECKS]
+    # Browser lanes parallelise inside themselves; beside other work their timing-sensitive tests flake.
+    browsers = [c for c in rest if 'Chromium' in c['name']]
+    others = [c for c in rest if c not in browsers]
+    waves = [[c] for c in builders] + ([others] if parallel else [[c] for c in others]) + [[c] for c in browsers]
+    for wave in filter(None, waves):
+        if failed and not keep_going:
+            return finish(checks, failed, started)
+        if len(wave) > 1:
+            print(f"\nrunning concurrently: {', '.join(c['name'] for c in wave)}", flush=True)
+        logs = {c['name']: tempfile.TemporaryFile() for c in wave} if len(wave) > 1 else {}
+        # Concurrent suites split the processors; the frontend runner keeps its own pool beside them.
+        share = max(1, jobs // max(1, sum(RUNNER in c['argv'] for c in wave) + any(c['cwd'] == 'frontend' for c in wave)))
+        with ThreadPoolExecutor(len(wave)) as pool:
+            if not logs:
+                print(f"\n[{wave[0]['name']}]", flush=True)
+            pending = {pool.submit(run, c, logs.get(c['name']), share): c for c in wave}
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    check = pending.pop(future)
+                    report(check, *future.result(), logs.get(check['name']))
+        for log in logs.values():
+            log.close()
+    return finish(checks, failed, started)
+
+
+def finish(checks: list[dict], failed: list[str], started: float) -> int:
+    elapsed = time.monotonic() - started
+    if failed:
+        print(f'FAILED {len(failed)} of {len(checks)} checks in {elapsed:.2f}s: {", ".join(failed)}')
+        return 1
+    print(f'Completed {len(checks)} selected checks in {elapsed:.2f}s')
     return 0
 
 

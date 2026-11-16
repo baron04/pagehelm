@@ -12,9 +12,13 @@ import argparse
 import fnmatch
 import hashlib
 import os
+import re
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -62,6 +66,8 @@ def main(argv=None) -> int:
     ap.add_argument("--exclude", action="append", default=[], help="exclude test-ID glob")
     ap.add_argument("--strict-skips", action="store_true", help="refuse missing integration prerequisites")
     ap.add_argument("--list", action="store_true", help="collect without running tests")
+    ap.add_argument("--jobs", type=int, default=1, help="run test modules in this many parallel processes")
+    ap.add_argument("--ids-file", type=Path, help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
 
     inherited = os.environ.get("WOA_SPEND_LEDGER")
@@ -88,7 +94,9 @@ def main(argv=None) -> int:
 
 def run_selected(a) -> int:
     loader = unittest.TestLoader()
-    if a.module:
+    if a.ids_file:
+        suite = loader.loadTestsFromNames(a.ids_file.read_text().split())
+    elif a.module:
         suite = loader.loadTestsFromNames(a.module)
     elif a.group:
         suite = unittest.TestSuite()
@@ -113,6 +121,19 @@ def run_selected(a) -> int:
         print("\n".join(sorted(selected)))
         return 0
 
+    # Module is the process unit, keeping setUpModule/setUpClass together. Browser tests,
+    # not imports, bound the wall clock: each gets its own process unless its class shares fixtures.
+    modules = {}
+    for name in sorted(selected):
+        test = selected[name]
+        kind = type(test)
+        shared = any(getattr(kind, f).__func__ is not getattr(unittest.TestCase, f).__func__
+                     for f in ("setUpClass", "tearDownClass"))
+        unit = kind.__module__ if not is_browser(test) else name if not shared else f"{kind.__module__}.{kind.__qualname__}"
+        modules.setdefault(unit, []).append(name)
+    if a.jobs > 1 and len(modules) > 1:
+        return run_parallel(a, modules)
+
     result = unittest.TextTestRunner(verbosity=a.verbose).run(
         unittest.TestSuite(selected[name] for name in sorted(selected)))
 
@@ -120,6 +141,34 @@ def run_selected(a) -> int:
         print(f"REFUSED: {len(result.skipped)} selected integration tests were skipped")
         return 2
     return 0 if result.wasSuccessful() else 1
+
+
+def run_parallel(a, modules) -> int:
+    """Run each unit in its own process; the largest start first."""
+    with tempfile.TemporaryDirectory(prefix="woa-test-ids-") as directory:
+        def run(item):
+            module, names = item
+            ids = Path(directory) / f"{module}.txt"
+            ids.write_text("\n".join(names))
+            command = [sys.executable, __file__, "--ids-file", str(ids)]
+            command += ["--strict-skips"] if a.strict_skips else []
+            started = time.monotonic()
+            done = subprocess.run(command, capture_output=True, text=True)
+            return module, len(names), done.returncode, done.stdout + done.stderr, time.monotonic() - started
+
+        order = sorted(modules.items(), key=lambda item: -len(item[1]))
+        failed, skipped = [], 0
+        with ThreadPoolExecutor(a.jobs) as pool:
+            for module, count, code, output, seconds in pool.map(run, order):
+                if code:
+                    failed.append(module)
+                    print(output, file=sys.stderr)
+                skipped += sum(int(n) for n in re.findall(r"skipped=(\d+)", output))
+                print(f"{'FAILED' if code else 'ok':6} {module} ({count} tests, {seconds:.1f}s)", flush=True)
+    total = sum(len(names) for names in modules.values())
+    print(f"\nRan {total} tests in {len(modules)} modules with {a.jobs} jobs: "
+          + (f"FAILED ({', '.join(failed)})" if failed else "OK") + f" (skipped={skipped})")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
