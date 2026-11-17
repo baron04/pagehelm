@@ -646,11 +646,38 @@ export class Page {
           const n = this.lookup(this.controller.selectorMap, i)
           return n === innerOption || n === hitArea || n === option
         })
-        const indexes = exactIndexes.length ? exactIndexes : indexed.filter(i => {
-          const n = this.lookup(this.controller.selectorMap, i)
-          return n instanceof Element && hitArea.contains(n) &&
-            (tree ? n.closest('[role="treeitem"]') === option : n.closest('[role="option"]') === option)
-        })
+        let indexes = exactIndexes
+        if (indexes.length === 0) {
+          const ownerRole = tree ? '[role="treeitem"]' : '[role="option"]'
+          const descendants = indexed.filter(i => {
+            const n = this.lookup(this.controller.selectorMap, i)
+            return n instanceof Element && hitArea.contains(n) &&
+              n.closest(ownerRole) === option && visibleElement(n)
+          })
+          if (descendants.length <= 1) {
+            indexes = descendants
+          } else {
+            const targetText = optionText(innerOption ?? option)
+            const textMatches = descendants.filter(i => {
+              const n = this.lookup(this.controller.selectorMap, i)
+              if (!(n instanceof Element) || n.getAttribute('aria-expanded') !== null) return false
+              const text = optionText(n)
+              return text.length > 0 && text === targetText
+            })
+            const pool = textMatches.length ? textMatches : descendants.filter(i => {
+              const n = this.lookup(this.controller.selectorMap, i)
+              return n instanceof Element && optionText(n).length > 0
+            })
+            indexes = pool.filter(i => {
+              const n = this.lookup(this.controller.selectorMap, i)
+              return n instanceof Element && !pool.some(other => {
+                if (other === i) return false
+                const otherEl = this.lookup(this.controller.selectorMap, other)
+                return otherEl instanceof Element && n.contains(otherEl)
+              })
+            })
+          }
+        }
         if (indexes.length === 0) {
           if (attempt === 8) break
           // Reuse PageController's scoped scroll. Anchor it to an indexed option in

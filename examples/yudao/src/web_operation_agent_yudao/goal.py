@@ -1341,13 +1341,14 @@ class YudaoGoalData:
         full_path = "/admin-api/" + spec.list_path.lstrip("/")
         if full_path in self._writing_gets or spec.list_path in self._writing_gets:
             return False
+        if set(spec.required) - set(spec.fixed_params):
+            return False
         if self._narrowing(entity, text) is not EVERYTHING:
             return True
         if is_serial and not (set(self._CODE_KEYS) & set(spec.props)):
             return False
         return (full_path in (self._docs.get("paths") or {})
-                and _unpaged(self._docs, spec.list_path)
-                and not (set(spec.required) - set(spec.fixed_params)))
+                and _unpaged(self._docs, spec.list_path))
 
     def _narrowing(self, entity: str, text: str) -> Cond:
         """A name search pushed down where the list has a name or number parameter."""
@@ -1360,7 +1361,8 @@ class YudaoGoalData:
             if spec.name_field in self._CODE_KEYS:
                 candidates.insert(0, spec.name_field)
         else:
-            candidates = [spec.name_field, "name", "title", "nickname", "subject"]
+            candidates = [spec.name_field, "name", "title", "nickname", "subject",
+                          "keyword", "search", "itemName"]
             if re.fullmatch(r"[A-Za-z0-9_-]{3,64}", token):
                 candidates.extend(self._CODE_KEYS)
         for key in dict.fromkeys(c for c in candidates if c):

@@ -34,5 +34,12 @@
     "cache_read_per_m": 0.2,
     "currency": "CNY",
     "taken": "2026-10-03, help.aliyun.com/zh/model-studio/deepseek-v4-1-flash, Beijing busy-hour published reference price; no idle-hour or plan discount assumed, so a prepaid token plan is booked at or above what it costs"
+  },
+  "gpt-6.1-sol": {
+    "input_per_m": 13.439,
+    "output_per_m": 67.195,
+    "cache_read_per_m": 0.67195,
+    "currency": "CNY",
+    "taken": "2026-10-28, https://developers.openai.com/api/docs/models/gpt-6.1-sol ($2.00/$0.10/$10.00 per M USD) converted at fixed 6.7195 CNY/USD reference (2026-10-22 CFETS); gateway invoice may differ"
   }
 }

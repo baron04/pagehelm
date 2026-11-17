@@ -1266,3 +1266,28 @@ class HandoffStaysTests(unittest.TestCase):
             executor._dispatch(self.state, "scroll", {"direction": "down", "pages": 1})
             executor._dispatch(self.state, "handoff_form", args)
         self.assertEqual(self.sent, ["handoff_form", "handoff_form", "scroll", "handoff_form"])
+
+
+class OperationCatalogTests(unittest.TestCase):
+    def test_operation_catalog_lines_render_bounded_enum_values(self):
+        from web_operation_agent.execution.model_loop import _operation_catalog_lines
+
+        skill = NS(name="demo-skill")
+        defs = [
+            NS(
+                name="doc_status",
+                description="切换状态",
+                input_json=json.dumps({
+                    "type": "object",
+                    "properties": {
+                        "doc_type": {"type": "string", "enum": ["采购订单", "库存调拨单"]},
+                        "no": {"type": "string"},
+                    },
+                    "required": ["doc_type", "no"],
+                }, ensure_ascii=False),
+            )
+        ]
+        lines = _operation_catalog_lines([(skill, defs)])
+        self.assertEqual(len(lines), 1)
+        self.assertIn("doc_type*∈[采购订单|库存调拨单]", lines[0])
+        self.assertIn("no*", lines[0])

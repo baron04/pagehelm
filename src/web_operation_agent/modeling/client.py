@@ -377,6 +377,7 @@ class ChatModel(_ConcreteChatProvider):
             url = f"{self.base}/chat/completions"
             headers = {"content-type": "application/json",
                        "authorization": f"Bearer {self._key}",
+                       "user-agent": "web-operation-agent/0.2",
                        "x-woa-request-id": request_id}
             try:
                 if cancelled is None:

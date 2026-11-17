@@ -33,6 +33,15 @@ ERP_DOCUMENT_ENTITIES = {
     "收款单": "erp/finance-receipt",
     "付款单": "erp/finance-payment",
 }
+_DOC_TYPE_ALIASES = {
+    "库存调度单": "库存调拨单",
+    "库存调度": "库存调拨单",
+}
+
+
+def _canonical_doc_type(raw: str) -> str:
+    text_val = str(raw or "").strip()
+    return _DOC_TYPE_ALIASES.get(text_val, text_val)
 _ERP_SIDE_EFFECTS = {
     "采购订单": "变更订单审批状态，决定后续能否生成关联采购入库或退货单据",
     "销售订单": "变更订单审批状态，决定后续能否生成关联销售出库或退货单据",
@@ -86,7 +95,8 @@ class StatusEffects:
 
     def project_inputs(self, inputs: dict) -> RequestedEffect:
         if self.operation == "erp_document_status":
-            entity = ERP_DOCUMENT_ENTITIES[inputs["document_type"]]
+            doc_type = _canonical_doc_type(inputs["document_type"])
+            entity = ERP_DOCUMENT_ENTITIES[doc_type]
             target_label = "已审核" if inputs["action"] == "审批" else "未审核"
             return RequestedEffect(entity, "state_change", entity, inputs["no"],
                                    canonical({"status": target_label}))
@@ -139,7 +149,7 @@ class _StatusHandler:
     def prepare(self, inputs: dict, *, context=None) -> BusinessMutationSpec:
         actor = self.base._actor(context)
         if self.operation == "erp_document_status":
-            doc_type = inputs["document_type"]
+            doc_type = _canonical_doc_type(inputs["document_type"])
             entity = ERP_DOCUMENT_ENTITIES[doc_type]
             record = self._find_erp_doc(entity, inputs["no"])
             target_code = 20 if inputs["action"] == "审批" else 10
@@ -299,7 +309,7 @@ def status_tools(client, goal_data, handler_factory):
             "erp_document_status",
             "审批或反审批 ERP 业务单据（采购/销售/出入库/调拨/盘点/收付款单）；不修改明细行或结算账户。",
             json.dumps(object_schema({
-                "document_type": {"type": "string", "enum": list(ERP_DOCUMENT_ENTITIES)},
+                "document_type": {"type": "string", "enum": [*ERP_DOCUMENT_ENTITIES, "库存调度单"]},
                 "no": text(100, description="已有单据的确切单号，例如 CGRK20260001；不填内部数字 ID。"),
                 "action": {"type": "string", "enum": ["审批", "反审批"]},
             }, ("document_type", "no", "action"))),

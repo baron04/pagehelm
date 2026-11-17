@@ -788,6 +788,81 @@ class YudaoConventionWritesTests(unittest.TestCase):
             self.assertTrue(res_dt.content["verified"])
             self.assertEqual(client.records[("promotion/coupon-template", 7)]["validStartTime"], "2026-07-11 10:00:00")
 
+    def test_validate_provenance_handles_candidate_dataclasses_and_existing_values(self):
+        from web_operation_agent.goal.skill_writes import SkillWrites
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_synthetic_release(Path(tmp))
+            docs = copy.deepcopy(_synthetic_openapi())
+            docs["components"]["schemas"]["CouponUpdateReq"]["properties"]["fixedEndTerm"] = {
+                "type": "integer",
+                "description": "结束天数",
+            }
+            docs["components"]["schemas"]["CouponResp"]["properties"]["fixedEndTerm"] = {"type": "integer"}
+            goal_data = FakeGoalData(docs, source=None)
+            client = FakeYudaoClient()
+            client.records[("promotion/coupon-template", 7)]["fixedEndTerm"] = 7
+            tools = native_tools(client, goal_data)
+            update_def = tools.get("update_record")
+
+            # 1. unit_scale == 1 integer field sourced from existing_values keyed by f_spec.name
+            int_inputs = {
+                "entity": "promotion/coupon-template",
+                "target": "合成满减券",
+                "changes": [{"field": "fixedEndTerm", "value": 12}],
+            }
+            spec_int = tools.prepare_mutation("update_record", int_inputs, context=_ctx())
+            SkillWrites._validate_prepared_update(
+                update_def,
+                int_inputs,
+                ("把结束天数设为参照值",),
+                NS(effect_projection=spec_int.effect_projection),
+                existing_values={"fixedEndTerm": ("12",), "usePrice": ("999",)},
+            )
+
+            # 2. date_kind field sourced from existing_values keyed by f_spec.name
+            dt_inputs = {
+                "entity": "hrm/employee",
+                "target": "周敏",
+                "changes": [{"field": "入职时间", "value": "2026-10-20 09:00:00"}],
+            }
+            spec_dt = tools.prepare_mutation("update_record", dt_inputs, context=_ctx())
+            update_def.handler.validate_provenance(
+                dt_inputs,
+                ("把周敏入职时间改为参考值",),
+                NS(effect_projection=spec_dt.effect_projection),
+                existing_values={"entryTime": ("2026-10-20 09:00:00",), "mobile": ("13800000011",)},
+            )
+
+            # 3. Ungrounded numeric or mismatched candidate value still fails closed
+            bad_int = {
+                "entity": "promotion/coupon-template",
+                "target": "合成满减券",
+                "changes": [{"field": "fixedEndTerm", "value": 99}],
+            }
+            spec_bad = tools.prepare_mutation("update_record", bad_int, context=_ctx())
+            with self.assertRaises(BusinessToolRequestError):
+                update_def.handler.validate_provenance(
+                    bad_int,
+                    ("把结束天数改成参考值",),
+                    NS(effect_projection=spec_bad.effect_projection),
+                    existing_values={"fixedEndTerm": ("12",), "usePrice": ("99",)},
+                )
+
+            # 4. Append preservation works with existing_values passed explicitly
+            app_inputs = {
+                "entity": "promotion/coupon-template",
+                "target": "合成满减券",
+                "changes": [{"field": "description", "value": "原说明；补充一条"}],
+            }
+            spec_app = tools.prepare_mutation("update_record", app_inputs, context=_ctx())
+            update_def.handler.validate_provenance(
+                app_inputs,
+                ("在说明后补充：补充一条",),
+                NS(effect_projection=spec_app.effect_projection),
+                existing_values={"description": ("原说明",), "usePrice": ("100",)},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

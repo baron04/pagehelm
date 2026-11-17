@@ -272,3 +272,20 @@ class Phase47Step2Tests(unittest.TestCase):
         cleaned = _clean_user_answer("根据表 t1 与 `t2` 计算，合计 300 元。", BASELINE_SESSION_HANDOFFS)
         self.assertNotIn("t1", cleaned)
         self.assertNotIn("t2", cleaned)
+
+    def test_erp_document_status_canonicalizes_dispatch_menu_alias(self):
+        client = FakeClient({
+            "erp/stock-move": {91: {"id": 91, "no": "QCDB20260001", "status": 10, "totalPrice": 1200}},
+        })
+        goal_data = FakeGoalData(client)
+        registry = native_tools(client, goal_data, runtime_dictionary=False)
+        spec = registry.prepare_mutation(
+            "erp_document_status",
+            {"document_type": "库存调度单", "no": "QCDB20260001", "action": "审批"},
+            context=_ctx(),
+        )
+        self.assertEqual(spec.args["entity"], "erp/stock-move")
+        self.assertIn("库存调拨单", spec.effect)
+        res = registry.execute_mutation("erp_document_status", spec.args, context=_ctx())
+        self.assertTrue(res.content["verified"])
+        self.assertEqual(client.records["erp/stock-move"][91]["status"], 20)

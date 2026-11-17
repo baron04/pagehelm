@@ -228,4 +228,60 @@ describe('tree-backed combobox helpers (ElTreeSelect / ARIA tree)', () => {
     expect(treeSelectionMatches(input, '平台组')).toBe(true)
     expect(treeSelectionMatches(input, '总部 / 平台组')).toBe(true)
   })
+
+  it('Page.select clicks the unique text descendant when a tree row indexes both expand icon and label span', async () => {
+    const form = document.createElement('form')
+    form.innerHTML = `
+      <label>归属部门<input id="dept-multi-input" role="combobox" readonly aria-haspopup="tree"
+        aria-controls="dept-multi-pop" aria-expanded="true"></label>
+      <div id="dept-multi-pop" role="tree">
+        <div role="treeitem">
+          <div id="row-wrap">
+            <span id="icon-child" aria-expanded="false"></span>
+            <span id="label-outer"><span id="label-inner">研发部</span></span>
+          </div>
+        </div>
+      </div>
+    `
+    document.body.append(form)
+    try {
+      const input = document.getElementById('dept-multi-input') as HTMLInputElement
+      const pop = document.getElementById('dept-multi-pop')!
+      const rowWrap = document.getElementById('row-wrap')!
+      const iconChild = document.getElementById('icon-child')!
+      const labelOuter = document.getElementById('label-outer')!
+      const labelInner = document.getElementById('label-inner')!
+      const treeItem = pop.querySelector('[role="treeitem"]') as HTMLElement
+
+      for (const el of [input, pop, treeItem, rowWrap, iconChild, labelOuter, labelInner]) {
+        ;(el as HTMLElement).getBoundingClientRect = () => ({
+          width: 100, height: 24, top: 10, bottom: 34, left: 10, right: 110, x: 10, y: 10, toJSON: () => ({}),
+        } as DOMRect)
+      }
+
+      const api = mockController()
+      api.getBrowserState = vi.fn(async () => ({
+        url: location.href,
+        title: '',
+        content: '[1]<input />\n[2]<span /> \n[3]<span>研发部 /> \n[4]<span>研发部 />',
+      }))
+      api.clickElement = vi.fn(async idx => {
+        if (idx === 4) {
+          treeItem.setAttribute('aria-selected', 'true')
+          input.value = '研发部'
+          input.setAttribute('aria-expanded', 'false')
+        }
+        return {success: true}
+      })
+
+      const map: Record<number, Element> = {1: input, 2: iconChild, 3: labelOuter, 4: labelInner}
+      const lookup = (_m: unknown, idx: number) => map[idx] ?? null
+      const page = new Page(api, lookup, createRedactor())
+
+      await page.select('e1', '103', '研发部')
+      expect(api.clickElement).toHaveBeenCalledWith(4)
+    } finally {
+      form.remove()
+    }
+  })
 })

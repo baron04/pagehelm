@@ -130,7 +130,17 @@ def _operation_catalog_lines(catalog) -> list[str]:
             params = json.loads(d.input_json)
             props = params.get("properties") or {}
             req = set(params.get("required") or ())
-            sig = ", ".join(f"{k}*" if k in req else k for k in props)
+            parts: list[str] = []
+            for k, prop_schema in props.items():
+                head = f"{k}*" if k in req else k
+                if isinstance(prop_schema, dict) and isinstance(prop_schema.get("enum"), list):
+                    choices = prop_schema["enum"]
+                    if 1 <= len(choices) <= 15:
+                        vals = "|".join(str(x) for x in choices)
+                        if len(vals) <= 140:
+                            head += f"∈[{vals}]"
+                parts.append(head)
+            sig = ", ".join(parts)
             lines.append(f"- {d.name}({sig})：{d.description}（Skill: {skill.name}）")
     return lines
 
@@ -390,10 +400,10 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 )
                 write_lead = (
                     "\n有已安装的写入操作覆盖时，优先直接用 propose_operation(operation, inputs) 提出提案"
-                    f"（程序会自动加载对应 Skill，无需先调 load_skill{conv_hint}）；"
+                    f"（程序会自动加载对应 Skill；需要查看某个 Skill 的完整规则或参考资料时仍可调用 load_skill{conv_hint}）；"
                     "以上操作均不适用（如新建无专用操作、含嵌套明细行修改等）时，在用户页用原生表单或行内按钮配合 request_submit 提出批准（仅要求预填时停在提交前）。"
                     if getattr(self, "native_submit", None) is not None else
-                    "\n只有已安装的写入操作可提出写入；可直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill）。"
+                    "\n只有已安装的写入操作可提出写入；可直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill；需查完整规则时仍可调用 load_skill）。"
                 )
                 instructions += (
                     write_lead

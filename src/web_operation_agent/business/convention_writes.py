@@ -260,6 +260,19 @@ def _violates_optional_bounds(f_spec: ConventionFieldSpec, val: object) -> bool:
     return False
 
 
+def _entry_provenance_ok(
+    entry: Entry,
+    scoped_cands: list[tuple[str, str]],
+    texts: tuple[str, ...] | list[str],
+) -> bool:
+    """Validate one field entry against user texts and earlier scoped candidate values."""
+    sub = SourceLedger()
+    if scoped_cands:
+        sub.add_candidates([(entry.field, val) for _binding, val in scoped_cands])
+    sub.add(entry)
+    return check_entries(sub, list(texts))[0].ok
+
+
 class ConventionWriteEffects:
     def __init__(self, tool_name: str, port: ConventionWritePort):
         self.tool_name = tool_name
@@ -503,8 +516,9 @@ class ConventionUpdateHandler:
                 if existing_values else set()
             )
             scoped_cands = [
-                (b, v) for b, v in ledger.candidates
-                if b in {label, f_spec.name, f_spec.reference_entity} or b.endswith("." + f_spec.name)
+                (cand.binding, cand.value) for cand in ledger.candidates
+                if cand.binding in {label, f_spec.name, f_spec.reference_entity}
+                or (cand.binding and cand.binding.endswith("." + f_spec.name))
             ]
 
             # 2. Boolean fields
@@ -579,11 +593,7 @@ class ConventionUpdateHandler:
                         continue
                     if literal_supplied(s_elem, texts):
                         continue
-                    verdict = check_entries(
-                        SourceLedger(entries=[Entry(label, s_elem, kind="text")], candidates=scoped_cands),
-                        texts,
-                    )[0]
-                    if not verdict.ok:
+                    if not _entry_provenance_ok(Entry(label, s_elem, kind="text"), scoped_cands, texts):
                         raise BusinessToolRequestError(
                             f"字段「{label}」的元素「{s_elem[:60]}」未在用户原话或已读候选中找到依据。"
                         )
@@ -610,12 +620,7 @@ class ConventionUpdateHandler:
 
             # 7. Date / datetime string inputs (for both string dates and epoch-ms timestamps)
             if f_spec.date_kind and isinstance(raw_val, str) and raw_val:
-                entry = Entry(label, raw_val, kind="text")
-                verdict = check_entries(
-                    SourceLedger(entries=[entry], candidates=scoped_cands),
-                    texts,
-                )[0]
-                if not verdict.ok:
+                if not _entry_provenance_ok(Entry(label, raw_val, kind="text"), scoped_cands, texts):
                     raise BusinessToolRequestError(
                         f"字段「{label}」的日期时间值「{raw_val}」未在用户原话或本轮时间换算中找到依据，请向用户确认。"
                     )
@@ -636,12 +641,7 @@ class ConventionUpdateHandler:
 
             # 9. Numbers / integers (unit_scale == 1)
             if f_spec.kind in {"integer", "number"} and raw_val is not None and not isinstance(raw_val, bool):
-                entry = Entry(label, scalar_text(raw_val), kind="text")
-                verdict = check_entries(
-                    SourceLedger(entries=[entry], candidates=scoped_cands),
-                    texts,
-                )[0]
-                if not verdict.ok:
+                if not _entry_provenance_ok(Entry(label, scalar_text(raw_val), kind="text"), scoped_cands, texts):
                     raise BusinessToolRequestError(
                         f"字段「{label}」的数值「{raw_val}」未在用户原话或本轮计算中找到依据，请向用户确认。"
                     )

@@ -536,8 +536,22 @@ class ActorKnowledge:
             return f"没有这个只读接口：{path}。相近的接口：\n{near}"
         if path in self.writing_gets:
             return "这个接口读取时会写入数据，助手不允许调用。"
+        if isinstance(params, dict):
+            params = dict(params)
+            published_q = {
+                q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
+                if isinstance(q, dict) and q.get("in") == "query"
+            }
+            for k, v in list(params.items()):
+                if (isinstance(v, list) and len(v) == 2
+                        and all(isinstance(item, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", item) for item in v)):
+                    q = published_q.get(k) or {}
+                    schema = self._deref(q.get("schema") or {})
+                    items = self._deref(schema.get("items") or {})
+                    hint = " ".join(str(x or "") for x in (q.get("description"), q.get("example"), schema.get("description")))
+                    if items.get("format") == "date-time" or "00:00:00" in hint or "HH:mm:ss" in hint:
+                        params[k] = [f"{v[0]} 00:00:00", f"{v[1]} 23:59:59"]
         self._validate_params(path, params)
-        params = dict(params)
         filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
         relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
         if summary is not None:
@@ -734,6 +748,13 @@ class ActorKnowledge:
                                f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算，注意 SQL 行表内时间列仍存原始毫秒整数）：" + inline)
                 else:
                     out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
+            if rows is not None:
+                row_keys = tuple(dict.fromkeys(
+                    k for r in rows[:5] if isinstance(r, dict) for k in r
+                )) or tuple(props)
+                self._append_completeness_and_clock_notes(
+                    out, props=props, fields=fields, rows=rows, whole=whole,
+                    keys=row_keys, require_fields_for_partial=False, always_check_clocks=True)
             return self._told(out, data_lines)
         if rows is None:
             shown = self._row(data) if isinstance(data, dict) else data
@@ -742,26 +763,9 @@ class ActorKnowledge:
             data_lines.add(len(out))
             out.append(json.dumps(shown, ensure_ascii=False)[:3500])
             return self._told(out, data_lines)
-        if fields and not whole:
-            out.append("这次没有读完符合条件的全部记录；不能据已读行给出全量合计、最大最小、分组、完整名单或不存在结论。请缩小筛选范围，或说明此项无法完整核实。")
-        # A list usually carries several instants (made, ordered, received). Which one a
-        # question means is the model's to read from the words, so every one is counted
-        # and named, not only the one it happened to ask for.
-        clocks = [k for k in dict.fromkeys((*fields, *(keys if fields else ()))) if _TIME_KEY.search(k)][:5]
-        if whole and len(clocks) > 1:
-            named = [(k, (self._deref(props.get(k) or {}).get("description") or "")[:20]) for k in clocks]
-            out.append("这些行有几个时间列: " + "; ".join(f"{k}={d}" if d else k for k, d in named)
-                       + "。用户说的是哪个时间（创建、下单、入库…）就用哪一列的行数。")
-        for key in clocks if whole else ():
-            # Counting the rows of a month is the program's work, not the model's.
-            months: dict[str, int] = {}
-            for row in rows:
-                shown = self._cell(key, row.get(key)) if isinstance(row, dict) else None
-                if isinstance(shown, str) and re.match(r"\d{4}-\d{2}", shown):
-                    months[shown[:7]] = months.get(shown[:7], 0) + 1
-            if months:
-                out.append(f"{key} 按月的行数: " + "，".join(
-                    f"{month} {count} 行" for month, count in sorted(months.items(), reverse=True)[:12]))
+        self._append_completeness_and_clock_notes(
+            out, props=props, fields=fields, rows=rows, whole=whole,
+            keys=keys, require_fields_for_partial=True, always_check_clocks=False)
         quantities = []
         for key in fields if whole else ():
             values = [row.get(key) for row in rows if isinstance(row, dict)]
@@ -864,6 +868,47 @@ class ActorKnowledge:
                        "要统计、比较或找最大最小：用 fields 只取要用的列；只有结果明确显示已读完所有页，统计才代表全量。")
         return self._told(out, data_lines)
 
+    def _append_completeness_and_clock_notes(
+        self,
+        out: list,
+        *,
+        props: dict,
+        fields: tuple,
+        rows: list,
+        whole: bool,
+        keys,
+        require_fields_for_partial: bool,
+        always_check_clocks: bool,
+    ) -> None:
+        """Append partial-read warning, multi-clock disambiguation, and per-month counts."""
+        if (not require_fields_for_partial or fields) and not whole:
+            out.append(
+                "这次没有读完符合条件的全部记录；不能据已读行给出全量合计、最大最小、分组、完整名单或不存在结论。"
+                "请缩小筛选范围，或说明此项无法完整核实。"
+            )
+        clocks = [
+            k for k in dict.fromkeys((*fields, *(keys if (fields or always_check_clocks) else ())))
+            if _TIME_KEY.search(k)
+        ][:5]
+        if whole and rows and len(clocks) > 1:
+            named = [(k, (self._deref(props.get(k) or {}).get("description") or "")[:20]) for k in clocks]
+            out.append(
+                "这些行有几个时间列: "
+                + "; ".join(f"{k}={d}" if d else k for k, d in named)
+                + "。用户说的是哪个时间（创建、下单、入库…）就用哪一列的行数。"
+            )
+        for key in (clocks if whole and rows else ()):
+            months: dict[str, int] = {}
+            for row in rows:
+                shown = self._cell(key, row.get(key)) if isinstance(row, dict) else None
+                if isinstance(shown, str) and re.match(r"\d{4}-\d{2}", shown):
+                    months[shown[:7]] = months.get(shown[:7], 0) + 1
+            if months:
+                out.append(
+                    f"{key} 按月的行数: "
+                    + "，".join(f"{month} {count} 行" for month, count in sorted(months.items(), reverse=True)[:12])
+                )
+
     def _relation_names(self, path, rows, column_names):
         """Names for identities a read returns bare, from the reviewed lookup read under
         the same actor: ({column: {identity: name}}, the lines that tell the model)."""
@@ -905,7 +950,11 @@ class ActorKnowledge:
         published = {q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
                      if isinstance(q, dict) and q.get("in") == "query"}
         if set(params) - set(published):
-            raise QueryParametersError("query parameter is not declared by this endpoint; use search_api for its fields")
+            declared = ", ".join(k for k in list(published)[:24] if isinstance(k, str))
+            raise QueryParametersError(
+                "query parameter is not declared by this endpoint; use search_api for its fields"
+                + (f" (declared: {declared})" if declared else "")
+            )
         missing = {key for key, q in published.items() if q.get("required") is True} - set(params)
         if missing:
             names = sorted(key for key in missing if isinstance(key, str)
@@ -2151,9 +2200,8 @@ class YudaoLoopProcedures:
                     data = store.query(args["query"])
                 else:
                     data = date_range(today=today, zone=zone, **args)
-                    for value in (data or {}).values():
-                        if policy_turn is not None and isinstance(value, (str, int, float)) \
-                                and not isinstance(value, bool):
+                    if policy_turn is not None:
+                        for value in _date_range_receipt_values(data):
                             note_receipt(policy_turn, "", value)
                 return LoopToolResult(fenced(json.dumps(data, ensure_ascii=False)), kind="read")
             except TurnReadError as exc:
@@ -2524,7 +2572,20 @@ class YudaoLoopProcedures:
         before, expected = s.obs, []
         said, incomplete, failure = [], False, None
         paging_commands, paging_targets = [], []
-        for item in fields:
+
+        def _visible_named(target_label: str):
+            vis_lines, _ = _page_lines(s.obs)
+            vis_shown = {m.group(2) for line in vis_lines if (m := _DEPTH.match(line))}
+            matches = [
+                e for e in s.obs.elements
+                if e.ref[1:] in vis_shown and target_label and target_label in (
+                    str(e.attrs.get("field_label") or "").rstrip(":：").strip(),
+                    str(e.attrs.get("title") or ""),
+                ) and (not query_only or e.attrs.get("page_control") == "query")
+            ]
+            return vis_shown, matches
+
+        for field_idx, item in enumerate(fields):
             label, value = str(item.get("label", "")).strip().rstrip(":：").strip(), str(item.get("value", ""))
             if label in _PAGING:
                 paging = self._paging(s, _PAGING[label], label, value)
@@ -2543,11 +2604,7 @@ class YudaoLoopProcedures:
                 missing = locate(s,label)
                 if missing:
                     return missing
-            lines, _hints = _page_lines(s.obs)
-            shown = {m.group(2) for line in lines if (m := _DEPTH.match(line))}
-            found = [e for e in s.obs.elements if e.ref[1:] in shown and label and label in (
-                str(e.attrs.get("field_label") or "").rstrip(":：").strip(), str(e.attrs.get("title") or ""))
-                and (not query_only or e.attrs.get("page_control") == "query")]
+            shown, found = _visible_named(label)
             if not found:
                 incomplete = True
                 said.append(f"{label}：屏幕上没有这个字段（先 scroll 让它出现，或核对字段名）")
@@ -2601,7 +2658,16 @@ class YudaoLoopProcedures:
                     break
                 dispatched_any = True
                 expected.append((field_identity(element), text))
-                self._settled(s, waits=2)
+                coalesce_plain = False
+                if kind == "" and not pair and field_idx + 1 < len(fields):
+                    nxt_label = str(fields[field_idx + 1].get("label", "")).strip().rstrip(":：").strip()
+                    if nxt_label and nxt_label not in _PAGING:
+                        _, nxt_found = _visible_named(nxt_label)
+                        if (len(nxt_found) == 1 and _control_kind(nxt_found[0]) == ""
+                                and not _date_pair(nxt_found[0], s.obs.elements)):
+                            coalesce_plain = True
+                if not coalesce_plain:
+                    self._settled(s, waits=2)
             if s.terminal_reason:
                 detail = "；".join(said)
                 detail += ("；" if detail else "") + f"{label}：" + (
@@ -2947,6 +3013,34 @@ class YudaoLoopProcedures:
                        read_summary=turn["reads"][-1] if turn["reads"] else None, marked=turn["marked"])
 
 
+_ISO_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _date_range_receipt_values(result: dict | None) -> list:
+    """Return scalar receipt values plus exact day/boundary timestamps for a date_range result."""
+    if not isinstance(result, dict):
+        return []
+    out: list = []
+
+    def add(value) -> None:
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool) and value not in out:
+            out.append(value)
+
+    for key in ("start", "end_inclusive"):
+        value = result.get(key)
+        add(value)
+        if isinstance(value, str) and _ISO_DAY_RE.fullmatch(value):
+            add(value + " 00:00:00")
+            add(value + " 23:59:59")
+    exclusive = result.get("end_exclusive")
+    add(exclusive)
+    if isinstance(exclusive, str) and _ISO_DAY_RE.fullmatch(exclusive):
+        add(exclusive + " 00:00:00")
+    for key in ("start_ms", "end_exclusive_ms"):
+        add(result.get(key))
+    return out
+
+
 _ROLLING_DAYS_RE = re.compile(r"(?:近|最近|过去)\s*([1-9][0-9]{0,2})\s*(?:个)?(?:自然)?(?:天|日)")
 
 
@@ -3004,7 +3098,7 @@ def _precomputed_dates(prompt: str, table_context) -> str:
             r = date_range(today=today, zone=zone, **kw)
         except TurnReadError:
             continue
-        for v in (r["start"], r["end_inclusive"], r["end_exclusive"], r["start_ms"], r["end_exclusive_ms"]):
+        for v in _date_range_receipt_values(r):
             if v not in values:
                 values.append(v)
         lines.append(
@@ -3639,7 +3733,7 @@ class TableReadTurnExecutor(SlimTurnExecutor):
         super().__init__(today=today, time_zone=time_zone, **kwargs)
         instructions = self.profile.instructions.replace(
             "先 load_skill，再用已安装操作提出提案",
-            "直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill，无需先调 load_skill；"
+            "直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill，需要查完整领域规则时仍可调 load_skill；"
             "扁平单表记录字段修改优先用 update_record，两态启停/上下架优先用 toggle_record_status，专用新建或状态变更用对应操作）",
         )
         self.profile = replace(self.profile, instructions=instructions + PAGE_DELIVERY_RULES)

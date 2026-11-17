@@ -350,6 +350,162 @@ class Phase47SuppTests(unittest.TestCase):
         self.assertNotIn("只有下面“已安装的 Skill”覆盖的操作能办", replaced)
         self.assertIn("不得因无对应 Skill 而拒绝", replaced)
 
+    def test_call_api_shapes_date_range_echoes_declared_params_and_warns_clocks_with_row_sink(self):
+        class RichClient(MiniClient):
+            def __init__(self):
+                super().__init__()
+                self.page_size_limit = False
+
+            def get(self, path, **params):
+                self.calls.append((path, dict(params)))
+                if path == "erp/stock-move/page":
+                    if self.page_size_limit:
+                        return {
+                            "total": 4,
+                            "list": [
+                                {"id": 1, "no": "DB1", "moveTime": 1795485600000, "createTime": 1793491200000},
+                                {"id": 2, "no": "DB2", "moveTime": 1795485600000, "createTime": 1793491200000},
+                            ],
+                        }
+                    return {
+                        "total": 2,
+                        "list": [
+                            {"id": 1, "no": "DB1", "moveTime": 1795485600000, "createTime": 1793491200000},
+                            {"id": 2, "no": "DB2", "moveTime": 1796090400000, "createTime": 1793491200000},
+                        ],
+                    }
+                return super().get(path, **params)
+
+        def rich_docs():
+            d = _mini_docs()
+            params = d["paths"]["/admin-api/erp/stock-move/page"]["get"]["parameters"]
+            params.append({
+                "name": "createTime",
+                "in": "query",
+                "schema": {"type": "array", "items": {"type": "string", "format": "date-time"}},
+            })
+            d["components"]["schemas"]["StockMove"]["properties"]["createTime"] = {
+                "type": "integer",
+                "description": "创建时间",
+            }
+            return d
+
+        client = RichClient()
+        know = ActorKnowledge(client, rich_docs, time_zone="Asia/Shanghai")
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        try:
+            text = know.call_api(
+                "erp/stock-move/page",
+                {"createTime": ["2026-10-01", "2026-10-31"], "pageNo": 1, "pageSize": 10},
+                row_sink=tables.add,
+            )
+            sent_params = [p for path, p in client.calls if path == "erp/stock-move/page"][-1]
+            self.assertEqual(sent_params["createTime"], ["2026-10-01 00:00:00", "2026-10-31 23:59:59"])
+            self.assertIn("这些行有几个时间列:", text)
+            self.assertIn("moveTime 按月的行数:", text)
+            self.assertIn("createTime 按月的行数:", text)
+
+            # Unknown query param echoes declared parameter names
+            from web_operation_agent_yudao.slim_loop import QueryParametersError
+            with self.assertRaisesRegex(QueryParametersError, r"declared:.*createTime"):
+                know.call_api("erp/stock-move/page", {"unknownField": "1"})
+
+            # Partial read via row_sink still warns incomplete
+            client.page_size_limit = True
+            orig_pages = know._pages
+            know._pages = lambda rel, prm, follow: (
+                {"total": 4, "list": [{"id": 1, "no": "DB1"}, {"id": 2, "no": "DB2"}]},
+                [{"id": 1, "no": "DB1"}, {"id": 2, "no": "DB2"}],
+                4,
+                False,
+                1,
+            )
+            try:
+                partial_text = know.call_api(
+                    "erp/stock-move/page",
+                    {"pageNo": 1, "pageSize": 2},
+                    row_sink=tables.add,
+                )
+            finally:
+                know._pages = orig_pages
+            self.assertIn("没有读完符合条件的全部记录", partial_text)
+        finally:
+            tables.close()
+
+    def test_name_searchable_skips_unsatisfied_required_and_matches_extended_narrowing_keys(self):
+        from web_operation_agent_yudao.goal import _Entity
+
+        client = MiniClient()
+        goal = YudaoGoalData(client, _mini_docs)
+        goal.outline()
+        goal._entities = {
+            "erp/child-item": _Entity(
+                key="erp/child-item", module="erp", resource="child-item", label="子明细",
+                list_path="erp/child-item/page", name_field="itemName",
+                params={"name": {"type": "string"}, "parentId": {"type": "integer"}},
+                props={"id": {"type": "integer"}, "itemName": {"type": "string"}},
+                required=frozenset({"parentId"}), fixed_params=(), has_get=False, operations=(),
+                view=None, lists=frozenset(), money={},
+            ),
+            "mall/sku-item": _Entity(
+                key="mall/sku-item", module="mall", resource="sku-item", label="商品项",
+                list_path="mall/sku-item/page", name_field="itemName",
+                params={"keyword": {"type": "string"}},
+                props={"id": {"type": "integer"}, "keyword": {"type": "string"}, "itemName": {"type": "string"}},
+                required=frozenset(), fixed_params=(), has_get=False, operations=(),
+                view=None, lists=frozenset(), money={},
+            ),
+        }
+        self.assertFalse(goal.name_searchable("erp/child-item", "苹果"))
+        self.assertTrue(goal.name_searchable("mall/sku-item", "苹果"))
+        self.assertEqual(goal._narrowing("mall/sku-item", "苹果"), Compare("keyword", "contains", "苹果"))
+
+    def test_precomputed_dates_variants_and_fill_fields_plain_input_coalescing(self):
+        from web_operation_agent.schemas import ElementRef, PageObservation
+
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        try:
+            _precomputed_dates("查今天的数据", (tables, "2026-10-25", "Asia/Shanghai"))
+            self.assertIn("2026-10-25", tables.precomputed_date_values)
+            self.assertIn("2026-10-25 00:00:00", tables.precomputed_date_values)
+            self.assertIn("2026-10-25 23:59:59", tables.precomputed_date_values)
+            self.assertIn("2026-10-26 00:00:00", tables.precomputed_date_values)
+            self.assertNotIn("2026-10-26 23:59:59", tables.precomputed_date_values)
+        finally:
+            tables.close()
+
+        proc = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
+        proc.knowledge = None
+        proc._choice_label = lambda s, el, text: text
+        settled_calls = []
+        proc._act = lambda s, action, args, **kw: None
+        proc._settled = lambda s, **kw: settled_calls.append(kw) or "still"
+        obs = PageObservation(
+            1, 1, "https://synthetic.test/form", "Form", [],
+            [
+                ElementRef("e1", "textbox", "", "input", 1, {"field_label": "字段一"}),
+                ElementRef("e2", "textbox", "", "input", 1, {"field_label": "字段二"}),
+                ElementRef("e3", "textbox", "", "input", 1, {"field_label": "字段三"}),
+                ElementRef("e4", "combobox", "", "input", 1, {"field_label": "类别", "aria-haspopup": "listbox"}),
+            ],
+            content="[1]<input />\n[2]<input />\n[3]<input />\n[4]<input />",
+        )
+        s = NS(obs=obs, terminal_reason="", page=NS(action_observations=lambda: ()))
+        res = proc._fill_fields(
+            s,
+            [
+                {"label": "字段一", "value": "A"},
+                {"label": "字段二", "value": "B"},
+                {"label": "字段三", "value": "C"},
+                {"label": "类别", "value": "普通"},
+            ],
+            "",
+            {"touched": [], "trace": []},
+        )
+        self.assertEqual(res.state, "completed")
+        # Plain fields 1->2 and 2->3 coalesce; settles before dropdown 4 and after dropdown 4 => 2 settles
+        self.assertEqual(len(settled_calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
