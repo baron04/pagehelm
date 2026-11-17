@@ -82,13 +82,15 @@ class EffectProjection:
     derived_json: str = "{}"
     required_receipts: tuple[str, ...] = ()
     preserves_unmentioned: bool = False
+    before_json: str = "{}"
 
     def __post_init__(self):
         if not isinstance(self.change, RequestedEffect):
             raise ValueError("effect projection requires a typed change")
         if type(self.preserves_unmentioned) is not bool:
             raise ValueError("effect preservation policy must be boolean")
-        for key, kind in (("bindings_json", list), ("preserved_json", dict), ("derived_json", dict)):
+        for key, kind in (("bindings_json", list), ("preserved_json", dict),
+                          ("derived_json", dict), ("before_json", dict)):
             value = json.loads(getattr(self, key))
             if not isinstance(value, kind):
                 raise ValueError("effect projection has an invalid shape")
@@ -99,10 +101,12 @@ class EffectProjection:
             raise ValueError("effect projection requires unique verification duties")
 
     def to_json(self):
+        before = json.loads(self.before_json)
         return {"change": self.change.to_json(), "bindings": json.loads(self.bindings_json),
                 "preserved": json.loads(self.preserved_json), "derived": json.loads(self.derived_json),
                 "required_receipts": list(self.required_receipts),
-                "preserves_unmentioned": self.preserves_unmentioned}
+                "preserves_unmentioned": self.preserves_unmentioned,
+                **({"before": before} if before else {})}
 
     def require(self, intent: RequestedEffect):
         if not intent.same_change(self.change):

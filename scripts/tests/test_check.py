@@ -74,6 +74,7 @@ class SelectionTests(unittest.TestCase):
     def test_browser_runtime_auth_changes_select_cross_boundary_tests(self):
         names, _ = self.names(['frontend/src/runtime/boot.ts'])
         self.assertIn('runtime Chromium', names)
+        self.assertIn('core boundary', names)
 
     def test_story_changes_only_build_the_showcase(self):
         names, plan = self.names(['frontend/stories/Panel.stories.tsx'])

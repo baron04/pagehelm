@@ -19,8 +19,9 @@ from ..business.effects import canonical
 from ..business.errors import BusinessToolError, BusinessToolRequestError
 from ..business.tools.registry import validate_input
 from ..business.write_service import BusinessWriteService, OperationOutcome
+from ..execution.value_source import append_overwrites_existing
 from ..skills import SkillContext
-from .skill_literals import require_literal_inputs
+from .skill_literals import _existing_append_supplied, literal_supplied, require_literal_inputs
 
 
 class SkillWrites:
@@ -83,13 +84,51 @@ class SkillWrites:
         """The operations the Skills loaded so far let this turn propose."""
         return tuple(self._offered(self.loaded_ids).values())
 
+    @staticmethod
+    def _validate_prepared_update(definition, inputs: dict, texts, proposal) -> None:
+        if definition.operation.operation != "update" or proposal.effect_projection is None:
+            return
+        before_map = json.loads(proposal.effect_projection.before_json)
+        if not before_map:
+            return
+        changed_values = proposal.effect_projection.change.values
+        prompt = texts[-1] if texts else ""
+        field_map = {path: target_field for path, _entity, target_field in definition.input_fields}
+        for path in definition.literal_inputs:
+            target = inputs
+            keys = path.split(".")
+            for key in keys[:-1]:
+                target = target.get(key) if isinstance(target, dict) else None
+            if not isinstance(target, dict) or keys[-1] not in target:
+                continue
+            value = target[keys[-1]]
+            if not isinstance(value, str) or not value:
+                continue
+            app_field = field_map.get(path) or field_map.get(keys[-1]) or keys[-1]
+            if not literal_supplied(value, texts):
+                old_val = before_map.get(app_field, before_map.get(keys[-1]))
+                allowed = (old_val,) if isinstance(old_val, str) else ()
+                if not _existing_append_supplied(value, texts, allowed):
+                    raise BusinessToolRequestError(
+                        f"input.{path} must copy a value supplied by the person in full, preserving case"
+                    )
+        for app_field, new_val in changed_values.items():
+            old_val = before_map.get(app_field)
+            if append_overwrites_existing(prompt, app_field, old_val, new_val):
+                raise BusinessToolRequestError(
+                    f"用户要求在 {app_field} 中追加或补充内容，当前修改覆盖了原有内容；"
+                    f"请先读取并保留目标记录该字段原值，再在其后追加本次内容。"
+                )
+
     def propose(self, operation: str, inputs: dict, *, step: int, texts,
-                prefill_port=None, prefill_observation=None) -> OperationOutcome:
+                prefill_port=None, prefill_observation=None,
+                existing_values: dict[str, tuple[str, ...]] | None = None) -> OperationOutcome:
         """One proposed operation, to its verified result or to the reason it did not run.
 
         `texts` are the person's own messages: a registered literal input must copy one of
-        them in full. The expected change is the application's own reading of the inputs,
-        and what it then prepares must be that change before anyone is asked.
+        them in full (or append user-supplied text to a read existing value on update).
+        The expected change is the application's own reading of the inputs, and what it
+        then prepares must be that change before anyone is asked.
         """
         ledger = self.approvals.ledger
         definition = self._offered(self.loaded_ids).get(operation)
@@ -106,7 +145,7 @@ class SkillWrites:
             if key in self._completed:
                 return OperationOutcome("repeated")
             validate_input(json.loads(definition.input_json), inputs)
-            require_literal_inputs(inputs, definition, texts)
+            require_literal_inputs(inputs, definition, texts, existing_values=existing_values)
             expected = (definition.effect_contract.project_inputs(inputs)
                         if definition.effect_contract is not None else None)
         except (BusinessToolError, ValueError) as exc:
@@ -115,10 +154,15 @@ class SkillWrites:
                           detail=str(exc)[:300], side_effect_possible=False)
             return OperationOutcome("refused", reason="agent_refused", error=exc)
         context = self.approvals.context(step, operation, hold_ms=self.approvals.approval_hold_ms)
-        outcome = self.service.run(operation, inputs, step=step, context=context,
-                                   skill_id=supporters[0], expected=expected,
-                                   prefill_port=prefill_port,
-                                   prefill_observation=prefill_observation)
+        outcome = self.service.run(
+            operation, inputs, step=step, context=context,
+            skill_id=supporters[0], expected=expected,
+            prefill_port=prefill_port,
+            prefill_observation=prefill_observation,
+            check_proposal=lambda proposal: self._validate_prepared_update(
+                definition, inputs, texts, proposal
+            ),
+        )
         if outcome.state == "completed":
             self._completed.add(key)
             self.operations.invalidate_reads(frozenset({outcome.result.content.get("entity", "")}))

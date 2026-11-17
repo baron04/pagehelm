@@ -205,4 +205,27 @@ describe('tree-backed combobox helpers (ElTreeSelect / ARIA tree)', () => {
       form.remove()
     }
   })
+
+  it('supports pure framework-free ARIA tree comboboxes without UI-library classes', () => {
+    document.body.innerHTML = `
+      <input id="plain-combo" role="combobox" aria-haspopup="tree" aria-controls="plain-tree" />
+      <ul id="plain-tree" role="tree">
+        <li role="treeitem" aria-expanded="true">
+          <button type="button" data-tree-expand aria-hidden="true">▾</button>
+          <span>总部</span>
+          <ul role="group">
+            <li role="treeitem" aria-selected="true">平台组</li>
+            <li role="treeitem" aria-disabled="true">冻结组</li>
+          </ul>
+        </li>
+      </ul>
+    `
+    const input = document.getElementById('plain-combo') as HTMLInputElement
+    const tree = ownedTree(input)
+    expect(tree).not.toBeNull()
+    expect(treeItemChoices(tree!).map(c => c.path)).toEqual(['总部', '总部 / 平台组', '总部 / 冻结组'])
+    expect(selectedTreeOption(input)).toBe('平台组')
+    expect(treeSelectionMatches(input, '平台组')).toBe(true)
+    expect(treeSelectionMatches(input, '总部 / 平台组')).toBe(true)
+  })
 })

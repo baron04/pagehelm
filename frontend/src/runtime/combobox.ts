@@ -51,13 +51,64 @@ export function optionText(element: Element): string {
   return (element.textContent || '').replace(/\s+/g, ' ').trim()
 }
 
+export function ownTreeOption(item: Element): HTMLElement | null {
+  for (const candidate of item.querySelectorAll('[role="option"]')) {
+    if (candidate instanceof HTMLElement && candidate.closest('[role="treeitem"]') === item) {
+      return candidate
+    }
+  }
+  return null
+}
+
+export function ownTreeRow(item: Element): HTMLElement | null {
+  const headerChildren = [...item.children].filter(child => {
+    const role = child.getAttribute('role')
+    return role !== 'group' && role !== 'treeitem' &&
+      !child.querySelector('[role="group"], [role="treeitem"]')
+  })
+  return headerChildren.length === 1 && headerChildren[0] instanceof HTMLElement
+    ? headerChildren[0]
+    : null
+}
+
+export function ownTreeExpandToggle(item: Element): HTMLElement | null {
+  for (const explicit of item.querySelectorAll('[data-tree-expand]')) {
+    if (explicit instanceof HTMLElement && explicit.closest('[role="treeitem"]') === item &&
+        !explicit.classList.contains('is-leaf')) {
+      return explicit
+    }
+  }
+  const container = ownTreeRow(item) ?? item
+  const opt = ownTreeOption(item)
+  if (opt) {
+    for (const child of container.children) {
+      if (child === opt || child.contains(opt)) break
+      if (child instanceof HTMLElement && !child.classList.contains('is-leaf') &&
+          child.getAttribute('role') !== 'group' && child.getAttribute('role') !== 'treeitem') {
+        return child
+      }
+    }
+    return null
+  }
+  if (container.children.length >= 2) {
+    const first = container.children[0]
+    if (first instanceof HTMLElement && !first.classList.contains('is-leaf') &&
+        first.getAttribute('role') !== 'group' && first.getAttribute('role') !== 'treeitem' &&
+        optionText(first).length <= 2) {
+      return first
+    }
+  }
+  return null
+}
+
 function treeItemSelfLabel(item: Element): string {
-  const direct = item.querySelector(
-    ':scope > .el-tree-node__content .el-tree-node__label, :scope > .el-tree-node__content > [role="option"], :scope > [role="option"], :scope > .el-tree-node__content',
-  )
-  if (direct) return optionText(direct)
-  const clone = item.cloneNode(true) as Element
-  for (const child of clone.querySelectorAll('[role="group"], [role="treeitem"]')) child.remove()
+  const opt = ownTreeOption(item)
+  if (opt) return optionText(opt)
+  const basis = ownTreeRow(item) ?? item
+  const clone = basis.cloneNode(true) as Element
+  for (const child of clone.querySelectorAll('[role="group"], [role="treeitem"], [aria-hidden="true"]')) {
+    child.remove()
+  }
   return optionText(clone)
 }
 
@@ -90,15 +141,21 @@ export function matchingTreeChoices(tree: HTMLElement, label: string): {item: El
 }
 
 function isTreeItemSelected(item: Element): boolean {
-  if (item.getAttribute('aria-selected') === 'true' || item.classList.contains('is-current')) return true
-  const ownOpt = item.querySelector(':scope > .el-tree-node__content > [role="option"], :scope > [role="option"]')
+  if (item.getAttribute('aria-selected') === 'true' ||
+      item.getAttribute('aria-current') === 'true' ||
+      item.classList.contains('is-current') ||
+      item.classList.contains('is-selected')) return true
+  const ownOpt = ownTreeOption(item)
   return Boolean(ownOpt && (ownOpt.getAttribute('aria-selected') === 'true' || ownOpt.classList.contains('is-selected')))
 }
 
-function isTreeItemDisabled(item: Element): boolean {
-  if (item.getAttribute('aria-disabled') === 'true' || item.hasAttribute('disabled')) return true
-  const ownOpt = item.querySelector(':scope > .el-tree-node__content > [role="option"], :scope > [role="option"]')
-  return Boolean(ownOpt && (ownOpt.getAttribute('aria-disabled') === 'true' || ownOpt.classList.contains('is-disabled')))
+export function isTreeItemDisabled(item: Element): boolean {
+  if (item.getAttribute('aria-disabled') === 'true' ||
+      item.hasAttribute('disabled') ||
+      item.classList.contains('is-disabled')) return true
+  const ownOpt = ownTreeOption(item)
+  return Boolean(ownOpt && (ownOpt.getAttribute('aria-disabled') === 'true' ||
+    ownOpt.hasAttribute('disabled') || ownOpt.classList.contains('is-disabled')))
 }
 
 export function selectedTreeChoice(element: HTMLInputElement): {label: string; path: string} | null {

@@ -273,6 +273,45 @@ class SkillWritesTests(unittest.TestCase):
                          ("refused", "business_mutation_refused", True))
         self.assertEqual(self.notes.records["Cedar"], "draft")
 
+    def test_append_on_update_preserves_target_record_text_and_blocks_overwrite_or_cross_record_leak(self):
+        original_prepare = self.notes.prepare
+
+        def prepare_with_before(args, *, context=None):
+            spec = original_prepare(args, context=context)
+            from dataclasses import replace
+            before = {"body": self.notes.records[args["target"]]}
+            proj = replace(spec.effect_projection, before_json=canonical(before))
+            return replace(spec, effect_projection=proj)
+
+        self.notes.records["Cedar"] = "主结算户"
+        self.notes.records["Birch"] = "备用金户"
+        self.notes.prepare = prepare_with_before
+        writes = self.writes()
+        writes.load(SKILL, step=1)
+        prompt = "在 Cedar 的备注里追加：限额五万"
+
+        # 1. Destructive overwrite ("限额五万" drops "主结算户") is refused before asking
+        overwritten = writes.propose("revise_note", {"target": "Cedar", "body": "限额五万"},
+                                     step=2, texts=(prompt,))
+        self.assertEqual((overwritten.state, overwritten.asked), ("refused", False))
+        self.assertEqual(self.person.shown, [])
+
+        # 2. Cross-record prefix leak ("备用金户；限额五万" on Cedar) is refused before asking
+        cross = writes.propose(
+            "revise_note", {"target": "Cedar", "body": "备用金户；限额五万"},
+            step=3, texts=(prompt,), existing_values={"body": ("主结算户", "备用金户")},
+        )
+        self.assertEqual((cross.state, cross.asked), ("refused", False))
+        self.assertEqual(self.person.shown, [])
+
+        # 3. Preserving Cedar's own current text + user addition succeeds
+        ok = writes.propose(
+            "revise_note", {"target": "Cedar", "body": "主结算户；限额五万"},
+            step=4, texts=(prompt,), existing_values={"body": ("主结算户", "备用金户")},
+        )
+        self.assertEqual((ok.state, ok.asked), ("completed", True))
+        self.assertEqual(self.notes.records["Cedar"], "主结算户；限额五万")
+
 
 if __name__ == "__main__":
     unittest.main()

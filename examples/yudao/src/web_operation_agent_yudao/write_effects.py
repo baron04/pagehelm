@@ -99,6 +99,9 @@ def prepared_effect(operation, inputs, body, *, actor, choices, relations, snaps
             derived["related_follow_up"] = {"targets": linked, "nextTime": body["nextTime"]}
     change = RequestedEffect(declared.entity, declared.action, declared.target_entity,
                              declared.target, canonical(values))
+    before = ({k: snapshot.get(k) for k in values if k in snapshot}
+              if snapshot and declared.action == "update" else {})
     return EffectProjection(change, canonical(bindings), canonical(preserved),
                             canonical(derived), tuple(duties),
-                            preserves_unmentioned=bool(contract and operation.endswith("update")))
+                            preserves_unmentioned=bool(contract and operation.endswith("update")),
+                            before_json=canonical(before))

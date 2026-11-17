@@ -336,16 +336,22 @@ class TurnTables:
         if re.search(r"\bGROUP\s+BY\b", stmt, re.IGNORECASE):
             return ""
         stmt = re.sub(r"(?is)\s+(?:ORDER\s+BY\b.*|LIMIT\s+\d+(?:\s*,\s*\d+|\s+OFFSET\s+\d+)?)\s*$", "", stmt)
-        m = re.match(r"(?is)^\s*SELECT\s+(?:MIN|MAX)\s*\(\s*([A-Za-z_][A-Za-z0-9_]*|\"[^\"]+\")\s*\)"
-                     r"(?:\s+(?:AS\s+)?(?:\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*))?\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)"
-                     r"(?:\s+WHERE\s+(.+))?\s*$", stmt)
+        m = re.match(
+            r"(?is)^\s*SELECT\s+(?:MIN|MAX)\s*\(\s*"
+            r"((?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:[A-Za-z_][A-Za-z0-9_]*|\"[^\"]+\"))\s*\)"
+            r"(?:\s+(?:AS\s+)?(?:\"[^\"]+\"|[A-Za-z_][A-Za-z0-9_]*))?\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)"
+            r"(?:\s+(?:AS\s+)?(?!WHERE\b|GROUP\b|ORDER\b|LIMIT\b)([A-Za-z_][A-Za-z0-9_]*))?"
+            r"(?:\s+WHERE\s+(.+))?\s*$",
+            stmt,
+        )
         if m is None:
             return ""
-        col, table, where = m.group(1), m.group(2), m.group(3)
+        col, table, alias, where = m.group(1), m.group(2), m.group(3), m.group(4)
         value = rows_out[0][0]
         if value is None or table.casefold() not in {name.casefold() for name in self.tables}:
             return ""
-        sql = f"SELECT COUNT(*) FROM {table} WHERE ({col}) = ?" + (f" AND ({where})" if where else "")
+        from_clause = f"{table} {alias}" if alias else table
+        sql = f"SELECT COUNT(*) FROM {from_clause} WHERE ({col}) = ?" + (f" AND ({where})" if where else "")
         conn.set_authorizer(authorize)
         conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 500)
         try:
@@ -355,7 +361,7 @@ class TurnTables:
         finally:
             conn.set_progress_handler(None, 0)
             conn.set_authorizer(None)
-        return (f"该极值对应的记录在 {table} 中共有 {count} 行同值并列；若需列出对应记录，须完整给出全部 {count} 行并列项。"
+        return (f"该极值对应的记录在本轮行表中共有 {count} 行同值并列；若需列出对应记录，须完整给出全部 {count} 行并列项。"
                 if isinstance(count, int) and count >= 2 else "")
 
     def _tie_boundary(self, conn, statement, authorize, deadline):

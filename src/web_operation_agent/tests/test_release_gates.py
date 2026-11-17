@@ -172,9 +172,8 @@ class TheDependencyGateChecksDigestsAndNotOnlyNames(unittest.TestCase):
 
 
 class TheCoreBoundaryGateCatchesWhatItNames(unittest.TestCase):
-    # The checker only reads this core tree, including its tests. Copying the whole
-    # repository also copied application builds, evaluator data and node_modules.
-    FILES = ("scripts/check_core_boundary.py", "src/web_operation_agent")
+    # The checker only reads this core tree, including its tests, and the neutral runtime.
+    FILES = ("scripts/check_core_boundary.py", "src/web_operation_agent", "frontend/src/runtime")
 
     def test_an_application_route_in_core_execution_logic_is_caught(self):
         with _Copy(*self.FILES) as root:
@@ -182,6 +181,14 @@ class TheCoreBoundaryGateCatchesWhatItNames(unittest.TestCase):
             target.write_text(target.read_text().replace(
                 "class ServerAgentSession",
                 'ODOO_ROUTE = "/odoo/customers"\n\n\nclass ServerAgentSession', 1))
+            done = _run("check_core_boundary.py", cwd=root)
+
+        self.assertEqual(done.returncode, 1)
+
+    def test_ui_framework_selector_in_browser_runtime_is_caught(self):
+        with _Copy(*self.FILES) as root:
+            target = root / "frontend/src/runtime/combobox.ts"
+            target.write_text(target.read_text() + '\nconst LEAK = ".el-tree-node__content"\n')
             done = _run("check_core_boundary.py", cwd=root)
 
         self.assertEqual(done.returncode, 1)

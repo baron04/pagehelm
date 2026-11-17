@@ -20,7 +20,14 @@ from web_operation_agent.business.errors import (
 from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexRule
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent_yudao.skill_packages import domain_playbooks, packaged_skills
-from web_operation_agent_yudao.slim_loop import SlimTurnExecutor, YudaoLoopProcedures, system_text
+from web_operation_agent_yudao.slim_loop import (
+     SlimTurnExecutor,
+    TABLE_READ_RULES,
+    YudaoLoopProcedures,
+    _clean_user_answer,
+    _requires_page_delivery,
+    system_text,
+)
 from web_operation_agent_yudao.writes import native_tools
 
 
@@ -112,10 +119,17 @@ class Phase47Step2Tests(unittest.TestCase):
         for domain, text in books.items():
             # Every snake_case write-tool token mentioned in backticks must exist in native_tools!
             mentioned_ops = set(re.findall(r"`([a-z]+_[a-z0-9_]+)`", text)) - {
-                "document_type", "entity_rules", "search_api", "load_domain_guide",
+                "document_type", "entity_rules", "search_api", "load_domain_guide", "call_api",
             }
             unknown = mentioned_ops - real_ops
             self.assertEqual(unknown, set(), f"{domain} references non-existent write ops: {unknown}")
+            self.assertNotIn("hrm/recruit-post", text)
+        self.assertIn("元（yuan）", books["crm-sales"])
+        self.assertNotIn("单位均为**分", books["crm-sales"])
+        self.assertIn("hrm/recruit/post", books["hrm-org-salary"])
+        self.assertIn("hrm/salary/employee-info", books["hrm-org-salary"])
+        self.assertIn("entity_rules", TABLE_READ_RULES)
+        self.assertIn("load_domain_guide", TABLE_READ_RULES)
 
         # Missing directory degrades to {} instead of raising FileNotFoundError
         with patch("importlib.resources.files") as mock_files:
@@ -212,3 +226,49 @@ class Phase47Step2Tests(unittest.TestCase):
         self.assertTrue(res_dept.content["verified"])
         self.assertEqual(client.records["system/dept"][101]["parentId"], 0)
         self.assertEqual(client.records["system/dept"][101]["phone"], "13800138000")
+
+        # 5. Un-approve ERP document with downstream write-off / shipment is refused before approval card
+        client.records["erp/purchase-in"][11]["paymentPrice"] = 50
+        with self.assertRaises(BusinessMutationRefusedError) as downstream_err:
+            registry.prepare_mutation(
+                "erp_document_status",
+                {"document_type": "采购入库单", "no": "CGRK-001", "action": "反审批"},
+                context=ctx,
+            )
+        self.assertEqual(downstream_err.exception.reason, "downstream_document_exists")
+
+        # 6. erp_account_update projects before_json for append-safety checks
+        spec_acc = registry.prepare_mutation(
+            "erp_account_update",
+            {"target": "招行基本户", "changes": {"remark": "old；限额五万"}},
+            context=ctx,
+        )
+        self.assertIn('"remark":"old"', spec_acc.effect_projection.before_json)
+
+    def test_dangerous_typed_ops_gate_negated_page_obligation_and_table_token_cleaning(self):
+        from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
+
+        executor = object.__new__(SlimTurnExecutor)
+        executor._earlier_words = []
+        events = []
+        state = NS(
+            step=1,
+            message=NS(text="把双11秒杀活动关闭"),
+            ledger=NS(append=lambda event, **kw: events.append((event, kw))),
+        )
+        blocked = executor._propose(state, NS(), "promotion_seckill_activity_close", {"target": "双11秒杀"}, {})
+        self.assertEqual((blocked.state, blocked.error_code), ("needs_input", "dangerous_unconfirmed"))
+
+        blocked_unapprove = executor._propose(
+            state, NS(), "erp_document_status",
+            {"document_type": "采购入库单", "no": "CGRK-001", "action": "反审批"}, {},
+        )
+        self.assertEqual((blocked_unapprove.state, blocked_unapprove.error_code), ("needs_input", "dangerous_unconfirmed"))
+
+        self.assertFalse(_requires_page_delivery("查一下本月成交合同金额，不用打开页面"))
+        self.assertFalse(_requires_page_delivery("帮我看下待审核出库单，不要跳转到列表"))
+        self.assertTrue(_requires_page_delivery("不用打开详情，直接在列表页面筛选未审核单据"))
+
+        cleaned = _clean_user_answer("根据表 t1 与 `t2` 计算，合计 300 元。", BASELINE_SESSION_HANDOFFS)
+        self.assertNotIn("t1", cleaned)
+        self.assertNotIn("t2", cleaned)

@@ -44,13 +44,64 @@ def user_texts(request, conversation=None):
         if isinstance(item, dict))) if isinstance(conversation, dict) else (request,)
 
 
-def require_literal_inputs(inputs, definition, texts):
+_APPEND_SEPARATORS = " \t\r\n,，;；:：、/|-—"
+
+
+def _existing_append_supplied(value: str, texts, existing_values: tuple[str, ...] | list[str]) -> bool:
+    """When updating an existing record, keeping a field's read text and appending (or
+    prepending) user-supplied text preserves both the existing content and literal origin."""
+    val = value.strip()
+    if not val:
+        return False
+    for raw_old in existing_values or ():
+        if not isinstance(raw_old, str):
+            continue
+        old = raw_old.strip()
+        if not old:
+            continue
+        if val == old:
+            return True
+        rest = ""
+        if val.startswith(old):
+            rest = val[len(old):].lstrip(_APPEND_SEPARATORS)
+        elif val.endswith(old):
+            rest = val[:-len(old)].rstrip(_APPEND_SEPARATORS)
+        if rest and literal_supplied(rest, texts):
+            return True
+    return False
+
+
+def _field_existing_candidates(path: str, definition, existing_values: dict[str, tuple[str, ...]] | None) -> tuple[str, ...]:
+    if not existing_values:
+        return ()
+    leaf = path.split(".")[-1]
+    names = [path, leaf]
+    for input_path, _entity, target_field in getattr(definition, "input_fields", ()):
+        if input_path in {path, leaf}:
+            names.append(target_field)
+    found: list[str] = []
+    for name in names:
+        for item in existing_values.get(name) or existing_values.get(name.casefold()) or ():
+            if isinstance(item, str) and item not in found:
+                found.append(item)
+    return tuple(found)
+
+
+def require_literal_inputs(
+    inputs,
+    definition,
+    texts,
+    *,
+    existing_values: dict[str, tuple[str, ...]] | None = None,
+):
     """Every plain literal input is complete text the person supplied, found by the server.
 
     For a proposer that writes the installed inputs directly, without the planning source
-    envelope. The person's own messages are the only anchor; an empty string remains an
-    explicit clearing and missing fields are left to the installed schema.
+    envelope. The person's own messages are the only anchor; on updates, preserving a
+    field's read value and appending/prepending user-supplied text is also admitted. An
+    empty string remains an explicit clearing and missing fields are left to the schema.
     """
+    is_update = getattr(getattr(definition, "operation", None), "operation", "") == "update"
     for path in definition.literal_inputs:
         target = inputs
         keys = path.split(".")
@@ -60,6 +111,10 @@ def require_literal_inputs(inputs, definition, texts):
             continue
         value = target[keys[-1]]
         if isinstance(value, str) and value and not literal_supplied(value, texts):
+            if is_update and _existing_append_supplied(
+                value, texts, _field_existing_candidates(path, definition, existing_values)
+            ):
+                continue
             raise BusinessToolRequestError(
                 f"input.{path} must copy a value supplied by the person in full, preserving case")
 

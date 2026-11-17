@@ -29,6 +29,7 @@ class ClientHello:
     application_id: str = ""
     principal_digest: str = ""
     last_event_id: str = ""
+    window_id: str = ""
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ClientHello")
@@ -41,6 +42,7 @@ class ClientHello:
         object.__setattr__(self, "page_origin", _page_origin(self.page_origin))
         _str(self.application_id, "application_id", allow_empty=True)
         _str(self.principal_digest, "principal_digest", allow_empty=True)
+        _str(self.window_id, "window_id", allow_empty=True)
         _require(bool(self.application_id) == bool(self.principal_digest),
                  "application_id and principal_digest must be supplied together")
         if self.principal_digest:
@@ -54,14 +56,15 @@ class ClientHello:
                 "capabilities": list(self.capabilities), "page_origin": self.page_origin,
                 "application_id": self.application_id,
                 "principal_digest": self.principal_digest,
-                "last_event_id": self.last_event_id}
+                "last_event_id": self.last_event_id,
+                **({"window_id": self.window_id} if self.window_id else {})}
 
     @staticmethod
     def from_json(d: dict) -> "ClientHello":
         allowed = {"schema_version", "session_id", "client_id", "runtime_instance_id",
                    "runtime", "capabilities", "page_origin", "application_id",
-                   "principal_digest", "last_event_id"}
-        required = allowed - {"application_id", "principal_digest", "last_event_id"}
+                   "principal_digest", "last_event_id", "window_id"}
+        required = allowed - {"application_id", "principal_digest", "last_event_id", "window_id"}
         d = _strict_object(d, "ClientHello", allowed=allowed, required=required)
         _require(isinstance(d["capabilities"], list), "capabilities must be an array")
         return ClientHello(schema_version=d["schema_version"], session_id=d["session_id"],
@@ -71,7 +74,8 @@ class ClientHello:
                            page_origin=d["page_origin"],
                            application_id=d.get("application_id", ""),
                            principal_digest=d.get("principal_digest", ""),
-                           last_event_id=d.get("last_event_id", ""))
+                           last_event_id=d.get("last_event_id", ""),
+                           window_id=d.get("window_id", ""))
 
 
 @dataclass(frozen=True)

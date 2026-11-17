@@ -37,6 +37,7 @@ from .action_admission import (ADMITTED_ACTIONS, ActionAdmission,
 from ..business.draft_steps import DraftStepAdmission
 from .model_sources import TurnSources, SOURCE_TOOLS, SOURCE_NAMES, SOURCE_INSTRUCTIONS, source_finish_tool
 from .native_submit import NativeSubmitMixin, REQUEST_SUBMIT_TOOL
+from .value_source import note_candidates
 from .draft_handoff import unrestorable_form
 from ..transport.browser import TransportError
 from .product import page_observation_failure
@@ -1642,12 +1643,28 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         s.budget.check()
         s.step += 1
         turn['skills'].update((skill.skill_id for skill in writes.context.loaded if operation in skill.write_operations))
+        source_ledger = turn.get("source_ledger")
+        existing_map: dict[str, list[str]] = {}
+        if source_ledger is not None:
+            for cand in getattr(source_ledger, "candidates", ()):
+                if cand.binding and isinstance(cand.value, str) and cand.value.strip():
+                    existing_map.setdefault(cand.binding, []).append(cand.value)
+        existing_values = {k: tuple(dict.fromkeys(v)) for k, v in existing_map.items()} or None
         with s.receipt.stage('business'):
             outcome = writes.propose(operation, inputs, step=s.step,
                                      texts=self._said(s.message.text),
                                      prefill_port=self.profile.mutation_prefill,
                                      prefill_observation=(PageObservation.from_json(s.obs.to_json())
-                                                          if s.obs is not None else None))
+                                                          if s.obs is not None else None),
+                                     existing_values=existing_values)
+        if (outcome.state == "refused" and not outcome.asked
+                and outcome.proposal is not None and outcome.proposal.effect_projection is not None):
+            before_items = [
+                (k, v) for k, v in json.loads(outcome.proposal.effect_projection.before_json).items()
+                if isinstance(v, str) and v.strip()
+            ]
+            if before_items:
+                note_candidates(turn, before_items)
         def result(feedback):
             state = {"completed": "completed", "repeated": "completed", "reference": "needs_input",
                      "indeterminate": "indeterminate",

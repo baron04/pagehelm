@@ -27,9 +27,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CORE = ROOT / "src" / "web_operation_agent"
+RUNTIME = ROOT / "frontend" / "src" / "runtime"
 
 #: Reference-application names and routes that must not become core execution logic.
-_PATTERN = re.compile(r"\bodoo\b|/odoo/", re.IGNORECASE)
+_PATTERN = re.compile(r"\bodoo\b|/odoo/|\byudao\b|/admin-api/", re.IGNORECASE)
+#: Generic browser runtime must not embed reference-app tokens or Element Plus `.el-*` classes.
+_RUNTIME_PATTERN = re.compile(
+    r"\bodoo\b|/odoo/|\byudao\b|/admin-api/|(?<![A-Za-z0-9_])\.?el-[a-z0-9_-]+",
+    re.IGNORECASE,
+)
+_TS_COMMENT_OR_STRING = re.compile(
+    r"//[^\n]*|/\*[\s\S]*?\*/",
+)
 #: Every in-repository application distribution. The core imports none of them, anywhere.
 _ADAPTER_IMPORT = re.compile(r"web_operation_agent_[a-z0-9_]+")
 
@@ -147,8 +156,27 @@ def check_no_adapter_import() -> list[str]:
     return violations
 
 
+def check_runtime_boundary() -> list[str]:
+    if not RUNTIME.is_dir():
+        return []
+    violations = []
+    for path in sorted(RUNTIME.rglob("*.ts")):
+        rel = path.relative_to(ROOT)
+        source = path.read_text(encoding="utf-8")
+        scrubbed = _TS_COMMENT_OR_STRING.sub(
+            lambda m: "".join("\n" if ch == "\n" else " " for ch in m.group(0)),
+            source,
+        )
+        lines = source.splitlines()
+        for match in _RUNTIME_PATTERN.finditer(scrubbed):
+            line = scrubbed.count("\n", 0, match.start()) + 1
+            violations.append(f"{rel}:{line}: {lines[line - 1].strip()!r}")
+    return violations
+
+
 def main() -> int:
     execution_violations = check_execution_logic()
+    runtime_violations = check_runtime_boundary()
     adapter_violations = check_no_adapter_import()
     evals_violations = check_no_evals_import()
     ok = True
@@ -159,6 +187,13 @@ def main() -> int:
             print(f"  {v}")
     else:
         print("PASS: no application name or route shape in core execution logic")
+    if runtime_violations:
+        ok = False
+        print("FAIL: application- or framework-specific tokens in frontend/src/runtime:")
+        for v in runtime_violations:
+            print(f"  {v}")
+    else:
+        print("PASS: frontend/src/runtime is free of application names and UI-framework selectors")
     if evals_violations:
         ok = False
         print("FAIL: core imports from evals:")

@@ -167,7 +167,8 @@ def make_plan(paths: list[str], profile: str = 'dev', reason: str = 'explicit pa
     plan['needs_python_packages'] = any(Path(f).suffix in {'.yaml', '.yml'} for f in p)
     if tooling:
         add('check selection regression', ['@python', '-m', 'unittest', 'discover', '-s', 'scripts/tests', '-q'], needs_python_packages=True)
-    if production or broad or python_dependencies or 'scripts/check_core_boundary.py' in p:
+    if (production or broad or python_dependencies or 'scripts/check_core_boundary.py' in p
+            or any(f.startswith('frontend/src/runtime/') for f in p)):
         add('core boundary', ['@python', 'scripts/check_core_boundary.py'])
     if dependencies or any(f in {'scripts/lock_and_sbom.py', 'sbom.json', 'THIRD_PARTY.md'} for f in p):
         add('dependency lock/SBOM', ['@python', 'scripts/lock_and_sbom.py', '--check'])

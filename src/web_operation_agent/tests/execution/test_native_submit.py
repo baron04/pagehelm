@@ -382,6 +382,32 @@ class ReviewRegressionTests(_Setup, unittest.TestCase):
         for yes in ("确认，停用吧", "可以，继续", "没问题，办吧"):
             self.assertTrue(_confirm_words(yes), yes)
 
+    def test_append_request_refuses_destructive_overwrite_and_accepts_preserved_prefix(self):
+        from web_operation_agent.execution.value_source import Entry
+        self.ex.native_submit.record["remark"] = "主结算户"
+        self.ex.form = {**LOADED, "remark": "主结算户"}
+        self.ex.form_read = lambda: {**self.ex.model(), "items": [*ITEMS, {"prop": "remark", "label": "备注"}]}
+        self.ex.s.message = NS(text="在张三的备注里追加：限额五万")
+        self.ex.turn["form_baselines"] = {}
+        self.ex.capture_form_baseline(self.ex.s, self.ex.turn, self.ex.s.obs.elements[0])
+
+        # 1. Overwriting existing remark ("主结算户" -> "限额五万") is refused before the card
+        self.ex.form["remark"] = "限额五万"
+        self.ex.turn["source_ledger"] = SourceLedger()
+        self.ex.turn["source_ledger"].add(Entry("备注", "限额五万"))
+        refused = self.ex._request_submit(self.ex.s, {"index": 2}, self.ex.turn)
+        self.assertEqual((refused.state, refused.error_code), ("needs_input", "append_overwrite"))
+        self.assertEqual(self.ex.s.approvals.cards, [])
+
+        # 2. Preserving existing remark + user addition ("主结算户；限额五万") passes value_source and approves
+        self.ex.form["remark"] = "主结算户；限额五万"
+        self.ex.turn["source_ledger"] = SourceLedger()
+        self.ex.turn["source_ledger"].add(Entry("备注", "主结算户；限额五万"))
+        self.ex.clicks = [("PUT", PREFIX + "update", {**self.ex.native_submit.record, "remark": "主结算户；限额五万"})]
+        approved = self.ex._request_submit(self.ex.s, {"index": 2}, self.ex.turn)
+        self.assertEqual(approved.state, "completed", approved.feedback)
+        self.assertEqual(len(self.ex.s.approvals.cards), 1)
+
     def test_readback_accepts_lines_that_carry_keys_of_their_own(self):
         self.ex.form = {**LOADED, "lines": [{"id": 1, "sku": "A", "qty": 3}], "mobile": "13900000000"}
         self.ex.clicks = [("PUT", PREFIX + "update", dict(self.ex.form))]

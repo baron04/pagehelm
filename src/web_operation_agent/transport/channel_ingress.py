@@ -48,7 +48,7 @@ class ChannelIngress:
                 prior = self._lease_hellos.get(existing_lease)
                 stable = ("session_id", "client_id", "runtime", "runtime_instance_id",
                           "capabilities", "page_origin", "application_id",
-                          "principal_digest")
+                          "principal_digest", "window_id")
                 if prior is not None and any(getattr(prior, name) != getattr(hello, name)
                                              for name in stable):
                     raise RemoteProtocolError("runtime instance changed its hello contract")

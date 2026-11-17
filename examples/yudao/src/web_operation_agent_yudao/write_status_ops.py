@@ -1,6 +1,7 @@
 """Reviewed typed status-transition operations for ERP documents and Mall promotions."""
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 
@@ -48,6 +49,29 @@ _ERP_SIDE_EFFECTS = {
 }
 _ERP_STATUS_LABELS = {10: "未审核", 20: "已审核"}
 _PROMO_STATUS_LABELS = {0: "开启", 1: "关闭"}
+_ERP_UNAPPROVE_BLOCKERS: dict[str, tuple[tuple[str, str], ...]] = {
+    "erp/sale-order": (
+        ("outCount", "已生成关联销售出库单，无法反审批"),
+        ("returnCount", "已生成关联销售退货单，无法反审批"),
+    ),
+    "erp/purchase-order": (
+        ("inCount", "已生成关联采购入库单，无法反审批"),
+        ("returnCount", "已生成关联采购退货单，无法反审批"),
+    ),
+    "erp/sale-out": (("receiptPrice", "存在已核销收款金额，无法反审批"),),
+    "erp/sale-return": (("refundPrice", "存在已核销退款金额，无法反审批"),),
+    "erp/purchase-in": (("paymentPrice", "存在已核销付款金额，无法反审批"),),
+    "erp/purchase-return": (("refundPrice", "存在已核销退款金额，无法反审批"),),
+}
+
+
+def _positive_number(value) -> bool:
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return Decimal(str(value).strip()) > 0
+    except (InvalidOperation, ValueError):
+        return False
 
 
 class StatusEffects:
@@ -124,6 +148,13 @@ class _StatusHandler:
                     f"单据「{inputs['no']}」当前已是{_ERP_STATUS_LABELS[target_code]}状态，无需重复{inputs['action']}。",
                     reason="already_in_target_state",
                 )
+            if inputs["action"] == "反审批":
+                for field, why in _ERP_UNAPPROVE_BLOCKERS.get(entity, ()):
+                    if _positive_number(record.get(field)):
+                        raise BusinessMutationRefusedError(
+                            f"单据「{inputs['no']}」{why}。",
+                            reason="downstream_document_exists",
+                        )
             before_label = _ERP_STATUS_LABELS.get(record.get("status"), str(record.get("status")))
             after_label = _ERP_STATUS_LABELS[target_code]
             summary = f"{inputs['action']}{doc_type}「{record.get('no')}」"
@@ -223,6 +254,10 @@ class _StatusHandler:
         current = self.client.get(entity + "/get", id=record_id)
         if not isinstance(current, dict) or any(current.get(k) != v for k, v in args["snapshot"].items()):
             raise BusinessMutationRefusedError("record state changed after approval", reason="precondition_changed")
+        if self.operation == "erp_document_status" and (args.get("params") or {}).get("status") == 10:
+            for field, why in _ERP_UNAPPROVE_BLOCKERS.get(entity, ()):
+                if _positive_number(current.get(field)):
+                    raise BusinessMutationRefusedError(why, reason="precondition_changed")
         uncertain = False
         try:
             self.client.write_once(args["method"], args["path"], body=args["body"], params=args["params"],

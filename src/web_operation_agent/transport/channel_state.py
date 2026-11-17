@@ -44,14 +44,17 @@ class ChannelState:
 
     @property
     def active_instance(self) -> str:
-        """The runtime instance of the page the current (or last) turn runs on.
+        """The guard window (or runtime instance) of the page the current turn runs on.
 
-        The window a turn's reads, refusals and permits belong to is the one the
-        page that asked carries as its runtime instance id.
+        The window a turn's reads, refusals and permits belong to is the guard window
+        the page that asked declares in hello, keeping runtime_instance_id distinct per
+        document so reloads and duplicated tabs still retire the old document's lease.
         """
         with self._condition:
             hello = self._lease_hellos.get(self._active_lease_id or "")
-            return hello.runtime_instance_id if hello is not None else ""
+            if hello is None:
+                return ""
+            return hello.window_id or hello.runtime_instance_id
 
     @property
     def idle(self) -> bool:

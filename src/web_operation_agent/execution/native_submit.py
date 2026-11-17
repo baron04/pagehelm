@@ -26,7 +26,7 @@ from .model_loop_contracts import LoopToolResult
 from .submit_contract import (ContractRefused, FormData, SubmitCard, SubmitPermit, build_card,
                               diff_models, digest, is_empty, same_value, strip_volatile, terminal_state)
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
-from .value_source import Entry, SourceLedger, check_entries, note_receipt
+from .value_source import Entry, SourceLedger, append_overwrites_existing, check_entries, note_receipt
 
 #: The control the model names; the program decides everything else.
 REQUEST_SUBMIT_TOOL = {"type": "function", "function": {
@@ -59,6 +59,8 @@ MESSAGES = {
                              "并用 finish(need_input) 请用户明确确认；用户确认后下一轮再请求。",
     "value_not_from_user": "这些值不是用户给的，也不是用户选定的候选，不能写入：{detail}。"
                            "请用 finish(need_input) 向用户确认这些值，不要自己编。",
+    "append_overwrite": "用户要求追加或补充内容，但当前填写覆盖了原有内容（{detail}）。"
+                        "请保留该字段原有内容并在其后追加本次内容后再提交。",
     "conventions_undeclared": "当前集成没有声明应用的记录约定，不能由助手提交。",
 }
 
@@ -451,7 +453,7 @@ class NativeSubmitMixin:
             refused = self._not_sent(s, exc.code, exc.detail)
             if exc.code in {"dangerous_unconfirmed", "record_changed", "record_unreadable",
                             "validation", "no_change", "opening_changes", "credential_field",
-                            "value_not_from_user"}:
+                            "value_not_from_user", "append_overwrite"}:
                 turn["submit_handoff_blocked"] = exc.code
                 return refused
             return self._submit_handoff(s, element, turn, refused, form=form)
@@ -481,7 +483,7 @@ class NativeSubmitMixin:
         template = MESSAGES.get(code)
         text = (template.format(detail=detail, **{"button": "", "target": "", **names})
                 if template is not None else "没有提交：" + (detail or code))
-        retry = code in {"value_not_from_user", "dangerous_unconfirmed", "validation", "no_change"}
+        retry = code in {"value_not_from_user", "append_overwrite", "dangerous_unconfirmed", "validation", "no_change"}
         return LoopToolResult(text, kind="write", state="needs_input" if retry else "refused",
                               error_code=code)
 
@@ -581,7 +583,15 @@ class NativeSubmitMixin:
             raise ContractRefused("form_data_unreadable", "the form changed record")
         ledger = turn.get("source_ledger") or SourceLedger()
         words = self._said(s.message.text)
-        verdicts = check_entries(ledger, words)
+        existing_fields: dict[str, str] = {}
+        if loaded.mode == "update":
+            for prop, val in loaded.model.items():
+                if isinstance(val, str) and val.strip():
+                    existing_fields[prop] = val
+                    label = loaded.label(prop)
+                    if label:
+                        existing_fields[label] = val
+        verdicts = check_entries(ledger, words, existing=existing_fields or None)
         s.ledger.append("native_submit_value_sources", step=s.step,
                         checks=[{"field": v.entry.field, "ok": v.ok, "source": v.source,
                                  "reason": v.reason, **({"value": v.entry.value} if not v.ok else {})} for v in verdicts])
@@ -591,6 +601,8 @@ class NativeSubmitMixin:
             # person instead of presenting invented values for approval.
             raise ContractRefused("value_not_from_user",
                                   "、".join(f"{v.entry.field}={v.entry.value}" for v in missing))
+        if current.mode == "update":
+            self._check_append_overwrite(s.message.text, loaded.model, current)
         requested = self._requested_fields(current, ledger)
         reads = port.recent_reads()
         prefixes = port.prefixes(reads, mode=current.mode, record_id=current.record_id, source=raw.get("source", ""))
@@ -607,6 +619,7 @@ class NativeSubmitMixin:
             if baseline is None:
                 raise ContractRefused("record_unreadable")
             turn["submit_targets"][target_key]["baseline"] = baseline
+            self._check_append_overwrite(s.message.text, baseline, current)
             earlier = turn.get("form_record_baselines", {}).get(key)
             if earlier is not None and not same_value(
                     strip_volatile(earlier, conventions.volatile_keys),
@@ -668,6 +681,22 @@ class NativeSubmitMixin:
                                                 for v in verdicts))
         return self._approve_and_press(s, element, turn, card, prefixes, baseline,
                                        kind="form", check=raw.get("check", ""), loaded=loaded)
+
+    @staticmethod
+    def _check_append_overwrite(prompt: str, before: dict | None, current: FormData) -> None:
+        if not isinstance(before, dict):
+            return
+        overwritten: list[str] = []
+        for prop, new_val in current.model.items():
+            if not isinstance(new_val, str):
+                continue
+            old_val = before.get(prop)
+            label = current.label(prop) or prop
+            if (append_overwrites_existing(prompt, label, old_val, new_val)
+                    or append_overwrites_existing(prompt, prop, old_val, new_val)):
+                overwritten.append(label)
+        if overwritten:
+            raise ContractRefused("append_overwrite", "、".join(dict.fromkeys(overwritten)))
 
     @staticmethod
     def _requested_fields(form: FormData, ledger: SourceLedger) -> frozenset:

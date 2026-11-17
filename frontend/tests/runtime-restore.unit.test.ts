@@ -155,35 +155,36 @@ describe('bounded live catch-up and independent history requests', () => {
   })
 })
 
-describe('the page names its channel presence by its guard window', () => {
+describe('the page names its channel presence by its guard window without sharing document leases', () => {
   afterEach(() => { vi.restoreAllMocks() })
-  it('starts with the window name as its runtime instance id', async () => {
-    const runtime = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
+  it('keeps a per-document runtime instance id while sending window_id in hello', async () => {
+    const first = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
       sessionId: 's1', clientToken: 'token', sessionGeneration: 'g',
       panel: false}, null, {windowToken: async () => 'tab-1.3'})
-    runtimes.push(runtime)
-    runtime.panelConfiguration = DEFAULT_CONFIGURATION
+    const second = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
+      sessionId: 's1', clientToken: 'token', sessionGeneration: 'g',
+      panel: false}, null, {windowToken: async () => 'tab-1.3'})
+    runtimes.push(first, second)
+    first.panelConfiguration = DEFAULT_CONFIGURATION
+    second.panelConfiguration = DEFAULT_CONFIGURATION
     const controllerStub = new Proxy({controller: {dispose: vi.fn()}} as Record<PropertyKey, unknown>,
       {get: (target: Record<PropertyKey, unknown>, prop) =>
         prop === 'then' ? undefined : (target[prop] ??= vi.fn())})
     vi.mocked(loadPageController).mockResolvedValue(controllerStub as never)
-    vi.spyOn(runtime, '_startConnectedRuntime').mockResolvedValue(runtime)
-    await runtime.start()
-    expect(runtime.runtimeInstanceId).toBe('tab-1.3')
-  })
+    vi.spyOn(first, '_startConnectedRuntime').mockResolvedValue(first)
+    vi.spyOn(second, '_startConnectedRuntime').mockResolvedValue(second)
+    await first.start()
+    await second.start()
+    expect(first.runtimeInstanceId).not.toBe('tab-1.3')
+    expect(first.runtimeInstanceId).not.toBe(second.runtimeInstanceId)
 
-  it('sends that name as the hello runtime instance id', async () => {
-    const runtime = new EmbeddedWebRuntime({endpoint: 'https://agent.test',
-      sessionId: 's1', clientToken: 'token', sessionGeneration: 'g',
-      panel: false})
-    runtimes.push(runtime)
-    runtime.panelConfiguration = DEFAULT_CONFIGURATION
-    runtime.runtimeInstanceId = 'tab-1.0'
     const post = vi.spyOn(SessionClient.prototype, 'post')
       .mockResolvedValue({lease_id: 'L1', panel: DEFAULT_CONFIGURATION} as never)
-    await runtime._hello()
-    expect(vi.mocked(post).mock.calls[0]?.[1])
-      .toMatchObject({runtime_instance_id: 'tab-1.0'})
+    await first._hello()
+    expect(vi.mocked(post).mock.calls[0]?.[1]).toMatchObject({
+      runtime_instance_id: first.runtimeInstanceId,
+      window_id: 'tab-1.3',
+    })
   })
 })
 

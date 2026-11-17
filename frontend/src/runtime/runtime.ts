@@ -335,10 +335,6 @@ export class EmbeddedWebRuntime {
     this.confirmButtonPresser = confirmButtonPresser
     this.submitBusyReader = submitBusyReader
     this.guardWindow = await this.hooks.windowToken?.() ?? ''
-    // The page names itself to the session's channel by the name its guard window
-    // carries, so the channel's active page resolves to the window its turn's
-    // evidence, refusals and permits belong to.
-    if (this.guardWindow) this.runtimeInstanceId = this.guardWindow
     return this._startConnectedRuntime()
   }
 
@@ -419,6 +415,7 @@ export class EmbeddedWebRuntime {
       application_id: this.applicationId,
       principal_digest: this.principalBinding,
       last_event_id: this.stored.lastEventId,
+      ...(this.guardWindow ? {window_id: this.guardWindow} : {}),
     }, {includeLease: false})
     if (!reply.lease_id) throw new Error('hello response did not include a runtime lease')
     this.leaseId = String(reply.lease_id)

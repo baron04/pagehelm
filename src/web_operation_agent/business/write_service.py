@@ -75,7 +75,8 @@ class BusinessWriteService:
 
     def run(self, name, inputs, *, step, context, skill_id="", expected=None,
             prefill_port: MutationPrefillPort | None = None,
-            prefill_observation=None) -> OperationOutcome:
+            prefill_observation=None,
+            check_proposal=None) -> OperationOutcome:
         """One proposed operation from preparation to its verified result, exactly once.
 
         Preparation is read-only. With `expected`, the application's projection of what it
@@ -94,6 +95,8 @@ class BusinessWriteService:
                 proposal.effect_projection.require(expected)
                 ledger.append("skill_effect_bound", step=step, tool=name,
                               proposal_digest=proposal.content_digest, side_effect_possible=False)
+            if check_proposal is not None:
+                check_proposal(proposal)
             if prefill_port is not None:
                 if not isinstance(prefill_port, MutationPrefillPort):
                     raise BusinessToolError("mutation prefill port is invalid")

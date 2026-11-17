@@ -314,10 +314,46 @@ def _receipt_match(entry: Entry, ledger: SourceLedger, fieldless: dict) -> bool:
     return False
 
 
-def _verdict(entry: Entry, ledger: SourceLedger, words: list[str], fieldless: dict) -> Verdict:
+def _existing_append_match(
+    entry: Entry,
+    ledger: SourceLedger,
+    words: list[str],
+    fieldless: dict,
+    existing: dict[str, str] | None,
+) -> Verdict | None:
+    """When editing an existing record/form, preserving a field's loaded text and
+    appending (or prepending) a sourced addition is valid."""
+    if not existing or not isinstance(entry.value, str):
+        return None
+    old = str(existing.get(_plain(entry.field)) or "").strip()
+    val = entry.value.strip()
+    if not old or not val:
+        return None
+    if val == old:
+        return Verdict(entry, True, "candidate")
+    separators = " \t\r\n,，;；:：、/|-—"
+    rest = ""
+    if val.startswith(old):
+        rest = val[len(old):].lstrip(separators)
+    elif val.endswith(old):
+        rest = val[:-len(old)].rstrip(separators)
+    if not rest:
+        return None
+    sub = _verdict(replace(entry, value=rest), ledger, words, fieldless, existing=None)
+    return Verdict(entry, True, sub.source) if sub.ok else None
+
+
+def _verdict(
+    entry: Entry,
+    ledger: SourceLedger,
+    words: list[str],
+    fieldless: dict,
+    *,
+    existing: dict[str, str] | None = None,
+) -> Verdict:
     parts = _range_parts(entry.value)
     if parts is not None:
-        verdicts = [_verdict(replace(entry, value=part), ledger, words, fieldless)
+        verdicts = [_verdict(replace(entry, value=part), ledger, words, fieldless, existing=existing)
                     for part in parts]
         if all(v.ok for v in verdicts):
             source = verdicts[0].source if all(v.source == verdicts[0].source
@@ -334,10 +370,65 @@ def _verdict(entry: Entry, ledger: SourceLedger, words: list[str], fieldless: di
         return Verdict(entry, True, "candidate")
     if _receipt_match(entry, ledger, fieldless):
         return Verdict(entry, True, "receipt")
+    appended = _existing_append_match(entry, ledger, words, fieldless, existing)
+    if appended is not None:
+        return appended
     return Verdict(entry, False, "", "not_from_the_person")
 
 
-def check_entries(ledger: SourceLedger, words: list[str]) -> list[Verdict]:
+_APPEND_CLAUSE_SPLIT = re.compile(r"[，,；;。！？!\n]+")
+_APPEND_NEGATION = re.compile(r"(?:不|别|勿|无需|无须|不用|不必)(?:要|用)?(?:追加|补充|附上|附注|续写|补写)")
+_APPEND_OVERWRITE = re.compile(r"覆盖|替换|清空|重写|代替")
+_APPEND_VERB = re.compile(
+    r"追加|补充|附上|附注|续写|补写"
+    r"|后(?:面|边)?(?:加|添|写|补)"
+    r"|末尾(?:加|添|写|补)"
+    r"|(?:在|往)[^，,；;。！？!\n]{0,16}(?:备注|说明|描述|附言|内容)[^，,；;。！？!\n]{0,6}(?:加上?|添上?|写上?|补上?)"
+)
+_TEXT_NOTE_FIELD = re.compile(
+    r"^(?:remark|description|memo|note|notes|comment|content|body|备注|说明|描述|附言|附注|正文|内容)$",
+    re.IGNORECASE,
+)
+
+
+def append_overwrites_existing(prompt: str, field_name: str, before_value, after_value) -> bool:
+    """True when the user asked to append/supplement a text field that already held
+    non-empty text, and the proposed value drops that existing text instead."""
+    if not isinstance(before_value, str) or not before_value.strip():
+        return False
+    if not isinstance(after_value, str):
+        return False
+    old_s = before_value.strip()
+    new_s = after_value.strip()
+    if old_s in new_s or (_plain(old_s) and _plain(old_s) in _plain(new_s)):
+        return False
+    clauses = [
+        c for c in _APPEND_CLAUSE_SPLIT.split(prompt or "")
+        if c and _APPEND_VERB.search(c)
+        and not _APPEND_NEGATION.search(c)
+        and not _APPEND_OVERWRITE.search(c)
+    ]
+    if not clauses:
+        return False
+    label = (field_name or "").strip()
+    if _TEXT_NOTE_FIELD.match(label):
+        return not any(
+            re.search(rf"{re.escape(label)}[^，,；;。！？!\n]{{0,4}}(?:改成|改为|设为|置为|修改为|更新为)", c)
+            for c in _APPEND_CLAUSE_SPLIT.split(prompt or "") if c
+        )
+    return bool(label and not label.isascii() and any(label in c for c in clauses))
+
+
+def check_entries(
+    ledger: SourceLedger,
+    words: list[str],
+    *,
+    existing: dict[str, str] | None = None,
+) -> list[Verdict]:
     """A source verdict per business form value; missing sources are shown on the card."""
     fieldless: dict = {}
-    return [_verdict(entry, ledger, words, fieldless) for entry in ledger.entries]
+    normalized_existing = (
+        {_plain(k): str(v) for k, v in existing.items() if isinstance(v, str) and v.strip()}
+        if existing else None
+    )
+    return [_verdict(entry, ledger, words, fieldless, existing=normalized_existing) for entry in ledger.entries]

@@ -6,5 +6,5 @@
   - **公海客户**：`crm/customer/page` 传 `pool=true`；领取用 `crm_customer_receive`、放入公海用 `crm_customer_put_pool`；公海时间列按页面可见列核对。
 - **核心口径**：
   - 合同 `auditStatus`：`0`=未提交、`10`=审核中、`20`=审核通过（成交）、`30`=审核不通过；新签合同按 `orderDate`（下单日期）统计。
-  - **金额单位**：CRM 合同与回款接口字段（`totalPrice`、`totalReceivablePrice`、`price`）单位均为**分（fen）**（与 ERP 的元口径相反），应收余额 = `totalPrice - totalReceivablePrice`（展示时按已核验单位换算为元）。
+  - **金额单位**：CRM 合同、回款、回款计划、商机与产品接口金额字段（`totalPrice`、`totalReceivablePrice`、`price`）单位均为**元（yuan）**（与 ERP 一致，切勿当作分除以 100；仅商城/会员/支付域使用分），合同待回款差额 = `totalPrice - totalReceivablePrice`（多行差额或汇总用 `sql` 计算）。
 - **可用类型化写入**：`crm-customer-*`、`crm-contact-*`、`crm-clue-maintenance`、`crm-follow-up`、`crm-receivable-planning`。

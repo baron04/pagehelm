@@ -20,7 +20,8 @@ import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formInstance, localChoiceRemoval} from './formInstance'
 import {
-  ChoiceUnavailable, listboxCombobox, matchingTreeChoices, optionText, ownedListbox, ownedTree,
+  ChoiceUnavailable, isTreeItemDisabled, listboxCombobox, matchingTreeChoices, optionText,
+  ownedListbox, ownedTree, ownTreeExpandToggle, ownTreeOption, ownTreeRow,
   selectedComboboxOption, selectedOption, treeItemChoices, treeSelectionMatches, visibleElement,
 } from './combobox'
 import {radioGroup, radioChoices, radioLabel, radioEnabled, radioSelectionMatches} from './radio'
@@ -579,20 +580,17 @@ export class Page {
             }
           }
           if (expandItem && visibleElement(expandItem)) {
-            const caret = expandItem.querySelector(
-              ':scope > .el-tree-node__content > .el-tree-node__expand-icon:not(.is-leaf), ' +
-              ':scope > .el-tree-node__expand-icon:not(.is-leaf), :scope > [data-tree-expand]',
-            )
+            const caret = ownTreeExpandToggle(expandItem)
             if (caret instanceof HTMLElement && visibleElement(caret)) {
               caret.click()
               await sleep(80)
               continue
             }
-            if (!expandItem.querySelector('[role="option"]')) {
+            if (!ownTreeOption(expandItem)) {
               const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
               const expIdx = indexed.find(i => {
                 const n = this.lookup(this.controller.selectorMap, i)
-                return n === expandItem || n === expandItem!.querySelector(':scope > .el-tree-node__content')
+                return n === expandItem || n === ownTreeRow(expandItem!)
               })
               if (expIdx !== undefined) {
                 await this.controller.clickElement(expIdx)
@@ -634,17 +632,15 @@ export class Page {
           throw new ChoiceUnavailable(candidate_labels, bound && unchanged,
             !bound ? 'the form binding changed' : 'local field values changed')
         }
-        const innerOption = tree
-          ? matches[0]?.querySelector(':scope > .el-tree-node__content > [role="option"], :scope > [role="option"]') ?? null
-          : null
-        const optionDisabled = matches[0]!.getAttribute('aria-disabled') === 'true' ||
-          matches[0]!.hasAttribute('disabled') ||
-          Boolean(innerOption && (innerOption.getAttribute('aria-disabled') === 'true' || innerOption.classList.contains('is-disabled')))
+        const innerOption = tree && matches[0] ? ownTreeOption(matches[0]) : null
+        const optionDisabled = tree && matches[0]
+          ? isTreeItemDisabled(matches[0])
+          : (matches[0]!.getAttribute('aria-disabled') === 'true' || matches[0]!.hasAttribute('disabled'))
         if (matches.length !== 1 || !visibleElement(matches[0]!) || optionDisabled) {
           throw new Error('execution_failed: combobox option is absent, ambiguous, or disabled')
         }
         const option = matches[0]!
-        const hitArea = tree ? option.querySelector(':scope > .el-tree-node__content') ?? option : option
+        const hitArea = tree ? ownTreeRow(option) ?? option : option
         const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
         const indexes = indexed.filter(i => {
           const n = this.lookup(this.controller.selectorMap, i)
@@ -660,7 +656,7 @@ export class Page {
               (list
                 ? node.getAttribute('role') === 'option' && node.closest('[role="listbox"]') === list
                 : tree!.contains(node) && (node.getAttribute('role') === 'treeitem' ||
-                  node.getAttribute('role') === 'option' || node.classList.contains('el-tree-node__content'))) &&
+                  node.getAttribute('role') === 'option' || Boolean(node.closest('[role="treeitem"]')))) &&
               visibleElement(node)
           })
           if (!anchors.length || !current()) {

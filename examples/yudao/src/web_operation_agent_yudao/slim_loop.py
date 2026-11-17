@@ -45,6 +45,7 @@ from web_operation_agent.execution.model_loop_contracts import (AnswerTarget, Lo
     DeliveryFeedback, VerificationResult, ModelLoopProfile, LoopProcedure)
 from web_operation_agent.execution.read_summary import (SummaryRefused, parse_summary_spec,
                                                         summary_schema)
+from web_operation_agent.execution.native_submit import _confirm_words
 from web_operation_agent.execution.value_source import note_candidates, note_receipt
 from web_operation_agent.business.errors import BusinessToolPermissionError, BusinessToolUnavailableError
 from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS, MAX_SCROLL_PAGES
@@ -142,9 +143,9 @@ _RECORD_KEY = re.compile(r"(?i)(^|_)(id|no|name|title|subject)$|name$")
 
 def _cell_values(rows, column_names=None, cap=400):
     """(binding, value) candidates of rows the actor read this turn: every scalar cell
-    bound to its column's label, plus the record's own name/id cells unbound for
-    selection fields."""
-    bound, records = [], []
+    bound to its column's label (and raw field key when different), plus the record's
+    own name/id cells unbound for selection fields."""
+    bound, raw_keys, records = [], [], []
     names = column_names or {}
     for row in rows or ():
         if not isinstance(row, dict):
@@ -152,13 +153,16 @@ def _cell_values(rows, column_names=None, cap=400):
         for key, cell in row.items():
             if isinstance(cell, (dict, list, tuple)) or cell is None or isinstance(cell, bool):
                 continue
+            raw_key = str(key)[:80]
             label = str(names.get(key, key))[:80]
             bound.append((label, cell))
+            if raw_key != label:
+                raw_keys.append((raw_key, cell))
             if _RECORD_KEY.search(str(key)) or _RECORD_KEY.search(label):
                 records.append(("", cell))
             if len(bound) >= cap:
-                return bound + records, bound
-    return bound + records, bound
+                return bound + raw_keys + records, bound
+    return bound + raw_keys + records, bound
 
 
 class ActorKnowledge:
@@ -701,8 +705,8 @@ class ActorKnowledge:
                 inline = (json.dumps(table_rows, ensure_ascii=False)
                           if info["complete"] and len(table_rows) <= 30 else "")
                 if inline and len(inline) <= 9000:
-                    out.append(f"全部行（共 {len(table_rows)} 行，已读完所有页；单表查看或名单可直接引用上方读取回执交付，"
-                               f"无需再调 tables/sql 重复取行；需多行聚合、差额、分组或排序极值时再用 sql）：" + inline)
+                    out.append(f"全部行（共 {len(table_rows)} 行，已读完所有页；单表原样字段或名单可直接引用上方读取回执交付，"
+                               f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算）：" + inline)
                 else:
                     out.append("样例（不是全表）：" + json.dumps(table_rows[:3], ensure_ascii=False)[:2600])
             return self._told(out, data_lines)
@@ -1074,7 +1078,8 @@ WRITE_RULES = """
 4. 直接替用户办理会改数据的事（新建、修改、写跟进、状态变更）。只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。
    - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。程序会按本轮原话和草稿续轮决定是否提供这些工具，工具可见也不构成写入授权。
    - 用户只是询问、查看、打开页面，或问“怎么做”“能不能”：不加载 Skill，不提提案。
-   - 操作的参数只填用户明确给出的内容。名称、电话、正文、备注这类文字照用户原话完整填写，不改写、不缩写、不补全；要引用的记录写它确切的业务名称（有同名时写候选的完整显示名），不填数字 ID；有固定选项的参数只用列出的选项。
+   - 操作的参数只填用户明确给出的内容。名称、电话、正文、备注这类文字照用户原话完整填写，不改写、不缩写、不补全；用户要求在已有备注/说明后追加或补充时，先用 call_api 读出该记录当前值，保留原值并在其后追加本次内容，不得只传新增片段覆盖原值；要引用的记录写它确切的业务名称（有同名时写候选的完整显示名），不填数字 ID；有固定选项的参数只用列出的选项。
+   - 关闭秒杀活动、反审批单据等不可逆或逆向动作，先在对话里向用户说明对记录及关联库存/活动的影响并用 finish(need_input) 请用户确认，确认后下一轮再提出提案。
    - 必填的信息用户没给，或者目标记录有几条候选：用 need_input 问清楚，不要猜，也不要先办一部分。
    - 拿不准记录是否存在、属于哪个模块、当前值是什么时，先用 find_record / call_api 读，再提案。
    - 要新建单据而关联对象不在原生选择器里时，先读该对象当前状态。若对象已关闭且应用可选列表不含它，如实说明关闭和不可选，保留用户给的单据明细，不提案、不换相近对象。
@@ -1102,12 +1107,12 @@ SYSTEM_READ = """1. 读取并交付数据。search_api 找已发布接口，call
 - 无权限结论只能来自指向它本身的确切读取被拒。某次查询被拒不等于整类不可读；已读结果能回答时照常作答。
 """
 TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，call_api 读已发布参数；find_record 按名称或简称找记录，kind 限定类型，编号用对应编号参数。
-1）交付中的值须来自本轮回执。call_api 若已完整内联全部行（≤30 行）且无需二次聚合、差额或排序，可直接引用其读取回执交付，省去多余的 tables/sql 调用；跨页、聚合、差额、分组或极值排名先看行表完整性再用 sql 计算；说明依据条件、口径和算法。
+1）交付中的值须来自本轮回执。call_api 若已完整内联全部行（≤30 行）且字段已为最终展示口径、无需二次计算，可直接引用其读取回执交付，省去多余的 tables/sql 调用；若涉及分转元（÷100.0）等单位换算、子集计数、跨页、聚合、差额、分组或极值排名，须看行表完整性并用 sql 计算使衍生数值有回执；说明依据条件、口径和算法。
 2）相对日期先用 date_range 换成具体范围，再写入 API 参数或 SQL 筛选。已发生事项的本周、本月、本季度、今年默认截至当天；计划、预算用scope=planned覆盖完整自然周期。近N天含当天共N个自然日，用unit=rolling_days及days=N；最近一个月为近30天，上个月为上一个自然月。用户明确起止日期优先，用unit=range及start_date/end_date，首尾均含。按用户动词选真实时间列；创建时间不代替业务日期。SQL 表保留接口原值或已核验的显示单位；时间戳用换算结果中的毫秒阈值，ISO 日期用日期范围。
 3）找不到接口、字段或记录，或读取失败，说明缺什么；不能核实时用 cannot 或追问。不把已提交的参数当作返回行确已满足条件的证明；用已读字段核对。范围未读全不能报全量合计、极值、完整名单或不存在。
 4）同名时按组织用语约定和所在模块消歧；仍有多条，列候选并追问，不缩短名称或穷举模块。关联对象先按确切名称解析同账号编号，条件和分组用编号，名称用于展示。
 5）问指定记录的详情，优先查该记录的详情接口，不把列表摘要当成详情。
-6）要改数据先读现值；已经满足就说明，只改用户指定项。
+6）要改数据先读现值；已经满足就说明，只改用户指定项；要求追加/补充备注等文字时保留原值再追加。删改/作废/关闭/反审或问操作限制与连带影响时，先用 entity_rules 查编译期规则再用 call_api 核对现值；跨模块消歧或金额单位口径拿不准时用 load_domain_guide。
 7）实际写入仍须走已安装 Skill 的批准、执行及核验；没有已核验回执不能声称写成。只要求预填时，填好交给用户，停在提交前。
 8）查无结果要说清条件和范围；CRM sceneType 只按用户明确的负责/参与/下属等条件使用。后续指代重新读取，历史答复不算当前证据。
 9）组织审阅过的业务用语约定照用，不自行套用额外默认条件。
@@ -1169,7 +1174,7 @@ SYSTEM_PAGE = """2. 页面请求用search_menu/goto，记录有详情地址就�
 - 无写工具的办理请求仍精确定位记录，highlight属于它的业务控件，明确“尚未点击、尚未办理”。无法确认按钮归属才cannot；只给手工建议不算交接。同一动作被部署拒绝不再重复；要看记录详情，用find_record给出的详情地址goto。
 """
 SYSTEM_FORM = """3. 预填不提交。新建草稿的名称是待填值，不先当已有记录查；已有修改才定位原记录。有详情先从详情进入编辑，缺入口不等于无权限。
-- goto(open=审核入口)后看观察；fill_fields按字段名填用户明确给出的所有字段，未要求字段保持原值。每批最多20项，最后一批才then_highlight和answer。明细用add_lines并带齐主表、行字段；不编单价、税率或其它值。
+- goto(open=审核入口)后看观察；fill_fields按字段名填用户明确给出的所有字段，未要求字段保持原值，要求追加备注/说明时保留原值并在其后追加。每批最多20项，最后一批才then_highlight和answer。明细用add_lines并带齐主表、行字段；不编单价、税率或其它值。
 - 原生关联下拉先填确切名称，缺选项再读取所属类型，不改选近似名称；已关闭且不可选则解释并停止。填值后逐项回读，完整原请求全部填好并标出提交才交接；漏字段不能完成。未知/禁用编辑只说明实际做到哪步。
 - 不点击保存、确定、提交、删除等持久动作。空必填仅提醒用户补；一个具体值也未给则need_input，不自编。草稿续轮只改用户此次要求字段。
 """
@@ -3345,6 +3350,20 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             return LoopToolResult(
                 "用户本轮只要求预填表单。未提出写入提案，也未执行写入；请改用页面表单步骤，停在提交前。",
                 kind="write", state="refused", dispatch="not_dispatched", error_code="draft_only")
+        dangerous_op = (
+            operation == "promotion_seckill_activity_close"
+            or (operation == "erp_document_status" and isinstance(inputs, dict) and inputs.get("action") == "反审批")
+        )
+        if dangerous_op and (not self._earlier_words or not _confirm_words(s.message.text)):
+            action_label = ("关闭秒杀活动（不可逆）" if operation == "promotion_seckill_activity_close"
+                            else "反审批单据（回退库存或核销状态）")
+            s.ledger.append("skill_operation_refused", step=s.step + 1, tool=operation,
+                            error_code="dangerous_unconfirmed", detail=action_label, side_effect_possible=False)
+            return LoopToolResult(
+                f"「{action_label}」属于不可逆或逆向状态变更。请先在对话里向用户说明该动作对目标记录及关联库存/活动的具体影响，"
+                "并用 finish(need_input) 请用户明确确认；用户确认后下一轮再提出写入提案。",
+                kind="write", state="needs_input", dispatch="not_dispatched", error_code="dangerous_unconfirmed",
+            )
         return super()._propose(s, writes, operation, inputs, turn)
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
@@ -3417,22 +3436,31 @@ _RECEIPT_INLINE = re.compile(
 _BARE_RECEIPT = re.compile(r"`?ev_[0-9a-f]{12}_\d+`?")
 _RECEIPT_STUB = re.compile(r"[（(]\s*(?:依据|来源|引用|参考|见)?(?:本轮)?(?:读取|工具)?回执[，,、\s]*(?:详见)?(?:本轮读取数据)?\s*[）)]")
 _EMPTY_PARENS = re.compile(r"[（(]\s*[）)]")
-_TABLE_TOKEN = re.compile(r"(?:本轮)?行表\s*`?t\d{1,2}`?")
+_TABLE_TOKEN = re.compile(r"(?:(?:本轮)?行表|数据表|临时表|表)\s*`?t\d{1,2}`?|`t\d{1,2}`")
 _PAGE_OBLIGATION = re.compile(
     r"调出|(?:帮我|请)?(?:打开|进入|跳转到?|定位到?|切到|切换到)[^，。；！？?\n]{0,24}"
-    r"(?:页面|列表|详情|台账|看板|页签|栏目|菜单|视图|界面)"
-    r"|在(?:当前)?(?:页面|列表)(?:上|里|中)?(?:筛选|过滤|按条件筛)"
+    r"(?:页面|列表页?|详情|台账|看板|页签|栏目|菜单|视图|界面)"
+    r"|在[^，。；！？?\n]{0,12}(?:页面|列表页?|台账)(?:上|里|中)?(?:筛选|过滤|按条件筛)"
 )
 _META_PAGE_QUESTION = re.compile(r"(?:怎么|如何|怎样|能否|能不能|是否|为什么)[^，。；！？?\n]{0,12}(?:打开|调出|进入|跳转|切到)")
+_NEGATED_PAGE_OBLIGATION = re.compile(
+    r"(?:不要|不用|无需|无须|不必|不需|别|勿)[^，。；！？?\n]{0,8}(?:打开|调出|进入|跳转|定位|切到|切换|筛选)"
+)
 _ALREADY_SATISFIED = re.compile(r"已是|已经为|已经是|无需修改|原本就是|保持一致|未发生变化")
 _WRITE_UNEXECUTED = re.compile(r"未(?:执行|完成|成功|提交|保存|修改|写入)|尚未|未能")
 
 
 def _requires_page_delivery(prompt: str) -> bool:
     said = _words(prompt or "").strip()
-    if not said or _META_PAGE_QUESTION.search(said):
+    if not said:
         return False
-    return bool(_PAGE_OBLIGATION.search(said))
+    for clause in re.split(r"[，,；;。！？!\n]+", said):
+        if not clause or not _PAGE_OBLIGATION.search(clause):
+            continue
+        if _META_PAGE_QUESTION.search(clause) or _NEGATED_PAGE_OBLIGATION.search(clause):
+            continue
+        return True
+    return False
 
 
 def _clean_user_answer(answer: str, handoffs) -> str:
@@ -3556,7 +3584,13 @@ class TableReadTurnExecutor(SlimTurnExecutor):
                 facts = page_facts()
                 has_page_item = any(item.get("kind") == "page" and item.get("status") == "delivered"
                                     for item in args["items"])
-                if facts["home"] or not has_page_item:
+                page_acted = (
+                    not facts["home"]
+                    and not facts["masked"]
+                    and any(r.ok and r.action in {"goto", "click", "fill", "select"}
+                            for r in self._tool_receipts)
+                )
+                if facts["home"] or (not has_page_item and not page_acted):
                     raise TurnReadError("delivery_page_obligation",
                                         "用户的请求要求在页面上调出、打开或筛选，不能仅用接口文字代替页面落点。"
                                         "请在用户页完成对应导航与筛选并加入 kind=page 的交付项；"
