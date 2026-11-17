@@ -292,6 +292,16 @@ class YudaoHost:
         self._lock = threading.RLock()
         self._traces_pruned_at = 0.0
         self.prune_turn_traces()
+        if config.warm_index and self.rule_source is not None:
+            threading.Thread(target=self._warm_sources, name="yudao-warm-sources",
+                             daemon=True).start()
+
+    def _warm_sources(self) -> None:
+        try:
+            if self.rule_source is not None:
+                self.rule_source.warm()
+        except Exception:  # noqa: BLE001 -- live turns report source unavailability directly
+            pass
 
     # -- bootstrap ------------------------------------------------------------------------
     def _fenced_gets(self, policy: dict) -> frozenset:

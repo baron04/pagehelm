@@ -9,14 +9,20 @@ import re
 
 _DRAFT = re.compile(
     r"先填|只填|预填|填好|填上|填成|填一下|草稿|准备给|"
+    r"留空.{0,12}?(?:不填|待补|再填|空着|留给我)|"
     r"(?:不(?:要|用|必|需要|能|得|许)?|无(?:需|须)|(?<!分)(?<!特)别|请勿|切勿|暂不)"
     r"(?:再|直接|立即|马上|现在|就)?(?:提交|保存)"
     r"|(?:(?<![帮替给为])我(?:来|再|自己(?:来|再)?)|由我(?:来|再)?|自己(?:来|再)?)(?:提交|保存)"
 )
 _COMMIT_AFTER_DRAFT = re.compile(
     r"(?:先填|预填|填好|填上|填成|草稿).{0,80}?"
-    r"(?:再|然后|随后|接着|并|之后|后)(?:由你|帮我|直接|立即|马上|现在|就)?(?:提交|保存)"
+    r"(?:再|然后|随后|接着|并|之后|后)+(?:由你|帮我|替我|直接|立即|马上|现在|就)*(?:提交|保存)"
 )
+_DEFERRED_USER_SUBMIT = re.compile(
+    r"回头|以后|稍后|晚点|待会|等.{0,12}?(?:补|填|核对|确认)|"
+    r"补(?:上|齐|完|全)[^，。；！？?\n]{0,12}?(?:后|再)(?:提交|保存)|留空"
+)
+_EXPLICIT_ASSISTANT_SUBMIT = re.compile(r"(?:由你|帮我|替我)(?:直接|立即|马上|现在|就)*(?:提交|保存)")
 _SAVE = re.compile(
     r"新建|新增|创建|添加|开一张|改成|改为|换成|更换|调成|设为|清空|记一条|补条|记好|"
     r"写一条跟进|审批|审核|删除|关闭|启用|停用|分配|领取|放入公海|提交|保存"
@@ -44,6 +50,8 @@ def classify_write_intent(text: str, *, prior_draft: bool = False) -> WriteInten
                       compact[max(0, match.start() - 1):match.start()] in {"(", "（"}
                       or _DRAFT_STATUS_SUFFIX.match(compact[match.end():]))), None)
     commit = _COMMIT_AFTER_DRAFT.search(compact)
+    if commit and _DEFERRED_USER_SUBMIT.search(compact) and not _EXPLICIT_ASSISTANT_SUBMIT.search(compact):
+        commit = None
     if draft and not commit:
         return WriteIntent("draft", draft.group())
     # Editing *inside a form* names a transient result. A separate, explicit

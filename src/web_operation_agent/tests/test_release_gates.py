@@ -78,10 +78,10 @@ class _Copy:
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             if source.is_dir():
-                # The only directory input is the boundary checker's Python tree.
+                # The directory inputs are the boundary checker's Python and neutral TypeScript trees.
                 # Neither generated assets nor interpreter caches are checker inputs.
-                for path in source.rglob("*.py"):
-                    if "__pycache__" in path.parts:
+                for path in source.rglob("*"):
+                    if not path.is_file() or path.suffix not in {".py", ".ts"} or "__pycache__" in path.parts:
                         continue
                     copied = target / path.relative_to(source)
                     copied.parent.mkdir(parents=True, exist_ok=True)

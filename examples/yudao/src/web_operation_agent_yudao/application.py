@@ -123,7 +123,7 @@ class YudaoApplication:
         # The data port's own reads of application metadata go out four at a time, as its
         # lookups by name do (`reference_workers` below).
         self.goal_data = YudaoGoalData(self.client, api_docs, ui=ui, time_zone=time_zone,
-                                      native_sections=native_tabs, read_workers=4,
+                                      native_sections=native_tabs, read_workers=8,
                                       writing_gets=writing_gets)
         from .native_tabs import NativeTabPolicy
         self.native_tab_policy = NativeTabPolicy((ui or UiSource.none()).records.values()) if native_tabs else None
@@ -139,18 +139,18 @@ class YudaoApplication:
             self.goal_data.attach_conventions(load_conventions(conventions))
         from .page_goals import NativePageGoalPort
         goal_port = NativePageGoalPort if native_tabs else DataGoalPort
-        self.goal_port = goal_port(self.goal_data, today=today, reference_workers=4)
+        self.goal_port = goal_port(self.goal_data, today=today, reference_workers=8)
         from .live_forms import LiveFormPort
         if isinstance(forms, LiveFormPort):
             from .live_goals import LiveFormsGoalPort
-            self.goal_port = LiveFormsGoalPort(self.goal_data, forms, today=today, reference_workers=4)
+            self.goal_port = LiveFormsGoalPort(self.goal_data, forms, today=today, reference_workers=8)
             self.native_tab_policy = forms.click_policy(self.native_tab_policy)
         from .form_entries import NativeEntryFormPort
         if isinstance(forms, NativeEntryFormPort):
             from .form_goals import NativeFormsGoalPort
             self.goal_port = NativeFormsGoalPort(self.goal_data, forms.goal_source, entries=forms.goal_entries, updates=forms.goal_updates,
                                                  current_form=forms.current_goal_form,
-                                                 today=today, reference_workers=4)
+                                                 today=today, reference_workers=8)
             self.native_tab_policy = forms.click_policy(self.native_tab_policy)
         reads = YudaoReadTools(self.goal_data, application_id=APPLICATION_ID)
         self.data_reads = DataReadTools(

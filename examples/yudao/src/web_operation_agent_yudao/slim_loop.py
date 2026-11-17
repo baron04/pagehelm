@@ -355,27 +355,51 @@ class ActorKnowledge:
                      and isinstance(row.get("name"), str)
                      and wanted in row["name"].strip().casefold())[:5]
 
+    @staticmethod
+    def _stem(label: str) -> str:
+        core = re.sub(r"^(?:ERP|CRM|HRM|OA|BPM|FMS|WMS|PMS|商城|系统|会员|交易|财务|人事)\s*", "", label).strip()
+        core = re.sub(r"(?:管理|列表|记录|信息|模板|档案|设置|配置|台账)$", "", core).strip()
+        if len(core) >= 4 and core.startswith("库存") and core.endswith("单"):
+            return core[2:]
+        return core
+
     def suggest(self, sentence: str) -> str:
         """Pages and lists whose own names the person's words contain, found without a
         model request. A first step usually asks for exactly these."""
         self._load()
         said = re.sub(r"\s+", "", sentence)
-        pages = sorted((m for m in self._menu if len(m["leaf"]) >= 2 and re.sub(r"\s+", "", m["leaf"]) in said),
-                       key=lambda m: -len(m["leaf"]))[:4]
-        lists = []
+        exact_pages = [m for m in self._menu if len(m["leaf"]) >= 2 and re.sub(r"\s+", "", m["leaf"]) in said]
+        stem_pages = [m for m in self._menu if m not in exact_pages
+                      and len(self._stem(m["leaf"])) >= 2 and self._stem(m["leaf"]) in said]
+        pages = (sorted(exact_pages, key=lambda m: -len(m["leaf"]))
+                 + sorted(stem_pages, key=lambda m: -len(self._stem(m["leaf"]))))[:4]
+        lists, matched_nouns = [], []
         for op in self._ops:
+            if not op["path"].endswith(("/page", "/list")):
+                continue
             noun = op["tag"].split()[-1] if op["tag"].split() else ""
-            if len(noun) >= 2 and noun in said and op["path"].endswith("/page"):
-                lists.append(op)
-        lists.sort(key=lambda op: -len(op["tag"].split()[-1]))
-        nouns = [op["tag"].split()[-1] for op in lists]
+            stem = self._stem(noun)
+            token = noun if (len(noun) >= 2 and noun in said) else (stem if (len(stem) >= 2 and stem in said) else "")
+            if token:
+                lists.append((len(noun in said and noun or ""), len(token), op["path"].endswith("/page"), op, token))
+        lists.sort(key=lambda item: (-item[0], -item[1], -int(item[2])))
+        nouns = [item[4] for item in lists]
         # "用户" inside "用户分组" names nothing of its own.
-        lists = [op for op, noun in zip(lists, nouns) if not any(noun != other and noun in other for other in nouns)][:3]
-        if not pages and not lists:
+        picked = []
+        seen_paths = set()
+        for _exact_len, _tok_len, _is_page, op, noun in lists:
+            if any(noun != other and noun in other for other in nouns):
+                continue
+            if op["path"] not in seen_paths:
+                seen_paths.add(op["path"])
+                picked.append(op)
+            if len(picked) >= 5:
+                break
+        if not pages and not picked:
             return ""
         out = ["程序按字面先找到的（可能不全、也可能不是用户指的那个；不合适就用 search_menu / search_api 自己找）:"]
         out += [f"页面 {m['path']}  {m['name']}" for m in pages]
-        out += [self._api_line(op) for op in lists]
+        out += [self._api_line(op) for op in picked]
         return "\n".join(out)
 
     def _deref(self, schema):
@@ -643,14 +667,19 @@ class ActorKnowledge:
         blanked = {k for row in (rows if rows is not None else [data]) if isinstance(row, dict)
                    for k, v in row.items() if v == REDACTED}
         if fields:
+            missing = [f for f in fields if f != "id" and f not in keys and f not in props]
+            if missing:
+                out.append("提示：本次 fields 中请求的以下列名在返回记录中不存在："
+                           + "、".join(missing)
+                           + "；请改用下方实际存在的列名（本轮行表已保留接口返回的全部真实列，可直接用真实列名在 sql 中查询，无需重复 call_api）。")
             other = [key for key in dict.fromkeys(k for row in (rows if rows is not None else [data])
                      if isinstance(row, dict) for k in row) if key in props
                      and key not in ("id", *fields) and key not in blanked]
             if other:
-                out.append("本次只展示 fields 指定的列；下面是已返回但未展示的列，需要时带 fields 重读，不能据此说接口没有这些字段：")
+                out.append("本次只展示 fields 指定的列；下面是已返回但未展示的列，需要时在 sql 中直接按列名查询（无需重复 call_api），不能据此说接口没有这些字段：")
                 data_lines.add(len(out))
                 out.append("; ".join(key + ("（" + str(self._deref(props[key]).get("description") or "")[:40] + "）"
-                    if key in props and self._deref(props[key]).get("description") else "") for key in other[:12]))
+                    if key in props and self._deref(props[key]).get("description") else "") for key in other[:32]))
         verified_keys = [key for key in (fields or keys) if key in certified and key in keys]
         if verified_keys:
             out.append("这些字段已按部署前端源码和同记录非零页面样本逐字段核验；"
@@ -688,27 +717,23 @@ class ActorKnowledge:
                     and "id" in data and str(filters["id"]) != str(data["id"])):
                 raise TurnReadError("record_identity_mismatch", "详情接口返回的记录编号与请求不符。")
             observed = rows if rows is not None else ([] if data is None else [data])
-            table_rows = [
-                row if not isinstance(row, dict) or not fields else
-                {k: v for k, v in row.items() if k in ("id", *fields)}
-                for row in observed
-            ]
-            info = row_sink(path=relative, params=filters, rows=table_rows,
-                            total=declared_total if rows is not None else len(table_rows),
+            info = row_sink(path=relative, params=filters, rows=observed,
+                            total=declared_total if rows is not None else len(observed),
                             complete=whole if rows is not None else True,
-                            published=(fields or tuple(props)) if not table_rows else ())
+                            published=tuple(dict.fromkeys((*props, *fields))) if not observed else ())
             out.append(f"本轮行表 {info['name']}，读取回执 {info['receipt']}。")
             data_lines.add(len(out))
             out.append(json.dumps(info, ensure_ascii=False))
-            if table_rows:
+            if observed:
                 data_lines.add(len(out))
-                inline = (json.dumps(table_rows, ensure_ascii=False)
-                          if info["complete"] and len(table_rows) <= 30 else "")
+                shown_rows = [self._row(r, fields) if isinstance(r, dict) else r for r in observed]
+                inline = (json.dumps(shown_rows, ensure_ascii=False)
+                          if info["complete"] and len(observed) <= 30 else "")
                 if inline and len(inline) <= 9000:
-                    out.append(f"全部行（共 {len(table_rows)} 行，已读完所有页；单表原样字段或名单可直接引用上方读取回执交付，"
-                               f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算）：" + inline)
+                    out.append(f"全部行（共 {len(observed)} 行，已读完所有页；内联时间字段已按本应用时区换算为 YYYY-MM-DD HH:MM:SS，单表原样字段或名单可直接引用上方读取回执交付，"
+                               f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算，注意 SQL 行表内时间列仍存原始毫秒整数）：" + inline)
                 else:
-                    out.append("样例（不是全表）：" + json.dumps(table_rows[:3], ensure_ascii=False)[:2600])
+                    out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
             return self._told(out, data_lines)
         if rows is None:
             shown = self._row(data) if isinstance(data, dict) else data
@@ -1113,7 +1138,7 @@ TABLE_READ_RULES = """1. 读同账号的应用接口。search_api 找接口，ca
 4）同名时按组织用语约定和所在模块消歧；仍有多条，列候选并追问，不缩短名称或穷举模块。关联对象先按确切名称解析同账号编号，条件和分组用编号，名称用于展示。
 5）问指定记录的详情，优先查该记录的详情接口，不把列表摘要当成详情。
 6）要改数据先读现值；已经满足就说明，只改用户指定项；要求追加/补充备注等文字时保留原值再追加。删改/作废/关闭/反审或问操作限制与连带影响时，先用 entity_rules 查编译期规则再用 call_api 核对现值；跨模块消歧或金额单位口径拿不准时用 load_domain_guide。
-7）实际写入仍须走已安装 Skill 的批准、执行及核验；没有已核验回执不能声称写成。只要求预填时，填好交给用户，停在提交前。
+7）实际写入须经用户批准、程序执行及同账号回读核验（有对应 Skill 时用 Skill 提案；Skill 未覆盖且本部署开放批准后提交时，在用户页用原生表单或行内按钮配合 request_submit 提交，不得因无对应 Skill 拒答）；没有已核验回执不能声称写成。只要求预填或留空待补时，填好交给用户，停在提交前。
 8）查无结果要说清条件和范围；CRM sceneType 只按用户明确的负责/参与/下属等条件使用。后续指代重新读取，历史答复不算当前证据。
 9）组织审阅过的业务用语约定照用，不自行套用额外默认条件。
 10）最早、最晚、最大、最小等有并列时列出全部；取前 N 名保留第 N 名并列。需要唯一结果时再问用户。
@@ -2629,7 +2654,10 @@ class YudaoLoopProcedures:
                 LoopToolResult(text, kind="page", state="unverified" if incomplete else "completed"))
 
     def _entity_rules(self, s, target: str, operation: str = "") -> str:
-        index = self.goal_port.index(context=s.operation)
+        rules_fn = (getattr(self.goal_port, "rules_index", None)
+                    or getattr(getattr(self.goal_port, "data", None), "rules_index", None))
+        index = (rules_fn(context=s.operation) if callable(rules_fn)
+                 else self.goal_port.index(context=s.operation))
         query = (target or "").strip().casefold()
         op_filter = (operation or "").strip().casefold()
         if not query:
@@ -2877,6 +2905,9 @@ class YudaoLoopProcedures:
         with self.knowledge.client.read_window(bound._check):
             self.knowledge._load()
             suggested = self.knowledge.suggest(prompt)
+        dates = _precomputed_dates(prompt, _TURN_TABLES.get())
+        if dates:
+            suggested = (suggested + "\n\n" + dates) if suggested else dates
         return suggested
 
     def execute(self, name, arguments, context):
@@ -2892,6 +2923,77 @@ class YudaoLoopProcedures:
         context.page.checkpoint()
         return replace(result, entered=tuple(turn["touched"]), trace=tuple(turn["trace"]),
                        read_summary=turn["reads"][-1] if turn["reads"] else None, marked=turn["marked"])
+
+
+_ROLLING_DAYS_RE = re.compile(r"(?:近|最近|过去)\s*([1-9][0-9]{0,2})\s*(?:个)?(?:自然)?(?:天|日)")
+
+
+def _precomputed_dates(prompt: str, table_context) -> str:
+    """Precompute standard relative date ranges on turn start so simple temporal queries
+    need no extra `date_range` model round-trip."""
+    if not prompt or table_context is None:
+        return ""
+    store, today, zone = table_context
+    text = prompt.strip()
+    specs: list[tuple[str, dict]] = []
+    if re.search(r"今天|今日|当天", text):
+        specs.append(("今天", {"unit": "day", "offset": 0}))
+    if re.search(r"昨天|昨日", text):
+        specs.append(("昨天", {"unit": "day", "offset": -1}))
+    if re.search(r"明天|明日", text):
+        specs.append(("明天", {"unit": "day", "offset": 1}))
+    if re.search(r"本周|这周", text):
+        specs.append(("本周（已发生截至今日）", {"unit": "week", "offset": 0, "scope": "occurred"}))
+        specs.append(("本周（计划/完整周）", {"unit": "week", "offset": 0, "scope": "planned"}))
+    if re.search(r"上周|上一周", text):
+        specs.append(("上周", {"unit": "week", "offset": -1}))
+    if re.search(r"本月|这个月|当月", text):
+        specs.append(("本月（已发生截至今日）", {"unit": "month", "offset": 0, "scope": "occurred"}))
+        specs.append(("本月（计划/预算完整月）", {"unit": "month", "offset": 0, "scope": "planned"}))
+    if re.search(r"上月|上个月", text):
+        specs.append(("上个月", {"unit": "month", "offset": -1}))
+    if re.search(r"本季度?|当前季度|当季", text):
+        specs.append(("本季度（已发生截至今日）", {"unit": "quarter", "offset": 0, "scope": "occurred"}))
+        specs.append(("本季度（计划/预算完整季）", {"unit": "quarter", "offset": 0, "scope": "planned"}))
+    if re.search(r"上季度?|上一季度", text):
+        specs.append(("上季度", {"unit": "quarter", "offset": -1}))
+    if re.search(r"今年|本年|年初至今", text):
+        specs.append(("今年（已发生截至今日）", {"unit": "year", "offset": 0, "scope": "occurred"}))
+        specs.append(("今年（计划/预算完整年）", {"unit": "year", "offset": 0, "scope": "planned"}))
+    if re.search(r"去年|上一年", text):
+        specs.append(("去年", {"unit": "year", "offset": -1}))
+    if re.search(r"最近一个月|近一个月|过去一个月", text):
+        specs.append(("最近一个月（近30天含今日）", {"unit": "rolling_days", "days": 30}))
+    if re.search(r"近一周|最近一周|过去一周|近七天|最近七天", text):
+        specs.append(("近7天（含今日）", {"unit": "rolling_days", "days": 7}))
+    for m in _ROLLING_DAYS_RE.finditer(text):
+        days = int(m.group(1))
+        if days not in (7, 30) or not any(f"近{days}天" in label for label, _ in specs):
+            specs.append((f"近{days}天（含今日）", {"unit": "rolling_days", "days": days}))
+    if not specs:
+        return ""
+    lines = []
+    values = getattr(store, "precomputed_date_values", None)
+    if values is None:
+        values = []
+        store.precomputed_date_values = values
+    for label, kw in specs[:6]:
+        try:
+            r = date_range(today=today, zone=zone, **kw)
+        except TurnReadError:
+            continue
+        for v in (r["start"], r["end_inclusive"], r["end_exclusive"], r["start_ms"], r["end_exclusive_ms"]):
+            if v not in values:
+                values.append(v)
+        lines.append(
+            f"- {label}：{r['start']} ~ {r['end_inclusive']}（左闭右开 < {r['end_exclusive']}；"
+            f"毫秒 [{r['start_ms']}, {r['end_exclusive_ms']})）"
+        )
+    if not lines:
+        return ""
+    ref = store.issue_receipt()
+    return (f"程序按应用当前日期预换算的相对时间范围（回执 {ref}；可直接用于接口参数、SQL 或表单填写，"
+            f"无需重复调用 date_range；其它指定年月/自定义区间仍调 date_range）：\n" + "\n".join(lines))
 
 
 class _Procedure:
@@ -3141,6 +3243,11 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                     if callable(mark_fn):
                         turn["handoff_mark"] = mark_fn()
         if self.native_submit is not None and result.entered:
+            table_ctx = _TURN_TABLES.get()
+            if table_ctx is not None and not turn.get("_seeded_precomputed_dates"):
+                turn["_seeded_precomputed_dates"] = True
+                for val in getattr(table_ctx[0], "precomputed_date_values", ()):
+                    note_receipt(turn, "", val)
             self.note_entries(s, turn, result.entered, before,
                               receipts=self._tool_receipts[receipt_start:])
             ledger = turn.get("source_ledger")
@@ -3308,7 +3415,7 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                     + (f"直接保存会把 {effects}；" if effects else "直接保存会带入未核对的变化；")
                     + "请核对后自己提交。").strip()}
         pressed = (self._await_handoff_press(s, turn)
-                   if args.get("status") in ("done", "cannot") else "")
+                   if args.get("status") in ("done", "cannot") and self._submit_allowed(turn) else "")
         if pressed:
             args = {**args, "answer": (str(args.get("answer") or "").rstrip() + "\n\n" + pressed).strip()}
         return args
@@ -3412,7 +3519,24 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
             self.native_submit = native_submit
             if hasattr(self.channel, "read_only_mode"):
                 self.channel.read_only_mode = False
-            self.profile = replace(self.profile, instructions=self.profile.instructions + NATIVE_SUBMIT_RULES)
+            updated_instructions = (
+                self.profile.instructions
+                .replace(
+                    "只有下面“已安装的 Skill”覆盖的操作能办：你提出写入提案，用户在批准卡片上确认后，程序执行一次并回读核对。\n"
+                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 时把表单填好交接。",
+                    "优先用下面“已安装的 Skill”覆盖的操作提出提案；Skill 未覆盖的新增、修改或行内状态动作，"
+                    "在用户页用原生表单或行内按钮配合 request_submit 经批准卡提交（不得因无对应 Skill 而拒绝，唯独涉及密码或本地文件上传时填好其余字段交接）。\n"
+                    "   - 本轮提供了 Skill 写入工具且用户要求办理其覆盖的事时，先 load_skill，再用已安装操作提出提案；没有对应 Skill 且非纯预填时，打开对应页面表单填好后用 request_submit 请求批准提交。",
+                    1,
+                )
+                .replace(
+                    "用户要的事里有 Skill 办不到的部分（参数里没有的字段、另一种业务动作）：先如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
+                    "用户要的事里若既有 Skill 参数没覆盖某个字段或动作，改走用户页原生表单配合 request_submit 办理；若应用页面本身也不支持，再如实说明办不到的是哪部分（cannot），不要只办能办的那部分就说完成。",
+                    1,
+                )
+                + NATIVE_SUBMIT_RULES
+            )
+            self.profile = replace(self.profile, instructions=updated_instructions)
 
     def _untraced_numbers(self, prompt, answer, turn):
         stripped = _TABLE_TOKEN.sub("", _BARE_RECEIPT.sub("", answer or ""))

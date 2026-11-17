@@ -113,6 +113,8 @@ class YudaoGoalData:
         #: The schema without the line tables, and its index, until the schema is complete.
         self._outline: Schema | None = None
         self._outline_index: ApplicationIndex | None = None
+        self._rules_index: ApplicationIndex | None = None
+        self._rules_outline: Schema | None = None
         self._outline_entities: dict = {}
         self._index: ApplicationIndex | None = None
         self._conventions: tuple = ()
@@ -155,12 +157,14 @@ class YudaoGoalData:
 
     def attach_conventions(self, conventions) -> None:
         with self._lock:
-            self._conventions, self._index = tuple(conventions), None
+            self._conventions = tuple(conventions)
+            self._index = self._outline_index = self._rules_index = None
 
     def attach_source(self, source) -> None:
         """Compile the deployment's source rules (`YudaoSource`) into the index."""
         with self._lock:
-            self._source, self._index = source, None
+            self._source = source
+            self._index = self._rules_index = None
 
     def capabilities(self) -> frozenset[str]:
         # Candidate values are records found by name, which every entity here offers.
@@ -242,6 +246,7 @@ class YudaoGoalData:
                 # metadata as well as data, so old opaque entity IDs cannot survive it.
                 self._schema, self._index = None, None
                 self._outline, self._outline_index = None, None
+                self._rules_index, self._rules_outline = None, None
                 self._entities.clear()
                 self._lines.clear()
                 self._read.clear()
@@ -277,6 +282,25 @@ class YudaoGoalData:
                         conventions=self._conventions, actor=self._actor), complete=self._menu_complete)
                 return self._outline_index, schema
         return self.index(context=context), schema
+
+    def rules_index(self, *, context=None) -> ApplicationIndex:
+        """An index with compiled source rules over the outline schema, avoiding per-entity
+        line-table sample GETs when answering `entity_rules` queries."""
+        outline = self.outline()
+        with self._lock:
+            if self._index is not None and outline is self._schema:
+                return self._index
+            if self._rules_index is None or self._rules_outline is not outline:
+                rules, digest = {}, ""
+                if self._source is not None:
+                    rules, _controls = self._source.rules(self._entity_sources(outline))
+                    digest = self._source.release
+                self._rules_index = replace(index_from_schema(
+                    outline, breadcrumbs=self._breadcrumbs, aliases=self._aliases,
+                    conventions=self._conventions, rules=rules, source_digest=digest,
+                    actor=self._actor), complete=self._menu_complete)
+                self._rules_outline = outline
+            return self._rules_index
 
     def _known(self) -> Schema:
         """The complete schema when there is one, else the outline: for reading entities
@@ -752,10 +776,16 @@ class YudaoGoalData:
                 return tuple(Ref(entity=entity, id=_row_id(r), display=text.strip(),
                                  name=self._display(entity, r))
                              for r in picked[:limit])
-        rows = self._people(entity) if entity in (_USERS, _DEPTS) else self._fetch(
-            entity, self._narrowing(entity, text))
+        narrow = None if entity in (_USERS, _DEPTS) else self._narrowing(entity, text)
+        rows = self._people(entity) if entity in (_USERS, _DEPTS) else self._fetch(entity, narrow)
         hits = [(self._display(entity, r), r) for r in rows]
-        hits = [(d, r) for d, r in hits if wanted in d.casefold()]
+        narrow_key = narrow.field if isinstance(narrow, Compare) and narrow.field in self._CODE_KEYS else ""
+        hits = [
+            (d, r)
+            for d, r in hits
+            if wanted in d.casefold()
+            or (narrow_key and wanted in str(r.get(narrow_key) or "").casefold())
+        ]
         if entity == "crm/contact":
             # The customer detail's contact list can expose an actor-readable
             # contact absent from mine/participant/subordinate scenes. Search the
@@ -1295,11 +1325,16 @@ class YudaoGoalData:
         rows = self._client.get(path) or []
         return [{"id": r["id"], "name": r.get("nickname") or r.get("name") or str(r["id"])} for r in rows]
 
+    _SERIAL_CODE = re.compile(r"^[A-Za-z]{1,10}\d{6,32}$")
+    _CODE_KEYS = ("no", "code", "orderNo", "sn", "bizNo", "sourceNo", "trackNo", "username")
+
     def name_searchable(self, entity: str, text: str) -> bool:
         """Whether an unscoped lookup across every entity can check `entity` without
         unbounded full-table pagination or writing GET side effects."""
+        token = text.strip()
+        is_serial = bool(self._SERIAL_CODE.fullmatch(token))
         if entity in (_USERS, _DEPTS):
-            return True
+            return not is_serial
         spec = self._entities.get(entity)
         if spec is None:
             return False
@@ -1308,6 +1343,8 @@ class YudaoGoalData:
             return False
         if self._narrowing(entity, text) is not EVERYTHING:
             return True
+        if is_serial and not (set(self._CODE_KEYS) & set(spec.props)):
+            return False
         return (full_path in (self._docs.get("paths") or {})
                 and _unpaged(self._docs, spec.list_path)
                 and not (set(spec.required) - set(spec.fixed_params)))
@@ -1317,9 +1354,15 @@ class YudaoGoalData:
         spec = self._entities.get(entity)
         if spec is None:
             return EVERYTHING
-        candidates = [spec.name_field, "name", "title", "nickname", "subject"]
-        if re.fullmatch(r"[A-Za-z0-9_-]{3,64}", text.strip()):
-            candidates.extend(("no", "code", "username", "sn"))
+        token = text.strip()
+        if self._SERIAL_CODE.fullmatch(token):
+            candidates = [*self._CODE_KEYS]
+            if spec.name_field in self._CODE_KEYS:
+                candidates.insert(0, spec.name_field)
+        else:
+            candidates = [spec.name_field, "name", "title", "nickname", "subject"]
+            if re.fullmatch(r"[A-Za-z0-9_-]{3,64}", token):
+                candidates.extend(self._CODE_KEYS)
         for key in dict.fromkeys(c for c in candidates if c):
             if key in spec.params and (key == spec.name_field or (
                     key in spec.props and spec.params[key].get("type") in (None, "string"))):

@@ -346,7 +346,13 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         if sources is not None:
             instructions += SOURCE_INSTRUCTIONS
         if catalog:
-            instructions += "\n只有已安装的 Skill 可提出写入；先加载对应 Skill 再提出它的 typed 操作。" + \
+            write_lead = (
+                "\n有已安装的 Skill 覆盖时，优先加载对应 Skill 再提出它的 typed 操作；"
+                "Skill 未覆盖的页面表单或行内状态修改，用 request_submit 提出批准（仅要求预填时停在提交前）。"
+                if getattr(self, "native_submit", None) is not None else
+                "\n只有已安装的 Skill 可提出写入；先加载对应 Skill 再提出它的 typed 操作。"
+            )
+            instructions += write_lead + \
                 "参数照用户原话，缺少信息先询问；每项写入有独立批准，拒绝或结果未知不能重发。\n已安装的 Skill：\n" + \
                 "\n".join(f"- {skill.name}：{skill.description}" for skill, _ in catalog)
         self._messages = [{"role": "system", "content": instructions}, *earlier]

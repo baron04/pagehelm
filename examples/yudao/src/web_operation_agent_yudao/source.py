@@ -184,6 +184,13 @@ class YudaoSource:
         self._lines: dict[str, list[bytes]] = {}
         self._server_snapshot = None
         self._ui_cache_complete = True
+        self._instance_lock = RLock()
+
+    def warm(self) -> None:
+        """Precompile server and UI source caches outside live turns."""
+        with self._instance_lock:
+            self._server_rules()
+            self._ui_rules()
 
     # -- citations ------------------------------------------------------------------------
     def _read(self, relative: str) -> str:
@@ -719,8 +726,12 @@ class YudaoSource:
     def rules(self, entities: tuple[EntitySource, ...]) -> tuple[dict[str, tuple[IndexRule, ...]],
                                                                   dict[str, tuple[str, ...]]]:
         """(entity key -> its rules, entity key -> the controls its pages show)."""
-        operations, refusals, cascades = self._server_rules()
-        buttons, form_fields = self._ui_rules()
+        with self._instance_lock:
+            operations, refusals, cascades = self._server_rules()
+            buttons, form_fields = self._ui_rules()
+            return self._assemble_rules(entities, operations, refusals, cascades, buttons, form_fields)
+
+    def _assemble_rules(self, entities, operations, refusals, cascades, buttons, form_fields):
         by_dir = sorted((e for e in entities if e.component_dir), key=lambda e: -len(e.component_dir))
         out: dict[str, list[IndexRule]] = {e.key: [] for e in entities}
         controls: dict[str, list[str]] = {e.key: [] for e in entities}
