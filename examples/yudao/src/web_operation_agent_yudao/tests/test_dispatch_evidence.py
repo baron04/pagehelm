@@ -18,7 +18,8 @@ class DispatchEvidenceTests(unittest.TestCase):
         from web_operation_agent_yudao.write_special import STATE_PATHS
         self.assertEqual(set(BACKEND_WRITE_ATOMICITY), set(RECORD_OPERATIONS) | set(STATE_PATHS) |
                          {"crm_receivable_plan_create", "oa_announcement_create", "crm_follow_up_create",
-                      "erp_document_status", "promotion_coupon_template_status", "promotion_seckill_activity_close"})
+                      "erp_document_status", "promotion_coupon_template_status", "promotion_seckill_activity_close",
+                      "update_record", "toggle_record_status"})
         self.assertFalse(BACKEND_WRITE_ATOMICITY["crm_follow_up_create"][0])
 
     def test_native_ack_refusal_invalid_ack_and_partial_error_remain_distinct(self):

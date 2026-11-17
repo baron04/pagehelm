@@ -84,8 +84,30 @@ class SkillWrites:
         """The operations the Skills loaded so far let this turn propose."""
         return tuple(self._offered(self.loaded_ids).values())
 
+    def available_definitions(self) -> tuple:
+        """Every offered write definition across all actor-eligible installed Skills."""
+        seen: dict[str, object] = {}
+        for _skill, definitions in self.catalog():
+            for d in definitions:
+                seen.setdefault(d.name, d)
+        return tuple(seen.values())
+
+    def owner_for_operation(self, operation: str):
+        """Return the unique ``(skill, definition)`` supporting ``operation``, or None."""
+        matches = [
+            (skill, d)
+            for skill, definitions in self.catalog()
+            for d in definitions
+            if d.name == operation
+        ]
+        return matches[0] if len(matches) == 1 else None
+
     @staticmethod
-    def _validate_prepared_update(definition, inputs: dict, texts, proposal) -> None:
+    def _validate_prepared_update(definition, inputs: dict, texts, proposal,
+                                  existing_values: dict[str, tuple[str, ...]] | None = None) -> None:
+        provenance_fn = getattr(definition.handler, "validate_provenance", None)
+        if callable(provenance_fn):
+            provenance_fn(inputs, tuple(texts), proposal, existing_values=existing_values)
         if definition.operation.operation != "update" or proposal.effect_projection is None:
             return
         before_map = json.loads(proposal.effect_projection.before_json)
@@ -160,7 +182,7 @@ class SkillWrites:
             prefill_port=prefill_port,
             prefill_observation=prefill_observation,
             check_proposal=lambda proposal: self._validate_prepared_update(
-                definition, inputs, texts, proposal
+                definition, inputs, texts, proposal, existing_values=existing_values
             ),
         )
         if outcome.state == "completed":

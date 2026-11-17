@@ -1438,4 +1438,26 @@ describe('native editor mode is current application state', () => {
     expect(readElementPageControl(input)).toBeUndefined() // DOM title/id alone do not attest an editor.
     dialog.remove()
   })
+  it('classifies modelless inline filter toolbars as query controls and strips float tail noise on form models', () => {
+    const state = mountedPage('/mall/statistics/product', 'ProductStatistics')
+    state.element.innerHTML = '<form class="el-form el-form--inline"><input></form>'
+    const inlineForm = state.element.querySelector('form')!, filterInput = inlineForm.querySelector('input')!
+    const inlineOwner = {...state.instance, type: {name: 'ElForm'}, props: {},
+      subTree: {type: 'form', el: inlineForm}, vnode: {ctx: state.instance}, parent: state.instance}
+    state.instance.subTree.children = [{component: inlineOwner}] as unknown as NativeVNode[]
+    expect(readElementPageControl(filterInput)).toEqual({kind: 'query'})
+
+    const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog')
+    dialog.innerHTML = '<header class="el-dialog__header">编辑</header><form class="el-form"><input></form>'
+    const form = dialog.querySelector('form')!, input = form.querySelector('input')!
+    for (const node of [dialog, form, input]) node.getBoundingClientRect = () => ({width: 400, height: 200} as DOMRect)
+    state.element.append(dialog)
+    const model = {id: 99, totalPrice: 1370.13 + 1381.43, inTime: 1795485600000}
+    const formOwner = {...state.instance, type: {name: 'ElForm'}, props: {model},
+      subTree: {type: 'form', el: form}, vnode: {ctx: state.instance}, parent: state.instance}
+    state.instance.subTree.children = [{component: formOwner}] as unknown as NativeVNode[]
+    const snapshot = readElementFormModel(input) as {model?: Record<string, unknown>}
+    expect(snapshot.model).toEqual({id: 99, totalPrice: 2751.56, inTime: 1795485600000})
+    dialog.remove()
+  })
 })

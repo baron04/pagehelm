@@ -504,6 +504,11 @@ class MinimalContactsApplication:
         # demonstrate one. `_lock` is what keeps the create and the readback consistent.
         self.workspaces = {DEMO_WORKSPACE: _validated(contacts),
                            OTHER_WORKSPACE: _validated(other_contacts)}
+        #: Optional two-state subscription flags per workspace, keyed by contact id.
+        self.subscriptions: dict[str, dict[str, str]] = {
+            ws: {item["id"]: "enabled" for item in items}
+            for ws, items in self.workspaces.items()
+        }
         if not self.workspaces[DEMO_WORKSPACE]:
             raise ValueError("contacts must contain id, name, and email")
         #: The demo workspace's records, which is what a single-workspace reader expects.
@@ -876,6 +881,56 @@ class MinimalContactsApplication:
                                         urllib.parse.urlsplit(self.path).query, body)
                 if gate == "refused":
                     return
+                delegated_contact = re.fullmatch(r"/api/contacts/([a-z0-9-]+)", path)
+                delegated_sub = re.fullmatch(r"/api/contact-subscriptions/([a-z0-9-]+)", path)
+                if delegated_contact or delegated_sub:
+                    with owner._lock:
+                        owner.write_requests += 1
+                    if resolved is None or resolved[1] != "delegated_api":
+                        self._refuse_write(401, "delegated_token_required")
+                        return
+                    actor = resolved[0]
+                    if "contacts:write" not in actor.permissions:
+                        self._refuse_write(403, "forbidden")
+                        return
+                    try:
+                        payload = json.loads(body or b"{}")
+                    except (ValueError, OSError):
+                        self._reply(400, _json_bytes({"error": "invalid_json"}), "application/json")
+                        return
+                    identifier = (delegated_contact or delegated_sub).group(1)
+                    if delegated_contact:
+                        if not isinstance(payload, dict) or set(payload) != {"id", "name", "email"} or payload["id"] != identifier:
+                            self._reply(400, _json_bytes({"error": "update_shape"}), "application/json")
+                            return
+                        name = str(payload["name"]).strip()
+                        email = str(payload["email"]).strip().casefold()
+                        if not name or not email:
+                            self._reply(400, _json_bytes({"error": "name_and_email_required"}), "application/json")
+                            return
+                        with owner._lock:
+                            store = owner.workspaces[actor.workspace]
+                            record = next((item for item in store if item["id"] == identifier), None)
+                            if record is None:
+                                self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                                return
+                            record["name"], record["email"] = name, email
+                            updated = dict(record)
+                        self._reply(200, _json_bytes({"contact": updated}), "application/json")
+                        return
+                    if not isinstance(payload, dict) or set(payload) != {"id", "status"} or payload["id"] != identifier or payload["status"] not in {"enabled", "disabled"}:
+                        self._reply(400, _json_bytes({"error": "status_shape"}), "application/json")
+                        return
+                    with owner._lock:
+                        store = owner.workspaces[actor.workspace]
+                        record = next((item for item in store if item["id"] == identifier), None)
+                        if record is None:
+                            self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                            return
+                        owner.subscriptions.setdefault(actor.workspace, {})[identifier] = payload["status"]
+                        sub = {"id": identifier, "name": record["name"], "status": payload["status"]}
+                    self._reply(200, _json_bytes({"subscription": sub}), "application/json")
+                    return
                 if path != "/api/browser/contacts":
                     self._refuse_write(404, "not_found")
                     return
@@ -994,6 +1049,38 @@ class MinimalContactsApplication:
                         records = [dict(item)
                                    for item in owner.workspaces[resolved[0].workspace]]
                     self._reply(200, _json_bytes({"contacts": records}),
+                                "application/json; charset=utf-8")
+                elif re.fullmatch(r"/api/contacts/([a-z0-9-]+)", path):
+                    if resolved is None:
+                        self._reply(401, _json_bytes({"error": "unauthenticated"}), "application/json")
+                        return
+                    if "contacts:read" not in resolved[0].permissions:
+                        self._reply(403, _json_bytes({"error": "forbidden"}), "application/json")
+                        return
+                    identifier = path.rsplit("/", 1)[-1]
+                    with owner._lock:
+                        found = next((dict(item) for item in owner.workspaces[resolved[0].workspace]
+                                      if item["id"] == identifier), None)
+                    if found is None:
+                        self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                        return
+                    self._reply(200, _json_bytes({"contact": found}), "application/json; charset=utf-8")
+                elif re.fullmatch(r"/api/contact-subscriptions/([a-z0-9-]+)", path):
+                    if resolved is None:
+                        self._reply(401, _json_bytes({"error": "unauthenticated"}), "application/json")
+                        return
+                    if "contacts:read" not in resolved[0].permissions:
+                        self._reply(403, _json_bytes({"error": "forbidden"}), "application/json")
+                        return
+                    identifier = path.rsplit("/", 1)[-1]
+                    ws = resolved[0].workspace
+                    with owner._lock:
+                        found = next((dict(item) for item in owner.workspaces[ws] if item["id"] == identifier), None)
+                        status = owner.subscriptions.get(ws, {}).get(identifier, "enabled")
+                    if found is None:
+                        self._reply(404, _json_bytes({"error": "not_found"}), "application/json")
+                        return
+                    self._reply(200, _json_bytes({"subscription": {"id": identifier, "name": found["name"], "status": status}}),
                                 "application/json; charset=utf-8")
                 elif path == "/woa/page-controller.js":
                     # The application serves its own PageController from its own origin,

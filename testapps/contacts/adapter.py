@@ -73,7 +73,7 @@ from web_operation_agent.business.forms import (
     ApplicationFormValue,
     FormChoice,
 )
-from web_operation_agent.business.tools.contracts import FormDraft, FormDraftField
+from web_operation_agent.business.tools.contracts import FormDraft, FormDraftField, ToolOperation
 from web_operation_agent.business.errors import BusinessToolRequestError
 from web_operation_agent.business.entities import (
     DESCRIBE_ENTITY_TOOL,
@@ -812,10 +812,10 @@ class _ContactsReconciler:
 
     supported_tools = frozenset({CREATE_CONTACT})
 
-    def __init__(self, executor: "_ContactsToolExecutor", enabled: bool):
+    def __init__(self, executor: "_ContactsToolExecutor", enabled: bool,
+                 extra_tools: frozenset[str] = frozenset()):
         self._executor = executor
-        if not enabled:
-            self.supported_tools = frozenset()
+        self.supported_tools = (frozenset({CREATE_CONTACT}) | extra_tools) if enabled else frozenset()
 
     def reconcile(self, name, business_key, *, evidence, principal):
         if name not in self.supported_tools or principal is None:
@@ -823,6 +823,10 @@ class _ContactsReconciler:
         principal.require_live(application_id=APPLICATION_ID)
         if SCOPES["list_contacts"] not in principal.scopes:
             raise PrincipalError("reconciliation requires the read scope")
+        if name != CREATE_CONTACT:
+            return MutationReconciliation(
+                outcome="unknown", requires_human=True,
+                reason=f"Indeterminate {name} outcome; inspect workspace records under the acting user.")
         proposed = self._executor._normalise(business_key)
         matches = self._executor._existing(proposed["name"])
         return MutationReconciliation(
@@ -837,7 +841,8 @@ class MinimalContactsAdapter:
 
     def __init__(self, origin: str, *, api_token: str = "",
                  allow_mutations: bool = False, mutation_journal=None,
-                 extra_skills: tuple[BusinessSkill, ...] = (), standard_skills: bool = False):
+                 extra_skills: tuple[BusinessSkill, ...] = (), standard_skills: bool = False,
+                 convention_updates: bool = False):
         if allow_mutations and mutation_journal is None:
             raise ValueError("allow_mutations=True requires an explicit mutation journal")
         if (not isinstance(extra_skills, tuple)
@@ -851,12 +856,23 @@ class MinimalContactsAdapter:
         executor = _ContactsToolExecutor(origin, api_token=api_token,
                                          allow_mutations=allow_mutations)
         self._executor = executor
+        forms = _ContactsFormPort(executor)
+        base_scopes = ({tool: scope for tool, scope in SCOPES.items()
+                        if allow_mutations or tool != CREATE_CONTACT})
+        if convention_updates and allow_mutations:
+            base_scopes["update_record"] = "contacts:write"
+            base_scopes["toggle_record_status"] = "contacts:write"
+        self.identity = _ContactsIdentityPort(
+            origin, api_token=api_token,
+            scopes=(frozenset(base_scopes.values()) | forms.required_scopes))
         operations = None
         if standard_skills:
             if extra_skills:
                 raise ValueError("standard packages use their independent installed registry")
             from .packages import contact_operations
-            operations = contact_operations(executor, allow_mutations)
+            operations = contact_operations(executor, allow_mutations,
+                                            convention_updates=convention_updates,
+                                            identity=self.identity)
             skills = []
         declarations = [("list_contacts", ("synthetic.contact", "business.identifier",
                                            "application.route"))]
@@ -875,43 +891,53 @@ class MinimalContactsAdapter:
             declarations.append(
                 (CREATE_CONTACT, ("synthetic.contact", "business.identifier",
                                   "application.route", "business.mutation_result")))
+            if convention_updates:
+                declarations.append(
+                    ("update_record", ("synthetic.contact", "business.identifier", "business.mutation_result")))
+                declarations.append(
+                    ("toggle_record_status", ("synthetic.contact", "business.identifier", "business.mutation_result")))
         data = DeclaredDataClassifier(tuple(sorted(declarations)))
         # A write that cannot say the application confirmed it is refused by the framework
         # before it can be reported as done. An empty tuple here is what a read-only
         # integration declares, and it is not the same thing as having no opinion.
-        postconditions = ResultPostconditionVerifier(
-            ((CREATE_CONTACT, ("content.readback_verified", "audit.readback_verified")),)
-            if allow_mutations else ())
+        post_rules = [((CREATE_CONTACT, ("content.readback_verified", "audit.readback_verified")))] if allow_mutations else []
+        if allow_mutations and convention_updates:
+            post_rules.extend((
+                ("update_record", ("content.verified", "audit.verified")),
+                ("toggle_record_status", ("content.verified", "audit.verified")),
+            ))
+        postconditions = ResultPostconditionVerifier(tuple(post_rules))
         routes = DeclaredRoutePort(
             application_id=APPLICATION_ID,
             tool_route_patterns=(r"/contacts", r"/contacts/new", r"/contacts/[a-z0-9-]+",
                                  r"/contacts/workflows/(?:partner|supplier)"),
         )
-        self.business_tools = BusinessToolRuntime(
-            tuple(skills), executor, application_id=APPLICATION_ID,
-            required_scopes={tool: scope for tool, scope in SCOPES.items()
-                             if allow_mutations or tool != CREATE_CONTACT},
-            mutation_journal=mutation_journal,
-            data_classifier=data, postcondition_verifier=postconditions,
-            route_validator=routes)
-        if operations is not None:
+        if operations is None:
+            self.business_tools = BusinessToolRuntime(
+                tuple(skills), executor, application_id=APPLICATION_ID,
+                required_scopes={tool: scope for tool, scope in SCOPES.items()
+                                 if allow_mutations or tool != CREATE_CONTACT},
+                mutation_journal=mutation_journal,
+                data_classifier=data, postcondition_verifier=postconditions,
+                route_validator=routes)
+        else:
             from .packages import ContactsTools
             # The narrow adapter bridge reuses existing reads and the reviewed REST
             # handler; new operation declarations and step tools share one registry.
             self.business_tools = BusinessToolRuntime((), ContactsTools(executor, operations.tools), application_id=APPLICATION_ID,
-                required_scopes=self.business_tools.required_scopes, mutation_journal=mutation_journal,
+                required_scopes=base_scopes, mutation_journal=mutation_journal,
                 data_classifier=data, postcondition_verifier=postconditions, route_validator=routes,
-                skill_registry=operations.skills, require_skill_for_writes=True)
-        forms = _ContactsFormPort(executor)
-        self.identity = _ContactsIdentityPort(
-            origin, api_token=api_token,
-            scopes=(frozenset(self.business_tools.required_scopes.values())
-                    | forms.required_scopes))
+                skill_registry=operations.skills, require_skill_for_writes=True,
+                operations={
+                    **{name: ToolOperation("contacts", "read") for name in SCOPES if name != CREATE_CONTACT},
+                    **{d.name: d.operation for d in operations.tools.definitions},
+                })
+        extra_reconcile = frozenset({"update_record", "toggle_record_status"}) if convention_updates else frozenset()
         self.ports = ApplicationPorts(
             identity=self.identity,
             routes=routes,
             postconditions=postconditions,
-            reconciliation=_ContactsReconciler(executor, allow_mutations),
+            reconciliation=_ContactsReconciler(executor, allow_mutations, extra_reconcile),
             data=data,
             forms=forms,
             operations=operations,

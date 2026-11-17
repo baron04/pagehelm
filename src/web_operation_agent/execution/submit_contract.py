@@ -20,6 +20,7 @@ from datetime import datetime, tzinfo
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import math
 import re
 import secrets
 import threading
@@ -76,6 +77,10 @@ def digest(value) -> str:
 def _decimal(value) -> Decimal | None:
     if isinstance(value, bool):
         return None
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return Decimal(f"{value:.15g}")
     try:
         parsed = Decimal(str(value).strip())
     except (InvalidOperation, ValueError):

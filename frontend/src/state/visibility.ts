@@ -58,6 +58,8 @@ function coverage(node: HTMLElement, shownRect?: {width: number; height: number}
   return coverable > 0 ? shown / coverable : 0
 }
 
+const THRESHOLDS = Array.from({length: 21}, (_, index) => index / 20)
+
 export function useVisibilityGate(options: {
   minVisibleRatio: number
   minVisibleMs: number
@@ -67,29 +69,71 @@ export function useVisibilityGate(options: {
   const visibleSince = useRef(0)
   const reported = useRef(false)
   const observer = useRef<IntersectionObserver | null>(null)
+  const cleanupListeners = useRef<(() => void) | null>(null)
   const {minVisibleRatio, minVisibleMs} = options
 
   const attach = useCallback((node: HTMLElement | null) => {
     observer.current?.disconnect()
     observer.current = null
+    cleanupListeners.current?.()
+    cleanupListeners.current = null
     element.current = node
     mountedAt.current = node ? performance.now() : 0
     visibleSince.current = 0
     reported.current = false
-    if (!node || typeof IntersectionObserver === 'undefined') return
+    if (!node) return
+
+    const syncCoverage = () => {
+      if (!node.isConnected) {
+        visibleSince.current = 0
+        return
+      }
+      reported.current = true
+      const visible = coverage(node) >= minVisibleRatio
+      if (visible && !visibleSince.current) visibleSince.current = performance.now()
+      if (!visible) visibleSince.current = 0
+    }
+
+    const targets: EventTarget[] = []
+    if (typeof window !== 'undefined') {
+      targets.push(window)
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const style = getComputedStyle(parent)
+        if (CLIP.test(style.overflowY) || CLIP.test(style.overflowX)) targets.push(parent)
+      }
+      for (const target of targets) {
+        target.addEventListener('scroll', syncCoverage, {passive: true})
+        target.addEventListener('resize', syncCoverage, {passive: true})
+      }
+      cleanupListeners.current = () => {
+        for (const target of targets) {
+          target.removeEventListener('scroll', syncCoverage)
+          target.removeEventListener('resize', syncCoverage)
+        }
+      }
+    }
+
+    if (typeof IntersectionObserver === 'undefined') return
+    const thresholds = THRESHOLDS.includes(minVisibleRatio)
+      ? THRESHOLDS
+      : [...THRESHOLDS, minVisibleRatio].sort((a, b) => a - b)
     const created = new IntersectionObserver(records => {
       const record = records.at(-1)
       if (!record) return
       reported.current = true
-      const visible = record.isIntersecting && coverage(node, record.intersectionRect) >= minVisibleRatio
+      const ratio = coverage(node, record.intersectionRect)
+      const visible = record.isIntersecting && (ratio >= minVisibleRatio || coverage(node) >= minVisibleRatio)
       if (visible && !visibleSince.current) visibleSince.current = performance.now()
       if (!visible) visibleSince.current = 0
-    }, {threshold: [0, 0.25, 0.5, 0.75, minVisibleRatio, 1]})
+    }, {threshold: thresholds})
     created.observe(node)
     observer.current = created
   }, [minVisibleRatio])
 
-  useEffect(() => () => observer.current?.disconnect(), [])
+  useEffect(() => () => {
+    observer.current?.disconnect()
+    cleanupListeners.current?.()
+  }, [])
 
   const refusalFor = useCallback((event: {isTrusted: boolean}) => {
     if (!event.isTrusted) return 'panel_not_visible'

@@ -152,6 +152,8 @@ class YudaoApplication:
                                                  current_form=forms.current_goal_form,
                                                  today=today, reference_workers=8)
             self.native_tab_policy = forms.click_policy(self.native_tab_policy)
+        if isinstance(self.goal_port, NativePageGoalPort):
+            self.goal_port.allow_updates = bool(native_writes or native_write_preparation)
         reads = YudaoReadTools(self.goal_data, application_id=APPLICATION_ID)
         self.data_reads = DataReadTools(
             lambda context, checkpoint: BoundDataReads(self.goal_data, context, checkpoint),

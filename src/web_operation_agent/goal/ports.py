@@ -220,11 +220,12 @@ REQUIRED = ("index", "records", "facts", "aggregates", "pages")
 #: tabs on a record's page ("sections"), the lines a record's form embeds ("lines"),
 #: business controls to point at ("handoffs"), entering a value before handing over
 #: ("fill"), free text searched on a page ("search"), rules compiled from the
-#: deployment's source ("source"), and real values offered before the declaration --
+#: deployment's source ("source"), real values offered before the declaration --
 #: a named record's lines, a named partner's documents -- through
-#: `candidates(entities=, known=, context=)` ("values").
+#: `candidates(entities=, known=, context=)` ("values"), and symmetric flat record
+#: updates / two-state status toggles over same-actor readback ("updates").
 OPTIONAL = frozenset({"facets", "paging", "sections", "lines", "handoffs", "fill", "search", "source",
-                      "values"})
+                      "values", "updates"})
 
 
 class GoalPort(Protocol):

@@ -642,9 +642,14 @@ export class Page {
         const option = matches[0]!
         const hitArea = tree ? ownTreeRow(option) ?? option : option
         const indexed = [...state.content.matchAll(/(?:^|\n)\s*\*?\[(\d+)]</g)].map(m => Number(m[1]))
-        const indexes = indexed.filter(i => {
+        const exactIndexes = indexed.filter(i => {
           const n = this.lookup(this.controller.selectorMap, i)
           return n === innerOption || n === hitArea || n === option
+        })
+        const indexes = exactIndexes.length ? exactIndexes : indexed.filter(i => {
+          const n = this.lookup(this.controller.selectorMap, i)
+          return n instanceof Element && hitArea.contains(n) &&
+            (tree ? n.closest('[role="treeitem"]') === option : n.closest('[role="option"]') === option)
         })
         if (indexes.length === 0) {
           if (attempt === 8) break

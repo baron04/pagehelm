@@ -73,6 +73,7 @@ class UiSource:
     record_sections: dict = field(default_factory=dict)
     #: Table component -> literal row-field dictionary bindings; empty means unresolved.
     table_dicts: dict = field(default_factory=dict)
+    root: Path | None = None
 
     def line_labels(self, component_dir: str) -> dict:
         """The labels the tables of a page's own files give row fields (`productPrice` ->
@@ -144,7 +145,8 @@ class UiSource:
                                       column_units=units, query_choices=query_choices, query_dicts=query_dicts)
         router = (src / "router" / "modules" / "remaining.ts").read_text(encoding="utf-8")
         return UiSource(views=views, records=_record_routes(router), tables=tables,
-                        record_sections=_record_sections(src, router), table_dicts=table_dicts)
+                        record_sections=_record_sections(src, router), table_dicts=table_dicts,
+                        root=Path(root).resolve())
 
 
 def _query_choices(text: str, dictionary: str):

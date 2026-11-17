@@ -418,8 +418,10 @@ def native_tools(client, goal_data, *, runtime_dictionary=False, mutation_dispat
             effect_contract=NativeEffects(name),
             scope_entities=tuple(schema["properties"]["entity"]["enum"])))
     from .write_special import special_tools
+    from .convention_writes import yudao_convention_tools
     definitions.extend(special_tools(client, goal_data, NativeWriteHandler,
         dictionary_rows=rows if runtime_dictionary else None))
+    definitions.extend(yudao_convention_tools(client, goal_data))
     return ToolRegistry(tuple(definitions), mutation_dispatch_enabled=mutation_dispatch_enabled)
 
 

@@ -34,10 +34,12 @@ _DESK_SECTIONS = ("Overview", "Terms")
 class ContactsGoalPort:
     """Resolve a small, real REST application's goals under its delegated actor."""
 
-    def __init__(self, adapter: MinimalContactsAdapter, *, form_prefill: bool = False):
-        if not isinstance(form_prefill, bool):
-            raise TypeError("form_prefill must be boolean")
+    def __init__(self, adapter: MinimalContactsAdapter, *, form_prefill: bool = False,
+                 convention_updates: bool = False):
+        if not isinstance(form_prefill, bool) or not isinstance(convention_updates, bool):
+            raise TypeError("form_prefill and convention_updates must be boolean")
         self._form_prefill = form_prefill
+        self._convention_updates = convention_updates
         self._adapter = adapter
         executor = adapter.business_tools._executor
         self._executor = getattr(executor, "reads", executor)
@@ -85,7 +87,9 @@ class ContactsGoalPort:
         """Beyond the required level this application offers tabs on its vendor desks,
         the creation handoff and candidate values (its contacts); it has no page filters,
         search box or lines."""
-        return frozenset({"sections", "handoffs", "values"} | ({"fill"} if self._form_prefill else set()))
+        return frozenset({"sections", "handoffs", "values"}
+                         | ({"fill"} if self._form_prefill else set())
+                         | ({"updates"} if self._convention_updates else set()))
 
     def candidates(self, *, entities: tuple[str, ...] = (), known: tuple = (),
                    dates: tuple[str, ...] = (), context: OperationContext | None = None):

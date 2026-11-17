@@ -223,6 +223,8 @@ BACKEND_WRITE_ATOMICITY = MappingProxyType({
     "crm_receivable_plan_create": (True, "CrmReceivablePlanServiceImpl#createReceivablePlan"),
     "oa_announcement_create": (True, "OaAnnouncementServiceImpl#createAnnouncement"),
     "crm_follow_up_create": (False, "CrmFollowUpRecordServiceImpl#createFollowUpRecord"),
+    "update_record": (False, "YudaoConventionWritePort#dispatch_update"),
+    "toggle_record_status": (False, "YudaoConventionWritePort#dispatch_status"),
 })
 
 

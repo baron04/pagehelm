@@ -320,6 +320,31 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(permit(card, baseline=record, reread=lambda: record).admit(
             "PUT", PREFIX + "update", "", body(mobile="1")).code, "change_not_on_card")
 
+    def test_binary64_float_tail_noise_matches_precision_15_without_relaxing_real_deltas(self):
+        self.assertTrue(same_value(1370.13 + 1381.43, 2751.56))
+        self.assertTrue(same_value(0.1 + 0.2, 0.3))
+        self.assertFalse(same_value(2751.560001, 2751.56))
+        self.assertFalse(same_value(2751.57, 2751.56))
+        self.assertFalse(same_value("007", "7"))
+        self.assertFalse(same_value("0012.50", "12.5"))
+
+        base_with_total = {**LOADED, "totalPrice": 2751.56}
+        card_model = {**base_with_total, "mobile": "13900000000"}
+        card = build_card(
+            conventions=CONVENTIONS,
+            loaded=form(base_with_total),
+            form=form(card_model),
+            page="/erp/purchase-in",
+            button="确定",
+            mode="update",
+            record_id="7",
+            target_name="张三",
+        )
+        permit_ = SubmitPermit("a" * 64, card, (PREFIX,), CATALOG, base_with_total, lambda: dict(base_with_total),
+                               conventions=CONVENTIONS)
+        sent = json.dumps({**card_model, "totalPrice": 1370.13 + 1381.43}).encode()
+        self.assertTrue(permit_.admit("PUT", PREFIX + "update", "", sent).allowed)
+
 
 class DryRunTests(unittest.TestCase):
     def test_a_dry_run_judges_like_a_real_one_and_sends_nothing(self):

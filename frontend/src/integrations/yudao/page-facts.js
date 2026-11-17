@@ -852,7 +852,11 @@ function cloneFormModel(model) {
     if (depth > FORM_LIMITS.depth) throw new Error('too_deep')
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
     // As JSON.stringify, which is what the page sends: a number that is not finite is null.
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null
+    // Strip binary64 floating-point tail noise (e.g. 1370.13 + 1381.43 = 2751.5600000000004).
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return null
+      return Number.isInteger(value) ? value : Number(value.toPrecision(15))
+    }
     if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString()
     if (typeof value !== 'object') return undefined
     if (active.has(value)) throw new Error('cyclic')
@@ -1045,7 +1049,16 @@ export function readElementPageControl(element) {
     // by this exact active component, not a child editor or cached view.
     if (!binding || binding.owned.length !== 1 || binding.owned[0] !== binding.instance ||
         !model || typeof model !== 'object' || !Number.isSafeInteger(model.pageNo) ||
-        model.pageNo < 1 || !Number.isSafeInteger(model.pageSize) || model.pageSize < 1) return undefined
+        model.pageNo < 1 || !Number.isSafeInteger(model.pageSize) || model.pageSize < 1) {
+      if (form.classList.contains('el-form--inline')) {
+        const inlineBinding = binding ?? pageComponentForRoot(form, 'ElForm', true)
+        const inlineModel = inlineBinding?.instance.props?.model
+        if (inlineBinding && (inlineModel === undefined || inlineModel === null)) {
+          return {kind: 'query'}
+        }
+      }
+      return undefined
+    }
     const itemRoot = element.closest('.el-form-item')
     const item = itemRoot && pageComponentForRoot(itemRoot, 'ElFormItem')
     const field = item?.instance.props?.prop

@@ -30,7 +30,9 @@ export async function clickElement(element, invoked = () => {}) {
   const rect = element.getBoundingClientRect()
   const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2
   const hit = element.ownerDocument.elementFromPoint(x, y)
-  const target = hit instanceof HTMLElement && element.contains(hit) ? hit : element
+  const avoidInnerInput = element instanceof HTMLElement && element.classList.contains('el-select__wrapper') &&
+    hit instanceof HTMLInputElement && hit.classList.contains('el-select__input')
+  const target = hit instanceof HTMLElement && element.contains(hit) && !avoidInnerInput ? hit : element
   const pointer = {bubbles: true, cancelable: true, clientX: x, clientY: y, pointerType: 'mouse'}
   const mouse = {bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0}
   notify(invoked)
@@ -147,9 +149,12 @@ export class PageController extends GenericPageController {
     if (bindings && await boundClick(target, () => record('binding'))) {
       return finish({success: true, message: 'component click binding'})
     }
-    if (element instanceof HTMLLabelElement && target instanceof HTMLInputElement && element !== target) {
-      // Label focus does not open Element Plus's query select. Click its exact
-      // owned wrapper through the existing controller's fixed DOM operation.
+    if (target instanceof HTMLInputElement &&
+        ((element instanceof HTMLLabelElement && element !== target) ||
+         (element === target && target.getAttribute('role') === 'combobox' &&
+          target.getAttribute('aria-expanded') !== 'true'))) {
+      // Label focus or inner combobox input click (@click.stop in Element Plus) does not
+      // open Element Plus's select. Click its exact owned wrapper through the controller.
       const wrapper = target.closest('.el-select__wrapper')
       if (wrapper && nativeControlElement(wrapper) === target) {
         await clickElement(wrapper, () => record('ordinary'))

@@ -18,6 +18,7 @@ from ..state.identity import PrincipalError
 from ..business.tools.registry import validate_input
 from ..goal.executor import GoalTurnExecutor
 from ..goal.skill_writes import SkillWrites
+from ..business.convention_writes import normalize_changes_argument
 from ..goal.ports import capabilities_of
 from ..goal.data import DataRefused
 from ..privacy import SessionHandoffPolicy
@@ -99,6 +100,39 @@ WRITE_TOOLS = [{"type": "function", "function": {"name": name, "description": de
     ("load_skill", "加载当前 actor 可用的已安装 Skill 及其操作。", {"skill": {"type": "string", "maxLength": 200}}),
     ("read_skill_resource", "读取已加载 Skill 的有界参考资料。", {"skill": {"type": "string", "maxLength": 200},
                                                            "path": {"type": "string", "maxLength": 300}}))]
+PROPOSE_OPERATION_TOOL = {"type": "function", "function": {
+    "name": "propose_operation",
+    "description": (
+        "直接调用“已安装的写入操作”清单中的操作提出写入提案（无需先调用 load_skill，程序自动加载对应 Skill、"
+        "校验参数并出卡请用户批准，批准后单次执行并同账号回读核验）。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "operation": {"type": "string", "minLength": 1, "maxLength": 120,
+                          "description": "“已安装的写入操作”清单中的确切操作名"},
+            "inputs": {"type": "object", "description": "该操作的输入参数 JSON 对象"},
+        },
+        "required": ["operation", "inputs"],
+        "additionalProperties": False,
+    },
+}}
+
+
+def _operation_catalog_lines(catalog) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for skill, definitions in catalog:
+        for d in definitions:
+            if d.name in seen:
+                continue
+            seen.add(d.name)
+            params = json.loads(d.input_json)
+            props = params.get("properties") or {}
+            req = set(params.get("required") or ())
+            sig = ", ".join(f"{k}*" if k in req else k for k in props)
+            lines.append(f"- {d.name}({sig})：{d.description}（Skill: {skill.name}）")
+    return lines
 
 class _ProcedurePage:
     # A capability object deliberately has no channel, browser or approval API.
@@ -128,6 +162,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
     verifies_finish = False
     api_history_chars = 12000
     program_read_delivery = True
+    direct_skill_operations = False
 
     def _finish_feedback(self, s, turn, args):
         """Return a user-safe reason to send a malformed delivery back to the model."""
@@ -346,15 +381,38 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         if sources is not None:
             instructions += SOURCE_INSTRUCTIONS
         if catalog:
-            write_lead = (
-                "\n有已安装的 Skill 覆盖时，优先加载对应 Skill 再提出它的 typed 操作；"
-                "Skill 未覆盖的页面表单或行内状态修改，用 request_submit 提出批准（仅要求预填时停在提交前）。"
-                if getattr(self, "native_submit", None) is not None else
-                "\n只有已安装的 Skill 可提出写入；先加载对应 Skill 再提出它的 typed 操作。"
-            )
-            instructions += write_lead + \
-                "参数照用户原话，缺少信息先询问；每项写入有独立批准，拒绝或结果未知不能重发。\n已安装的 Skill：\n" + \
-                "\n".join(f"- {skill.name}：{skill.description}" for skill, _ in catalog)
+            if self.direct_skill_operations:
+                has_updates = "updates" in capabilities_of(self.goal_port)
+                conv_hint = (
+                    "；对于扁平单表记录字段修改优先用 update_record，"
+                    "两态启停/上下架优先用 toggle_record_status，专用状态或新建优先用对应专用操作"
+                    if has_updates else ""
+                )
+                write_lead = (
+                    "\n有已安装的写入操作覆盖时，优先直接用 propose_operation(operation, inputs) 提出提案"
+                    f"（程序会自动加载对应 Skill，无需先调 load_skill{conv_hint}）；"
+                    "以上操作均不适用（如新建无专用操作、含嵌套明细行修改等）时，在用户页用原生表单或行内按钮配合 request_submit 提出批准（仅要求预填时停在提交前）。"
+                    if getattr(self, "native_submit", None) is not None else
+                    "\n只有已安装的写入操作可提出写入；可直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill）。"
+                )
+                instructions += (
+                    write_lead
+                    + "参数照用户原话，缺少信息先询问；每项写入有独立批准，拒绝或结果未知不能重发。\n已安装的写入操作（* 为必填参数）：\n"
+                    + "\n".join(_operation_catalog_lines(catalog))
+                )
+            else:
+                write_lead = (
+                    "\n有已安装的 Skill 覆盖时，优先加载对应 Skill 再提出它的 typed 操作；"
+                    "Skill 未覆盖的页面表单或行内状态修改，用 request_submit 提出批准（仅要求预填时停在提交前）。"
+                    if getattr(self, "native_submit", None) is not None else
+                    "\n只有已安装的 Skill 可提出写入；先加载对应 Skill 再提出它的 typed 操作。"
+                )
+                instructions += write_lead + \
+                    "参数照用户原话，缺少信息先询问；每项写入有独立批准，拒绝或结果未知不能重发。\n已安装的 Skill：\n" + \
+                    "\n".join(
+                        f"- {skill.name}：{skill.description}（操作：{'、'.join(d.name for d in defs)}）"
+                        for skill, defs in catalog
+                    )
         self._messages = [{"role": "system", "content": instructions}, *earlier]
         carried = []
         for skill_id in self._carried_skills if writes is not None else ():
@@ -465,6 +523,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         writes = turn.get("writes")
         if writes is not None:
             tools += WRITE_TOOLS
+            if self.direct_skill_operations:
+                tools.append(PROPOSE_OPERATION_TOOL)
             for definition in writes.definitions():
                 schema = definition.schema
                 schema["function"]["description"] = _OPERATION_NOTE + definition.description
@@ -527,13 +587,20 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
                 self._note(s, stage="tool", tool="load_skill", arguments={"skill": args["skill"]})
                 text = self._load_skill(s, writes, args["skill"], turn)
                 loaded = self._skill_id(writes, args["skill"]) in turn["skills"]
-                return LoopToolResult(text, state="completed" if loaded else "unavailable")
+                return LoopToolResult(text, kind="metadata", state="completed" if loaded else "unavailable")
             if name == "read_skill_resource":
                 self._note(s, stage="tool", tool="load_skill", arguments={"skill": args["skill"]})
                 return LoopToolResult(self._skill_resource(s, writes, args), kind="read")
+            if name == "propose_operation" and self.direct_skill_operations:
+                op_name = str(args.get("operation") or "").strip()
+                raw_inputs = args.get("inputs")
+                op_inputs = normalize_changes_argument(raw_inputs) if op_name == "update_record" else raw_inputs
+                self._note(s, stage="tool", tool=op_name, mutation=True)
+                return self._propose(s, writes, op_name, op_inputs, turn)
             if any(d.name == name for d in writes.definitions()):
+                op_inputs = normalize_changes_argument(args) if name == "update_record" else args
                 self._note(s, stage="tool", tool=name, mutation=True)
-                return self._propose(s, writes, name, args, turn)
+                return self._propose(s, writes, name, op_inputs, turn)
         procedure = next((p for p in self.profile.procedures if p.schema["function"]["name"] == name), None)
         if procedure is None:
             return LoopToolResult("当前应用没有提供这个工具。", state="unavailable", error_code="tool_unavailable")
@@ -795,23 +862,58 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin, GoalTurnExecutor):
         return None
 
     def _invoke_tool(self, s, name, args, turn):
-        schema = next((item["function"]["parameters"] for item in self._tools(turn)
-                       if item["function"]["name"] == name), None)
-        if schema is None:
-            writes = turn.get("writes")
-            owner = next((skill.name for skill, definitions in writes.catalog()
-                          if any(d.name == name for d in definitions)), "") if writes is not None else ""
-            if owner:
-                return LoopToolResult(f'这个操作所属的 Skill 本轮还没有加载：先 load_skill("{owner}")，再调用它。',
-                                      kind="write", state="refused", error_code="skill_not_loaded")
-            return LoopToolResult("当前应用没有提供这个工具。", state="unavailable",
-                                  error_code="tool_unavailable")
-        try:
-            validate_input(schema, args)
-        except BusinessToolRequestError as exc:
-            # This validator reports installed schema paths and bounds, never supplied
-            # values or unexpected keys. Give the Agent the exact structural correction.
-            return LoopToolResult("工具参数有误：" + str(exc), state="refused", error_code="invalid_arguments")
+        writes = turn.get("writes")
+        if name == "propose_operation" and self.direct_skill_operations and writes is not None:
+            op_name = args.get("operation")
+            op_inputs = args.get("inputs")
+            if not isinstance(op_name, str) or not op_name.strip() or not isinstance(op_inputs, dict) or set(args) - {"operation", "inputs"}:
+                return LoopToolResult("工具参数有误：propose_operation 需要字符串 operation 与对象 inputs。",
+                                      kind="write", state="refused", error_code="invalid_arguments")
+            op_name = op_name.strip()
+            owned = writes.owner_for_operation(op_name)
+            if owned is None:
+                return LoopToolResult(
+                    f"当前部署或账号下没有可用的写入操作「{op_name}」；请核对“已安装的写入操作”清单，或改走页面表单 request_submit。",
+                    kind="write", state="unavailable", error_code="tool_unavailable")
+            skill, definition = owned
+            if skill.skill_id not in writes.loaded_ids:
+                writes.load(skill.skill_id, step=s.step)
+                turn["skills"].add(skill.skill_id)
+            op_inputs = normalize_changes_argument(op_inputs) if op_name == "update_record" else op_inputs
+            op_schema = definition.schema["function"]["parameters"]
+            try:
+                validate_input(op_schema, op_inputs)
+            except BusinessToolRequestError as exc:
+                return LoopToolResult(
+                    f"操作 {op_name} 参数有误：{exc}\n该操作完整参数定义：{json.dumps(op_schema, ensure_ascii=False)}",
+                    kind="write", state="refused", error_code="invalid_arguments")
+            args = {"operation": op_name, "inputs": op_inputs}
+        else:
+            schema = next((item["function"]["parameters"] for item in self._tools(turn)
+                           if item["function"]["name"] == name), None)
+            if schema is None:
+                owned = writes.owner_for_operation(name) if writes is not None else None
+                if owned is not None and self.direct_skill_operations:
+                    skill, definition = owned
+                    if skill.skill_id not in writes.loaded_ids:
+                        writes.load(skill.skill_id, step=s.step)
+                        turn["skills"].add(skill.skill_id)
+                    schema = definition.schema["function"]["parameters"]
+                elif owned is not None:
+                    owner = owned[0].name
+                    return LoopToolResult(f'这个操作所属的 Skill 本轮还没有加载：先 load_skill("{owner}")，再调用它。',
+                                          kind="write", state="refused", error_code="skill_not_loaded")
+                else:
+                    return LoopToolResult("当前应用没有提供这个工具。", state="unavailable",
+                                          error_code="tool_unavailable")
+            if name == "update_record":
+                args = normalize_changes_argument(args)
+            try:
+                validate_input(schema, args)
+            except BusinessToolRequestError as exc:
+                # This validator reports installed schema paths and bounds, never supplied
+                # values or unexpected keys. Give the Agent the exact structural correction.
+                return LoopToolResult("工具参数有误：" + str(exc), state="refused", error_code="invalid_arguments")
         if name in SOURCE_NAMES and turn.get("sources") is not None:
             context = s.approvals.context(s.step, name)
             context.require_live(application_id=self.application.descriptor.application_id)

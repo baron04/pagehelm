@@ -1534,6 +1534,14 @@ def _native_input_text(element, value: str) -> str:
     return value
 
 
+def _unavailable_already_matches(element, value: str) -> bool:
+    """True when a disabled/read-only control already displays the requested value."""
+    if not form_control_unavailable(element.attrs):
+        return False
+    from web_operation_agent.execution.draft_handoff import value_matches
+    return value_matches(element, value.strip()) or value_matches(element, value)
+
+
 def _commits(element, elements) -> bool:
     """Whether a typed value is committed at once. The first box of a date range is not:
     the component takes the pair when its second box is left, and a first box committed
@@ -2363,12 +2371,17 @@ class YudaoLoopProcedures:
                                           error_code="unrequested_draft_field")
             if name == "input":
                 value = _native_input_text(element, value)
-            command = {"ref": element.ref, "value": value}
-            if name == "input":
-                command["commit"] = _commits(element, s.obs.elements)
+                command = {"ref": element.ref, "value": value, "commit": _commits(element, s.obs.elements)}
             else:
                 value = self._choice_label(s, element, value)
-                command["option_label"] = value
+                command = {"ref": element.ref, "value": value, "option_label": value}
+            if _unavailable_already_matches(element, value):
+                return LoopToolResult(
+                    f"「{_control_name(element)}」当前已是「{value}」（只读/禁用字段，保持原值）。",
+                    kind="page",
+                    state="completed",
+                    dispatch="not_dispatched",
+                )
             failed = (self._act(s, "fill", command) if name == "input"
                       else self._select(s, element, value))
             if not failed:
@@ -2560,6 +2573,7 @@ class YudaoLoopProcedures:
                     continue
                 steps = [(found[0], value)]
             failed = ""
+            dispatched_any = False
             for at, (element, text) in enumerate(steps):
                 if pair:
                     # Filling the start opens a calendar and can reindex the page.
@@ -2575,12 +2589,17 @@ class YudaoLoopProcedures:
                 text = _native_input_text(element, text)
                 if kind in ("〔下拉〕", "〔单选〕") and text.strip():
                     text = self._choice_label(s, element, text)
+                    if _unavailable_already_matches(element, text):
+                        continue
                     failed = (choose or self._select)(s, element, text)
                 else:
+                    if _unavailable_already_matches(element, text):
+                        continue
                     failed = self._act(s, "fill", {"ref": element.ref, "value": text,
                                                    "commit": _commits(element, s.obs.elements)})
                 if failed or s.terminal_reason:
                     break
+                dispatched_any = True
                 expected.append((field_identity(element), text))
                 self._settled(s, waits=2)
             if s.terminal_reason:
@@ -2596,9 +2615,12 @@ class YudaoLoopProcedures:
                 failure = failure or failed
                 said.append(f"{label}：{failed.feedback}")
             else:
-                turn["touched"].append((label, value))
-                turn["trace"].append(f"fill_fields[{label}]({json.dumps(value, ensure_ascii=False)[:60]})")
-                said.append(f"{label}：已{'选' if kind in ('〔下拉〕', '〔单选〕') else '填'}")
+                if not dispatched_any:
+                    said.append(f"{label}：已是「{value}」（只读/禁用字段，保持原值）")
+                else:
+                    turn["touched"].append((label, value))
+                    turn["trace"].append(f"fill_fields[{label}]({json.dumps(value, ensure_ascii=False)[:60]})")
+                    said.append(f"{label}：已{'选' if kind in ('〔下拉〕', '〔单选〕') else '填'}")
         wanted = re.sub(r"\s+", "", then_click or "")
         if wanted and not incomplete and not failure:
             if locate is not None:
@@ -3175,10 +3197,11 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
                     if tool["function"]["name"] in (_STATUS_READ_TOOLS | (_TABLE_TOOLS if _TURN_TABLES.get() else frozenset()))]
         if not isinstance(intent, WriteIntent) or intent.mode != "draft":
             return offered
-        names = {"load_skill", "read_skill_resource", "request_submit"}
+        names = {"load_skill", "read_skill_resource", "propose_operation", "request_submit"}
         writes = turn.get("writes")
         if writes is not None:
-            names.update(definition.name for definition in writes.definitions())
+            avail = getattr(writes, "available_definitions", writes.definitions)
+            names.update(definition.name for definition in avail())
         return [tool for tool in offered if tool["function"]["name"] not in names]
 
     def _submit_allowed(self, turn):
@@ -3205,8 +3228,9 @@ class SlimTurnExecutor(ModelDrivenTurnExecutor):
         intent = _WRITE_INTENT.get()
         if isinstance(intent, WriteIntent) and intent.mode == "draft":
             writes = turn.get("writes")
-            operations = {definition.name for definition in writes.definitions()} if writes is not None else set()
-            if name in {"load_skill", "read_skill_resource"} | operations:
+            avail = getattr(writes, "available_definitions", writes.definitions) if writes is not None else (lambda: ())
+            operations = {definition.name for definition in avail()}
+            if name in {"load_skill", "read_skill_resource", "propose_operation"} | operations:
                 return LoopToolResult("用户本轮只要求预填表单；Skill 写入工具不可用。",
                                       kind="write", state="refused", error_code="draft_only")
         before = getattr(s, "obs", None)
@@ -3607,12 +3631,18 @@ class TableReadTurnExecutor(SlimTurnExecutor):
     """Product candidate: calculation and delivery both cite this turn's real receipts."""
 
     program_read_delivery = False
+    direct_skill_operations = True
 
     def __init__(self, *, today="", time_zone="Asia/Shanghai", **kwargs):
         self._date_override, self._time_zone = today, time_zone
         kwargs.setdefault("model_steps", MODEL_STEPS)
         super().__init__(today=today, time_zone=time_zone, **kwargs)
-        self.profile = replace(self.profile, instructions=self.profile.instructions + PAGE_DELIVERY_RULES)
+        instructions = self.profile.instructions.replace(
+            "先 load_skill，再用已安装操作提出提案",
+            "直接用 propose_operation(operation, inputs) 提出提案（程序自动加载对应 Skill，无需先调 load_skill；"
+            "扁平单表记录字段修改优先用 update_record，两态启停/上下架优先用 toggle_record_status，专用新建或状态变更用对应操作）",
+        )
+        self.profile = replace(self.profile, instructions=instructions + PAGE_DELIVERY_RULES)
 
     def _run(self, state):
         tables = TurnTables(self.knowledge.handoffs)

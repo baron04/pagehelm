@@ -18,16 +18,18 @@ def tool(name, description, properties, required=()):
 
 class ContactsModelGoalPort:
     """Capabilities implemented by this profile, independently of the goal planner."""
-    def __init__(self, adapter, *, drafts=False, filters=False):
+    def __init__(self, adapter, *, drafts=False, filters=False, updates=False):
         from .goal import ContactsGoalPort
-        self._port, self.drafts, self.filters = ContactsGoalPort(adapter), drafts, filters
+        self._port = ContactsGoalPort(adapter, convention_updates=updates)
+        self.drafts, self.filters, self.updates = drafts, filters, updates
 
     def __getattr__(self, name):
         return getattr(self._port, name)
 
     def capabilities(self):
         return frozenset({"sections", "handoffs"} | ({"fill", "lines"} if self.drafts else set())
-                         | ({"facets"} if self.filters else set()))
+                         | ({"facets"} if self.filters else set())
+                         | ({"updates"} if self.updates else set()))
 
 
 class ContactsProcedure:

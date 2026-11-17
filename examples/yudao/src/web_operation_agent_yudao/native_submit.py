@@ -43,6 +43,50 @@ def _decode_write(status, body):
     return status, answer
 
 
+def _enrich_erp_line_totals(prefix: str, data: dict) -> dict:
+    """Populate Yudao ERP ItemForm client-side deterministic line display totals when absent from GET."""
+    if not isinstance(prefix, str) or not prefix.startswith("/admin-api/erp/"):
+        return data
+    items = data.get("items")
+    if not isinstance(items, list):
+        return data
+    out_items = []
+    changed = False
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            out_items.append(raw_item)
+            continue
+        price = raw_item.get("productPrice")
+        count = raw_item.get("count")
+        if price is None or count is None or isinstance(price, bool) or isinstance(count, bool):
+            out_items.append(raw_item)
+            continue
+        try:
+            base = round(float(price) * float(count), 2)
+            item = dict(raw_item)
+            if "taxPercent" in item or "taxPrice" in item:
+                if item.get("totalProductPrice") is None:
+                    item["totalProductPrice"] = base
+                    changed = True
+                total_prod = float(item["totalProductPrice"])
+                if item.get("taxPrice") is None:
+                    tax_pct = float(item.get("taxPercent") or 0)
+                    item["taxPrice"] = round(total_prod * (tax_pct / 100.0), 2)
+                    changed = True
+                if item.get("totalPrice") is None:
+                    item["totalPrice"] = round(total_prod + float(item.get("taxPrice") or 0), 2)
+                    changed = True
+            else:
+                if item.get("totalPrice") is None:
+                    item["totalPrice"] = base
+                    changed = True
+        except (TypeError, ValueError):
+            out_items.append(raw_item)
+            continue
+        out_items.append(item)
+    return {**data, "items": out_items} if changed else data
+
+
 YUDAO_SUBMIT_CONVENTIONS = SubmitConventions(
     volatile_keys=frozenset({"updateTime", "updater", "updaterName", "modifyTime", "version"}),
     record_key="id", line_key="id", name_key="name",
@@ -165,7 +209,7 @@ class YudaoSubmitPort:
                 failure = exc
                 continue
             if isinstance(data, dict):
-                return data
+                return _enrich_erp_line_totals(prefix, data)
             if data is None:
                 return None
         if failure is not None:

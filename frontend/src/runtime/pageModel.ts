@@ -12,7 +12,7 @@ import type {ElementRef} from './types'
 import browserContract from '@contract/browser_contract.json'
 import {formLifetime, formInstance} from './formInstance'
 import {listboxCombobox, selectedComboboxOption, selectedTreeChoice} from './combobox'
-import {radioGroup, radioChoices, radioLabel, radioEnabled, selectedRadio} from './radio'
+import {anyRadioGroup, observedSelectedRadio, radioChoices, radioLabel, radioEnabled, selectedRadio} from './radio'
 
 /** Maximum live controls one observation may expose across the browser boundary. */
 export const MAX_OBSERVATION_ELEMENTS = browserContract.observation.max_elements
@@ -377,7 +377,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
   for (const item of elements) {
     try {
       let element = getByIndex(selectorMap, refIndex(item.ref))
-      const group = radioGroup(element)
+      const group = anyRadioGroup(element)
       // Scrub each alias before either radio grouping or control deduplication.
       // The parsed summary may lack a sensitive name that only the live DOM exposes.
       if (isSensitiveFormControl(element, redactor) ||
@@ -436,7 +436,8 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       // These are live DOM facts rather than hints parsed from PageController's text.
       // They let the server omit an unavailable field up front; Page.input/select still
       // recheck the live element at execution time because the DOM may change afterwards.
-      if (element?.disabled) item.attrs.disabled = 'true'
+      if (element?.disabled || (group && (group.getAttribute('aria-disabled') === 'true' ||
+          !radioChoices(group).some(radioEnabled)))) item.attrs.disabled = 'true'
       // Read-only text entry is normal for a single-choice combobox. Selection remains
       // available; Page.input still refuses typing and Page.select checks the live menu.
       delete item.attrs.readonly
@@ -482,7 +483,7 @@ export function hydrateFormFacts(elements: ElementRef[], selectorMap: unknown,
       }
       if (group) {
         delete item.attrs.value
-        const selected = selectedRadio(group)
+        const selected = selectedRadio(group) ?? observedSelectedRadio(group)
         if (selected && !sensitive) item.attrs.value = redactor.redactString(selected).slice(0, 120)
         const choices = radioChoices(group).filter(radioEnabled).map(option => {
           const label = radioLabel(option)

@@ -2,14 +2,18 @@
 import type {ElementLike} from './pageModel'
 import browserContract from '@contract/browser_contract.json'
 
-export function radioGroup(element: ElementLike | null | undefined): HTMLElement | null {
+export function anyRadioGroup(element: ElementLike | null | undefined): HTMLElement | null {
   if (typeof HTMLElement === 'undefined' || !(element instanceof HTMLElement)) return null
   if (element.getAttribute('role') !== 'radiogroup' &&
       !(element instanceof HTMLInputElement && element.type === 'radio') &&
       element.getAttribute('role') !== 'radio') return null
   const group = element.closest('[role="radiogroup"]')
-  return group instanceof HTMLElement && group.isConnected &&
-    group.getAttribute('aria-disabled') !== 'true' ? group : null
+  return group instanceof HTMLElement && group.isConnected ? group : null
+}
+
+export function radioGroup(element: ElementLike | null | undefined): HTMLElement | null {
+  const group = anyRadioGroup(element)
+  return group && group.getAttribute('aria-disabled') !== 'true' ? group : null
 }
 
 export function radioChoices(group: HTMLElement): HTMLElement[] {
@@ -46,6 +50,12 @@ export function radioChecked(element: HTMLElement): boolean {
 export function selectedRadio(group: HTMLElement): string | null {
   const options = radioChoices(group), selected = options.filter(radioChecked)
   const label = selected.length === 1 && radioEnabled(selected[0]!) ? radioLabel(selected[0]!) : null
+  return label && options.filter(e => radioLabel(e) === label).length === 1 ? label : null
+}
+
+export function observedSelectedRadio(group: HTMLElement): string | null {
+  const options = radioChoices(group), selected = options.filter(radioChecked)
+  const label = selected.length === 1 ? radioLabel(selected[0]!) : null
   return label && options.filter(e => radioLabel(e) === label).length === 1 ? label : null
 }
 

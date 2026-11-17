@@ -50,6 +50,25 @@ describe('adapter-issued radio choice', () => {
       expect(s.page.verifyFormFields(s.fields, s.observed)).toBe(false)
     } finally { s.form.remove() }
   })
+  it('exposes the checked label and disabled flag on a read-only disabled radiogroup without enabling selection', async () => {
+    const s = setup(false)
+    try {
+      for (const opt of s.options) (opt as HTMLInputElement).disabled = true
+      const observed = hydrateFormFacts(
+        s.options.map((_, i) => ({ref: `e${i + 1}`, role: 'radio', name: '', tag: 'input', epoch: 1, attrs: {}})),
+        {},
+        (_map, index) => s.options[index - 1],
+        createRedactor(),
+      )
+      expect(observed.filter(e => e.role === 'radiogroup')).toHaveLength(1)
+      expect(observed[0]?.role).toBe('radiogroup')
+      expect(observed[0]?.attrs.disabled).toBe('true')
+      expect(observed[0]?.attrs.value).toBe('Private')
+      expect(observed[0]?.attrs.radio_options).toBeUndefined()
+      await expect(s.page.select('e1', 'false', 'Private')).rejects.toThrow()
+      expect(s.api.clickElement).not.toHaveBeenCalled()
+    } finally { s.form.remove() }
+  })
   it('omits label/value facts for ambiguous or sensitive options', () => {
     for (const mode of ['duplicate', 'sensitive']) {
       const s = setup()
