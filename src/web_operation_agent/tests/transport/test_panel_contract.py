@@ -361,5 +361,75 @@ class ASessionEndIsSaidNotCoded(unittest.TestCase):
                 self.assertIsNone(re.search(r"[A-Za-z_]{3,}", entry["text"]))
 
 
+class Wave3PanelContractProjectionTests(unittest.TestCase):
+    def test_wave3_step_stages_and_transient_markers(self):
+        self.assertEqual(describe_step({"stage": "read_page"}), "正在翻页查看")
+        self.assertEqual(describe_step({"stage": "read_page", "page": 3}), "正在翻页查看（第 3 页）")
+        self.assertEqual(describe_step({"stage": "settle"}), "正在等待页面稳定")
+        self.assertEqual(describe_step({"stage": "awaiting_approval"}), "正在等待你的确认")
+        for stage, expect_transient in (("settle", True), ("awaiting_approval", True), ("read_page", False)):
+            entry = project_event(_event("progress", {
+                "state": "step", "message": describe_step({"stage": stage}), "step": {"stage": stage},
+            }), at=1)
+            assert entry is not None
+            self.assertEqual(bool(entry.get("transient")), expect_transient)
+
+    def test_wave3_table_input_options_and_handoff_projections(self):
+        finished_payload = {
+            "state": "finished",
+            "message": "共 2 条记录",
+            "table": {
+                "title": "客户列表",
+                "columns": ["名称", "状态"],
+                "rows": [["Acme?token=abc", "正常"], ["Beta", "停用"]],
+                "total_rows": 2,
+            },
+            "handoff": {
+                "completed_fields": [{"name": "名称", "value": "Acme"}, {"name": "密码", "value": "secret-123"}],
+                "pending_fields": [{"name": "附件"}],
+                "restricted_controls": [{"label": "登录密码", "kind": "password", "ref": "e9"}],
+                "can_undo": True,
+            },
+        }
+        live = project_event(_event("progress", finished_payload), at=10)
+        replayed = project_history_record({"kind": "progress", "payload": finished_payload}, index=2)
+        for entry in (live, replayed):
+            assert entry is not None
+            self.assertEqual(entry["table"], {
+                "title": "客户列表",
+                "columns": ["名称", "状态"],
+                "rows": [["Acme?token=[redacted]", "正常"], ["Beta", "停用"]],
+                "total_rows": 2,
+            })
+            self.assertEqual(entry["handoff"]["completed_fields"], [
+                {"name": "名称", "value": "Acme"},
+                {"name": "密码"},
+            ])
+            self.assertEqual(entry["handoff"]["restricted_controls"], [
+                {"label": "登录密码", "kind": "password", "ref": "e9"},
+            ])
+            self.assertTrue(entry["handoff"]["can_undo"])
+            self.assertNotIn("secret-123", json.dumps(entry, ensure_ascii=False))
+
+        clarify_payload = {
+            "state": "needs_input",
+            "message": "请选择客户",
+            "table": {"columns": ["不该投影"], "rows": [["x"]]},
+            "input_options": [
+                {"id": "c1", "label": "Acme?token=xyz", "prompt": "选择客户 Acme"},
+                "Beta",
+            ],
+        }
+        clarify = project_event(_event("progress", clarify_payload), at=11)
+        clarify_hist = project_history_record({"kind": "progress", "payload": clarify_payload}, index=3)
+        for entry in (clarify, clarify_hist):
+            assert entry is not None
+            self.assertNotIn("table", entry)
+            self.assertEqual(entry["input_options"], [
+                {"id": "c1", "label": "Acme?token=[redacted]", "prompt": "选择客户 Acme"},
+                {"id": "opt-2", "label": "Beta"},
+            ])
+
+
 if __name__ == "__main__":
     unittest.main()

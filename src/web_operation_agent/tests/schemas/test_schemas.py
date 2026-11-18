@@ -368,5 +368,34 @@ class ControlPlanRedaction(unittest.TestCase):
         self.assertEqual(plan.redacted()["ticket_count"], 1)
 
 
+class Wave3ActionReceiptContracts(unittest.TestCase):
+    def test_form_closed_or_readonly_and_wave3_optional_receipt_fields(self):
+        self.assertIn("form_closed_or_readonly", S.RECEIPT_ERRORS)
+        base = S.ActionReceipt(
+            schema_version=1, command_id="c-base", action="click",
+            args_echo={"ref": "e1"}, ok=True,
+        )
+        # Existing minimal receipts omit empty Wave 3 fields on the wire.
+        base_json = base.to_json()
+        for key in ("observation_summary", "applied_fields", "rejected_fields",
+                    "previous_fields", "restricted_fields"):
+            self.assertNotIn(key, base_json)
+
+        rich = S.ActionReceipt(
+            schema_version=1, command_id="c-fill", action="fill",
+            args_echo={"ref": "form1"}, ok=False, error_code="form_closed_or_readonly",
+            observation_summary={"url_changed": False, "dialog_open": False},
+            applied_fields={"name": "Acme"},
+            rejected_fields={"owner": {"reason": "option_unavailable", "candidates": ["Alice"]}},
+            previous_fields={"name": "Old"},
+            restricted_fields=("密码", "营业执照上传"),
+        )
+        wire = rich.to_json()
+        roundtrip = S.ActionReceipt.from_json(wire)
+        self.assertEqual(roundtrip, rich)
+        self.assertEqual(roundtrip.restricted_fields, ("密码", "营业执照上传"))
+        self.assertEqual(roundtrip.error_code, "form_closed_or_readonly")
+
+
 if __name__ == "__main__":
     unittest.main()

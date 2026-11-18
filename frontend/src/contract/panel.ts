@@ -84,6 +84,41 @@ export interface TimelineEntry {
   /** Says only what is under way: shown while it is the newest step of a running turn. */
   transient?: boolean
   answer_targets?: AnswerTarget[]
+  table?: StructuredTable
+  input_options?: ClarificationOption[]
+  handoff?: HandoffCardFacts
+}
+
+export interface StructuredTable {
+  title?: string
+  columns: string[]
+  rows: string[][]
+  total_rows: number
+}
+
+export interface ClarificationOption {
+  id: string
+  label: string
+  prompt?: string
+}
+
+export interface HandoffFieldSummary {
+  name: string
+  value?: string
+}
+
+export interface HandoffRestrictedControl {
+  label: string
+  kind: 'password' | 'file' | string
+  ref?: string
+}
+
+export interface HandoffCardFacts {
+  completed_fields: HandoffFieldSummary[]
+  pending_fields: HandoffFieldSummary[]
+  restricted_controls?: HandoffRestrictedControl[]
+  can_undo?: boolean
+  undone?: boolean
 }
 
 export interface AnswerTarget {

@@ -430,6 +430,14 @@ class ActionReceipt:
     execution_trace: dict | None = field(default=None, repr=False, compare=False)
     #: The data bound to a live form, for `form_model` receipts only; bounded JSON.
     form_data: dict | None = None
+    #: Bounded post-action observation diff / state summary for model continuity.
+    observation_summary: dict | None = None
+    #: Per-field outcome summaries for atomic form fill (`applied`, `rejected`, `previous`).
+    applied_fields: dict | None = None
+    rejected_fields: dict | None = None
+    previous_fields: dict | None = None
+    #: Restricted control labels/kinds (e.g. password/file) requiring manual user action.
+    restricted_fields: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _schema_version(self.schema_version, "ActionReceipt")
@@ -469,9 +477,26 @@ class ActionReceipt:
             _require(len(json.dumps(self.form_data, ensure_ascii=False, allow_nan=False)
                          .encode("utf-8")) <= MAX_FORM_MODEL_BYTES, "form data exceeds its bound")
             self.form_data = copy.deepcopy(self.form_data)
+        for field_name in ("observation_summary", "applied_fields", "rejected_fields", "previous_fields"):
+            val = getattr(self, field_name)
+            if val is not None:
+                _require(isinstance(val, dict), f"{field_name} must be an object")
+                _require(len(json.dumps(val, ensure_ascii=False, allow_nan=False)
+                             .encode("utf-8")) <= MAX_FORM_MODEL_BYTES,
+                         f"{field_name} exceeds its bound")
+                object.__setattr__(self, field_name, copy.deepcopy(val))
+        _require(isinstance(self.restricted_fields, tuple)
+                 and len(self.restricted_fields) <= MAX_FORM_CHOICE_OPTIONS
+                 and all(isinstance(v, str) and 0 < len(v) <= MAX_FORM_LABEL_CHARS for v in self.restricted_fields),
+                 "restricted_fields must be a bounded tuple of strings")
 
     def to_json(self, *, include_diagnostics: bool = True) -> dict:
         trace = _execution_trace(self.execution_trace, self.action) if include_diagnostics else None
+        extra_dicts = {
+            name: copy.deepcopy(getattr(self, name))
+            for name in ("observation_summary", "applied_fields", "rejected_fields", "previous_fields")
+            if getattr(self, name)
+        }
         return {"schema_version": self.schema_version, "command_id": self.command_id,
                 "action": self.action, "args_echo": copy.deepcopy(self.args_echo), "ok": self.ok,
                 "error_code": self.error_code, "error_detail": self.error_detail,
@@ -483,6 +508,8 @@ class ActionReceipt:
                 **({"no_effect": True} if self.no_effect else {}),
                 **({"execution_trace": trace} if trace else {}),
                 **({"form_data": copy.deepcopy(self.form_data)} if self.form_data is not None else {}),
+                **extra_dicts,
+                **({"restricted_fields": list(self.restricted_fields)} if self.restricted_fields else {}),
                 "observation": self.observation.to_json() if self.observation else None}
 
     @staticmethod
@@ -491,11 +518,13 @@ class ActionReceipt:
                    "error_code", "error_detail", "url_before", "url_after", "navigated",
                    "epoch_before", "epoch_after", "elapsed_ms", "relogin",
                    "write_guard_held", "candidate_labels", "no_effect", "observation", "execution_trace",
-                   "form_data"}
+                   "form_data", "observation_summary", "applied_fields", "rejected_fields",
+                   "previous_fields", "restricted_fields"}
         required = {"schema_version", "command_id", "action", "args_echo", "ok"}
         d = _strict_object(d, "ActionReceipt", allowed=allowed, required=required)
         obs = d.get("observation")
         _require(isinstance(d.get("candidate_labels", []), list), "candidate_labels must be a list")
+        _require(isinstance(d.get("restricted_fields", []), list), "restricted_fields must be a list")
         return ActionReceipt(schema_version=d["schema_version"], command_id=d["command_id"],
                              action=d["action"], args_echo=d.get("args_echo", {}),
                              ok=d["ok"], error_code=d.get("error_code", ""),
@@ -511,6 +540,11 @@ class ActionReceipt:
                              no_effect=d.get("no_effect", False),
                              execution_trace=d.get("execution_trace"),
                              form_data=d.get("form_data"),
+                             observation_summary=d.get("observation_summary"),
+                             applied_fields=d.get("applied_fields"),
+                             rejected_fields=d.get("rejected_fields"),
+                             previous_fields=d.get("previous_fields"),
+                             restricted_fields=tuple(d.get("restricted_fields", ())),
                              observation=PageObservation.from_json(obs)
                              if obs is not None else None)
 
@@ -523,4 +557,6 @@ RECEIPT_ERRORS = frozenset({
     "user_intervened",
     # A choice list was open and did not offer the option asked for; nothing was chosen.
     "option_unavailable",
+    # A target form or field became closed, detached, or read-only before/during form fill.
+    "form_closed_or_readonly",
 })

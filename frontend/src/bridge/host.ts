@@ -8,8 +8,8 @@
  * `state() ?? status()` probe does not survive into this contract.
  */
 import type {
-  AnswerTarget, ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus, TimelineEntry,
-  TimelinePage,
+  AnswerTarget, ApprovalRequest, HandoffRestrictedControl, PanelConfiguration, PanelState,
+  ReconciliationStatus, TimelineEntry, TimelinePage,
 } from '../contract/panel'
 
 export interface ConnectionState {
@@ -78,6 +78,10 @@ export interface PanelHost {
   panelVisibility?(open: boolean): void
   /** Trigger a read-only reconciliation check for an indeterminate write turn. */
   reconcile?(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> | void
+  /** Restore pre-fill field values captured for this turn when the form is still open. */
+  undoFormFill?(turnId: string): Promise<boolean> | boolean
+  /** Scroll and focus a restricted control (e.g. password/file) left for manual user action. */
+  focusHandoffControl?(control: HandoffRestrictedControl): Promise<boolean> | boolean
 }
 
 const REQUIRED_METHODS = [

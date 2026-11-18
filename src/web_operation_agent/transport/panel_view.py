@@ -11,6 +11,7 @@ links for a user's click, never an assistant action envelope or an approval capa
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any
@@ -199,7 +200,136 @@ def _debug_trace_projection(payload: dict) -> dict[str, Any] | None:
     return projected or None
 
 
-def _terminal_extras(payload: dict, limits: dict[str, int]) -> dict[str, Any]:
+_TABLE_MAX_COLS = 24
+_TABLE_MAX_ROWS = 2000
+_TABLE_CELL_CHARS = 300
+_INPUT_MAX_OPTIONS = 12
+_HANDOFF_MAX_FIELDS = 24
+_HANDOFF_MAX_RESTRICTED = 12
+_SECRET_FIELD_RE = re.compile(r"(?:password|passwd|secret|token|密码|口令)", re.IGNORECASE)
+
+
+def _table_projection(payload: dict) -> dict[str, Any] | None:
+    """Project a bounded structured table payload directly onto a terminal result entry."""
+    raw = payload.get("table")
+    if not isinstance(raw, dict):
+        return None
+    raw_cols = raw.get("columns")
+    raw_rows = raw.get("rows")
+    if not isinstance(raw_cols, (list, tuple)) or not isinstance(raw_rows, (list, tuple)):
+        return None
+    columns = [" ".join(_clip(col, 80).split()) for col in raw_cols[:_TABLE_MAX_COLS]]
+    if not columns or any(not col for col in columns):
+        return None
+    width = len(columns)
+    rows: list[list[str]] = []
+    for row in raw_rows[:_TABLE_MAX_ROWS]:
+        if not isinstance(row, (list, tuple)):
+            continue
+        cells = [" ".join(_clip(row[idx] if idx < len(row) else "", _TABLE_CELL_CHARS).split())
+                 for idx in range(width)]
+        rows.append(cells)
+    total_raw = raw.get("total_rows")
+    total_rows = (total_raw if isinstance(total_raw, int) and not isinstance(total_raw, bool)
+                  and total_raw >= len(rows) else len(rows))
+    projected: dict[str, Any] = {"columns": columns, "rows": rows, "total_rows": total_rows}
+    title = " ".join(_clip(raw.get("title"), 120).split())
+    if title:
+        projected["title"] = title
+    return projected
+
+
+def _input_options_projection(payload: dict, limits: dict[str, int]) -> list[dict[str, str]]:
+    """Project bounded clickable clarification options for ``needs_input`` turns."""
+    raw = payload.get("input_options")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return []
+    options: list[dict[str, str]] = []
+    for idx, item in enumerate(raw[:_INPUT_MAX_OPTIONS], start=1):
+        if isinstance(item, str):
+            label = " ".join(_clip(item, limits["label_max_chars"]).split())
+            if label:
+                options.append({"id": f"opt-{idx}", "label": label})
+            continue
+        if not isinstance(item, dict):
+            continue
+        label = " ".join(_clip(item.get("label"), limits["label_max_chars"]).split())
+        if not label:
+            continue
+        opt_id = " ".join(_clip(item.get("id"), 60).split()) or f"opt-{idx}"
+        entry: dict[str, str] = {"id": opt_id, "label": label}
+        prompt = _clip(item.get("prompt"), limits["goal_max_chars"]).strip()
+        if prompt:
+            entry["prompt"] = prompt
+        options.append(entry)
+    return options
+
+
+def _handoff_fields(raw_items: object, limits: dict[str, int]) -> list[dict[str, str]]:
+    if not isinstance(raw_items, (list, tuple)):
+        return []
+    result: list[dict[str, str]] = []
+    for item in raw_items[:_HANDOFF_MAX_FIELDS]:
+        if isinstance(item, str):
+            name = " ".join(_clip(item, limits["label_max_chars"]).split())
+            if name:
+                result.append({"name": name})
+            continue
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(_clip(item.get("name"), limits["label_max_chars"]).split())
+        if not name:
+            continue
+        entry: dict[str, str] = {"name": name}
+        raw_val = item.get("value")
+        kind = str(item.get("kind") or "")
+        if raw_val not in (None, "") and not _SECRET_FIELD_RE.search(f"{name} {kind}"):
+            val = _clip(raw_val, limits["target_max_chars"]).strip()
+            if val:
+                entry["value"] = val
+        result.append(entry)
+    return result
+
+
+def _handoff_projection(payload: dict, limits: dict[str, int]) -> dict[str, Any] | None:
+    """Project bounded form-handoff summaries and restricted control pointers."""
+    raw = payload.get("handoff")
+    if not isinstance(raw, dict):
+        return None
+    completed = _handoff_fields(raw.get("completed_fields"), limits)
+    pending = _handoff_fields(raw.get("pending_fields"), limits)
+    restricted: list[dict[str, str]] = []
+    raw_restricted = raw.get("restricted_controls")
+    if isinstance(raw_restricted, (list, tuple)):
+        for item in raw_restricted[:_HANDOFF_MAX_RESTRICTED]:
+            if not isinstance(item, dict):
+                continue
+            label = " ".join(_clip(item.get("label"), limits["label_max_chars"]).split())
+            if not label:
+                continue
+            ctrl: dict[str, str] = {
+                "label": label,
+                "kind": " ".join(_clip(item.get("kind") or "restricted", 32).split()) or "restricted",
+            }
+            ref = " ".join(_clip(item.get("ref"), 32).split())
+            if ref:
+                ctrl["ref"] = ref
+            restricted.append(ctrl)
+    if not (completed or pending or restricted
+            or isinstance(raw.get("can_undo"), bool)
+            or isinstance(raw.get("undone"), bool)):
+        return None
+    out: dict[str, Any] = {"completed_fields": completed, "pending_fields": pending}
+    if restricted:
+        out["restricted_controls"] = restricted
+    if isinstance(raw.get("can_undo"), bool):
+        out["can_undo"] = raw["can_undo"]
+    if isinstance(raw.get("undone"), bool):
+        out["undone"] = raw["undone"]
+    return out
+
+
+def _terminal_extras(payload: dict, limits: dict[str, int], *, state: str = "") -> dict[str, Any]:
     extras: dict[str, Any] = {}
     if payload.get("retryable") is True:
         extras["retryable"] = True
@@ -212,6 +342,18 @@ def _terminal_extras(payload: dict, limits: dict[str, int]) -> dict[str, Any]:
     debug_trace = _debug_trace_projection(payload)
     if debug_trace is not None:
         extras["debug_trace"] = debug_trace
+    if state == "finished":
+        table = _table_projection(payload)
+        if table is not None:
+            extras["table"] = table
+    if state == "needs_input":
+        options = _input_options_projection(payload, limits)
+        if options:
+            extras["input_options"] = options
+    if state in {"finished", "needs_input"}:
+        handoff = _handoff_projection(payload, limits)
+        if handoff is not None:
+            extras["handoff"] = handoff
     return extras
 
 
@@ -334,6 +476,16 @@ def describe_step(facts: dict) -> str:
             return ""
         term = " ".join(_clip(facts.get("term"), _SEARCH_TERM_CHARS).split())
         return f"正在查找{what}：{term}" if term else f"正在查找{what}"
+    if stage == "read_page":
+        base = panel_contract()["label_keys"]["progressPaging"]
+        page = facts.get("page")
+        if isinstance(page, int) and not isinstance(page, bool) and 1 <= page <= 10_000:
+            return f"{base}（第 {page} 页）"
+        return base
+    if stage == "settle":
+        return panel_contract()["label_keys"]["progressSettling"]
+    if stage == "awaiting_approval":
+        return panel_contract()["label_keys"]["progressAwaitingApproval"]
     if stage == "check":
         return "正在核对结果"
     return ""
@@ -471,7 +623,7 @@ def _ending_text(payload: dict, text: str) -> str:
 #: Steps that say only that something is under way. Between two things the assistant did,
 #: "正在思考" is what it was doing while nothing happened; once the next thing has happened,
 #: or the turn has ended, it says nothing more and the panel stops showing it.
-_TRANSIENT_STAGES = frozenset({"thinking"})
+_TRANSIENT_STAGES = frozenset({"thinking", "settle", "awaiting_approval"})
 
 
 def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> dict | None:
@@ -526,7 +678,7 @@ def project_event(event: TaskEvent, *, at: int, target: dict | None = None) -> d
     node = payload.get("step")
     node = node if state == "step" and isinstance(node, dict) and node else None
     targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
-    terminal_extras = _terminal_extras(payload, limits) if mapping["terminal"] else {}
+    terminal_extras = _terminal_extras(payload, limits, state=state) if mapping["terminal"] else {}
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text,
             "panel_state": mapping["panel_state"],
@@ -565,7 +717,7 @@ def project_history_record(record: dict, *, index: int) -> dict | None:
     if not text:
         return None
     targets = _answer_targets(payload, text) if mapping["terminal"] and state == "finished" else []
-    terminal_extras = _terminal_extras(payload, limits) if mapping["terminal"] else {}
+    terminal_extras = _terminal_extras(payload, limits, state=state) if mapping["terminal"] else {}
     return {**base, "kind": "result" if mapping["terminal"] else "progress",
             "tone": mapping["tone"], "text": text, "panel_state": mapping["panel_state"],
             **({"answer_targets": targets} if targets else {}),

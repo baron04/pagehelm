@@ -137,6 +137,13 @@ export interface ActionReceipt {
   execution_trace?: ExecutionTrace
   /** The data bound to a live form, for a `form_model` action only. */
   form_data?: JsonObject
+  /** Bounded post-action observation summary for model continuity. */
+  observation_summary?: JsonObject
+  /** Per-field applied/rejected/previous/restricted outcomes for form fill actions. */
+  applied_fields?: JsonObject
+  rejected_fields?: JsonObject
+  previous_fields?: JsonObject
+  restricted_fields?: string[]
   observation: PageObservation | null
 }
 
