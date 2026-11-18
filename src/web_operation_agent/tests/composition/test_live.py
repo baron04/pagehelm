@@ -440,6 +440,51 @@ class LiveProductSessionTests(unittest.TestCase):
             self.assertEqual(timeline["entries"][-1]["reconciliation"], reply)
             self.assertIn("business_mutation_reconciled", ledger_path.read_text(encoding="utf-8"))
 
+            # GoalTurnExecutor and subclasses expose business_tools via application.business_tools
+            # without a top-level executor.business_tools attribute.
+            digest_app = "c" * 64
+            journal.register(
+                digest_app, "f" * 64, expires_at=now + 60_000, now_ms=now,
+                reconciliation={"application_id": "sample", "tool": "create_company",
+                                "args": {"name": "Beta"}, "identity": identity})
+            journal.claim(digest_app, "f" * 64, now_ms=now + 1,
+                          dispatch_lease_expires_at=now + 60_000)
+            journal.finish(digest_app, "indeterminate", now_ms=now + 2)
+            registry_app = RemoteSessionRegistry()
+            grant_app, ch_app = registry_app.create(
+                allowed_origins=[ORIGIN], session_id="live-reconcile-app", principal=actor)
+            lease_app = ch_app.accept_hello(ClientHello(
+                schema_version=SCHEMA_VERSIONS["ClientHello"],
+                session_id=grant_app.session_id,
+                client_id="tab-1",
+                runtime="test-runtime/1",
+                runtime_instance_id="doc-2",
+                capabilities=("dom.observe",),
+                page_origin=ORIGIN,
+                application_id="sample",
+                principal_digest=actor.binding_digest,
+            ))["lease_id"]
+            exec_app = SimpleNamespace(
+                application=SimpleNamespace(
+                    descriptor=SimpleNamespace(application_id="sample"),
+                    business_tools=SimpleNamespace(mutation_journal=journal),
+                    ports=SimpleNamespace(
+                        identity=SimpleNamespace(validate=lambda *_a, **_kw: None),
+                        reconciliation=_FakeReconciler(),
+                    ),
+                ),
+                config=SimpleNamespace(ledger_path=ledger_path),
+                ledger_factory=SessionLedger,
+                execute=lambda _msg: None,
+            )
+            LiveConversationRunner(ch_app, executor=exec_app)
+            ch_app.record_turn_proposal("m-app", digest_app)
+            reply_app = ch_app.accept_reconciliation(
+                ReconciliationRequest(1, grant_app.session_id, turn_id="m-app"),
+                lease_id=lease_app)
+            self.assertEqual(reply_app["settled"], True)
+            self.assertEqual(journal.get(digest_app).state, "failed")
+
     def test_legacy_per_turn_factory_remains_a_thin_compatibility_path(self):
         channel, lease = _channel_with_observation()
         message = _message(1)

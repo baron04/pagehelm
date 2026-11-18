@@ -104,7 +104,8 @@ class LiveConversationRunner:
         if self.executor is None or getattr(channel, "_reconciler", None) is not None:
             return
         application = getattr(self.executor, "application", None)
-        business_tools = getattr(self.executor, "business_tools", None)
+        business_tools = (getattr(self.executor, "business_tools", None)
+                          or getattr(application, "business_tools", None))
         journal = (getattr(business_tools, "mutation_journal", None)
                    or getattr(business_tools, "_mutation_journal", None))
         if application is None or journal is None:

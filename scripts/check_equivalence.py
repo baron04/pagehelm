@@ -218,7 +218,7 @@ from testapps.contacts.model_loop import ContactsModelGoalPort, contacts_profile
 
 ORIGIN = "https://synthetic.test"
 TODAY = "2026-10-13"
-REGISTERED_ALLOWANCES = frozenset({"arc-08", "arc-09", "arc-12"})
+REGISTERED_ALLOWANCES = frozenset({"ops-03", "arc-08", "arc-09", "arc-12"})
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +336,7 @@ def parse_allow_registered(raw: str) -> set[str]:
 
 
 def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dict[str, Any]:
-    """Project a canonicalized capture with explicit, strictly scoped Wave 2 allowances."""
+    """Project a canonicalized capture with explicit, strictly scoped Wave 1/2 allowances."""
     if not allow:
         return capture
     projected = copy.deepcopy(capture)
@@ -353,6 +353,8 @@ def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dic
                     continue
                 if "arc-08" in allow and (ev in _ARC08_EVENT_NAMES or ev.endswith("_timing")):
                     continue
+                if "ops-03" in allow and ev == "business_mutation_indeterminate":
+                    rec = {k: v for k, v in rec.items() if k != "proposal_digest"}
                 if "arc-08" in allow:
                     rec = {k: v for k, v in rec.items() if k not in _ARC08_KEYS}
                 filtered_audit.append(rec)
@@ -1795,7 +1797,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-registered",
         default="",
-        help="Comma-separated registered allowances for Wave 2 tasks (arc-08, arc-09, arc-12)",
+        help="Comma-separated registered allowances for Wave 1/2 tasks (ops-03, arc-08, arc-09, arc-12)",
     )
     args = parser.parse_args(argv)
 

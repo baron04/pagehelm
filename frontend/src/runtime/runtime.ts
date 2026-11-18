@@ -850,10 +850,15 @@ export class EmbeddedWebRuntime {
     } catch (error) {
       const verdict = classifyTransportError(
         error as {code?: unknown; status?: unknown}, this.panelConfiguration)
+      const failure = error as {code?: unknown} | null | undefined
+      if (failure?.code === 'unknown_reconciliation' && !verdict.terminal) {
+        const status: ReconciliationStatus = {outcome: 'unknown', settled: false}
+        this.panelHost?.setReconciliation(cleanTurnId, status, cleanDigest || undefined)
+        return status
+      }
       if (verdict.terminal) {
         this._raise(error)
       } else {
-        const failure = error as {code?: unknown} | null | undefined
         this.panelHost?.raise(String(failure?.code || verdict.code || 'unexpected'), {retryable: false})
       }
       throw error

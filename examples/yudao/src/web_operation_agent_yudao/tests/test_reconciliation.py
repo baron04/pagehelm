@@ -164,6 +164,31 @@ class YudaoMutationReconcilerTests(unittest.TestCase):
         self.assertEqual(res_partial.outcome, "unknown")
         self.assertTrue(res_partial.requires_human)
 
+        # 7. unknown: partial/ambiguous readback matching neither expected nor before stays unknown
+        client.records[("crm/customer", "42")] = {"id": 42, "name": "并发他改", "remark": "新备注"}
+        res_ambiguous = reconciler.reconcile(
+            "crm_customer_update",
+            {
+                "entity": "crm/customer",
+                "id": 42,
+                "expected": {"name": "新名称", "remark": "新备注"},
+                "before": {"name": "旧名称", "remark": "旧备注"},
+            },
+            evidence={},
+            principal=principal,
+        )
+        self.assertEqual(res_ambiguous.outcome, "unknown")
+        self.assertTrue(res_ambiguous.requires_human)
+
+        res_no_before = reconciler.reconcile(
+            "crm_customer_update",
+            {"entity": "crm/customer", "id": 42, "expected": {"name": "新名称"}},
+            evidence={},
+            principal=principal,
+        )
+        self.assertEqual(res_no_before.outcome, "unknown")
+        self.assertTrue(res_no_before.requires_human)
+
         # Strictly GET-only; never dispatches writes
         self.assertTrue(all(method == "GET" for method, _path, _params in client.http_calls))
 

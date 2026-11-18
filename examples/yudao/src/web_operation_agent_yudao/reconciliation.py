@@ -172,9 +172,9 @@ class YudaoMutationReconciler:
                 reason=f"same-actor GET {read_path}?id={record_id} confirmed record retains pre-mutation values",
             )
         return MutationReconciliation(
-            outcome="failed",
-            requires_human=False,
-            reason=f"same-actor GET {read_path}?id={record_id} confirmed expected changes did not apply",
+            outcome="unknown",
+            requires_human=True,
+            reason=f"same-actor GET {read_path}?id={record_id} neither matched expected values nor confirmed pre-mutation values",
         )
 
 

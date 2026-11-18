@@ -228,6 +228,41 @@ class EquivalenceHarnessTests(unittest.TestCase):
         if single["backend_http_reads"] != next(s for s in self.capture_a["scenarios"] if s["scenario"] == "yudao_table_read_single")["backend_http_reads"]:
             self.assertFalse(ce.compare_captures(self.capture_a, bad_other, allow={"arc-09"})[0])
 
+    def test_allow_registered_ops03_scoping(self):
+        modified = copy.deepcopy(self.capture_a)
+        scen = next(
+            s for s in modified["scenarios"] if s["scenario"] == "yudao_convention_write_readback_timeout"
+        )
+        indet = next(
+            r for r in scen["audit_records"] if r.get("event") == "business_mutation_indeterminate"
+        )
+        indet["proposal_digest"] = "mutated_digest"
+
+        # Fails without ops-03
+        self.assertFalse(ce.compare_captures(self.capture_a, modified)[0])
+        # Passes with ops-03
+        ok_allowed, diff = ce.compare_captures(self.capture_a, modified, allow={"ops-03"})
+        self.assertTrue(ok_allowed, diff)
+
+        # Changing proposal_digest on any other audit event STILL fails even with ops-03
+        other_event_mod = copy.deepcopy(modified)
+        other_scen = next(
+            s for s in other_event_mod["scenarios"] if s["scenario"] == "yudao_convention_write_readback_timeout"
+        )
+        non_indet = next(
+            r for r in other_scen["audit_records"]
+            if r.get("event") != "business_mutation_indeterminate" and isinstance(r, dict)
+        )
+        non_indet["proposal_digest"] = "unexpected_digest"
+        self.assertFalse(ce.compare_captures(self.capture_a, other_event_mod, allow={"ops-03"})[0])
+
+        # Changing model calls, receipts, or answer STILL fails even with ops-03
+        bad_answer = copy.deepcopy(modified)
+        next(
+            s for s in bad_answer["scenarios"] if s["scenario"] == "yudao_convention_write_readback_timeout"
+        )["result"]["user_answer"] = "tampered"
+        self.assertFalse(ce.compare_captures(self.capture_a, bad_answer, allow={"ops-03"})[0])
+
 
 if __name__ == "__main__":
     unittest.main()

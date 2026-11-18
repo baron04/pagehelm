@@ -285,4 +285,32 @@ describe('UX-06: PanelHost.reconcile calls /reconciliations and updates timeline
     expect(runtime.stopped).toBe(false)
     expect(runtime.panelHost!.snapshot().notice).toMatchObject({code: 'gateway_error', retryable: false})
   })
+
+  it('treats 404 unknown_reconciliation as unsettled unknown without raising an inline notice banner', async () => {
+    const runtime = makeRuntime()
+    runtime.panelHost!.applyTimeline({
+      entries: [
+        {
+          id: 'e-1',
+          sequence: 1,
+          turn_id: 'turn-native',
+          at: 1757000000000,
+          kind: 'result',
+          tone: 'warning',
+          text: '写入结果未确认',
+          panel_state: 'indeterminate',
+        },
+      ],
+    })
+    const fetcher = vi.fn().mockResolvedValue(
+      Response.json({error: 'not tracked', code: 'unknown_reconciliation'}, {status: 404}),
+    )
+    vi.stubGlobal('fetch', fetcher)
+
+    const status = await runtime.panelHost!.reconcile!('turn-native')
+    expect(status).toEqual({outcome: 'unknown', settled: false})
+    expect(runtime.panelHost!.snapshot().notice).toBeNull()
+    expect(runtime.panelHost!.snapshot().entries[0]?.reconciliation).toEqual(status)
+    expect(runtime.stopped).toBe(false)
+  })
 })
