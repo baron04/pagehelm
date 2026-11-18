@@ -128,3 +128,86 @@ export function collectElTreeQueryControls(selectorMap, html, root = document, r
   }
   return lines.length ? lines.join('\n') + '\n' + html : html
 }
+
+function isVisibleElOption(node) {
+  if (!(node instanceof Element) || !node.isConnected) return false
+  const rect = node.getBoundingClientRect()
+  const view = node.ownerDocument?.defaultView ?? window
+  const style = view.getComputedStyle(node)
+  return Boolean(rect.width && rect.height && style.display !== 'none' && style.visibility !== 'hidden' &&
+    !node.closest('[hidden],[aria-hidden="true"]'))
+}
+
+function findElOwnedPopup(element) {
+  if (!(element instanceof Element) || !element.isConnected) return null
+  const doc = element.ownerDocument
+  const ids = [element.getAttribute('aria-controls'), element.getAttribute('aria-owns')].filter(Boolean)
+  if (!ids.length || new Set(ids).size !== 1 || !/^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(ids[0])) return null
+  const found = doc.querySelectorAll(`[id="${ids[0]}"]`)
+  if (found.length !== 1) return null
+  return found[0].closest('.el-select-dropdown,.el-tree-select__popper') ?? found[0]
+}
+
+/** Collect visible enabled option labels from an open Element Plus select/tree-select dropdown. */
+export function readElSelectVisibleCandidates(element, maxCandidates = 12, maxChars = 200) {
+  const popup = findElOwnedPopup(element)
+  if (!popup || !isVisibleElOption(popup)) return []
+  const items = popup.querySelectorAll('.el-tree-node[role="treeitem"], .el-select-dropdown__item, [role="option"]')
+  const seen = new Set()
+  const out = []
+  for (const item of items) {
+    if (item.classList.contains('is-disabled') || item.getAttribute('aria-disabled') === 'true' || item.hasAttribute('disabled')) {
+      continue
+    }
+    if (!isVisibleElOption(item)) continue
+    const labelNode = item.matches('.el-tree-node[role="treeitem"]')
+      ? (item.querySelector(':scope > .el-tree-node__content .el-tree-node__label') ?? item)
+      : item
+    const text = (labelNode.textContent || '').replace(/\s+/g, ' ').trim().slice(0, maxChars)
+    if (!text || seen.has(text)) continue
+    seen.add(text)
+    out.push(text)
+    if (out.length >= maxCandidates) break
+  }
+  return out
+}
+
+/** True when an Element Plus select input cleared without any selected item or tag. */
+export function isElSelectClearedWithoutSelection(element) {
+  if (!(element instanceof HTMLInputElement) || !element.isConnected) return false
+  if (String(element.value || '').trim() !== '') return false
+  const wrapper = element.closest('.el-select__wrapper, .el-select')
+  if (wrapper) {
+    const selectedItems = [...wrapper.querySelectorAll('.el-select__selected-item, .el-tag')]
+      .filter(node => !node.classList.contains('is-hidden') &&
+        !node.classList.contains('el-select__input-wrapper') &&
+        !node.classList.contains('el-select__placeholder') &&
+        !node.querySelector('input') &&
+        (node.textContent || '').trim() !== '')
+    if (selectedItems.length > 0) return false
+  }
+  const popup = findElOwnedPopup(element)
+  if (popup) {
+    const selected = popup.querySelectorAll('[aria-selected="true"], .el-select-dropdown__item.is-selected, .el-tree-node.is-current')
+    if (selected.length > 0) return false
+  }
+  return true
+}
+
+/** Bounded ~250ms async option probe when an Element Plus dropdown opens with an empty list. */
+export async function probeElSelectOptions(element, {timeoutMs = 250, intervalMs = 50} = {}) {
+  if (readElSelectVisibleCandidates(element, 1).length > 0) return true
+  const popup = findElOwnedPopup(element)
+  if (!popup || !isVisibleElOption(popup)) return false
+  const deadline = Date.now() + Math.max(0, timeoutMs)
+  while (element.isConnected && Date.now() < deadline) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) break
+    await new Promise(resolve => setTimeout(resolve, Math.min(intervalMs, remaining)))
+    if (!element.isConnected) return false
+    if (readElSelectVisibleCandidates(element, 1).length > 0) return true
+    const current = findElOwnedPopup(element)
+    if (!current || !isVisibleElOption(current)) return false
+  }
+  return readElSelectVisibleCandidates(element, 1).length > 0
+}

@@ -6,10 +6,12 @@
  * based on, the command digest -- which three builders and one inline literal used to
  * write out separately. They share it now.
  */
+import {summarizeObservation} from './pageSnapshot'
 import type {Redactor} from './redaction'
 import browserContract from '@contract/browser_contract.json'
 import {WIRE_VERSION, type ActionCommand, type ActionEnvelope,
-  type ActionReceipt, type ActionResultEnvelope, type ObservationEnvelope, type ExecutionTrace} from './types'
+  type ActionReceipt, type ActionResultEnvelope, type JsonObject,
+  type ObservationEnvelope, type ExecutionTrace, type PageObservation} from './types'
 
 /** Read only the diagnostic whitelist. A getter or malformed collector cannot
  * replace a valid business result or its original failure. */
@@ -93,6 +95,8 @@ interface ReceiptFacts {
   code: string
   detail: unknown
   observation: ObservationEnvelope
+  beforeObservation?: PageObservation | null
+  observationSummary?: JsonObject
   navigated: boolean
   elapsedMs: number
   /** Where the page was before, if the in-flight record does not say. */
@@ -104,10 +108,73 @@ interface ReceiptFacts {
   noEffect?: boolean
   execution_trace?: unknown
   form_data?: unknown
+  appliedFields?: JsonObject
+  rejectedFields?: JsonObject
+  previousFields?: JsonObject
+  restrictedFields?: string[]
+}
+
+function boundedFieldMap(raw: JsonObject | undefined, redactor: Redactor): JsonObject | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const entries = Object.entries(raw)
+  if (!entries.length) return undefined
+  const out: JsonObject = {}
+  for (const [key, val] of entries.slice(0, 64)) {
+    const cleanKey = redactor.redactString(key).slice(0, browserContract.form_handoff.max_label_chars)
+    if (!cleanKey || redactor.isSensitiveName(cleanKey)) continue
+    if (typeof val === 'string') {
+      out[cleanKey] = redactor.redactString(val).slice(0, 300)
+    } else if (val && typeof val === 'object' && !Array.isArray(val)) {
+      const obj = val as Record<string, unknown>
+      const cleaned: JsonObject = {}
+      if (typeof obj.reason === 'string') cleaned.reason = redactor.redactString(obj.reason).slice(0, 120)
+      if (Array.isArray(obj.candidates)) {
+        cleaned.candidates = obj.candidates
+          .filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+          .slice(0, browserContract.choice_failure.max_candidates)
+          .map(c => redactor.redactString(c).slice(0, browserContract.choice_failure.max_label_chars))
+      }
+      if (Object.keys(cleaned).length) out[cleanKey] = cleaned
+    } else if (typeof val === 'number' || typeof val === 'boolean' || val === null) {
+      out[cleanKey] = val
+    }
+  }
+  if (!Object.keys(out).length) return undefined
+  try {
+    if (JSON.stringify(out).length > browserContract.form_model.max_bytes) return undefined
+  } catch {
+    return undefined
+  }
+  return out
+}
+
+function boundedRestrictedFields(raw: string[] | undefined, redactor: Redactor): string[] | undefined {
+  if (!Array.isArray(raw) || !raw.length) return undefined
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const label of raw) {
+    if (typeof label !== 'string') continue
+    const clean = redactor.redactString(label).replace(/\s+/g, ' ').trim()
+      .slice(0, browserContract.form_handoff.max_label_chars)
+    if (!clean || seen.has(clean)) continue
+    seen.add(clean)
+    out.push(clean)
+    if (out.length >= browserContract.form_handoff.max_choice_options) break
+  }
+  return out.length ? out : undefined
 }
 
 export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: Redactor): ActionReceipt {
   const execution_trace = executionTraceOf(facts, action.command.action)
+  const observation_summary = facts.observationSummary ?? (
+    ['click', 'select', 'goto'].includes(action.command.action)
+      ? summarizeObservation(facts.beforeObservation, facts.observation.observation, redactor)
+      : undefined
+  )
+  const applied_fields = boundedFieldMap(facts.appliedFields, redactor)
+  const rejected_fields = boundedFieldMap(facts.rejectedFields, redactor)
+  const previous_fields = boundedFieldMap(facts.previousFields, redactor)
+  const restricted_fields = boundedRestrictedFields(facts.restrictedFields, redactor)
   return {
     schema_version: WIRE_VERSION,
     command_id: action.action_id,
@@ -132,6 +199,11 @@ export function receipt(action: ActionEnvelope, facts: ReceiptFacts, redactor: R
     ...(execution_trace ? {execution_trace} : {}),
     ...(facts.form_data && action.command.action === 'form_model'
       ? {form_data: facts.form_data as NonNullable<ActionReceipt['form_data']>} : {}),
+    ...(observation_summary ? {observation_summary} : {}),
+    ...(applied_fields ? {applied_fields} : {}),
+    ...(rejected_fields ? {rejected_fields} : {}),
+    ...(previous_fields ? {previous_fields} : {}),
+    ...(restricted_fields ? {restricted_fields} : {}),
     observation: facts.observation.observation,
   }
 }

@@ -12,12 +12,14 @@ import {visibleElement} from './combobox'
 import {sleep} from './contain'
 import type {FormModelRead, RowRecordRead} from './formModel'
 import {
-  EnteredControlTracker, formFieldMatches, inputFormControl, readPageFormModel,
-  readPageRowRecord, selectFormControl, verifyFormFields, verifyFormSubmit,
+  EnteredControlTracker, ensureHandoffFormOpenAndWritable, FormClosedOrReadonlyError,
+  formFieldMatches, inputFormControl, readPageFormModel, readPageRowRecord, selectFormControl,
+  verifyFormFields, verifyFormSubmit,
   type ElementReadFn, type FormHandoffField, type FormSubmitTarget,
 } from './pageForm'
 import {guideSubmitControl, highlightControl, type PageHighlight} from './pageHighlight'
 import {formControlScope, refIndex, revealable, type ElementLike, type ElementLookup} from './pageModel'
+import {waitForPageSettle, type SettleOptions, type SettleResult} from './pageSettle'
 import {
   boundedFacetCandidates, describeBrowserState, elementFingerprint, readBrowserState,
   type ActiveViewReader, type BrowserState, type ElementNavigationReader, type FacetApplier,
@@ -28,7 +30,7 @@ import {
 import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
 
-export {formFieldMatches, type FormHandoffField, type FormSubmitTarget}
+export {FormClosedOrReadonlyError, formFieldMatches, type FormHandoffField, type FormSubmitTarget}
 export type {PageHighlight}
 export type {
   ActiveViewReader, BrowserState, ElementNavigationReader, FacetApplier,
@@ -267,6 +269,20 @@ export class Page {
   /** Check an adapter-issued draft against live controls without sending their values back. */
   verifyFormFields(fields: unknown, observed: ElementRef[]): boolean {
     return verifyFormFields(fields, observed, ref => this.element(ref), this.entered, this.redactor)
+  }
+
+  /** Throw `FormClosedOrReadonlyError` if any targeted handoff form/field closed, detached, or turned readonly. */
+  ensureHandoffOpenAndWritable(fields: unknown, observed: ElementRef[]): void {
+    ensureHandoffFormOpenAndWritable(fields, observed, ref => this.element(ref), this.entered)
+  }
+
+  /** Wait briefly for substantive DOM mutations and non-long-tail network requests to settle. */
+  settle(options: SettleOptions = {}): Promise<SettleResult> {
+    return waitForPageSettle({
+      panelContainer: this.panelContainer ?? null,
+      isBusy: () => this.readiness().pending,
+      ...options,
+    })
   }
 
   /** Verify one visible server-owned submit target, including a disabled button.

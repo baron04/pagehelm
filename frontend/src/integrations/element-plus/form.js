@@ -350,3 +350,67 @@ export function installElOverlayOffset(doc = document, {styleId = 'woa-el-overla
     if (current.count === 0) current.teardown()
   }
 }
+
+/** Verify an Element Plus form control and its enclosing dialog/drawer/form are open, visible, and writable. */
+export function isElFormOpenAndWritable(element, {allowReadonlyCombobox = false} = {}) {
+  if (!(element instanceof HTMLElement) || !element.isConnected) return false
+  if (element.disabled || element.getAttribute('aria-disabled') === 'true' || element.classList.contains('is-disabled')) {
+    return false
+  }
+  const isCombobox = element.getAttribute('role') === 'combobox'
+  if (element.readOnly && !(allowReadonlyCombobox && isCombobox)) return false
+  if (element.getAttribute('aria-readonly') === 'true' && !(allowReadonlyCombobox && isCombobox)) return false
+  if (element.closest('.is-disabled, [aria-disabled="true"], [inert], [hidden], [aria-hidden="true"], fieldset:disabled')) {
+    return false
+  }
+  const view = element.ownerDocument?.defaultView ?? window
+  for (let node = element; node; node = node.parentElement) {
+    const style = view.getComputedStyle(node)
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
+      return false
+    }
+  }
+  const dialog = element.closest('.el-dialog, .el-drawer, .el-overlay, [role="dialog"], dialog')
+  if (dialog && dialog.tagName === 'DIALOG' && !dialog.hasAttribute('open')) return false
+  return true
+}
+
+/** Collect restricted password/file controls inside an Element Plus form/dialog root. */
+export function findElRestrictedControls(root) {
+  if (!(root instanceof Element) || !root.isConnected) return []
+  const out = []
+  const seen = new Set()
+  for (const input of root.querySelectorAll('input[type="password"], input[type="file"]')) {
+    if (!(input instanceof HTMLInputElement) || !input.isConnected || input.disabled) continue
+    const kind = input.type.toLowerCase() === 'file' ? 'file' : 'password'
+    const formItem = input.closest('.el-form-item')
+    const itemLabel = formItem?.querySelector('.el-form-item__label')?.textContent?.replace(/\s+/g, ' ').trim()
+    const explicitLabel = itemLabel ||
+      (input.labels?.[0]?.textContent || '').replace(/\s+/g, ' ').trim() ||
+      (input.getAttribute('aria-label') || '').trim() ||
+      (input.getAttribute('placeholder') || '').trim() ||
+      (input.name || '').trim() ||
+      (kind === 'file' ? '文件上传' : '密码')
+    const uploadWrap = kind === 'file' ? input.closest('.el-upload') : null
+    const focusTarget = (uploadWrap && uploadWrap instanceof HTMLElement ? uploadWrap : input)
+    if (seen.has(input)) continue
+    seen.add(input)
+    out.push({label: explicitLabel.slice(0, 120), kind, element: input, focusTarget})
+  }
+  return out
+}
+
+/** Smooth-scroll and focus a restricted password/file control (or its `.el-upload` trigger). */
+export function focusElRestrictedControl(target) {
+  if (!(target instanceof HTMLElement) || !target.isConnected) return false
+  const focusable = target.matches('input[type="file"]')
+    ? (target.closest('.el-upload')?.querySelector('button,[tabindex]') ?? target.closest('.el-upload') ?? target)
+    : target
+  if (!(focusable instanceof HTMLElement) || !focusable.isConnected) return false
+  focusable.scrollIntoView?.({behavior: 'smooth', block: 'center', inline: 'nearest'})
+  if (!focusable.matches('input,button,textarea,select,a,[tabindex]')) {
+    focusable.setAttribute('tabindex', '-1')
+  }
+  focusable.focus?.({preventScroll: true})
+  return true
+}

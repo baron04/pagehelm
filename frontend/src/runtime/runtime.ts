@@ -14,12 +14,15 @@
  * seams the conformance tests reach through, so they stay methods on the instance.
  */
 import browserContract from '@contract/browser_contract.json'
-import type {ApprovalRequest, PanelConfiguration, PanelState, ReconciliationStatus} from '../contract/panel'
+import type {
+  ApprovalRequest, HandoffRestrictedControl, PanelConfiguration, PanelState, ReconciliationStatus,
+} from '../contract/panel'
 import {postApprovalDecision, type ApprovalContext} from './approvalController'
 import {contained, detach, listen, soon, type Cancel} from './contain'
 import {
   mayNavigate, navigationExpectation, type NavigationExpectation,
 } from './executor'
+import {FormFillTracker} from './formFillTracker'
 import {
   armSessionExpiry, canRenewRuntimeSession, expireSession, handleSessionLapse,
   performHello, renewRuntimeSession, type LeaseSyncContext,
@@ -30,6 +33,7 @@ import {
   type PageControllerApi, type PageFacetReader, type PageHighlight, type PageOpener,
   type PageQueryReader, type PageRecordRouteReader, type PageRouteReader,
 } from './page'
+import {readPageFormModel} from './pageForm'
 import type {ElementLookup} from './pageModel'
 import type {PanelHost, TransportVerdict} from './panelHost'
 import {createRedactor, type Redactor} from './redaction'
@@ -162,6 +166,7 @@ function turnContextOf(runtime: EmbeddedWebRuntime): TurnControllerContext {
     get confirmButtonPresser() { return runtime.confirmButtonPresser },
     get submitBusyReader() { return runtime.submitBusyReader },
     get restoreElementFormModel() { return runtime.restoreElementFormModel },
+    get formFillTracker() { return runtime.formFillTracker },
     get guardWindow() { return runtime.guardWindowValue() },
     get stopped() { return runtime.stopped },
     set stopped(v) { runtime.stopped = v },
@@ -280,6 +285,7 @@ export class EmbeddedWebRuntime {
   private cancelExpiry: Cancel | null = null
   private stopListening: Cancel[] = []
   private redactorInstance: Redactor | null = null
+  private formFillTrackerInstance: FormFillTracker | null = null
   /** When the application's read-only window expires, in epoch milliseconds; 0 if none. */
   writeGuardUntil = 0
   /** @internal */
@@ -377,6 +383,10 @@ export class EmbeddedWebRuntime {
   // -- the pieces, reachable even on an instance assembled without its constructor ---------
 
   get redactor(): Redactor { return this.redactorInstance ?? defaultRedactor }
+
+  get formFillTracker(): FormFillTracker {
+    return (this.formFillTrackerInstance ??= new FormFillTracker(this.redactor))
+  }
 
   private get client(): SessionClient {
     this.clientInstance ??= new SessionClient({
@@ -574,6 +584,8 @@ export class EmbeddedWebRuntime {
         detach('load older', this._loadOlder(before).catch(error => this._raise(error)))
       },
       reconcile: (turnId, proposalDigest) => this.reconcileTurn(turnId, proposalDigest),
+      undoFormFill: turnId => this.undoFormFill(turnId),
+      focusHandoffControl: control => this.focusHandoffControl(control),
       openAnswerTarget: bindAnswerOpener(this.openPage, target => this._openInApplication(target)),
       panelVisibility: open => { if (!open) this._clearHighlight() },
     })
@@ -598,6 +610,7 @@ export class EmbeddedWebRuntime {
 
   stop({removePanel = true}: {removePanel?: boolean} = {}): void {
     this._clearHighlight()
+    this.formFillTrackerInstance?.clear()
     this.stopped = true
     this.cancelExpiry?.()
     this.cancelExpiry = null
@@ -655,6 +668,34 @@ export class EmbeddedWebRuntime {
   /** Trigger a read-only reconciliation check for an indeterminate write turn. Never retries writes. */
   reconcileTurn(turnId: string, proposalDigest?: string): Promise<ReconciliationStatus> {
     return reconcileRuntimeTurn(turnContextOf(this), turnId, proposalDigest)
+  }
+
+  /** Restore original pre-fill values captured for `turnId` while the same form is still open. */
+  undoFormFill(turnId: string): Promise<boolean> {
+    if (this.stopped) return Promise.resolve(false)
+    return this.formFillTracker.undoTurn(turnId, {
+      restoreFormModel: this.restoreElementFormModel,
+      readFormModel: element => {
+        try {
+          return readPageFormModel(element, this.readElementFormModel, this.acceptReadSource).read
+        } catch {
+          return null
+        }
+      },
+      onRestored: () => this._clearHighlight(),
+    })
+  }
+
+  /** Smoothly scroll and focus a restricted control (e.g. password/file) left for user action. */
+  focusHandoffControl(control: HandoffRestrictedControl): boolean {
+    if (this.stopped) return false
+    return this.formFillTracker.focusControl(control, ref => {
+      try {
+        return this.controller && this.getElementByIndex ? this.page.element(ref) : null
+      } catch {
+        return null
+      }
+    })
   }
 
   /** Record the decision before dispatching it, so a reload replays rather than re-asks. */

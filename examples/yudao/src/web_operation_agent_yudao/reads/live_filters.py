@@ -20,6 +20,85 @@ from web_operation_agent.goal.page_filters import PageFilterDraft, PageFilterFie
 
 #: What this application's pages call the control that applies a query form.
 QUERY_WORDS = ("搜索", "查询")
+_PAGING_KEYS = frozenset({"pageNo", "pageSize", "每页条数", "每页", "每页显示", "页码", "第几页"})
+
+
+def canonical_filter_pairs(filters) -> tuple[tuple[str, str], ...]:
+    """Canonical sorted `(key, value)` pairs for monotonic empty-filter tracking (ACC-02)."""
+    if filters is None:
+        return ()
+    if isinstance(filters, dict):
+        raw_items = filters.items()
+    elif isinstance(filters, (list, tuple)):
+        raw_items = []
+        for item in filters:
+            if isinstance(item, dict) and "label" in item:
+                raw_items.append((item.get("label"), item.get("value")))
+            elif isinstance(item, (list, tuple)) and len(item) == 2:
+                raw_items.append((item[0], item[1]))
+    else:
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for raw_key, raw_val in raw_items:
+        key = str(raw_key or "").strip().rstrip(":：").strip()
+        if not key or key in _PAGING_KEYS:
+            continue
+        if raw_val is None or raw_val == "" or raw_val == [] or raw_val == ():
+            continue
+        if isinstance(raw_val, (list, tuple, dict)):
+            val = json.dumps(raw_val, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        elif isinstance(raw_val, bool):
+            val = "true" if raw_val else "false"
+        else:
+            val = str(raw_val).strip()
+            if not val:
+                continue
+        pairs.append((key, val))
+    return tuple(sorted(set(pairs)))
+
+
+def active_view_or_tab(observation) -> str:
+    """Return stable active view or selected tab name(s) from an observation."""
+    if observation is None:
+        return ""
+    active = str(getattr(observation, "active_view", "") or "").strip()
+    if active:
+        return active
+    tabs = [
+        str(e.name or "").strip().splitlines()[0]
+        for e in getattr(observation, "elements", ()) or ()
+        if getattr(e, "role", "") == "tab"
+        and (getattr(e, "attrs", {}) or {}).get("aria-selected") == "true"
+        and str(getattr(e, "name", "") or "").strip()
+    ]
+    if tabs:
+        return "|".join(dict.fromkeys(tabs))
+    selected = [str(x).strip() for x in getattr(observation, "selected_controls", ()) or () if str(x).strip()]
+    return "|".join(dict.fromkeys(selected))
+
+
+def control_identity(observation, element) -> dict[str, str]:
+    """Stable control identity (`route`, `form_scope`, `label_or_name`) independent of volatile refs."""
+    route = ""
+    if observation is not None:
+        route = str(getattr(observation, "page_route", "") or urlsplit(getattr(observation, "url", "") or "").path)
+    if element is None:
+        return {"route": route, "form_scope": "", "label_or_name": ""}
+    attrs = getattr(element, "attrs", {}) or {}
+    label = ""
+    for key in ("field_label", "title", "placeholder"):
+        val = str(attrs.get(key) or "").rstrip(":：").strip()
+        if val:
+            label = val[:80]
+            break
+    if not label:
+        name = str(getattr(element, "name", "") or "").strip()
+        label = (name.splitlines()[0][:80] if name else "") or str(getattr(element, "role", "") or "")
+    return {
+        "route": route,
+        "form_scope": str(attrs.get("form_scope") or ""),
+        "label_or_name": label,
+    }
 
 
 def _digest(*values: str) -> str:

@@ -7,6 +7,7 @@ Runtime handoff for live DOM verification and highlighting. It never submits.
 from decimal import Decimal, InvalidOperation
 import json
 
+from .loop_guard import format_receipt_field_details
 from .model_loop_contracts import LoopToolResult
 
 
@@ -73,6 +74,10 @@ def add_draft_lines(context, button, count):
             return refused()
         outcome = context.page.execute("click", {"ref": target.ref})
         if outcome.state != "completed":
+            if outcome.error_code == "form_closed_or_readonly":
+                return LoopToolResult("当前表单或弹窗已关闭或为只读状态，明细建行未执行。", kind="page",
+                                      state=outcome.state, dispatch=outcome.dispatch,
+                                      error_code="form_closed_or_readonly")
             return LoopToolResult("明细建行未完成，请核对当前观察。", kind="page", state=outcome.state,
                                   dispatch=outcome.dispatch, error_code=outcome.error_code)
         after, current = context.obs, snapshot(context.obs)
@@ -242,7 +247,13 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
                        **({"option_label": option} if option is not None else {})})
     outcome = context.page.handoff(fields, {"ref": buttons[0].ref, "label": buttons[0].name, "scope": scope})
     if outcome.state != "completed" or outcome.receipt is None:
-        return LoopToolResult("表单交接未完成，请核对当前观察。", kind="page", state=outcome.state,
+        if outcome.error_code == "form_closed_or_readonly":
+            return LoopToolResult("当前表单或弹窗已关闭或为只读状态，未完成交接。", kind="page",
+                                  state=outcome.state, dispatch=outcome.dispatch,
+                                  error_code="form_closed_or_readonly")
+        extra = format_receipt_field_details(outcome.receipt)
+        msg = "表单交接未完成，请核对当前观察。" + (f"\n{extra}" if extra else "")
+        return LoopToolResult(msg, kind="page", state=outcome.state,
                               dispatch=outcome.dispatch, error_code=outcome.error_code)
     final = comparison_map([e for e in draft_fields(context.obs)
              if (e.attrs["form_scope"], e.attrs["form_instance"]) == (scope, instance)])
@@ -263,5 +274,7 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
            for key, e in {**baseline, **old_map}.items() if key not in wanted):
         return refused("final_untouched_value")
     context.audit("page_handoff_ready", observation_epoch=context.obs.epoch, submitted=False, persisted=False)
-    return LoopToolResult("表单已核验，提交按钮已标出。", kind="page", dispatch="acknowledged",
+    extra = format_receipt_field_details(outcome.receipt)
+    msg = "表单已核验，提交按钮已标出。" + (f"\n{extra}" if extra else "")
+    return LoopToolResult(msg, kind="page", dispatch="acknowledged",
                           marked=buttons[0].name[:200], completion_command=outcome.receipt.command_id)

@@ -39,6 +39,7 @@ from web_operation_agent.business.errors import (
     BusinessToolIdentityError,
     BusinessToolUnavailableError,
 )
+from web_operation_agent.execution import loop_guard
 from web_operation_agent.execution.checks import ProgramCheckSpec, record_check_fired
 from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft, unrestorable_form
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor, history_messages
@@ -57,6 +58,7 @@ from web_operation_agent.schemas.browser import FORM_INPUT_CONTROLS
 from ..reads.answer_numbers import untraced as untraced_answer_numbers
 from ..reads.api_content import redacted
 from ..reads.bound_data_reads import turn_actor_reads
+from ..reads.live_filters import control_identity
 from ..reads.record_access import contact_can_edit, customer_can_edit
 from ..reads.turn_tables import TurnReadError, TurnTables
 from ..writes.draft_readback import product_price_readback
@@ -106,17 +108,23 @@ from .procedures import (
     _draft_only_request,
     _new_form_draft_request,
     _unrequested_draft_fields,
+    build_handoff_facts,
 )
 
-_STATUS_READ_TOOLS = frozenset({"find_record", "search_api", "call_api", "entity_rules", "load_domain_guide", "finish"})
 _CONCURRENT_READ_TOOLS = frozenset({"call_api", "find_record", "search_api", "entity_rules", "load_domain_guide"})
 
 YUDAO_CHECK_SPECS: dict[str, ProgramCheckSpec] = {
-    "read_only_question": ProgramCheckSpec(
-        name="read_only_question",
-        checks_what="Status-only questions refuse page mutation or navigation tools.",
-        retry_guidance="本轮只询问状态；请根据当前账号的只读接口结果直接回答，不操作页面。",
-        terminal_delivery="Only verified read-only API status facts are delivered; page actions remain refused.",
+    "unbacked_business_claim": ProgramCheckSpec(
+        name="unbacked_business_claim",
+        checks_what="Empty-items direct answers are only allowed for the 4 general non-business categories; business claims require current-turn ev_ tool receipts.",
+        retry_guidance="涉及业务数据、单据、库存、规则、权限或配置时不能用 items=[] 空口直接回答；请先调用查询工具并引用本轮 ev_ 回执，查不到用 status=cannot 如实说明。",
+        terminal_delivery="After a failed retry, unbacked business claims without receipts are refused with status=cannot.",
+    ),
+    "verified_empty_filter_repeated": ProgramCheckSpec(
+        name="verified_empty_filter_repeated",
+        checks_what="Repeated queries against the same route, view/tab, and filter criteria already verified empty (0 rows) in this turn are blocked.",
+        retry_guidance="同一筛选条件在本轮已核验为空结果（0条），请更换条件或直接用 status=cannot / done 说明查无记录。",
+        terminal_delivery="Repeated identical empty filter queries are stopped before re-dispatch.",
     ),
     "draft_only": ProgramCheckSpec(
         name="draft_only",
@@ -454,11 +462,66 @@ def _requirements(name, arguments, observation, review=None):
     return frozenset()
 
 
-def _read_only_status_question(text: str) -> bool:
-    """Only unmistakable status questions; mixed page, money and write requests retain tools."""
-    return (bool(re.search(r"状态|进度|情况", text))
-            and bool(re.search(r"[?？]|什么|如何|怎样|目前|现在|当前", text))
-            and not re.search(r"金额|价格|单价|费用|余额|打开|进入|跳转|页面|筛选|过滤|点击|选择|选中|填写|切换|翻页|定位|显示在|修改|改成|改为|变更|调整|设为|置为|标记|更新|设置|保存|提交|创建|新建|删除|取消|执行|办理", text))
+_BUSINESS_CLAIM_WORDS = re.compile(
+    r"客户|联系人|线索|商机|合同|回款|订单|采购|销售|退货|入库|出库|库存|仓库|供应商|产品|商品|"
+    r"部门|岗位|员工|用户|会员|积分|优惠券|秒杀|审批|流程|公告|规则|权限|配置|单据|账款|"
+    r"余额|金额|单价|数量|总数|条数|笔数|列表|详情|台账|状态|进度|审批|核销|打开|页面|筛选"
+)
+_GENERAL_GREETING_ONLY = re.compile(
+    r"^(?:你好|您好|hi|hello|hey|早上好|下午好|晚上好|在吗|谢谢|感谢|多谢|再见|拜拜)[！!。,.?\s]*$",
+    re.IGNORECASE,
+)
+_GENERAL_CAPABILITY = re.compile(
+    r"(?:你能做什么|你会什么|你可以做什么|你是谁|介绍一下你自己|怎么使用你|如何使用|有哪些功能|支持哪些操作)"
+)
+_GENERAL_TEXT_WORK = re.compile(
+    r"(?:翻译|译成|译为|润色|改写|缩写|扩写|摘要|总结(?:一下)?(?:下面|以下|这段|上述)|概括(?:一下)?(?:下面|以下|这段|上述))"
+)
+_PURE_ARITHMETIC_EXPRESSION = re.compile(r"^\s*[\d\s+\-*/().%＝=]+\s*(?:等于多少|是多少|[=?？]*)\s*$")
+_PURE_ARITHMETIC_PHRASE = re.compile(
+    r"(?:计算|算一下|等于几|等于多少|加|减|乘以?|除以?|求(?:和|差|积|商))"
+)
+
+
+def _is_allowed_direct_reply(prompt: str, answer: str) -> bool:
+    """Return True only for the 4 general non-business reply classes allowed with items=[]."""
+    text = _words(prompt or "").strip()
+    if not text:
+        return True
+    if _GENERAL_GREETING_ONLY.match(text):
+        return not _BUSINESS_CLAIM_WORDS.search(answer or "")
+    if _GENERAL_CAPABILITY.search(text) and not _BUSINESS_CLAIM_WORDS.search(text):
+        return True
+    if _GENERAL_TEXT_WORK.search(text) and not _BUSINESS_CLAIM_WORDS.search(text):
+        return True
+    if _PURE_ARITHMETIC_EXPRESSION.match(text):
+        return True
+    if _PURE_ARITHMETIC_PHRASE.search(text) and re.search(r"\d", text) and not _BUSINESS_CLAIM_WORDS.search(text):
+        return not _BUSINESS_CLAIM_WORDS.search(answer or "")
+    return False
+
+
+def _normalize_input_options(options) -> list[dict[str, str]]:
+    if not isinstance(options, list) or not (2 <= len(options) <= 4):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for idx, opt in enumerate(options, start=1):
+        if not isinstance(opt, dict):
+            return []
+        label = str(opt.get("label") or "").strip()
+        if not label or label in seen:
+            return []
+        seen.add(label)
+        item: dict[str, str] = {
+            "id": str(opt.get("id") or f"opt_{idx}").strip()[:64],
+            "label": label[:120],
+        }
+        prompt = str(opt.get("prompt") or "").strip()
+        if prompt:
+            item["prompt"] = prompt[:500]
+        out.append(item)
+    return out
 
 
 def _draft_form_binding(observation, element):
@@ -483,12 +546,13 @@ def _handoff_key(observation, marked: str):
 
 def _emit_yudao_check_fired(executor, s, check: str, *, outcome: str = "blocked",
                             attempt: int = 1, answer_preserved: bool = False) -> None:
-    ledger = getattr(s, "ledger", None)
+    model_state = s if getattr(s, "ledger", None) is not None else getattr(executor, "_active_model_state", s)
+    ledger = getattr(model_state, "ledger", None)
     if ledger is None:
         return
     record_check_fired(
         ledger,
-        s=s,
+        s=model_state,
         trace=getattr(executor, "_trace", None),
         check=check,
         outcome=outcome,
@@ -516,7 +580,13 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         prev_earlier = ctx.earlier_requests
         prev_intent = ctx.write_intent
         prev_tables = ctx.turn_tables
+        prev_empty = getattr(ctx, "verified_empty_filters", set())
+        prev_last_obs = getattr(self, "_last_obs", None)
+        prev_model_state = getattr(self, "_active_model_state", None)
         ctx.current_request = state.message.text
+        ctx.verified_empty_filters = set()
+        self._last_obs = getattr(state, "obs", None)
+        self._active_model_state = state
         self.knowledge.turn_targets = {}
         context = self.conversation_state.model_context() or {}
         ctx.earlier_requests = tuple(str(turn["user"]) for turn in context.get("prior_turns", ()))
@@ -540,6 +610,9 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         finally:
             ctx.turn_tables = prev_tables
             tables.close()
+            ctx.verified_empty_filters = prev_empty
+            self._last_obs = prev_last_obs
+            self._active_model_state = prev_model_state
             ctx.write_intent = prev_intent
             ctx.earlier_requests = prev_earlier
             ctx.current_request = prev_request
@@ -555,9 +628,6 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 isinstance(intent, WriteIntent) and intent.mode in {"draft", "save"})):
             turn["review_completion"] = True
         offered = super()._tools(turn)
-        if _read_only_status_question(ctx.current_request):
-            return [tool for tool in offered
-                    if tool["function"]["name"] in (_STATUS_READ_TOOLS | (_TABLE_TOOLS if ctx.turn_tables else frozenset()))]
         if not isinstance(intent, WriteIntent) or intent.mode != "draft":
             return offered
         names = {"load_skill", "read_skill_resource", "propose_operation", "request_submit"}
@@ -566,6 +636,39 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             avail = getattr(writes, "available_definitions", writes.definitions)
             names.update(definition.name for definition in avail())
         return [tool for tool in offered if tool["function"]["name"] not in names]
+
+    def _publish_step(self, facts: dict, turn_id: str = "") -> None:
+        harness = getattr(self, "_harness", None)
+        if harness is not None:
+            if facts.get("stage") == "read_page" and hasattr(harness, "publish_read_page"):
+                harness.publish_read_page(turn_id, facts.get("page"))
+                return
+            if hasattr(harness, "_publish_step"):
+                harness._publish_step(facts, turn_id)
+                return
+        channel = getattr(self, "channel", None)
+        if channel is not None and hasattr(channel, "publish"):
+            channel.publish("progress", {"step": dict(facts)}, turn_id=turn_id)
+
+    def _page(self, s, turn):
+        if getattr(s, "obs", None) is not None:
+            self._last_obs = s.obs
+        return super()._page(s, turn)
+
+    def _element(self, s, index):
+        if getattr(s, "obs", None) is not None:
+            self._last_obs = s.obs
+        return super()._element(s, index)
+
+    def _failure_base(self, name, arguments, target, observation=None):
+        base = loop_guard.failure_base(name, arguments, target)
+        if base is None:
+            return None
+        if target is None:
+            return base
+        obs = observation or getattr(self, "_last_obs", None)
+        ident = control_identity(obs, target)
+        return (base[0], (ident["route"], ident["form_scope"], ident["label_or_name"]), base[2])
 
     def _submit_allowed(self, turn):
         ctx = self._ctx()
@@ -588,11 +691,8 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
 
     def _invoke_tool(self, s, name, args, turn):
         ctx = self._ctx()
-        if _read_only_status_question(ctx.current_request):
-            if name not in (_STATUS_READ_TOOLS | (_TABLE_TOOLS if ctx.turn_tables else frozenset())):
-                self._emit_check_fired(s, "read_only_question")
-                return LoopToolResult("本轮只询问状态；请根据当前账号的只读接口结果直接回答，不操作页面。",
-                                      kind="read", state="refused", error_code="read_only_question")
+        if getattr(s, "obs", None) is not None:
+            self._last_obs = s.obs
         intent = ctx.write_intent
         if isinstance(intent, WriteIntent) and intent.mode == "draft":
             writes = turn.get("writes")
@@ -621,6 +721,8 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             result = super()._invoke_tool(s, name, args, turn)
         finally:
             ctx.executor_turn = prev_turn
+        if getattr(s, "obs", None) is not None:
+            self._last_obs = s.obs
         if result.state == "refused" and result.error_code == "unrequested_draft_field":
             self._emit_check_fired(s, "unrequested_draft_field")
         if self.native_submit is not None:
@@ -772,8 +874,89 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             return result.marked
         return ""
 
+    def export_table(self, ref: str) -> dict | None:
+        table_ctx = self._ctx().turn_tables
+        if table_ctx is None:
+            return None
+        try:
+            return table_ctx[0].export_table(ref)
+        except TurnReadError:
+            return None
+
+    def _resolve_finish_table(self, s, arguments: dict) -> dict | None:
+        del s
+        ref = str((arguments or {}).get("table_ref") or "").strip()
+        if not ref or str((arguments or {}).get("status") or "") != "done":
+            return None
+        return self.export_table(ref)
+
+    def _settle(self, s, current, text):
+        table_payload = getattr(s, "finish_table", None)
+        input_options = getattr(s, "input_options", None)
+        handoff_facts = getattr(s, "handoff_payload", None) or getattr(s, "handoff_facts", None)
+        if handoff_facts is not None and getattr(s, "handoff_payload", None) is None:
+            setattr(s, "handoff_payload", handoff_facts)
+        channel = getattr(self, "channel", None)
+        if channel is None or not hasattr(channel, "publish") or (
+                table_payload is None and input_options is None and handoff_facts is None):
+            return super()._settle(s, current, text)
+        orig_publish = channel.publish
+
+        def enriched_publish(kind, payload, **kw):
+            if kind == "progress" and isinstance(payload, dict) and "terminal_reason" in payload:
+                merged = dict(payload)
+                if table_payload is not None:
+                    merged.setdefault("table", table_payload)
+                if input_options is not None:
+                    merged.setdefault("input_options", list(input_options))
+                if handoff_facts is not None:
+                    merged.setdefault("handoff", dict(handoff_facts))
+                return orig_publish(kind, merged, **kw)
+            return orig_publish(kind, payload, **kw)
+
+        channel.publish = enriched_publish
+        try:
+            return super()._settle(s, current, text)
+        finally:
+            channel.publish = orig_publish
+
     def _closing(self, s, turn, args):
         args = super()._closing(s, turn, args)
+        table_ref = str(args.get("table_ref") or "").strip()
+        if table_ref:
+            exported = self._resolve_finish_table(s, args)
+            if exported is not None:
+                turn["finish_table"] = exported
+                setattr(s, "finish_table", exported)
+                trace = getattr(self, "_trace", None)
+                if trace is not None and hasattr(trace, "record_delivery"):
+                    try:
+                        trace.record_delivery(
+                            reference=table_ref,
+                            projection=exported,
+                            rendered_text=str(args.get("answer") or ""),
+                            presented_records=len(exported["rows"]),
+                            presentation_complete=len(exported["rows"]) >= exported["total_rows"],
+                            source_reference=table_ref,
+                        )
+                    except Exception:
+                        pass
+                receipt = self._ctx().turn_tables[0].receipt_for_table_ref(table_ref) if self._ctx().turn_tables else ""
+                s.ledger.append("finish_table_attached", ref=table_ref, rows=len(exported["rows"]),
+                                total_rows=exported["total_rows"], receipt=receipt)
+        if args.get("status") == "need_input" and args.get("options"):
+            normalized = _normalize_input_options(args.get("options"))
+            if normalized:
+                turn["input_options"] = normalized
+                setattr(s, "input_options", normalized)
+        handoff_facts = getattr(self._ctx(), "handoff_facts", None) or turn.get("handoff_facts")
+        if handoff_facts is None and (turn.get("applied_fields") or turn.get("rejected_fields") or turn.get("restricted_fields")
+                                      or (turn.get("handoff") and getattr(s, "obs", None) is not None)):
+            handoff_facts = build_handoff_facts(turn, getattr(s, "obs", None))
+        if handoff_facts is not None:
+            turn["handoff_facts"] = handoff_facts
+            setattr(s, "handoff_facts", handoff_facts)
+            setattr(s, "handoff_payload", handoff_facts)
         if (getattr(getattr(self, "procedures", None), "form_fill", None) and not turn.get("submit_started")
                 and not turn.get("written") and not turn.get("submit_handoff_blocked")):
             label = self._default_handoff(s, turn)
@@ -804,7 +987,7 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
     def _finish_tool(self, turn):
         tool = super()._finish_tool(turn)
         parameters = tool["function"]["parameters"]
-        parameters["properties"]["items"] = {"type": "array", "minItems": 1, "maxItems": 16, "items": {
+        parameters["properties"]["items"] = {"type": "array", "minItems": 0, "maxItems": 16, "items": {
             "type": "object", "properties": {
                 "item": {"type": "string", "minLength": 1, "maxLength": 240},
                 "kind": {"type": "string", "enum": ["data", "page", "write"]},
@@ -813,6 +996,24 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
                 "receipts": {"type": "array", "maxItems": 12,
                              "items": {"type": "string", "minLength": 1, "maxLength": 48}}},
             "required": ["item", "kind", "status", "receipts"], "additionalProperties": False}}
+        parameters["properties"]["table_ref"] = {
+            "type": "string", "minLength": 2, "maxLength": 12,
+            "description": "可选：引用 sql 返回的 q1..qN 或 t1..tN 表句柄，由服务端直接渲染完整数据表格。",
+        }
+        parameters["properties"]["options"] = {
+            "type": "array", "minItems": 2, "maxItems": 4,
+            "description": "仅 status=need_input 时可选：2 到 4 个让用户直接点选的候选或确认选项。",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "label": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 500},
+                },
+                "required": ["label"],
+                "additionalProperties": False,
+            },
+        }
         if turn.get("sources") is None or turn.get("runtime_used"):
             parameters["required"].append("items")
         return tool
@@ -854,6 +1055,36 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         feedback = super()._finish_feedback(s, turn, args)
         if feedback:
             return feedback
+        if args.get("table_ref"):
+            if args.get("status") != "done":
+                return DeliveryFeedback("invalid_table_ref", "table_ref 仅可在 status=done 时使用。")
+            if self.export_table(str(args["table_ref"])) is None:
+                return DeliveryFeedback("invalid_table_ref",
+                    f"表句柄 {args['table_ref']} 不存在或未生成；请引用 sql 返回的 q1..qN / t1..tN。")
+        if args.get("options"):
+            if args.get("status") != "need_input":
+                return DeliveryFeedback("invalid_input_options", "options 仅可在 status=need_input 时使用。")
+            if not _normalize_input_options(args.get("options")):
+                return DeliveryFeedback("invalid_input_options", "options 必须包含 2 到 4 个非空且不重复 label 的候选项。")
+        if (args.get("status") == "done" and not args.get("items") and not args.get("table_ref")
+                and turn.get("sources") is None):
+            table_ctx = self._ctx().turn_tables
+            has_evidence = bool(
+                getattr(self, "_tool_receipts", ())
+                or turn.get("read_tables_used")
+                or turn.get("written")
+                or turn.get("handoff")
+                or (table_ctx and table_ctx[0].receipts)
+            )
+            prompt_text = getattr(getattr(s, "message", None), "text", "") or self._ctx().current_request or ""
+            if not has_evidence and not _is_allowed_direct_reply(prompt_text, str(args.get("answer") or "")):
+                self._emit_check_fired(s, "unbacked_business_claim")
+                return DeliveryFeedback(
+                    "unbacked_business_claim",
+                    "只有纯问候、能力说明、用户原文翻译/摘要、纯算术这四类允许空回执（items=[]）直答；"
+                    "涉及客户、单据、库存、规则、权限或配置等业务数据时，必须先调用工具查询并引用本轮有效 ev_ 回执，"
+                    "查不到请用 status=cannot 如实说明。",
+                )
         if "items" not in args:
             return ""
         try:
@@ -985,10 +1216,27 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
             _emit_yudao_check_fired(self, s, "dangerous_unconfirmed")
             return LoopToolResult(
                 f"「{action_label}」属于不可逆或逆向状态变更。请先在对话里向用户说明该动作对目标记录及关联库存/活动的具体影响，"
-                "并用 finish(need_input) 请用户明确确认；用户确认后下一轮再提出写入提案。",
+                "并用 finish(status='need_input', answer=..., options=[{'id': 'confirm', 'label': '确认执行', 'prompt': '确认执行该不可逆操作'}, "
+                "{'id': 'cancel', 'label': '取消操作', 'prompt': '暂不执行，取消'}]) 请用户明确确认；用户确认后下一轮再提出写入提案。",
                 kind="write", state="needs_input", dispatch="not_dispatched", error_code="dangerous_unconfirmed",
             )
-        return super()._propose(s, writes, operation, inputs, turn)
+        prefill_port = getattr(getattr(self, "profile", None), "mutation_prefill", None)
+        if prefill_port is not None and hasattr(prefill_port, "last_handoff_facts"):
+            prefill_port.last_handoff_facts = None
+        result = super()._propose(s, writes, operation, inputs, turn)
+        handoff_facts = getattr(prefill_port, "last_handoff_facts", None) or (
+            getattr(ctx, "handoff_facts", None) if ctx is not None else None
+        )
+        if handoff_facts is not None:
+            turn["handoff_facts"] = handoff_facts
+            setattr(s, "handoff_facts", handoff_facts)
+            setattr(s, "handoff_payload", handoff_facts)
+        if result.state == "needs_input" and "options" not in result.feedback:
+            result = replace(
+                result,
+                feedback=result.feedback + "\n多个候选需要用户选择时，请在 finish(status='need_input', answer=..., options=[...]) 中提供 2 到 4 个候选 {id, label, prompt}。",
+            )
+        return result
 
     def __init__(self, *, knowledge, actor_name="", today="", time_zone="Asia/Shanghai", conventions=(),
                  draft_steps=None, mutation_prefill=None, location_bindings=False, native_submit=None, page_reads=None, **kwargs):
@@ -997,13 +1245,18 @@ class YudaoTurnExecutor(ModelDrivenTurnExecutor):
         application, goal_port = kwargs["application"], kwargs["goal_port"]
         self.knowledge = knowledge
         self.turn_context = SlimTurnContext()
+        self._last_obs = None
         knowledge.handoffs = SessionHandoffPolicy.extending(application.ports.routes.session_handoff_query_keys)
         procedure_type = YudaoLoopProcedures
         if location_bindings:
             from ..reads.location import LocationProcedures
             procedure_type = LocationProcedures
         self.procedures = owner = procedure_type(
-            knowledge, goal_port, application.descriptor.origin, turn_context=self.turn_context)
+            knowledge, goal_port, application.descriptor.origin,
+            turn_context=self.turn_context,
+            publish_step=lambda facts, tid="": self._publish_step(facts, tid),
+            check_fired=self._emit_check_fired,
+        )
         owner.page_reads = page_reads
         review = getattr(goal_port, "review", None)
         schemas = _table_tool_schemas(review)

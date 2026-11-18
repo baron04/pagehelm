@@ -10,7 +10,7 @@ import sqlite3
 import time
 from zoneinfo import ZoneInfo
 
-from web_operation_agent.privacy import has_unredacted_sensitive_assignment
+from web_operation_agent.privacy import has_unredacted_sensitive_assignment, redact_sensitive_assignments
 from .api_content import redacted
 from ..goal_compat.goal import _SECRET
 
@@ -20,6 +20,10 @@ MAX_ROWS = 5000
 MAX_TABLES = 36
 MAX_SQL_ROWS = 200
 MAX_SQL_CHARS = 14000
+EXPORT_MAX_COLS = 24
+EXPORT_MAX_ROWS = 2000
+EXPORT_CELL_CHARS = 300
+EXPORT_TITLE_CHARS = 120
 _FUNCTIONS = frozenset("""
 abs avg coalesce count date datetime dense_rank first_value glob group_concat
 ifnull iif instr json_array_length json_extract json_type julianday lag last_value
@@ -178,6 +182,21 @@ def _cell(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+def _export_cell(value, handoffs) -> str:
+    if value is None:
+        raw = ""
+    elif isinstance(value, bool):
+        raw = "true" if value else "false"
+    elif isinstance(value, (int, float)):
+        raw = str(value)
+    elif isinstance(value, str):
+        raw = value
+    else:
+        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    cleaned = redact_sensitive_assignments(redacted(raw, handoffs))
+    return " ".join(str(cleaned).split())[:EXPORT_CELL_CHARS]
+
+
 class TurnTables:
     """One database and receipt namespace, discarded at turn end."""
 
@@ -192,11 +211,13 @@ class TurnTables:
         self.prefix = secrets.token_hex(6)
         self.receipts = set()
         self.tables = {}
+        self.queries = {}
 
     def close(self):
         self.connection.close()
         self.receipts.clear()
         self.tables.clear()
+        self.queries.clear()
 
     def issue_receipt(self):
         reference = f"ev_{self.prefix}_{len(self.receipts) + 1}"
@@ -246,7 +267,65 @@ class TurnTables:
         return info
 
     def describe(self):
-        return {"tables": list(self.tables.values())}
+        queries = [
+            {k: v for k, v in q.items() if k != "rows"}
+            for q in self.queries.values()
+        ]
+        return {"tables": list(self.tables.values()), **({"queries": queries} if queries else {})}
+
+    def receipt_for_table_ref(self, ref: str) -> str:
+        key = str(ref or "").strip()
+        if key in self.queries:
+            return str(self.queries[key].get("receipt") or "")
+        if key in self.tables:
+            return str(self.tables[key].get("receipt") or "")
+        return ""
+
+    def export_table(self, ref: str) -> dict:
+        if not isinstance(ref, str) or not ref.strip():
+            raise TurnReadError("table_not_found", "请提供有效的表格句柄（如 t1 或 q1）。")
+        key = ref.strip()
+        if key in self.queries:
+            entry = self.queries[key]
+            raw_cols = list(entry.get("columns") or ())[:EXPORT_MAX_COLS]
+            cols = [
+                " ".join(redact_sensitive_assignments(redacted(str(col), self.handoffs)).split())[:80]
+                for col in raw_cols
+            ]
+            if not cols or any(not col for col in cols):
+                raise TurnReadError("table_unavailable", "该查询结果缺少可导出的列名。")
+            raw_rows = list(entry.get("rows") or ())[:EXPORT_MAX_ROWS]
+            rows = [
+                [_export_cell(row[idx] if idx < len(row) else "", self.handoffs) for idx in range(len(cols))]
+                for row in raw_rows
+            ]
+            total_rows = max(len(rows), int(entry.get("total_rows") or len(rows)))
+            title = " ".join(
+                redact_sensitive_assignments(redacted(str(entry.get("title") or key), self.handoffs)).split()
+            )[:EXPORT_TITLE_CHARS] or key
+            return {"title": title, "columns": cols, "rows": rows, "total_rows": total_rows}
+        if key in self.tables:
+            info = self.tables[key]
+            cols = [
+                " ".join(redact_sensitive_assignments(redacted(str(col), self.handoffs)).split())[:80]
+                for col in list(info.get("columns") or ())[:EXPORT_MAX_COLS]
+            ]
+            raw_cols = list(info.get("columns") or ())[:EXPORT_MAX_COLS]
+            if not raw_cols or not cols or any(not col for col in cols):
+                raise TurnReadError("table_unavailable", "该行表没有可导出的列。")
+            select_cols = ", ".join(_quoted(col) for col in raw_cols)
+            cursor = self.connection.execute(f"SELECT {select_cols} FROM {key} ORDER BY _row LIMIT ?", (EXPORT_MAX_ROWS,))
+            rows = [
+                [_export_cell(row[idx] if idx < len(row) else "", self.handoffs) for idx in range(len(raw_cols))]
+                for row in cursor
+            ]
+            declared_total = info.get("total")
+            total_rows = declared_total if isinstance(declared_total, int) and declared_total >= len(rows) else len(rows)
+            title = " ".join(
+                redact_sensitive_assignments(redacted(str(info.get("path") or key), self.handoffs)).split()
+            )[:EXPORT_TITLE_CHARS] or key
+            return {"title": title, "columns": cols, "rows": rows, "total_rows": total_rows}
+        raise TurnReadError("table_not_found", f"本轮不存在表格或查询结果引用：{key}。")
 
     def query(self, statement):
         if not isinstance(statement, str) or not re.match(r"\s*(?:SELECT|WITH)\b", statement, re.IGNORECASE):
@@ -278,16 +357,26 @@ class TurnTables:
             cursor = conn.execute(statement)
             columns = [item[0] for item in cursor.description]
             result = []
+            export_rows = []
+            total_rows = 0
             size = 0
             truncated = False
             for row in cursor:
                 safe_row = [value.hex() if isinstance(value, bytes) else value
                             for value in redacted(list(row), self.handoffs)]
-                size += len(json.dumps(safe_row, ensure_ascii=False))
-                if len(result) >= MAX_SQL_ROWS or size > MAX_SQL_CHARS:
-                    truncated = True
-                    break
-                result.append(safe_row)
+                total_rows += 1
+                if len(export_rows) < EXPORT_MAX_ROWS:
+                    export_rows.append(safe_row)
+                if not truncated:
+                    size += len(json.dumps(safe_row, ensure_ascii=False))
+                    if len(result) >= MAX_SQL_ROWS or size > MAX_SQL_CHARS:
+                        truncated = True
+                    else:
+                        result.append(safe_row)
+                elif len(export_rows) >= EXPORT_MAX_ROWS:
+                    # Keep counting bounded so total_rows reflects larger results without stalling.
+                    if total_rows >= EXPORT_MAX_ROWS + 500:
+                        break
         except sqlite3.Error as exc:
             code = getattr(exc, "sqlite_errorname", "SQLITE_ERROR")
             raise TurnReadError("sql_timeout" if expired else "sql_refused",
@@ -298,7 +387,9 @@ class TurnTables:
             conn.set_authorizer(None)
         if not sources or any(_secret_field(col) for col in columns):
             raise TurnReadError("sql_refused", "查询必须读取本轮行表，且不能输出凭据字段。")
-        out = {"receipt": self.issue_receipt(), "columns": columns, "rows": result,
+        qname = f"q{len(self.queries) + 1}"
+        receipt = self.issue_receipt()
+        out = {"name": qname, "table_ref": qname, "receipt": receipt, "columns": columns, "rows": result,
                "returned_rows": len(result), "truncated": truncated,
                "sources": [self.tables[name]["receipt"] for name in sorted(sources)],
                "sources_complete": all(self.tables[name]["complete"] for name in sources)}
@@ -312,6 +403,10 @@ class TurnTables:
                 extra = extra[:max(0, MAX_SQL_ROWS - len(rows_out))]
                 out["rows"] = rows_out = rows_out + extra
                 out["returned_rows"] = len(rows_out)
+                for row in extra:
+                    if len(export_rows) < EXPORT_MAX_ROWS and row not in export_rows:
+                        export_rows.append(row)
+                total_rows = max(total_rows, len(export_rows))
                 group = "该并列组共" + str(tie["group_rows"]) + "行" if tie.get("group_rows") else "并列组行数未知"
                 out["tie_note"] = (f"第 {tie['at']} 行与后续行按排序键同值并列，{group}，"
                                    f"已按上限返回 {len(extra)} 行。" if verified else
@@ -325,6 +420,19 @@ class TurnTables:
             extremum_note = self._scalar_extremum_note(conn, statement, sources, result, authorize, deadline)
             if extremum_note:
                 out["tie_note"] = extremum_note
+        source_paths = [str(self.tables[name].get("path") or name) for name in sorted(sources)]
+        title = " / ".join(dict.fromkeys(source_paths)) if source_paths else qname
+        self.queries[qname] = {
+            "name": qname,
+            "receipt": receipt,
+            "title": title[:EXPORT_TITLE_CHARS],
+            "columns": list(columns),
+            "rows": export_rows,
+            "row_count": len(export_rows),
+            "total_rows": max(total_rows, len(export_rows)),
+            "sources": out["sources"],
+            "sources_complete": out["sources_complete"],
+        }
         return out
 
     def _scalar_extremum_note(self, conn, statement, sources, rows_out, authorize, deadline) -> str:

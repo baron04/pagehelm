@@ -47,7 +47,7 @@ from web_operation_agent_yudao.executor.procedures import (
 )
 from web_operation_agent_yudao.executor.slim_loop import (
     ActorKnowledge, QueryParametersError, SlimTurnExecutor, TableReadTurnExecutor,
-    YudaoLoopProcedures, _clean_user_answer, _read_only_status_question,
+    YudaoLoopProcedures, _clean_user_answer, _is_allowed_direct_reply,
 )
 from web_operation_agent_yudao.writes.write_intent import WriteIntent
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -388,14 +388,11 @@ class PageTextTests(unittest.TestCase):
 
 
 class StatusQuestionTests(unittest.TestCase):
-    def test_only_status_questions_without_page_or_money_work_are_read_only(self):
-        self.assertTrue(_read_only_status_question("新程办公的销售订单现在是什么状态？"))
-        self.assertFalse(_read_only_status_question("打开新程办公的销售订单页面，看看是什么状态？"))
-        self.assertFalse(_read_only_status_question("销售订单状态和金额是多少？"))
-        self.assertFalse(_read_only_status_question("把销售订单状态改成已审核"))
-        self.assertFalse(_read_only_status_question("销售订单状态变更为已审核？"))
-
-    def test_status_question_cannot_be_given_or_invoke_page_tools(self):
+    def test_status_questions_keep_page_tools_and_prompt_encodes_four_allowed_five_must_check(self):
+        from web_operation_agent_yudao.executor.page_prompts import SYSTEM_RULES
+        self.assertIn("四允许、五必查", SYSTEM_RULES)
+        self.assertIn("ev_", SYSTEM_RULES)
+        self.assertIn("cannot", SYSTEM_RULES)
         schemas = [schema for schema in TOOLS if schema["function"]["name"] in
                    {"find_record", "call_api", "goto", "click", "finish"}]
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
@@ -403,10 +400,16 @@ class StatusQuestionTests(unittest.TestCase):
         with patch.object(ModelDrivenTurnExecutor, "_tools", return_value=schemas):
             offered = executor._tools({})
         self.assertEqual([schema["function"]["name"] for schema in offered],
-                         ["find_record", "call_api", "finish"])
-        result = executor._invoke_tool(None, "goto", {"path": "/erp/sale/order"}, {})
-        self.assertEqual(result.error_code, "read_only_question")
-        self.assertEqual(result.state, "refused")
+                         ["find_record", "goto", "click", "call_api", "finish"])
+
+    def test_four_allowed_vs_disguised_business_routing(self):
+        self.assertTrue(_is_allowed_direct_reply("你好", "你好，请问有什么可以帮您？"))
+        self.assertTrue(_is_allowed_direct_reply("你能做什么？", "我可以协助查询业务数据、定位页面或准备表单。"))
+        self.assertTrue(_is_allowed_direct_reply("把下面这段话翻译成英文：Hello", "你好"))
+        self.assertTrue(_is_allowed_direct_reply("125 * 4 等于多少？", "500"))
+        self.assertFalse(_is_allowed_direct_reply("新程办公的销售订单现在是什么状态？", "已完成"))
+        self.assertFalse(_is_allowed_direct_reply("你好，帮我看一下当前仓库库存还有多少？", "还有 10 件"))
+        self.assertFalse(_is_allowed_direct_reply("请概括一下客户权限配置规则", "所有员工都有权限"))
 
 
 class DraftChoiceTests(unittest.TestCase):

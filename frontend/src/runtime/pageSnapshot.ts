@@ -10,13 +10,13 @@ import {canonicalUrl} from './navigation'
 import {
   actionElementFingerprint, boundIndexedContent, elementsFrom, formControlScope,
   hydrateButtonFacts, hydrateFormFacts, hydrateLinkFacts, hydrateRevealFacts,
-  hydrateSelectionFacts, isSensitiveFormControl, refIndex,
+  hydrateScrollFacts, hydrateSelectionFacts, isSensitiveFormControl, refIndex,
   type ElementLike, type ElementLookup,
 } from './pageModel'
 import {selectedControlsFromPage} from './pageSelection'
 import {suspendPanelHitTargets} from './panelObservation'
 import {MAX_CONTENT_CHARS, type Redactor} from './redaction'
-import {WIRE_VERSION, type ElementRef, type PageObservation} from './types'
+import {WIRE_VERSION, type ElementRef, type JsonObject, type PageObservation} from './types'
 
 export interface BrowserState {
   url: string
@@ -365,6 +365,178 @@ export function boundedFacetCandidates(
   return result
 }
 
+/** Collect bounded scroll room hints for visible dialog/modal and page main scroll containers. */
+export function collectScrollContainerHints(
+  doc: Document | null | undefined,
+  panelContainer?: HTMLElement,
+): string[] {
+  if (!doc) return []
+  const view = doc.defaultView ?? (typeof window !== 'undefined' ? window : null)
+  const seen = new Set<Element>()
+  const hints: string[] = []
+  const tryContainer = (node: Element | null | undefined, scope: 'dialog' | 'page') => {
+    if (!node || seen.has(node) || !node.isConnected) return
+    if (panelContainer && (node === panelContainer || panelContainer.contains(node))) return
+    const tag = node.tagName.toUpperCase()
+    if (tag === 'TEXTAREA' || tag === 'SELECT') return
+    if (node.getAttribute('role') === 'listbox' || node.getAttribute('role') === 'tree') return
+    if (!(node.scrollHeight > node.clientHeight + 1 && node.clientHeight > 0)) return
+    const style = view?.getComputedStyle ? view.getComputedStyle(node) : null
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) return
+    if (node.closest('[hidden],[aria-hidden="true"]')) return
+    const isDocRoot = node === doc.scrollingElement || node === doc.documentElement || node === doc.body
+    if (!isDocRoot) {
+      if (style && !/(auto|scroll|overlay)/.test(style.overflowY)) return
+      if (node.clientHeight < 120) return
+    }
+    seen.add(node)
+    const up = Math.max(0, Math.round(node.scrollTop))
+    const down = Math.max(0, Math.round(node.scrollHeight - node.clientHeight - node.scrollTop))
+    hints.push(`[scroll_container scope=${scope} scroll_up_px=${up} scroll_down_px=${down}]`)
+  }
+  for (const dialog of doc.querySelectorAll('[role="dialog"], dialog')) {
+    if (panelContainer && panelContainer.contains(dialog)) continue
+    if (dialog.tagName === 'DIALOG' && !dialog.hasAttribute('open')) continue
+    tryContainer(dialog, 'dialog')
+    for (const candidate of dialog.querySelectorAll('*')) {
+      if (hints.length >= 4) break
+      tryContainer(candidate, 'dialog')
+    }
+  }
+  tryContainer(doc.scrollingElement ?? doc.documentElement, 'page')
+  if (doc.body && doc.body !== doc.scrollingElement) tryContainer(doc.body, 'page')
+  for (const candidate of doc.querySelectorAll('main, section, [role="main"], div')) {
+    if (hints.length >= 4) break
+    if (candidate.closest('[role="dialog"], dialog')) continue
+    tryContainer(candidate, 'page')
+  }
+  return hints.slice(0, 4)
+}
+
+function isVisibleSnapshotNode(node: Element, view: Window | null, panelContainer?: HTMLElement): boolean {
+  if (!node.isConnected) return false
+  if (panelContainer && (node === panelContainer || panelContainer.contains(node))) return false
+  if (node.closest('[hidden],[aria-hidden="true"]')) return false
+  if (view?.getComputedStyle) {
+    const style = view.getComputedStyle(node)
+    if (style.display === 'none' || style.visibility === 'hidden') return false
+  }
+  return true
+}
+
+function readOpenDialogTitle(
+  doc: Document | null | undefined,
+  redactor: Redactor,
+  panelContainer?: HTMLElement,
+): string {
+  if (!doc) return ''
+  const view = doc.defaultView ?? (typeof window !== 'undefined' ? window : null)
+  const dialogs = [...doc.querySelectorAll('[role="dialog"], dialog')].filter(dialog => {
+    if (dialog.tagName === 'DIALOG' && !dialog.hasAttribute('open')) return false
+    if (!isVisibleSnapshotNode(dialog, view, panelContainer)) return false
+    const rect = dialog.getBoundingClientRect()
+    // Allow jsdom tests where rects are unmocked if not display:none, or non-zero rects in browsers.
+    return rect.width > 0 || rect.height > 0 || !view?.getComputedStyle
+      ? true
+      : view.getComputedStyle(dialog).display !== 'none'
+  })
+  const active = dialogs.at(-1)
+  if (!active) return ''
+  const clean = (raw: string | null | undefined): string => {
+    const text = String(raw ?? '').replace(/\s+/g, ' ').trim()
+    if (!text || redactor.isSensitiveName(text)) return ''
+    return redactor.redactString(text).slice(0, 120)
+  }
+  const ariaLabel = clean(active.getAttribute('aria-label'))
+  if (ariaLabel) return ariaLabel
+  const labelledBy = active.getAttribute('aria-labelledby')
+  if (labelledBy) {
+    const parts = labelledBy.trim().split(/\s+/).slice(0, 4)
+      .map(id => /^[A-Za-z][A-Za-z0-9_:.-]{0,199}$/.test(id) ? doc.getElementById(id)?.textContent : '')
+      .filter(Boolean)
+    const joined = clean(parts.join(' '))
+    if (joined) return joined
+  }
+  const heading = active.querySelector('header, [role="heading"], h1, h2, h3, h4, [class*="title"]')
+  return clean(heading?.textContent)
+}
+
+function readVisibleRowCount(
+  doc: Document | null | undefined,
+  panelContainer?: HTMLElement,
+): number {
+  if (!doc) return 0
+  const view = doc.defaultView ?? (typeof window !== 'undefined' ? window : null)
+  let total = 0
+  for (const row of doc.querySelectorAll('table tbody tr, [role="grid"] [role="row"]')) {
+    if (!isVisibleSnapshotNode(row, view, panelContainer)) continue
+    if (row.closest('thead')) continue
+    if (row.querySelector('[role="columnheader"], th') && !row.querySelector('td, [role="gridcell"]')) continue
+    total += 1
+  }
+  return total
+}
+
+function readVisibleAlertMessages(
+  doc: Document | null | undefined,
+  redactor: Redactor,
+  panelContainer?: HTMLElement,
+): string[] {
+  if (!doc) return []
+  const view = doc.defaultView ?? (typeof window !== 'undefined' ? window : null)
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const node of doc.querySelectorAll('[role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]')) {
+    if (!isVisibleSnapshotNode(node, view, panelContainer)) continue
+    const raw = (node.textContent || '').replace(/\s+/g, ' ').trim()
+    if (!raw || raw.length > 200 || redactor.isSensitiveName(raw)) continue
+    const safe = redactor.redactString(raw).slice(0, 200)
+    if (!safe || seen.has(safe)) continue
+    seen.add(safe)
+    out.push(safe)
+    if (out.length >= 8) break
+  }
+  return out
+}
+
+/** Build a compact, bounded post-action observation summary for model continuity. */
+export function summarizeObservation(
+  before: PageObservation | null | undefined,
+  after: PageObservation,
+  redactor: Redactor,
+  doc: Document | null | undefined = typeof document !== 'undefined' ? document : null,
+  panelContainer?: HTMLElement,
+): JsonObject {
+  const prevMessages = new Set((before?.messages ?? []).map(m => String(m)))
+  const afterMessages = [
+    ...(after.messages ?? []).map(m => redactor.redactString(String(m)).slice(0, 200)).filter(Boolean),
+    ...readVisibleAlertMessages(doc, redactor, panelContainer),
+  ]
+  const newMessages: string[] = []
+  const seen = new Set<string>()
+  for (const msg of afterMessages) {
+    if (prevMessages.has(msg) || seen.has(msg)) continue
+    seen.add(msg)
+    newMessages.push(msg)
+    if (newMessages.length >= 8) break
+  }
+  const activeView = after.active_view
+    ? redactor.redactString(after.active_view).slice(0, 120)
+    : ''
+  const dialogTitle = readOpenDialogTitle(doc, redactor, panelContainer)
+  const rowCount = after.page_read && typeof after.page_read.rows === 'number'
+    ? after.page_read.rows
+    : readVisibleRowCount(doc, panelContainer)
+  return {
+    url_changed: Boolean(before && before.url !== after.url),
+    epoch_changed: Boolean(before && before.epoch !== after.epoch),
+    active_view: activeView,
+    new_messages: newMessages,
+    dialog_title: dialogTitle,
+    row_count: rowCount,
+  }
+}
+
 /** The server's view of one reading, numbered with the epoch the session assigned it. */
 export function describeBrowserState(
   deps: PageSnapshotReaders,
@@ -372,7 +544,12 @@ export function describeBrowserState(
   epoch: number,
 ): PageReading {
   const header = deps.redactor.sanitizePageContent(state.header ?? '').slice(0, 2_000)
-  const footer = deps.redactor.sanitizePageContent(state.footer ?? '').slice(0, 2_000)
+  const scrollHints = collectScrollContainerHints(
+    typeof document !== 'undefined' ? document : null,
+    deps.panelContainer,
+  )
+  const rawFooter = deps.redactor.sanitizePageContent(state.footer ?? '')
+  const footer = [rawFooter, ...scrollHints].filter(Boolean).join('\n').slice(0, 2_000)
   const availableBodyChars = Math.max(0, MAX_CONTENT_CHARS - header.length - footer.length - 2)
   const sanitizedBody = deps.redactor.sanitizePageContent(state.content)
   const charBoundedBody = sanitizedBody.slice(0, availableBodyChars)
@@ -392,10 +569,10 @@ export function describeBrowserState(
       } catch { /* The ordinary summary redactor still applies to stale records. */ }
       return record
     })
-  const elements: ElementRef[] = hydrateRevealFacts(hydrateSelectionFacts(hydrateButtonFacts(
+  const elements: ElementRef[] = hydrateScrollFacts(hydrateRevealFacts(hydrateSelectionFacts(hydrateButtonFacts(
     hydrateFormFacts(hydrateLinkFacts(elementsFrom(content, epoch, deps.redactor), map,
       deps.lookup, deps.redactor), map, deps.lookup, deps.redactor), map, deps.lookup,
-    deps.redactor), map, deps.lookup), map, deps.lookup)
+    deps.redactor), map, deps.lookup), map, deps.lookup), map, deps.lookup)
   const fingerprints = new Map<string, string>()
   for (const item of elements) {
     // Mode is policy-critical observation data, never parsed controller prose.

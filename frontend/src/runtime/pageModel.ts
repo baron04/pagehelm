@@ -592,3 +592,49 @@ export function hydrateButtonFacts(elements: ElementRef[], selectorMap: unknown,
   }
   return elements
 }
+
+function isVerticalScrollContainer(node: Element): boolean {
+  const tag = node.tagName.toUpperCase()
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return false
+  if (!(node.scrollHeight > node.clientHeight + 1 && node.clientHeight > 0)) return false
+  const doc = node.ownerDocument
+  if (node === doc?.scrollingElement || node === doc?.documentElement || node === doc?.body) return true
+  const view = doc?.defaultView ?? (typeof window !== 'undefined' ? window : null)
+  const overflowY = view?.getComputedStyle ? view.getComputedStyle(node).overflowY : ''
+  return /(auto|scroll|overlay)/.test(overflowY)
+}
+
+function nearestVerticalScrollContainer(element: ElementLike | null | undefined): Element | null {
+  if (typeof Element === 'undefined' || !(element instanceof Element) || !element.isConnected) return null
+  const inDialog = Boolean(element.closest('[role="dialog"],dialog'))
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    if (isVerticalScrollContainer(node)) return node
+    if (inDialog && node.matches('[role="dialog"],dialog')) return null
+  }
+  const scrolling = element.ownerDocument?.scrollingElement
+  return scrolling && isVerticalScrollContainer(scrolling) ? scrolling : null
+}
+
+/** Annotate observed elements inside scrollable containers with remaining scroll room. */
+export function hydrateScrollFacts(
+  elements: ElementRef[],
+  selectorMap: unknown,
+  getByIndex: ElementLookup,
+): ElementRef[] {
+  for (const item of elements) {
+    delete item.attrs.scroll_up_px
+    delete item.attrs.scroll_down_px
+    try {
+      const element = getByIndex(selectorMap, refIndex(item.ref))
+      const container = nearestVerticalScrollContainer(element)
+      if (!container) continue
+      const up = Math.max(0, Math.round(container.scrollTop))
+      const down = Math.max(0, Math.round(container.scrollHeight - container.clientHeight - container.scrollTop))
+      item.attrs.scroll_up_px = String(up)
+      item.attrs.scroll_down_px = String(down)
+    } catch {
+      // A stale index supplies no scroll metadata.
+    }
+  }
+  return elements
+}
