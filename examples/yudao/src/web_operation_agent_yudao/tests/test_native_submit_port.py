@@ -2,8 +2,8 @@
 from types import SimpleNamespace as NS
 import unittest
 
-from web_operation_agent_yudao.client import YudaoReadRefused
-from web_operation_agent_yudao.native_submit import YudaoSubmitPort
+from web_operation_agent_yudao.reads.client import YudaoReadRefused
+from web_operation_agent_yudao.writes.native_submit import YudaoSubmitPort
 
 DOCS = {"paths": {
     "/admin-api/mes/wm/warehouse/create": {"post": {}},

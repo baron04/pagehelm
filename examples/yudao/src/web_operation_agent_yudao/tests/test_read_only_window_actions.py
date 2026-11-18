@@ -6,10 +6,10 @@ from web_operation_agent.business.errors import BusinessToolIdentityError
 from web_operation_agent.execution.action_admission import ActionAdmission, ActionAdmissionRefused
 from web_operation_agent.schemas import ActionReceipt, ElementRef
 from web_operation_agent.transport.protocol import _remote_args_echo
-from web_operation_agent_yudao.guard_proxy import NativeGuardProxy
-from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
-from web_operation_agent_yudao.model_page_policy import NativePageReview
-from web_operation_agent_yudao.read_only_window_actions import (
+from web_operation_agent_yudao.host.guard_proxy import NativeGuardProxy
+from web_operation_agent_yudao.host.page_guard import GuardRefused, NativePageGuard
+from web_operation_agent_yudao.executor.model_page_policy import NativePageReview
+from web_operation_agent_yudao.executor.read_only_window_actions import (
     ReadOnlyWindowPageActions, ReadOnlyWindowDraftSteps, ReadOnlyWindowPageReview)
 from . import test_read_actions as read_fixture
 

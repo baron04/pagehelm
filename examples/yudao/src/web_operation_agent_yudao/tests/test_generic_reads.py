@@ -14,11 +14,11 @@ from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.goal.spec import GoalSpec
 from web_operation_agent.tests.support.entity_read_contract import assert_entity_read_contract
-from web_operation_agent_yudao.application import YudaoApplication
-from web_operation_agent_yudao.client import YudaoReadRefused
-from web_operation_agent_yudao.generic_reads import YudaoReadTools
-from web_operation_agent_yudao.goal import YudaoGoalData
-from web_operation_agent_yudao.ui_source import UiSource
+from web_operation_agent_yudao.host.application import YudaoApplication
+from web_operation_agent_yudao.reads.client import YudaoReadRefused
+from web_operation_agent_yudao.reads.generic_reads import YudaoReadTools
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
+from web_operation_agent_yudao.rules.ui_source import UiSource
 from .test_goal import CONTRACTS, DOCS, MENUS, _Client, _prop
 
 

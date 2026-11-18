@@ -6,8 +6,8 @@ from web_operation_agent.business.errors import (
     BusinessToolIdentityError, BusinessToolPermissionError, BusinessToolRequestError)
 from web_operation_agent.execution.action_admission import (
     ActionIntent, ActionAdmissionRefused, ActionEffect, ActionResultPending)
-from web_operation_agent_yudao.form_open_actions import NativeFormOpenActions
-from web_operation_agent_yudao.form_entries import NativeEntryFormPort, NativeEntryVerifiers, REVIEWED_FILES
+from web_operation_agent_yudao.writes.form_open_actions import NativeFormOpenActions
+from web_operation_agent_yudao.writes.form_entries import NativeEntryFormPort, NativeEntryVerifiers, REVIEWED_FILES
 from . import test_form_entries as entries
 
 

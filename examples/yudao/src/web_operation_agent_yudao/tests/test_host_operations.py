@@ -21,9 +21,9 @@ from web_operation_agent.business.mutation import SQLiteMutationJournal
 from web_operation_agent.execution.product import AgentTurnError, AgentTurnStatus
 from web_operation_agent.modeling.spend import DailyAllowance
 from web_operation_agent.state.identity import PrincipalError
-from web_operation_agent_yudao import native_server as native
-from web_operation_agent_yudao.application import YudaoIdentityPort
-from web_operation_agent_yudao.native_server import YudaoHost, YudaoHostConfig
+from web_operation_agent_yudao.host import native_server as native
+from web_operation_agent_yudao.host.application import YudaoIdentityPort
+from web_operation_agent_yudao.host.native_server import YudaoHost, YudaoHostConfig
 
 
 class _HeldModelServer:
@@ -102,8 +102,8 @@ class _BaseHostTest(unittest.TestCase):
         self.hosts: list[YudaoHost] = []
         self.addCleanup(lambda: [h.close() for h in self.hosts])
         self.addCleanup(patch.stopall)
-        patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy").start()
-        patch("web_operation_agent_yudao.native_server._api_docs", return_value={"paths": {}, "components": {}}).start()
+        patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy").start()
+        patch("web_operation_agent_yudao.host.native_server._api_docs", return_value={"paths": {}, "components": {}}).start()
 
         def actor(token):
             if token not in ("tok-1", "tok-2"):
@@ -121,7 +121,7 @@ class _BaseHostTest(unittest.TestCase):
             raise AssertionError((method, path))
 
         patch.object(YudaoIdentityPort, "page_identity", page_identity).start()
-        self._request_patcher = patch("web_operation_agent_yudao.client.YudaoClient._request", request)
+        self._request_patcher = patch("web_operation_agent_yudao.reads.client.YudaoClient._request", request)
         self._request_patcher.start()
 
     def _policies(self, writing_gets=()):
@@ -236,7 +236,7 @@ class HostConcurrencyTests(_BaseHostTest):
 
 class HostDrainTests(_BaseHostTest):
     def test_arc02_drain_refuses_new_work_and_waits_or_marks_indeterminate(self):
-        with patch("web_operation_agent_yudao.native_server.ChatModel") as mock_chat:
+        with patch("web_operation_agent_yudao.host.native_server.ChatModel") as mock_chat:
             mock_chat.return_value.model = "qwen3.8-flash"
             host = self._make_host(native_writes=True, shutdown_drain_timeout_s=1.0)
             host.bootstrap("tok-1", "1", "tab-a")
@@ -343,7 +343,7 @@ class HostDrainTests(_BaseHostTest):
 
 class HostCleanupAndCapTests(_BaseHostTest):
     def test_ops01_cleanup_prunes_stores_rotates_audit_and_preserves_unresolved_and_fingerprints(self):
-        with patch("web_operation_agent_yudao.native_server.ChatModel"):
+        with patch("web_operation_agent_yudao.host.native_server.ChatModel"):
             host = self._make_host(
                 native_writes=True,
                 session_retention_days=7,
@@ -412,7 +412,7 @@ class HostCleanupAndCapTests(_BaseHostTest):
         self.assertNotIn("ordinary_read", retained_text)
 
     def test_ops02_host_global_spend_cap_refuses_with_clear_chinese_message(self):
-        with patch("web_operation_agent_yudao.native_server.ChatModel") as mock_chat:
+        with patch("web_operation_agent_yudao.host.native_server.ChatModel") as mock_chat:
             mock_chat.return_value.model = "qwen3.8-flash"
             # Disabled by default for measurement configs.
             default_host = self._make_host()
@@ -451,7 +451,7 @@ class HostCleanupAndCapTests(_BaseHostTest):
             "/admin-api/report/wallet/init",
             "/admin-api/project/{id}/init",
         )
-        with patch("web_operation_agent_yudao.native_server.ChatModel") as mock_chat:
+        with patch("web_operation_agent_yudao.host.native_server.ChatModel") as mock_chat:
             mock_chat.return_value.model = "qwen3.8-flash"
             host = self._make_host(writing_gets=fenced_paths)
             host.bootstrap("tok-1", "1", "tab-warm")

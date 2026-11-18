@@ -2,8 +2,8 @@
 from pathlib import Path
 import tempfile
 import unittest
-from web_operation_agent_yudao.ui_source import UiSource
-from web_operation_agent_yudao.goal import YudaoGoalData
+from web_operation_agent_yudao.rules.ui_source import UiSource
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
 from web_operation_agent_yudao.tests.test_goal import _Client, DOCS
 
 ROUTER="""path: '/crm', children: [{ path: 'customer/detail/:id',

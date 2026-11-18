@@ -7,8 +7,8 @@ from web_operation_agent.goal.data import (EVERYTHING, All, Any, Compare, DataRe
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.goal.scoped import ScopedData
 from web_operation_agent.goal.spec import GoalSpec
-from web_operation_agent_yudao.goal import YudaoGoalData
-from web_operation_agent_yudao.ui_source import ListView, UiSource
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
+from web_operation_agent_yudao.rules.ui_source import ListView, UiSource
 from .test_goal import _Client, _array_list, _prop, DOCS as CRM_DOCS
 
 
@@ -50,7 +50,7 @@ class Client(_Client):
 class YudaoTableTests(unittest.TestCase):
     def test_native_page_resolution_binds_successful_query_and_never_falls_back_on_failure(self):
         from web_operation_agent.schemas import PageObservation
-        from web_operation_agent_yudao.page_goals import NativePageGoalPort
+        from web_operation_agent_yudao.goal_compat.page_goals import NativePageGoalPort
         from dataclasses import replace
         page=PageObservation(1,1,"https://test.invalid"+PAGE,"",[],[],render_state="ready",page_route=PAGE,
                              page_query={"path":"/admin-api/"+PATH,"parameters":{"ledgerId":"2","month":"2026-09"}})
@@ -147,7 +147,7 @@ class YudaoTableTests(unittest.TestCase):
                        {"ledgerId":1,"month":"2026-09","secret":"x"}):
             with self.assertRaises(DataRefused):
                 self.data.query_scope(ENTITY,params,label="invalid")
-        with patch("web_operation_agent_yudao.goal.time.monotonic",return_value=self.scope.payload.expires+1):
+        with patch("web_operation_agent_yudao.goal_compat.goal.time.monotonic",return_value=self.scope.payload.expires+1):
             with self.assertRaises(DataRefused):
                 self.data.count(ENTITY,self.scope)
         self.assertFalse([p for path,p in self.client.calls if path==PATH])

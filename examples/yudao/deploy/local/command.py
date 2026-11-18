@@ -91,8 +91,8 @@ def check(config: cfg.Configuration):
     cfg.load_model_environment()
     sys.path[:0] = [str(cfg.ROOT / "src"), str(cfg.ROOT / "examples/yudao/src")]
     from web_operation_agent.transport.page_controller import PageControllerAssetError, require_served_directory
-    from web_operation_agent_yudao.deployment_validation import validate_native_deployment
-    from web_operation_agent_yudao.native_server import YudaoHostConfig
+    from web_operation_agent_yudao.host.deployment_validation import validate_native_deployment
+    from web_operation_agent_yudao.host.native_server import YudaoHostConfig
     try:
         require_served_directory(cfg.CACHE / "woa")
     except PageControllerAssetError as exc:

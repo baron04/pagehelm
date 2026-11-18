@@ -14,11 +14,11 @@ from web_operation_agent.goal.spec import GoalSpec
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.schemas import ElementRef, PageObservation, ActionReceipt
 from web_operation_agent.state.identity import PrincipalContext, OperationContext
-from web_operation_agent_yudao.form_entries import (NativeFormReview, NativeCustomerEntryVerifier,
+from web_operation_agent_yudao.writes.form_entries import (NativeFormReview, NativeCustomerEntryVerifier,
     NativeEntryFormPort, NativeEntryClickPolicy, REVIEWED_FILES, CREATE_ENTRIES,
     NativeCreateReview, NativeCreateEntryVerifier, NativeEntryVerifiers)
-from web_operation_agent_yudao.form_goals import NativeFormsGoalPort
-from web_operation_agent_yudao.repository import repository_tree
+from web_operation_agent_yudao.goal_compat.form_goals import NativeFormsGoalPort
+from web_operation_agent_yudao.rules.repository import repository_tree
 
 
 class Client:

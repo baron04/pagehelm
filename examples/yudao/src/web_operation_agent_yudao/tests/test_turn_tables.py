@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
-from web_operation_agent_yudao.turn_tables import TurnReadError, TurnTables, date_range
+from web_operation_agent_yudao.reads.turn_tables import TurnReadError, TurnTables, date_range
 
 
 class TurnTablesTest(unittest.TestCase):
@@ -61,8 +61,8 @@ class TurnTablesTest(unittest.TestCase):
         self.assertTrue(result["truncated"])
 
     def test_api_read_records_actual_paged_rows_without_summary_output(self):
-        from web_operation_agent_yudao.slim_loop import ActorKnowledge
-        from web_operation_agent_yudao.tests.test_slim_loop import Client, DOCS
+        from web_operation_agent_yudao.executor.slim_loop import ActorKnowledge
+        from web_operation_agent_yudao.tests.slim_loop_support import Client, DOCS
 
         knowledge = ActorKnowledge(Client(), lambda: DOCS)
         answer = knowledge.call_api("orders/page", {"pageNo": 1, "pageSize": 10},
@@ -137,7 +137,8 @@ class TurnTablesTest(unittest.TestCase):
 
     def test_page_delivery_is_checked_against_the_page_not_a_quoted_receipt(self):
         from web_operation_agent.execution.model_loop_contracts import LoopToolResult
-        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
+        from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+        from web_operation_agent_yudao.executor.slim_loop import TableReadTurnExecutor
 
         executor = object.__new__(TableReadTurnExecutor)
         observation = SimpleNamespace(url="https://synthetic.invalid/list", to_json=lambda: {
@@ -148,8 +149,7 @@ class TurnTablesTest(unittest.TestCase):
             of_kind=lambda event: [{"tool": "call_api", "reference": read_reference}]))
         executor._tool_receipts = [SimpleNamespace(action="goto", ok=True, observation=observation,
                                                    command_id="synthetic-command")]
-        token = _TURN_TABLES.set((self.tables, "2026-10-25", "Asia/Shanghai"))
-        self.addCleanup(_TURN_TABLES.reset, token)
+        executor.turn_context = SlimTurnContext(turn_tables=(self.tables, "2026-10-25", "Asia/Shanghai"))
         turn = {}
         result = LoopToolResult("已打开", kind="page")
         self.assertFalse(executor._completion_proved(state, "goto", {"answer": "已打开"}, result))
@@ -191,12 +191,12 @@ class TurnTablesTest(unittest.TestCase):
 
     def test_unobserved_page_result_cannot_issue_a_page_state_receipt(self):
         from web_operation_agent.execution.model_loop_contracts import LoopToolResult
-        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
+        from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+        from web_operation_agent_yudao.executor.slim_loop import TableReadTurnExecutor
 
         executor = object.__new__(TableReadTurnExecutor)
         executor._tool_receipts = []
-        token = _TURN_TABLES.set((self.tables, "2026-10-25", "Asia/Shanghai"))
-        self.addCleanup(_TURN_TABLES.reset, token)
+        executor.turn_context = SlimTurnContext(turn_tables=(self.tables, "2026-10-25", "Asia/Shanghai"))
         state = SimpleNamespace(ledger=Mock())
         turn = {}
         executor._tool_feedback(state, turn, "observe", LoopToolResult("缺少观察", kind="page"), "缺少观察")
@@ -205,15 +205,15 @@ class TurnTablesTest(unittest.TestCase):
     def test_current_dialog_can_be_the_delivery_object_without_allowing_a_residual_mask(self):
         from web_operation_agent.schemas import ElementRef, PageObservation
         from web_operation_agent.execution.model_loop_contracts import LoopToolResult
-        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor, _TURN_TABLES
+        from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+        from web_operation_agent_yudao.executor.slim_loop import TableReadTurnExecutor
         executor=object.__new__(TableReadTurnExecutor)
         observation=PageObservation(1,2,"https://synthetic.invalid/list","List",[],[
             ElementRef("e1","dialog","Details","div",2,{"form_scope":"dialog:details"})],
             content="Details",render_state="ready",page_route="/list")
         state=SimpleNamespace(obs=observation,ledger=Mock())
         executor._tool_receipts=[SimpleNamespace(ok=True,observation=observation,command_id="opened")]
-        token=_TURN_TABLES.set((self.tables,"2026-11-14","Asia/Shanghai"))
-        self.addCleanup(_TURN_TABLES.reset,token)
+        executor.turn_context=SlimTurnContext(turn_tables=(self.tables,"2026-11-14","Asia/Shanghai"))
         turn={}
         executor._tool_feedback(state,turn,"open_record",LoopToolResult("opened",kind="page"),"opened")
         reference=next(iter(turn["page_delivery_receipts"]))
@@ -234,8 +234,8 @@ class TurnTablesTest(unittest.TestCase):
             [["Alice"], ["Alicia"]])
 
     def test_small_complete_api_reads_inline_all_rows_while_large_or_partial_reads_stay_sampled(self):
-        from web_operation_agent_yudao.slim_loop import ActorKnowledge
-        from web_operation_agent_yudao.tests.test_slim_loop import Client, DOCS
+        from web_operation_agent_yudao.executor.slim_loop import ActorKnowledge
+        from web_operation_agent_yudao.tests.slim_loop_support import Client, DOCS
 
         knowledge = ActorKnowledge(Client(), lambda: DOCS)
         small = knowledge.call_api("orders/page", {"pageNo": 1, "pageSize": 10},

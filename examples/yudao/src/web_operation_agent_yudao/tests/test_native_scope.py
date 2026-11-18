@@ -6,9 +6,9 @@ import json
 import unittest
 from unittest.mock import patch
 from web_operation_agent.execution.action_admission import ActionAdmissionRefused
-from web_operation_agent_yudao.model_page_policy import NativePageReview
-from web_operation_agent_yudao.native_server import YudaoHostConfig
-from web_operation_agent_yudao.slim_loop import TOOLS, scoped_page_tools, page_scope_notice, _requirements
+from web_operation_agent_yudao.executor.model_page_policy import NativePageReview
+from web_operation_agent_yudao.host.native_server import YudaoHostConfig
+from web_operation_agent_yudao.executor.slim_loop import TOOLS, scoped_page_tools, page_scope_notice, _requirements
 from . import test_model_page_policy as policy_fixture
 
 class NativeScopeTests(unittest.TestCase):
@@ -61,12 +61,12 @@ class NativeScopeTests(unittest.TestCase):
         base=dict(api_base='http://synthetic.invalid',public_origin='http://synthetic.invalid',state_dir=Path('/synthetic/unused'))
         for invalid in (['query'],frozenset({'navigation'}),frozenset({'typo'})):
             with self.assertRaises(ValueError):YudaoHostConfig(**base,native_page_disabled_handlers=invalid)
-        from web_operation_agent_yudao import native_server as native
+        from web_operation_agent_yudao.host import native_server as native
         class Composed(Exception):pass
         captured=[]
         def compose(config):captured.append(config);raise Composed()
         with patch.dict(native.os.environ,{'AGENT_OPENAI_API_KEY':'synthetic-unused','AGENT_OPENAI_MODEL':'scripted/no-model'},clear=True),\
-             patch('web_operation_agent_yudao.deployment_validation.validate_native_deployment'),\
+             patch('web_operation_agent_yudao.host.deployment_validation.validate_native_deployment'),\
              patch('web_operation_agent.modeling.spend.price_for',return_value={}),\
              patch.object(native,'YudaoHost',side_effect=compose):
             with self.assertRaises(Composed):native.main(['--api-base',base['api_base'],'--public-origin',base['public_origin'],
@@ -78,7 +78,7 @@ class NativeScopeTests(unittest.TestCase):
 class EditModeClosureTests(unittest.TestCase):
     def test_create_must_have_consistent_fresh_mode_and_edit_entry_stays_available(self):
         from web_operation_agent.business.draft_steps import DraftStepAdmission
-        from web_operation_agent_yudao.model_page_policy import NativeDraftSteps
+        from web_operation_agent_yudao.executor.model_page_policy import NativeDraftSteps
         from web_operation_agent.schemas import ElementRef,ActionReceipt
         from web_operation_agent.transport.protocol import _remote_args_echo
         fixture=policy_fixture.QueryTests();fixture.setUp()

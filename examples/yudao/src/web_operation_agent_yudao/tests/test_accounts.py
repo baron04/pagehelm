@@ -6,9 +6,9 @@ import stat
 import tempfile
 import unittest
 
-from web_operation_agent_yudao.accounts import (ACCOUNTS_FILE, add_account_arguments,
+from web_operation_agent_yudao.host.accounts import (ACCOUNTS_FILE, add_account_arguments,
                                                 load_account, read_accounts, save_account)
-from web_operation_agent_yudao.client import YudaoAccount
+from web_operation_agent_yudao.reads.client import YudaoAccount
 
 ROOT = Path(__file__).resolve().parents[5]
 ADMIN = {"username": "admin", "password": "synthetic-admin", "tenant": "1"}

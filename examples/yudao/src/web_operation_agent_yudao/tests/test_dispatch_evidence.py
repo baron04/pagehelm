@@ -9,13 +9,13 @@ from web_operation_agent.business.dispatch_evidence import mutation_evidence
 from web_operation_agent.business.errors import (BusinessMutationIndeterminate,
     BusinessMutationRefusedError, BusinessToolPermissionError)
 from web_operation_agent.execution.events import TurnEvents
-from web_operation_agent_yudao.client import YudaoClient
-from web_operation_agent_yudao.write_definitions import BACKEND_WRITE_ATOMICITY, RECORD_OPERATIONS
+from web_operation_agent_yudao.reads.client import YudaoClient
+from web_operation_agent_yudao.writes.write_definitions import BACKEND_WRITE_ATOMICITY, RECORD_OPERATIONS
 
 
 class DispatchEvidenceTests(unittest.TestCase):
     def test_every_native_operation_has_a_reviewed_backend_service_contract(self):
-        from web_operation_agent_yudao.write_special import STATE_PATHS
+        from web_operation_agent_yudao.writes.write_special import STATE_PATHS
         self.assertEqual(set(BACKEND_WRITE_ATOMICITY), set(RECORD_OPERATIONS) | set(STATE_PATHS) |
                          {"crm_receivable_plan_create", "oa_announcement_create", "crm_follow_up_create",
                       "erp_document_status", "promotion_coupon_template_status", "promotion_seckill_activity_close",

@@ -1,7 +1,7 @@
 """CRM edit facts use exact application permission rows, never the DOM."""
 import unittest
 from web_operation_agent.business.errors import BusinessToolContractError
-from web_operation_agent_yudao.record_access import contact_can_edit, customer_can_edit
+from web_operation_agent_yudao.reads.record_access import contact_can_edit, customer_can_edit
 
 
 class CrmRecordAccessTests(unittest.TestCase):
@@ -33,10 +33,11 @@ class CrmRecordAccessTests(unittest.TestCase):
         from unittest.mock import patch
         from web_operation_agent.state.identity import OperationContext, PrincipalContext
         from web_operation_agent.business.errors import BusinessToolIdentityError, BusinessToolUnavailableError
-        from web_operation_agent_yudao.client import YudaoClient
-        from web_operation_agent_yudao.bound_data_reads import turn_actor_reads
-        from web_operation_agent_yudao.slim_loop import YudaoLoopProcedures, _CURRENT_REQUEST, _WRITE_INTENT
-        from web_operation_agent_yudao.write_intent import classify_write_intent
+        from web_operation_agent_yudao.reads.client import YudaoClient
+        from web_operation_agent_yudao.reads.bound_data_reads import turn_actor_reads
+        from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+        from web_operation_agent_yudao.executor.slim_loop import YudaoLoopProcedures
+        from web_operation_agent_yudao.writes.write_intent import classify_write_intent
         client = YudaoClient.for_token('http://synthetic.invalid', 'synthetic-token', '1')
         now = int(time.time()*1000)
         principal = PrincipalContext(1,'yudao','1','10','1','delegation',now-100,now+60000,('yudao.read',))
@@ -57,18 +58,18 @@ class CrmRecordAccessTests(unittest.TestCase):
             row['userId']=1
             self.assertIn('有此客户记录本身的编辑资格',owner._record_access(context,'/crm/customer/detail/7'))
             count = len(requests)
-            token = _CURRENT_REQUEST.set('把晶华电子的联系人手机号换成新的')
+            owner.turn_context = SlimTurnContext(current_request='把晶华电子的联系人手机号换成新的')
             try:
                 self.assertEqual('',owner._record_access(context,'/crm/customer/detail/7'))
                 self.assertEqual(count,len(requests))
             finally:
-                _CURRENT_REQUEST.reset(token)
+                owner.turn_context = SlimTurnContext()
             row.update({'bizType':3,'bizId':8})
             identity['permissions']=['crm:contact:update']
             count = len(requests)
             self.assertEqual('',owner._record_access(context,'/crm/contact/detail/8'))
             self.assertEqual(count,len(requests))
-            token = _WRITE_INTENT.set(classify_write_intent('把联系人手机换成新的'))
+            owner.turn_context = SlimTurnContext(write_intent=classify_write_intent('把联系人手机换成新的'))
             try:
                 self.assertIn('有此联系人记录本身的编辑资格',
                               owner._record_access(context,'/crm/contact/detail/8'))
@@ -77,7 +78,7 @@ class CrmRecordAccessTests(unittest.TestCase):
                 self.assertIn('没有此联系人记录本身的编辑权限',
                               owner._record_access(context,'/crm/contact/detail/8'))
             finally:
-                _WRITE_INTENT.reset(token)
+                owner.turn_context = SlimTurnContext()
             identity['permissions']=None
             with self.assertRaises(BusinessToolUnavailableError):
                 owner._record_access(context,'/crm/customer/detail/7')

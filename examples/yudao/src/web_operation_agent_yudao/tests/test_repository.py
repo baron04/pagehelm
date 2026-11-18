@@ -7,7 +7,7 @@ import subprocess
 
 from web_operation_agent.planning.source_history import HistoryUnavailable
 
-from web_operation_agent_yudao.repository import repository_source
+from web_operation_agent_yudao.rules.repository import repository_source
 
 
 class RepositoryTests(unittest.TestCase):

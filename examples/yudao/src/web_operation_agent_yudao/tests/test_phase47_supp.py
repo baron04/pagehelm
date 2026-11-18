@@ -12,15 +12,15 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[4] / "src")]
 from web_operation_agent.goal.data import Compare, EVERYTHING
 from web_operation_agent.goal.index import IndexRule
 from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
-from web_operation_agent_yudao.goal import YudaoGoalData
-from web_operation_agent_yudao.slim_loop import (
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
+from web_operation_agent_yudao.executor.slim_loop import (
     ActorKnowledge,
     YudaoLoopProcedures,
     _precomputed_dates,
     system_text,
 )
-from web_operation_agent_yudao.turn_tables import TurnTables
-from web_operation_agent_yudao.write_intent import classify_write_intent
+from web_operation_agent_yudao.reads.turn_tables import TurnTables
+from web_operation_agent_yudao.writes.write_intent import classify_write_intent
 
 
 def _page(tag: str, summary: str, item: str, params: list[tuple[str, str]]) -> dict:
@@ -406,7 +406,7 @@ class Phase47SuppTests(unittest.TestCase):
             self.assertIn("createTime 按月的行数:", text)
 
             # Unknown query param echoes declared parameter names
-            from web_operation_agent_yudao.slim_loop import QueryParametersError
+            from web_operation_agent_yudao.executor.slim_loop import QueryParametersError
             with self.assertRaisesRegex(QueryParametersError, r"declared:.*createTime"):
                 know.call_api("erp/stock-move/page", {"unknownField": "1"})
 
@@ -433,7 +433,7 @@ class Phase47SuppTests(unittest.TestCase):
             tables.close()
 
     def test_name_searchable_skips_unsatisfied_required_and_matches_extended_narrowing_keys(self):
-        from web_operation_agent_yudao.goal import _Entity
+        from web_operation_agent_yudao.goal_compat.goal import _Entity
 
         client = MiniClient()
         goal = YudaoGoalData(client, _mini_docs)

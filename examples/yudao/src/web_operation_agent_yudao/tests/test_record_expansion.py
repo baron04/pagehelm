@@ -5,7 +5,7 @@ import unittest
 from web_operation_agent.business.errors import (BusinessToolReferenceError,
     BusinessToolRequestError, BusinessMutationRefusedError)
 from .test_native_writes import Client, Data, context
-from web_operation_agent_yudao.writes import native_tools
+from web_operation_agent_yudao.writes.writes import native_tools
 
 
 class Records(Client):

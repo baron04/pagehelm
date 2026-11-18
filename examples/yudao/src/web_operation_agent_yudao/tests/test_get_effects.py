@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 
-from web_operation_agent_yudao.get_effects import fence_policy, scan
+from web_operation_agent_yudao.reads.get_effects import fence_policy, scan
 
 _BASE = "server/yudao-module-demo/src/main/java/demo/"
 _SOURCES = {

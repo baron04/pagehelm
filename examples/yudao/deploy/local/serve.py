@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 import configuration as cfg
 
 sys.path[:0] = [str(cfg.ROOT / "src"), str(cfg.ROOT / "examples/yudao/src")]
-from web_operation_agent_yudao import native_server as native  # noqa: E402
-from web_operation_agent_yudao.guard_proxy import GUARD_PATH  # noqa: E402
+from web_operation_agent_yudao.host import native_server as native  # noqa: E402
+from web_operation_agent_yudao.host.guard_proxy import GUARD_PATH  # noqa: E402
 
 MAX_BODY = 20 * 1024 * 1024
 

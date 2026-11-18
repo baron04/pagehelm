@@ -9,9 +9,9 @@ from web_operation_agent.business.errors import BusinessToolIdentityError
 from web_operation_agent.goal.read_tools import DataReadTools
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.transport.browser import TurnCancelled
-from web_operation_agent_yudao.bound_data_reads import BoundDataReads, turn_actor_reads
-from web_operation_agent_yudao.client import YudaoClient
-from web_operation_agent_yudao.goal import YudaoGoalData
+from web_operation_agent_yudao.reads.bound_data_reads import BoundDataReads, turn_actor_reads
+from web_operation_agent_yudao.reads.client import YudaoClient
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
 from .test_goal import _Client, DOCS
 
 
@@ -122,7 +122,7 @@ class BoundDataReadTests(unittest.TestCase):
                 with self.assertRaises(PrincipalError):
                     BoundDataReads(self.data, self.context, lambda: None)
             def denied(*args, **kwargs):
-                from web_operation_agent_yudao.client import YudaoReadRefused
+                from web_operation_agent_yudao.reads.client import YudaoReadRefused
                 raise YudaoReadRefused("synthetic denied", code=403)
             with self.assertRaises(BusinessToolPermissionError):
                 bound._invoke(denied)

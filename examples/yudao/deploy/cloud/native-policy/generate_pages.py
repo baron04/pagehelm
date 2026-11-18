@@ -12,7 +12,7 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
-from web_operation_agent_yudao.ui_source import UiSource  # noqa: E402
+from web_operation_agent_yudao.rules.ui_source import UiSource  # noqa: E402
 
 
 def document(path: Path):

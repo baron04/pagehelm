@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from web_operation_agent_yudao.source import EntitySource, YudaoSource, _mask, _methods
+from web_operation_agent_yudao.rules.source import EntitySource, YudaoSource, _mask, _methods
 
 _JAVA = "server/yudao-module-crm/src/main/java/demo"
 _FILES = {
@@ -546,7 +546,7 @@ class YudaoSourceExtractionTests(unittest.TestCase):
         self.assertIn("DEMO_LOCKED", codes)
 
     def test_control_keywords_are_not_parsed_as_methods(self):
-        from web_operation_agent_yudao.source import _methods
+        from web_operation_agent_yudao.rules.source import _methods
         text = (self.root / f"{_DEMO}/service/DemoServiceImpl.java").read_text()
         names = {name for name, *_ in _methods(text)}
         self.assertFalse(names & {"if", "for", "while", "switch", "return", "new", "throw"})

@@ -7,7 +7,7 @@ from web_operation_agent.business.tools.contracts import BusinessMutationProposa
 from web_operation_agent.execution.draft_handoff import field_identity
 from web_operation_agent.schemas import ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
-from web_operation_agent_yudao.mutation_prefill import (
+from web_operation_agent_yudao.writes.mutation_prefill import (
     YudaoMutationPrefill, _customer_choice_settled)
 
 

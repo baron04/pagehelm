@@ -2,7 +2,7 @@
 import unittest
 
 from web_operation_agent.privacy import SessionHandoffPolicy
-from web_operation_agent_yudao.api_content import BEGIN, END, composed, fenced, program_lines, redacted
+from web_operation_agent_yudao.reads.api_content import BEGIN, END, composed, fenced, program_lines, redacted
 
 
 class RedactionTests(unittest.TestCase):

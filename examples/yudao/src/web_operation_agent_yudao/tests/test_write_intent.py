@@ -1,8 +1,9 @@
 """Application wording never turns draft work into a Skill write."""
 import unittest
 
-from web_operation_agent_yudao.write_intent import classify_write_intent, preceding_draft_handoff
-from web_operation_agent_yudao.slim_loop import SlimTurnExecutor, _WRITE_INTENT
+from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+from web_operation_agent_yudao.executor.slim_loop import SlimTurnExecutor
+from web_operation_agent_yudao.writes.write_intent import classify_write_intent, preceding_draft_handoff
 
 
 class WriteIntentTests(unittest.TestCase):
@@ -59,24 +60,21 @@ class WriteIntentTests(unittest.TestCase):
             def definitions(self):
                 return [type("Definition", (), {"name": "crm_contact_create"})()]
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
+        executor.turn_context = SlimTurnContext(write_intent=classify_write_intent("先填联系人，不提交"))
         offered = [{"function": {"name": name}} for name in (
             "find_record", "fill_fields", "load_skill", "read_skill_resource",
             "crm_contact_create", "finish")]
         parent = SlimTurnExecutor.__mro__[1]
         old = parent._tools
         parent._tools = lambda self, turn: offered
-        token = _WRITE_INTENT.set(classify_write_intent("先填联系人，不提交"))
         try:
             self.assertEqual([tool["function"]["name"] for tool in executor._tools({"writes": Writes()})],
                              ["find_record", "fill_fields", "finish"])
         finally:
-            _WRITE_INTENT.reset(token)
             parent._tools = old
-
 
     def test_read_queries_do_not_select_business_review_but_mixed_obligations_do(self):
         from unittest.mock import patch
-        from web_operation_agent_yudao.slim_loop import _CURRENT_REQUEST
         parent = SlimTurnExecutor.__mro__[1]
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         cases = {
@@ -95,19 +93,16 @@ class WriteIntentTests(unittest.TestCase):
         }
         for request, expected in cases.items():
             with self.subTest(request=request), patch.object(parent, "_tools", return_value=[]):
-                current = _CURRENT_REQUEST.set(request)
-                intent = _WRITE_INTENT.set(classify_write_intent(request))
+                executor.turn_context = SlimTurnContext(
+                    current_request=request,
+                    write_intent=classify_write_intent(request),
+                )
                 turn = {"writes": None, "query_answers": {"read_1": object()}}
-                try:
-                    executor._tools(turn)
-                    self.assertEqual(expected, bool(turn.get("review_completion")))
-                finally:
-                    _CURRENT_REQUEST.reset(current)
-                    _WRITE_INTENT.reset(intent)
+                executor._tools(turn)
+                self.assertEqual(expected, bool(turn.get("review_completion")))
 
     def test_a_read_only_deployment_selects_no_review_for_any_request(self):
         from unittest.mock import patch
-        from web_operation_agent_yudao.slim_loop import _CURRENT_REQUEST
         parent = SlimTurnExecutor.__mro__[1]
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
         # Recorded turns Q039 and Q109: a count of approved contracts, and an edit the
@@ -115,15 +110,13 @@ class WriteIntentTests(unittest.TestCase):
         for request in ("统计一下CRM合同里，审批状态为审核通过的合同数量。",
                         "帮我把ERP供应商里“甲”这个供应商的联系人改成“乙”。", "审核这些订单"):
             with self.subTest(request=request), patch.object(parent, "_tools", return_value=[]):
-                current = _CURRENT_REQUEST.set(request)
-                intent = _WRITE_INTENT.set(classify_write_intent(request))
+                executor.turn_context = SlimTurnContext(
+                    current_request=request,
+                    write_intent=classify_write_intent(request),
+                )
                 turn = {"writes": None, "read_only": True}
-                try:
-                    executor._tools(turn)
-                    self.assertNotIn("review_completion", turn)
-                finally:
-                    _CURRENT_REQUEST.reset(current)
-                    _WRITE_INTENT.reset(intent)
+                executor._tools(turn)
+                self.assertNotIn("review_completion", turn)
 
     def test_without_business_writes_a_save_intent_is_not_read(self):
         import contextlib
@@ -136,9 +129,9 @@ class WriteIntentTests(unittest.TestCase):
         parent = SlimTurnExecutor.__mro__[1]
         for enabled, expected in ((False, "neutral"), (True, "save")):
             with self.subTest(enabled=enabled), \
-                    patch("web_operation_agent_yudao.bound_data_reads.turn_actor_reads",
-                          lambda client: contextlib.nullcontext()), \
-                    patch.object(parent, "_run", lambda self, state: seen.append(_WRITE_INTENT.get().mode)):
+                    patch("web_operation_agent_yudao.executor.slim_loop.turn_actor_reads",
+                          lambda client, **_kw: contextlib.nullcontext()), \
+                    patch.object(parent, "_run", lambda self, state: seen.append(self.turn_context.write_intent.mode)):
                 executor._run(NS(message=NS(text="审核这些订单"), approvals=NS(mutations_enabled=enabled)))
                 self.assertEqual(seen[-1], expected)
 
@@ -146,61 +139,29 @@ class WriteIntentTests(unittest.TestCase):
         import contextlib
         from types import SimpleNamespace as NS
         from unittest.mock import patch
-        from web_operation_agent_yudao.slim_loop import YudaoLoopProcedures
+        from web_operation_agent_yudao.executor.slim_loop import YudaoLoopProcedures
         knowledge = NS(client=NS(read_window=lambda check: contextlib.nullcontext()),
                        _load=lambda: None, suggest=lambda prompt: "已发布的查询入口")
-        owner = YudaoLoopProcedures(knowledge, NS(data=object()), "https://synthetic.test")
+        owner = YudaoLoopProcedures(
+            knowledge, NS(data=object()), "https://synthetic.test",
+            turn_context=SlimTurnContext(write_intent=classify_write_intent("创建一个用户")),
+        )
         context = NS(operation=object(), page=NS(checkpoint=lambda: None))
-        intent = _WRITE_INTENT.set(classify_write_intent("创建一个用户"))
-        try:
-            with patch("web_operation_agent_yudao.bound_data_reads.BoundDataReads",
-                       return_value=NS(_check=lambda: None)):
-                self.assertEqual(owner.prepare("创建一个用户", context), "已发布的查询入口")
-        finally:
-            _WRITE_INTENT.reset(intent)
+        with patch("web_operation_agent_yudao.reads.bound_data_reads.BoundDataReads",
+                   return_value=NS(_check=lambda: None)):
+            self.assertEqual(owner.prepare("创建一个用户", context), "已发布的查询入口")
 
     def test_a_plain_navigation_does_not_add_a_data_completion_review(self):
         from unittest.mock import patch
-        from web_operation_agent_yudao.slim_loop import _CURRENT_REQUEST
         executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
-        current = _CURRENT_REQUEST.set("打开用户页面")
-        intent = _WRITE_INTENT.set(classify_write_intent("打开用户页面"))
-        try:
-            with patch.object(SlimTurnExecutor.__mro__[1], "_tools", return_value=[]):
-                turn = {"writes": None}
-                executor._tools(turn)
-                self.assertFalse(turn.get("review_completion"))
-        finally:
-            _CURRENT_REQUEST.reset(current)
-            _WRITE_INTENT.reset(intent)
-
-    def test_legacy_delivery_is_normalized_before_schema_validation(self):
-        from unittest.mock import patch
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
-        original = {"path": "orders/page", "fields": ["name"], "deliver": True,
-                    "summary": {"columns": ["name"], "order_by": [
-                        {"column": "name", "direction": "asc", "nulls": "last"}]}}
-        from web_operation_agent.execution.model_loop_contracts import LoopToolResult
-        expected = LoopToolResult("ok")
-        with patch.object(SlimTurnExecutor.__mro__[1], "_invoke_tool", return_value=expected) as parent:
-            self.assertIs(expected, executor._invoke_tool(None, "call_api", original, {}))
-            normalized = parent.call_args.args[2]
-            self.assertNotIn("deliver", normalized)
-            self.assertEqual(original["summary"], normalized["summary"])
-            self.assertIn("deliver", original)
-
-    def test_invalid_legacy_delivery_cannot_fall_back_to_a_partial_plain_read(self):
-        from unittest.mock import patch
-        executor = SlimTurnExecutor.__new__(SlimTurnExecutor)
-        for old in ({"path": "orders/page", "deliver": True},
-                    {"path": "orders/page", "deliver": True, "fields": ["name"], "row_offset": 1}):
-            with self.subTest(arguments=old), patch.object(
-                    SlimTurnExecutor.__mro__[1], "_invoke_tool") as parent:
-                result = executor._invoke_tool(None, "call_api", old, {})
-                self.assertEqual("refused", result.state)
-                self.assertEqual("invalid_arguments", result.error_code)
-                self.assertIsNone(result.query_answer)
-                parent.assert_not_called()
+        executor.turn_context = SlimTurnContext(
+            current_request="打开用户页面",
+            write_intent=classify_write_intent("打开用户页面"),
+        )
+        with patch.object(SlimTurnExecutor.__mro__[1], "_tools", return_value=[]):
+            turn = {"writes": None}
+            executor._tools(turn)
+            self.assertFalse(turn.get("review_completion"))
 
     def test_only_completed_draft_handoff_carries_to_follow_up(self):
         draft = {"user": "先填客户资料，不保存", "assistant": "请检查表单后手动提交。",

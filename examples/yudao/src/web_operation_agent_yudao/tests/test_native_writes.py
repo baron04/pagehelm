@@ -7,7 +7,7 @@ from web_operation_agent.business.errors import (BusinessMutationIndeterminate,
     BusinessMutationRefusedError, BusinessToolPermissionError, BusinessToolRequestError)
 from web_operation_agent.state.identity import PrincipalContext, OperationContext
 from web_operation_agent.goal.data import Ref
-from web_operation_agent_yudao.writes import native_tools
+from web_operation_agent_yudao.writes.writes import native_tools
 from web_operation_agent.business.effects import canonical
 from dataclasses import replace
 

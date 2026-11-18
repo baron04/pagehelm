@@ -6,8 +6,8 @@ import unittest
 from web_operation_agent.business.errors import (
     BusinessToolRequestError, BusinessToolAuthenticationError,
     BusinessToolPermissionError, BusinessToolUnavailableError)
-from web_operation_agent_yudao.client import YudaoReadRefused
-from web_operation_agent_yudao.form_choices import NativeFormChoices
+from web_operation_agent_yudao.reads.client import YudaoReadRefused
+from web_operation_agent_yudao.writes.form_choices import NativeFormChoices
 from . import test_forms as fixture
 from .test_source_forms import _PATH
 

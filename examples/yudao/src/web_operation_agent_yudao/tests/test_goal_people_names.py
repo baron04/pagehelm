@@ -3,7 +3,7 @@ from copy import deepcopy
 import unittest
 
 from web_operation_agent.goal.data import EVERYTHING, Compare, DataRefused
-from web_operation_agent_yudao.goal import YudaoGoalData
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
 from web_operation_agent_yudao.tests.test_goal import DOCS, _Client, _prop
 
 

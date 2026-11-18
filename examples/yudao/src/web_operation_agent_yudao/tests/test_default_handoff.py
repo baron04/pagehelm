@@ -4,9 +4,9 @@ from types import SimpleNamespace as NS
 import unittest
 
 from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
-from web_operation_agent_yudao.slim_loop import _CURRENT_REQUEST, _WRITE_INTENT
+from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
 from web_operation_agent_yudao.tests.test_draft_completion import DraftLoop, fill, finish, form
-from web_operation_agent_yudao.write_intent import WriteIntent
+from web_operation_agent_yudao.writes.write_intent import WriteIntent
 
 
 def saving_form():
@@ -29,15 +29,17 @@ Loop._procedure_context = lambda self, s, name, **kwargs: self.state
 
 class DefaultHandoffTests(unittest.TestCase):
     def intent(self, mode, text):
-        token = _WRITE_INTENT.set(WriteIntent(mode))
-        self.addCleanup(_WRITE_INTENT.reset, token)
-        token = _CURRENT_REQUEST.set(text)
-        self.addCleanup(_CURRENT_REQUEST.reset, token)
+        self._turn_ctx = SlimTurnContext(current_request=text, write_intent=WriteIntent(mode))
+
+    def _run_loop(self, loop):
+        loop.turn_context = self._turn_ctx
+        loop.owner.turn_context = self._turn_ctx
+        return loop.run()
 
     def test_draft_turn_ending_after_fill_gets_the_program_handoff_and_says_not_submitted(self):
         self.intent("draft", "名称先填Synthetic，由我提交")
         loop = Loop([fill(), finish()])
-        answer = loop.run()
+        answer = self._run_loop(loop)
         self.assertEqual(loop.state.terminal_reason, "")
         self.assertEqual(loop.actions, ["fill", "handoff_form"])
         self.assertIn("「保存」已标出", answer)
@@ -48,7 +50,7 @@ class DefaultHandoffTests(unittest.TestCase):
     def test_a_save_request_that_never_asked_for_a_card_is_handed_over_not_dropped(self):
         self.intent("save", "把名称填成Synthetic并保存")
         loop = Loop([fill(), finish()])
-        answer = loop.run()
+        answer = self._run_loop(loop)
         self.assertEqual(loop.actions, ["fill", "handoff_form"])
         self.assertIn("尚未提交", answer)
         self.assertNotIn("已提交", answer.replace("尚未提交", ""))
@@ -58,7 +60,7 @@ class DefaultHandoffTests(unittest.TestCase):
             with self.subTest(status=status):
                 self.intent("save", "名称先填Synthetic，其余等我补充")
                 loop = Loop([fill(), finish(status)])
-                answer = loop.run()
+                answer = self._run_loop(loop)
                 self.assertEqual(loop.actions, ["fill", "handoff_form"])
                 self.assertIn("尚未提交", answer)
                 self.assertEqual(loop.turn["handoff"][1], "保存")
@@ -70,7 +72,7 @@ class DefaultHandoffTests(unittest.TestCase):
         self.intent("save", "名称先填Synthetic")
         loop = Loop([fill(), finish("need_input")])
         loop.turn["submit_handoff_blocked"] = "opening_changes"
-        loop.run()
+        self._run_loop(loop)
         self.assertEqual(loop.actions, ["fill"])
 
     def test_a_successful_native_select_is_a_real_current_turn_value_candidate(self):
@@ -78,6 +80,8 @@ class DefaultHandoffTests(unittest.TestCase):
         from web_operation_agent.tests.execution.test_product_model_loop import call, reply
         self.intent("save", "选择现有分类")
         loop = Loop([reply(call("select", index=1, option="Synthetic option")), finish("cannot")])
+        loop.turn_context = self._turn_ctx
+        loop.owner.turn_context = self._turn_ctx
         loop.state.obs.elements[0] = replace(loop.state.obs.elements[0], role="combobox")
         loop.native_submit = NS()
         loop.capture_form_baseline = lambda *_: None
@@ -89,6 +93,7 @@ class DefaultHandoffTests(unittest.TestCase):
     def test_transactionally_restored_defaults_do_not_block_conversion_handoff(self):
         self.intent("save", "名称先填Synthetic")
         loop = Loop([fill()])
+        loop.turn_context = loop.owner.turn_context = self._turn_ctx
         loop.run = lambda: None
         loop._invoke_tool(loop.state, "fill_fields", {"fields": [{"label": "名称", "value": "Synthetic"}]}, loop.turn)
         old = loop.state.obs
@@ -104,7 +109,7 @@ class DefaultHandoffTests(unittest.TestCase):
         loop.state.obs = replace(loop.state.obs, elements=[
             *loop.state.obs.elements,
             replace(loop.state.obs.elements[-1], ref="e9", name="确定")])
-        answer = loop.run()
+        answer = self._run_loop(loop)
         self.assertEqual(loop.actions, ["fill"])
         self.assertIn("没能核验并标出提交按钮", answer)
 
@@ -112,13 +117,13 @@ class DefaultHandoffTests(unittest.TestCase):
         self.intent("save", "把名称填成Synthetic并保存")
         loop = Loop([fill(), finish()])
         loop.turn["submit_started"] = True
-        loop.run()
+        self._run_loop(loop)
         self.assertEqual(loop.actions, ["fill"])
 
     def test_the_reply_is_never_replaced(self):
         self.intent("save", "把名称填成Synthetic并保存")
         loop = Loop([fill(), finish()])
-        answer = loop.run()
+        answer = self._run_loop(loop)
         self.assertTrue(answer.startswith("Synthetic，备注为空，默认值保持原值。"))
 
 

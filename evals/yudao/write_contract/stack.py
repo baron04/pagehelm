@@ -17,12 +17,12 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "examples/yudao/src"), str(ROOT / "examples/yudao/deploy/local")]
 
 import serve  # noqa: E402  (the local front)
-from web_operation_agent_yudao import native_server as native  # noqa: E402
-from web_operation_agent_yudao.client import YudaoClient  # noqa: E402
-from web_operation_agent_yudao.guard_identity import GuardIdentity  # noqa: E402
-from web_operation_agent_yudao.guard_proxy import GUARD_PATH, NativeGuardProxy  # noqa: E402
-from web_operation_agent_yudao.native_submit import YudaoSubmitPort  # noqa: E402
-from web_operation_agent_yudao.page_guard import NativePageGuard  # noqa: E402
+from web_operation_agent_yudao.host import native_server as native  # noqa: E402
+from web_operation_agent_yudao.reads.client import YudaoClient  # noqa: E402
+from web_operation_agent_yudao.host.guard_identity import GuardIdentity  # noqa: E402
+from web_operation_agent_yudao.host.guard_proxy import GUARD_PATH, NativeGuardProxy  # noqa: E402
+from web_operation_agent_yudao.writes.native_submit import YudaoSubmitPort  # noqa: E402
+from web_operation_agent_yudao.host.page_guard import NativePageGuard  # noqa: E402
 
 POLICY = ROOT / "examples/yudao/deploy/cloud/native-policy/fence.json"
 

@@ -6,7 +6,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from web_operation_agent_yudao.money_review import VerifiedMoneyReview
+from web_operation_agent_yudao.reads.money_review import VerifiedMoneyReview
 
 
 def sha(path):

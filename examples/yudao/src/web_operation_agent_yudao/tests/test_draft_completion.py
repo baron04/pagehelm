@@ -11,10 +11,11 @@ from web_operation_agent.execution.model_loop_contracts import LoopToolResult, P
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS
 from web_operation_agent.tests.execution.test_product_model_loop import LoopFixture, call, reply
-from web_operation_agent_yudao.slim_loop import (
-    SlimTurnExecutor, TableReadTurnExecutor, YudaoLoopProcedures, _CURRENT_REQUEST, _TURN_TABLES, _WRITE_INTENT)
-from web_operation_agent_yudao.turn_tables import TurnTables
-from web_operation_agent_yudao.write_intent import WriteIntent
+from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+from web_operation_agent_yudao.executor.slim_loop import (
+    SlimTurnExecutor, TableReadTurnExecutor, YudaoLoopProcedures)
+from web_operation_agent_yudao.reads.turn_tables import TurnTables
+from web_operation_agent_yudao.writes.write_intent import WriteIntent
 
 
 def form(*, lifetime="live-a", instance="fields-a", query=False):
@@ -39,7 +40,12 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
         self.handoff_ok = handoff_ok
         self.reindex_handoff = reindex_handoff
         self.drop_scope_after_fill = drop_scope_after_fill
+        self.turn_context = SlimTurnContext(
+            current_request="名称先填Synthetic，备注填Note，默认值不变，由我提交并标出按钮",
+            write_intent=WriteIntent("draft"),
+        )
         self.owner = object.__new__(YudaoLoopProcedures)
+        self.owner.turn_context = self.turn_context
         self.owner.goal_port = NS(data=None)
         self.owner.knowledge = None
         self.owner._settled = lambda *_args, **_kwargs: None
@@ -123,12 +129,6 @@ def finish(status="done"):
 
 
 class DraftCompletionTests(unittest.TestCase):
-    def setUp(self):
-        token = _WRITE_INTENT.set(WriteIntent("draft"))
-        self.addCleanup(_WRITE_INTENT.reset, token)
-        token = _CURRENT_REQUEST.set("名称先填Synthetic，备注填Note，默认值不变，由我提交并标出按钮")
-        self.addCleanup(_CURRENT_REQUEST.reset, token)
-
     def test_fields_only_then_done_is_returned_once_and_cannot_claim_completion(self):
         loop = DraftLoop([fill(), finish(), finish()])
         answer = loop.run()
@@ -233,8 +233,7 @@ class DraftCompletionTests(unittest.TestCase):
         executor = object.__new__(TableReadTurnExecutor)
         tables = TurnTables(BASELINE_SESSION_HANDOFFS)
         self.addCleanup(tables.close)
-        token = _TURN_TABLES.set((tables, "2026-11-14", "Asia/Shanghai"))
-        self.addCleanup(_TURN_TABLES.reset, token)
+        executor.turn_context = SlimTurnContext(turn_tables=(tables, "2026-11-14", "Asia/Shanghai"))
         reference = tables.issue_receipt()
         loop.turn["page_delivery_receipts"] = {
             reference: hashlib.sha256(executor._page_fingerprint(loop.state.obs).encode()).hexdigest()}

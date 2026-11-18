@@ -7,8 +7,8 @@ being copied into packages. This test does not establish model success rates.
 import unittest
 from importlib import resources
 
-from ..skill_packages import _SHARED_REFERENCES, packaged_skills
-from ..write_definitions import RECORD_OPERATIONS
+from ..rules.skill_packages import _SHARED_REFERENCES, packaged_skills
+from ..writes.write_definitions import RECORD_OPERATIONS
 
 GOAL_PACKAGES = {
     "crm-customer-creation": ("crm_customer_create",),
