@@ -729,15 +729,17 @@ test.describe('copying an answer', () => {
     expect(panel.errors).toEqual([])
   })
 
-  test('a table carries no copy control of its own', async ({open}) => {
-    // Copying the answer already brings its tables as rows a spreadsheet splits into cells.
+  test('a table offers its own TSV copy and CSV download controls', async ({open}) => {
     const panel = await open(snapshot({entries: [
       entry('e1', 'goal', '列出待开票订单'),
       entry('e2', 'result', ANSWER, {authored: 'server', panel_state: 'success'}),
-    ]}))
+    ]}), {clipboard: true})
     await panel.page.locator('.woa-launcher').click()
-    await panel.page.locator('.woa-md table').hover()
-    await expect(panel.page.locator('.woa-md').getByRole('button')).toHaveCount(0)
+    const toolbar = panel.page.locator('.woa-datatable__toolbar')
+    await expect(toolbar.getByRole('button', {name: labels.tableDownloadCsv})).toBeVisible()
+    await toolbar.getByRole('button', {name: labels.tableCopyTsv}).click()
+    expect(await clipboard(panel.page)).toBe(TABLE)
+    await expect(toolbar.getByRole('button', {name: labels.copied})).toBeVisible()
     expect(panel.errors).toEqual([])
   })
 
@@ -896,6 +898,10 @@ test.describe('the work process', () => {
     expect(text.length).toBeGreaterThan(4000)
     const panel = await open(snapshot({entries: [entry('e1', 'result', text, {panel_state: 'success'})]}))
     await panel.page.locator('.woa-launcher').click()
+    await expect(panel.page.locator('.woa-md tbody tr')).toHaveCount(10)
+    await expect(panel.page.locator('.woa-datatable__pageinfo')).toHaveText('1 / 5')
+    await expect(panel.page.locator('.woa-md')).toContainText('source: all rows in this read')
+    await panel.page.getByLabel(labels.tablePageSize).selectOption('all')
     await expect(panel.page.locator('.woa-md tbody tr')).toHaveCount(50)
     await expect(panel.page.locator('.woa-md')).toContainText('contact-050@synthetic.example.test')
     await expect(panel.page.locator('.woa-md')).toContainText('source: all rows in this read')

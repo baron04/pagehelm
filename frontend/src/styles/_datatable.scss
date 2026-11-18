@@ -39,7 +39,7 @@
   font-size: var(--woa-font-size-meta);
   color: var(--woa-ink);
 }
-.woa-datatable__filter input:focus {
+.woa-datatable__filter input:focus:not(:focus-visible) {
   outline: none;
 }
 .woa-datatable__filter input::placeholder {
