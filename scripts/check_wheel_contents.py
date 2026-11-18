@@ -41,8 +41,8 @@ DISTRIBUTIONS = {
             "web_operation_agent/business/draft_steps.py",
             "web_operation_agent/execution/admitted_actions.py",
             "web_operation_agent/planning/repository_source.py",
-            "web_operation_agent/sourcetree.py",
-            "web_operation_agent/xmlscan.py",
+            "web_operation_agent/planning/sourcetree.py",
+            "web_operation_agent/planning/xmlscan.py",
             "web_operation_agent/policies/model_options.json",
             "web_operation_agent/policies/prices.json",
             # The Runtime and the panel, in the one file a host page includes. A wheel
@@ -58,6 +58,7 @@ DISTRIBUTIONS = {
             # was added to end.
             "web_operation_agent/policies/page_controller.json",
         ],
+        "required_suffixes": [".dist-info/licenses/LICENSE"],
         "forbidden": [
             "web_operation_agent/browser_worker.py",
             "web_operation_agent/cli.py",
@@ -77,32 +78,9 @@ DISTRIBUTIONS = {
         # The core wheel carries no application, example, or internal test application.
         "forbidden_name_substrings": ["odoo", "yudao", "demo", "contacts", "testapps"],
     },
-    "web-operation-agent-odoo": {
-        "glob": "examples/odoo/dist/web_operation_agent_odoo-[0-9]*.whl",
-        "required": [
-            "web_operation_agent_odoo/__init__.py",
-            "web_operation_agent_odoo/route.py",
-            "web_operation_agent_odoo/adapter.py",
-            "web_operation_agent_odoo/sourcemap.py",
-            "web_operation_agent_odoo/server/generic_forms.py",
-            "web_operation_agent_odoo/server/page_entries.py",
-            "web_operation_agent_odoo/demo/form_qualify.py",
-            "web_operation_agent_odoo/policies/odoo.json",
-            "web_operation_agent_odoo/skills/customer-maintenance/SKILL.md",
-            "web_operation_agent_odoo/skills/customer-maintenance/agents/woa.toml",
-            "web_operation_agent_odoo/skills/customer-maintenance/references/source-provenance.json",
-            "web_operation_agent_odoo/skills/sales-processing/SKILL.md",
-            "web_operation_agent_odoo/skills/order-billing/SKILL.md",
-            "web_operation_agent_odoo/skills/catalog-and-records/SKILL.md",
-        ],
-        # The fixture provisioner reads a Compose file and an addon from a checkout. Shipping
-        # it would put a fixture master password in a wheel and offer a command that cannot
-        # work once installed.
-        "forbidden_prefixes": ["web_operation_agent_odoo/deploy/"],
-        "forbidden_name_substrings": ["contacts", "testapps"],
-    },
     "web-operation-agent-yudao": {
         "glob": "examples/yudao/dist/web_operation_agent_yudao-[0-9]*.whl",
+        "required_suffixes": [".dist-info/licenses/LICENSE"],
         "required": [
             "web_operation_agent_yudao/__init__.py",
             "web_operation_agent_yudao/application.py",
@@ -178,6 +156,13 @@ def check_one(label: str, spec: dict) -> list[str]:
     missing = [name for name in spec.get("required", []) if name not in names]
     if missing:
         problems.append(f"{label}: wheel is missing {missing}")
+
+    missing_suffixes = [
+        suffix for suffix in spec.get("required_suffixes", [])
+        if not any(name.endswith(suffix) for name in names)
+    ]
+    if missing_suffixes:
+        problems.append(f"{label}: wheel is missing suffix {missing_suffixes}")
 
     present = [name for name in spec.get("forbidden", []) if name in names]
     if present:

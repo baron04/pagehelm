@@ -1,9 +1,0 @@
-{
-  "kind": "odoo_goal_holdout_seal",
-  "suite_id": "odoo-goals-zh-v4-holdout",
-  "task_set_sha256": "sha256:5fe83d925961164375d49ee7f9fe72d696f4370dae2b58be8c1a3dd7161e32e9",
-  "normal_tasks": 116,
-  "impossible_tasks": 15,
-  "frozen_at": "2026-09-24",
-  "reference_date": "2026-09-24"
-}

@@ -11,8 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINTS = ('local', 'deploy', 'scripts/check_wheels.sh', 'scripts/qualify.sh',
-               'examples/yudao/deploy/cloud/deploy.sh',
-               'examples/odoo/deploy/single-node/rebuild.sh')
+               'examples/yudao/deploy/cloud/deploy.sh')
 
 
 class PythonEntrypointTests(unittest.TestCase):
@@ -46,7 +45,7 @@ class PythonEntrypointTests(unittest.TestCase):
         return target
 
     def run_entrypoint(self, name, *args, env=None):
-        shell = '/bin/bash' if name.startswith(('scripts/', 'examples/odoo/')) else '/bin/sh'
+        shell = '/bin/bash' if name.startswith('scripts/') else '/bin/sh'
         return subprocess.run([shell, str(self.root / name), *args], env=env or self.env,
                               capture_output=True, text=True, timeout=15)
 

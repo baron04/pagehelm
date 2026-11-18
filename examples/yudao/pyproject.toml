@@ -9,6 +9,7 @@ description = "yudao (ruoyi-vue-pro) goal data for web-operation-agent"
 readme = "deploy/README.md"
 requires-python = ">=3.13,<3.14"
 license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",

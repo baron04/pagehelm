@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -40,14 +41,13 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCK_FILE = ROOT / "requirements.lock"
 SBOM_FILE = ROOT / "sbom.json"
 NOTICE_FILE = ROOT / "THIRD_PARTY.md"
-#: Every distribution whose runtime closure ships. The examples declare the core as their
-#: only dependency, so resolving them separately is what proves that is still true.
-DISTRIBUTIONS = ("", "examples/odoo")
-#: npm lockfiles whose components are part of the release inventory even though no wheel
-#: carries them: one builds the evaluation baseline, one builds the assistant panel.
+#: Every distribution whose runtime closure ships. Resolving the base core, `.[browser]`,
+#: and the example distribution separately proves that base `.` stays browser-free while
+#: `.[browser]` locks Playwright and examples declare only core as their dependency.
+DISTRIBUTIONS = ("", ".[browser]", "examples/yudao")
+#: npm lockfiles whose components are part of the release inventory.
 NPM_LOCKS = {
-    "evals/pageagent": "evaluation baseline (not shipped in any wheel)",
-    "frontend": "assistant panel bundle (built into the core wheel)",
+    "frontend": "assistant panel bundle and pinned PageController dependency",
 }
 SBOM_VERSION = 1
 
@@ -76,14 +76,32 @@ def _licence_of(metadata: dict) -> tuple[str, str]:
 OWN_PREFIX = "web-operation-agent"
 
 
-def _declared(target: Path) -> set[str]:
+def _split_project_spec(project: str) -> tuple[str, tuple[str, ...]]:
+    """Split a project spec like `.[browser]` into `(relative_dir, extras)`."""
+    match = re.fullmatch(r"(.*?)\[([A-Za-z0-9_.,-]+)\]", project)
+    if not match:
+        return project, ()
+    base = match.group(1)
+    if base == ".":
+        base = ""
+    extras = tuple(part.strip() for part in match.group(2).split(",") if part.strip())
+    return base, extras
+
+
+def _declared(target: Path, extras: tuple[str, ...] = ()) -> set[str]:
     """The names a distribution's own `pyproject.toml` asks for, however they are pinned."""
-    text = (target / "pyproject.toml").read_text(encoding="utf-8")
-    block = re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.S | re.M)
-    if not block:
-        return set()
-    return {match.casefold() for match in
-            re.findall(r"[\"']\s*([A-Za-z0-9][A-Za-z0-9._-]*)", block.group(1))}
+    data = tomllib.loads((target / "pyproject.toml").read_text(encoding="utf-8"))
+    project = data.get("project") or {}
+    reqs = list(project.get("dependencies") or ())
+    optional = project.get("optional-dependencies") or {}
+    for extra in extras:
+        reqs.extend(optional.get(extra) or ())
+    names = set()
+    for req in reqs:
+        match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req)
+        if match:
+            names.add(match.group(1).casefold())
+    return names
 
 
 def resolve_python(project: str, *, find_links: Path | None = None) -> list[dict]:
@@ -93,13 +111,21 @@ def resolve_python(project: str, *, find_links: Path | None = None) -> list[dict
     it on a local `--find-links` path. That is also what makes the result meaningful: if an
     example ever grows a dependency of its own, a new third-party name appears here.
     """
-    target = ROOT / project if project else ROOT
+    base_project, extras = _split_project_spec(project)
+    target = ROOT / base_project if base_project else ROOT
+    install_spec = f"{target}[{','.join(extras)}]" if extras else str(target)
+    required_by = (
+        f"web-operation-agent[{','.join(extras)}]"
+        if not base_project and extras
+        else (base_project or "web-operation-agent")
+    )
+    declared = _declared(target, extras)
     report = ROOT / ".sbom-report.json"
     links = ["--find-links", str(find_links)] if find_links else []
     try:
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "--dry-run", "--quiet",
-             "--ignore-installed", *links, "--report", str(report), str(target)],
+             "--ignore-installed", *links, "--report", str(report), install_spec],
             check=True, capture_output=True, timeout=900)
         payload = json.loads(report.read_text())
     finally:
@@ -123,10 +149,10 @@ def resolve_python(project: str, *, find_links: Path | None = None) -> list[dict
             # and the notice rule below, which exempts transitive packages, then constrained
             # nothing on the Python side at all. What "direct" has to mean here is what the
             # distribution's own metadata asks for.
-            "direct": metadata["name"].casefold() in _declared(target),
+            "direct": metadata["name"].casefold() in declared,
             # Every resolved Python artifact is installed alongside the wheel.
             "shipped": True,
-            "required_by": project or "web-operation-agent",
+            "required_by": required_by,
         })
     return components
 
@@ -254,8 +280,9 @@ def build_inventory() -> dict:
     python: dict[tuple[str, str], dict] = {}
     index = _local_index()
     for project in DISTRIBUTIONS:
+        base_project, _extras = _split_project_spec(project)
         for component in resolve_for_targets(
-                project, find_links=index if project else None):
+                project, find_links=index if base_project else None):
             key = (component["name"].casefold(), component["version"])
             # One component, every distribution that pulls it: a package required by three
             # of them is one entry that says so, not three entries that look independent.
@@ -344,11 +371,10 @@ def render_sbom(inventory: dict) -> dict:
             "component": {"type": "application", "name": "web-operation-agent"},
             "properties": [
                 {"name": "woa:note",
-                 "value": ("Resolved runtime closure plus the npm components the evaluation "
-                           "baseline and the assistant panel are built from. Browsers "
-                           "installed by `playwright install`, container images and the "
-                           "local fixture applications are separate artifacts and are "
-                           "inventoried in THIRD_PARTY.md, not here.")},
+                 "value": ("Resolved runtime closure (including optional [browser]) plus the "
+                           "frontend npm components. Browsers installed by `playwright install`, "
+                           "container images and the local fixture applications are separate "
+                           "artifacts and are inventoried in THIRD_PARTY.md, not here.")},
             ],
         },
         "components": components,

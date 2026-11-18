@@ -81,7 +81,7 @@ different threat model, and this repository does not ship it.
 
 ## Operational limitations
 
-The current code does not yet provide complete horizontal scaling, rate limiting, or comprehensive operational monitoring. The Odoo reference binds its browser session to a separately delegated API actor and renews only while both identities still match, but every new embedded application must implement an equivalent trusted server-side session assertion. No distributed revocation or cross-host principal renewal service exists. Browser actions do not provide database transaction or rollback guarantees.
+The current code does not yet provide complete horizontal scaling, rate limiting, or comprehensive operational monitoring. Embedded applications must bind each browser session to a separately delegated API actor and renew only while both identities still match through a trusted server-side session assertion. No distributed revocation or cross-host principal renewal service exists. Browser actions do not provide database transaction or rollback guarantees.
 
 In-process Runtime sessions expire after one hour by default and enforce hard limits for retained events, accepted messages, queued messages, observations, actions, approvals, and Runtime instances. Oversized event payloads and identifier or URL fields fail before entering retained state; queue pressure returns HTTP 429, while a lifetime-capacity breach terminates and revokes the session. These controls limit memory exposure but do not provide restart recovery or distributed quotas.
 

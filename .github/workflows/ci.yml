@@ -71,23 +71,16 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
-          python -m pip install --editable .
-          python -m pip install --no-deps --editable examples/odoo
+          python -m pip install --editable ".[browser]"
           python -m pip install --no-deps --editable examples/yudao
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.plan.outputs.needs_node == 'true'
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            evals/pageagent/package-lock.json
-            frontend/package-lock.json
-      - name: Install pinned PageController dependency
-        if: steps.plan.outputs.needs_page_controller == 'true'
-        working-directory: evals/pageagent
-        run: npm ci
-      - name: Install the assistant panel toolchain
-        if: steps.plan.outputs.needs_frontend == 'true'
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend and PageController dependencies
+        if: steps.plan.outputs.needs_node == 'true'
         working-directory: frontend
         run: npm ci
       - name: Install Python Chromium
@@ -109,6 +102,4 @@ jobs:
             --base "$CHECK_BASE" --head "$CHECK_HEAD"
       - name: Qualify release
         if: env.CHECK_PROFILE == 'release'
-        env:
-          WOA_REQUIRE_PAGEAGENT_BROWSER: "1"
         run: scripts/qualify.sh --require-browser
