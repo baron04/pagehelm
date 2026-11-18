@@ -32,8 +32,9 @@ class DefaultHandoffTests(unittest.TestCase):
         self._turn_ctx = SlimTurnContext(current_request=text, write_intent=WriteIntent(mode))
 
     def _run_loop(self, loop):
-        loop.turn_context = self._turn_ctx
-        loop.owner.turn_context = self._turn_ctx
+        ctx = replace(self._turn_ctx, turn_tables=loop.turn_context.turn_tables)
+        loop.turn_context = ctx
+        loop.owner.turn_context = ctx
         return loop.run()
 
     def test_draft_turn_ending_after_fill_gets_the_program_handoff_and_says_not_submitted(self):
@@ -80,12 +81,10 @@ class DefaultHandoffTests(unittest.TestCase):
         from web_operation_agent.tests.execution.test_product_model_loop import call, reply
         self.intent("save", "选择现有分类")
         loop = Loop([reply(call("select", index=1, option="Synthetic option")), finish("cannot")])
-        loop.turn_context = self._turn_ctx
-        loop.owner.turn_context = self._turn_ctx
         loop.state.obs.elements[0] = replace(loop.state.obs.elements[0], role="combobox")
         loop.native_submit = NS()
         loop.capture_form_baseline = lambda *_: None
-        loop.run()
+        self._run_loop(loop)
         verdict = check_entries(loop.turn["source_ledger"], ["选择现有分类"])[0]
         self.assertEqual(verdict.source, "candidate")
         self.assertTrue(verdict.ok)
@@ -93,7 +92,9 @@ class DefaultHandoffTests(unittest.TestCase):
     def test_transactionally_restored_defaults_do_not_block_conversion_handoff(self):
         self.intent("save", "名称先填Synthetic")
         loop = Loop([fill()])
-        loop.turn_context = loop.owner.turn_context = self._turn_ctx
+        self.addCleanup(loop._tables.close)
+        ctx = replace(self._turn_ctx, turn_tables=loop.turn_context.turn_tables)
+        loop.turn_context = loop.owner.turn_context = ctx
         loop.run = lambda: None
         loop._invoke_tool(loop.state, "fill_fields", {"fields": [{"label": "名称", "value": "Synthetic"}]}, loop.turn)
         old = loop.state.obs

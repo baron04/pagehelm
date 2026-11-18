@@ -1,6 +1,7 @@
-"""Application knowledge and bounded page procedures for SlimTurnExecutor."""
+"""Application knowledge and bounded page procedures for YudaoTurnExecutor."""
 from __future__ import annotations
 
+import contextlib
 from dataclasses import replace
 import hashlib
 import json
@@ -129,6 +130,16 @@ class _Procedure:
 
     def execute(self, arguments, *, context):
         return self.owner.execute(self.name, arguments, context)
+
+
+class _ConcurrentReadProcedure(_Procedure):
+    """Pure-read procedure supporting threaded prepare_read + main-thread commit_read."""
+
+    def prepare_read(self, arguments, *, observation=None, operation=None):
+        return self.owner.prepare_read(self.name, arguments, observation=observation, operation=operation)
+
+    def commit_read(self, prepared, arguments, *, context):
+        return self.owner.commit_read(self.name, prepared, arguments, context)
 
 
 class YudaoProceduresBase:
@@ -832,7 +843,8 @@ class YudaoProceduresBase:
 
     def _find_record(self, s, name: str, kind: str = "", *,
                      answer_targets: list[AnswerTarget] | None = None,
-                     found_values: list | None = None) -> str:
+                     found_values: list | None = None,
+                     preview_commits: list | None = None) -> str:
         """Where the application has a record of this name, through the goal port."""
         ctx = self._ctx()
         if not name:
@@ -880,7 +892,14 @@ class YudaoProceduresBase:
                         near += self.goal_port.records_named(part, context=context, entities=among)
                     for entity in among[:3]:
                         try:
-                            preview = self.knowledge.list_preview(entity)
+                            if preview_commits is not None:
+                                preview, preview_prepared = self.knowledge._prepare_list_preview(entity)
+                                if preview_prepared is not None:
+                                    preview_commits.append(preview_prepared)
+                                    if "error" in preview_prepared:
+                                        raise preview_prepared["error"]
+                            else:
+                                preview = self.knowledge.list_preview(entity)
                         except DataRefused as exc:
                             scope_notes.append(f"{entity} 的列表预览" +
                                                ("被应用明确拒绝" if exc.permission_denied else "未完成"))
@@ -1033,3 +1052,213 @@ class YudaoProceduresBase:
         context.page.checkpoint()
         return replace(result, entered=tuple(turn["touched"]), trace=tuple(turn["trace"]),
                        read_summary=turn["reads"][-1] if turn["reads"] else None, marked=turn["marked"])
+
+    @contextlib.contextmanager
+    def _worker_read_scope(self, operation):
+        client = getattr(getattr(self, "knowledge", None), "client", None)
+        data = getattr(getattr(self, "goal_port", None), "data", None)
+        data_client = getattr(data, "_client", None)
+        actor_client = data_client or client
+        with contextlib.ExitStack() as stack:
+            if actor_client is not None and hasattr(actor_client, "read_generation"):
+                seed_scope = getattr(self._ctx(), "actor_reads", None)
+                stack.enter_context(bound_data_reads.turn_actor_reads(actor_client, seed_scope=seed_scope))
+            if (operation is not None and data is not None and data_client is not None
+                    and hasattr(data_client, "read_generation")):
+                def checkpoint():
+                    operation.require_live(application_id="yudao", required_scope="yudao.read")
+
+                bound = bound_data_reads.BoundDataReads(data, operation, checkpoint)
+                if hasattr(data_client, "read_window"):
+                    stack.enter_context(data_client.read_window(bound._check))
+                if client is not None and client is not data_client and hasattr(client, "read_window"):
+                    stack.enter_context(client.read_window(bound._check))
+            yield
+
+    def prepare_read(self, name: str, arguments: dict, *, observation=None, operation=None):
+        """Pure-read worker preparation; never mutates `TurnTables`, `ActorKnowledge`, or `SlimTurnContext`."""
+        del observation
+        if name == "load_domain_guide":
+            from ..rules.skill_packages import domain_playbooks
+            domain = str(arguments.get("domain") or "").strip()
+            return {"domain": domain, "guide": domain_playbooks().get(domain)}
+        with self._worker_read_scope(operation):
+            if name == "search_api":
+                return {"keyword": arguments["keyword"], "text": self.knowledge.search_api(arguments["keyword"])}
+            if name == "entity_rules":
+                return {
+                    "target": arguments["target"],
+                    "text": self._entity_rules(
+                        SimpleNamespace(operation=operation),
+                        arguments["target"],
+                        arguments.get("operation", ""),
+                    ),
+                }
+            if name == "find_record":
+                targets: list[AnswerTarget] = []
+                found: list = []
+                preview_commits: list = []
+
+                def checkpoint():
+                    if operation is not None:
+                        operation.require_live(application_id="yudao", required_scope="yudao.read")
+
+                worker_state = SimpleNamespace(
+                    operation=operation,
+                    measure=lambda _name: contextlib.nullcontext(),
+                    page=SimpleNamespace(checkpoint=checkpoint),
+                )
+                try:
+                    text = self._find_record(
+                        worker_state,
+                        arguments["name"].strip(),
+                        arguments.get("kind", "").strip(),
+                        answer_targets=targets,
+                        found_values=found,
+                        preview_commits=preview_commits,
+                    )
+                except QueryParametersError as exc:
+                    return {"error": exc, "preview_commits": preview_commits}
+                return {
+                    "text": text,
+                    "targets": targets,
+                    "found": found,
+                    "preview_commits": preview_commits,
+                }
+            if name == "call_api":
+                params = json.loads(arguments.get("params", "{}"))
+                if not isinstance(params, dict):
+                    raise ValueError("query parameters must be an object")
+                called_path = "/admin-api/" + arguments["path"].removeprefix("/admin-api/").lstrip("/")
+                use_table_sink = self._ctx().turn_tables is not None
+                actor_digest = (
+                    operation.principal.actor_authority_digest
+                    if "summary" in arguments and operation is not None
+                    else ""
+                )
+                api_prepared = self.knowledge._prepare_call_api(
+                    arguments["path"],
+                    params,
+                    arguments.get("fields", ()),
+                    use_row_sink=use_table_sink,
+                    row_offset=arguments.get("row_offset", 0),
+                    **({"summary": arguments["summary"]} if "summary" in arguments else {}),
+                    **({"actor_digest": actor_digest} if "summary" in arguments else {}),
+                )
+                return {"called_path": called_path, "params": params, "api": api_prepared}
+        raise ValueError(f"unsupported concurrent read tool: {name}")
+
+    def commit_read(self, name: str, prepared: dict, arguments: dict, context) -> LoopToolResult:
+        """Main-thread sequential commit for a prepared pure-read result."""
+        ctx = self._ctx()
+        policy_turn = ctx.executor_turn
+        table_context = ctx.turn_tables
+        said = {
+            key: value for key, value in arguments.items()
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool)
+        }
+        if name == "load_domain_guide":
+            domain = prepared["domain"]
+            self._note(context, stage="search", what="guide", term=domain, tool=name, arguments=said)
+            guide = prepared["guide"]
+            if not guide:
+                return LoopToolResult(f"未知业务域：{domain}", kind="read", state="refused", error_code="unknown_domain")
+            return LoopToolResult(guide, kind="read")
+        if name == "search_api":
+            self._note(context, stage="search", what="source", term=prepared["keyword"], tool=name, arguments=said)
+            return LoopToolResult(prepared["text"])
+        if name == "entity_rules":
+            self._note(context, stage="search", what="rules", term=prepared["target"], tool=name, arguments=said)
+            return LoopToolResult(prepared["text"], kind="read")
+        if name == "find_record":
+            self._note(context, stage="search", what="record", term=arguments["name"], tool=name, arguments=said)
+            for preview_prepared in prepared.get("preview_commits", ()):
+                try:
+                    self.knowledge._commit_call_api(preview_prepared)
+                except DataRefused:
+                    pass
+            if "error" in prepared:
+                exc = prepared["error"]
+                return LoopToolResult(
+                    "查找未完成：" + str(exc) + "。用 search_api 核对接口，再用 call_api 读取。",
+                    kind="read", state="refused", error_code="invalid_arguments",
+                )
+            if policy_turn is not None:
+                note_candidates(policy_turn, (("", value) for value in prepared["found"]))
+            return LoopToolResult(prepared["text"], kind="read", answer_targets=tuple(prepared["targets"]))
+        if name == "call_api":
+            know = self.knowledge
+            called_path = prepared["called_path"]
+            params = prepared["params"]
+            self._note(context, stage="tool", tool=name, arguments=said)
+            try:
+                sink = table_context[0].add if table_context is not None else None
+                text = know._commit_call_api(prepared["api"], row_sink=sink)
+            except TurnReadError as exc:
+                return LoopToolResult(str(exc), kind="read", state="unverified", error_code=exc.code)
+            except SummaryRefused as exc:
+                return LoopToolResult("程序汇总未能核实：" + exc.detail, kind="read", state="unverified", error_code=exc.code)
+            except QueryParametersError as exc:
+                return LoopToolResult("未执行：" + str(exc), kind="read", state="refused", error_code="invalid_arguments")
+            except DataRefused as exc:
+                if not exc.permission_denied:
+                    raise
+                context.audit("yudao_api_read_refused", path=called_path, reason="permission_denied")
+                return LoopToolResult(
+                    "此只读接口明确拒绝了当前账号。这次拒绝只说明该接口本次不可读，"
+                    "不影响其它已读到的结果；不能据此断定其它接口、整类数据或整个问题都无权限。"
+                    "已有的成功读取能回答用户问题时照常作答，只说明这个接口未能读取；"
+                    "还需要补充证据时，依据已发布的只读接口和当前账号范围寻找。",
+                    kind="read", state="refused", error_code="permission_denied",
+                )
+            if know.last_read:
+                def valid_key(key):
+                    return isinstance(key, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key))
+
+                published_fields = know._row_schema(called_path)
+                paging = {
+                    key: int(params[key]) for key in ("pageNo", "pageSize")
+                    if key in params and re.fullmatch(r"[1-9][0-9]{0,5}", str(params[key]))
+                }
+                context.audit(
+                    "yudao_api_read",
+                    path=called_path,
+                    query_keys=sorted(key for key in params if valid_key(key))[:32],
+                    paging=paging,
+                    field_keys=sorted({
+                        key for key in arguments.get("fields") or ()
+                        if valid_key(key) and key in published_fields
+                    })[:12],
+                    read_count=know.last_read["count"],
+                    declared_total=know.last_read["declared_total"],
+                    complete=know.last_read["complete"],
+                )
+            review = getattr(self.goal_port, "review", None)
+            obs = context.obs
+            if know.last_read and review and obs and obs.page_read is not None:
+                route = urlsplit(obs.url).path
+                observed_path = obs.page_read.get("path")
+                if obs.page_route == route and observed_path == called_path:
+                    labels = review.labels_on(route)
+                    named = [f"{key}→{labels[key]}" for key in know.last_keys if key in labels][:30]
+                    if named:
+                        text += "\n本页表格列名（接口字段→页面列）：" + "、".join(named)
+            if know.last_read and policy_turn is not None:
+                note_candidates(policy_turn, know.last_read.get("values") or ())
+            if know.last_read:
+                self._note(
+                    context,
+                    stage="read_done",
+                    tool=name,
+                    **{k: v for k, v in know.last_read.items() if k != "values"},
+                )
+            return LoopToolResult(
+                text,
+                kind="read",
+                state="completed" if know.last_read else "refused",
+                query_answer=getattr(know, "last_query_answer", None) if "summary" in arguments else None,
+                read_key=called_path if know.last_read else "",
+                read_count=know.last_read["count"] if know.last_read else None,
+                read_summary=(json.dumps(arguments, ensure_ascii=False)[:160], text[:1500]),
+            )
+        raise ValueError(f"unsupported concurrent read tool: {name}")

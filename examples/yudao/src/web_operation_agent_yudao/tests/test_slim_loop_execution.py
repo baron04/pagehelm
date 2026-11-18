@@ -27,7 +27,7 @@ from web_operation_agent.composition.business_operations import RegisteredOperat
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.index import ApplicationIndex, IndexConvention, IndexEntity, IndexPage
 from web_operation_agent.goal.skill_writes import SkillWrites
-from web_operation_agent.privacy import SessionHandoffPolicy
+from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy
 from web_operation_agent.schemas.browser import ElementRef, PageObservation
 from web_operation_agent.state.conversation import ConversationState, SQLiteConversationState
 from web_operation_agent.state.identity import PrincipalContext
@@ -36,8 +36,9 @@ from web_operation_agent_yudao.host.native_server import YudaoHostConfig
 from web_operation_agent_yudao.rules.skill_packages import packaged_skills
 from web_operation_agent_yudao.reads.api_content import BEGIN, END
 from web_operation_agent_yudao.reads.answer_numbers import untraced
+from web_operation_agent_yudao.reads.turn_tables import TurnTables
 from web_operation_agent_yudao.executor.page_prompts import (
-    SYSTEM, TOOLS, VERIFY_SYSTEM, SlimTurnContext,
+    SYSTEM, SYSTEM_READ, TABLE_READ_RULES, TOOLS, VERIFY_SYSTEM, SlimTurnContext,
     _business_handoff_ready, _commits, _fields, _lines, _native_input_text,
     _own_list_facts, _own_list_path, _page_lines, _scroll_anchor, _shown,
     _tabs_not_shown, _today, conventions_text, page_text, system_text,
@@ -47,7 +48,7 @@ from web_operation_agent_yudao.executor.procedures import (
 )
 from web_operation_agent_yudao.executor.slim_loop import (
     ActorKnowledge, QueryParametersError, SlimTurnExecutor, TableReadTurnExecutor,
-    YudaoLoopProcedures, _clean_user_answer, _read_only_status_question,
+    YudaoLoopProcedures, YudaoTurnExecutor, _clean_user_answer, _read_only_status_question,
 )
 from web_operation_agent_yudao.writes.write_intent import WriteIntent
 from web_operation_agent_yudao.tests import test_native_writes as native
@@ -58,15 +59,20 @@ from web_operation_agent_yudao.tests.slim_loop_support import (
 )
 
 class LoopTests(unittest.TestCase):
-    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=(), slim=False, trace_values=False, write_intent=None, current_request=None):
+    def loop(self, *replies, steps: int = 6, tool=None, problems=(), asked="q", touched=(), page=(), tabs=(), slim=False, trace_values=False, write_intent=None, current_request=None, turn_tables=None):
         """`page` is what each step on the page in turn changes of it; a step past the
         end of it leaves the page as it was. `tabs` are (name, aria-selected) of the
         page's tabs."""
-        executor = (SlimTurnExecutor if slim else ModelDrivenTurnExecutor).__new__(SlimTurnExecutor if slim else ModelDrivenTurnExecutor)
+        executor = (YudaoTurnExecutor if slim else ModelDrivenTurnExecutor).__new__(YudaoTurnExecutor if slim else ModelDrivenTurnExecutor)
         executor.model_steps, executor.verify, executor._earlier_words = steps, True, []
+        tables = turn_tables
+        if slim and tables is None:
+            tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+            self.addCleanup(tables.close)
         executor.turn_context = SlimTurnContext(
             current_request=asked if current_request is None else current_request,
             write_intent=write_intent,
+            turn_tables=(tables, "2026-10-19", "Asia/Shanghai") if slim else None,
         )
         if trace_values:
             executor.profile = NS(untraced_numbers=untraced)
@@ -161,18 +167,27 @@ class LoopTests(unittest.TestCase):
             turn["confirmed"] = True
             return "已打开。", True
         _, state, answer = self.loop(
-            reply(call("goto",path="/orders",answer="已打开列表。")),
-            reply(call("finish",status="cannot",answer="尚未完成目标审批的交接。")),
-            slim=True,tool=opened,asked="请审批指定订单",problems=[("只打开列表，未交接目标审批按钮",)],
+            reply(call("goto", path="/orders")),
+            reply(call("finish", status="done", answer="已打开列表。", items=[
+                {"item": "打开订单列表", "kind": "page", "status": "delivered", "receipts": []},
+            ])),
+            reply(call("finish", status="cannot", answer="尚未完成目标审批的交接。", items=[
+                {"item": "审批指定订单", "kind": "page", "status": "undelivered", "receipts": []},
+            ])),
+            slim=True, tool=opened, asked="请审批指定订单", problems=[("只打开列表，未交接目标审批按钮",)],
             write_intent=WriteIntent("save", "审批"))
-        self.assertEqual(self.checked,["已打开列表。"])
-        self.assertEqual(answer,"尚未完成目标审批的交接。")
-        self.assertEqual(state.terminal_reason,"agent_refused")
+        self.assertEqual(self.checked, ["已打开列表。"])
+        self.assertEqual(answer, "尚未完成目标审批的交接。")
+        self.assertEqual(state.terminal_reason, "agent_refused")
 
     def test_literal_draft_values_still_review_omitted_fields_and_cannot_bypass_with_finish(self):
         _, state, answer = self.loop(
-            reply(call("finish",status="done",answer="已填好。")),
-            reply(call("finish",status="done",answer="已填好。")),
+            reply(call("finish",status="done",answer="已填好。",items=[
+                {"item": "表单预填", "kind": "page", "status": "delivered", "receipts": []},
+            ])),
+            reply(call("finish",status="done",answer="已填好。",items=[
+                {"item": "表单预填", "kind": "page", "status": "delivered", "receipts": []},
+            ])),
             slim=True,asked="名称甲，备注乙，先别保存",touched=[("名称","甲")],
             problems=[("备注未填",),("备注仍未填",)],
             write_intent=WriteIntent("draft"))
@@ -181,8 +196,15 @@ class LoopTests(unittest.TestCase):
         self.assertIn("尚未核对到",answer)
 
     def test_plain_read_in_slim_keeps_the_existing_no_extra_review_path(self):
-        self.loop(reply(call("finish",status="done",answer="共3条")),slim=True,asked="总共有多少条",
-                  write_intent=WriteIntent("neutral"))
+        tables = TurnTables(BASELINE_SESSION_HANDOFFS)
+        self.addCleanup(tables.close)
+        receipt = tables.issue_receipt()
+        self.loop(
+            reply(call("finish",status="done",answer="共3条",items=[
+                {"item": "总条数", "kind": "data", "status": "delivered", "receipts": [receipt]},
+            ])),
+            slim=True,asked="总共有多少条",turn_tables=tables,
+            write_intent=WriteIntent("neutral"))
         self.assertEqual(self.checked,[])
 
     def test_done_ends_the_turn_finished_with_the_model_s_answer(self):
@@ -853,10 +875,14 @@ class LoopTests(unittest.TestCase):
         self.assertIn(END, last)
 
     def test_read_instructions_are_short_and_do_not_offer_a_parallel_delivery_path(self):
+        self.assertIs(YudaoTurnExecutor, SlimTurnExecutor)
+        self.assertIs(YudaoTurnExecutor, TableReadTurnExecutor)
+        self.assertEqual(SYSTEM_READ, TABLE_READ_RULES)
         self.assertLessEqual(len(system_text(user="u", date="2026-10-19", tz="Asia/Shanghai",
-                                            runtime_source=False)), 2500)
-        self.assertIn("数据答案统一用call_api.summary", SYSTEM)
+                                            runtime_source=False)), 3000)
+        self.assertIn("交付中的值须来自本轮回执", SYSTEM)
         self.assertNotIn("deliver=true", SYSTEM)
+        self.assertNotIn("read_answer", SYSTEM)
 
     def test_the_model_and_the_checker_are_told_that_application_data_is_not_an_instruction(self):
         for text in (SYSTEM, system_text(user="u", date="2026-10-13", tz="Asia/Shanghai")):
@@ -871,10 +897,10 @@ class LoopTests(unittest.TestCase):
             self.assertIn(expected, system_text(user="u", date=today, tz="Asia/Shanghai"))
 
     def test_a_permission_claim_is_told_to_require_an_exact_denied_read(self):
-        # A3（P15 意图首跑）：按客户读商机的接口被拒，被当成了商机整体不可读。
+        # A3（P15 意图首跑）：缺入口不等于无权限，且未核实不能外推全无权。
         for text in (SYSTEM, system_text(user="u", date="2026-10-13", tz="Asia/Shanghai")):
-            self.assertIn("只能来自指向它本身的确切读取被拒", text)
-            self.assertIn("照常作答", text)
+            self.assertIn("缺入口不等于无权限", text)
+            self.assertIn("不能核实时用 cannot 或追问", text)
 
     def test_without_runtime_source_the_model_is_told_the_fixed_reply(self):
         # D3：用户态源码问答不上线；实现类问题用固定答复说明。

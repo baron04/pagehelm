@@ -746,6 +746,65 @@ class NativeHostTests(unittest.TestCase):
             self.assertIs(read[0], host._sessions[("1", "1", "slim-tab")].session.runner.executor.knowledge)
         self.chat.return_value.complete.assert_not_called()
 
+    def test_host_instructions_include_every_required_section_and_unified_executor(self):
+        from web_operation_agent_yudao.executor.page_prompts import (
+            NATIVE_SUBMIT_RULES, PAGE_DELIVERY_RULES, SYSTEM_FORM, SYSTEM_INTRO,
+            SYSTEM_PAGE, SYSTEM_READ, SYSTEM_RULES, TABLE_READ_RULES,
+        )
+        from web_operation_agent_yudao.executor.slim_loop import (
+            SlimTurnExecutor, TableReadTurnExecutor, YudaoTurnExecutor,
+        )
+        from web_operation_agent_yudao.rules.ui_source import UiSource
+        from web_operation_agent_yudao.host.page_guard import NativePageGuard
+        self.assertIs(YudaoTurnExecutor, SlimTurnExecutor)
+        self.assertIs(YudaoTurnExecutor, TableReadTurnExecutor)
+        self.assertIs(SYSTEM_READ, TABLE_READ_RULES)
+        self.assertFalse(YudaoTurnExecutor.program_read_delivery)
+
+        for enabled in (False, True):
+            with self.subTest(native_writes=enabled):
+                proxy = RealGuardProxy(
+                    upstream="http://127.0.0.1:9",
+                    origin="https://fixture.test",
+                    guard=NativePageGuard(frozenset(), writing_gets=frozenset()),
+                    resolve_actor=lambda *_: "a" * 64,
+                ).start()
+                self.addCleanup(proxy.close)
+                proxy.ingress_base = proxy.url
+                proxy.verify_ingress()
+                base_cfg = self._fence()
+                self.config = replace(
+                    base_cfg,
+                    native_page_policy=self._page_policy(),
+                    native_writes=enabled,
+                    native_page_admission="read-only-window" if enabled else base_cfg.native_page_admission,
+                    state_dir=Path(self.tmp.name) / f"instr-{enabled}",
+                )
+                with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy", return_value=proxy), \
+                        patch("web_operation_agent_yudao.host.page_guard.NativePageGuard"), \
+                        patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource.none()):
+                    host = self.host()
+                    host.bootstrap("synthetic-a", "1", "tab-a")
+                executor = host._sessions[("1", "1", "tab-a")].session.runner.executor
+                self.assertIs(type(executor), YudaoTurnExecutor)
+                self.assertEqual(host.config.native_submit, enabled)
+                instructions = executor.profile.instructions
+                self.assertTrue(instructions.startswith("你是企业后台助手，替当前登录用户完成请求。"))
+                self.assertIn(SYSTEM_INTRO.splitlines()[1], instructions)
+                if enabled:
+                    self.assertIn("交付中的值须来自本轮回执", instructions)
+                    self.assertIn("最后调用 finish", instructions)
+                    self.assertIn(NATIVE_SUBMIT_RULES, instructions)
+                else:
+                    self.assertIn(SYSTEM_READ, instructions)
+                    self.assertNotIn(NATIVE_SUBMIT_RULES, instructions)
+                self.assertIn(SYSTEM_PAGE, instructions)
+                self.assertIn(SYSTEM_FORM, instructions)
+                # SYSTEM_RULES has direct_skill_operations rewrite applied in YudaoTurnExecutor
+                for line in SYSTEM_RULES.strip().splitlines():
+                    self.assertIn(line, instructions)
+                self.assertIn(PAGE_DELIVERY_RULES, instructions)
+
     def test_inside_the_applications_window_only_reads_it_cannot_refuse_stay_fenced(self):
         from web_operation_agent_yudao.rules.ui_source import UiSource
         gets = ["/admin-api/pms/pm/project-group/list", "/admin-api/infra/redis/get-monitor-info",

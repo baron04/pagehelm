@@ -40,9 +40,11 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
         self.handoff_ok = handoff_ok
         self.reindex_handoff = reindex_handoff
         self.drop_scope_after_fill = drop_scope_after_fill
+        self._tables = TurnTables(BASELINE_SESSION_HANDOFFS)
         self.turn_context = SlimTurnContext(
             current_request="名称先填Synthetic，备注填Note，默认值不变，由我提交并标出按钮",
             write_intent=WriteIntent("draft"),
+            turn_tables=(self._tables, "2026-11-14", "Asia/Shanghai"),
         )
         self.owner = object.__new__(YudaoLoopProcedures)
         self.owner.turn_context = self.turn_context
@@ -112,6 +114,12 @@ class DraftLoop(LoopFixture, SlimTurnExecutor):
             raise AssertionError(name)
         return replace(result, entered=tuple(local["touched"]), trace=tuple(local["trace"]))
 
+    def run(self):
+        try:
+            return super().run()
+        finally:
+            self._tables.close()
+
     def _invoke_tool(self, state, name, args, turn):
         # Replace only tool transport/admission; exercise the production adapter's
         # tracking, real form entry/readback, and the common finish/shortcut paths.
@@ -125,7 +133,9 @@ def fill(label="名称", value="Synthetic", **kwargs):
 
 
 def finish(status="done"):
-    return reply(call("finish", status=status, answer="Synthetic，备注为空，默认值保持原值。"))
+    return reply(call("finish", status=status, answer="Synthetic，备注为空，默认值保持原值。", items=[
+        {"item": "表单预填", "kind": "page",
+         "status": "delivered" if status == "done" else "undelivered", "receipts": []}]))
 
 
 class DraftCompletionTests(unittest.TestCase):
@@ -158,7 +168,11 @@ class DraftCompletionTests(unittest.TestCase):
         loop = DraftLoop([fill(), finish()], query=True)
         self.assertNotIn("尚未完成同一实时表单", loop.run())
         self.assertFalse(loop.turn.get("draft_form_entries"))
-        loop = DraftLoop([reply(call("highlight", index=4, answer="已标出"))])
+        loop = DraftLoop([
+            reply(call("highlight", index=4)),
+            reply(call("finish", status="done", answer="已标出", items=[
+                {"item": "Review按钮", "kind": "page", "status": "delivered", "receipts": []}])),
+        ])
         self.assertEqual(loop.run(), "已标出")
 
     def test_query_input_and_filter_with_a_same_name_business_field_do_not_require_handoff(self):
@@ -202,17 +216,17 @@ class DraftCompletionTests(unittest.TestCase):
         loop = DraftLoop([fill(), reply(call("highlight", index=4, answer="全部完成")), finish("cannot")])
         self.assertNotEqual(loop.run(), "全部完成")
         self.assertEqual(loop.state.terminal_reason, "agent_refused")
-        self.assertIn("这一步带的 answer 未交付", str(loop._messages))
+        self.assertIn("这一步带的 answer 没有用上", str(loop._messages))
         self.assertNotIn("handoff_form", loop.actions)
 
     def test_repeated_shortcut_uses_the_same_bounded_delivery_correction(self):
-        highlight = reply(call("highlight", index=4, answer="全部完成"))
-        loop = DraftLoop([fill(), highlight, highlight])
+        shortcut = fill(then_highlight="Review", answer="全部完成")
+        loop = DraftLoop([fill(), reply(call("replace_form")), shortcut, shortcut])
         self.assertIn("尚未完成同一实时表单", loop.run())
         self.assertEqual(loop.state.terminal_reason, "agent_refused")
         rejected = [facts for event, facts in loop.events if event == "model_delivery_rejected"]
         self.assertEqual([r["returned"] for r in rejected], [True, False])
-        self.assertEqual(loop.actions, ["fill", "highlight", "highlight"])
+        self.assertEqual(loop.actions, ["fill", "observe", "fill", "handoff_form", "fill", "handoff_form"])
 
     def test_another_live_form_handoff_does_not_discharge_the_original_form(self):
         loop = DraftLoop([fill(), reply(call("replace_form")), fill(then_highlight="Review"), finish(), finish()])

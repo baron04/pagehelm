@@ -611,8 +611,8 @@ class KnowledgeTests(unittest.TestCase):
         self.assertIn('"别人的"}\n' + END, scoped)
 
     def test_model_and_checker_must_match_named_subset_to_read_scope(self):
-        self.assertIn("条件只能用接口已声明params或summary.where", SYSTEM)
-        self.assertIn("空结果只说明实际查询范围", SYSTEM)
+        self.assertIn("不把已提交的参数当作返回行确已满足条件的证明；用已读字段核对", SYSTEM)
+        self.assertIn("查无结果要说清条件和范围", SYSTEM)
         self.assertIn("完整分页只证明读全了该次接口查询范围", VERIFY_SYSTEM)
 
     def test_subset_comparison_can_read_both_filtered_and_whole_lists(self):

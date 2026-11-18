@@ -16,17 +16,24 @@ _TURN_ACTOR_LOCAL = threading.local()
 
 
 @contextmanager
-def turn_actor_reads(client, turn_context=None):
+def turn_actor_reads(client, turn_context=None, *, seed_scope=None):
     """Reuse identity matching, never permissions, within one synchronous slim turn.
 
     The delegated token names one actor. Renewing it invalidates the whole turn;
     every native GET still authenticates and authorizes at the application.
     Thread-local state cannot cross another thread or survive this scope.
     """
+    generation = client.read_generation
+    binding = None
+    if (isinstance(seed_scope, dict)
+            and seed_scope.get("client") is client
+            and seed_scope.get("generation") == generation
+            and seed_scope.get("binding") is not None):
+        binding = seed_scope["binding"]
     state = {
         "client": client,
-        "generation": client.read_generation,
-        "binding": None,
+        "generation": generation,
+        "binding": binding,
         "thread_id": threading.get_ident(),
     }
     previous_local = getattr(_TURN_ACTOR_LOCAL, "scope", None)

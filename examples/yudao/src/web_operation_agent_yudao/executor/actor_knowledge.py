@@ -114,8 +114,8 @@ class ActorKnowledge:
         self.filter_semantics = filter_semantics
         self._zone = ZoneInfo(time_zone)
         self._menu = self._ops = self._by_path = self._schemas = None
-        #: The host may load this ahead of the first turn, on another thread.
-        self._loading = threading.Lock()
+        #: The host may load this ahead of the first turn, or concurrent read threads may race _load().
+        self._loading = threading.RLock()
         self.user_name = ""
         #: The session parameters of the application this actor is signed in to; the turn
         #: sets its own, so a read is redacted of them like a page is.
@@ -229,17 +229,27 @@ class ActorKnowledge:
         path = f"/admin-api/{entity.strip('/')}/page"
         return path if path in self._by_path else ""
 
-    def list_preview(self, entity: str) -> str:
-        """Optional name context uses only the endpoint's own query contract."""
+    def _prepare_list_preview(self, entity: str):
+        """Prepare optional name context without mutating turn-scoped knowledge state."""
         path = self.list_path(entity)
         if not path:
-            return ""
+            return "", None
         published = {p["name"]: p for p in self._by_path[path]["op"].get("parameters", ())
                      if isinstance(p, dict) and p.get("in") == "query" and isinstance(p.get("name"), str)}
         params = {key: value for key, value in (("pageNo", 1), ("pageSize", 20)) if key in published}
         if any(p.get("required") is True and key not in params for key, p in published.items()):
+            return "", None
+        prepared = self._prepare_call_api(path, params)
+        if "error" in prepared:
+            return "", prepared
+        return prepared["text"], prepared
+
+    def list_preview(self, entity: str) -> str:
+        """Optional name context uses only the endpoint's own query contract."""
+        _text, prepared = self._prepare_list_preview(entity)
+        if prepared is None:
             return ""
-        return self.call_api(path, params)
+        return self._commit_call_api(prepared)
 
     def list_api(self, entity: str) -> str:
         """The paged list an entity key names, when the application publishes one."""
@@ -410,238 +420,324 @@ class ActorKnowledge:
                 visited.update(next_ids)
         return data, rows, total, first_page == 1 and len(rows) == total, requests
 
-    def call_api(self, path: str, params: dict, fields=(), *, row_offset: int = 0,
-                 summary=None, actor_digest: str = "", row_sink=None) -> str:
-        self.last_query_answer = None
-        if row_sink is not None and summary is not None:
-            raise QueryParametersError("行表读取不接受汇总交付参数")
-        if summary is not None:
-            if (not isinstance(fields, (tuple, list)) or len(fields) > 12
-                    or any(not isinstance(key, str) or not key for key in fields)
-                    or len(set(fields)) != len(fields) or row_offset):
-                raise QueryParametersError("summary不能与row_offset同时使用；fields若提供须为最多12个不同列名")
-            summary, rewritten = parse_summary_spec(summary)
-            used = (*summary.group_by, *summary.columns, *(condition.column for condition in summary.where),
-                    *(measure.column for measure in summary.measures if measure.column), *(key.column for key in summary.order_by))
-            fields = tuple(dict.fromkeys((*fields, *used))) or ("id",)
-            if len(fields) > 12:
-                raise QueryParametersError("summary引用列超过12个，请减少fields或汇总声明中的列")
-        else:
-            rewritten = ()
-        fields = tuple(str(f) for f in fields or () if isinstance(f, str) and f)[:12]
-        if type(row_offset) is not int or not 0 <= row_offset <= _ALL_ROWS or row_offset and not fields:
-            raise QueryParametersError("row_offset must be an integer from 0 to 5000; nonzero requires fields")
-        self._load()
-        self.last_read = None
-        self.last_keys = ()
-        if not path.startswith("/admin-api/"):
-            path = "/admin-api/" + path.lstrip("/")
-        if path not in self._by_path:
-            near = self.search_api(path.replace("/admin-api/", "").replace("/", " "))
-            return f"没有这个只读接口：{path}。相近的接口：\n{near}"
-        if path in self.writing_gets:
-            return "这个接口读取时会写入数据，助手不允许调用。"
-        if isinstance(params, dict):
-            params = dict(params)
-            published_q = {
-                q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
-                if isinstance(q, dict) and q.get("in") == "query"
-            }
-            for k, v in list(params.items()):
-                if (isinstance(v, list) and len(v) == 2
-                        and all(isinstance(item, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", item) for item in v)):
-                    q = published_q.get(k) or {}
-                    schema = self._deref(q.get("schema") or {})
-                    items = self._deref(schema.get("items") or {})
-                    hint = " ".join(str(x or "") for x in (q.get("description"), q.get("example"), schema.get("description")))
-                    if items.get("format") == "date-time" or "00:00:00" in hint or "HH:mm:ss" in hint:
-                        params[k] = [f"{v[0]} 00:00:00", f"{v[1]} 23:59:59"]
-        self._validate_params(path, params)
-        filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
-        relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
-        if summary is not None:
-            from ..reads.read_summary import bind_native_conditions
-            equalities = self.filter_semantics.equalities_for(path) if self.filter_semantics is not None else None
-            summary = bind_native_conditions(summary, filters, props, equalities)
-            fields = tuple(dict.fromkeys((*fields, *(c.column for c in summary.where))))
-            if len(fields) > 12:
-                raise QueryParametersError("汇总与接口范围条件合计引用列超过12个，未执行读取")
-        declared_total = None
-        data_lines: set[int] = set()
+    def _prepare_call_api(
+        self,
+        path: str,
+        params: dict,
+        fields=(),
+        *,
+        row_offset: int = 0,
+        summary=None,
+        actor_digest: str = "",
+        use_row_sink: bool = False,
+    ) -> dict:
+        """Pure-read preparation for `call_api`; never mutates `self` or `TurnTables`."""
+        prepared: dict = {
+            "reset_query_answer": True,
+            "reset_read": False,
+            "turn_targets_update": None,
+            "has_last_read": False,
+            "last_read": None,
+            "last_keys": (),
+            "last_query_answer": None,
+        }
         try:
-            data, rows, total, whole, requests = self._pages(relative, params, bool(fields))
-            declared_total = total if type(total) is int and total >= 0 else None
-            observed = rows if rows is not None else [data]
-            if (whole or rows is None) and all(isinstance(row, dict) for row in observed):
-                ids = {str(row["id"]) for row in observed if row.get("id") is not None}
-                if ids:
-                    self.turn_targets.setdefault(path.rpartition("/")[0], set()).update(ids)
-            if isinstance(data, list):
-                out.append(f"返回 {len(rows)} 行")
-            elif rows is not None:
-                count = (f"total={total}（符合条件的总数）" if type(total) is int and total >= 0
-                         else "total=未知")
-                out.append(f"{count}，本次读了 {len(rows)} 行"
-                           + ("（已读完所有页）" if whole and fields else ""))
-                if requests > 1:
-                    out.append("本次经多次分页请求读取，应用没有提供同一时点快照；"
-                               "若读取期间有变更，合计、极值和完整名单可能混合不同时点的记录。")
-        except DataRefused as exc:
-            if exc.permission_denied or exc.read_failed:
-                raise
-            return f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
-        metadata_keys = tuple(dict.fromkeys((*fields, *filters,
-            *(rows[0] if rows and isinstance(rows[0], dict)
-              else data if rows is None and isinstance(data, dict) else props))))
-        native_names = self._names(relative)
-        metadata = self._read_vocabulary(relative, metadata_keys, props, native_names)
-        try:
-            column_names = dict((self._columns(relative) or {}) if self._columns is not None else {})
-        except (DataRefused, LookupError, ValueError):
+            if use_row_sink and summary is not None:
+                raise QueryParametersError("行表读取不接受汇总交付参数")
+            if summary is not None:
+                if (not isinstance(fields, (tuple, list)) or len(fields) > 12
+                        or any(not isinstance(key, str) or not key for key in fields)
+                        or len(set(fields)) != len(fields) or row_offset):
+                    raise QueryParametersError("summary不能与row_offset同时使用；fields若提供须为最多12个不同列名")
+                summary, rewritten = parse_summary_spec(summary)
+                used = (*summary.group_by, *summary.columns, *(condition.column for condition in summary.where),
+                        *(measure.column for measure in summary.measures if measure.column), *(key.column for key in summary.order_by))
+                fields = tuple(dict.fromkeys((*fields, *used))) or ("id",)
+                if len(fields) > 12:
+                    raise QueryParametersError("summary引用列超过12个，请减少fields或汇总声明中的列")
+            else:
+                rewritten = ()
+            fields = tuple(str(f) for f in fields or () if isinstance(f, str) and f)[:12]
+            if type(row_offset) is not int or not 0 <= row_offset <= _ALL_ROWS or row_offset and not fields:
+                raise QueryParametersError("row_offset must be an integer from 0 to 5000; nonzero requires fields")
+            self._load()
+            prepared["reset_read"] = True
+            if not path.startswith("/admin-api/"):
+                path = "/admin-api/" + path.lstrip("/")
+            if path not in self._by_path:
+                near = self.search_api(path.replace("/admin-api/", "").replace("/", " "))
+                prepared["text"] = f"没有这个只读接口：{path}。相近的接口：\n{near}"
+                return prepared
+            if path in self.writing_gets:
+                prepared["text"] = "这个接口读取时会写入数据，助手不允许调用。"
+                return prepared
+            if isinstance(params, dict):
+                params = dict(params)
+                published_q = {
+                    q.get("name"): q for q in self._by_path[path]["op"].get("parameters", ())
+                    if isinstance(q, dict) and q.get("in") == "query"
+                }
+                for k, v in list(params.items()):
+                    if (isinstance(v, list) and len(v) == 2
+                            and all(isinstance(item, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", item) for item in v)):
+                        q = published_q.get(k) or {}
+                        schema = self._deref(q.get("schema") or {})
+                        items = self._deref(schema.get("items") or {})
+                        hint = " ".join(str(x or "") for x in (q.get("description"), q.get("example"), schema.get("description")))
+                        if items.get("format") == "date-time" or "00:00:00" in hint or "HH:mm:ss" in hint:
+                            params[k] = [f"{v[0]} 00:00:00", f"{v[1]} 23:59:59"]
+            self._validate_params(path, params)
+            filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
+            relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
+            if summary is not None:
+                from ..reads.read_summary import bind_native_conditions
+                equalities = self.filter_semantics.equalities_for(path) if self.filter_semantics is not None else None
+                summary = bind_native_conditions(summary, filters, props, equalities)
+                fields = tuple(dict.fromkeys((*fields, *(c.column for c in summary.where))))
+                if len(fields) > 12:
+                    raise QueryParametersError("汇总与接口范围条件合计引用列超过12个，未执行读取")
+            declared_total = None
+            data_lines: set[int] = set()
+            try:
+                data, rows, total, whole, requests = self._pages(relative, params, bool(fields))
+                declared_total = total if type(total) is int and total >= 0 else None
+                observed = rows if rows is not None else [data]
+                if (whole or rows is None) and all(isinstance(row, dict) for row in observed):
+                    ids = {str(row["id"]) for row in observed if row.get("id") is not None}
+                    if ids:
+                        prepared["turn_targets_update"] = (path.rpartition("/")[0], ids)
+                if isinstance(data, list):
+                    out.append(f"返回 {len(rows)} 行")
+                elif rows is not None:
+                    count = (f"total={total}（符合条件的总数）" if type(total) is int and total >= 0
+                             else "total=未知")
+                    out.append(f"{count}，本次读了 {len(rows)} 行"
+                               + ("（已读完所有页）" if whole and fields else ""))
+                    if requests > 1:
+                        out.append("本次经多次分页请求读取，应用没有提供同一时点快照；"
+                                   "若读取期间有变更，合计、极值和完整名单可能混合不同时点的记录。")
+            except DataRefused as exc:
+                if exc.permission_denied or exc.read_failed:
+                    raise
+                prepared["text"] = f"接口拒绝：{redacted(str(exc)[:200], self.handoffs)}"
+                return prepared
+            metadata_keys = tuple(dict.fromkeys((*fields, *filters,
+                *(rows[0] if rows and isinstance(rows[0], dict)
+                  else data if rows is None and isinstance(data, dict) else props))))
+            native_names = self._names(relative)
+            metadata = self._read_vocabulary(relative, metadata_keys, props, native_names)
+            try:
+                column_names = dict((self._columns(relative) or {}) if self._columns is not None else {})
+            except (DataRefused, LookupError, ValueError):
+                column_names = {}
+            named, named_lines = self._relation_names(relative, rows if rows is not None else [data], column_names)
+            if summary is not None:
+                from ..reads.read_summary import summarize
+                if rows is None and isinstance(data, dict) and "id" in data:
+                    if "id" in filters and str(filters["id"]) != str(data["id"]):
+                        raise SummaryRefused("record_identity_mismatch", "detail response does not identify the requested native record")
+                    rows, total, whole = [data], 1, True
+                    declared_total = 1
+                prepared["has_last_read"] = True
+                prepared["last_read"] = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
+                                         "complete": whole if rows is not None else None, "declared_total": declared_total,
+                                         "values": _cell_values(rows if rows is not None else [data], column_names)[0]}
+                prepared["last_keys"] = tuple(dict.fromkeys(key for row in rows or () if isinstance(row, dict) for key in row))
+                result = summarize(path=relative, filters=filters, fields=fields, props=props,
+                    deref=self._deref, rows=rows, total=total, whole=whole, requests=requests,
+                    actor_digest=actor_digest, zone=self._zone, money_review=self.money_review, spec=summary,
+                    columns=column_names, names=native_names, relation_names=named)
+                prepared["last_query_answer"] = result
+                unverified = [column.name for column in result.columns if column.unverified_unit]
+                told, data_idx = ["已按当前账号的真实读取准备程序汇总；数值和名单保存在本轮服务端。"], set()
+                if rewritten:
+                    told.append("程序对汇总声明的理解：" + "；".join(rewritten) + "。")
+                for line, is_data in (("实际接口条件：" + json.dumps(filters, ensure_ascii=False), True),
+                                      ("实际汇总声明：" + json.dumps(result.spec.to_json(), ensure_ascii=False), True),
+                                      (f"读取 {result.source_count} 行，命中 {result.matched_count} 行，完整={result.complete}。", False),
+                                      ("输出列与已核验单位：" + json.dumps([(column.name, column.unit) for column in result.columns],
+                                                                  ensure_ascii=False), True)):
+                    if is_data:
+                        data_idx.add(len(told))
+                    told.append(line)
+                if unverified:
+                    told.append("这些金额列的显示单位未经核验，按接口原值给出并标注：" + "、".join(unverified))
+                for line, is_data in named_lines:
+                    if is_data:
+                        data_idx.add(len(told))
+                    told.append(line)
+                told.append(result.incomplete_reason or "这份结果只覆盖上述条件；用户的其它义务仍须完成。")
+                prepared["text"] = self._told(told, data_idx) + metadata
+                return prepared
+            candidates = self.money_review.fields_for(relative) if self.money_review is not None else {}
+            read_rows = rows if rows is not None else [data]
+            certified = {key: spec for key, spec in candidates.items()
+                         if any(isinstance(row, dict) and spec.convertible(row.get(key))
+                                for row in read_rows)
+                         and all(not isinstance(row, dict) or row.get(key) is None
+                                 or spec.convertible(row.get(key)) for row in read_rows)}
+
+            def present(row):
+                if not isinstance(row, dict):
+                    return row
+                return {key: certified[key].display_value(value) if key in certified else value
+                        for key, value in row.items()}
+
+            if rows is None:
+                data = present(data)
+            else:
+                rows = [present(row) for row in rows]
+                if fields:
+                    scope_lines = (["本次接口查询范围：业务筛选参数如下（本次调用所提交的条件）：",
+                                    json.dumps(filters, ensure_ascii=False)] if filters else
+                                   ["本次接口查询范围：未带业务筛选条件；以下 total、合计和分组覆盖当前账号可见的此接口全表，"
+                                    "不能当作用户点名的子集。"])
+                    if filters and self.filter_semantics is not None:
+                        conditions = self.filter_semantics.condition_line(path, filters)
+                        if conditions:
+                            scope_lines.append("各条件的语义（按部署版本源码编译）：" + conditions)
+                    data_lines = {index + len(scope_lines) for index in data_lines}
+                    if filters:
+                        data_lines.add(1)
+                    out[:0] = scope_lines
             column_names = {}
-        named, named_lines = self._relation_names(relative, rows if rows is not None else [data], column_names)
-        if summary is not None:
-            from ..reads.read_summary import summarize
-            if rows is None and isinstance(data, dict) and "id" in data:
-                if "id" in filters and str(filters["id"]) != str(data["id"]):
-                    raise SummaryRefused("record_identity_mismatch", "detail response does not identify the requested native record")
-                rows, total, whole = [data], 1, True
-                declared_total = 1
-            self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
-                              "complete": whole if rows is not None else None, "declared_total": declared_total,
-                              "values": _cell_values(rows if rows is not None else [data], column_names)[0]}
-            self.last_keys = tuple(dict.fromkeys(key for row in rows or () if isinstance(row, dict) for key in row))
-            self.last_query_answer = summarize(path=relative, filters=filters, fields=fields, props=props,
-                deref=self._deref, rows=rows, total=total, whole=whole, requests=requests,
-                actor_digest=actor_digest, zone=self._zone, money_review=self.money_review, spec=summary,
-                columns=column_names, names=native_names, relation_names=named)
-            result = self.last_query_answer
-            unverified = [column.name for column in result.columns if column.unverified_unit]
-            told, data = ["已按当前账号的真实读取准备程序汇总；数值和名单保存在本轮服务端，选择read_answer交付。"], set()
-            if rewritten:
-                told.append("程序对汇总声明的理解：" + "；".join(rewritten) + "。")
-            for line, is_data in (("实际接口条件：" + json.dumps(filters, ensure_ascii=False), True),
-                                  ("实际汇总声明：" + json.dumps(result.spec.to_json(), ensure_ascii=False), True),
-                                  (f"读取 {result.source_count} 行，命中 {result.matched_count} 行，完整={result.complete}。", False),
-                                  ("输出列与已核验单位：" + json.dumps([(column.name, column.unit) for column in result.columns],
-                                                              ensure_ascii=False), True)):
-                if is_data:
-                    data.add(len(told))
-                told.append(line)
-            if unverified:
-                told.append("这些金额列的显示单位未经核验，按接口原值给出并标注：" + "、".join(unverified))
+            try:
+                column_names = dict((self._columns(relative) or {}) if self._columns is not None else {})
+            except (DataRefused, LookupError, ValueError):
+                column_names = {}
+            prepared["has_last_read"] = True
+            prepared["last_read"] = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
+                                     "complete": whole if rows is not None else None,
+                                     "declared_total": declared_total,
+                                     "values": _cell_values(rows if rows is not None else [data], column_names)[0]}
+            if rows is None:
+                keys = list(data.keys()) if isinstance(data, dict) else []
+            else:
+                keys = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
+            prepared["last_keys"] = tuple(str(key) for key in keys)
+            blanked = {k for row in (rows if rows is not None else [data]) if isinstance(row, dict)
+                       for k, v in row.items() if v == REDACTED}
+            if fields:
+                missing = [f for f in fields if f != "id" and f not in keys and f not in props]
+                if missing:
+                    out.append("提示：本次 fields 中请求的以下列名在返回记录中不存在："
+                               + "、".join(missing)
+                               + "；请改用下方实际存在的列名（本轮行表已保留接口返回的全部真实列，可直接用真实列名在 sql 中查询，无需重复 call_api）。")
+                other = [key for key in dict.fromkeys(k for row in (rows if rows is not None else [data])
+                         if isinstance(row, dict) for k in row) if key in props
+                         and key not in ("id", *fields) and key not in blanked]
+                if other:
+                    out.append("本次只展示 fields 指定的列；下面是已返回但未展示的列，需要时在 sql 中直接按列名查询（无需重复 call_api），不能据此说接口没有这些字段：")
+                    data_lines.add(len(out))
+                    out.append("; ".join(key + ("（" + str(self._deref(props[key]).get("description") or "")[:40] + "）"
+                        if key in props and self._deref(props[key]).get("description") else "") for key in other[:32]))
+            verified_keys = [key for key in (fields or keys) if key in certified and key in keys]
+            if verified_keys:
+                out.append("这些字段已按部署前端源码和同记录非零页面样本逐字段核验；"
+                           "以下数值是页面显示值，可直接用于本次纯查询，无需再次开页面："
+                           + "；".join(f"{key}（{certified[key].display_unit}）"
+                                      for key in dict.fromkeys(verified_keys)))
+            if metadata:
+                out.append(metadata)
+            notes = [f"{k}={(self._deref(props[k]).get('description') or '')[:40]}"
+                     for k in (fields or keys) if k in props and self._deref(props[k]).get("description")
+                     and k not in blanked and k not in certified]
+            if notes:
+                out.append("字段说明: " + "; ".join(notes[:30]))
+            names, read = native_names, (rows if rows is not None else [data])
+            coded = {}
+            for key in (fields or keys):
+                seen = dict.fromkeys(str(row.get(key)) for row in read
+                                     if isinstance(row, dict) and row.get(key) not in (None, ""))
+                pairs = [(code, names[key][code]) for code in seen if code in names.get(key, {})]
+                if pairs:
+                    coded[key] = pairs
+            if coded:
+                out.append("代码列的取值和名称（应用的字典）:")
+                data_lines.add(len(out))
+                out.append("；".join(f"{key}: " + "、".join(f"{code}={label}" for code, label in pairs[:20])
+                                    for key, pairs in coded.items()))
             for line, is_data in named_lines:
                 if is_data:
-                    data.add(len(told))
-                told.append(line)
-            told.append(result.incomplete_reason or "这份结果只覆盖上述条件；用户的其它义务仍须完成。")
-            return self._told(told, data) + metadata
-        candidates = self.money_review.fields_for(relative) if self.money_review is not None else {}
-        read_rows = rows if rows is not None else [data]
-        certified = {key: spec for key, spec in candidates.items()
-                     if any(isinstance(row, dict) and spec.convertible(row.get(key))
-                            for row in read_rows)
-                     and all(not isinstance(row, dict) or row.get(key) is None
-                             or spec.convertible(row.get(key)) for row in read_rows)}
-
-        def present(row):
-            if not isinstance(row, dict):
-                return row
-            return {key: certified[key].display_value(value) if key in certified else value
-                    for key, value in row.items()}
-
-        if rows is None:
-            data = present(data)
-        else:
-            rows = [present(row) for row in rows]
-            if fields:
-                scope_lines = (["本次接口查询范围：业务筛选参数如下（本次调用所提交的条件）：",
-                                json.dumps(filters, ensure_ascii=False)] if filters else
-                               ["本次接口查询范围：未带业务筛选条件；以下 total、合计和分组覆盖当前账号可见的此接口全表，"
-                                "不能当作用户点名的子集。"])
-                if filters and self.filter_semantics is not None:
-                    conditions = self.filter_semantics.condition_line(path, filters)
-                    if conditions:
-                        scope_lines.append("各条件的语义（按部署版本源码编译）：" + conditions)
-                data_lines = {index + len(scope_lines) for index in data_lines}
-                if filters:
-                    data_lines.add(1)
-                out[:0] = scope_lines
-        column_names = {}
-        try:
-            column_names = dict((self._columns(relative) or {}) if self._columns is not None else {})
-        except (DataRefused, LookupError, ValueError):
-            column_names = {}
-        self.last_read = {"count": 1 if rows is None else len(rows), "scope": self._by_path[path]["tag"],
-                          "complete": whole if rows is not None else None,
-                          "declared_total": declared_total,
-                          "values": _cell_values(rows if rows is not None else [data], column_names)[0]}
-        if rows is None:
-            keys = list(data.keys()) if isinstance(data, dict) else []
-        else:
-            keys = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
-        self.last_keys = tuple(str(key) for key in keys)
-        blanked = {k for row in (rows if rows is not None else [data]) if isinstance(row, dict)
-                   for k, v in row.items() if v == REDACTED}
-        if fields:
-            missing = [f for f in fields if f != "id" and f not in keys and f not in props]
-            if missing:
-                out.append("提示：本次 fields 中请求的以下列名在返回记录中不存在："
-                           + "、".join(missing)
-                           + "；请改用下方实际存在的列名（本轮行表已保留接口返回的全部真实列，可直接用真实列名在 sql 中查询，无需重复 call_api）。")
-            other = [key for key in dict.fromkeys(k for row in (rows if rows is not None else [data])
-                     if isinstance(row, dict) for k in row) if key in props
-                     and key not in ("id", *fields) and key not in blanked]
-            if other:
-                out.append("本次只展示 fields 指定的列；下面是已返回但未展示的列，需要时在 sql 中直接按列名查询（无需重复 call_api），不能据此说接口没有这些字段：")
+                    data_lines.add(len(out))
+                out.append(line)
+            if use_row_sink:
+                if (rows is None and isinstance(data, dict) and "id" in filters
+                        and "id" in data and str(filters["id"]) != str(data["id"])):
+                    raise TurnReadError("record_identity_mismatch", "详情接口返回的记录编号与请求不符。")
+                observed = rows if rows is not None else ([] if data is None else [data])
+                shown_rows = [self._row(r, fields) if isinstance(r, dict) else r for r in observed]
+                clock_notes: list = []
+                if rows is not None:
+                    row_keys = tuple(dict.fromkeys(
+                        k for r in rows[:5] if isinstance(r, dict) for k in r
+                    )) or tuple(props)
+                    self._append_completeness_and_clock_notes(
+                        clock_notes, props=props, fields=fields, rows=rows, whole=whole,
+                        keys=row_keys, require_fields_for_partial=False, always_check_clocks=True)
+                prepared["row_sink_payload"] = {
+                    "path": relative,
+                    "params": filters,
+                    "rows": observed,
+                    "total": declared_total if rows is not None else len(observed),
+                    "complete": whole if rows is not None else True,
+                    "published": tuple(dict.fromkeys((*props, *fields))) if not observed else (),
+                }
+                prepared["out"] = out
+                prepared["data_lines"] = data_lines
+                prepared["shown_rows"] = shown_rows
+                prepared["clock_notes"] = clock_notes
+                return prepared
+            if rows is None:
+                shown = self._row(data) if isinstance(data, dict) else data
+                if isinstance(data, dict):
+                    shown.update({k: v for k, v in _slim(data, deep=True).items() if k not in shown})
                 data_lines.add(len(out))
-                out.append("; ".join(key + ("（" + str(self._deref(props[key]).get("description") or "")[:40] + "）"
-                    if key in props and self._deref(props[key]).get("description") else "") for key in other[:32]))
-        verified_keys = [key for key in (fields or keys) if key in certified and key in keys]
-        if verified_keys:
-            out.append("这些字段已按部署前端源码和同记录非零页面样本逐字段核验；"
-                       "以下数值是页面显示值，可直接用于本次纯查询，无需再次开页面："
-                       + "；".join(f"{key}（{certified[key].display_unit}）"
-                                  for key in dict.fromkeys(verified_keys)))
-        if metadata:
-            out.append(metadata)
-        notes = [f"{k}={(self._deref(props[k]).get('description') or '')[:40]}"
-                 for k in (fields or keys) if k in props and self._deref(props[k]).get("description")
-                 and k not in blanked and k not in certified]
-        if notes:
-            out.append("字段说明: " + "; ".join(notes[:30]))
-        names, read = native_names, (rows if rows is not None else [data])
-        coded = {}
-        for key in (fields or keys):
-            seen = dict.fromkeys(str(row.get(key)) for row in read
-                                 if isinstance(row, dict) and row.get(key) not in (None, ""))
-            pairs = [(code, names[key][code]) for code in seen if code in names.get(key, {})]
-            if pairs:
-                coded[key] = pairs
-        if coded:
-            out.append("代码列的取值和名称（应用的字典）:")
-            data_lines.add(len(out))
-            out.append("；".join(f"{key}: " + "、".join(f"{code}={label}" for code, label in pairs[:20])
-                                for key, pairs in coded.items()))
-        for line, is_data in named_lines:
-            if is_data:
-                data_lines.add(len(out))
-            out.append(line)
+                out.append(json.dumps(shown, ensure_ascii=False)[:3500])
+                prepared["text"] = self._told(out, data_lines)
+                return prepared
+            self._append_completeness_and_clock_notes(
+                out, props=props, fields=fields, rows=rows, whole=whole,
+                keys=keys, require_fields_for_partial=True, always_check_clocks=False)
+            prepared["text"] = self._finish_plain_rows(
+                out=out, data_lines=data_lines, rows=rows, fields=fields,
+                whole=whole, coded=coded, row_offset=row_offset,
+            )
+            return prepared
+        except (QueryParametersError, TurnReadError, SummaryRefused, DataRefused) as exc:
+            prepared["error"] = exc
+            return prepared
+
+    def _commit_call_api(self, prepared: dict, *, row_sink=None) -> str:
+        """Apply turn-scoped `ActorKnowledge` and `TurnTables` mutations on the main thread."""
+        if prepared.get("reset_query_answer"):
+            self.last_query_answer = None
+        if prepared.get("reset_read"):
+            self.last_read = None
+            self.last_keys = ()
+        if prepared.get("turn_targets_update") is not None:
+            prefix, ids = prepared["turn_targets_update"]
+            self.turn_targets.setdefault(prefix, set()).update(ids)
+        if prepared.get("has_last_read"):
+            self.last_read = prepared["last_read"]
+            self.last_keys = prepared["last_keys"]
+        if prepared.get("last_query_answer") is not None:
+            self.last_query_answer = prepared["last_query_answer"]
+        if "error" in prepared:
+            raise prepared["error"]
+        if "text" in prepared:
+            return prepared["text"]
+        out = list(prepared["out"])
+        data_lines = set(prepared["data_lines"])
         if row_sink is not None:
-            if (rows is None and isinstance(data, dict) and "id" in filters
-                    and "id" in data and str(filters["id"]) != str(data["id"])):
-                raise TurnReadError("record_identity_mismatch", "详情接口返回的记录编号与请求不符。")
-            observed = rows if rows is not None else ([] if data is None else [data])
-            info = row_sink(path=relative, params=filters, rows=observed,
-                            total=declared_total if rows is not None else len(observed),
-                            complete=whole if rows is not None else True,
-                            published=tuple(dict.fromkeys((*props, *fields))) if not observed else ())
+            info = row_sink(**prepared["row_sink_payload"])
             out.append(f"本轮行表 {info['name']}，读取回执 {info['receipt']}。")
             data_lines.add(len(out))
             out.append(json.dumps(info, ensure_ascii=False))
+            observed = prepared["row_sink_payload"]["rows"]
             if observed:
                 data_lines.add(len(out))
-                shown_rows = [self._row(r, fields) if isinstance(r, dict) else r for r in observed]
+                shown_rows = prepared["shown_rows"]
                 inline = (json.dumps(shown_rows, ensure_ascii=False)
                           if info["complete"] and len(observed) <= 30 else "")
                 if inline and len(inline) <= 9000:
@@ -649,24 +745,22 @@ class ActorKnowledge:
                                f"无需再调 tables/sql 重复取行；若需分转元÷100.0 等单位换算、子集计数、多行聚合、差额、分组或排序极值，须调 sql 计算，注意 SQL 行表内时间列仍存原始毫秒整数）：" + inline)
                 else:
                     out.append("样例（不是全表）：" + json.dumps(shown_rows[:3], ensure_ascii=False)[:2600])
-            if rows is not None:
-                row_keys = tuple(dict.fromkeys(
-                    k for r in rows[:5] if isinstance(r, dict) for k in r
-                )) or tuple(props)
-                self._append_completeness_and_clock_notes(
-                    out, props=props, fields=fields, rows=rows, whole=whole,
-                    keys=row_keys, require_fields_for_partial=False, always_check_clocks=True)
-            return self._told(out, data_lines)
-        if rows is None:
-            shown = self._row(data) if isinstance(data, dict) else data
-            if isinstance(data, dict):
-                shown.update({k: v for k, v in _slim(data, deep=True).items() if k not in shown})
-            data_lines.add(len(out))
-            out.append(json.dumps(shown, ensure_ascii=False)[:3500])
-            return self._told(out, data_lines)
-        self._append_completeness_and_clock_notes(
-            out, props=props, fields=fields, rows=rows, whole=whole,
-            keys=keys, require_fields_for_partial=True, always_check_clocks=False)
+            out.extend(prepared["clock_notes"])
+        return self._told(out, data_lines)
+
+    def call_api(self, path: str, params: dict, fields=(), *, row_offset: int = 0,
+                 summary=None, actor_digest: str = "", row_sink=None) -> str:
+        prepared = self._prepare_call_api(
+            path, params, fields,
+            row_offset=row_offset,
+            summary=summary,
+            actor_digest=actor_digest,
+            use_row_sink=row_sink is not None,
+        )
+        return self._commit_call_api(prepared, row_sink=row_sink)
+
+    def _finish_plain_rows(self, *, out: list, data_lines: set, rows: list, fields: tuple,
+                           whole: bool, coded: dict, row_offset: int) -> str:
         quantities = []
         for key in fields if whole else ():
             values = [row.get(key) for row in rows if isinstance(row, dict)]
