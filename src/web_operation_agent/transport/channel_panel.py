@@ -117,6 +117,13 @@ class ChannelPanel:
                     entry["id"] = f"{self._history_prefix()}{record['sequence']:08d}"
                     entry["position"] = {"stream": self._history_prefix(),
                                          "sequence": record["sequence"]}
+                    if entry.get("panel_state") == "indeterminate":
+                        overlay = (
+                            self._reconciliations.get(f"p:{entry.get('proposal_digest', '')}")
+                            or self._reconciliations.get(f"t:{entry.get('turn_id', '')}")
+                        )
+                        if overlay is not None:
+                            entry["reconciliation"] = _copy_json(overlay)
                     projected.append(entry)
             joined = collapse_timeline(projected + entries + ([boundary] if boundary else []))
             entries = [entry for entry in joined if entry is not boundary]

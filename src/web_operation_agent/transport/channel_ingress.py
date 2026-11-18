@@ -2,17 +2,26 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import sqlite3
+from dataclasses import replace
 
-from .panel_view import progress_message
+from .channel_state import _is_transient_sqlite_error
+from .panel_view import panel_contract, panel_limits, progress_message
+from ..business.mutation import MutationJournalError
+from ..privacy import redact_sensitive_assignments, redact_session_handoffs
+from ..state.identity import PrincipalError
 from ..state.store import DurableStateError
 from ..schemas import (SCHEMA_VERSIONS, ActionResultEnvelope, ApprovalDecision,
-                       CancellationRequest, ClientHello, ObservationEnvelope)
+                       CancellationRequest, ClientHello, ObservationEnvelope,
+                       ReconciliationRequest)
 from .protocol import (RemoteProtocolError, RemoteSessionClosed,
                        _MAX_MESSAGE_ID_LENGTH, _MAX_PAGE_URL_LENGTH, _copy_json,
                        _copy_wire, _event_sequence, _origin, _remote_args_echo,
                        _safe_payload)
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ChannelIngress:
@@ -242,6 +251,62 @@ class ChannelIngress:
             self._action_claims[action_id] = lease_id
             return {"claimed": True, "duplicate": False}
 
+    @staticmethod
+    def _validate_message_id(message_id: object) -> str:
+        if (not isinstance(message_id, str) or not message_id
+                or len(message_id) > _MAX_MESSAGE_ID_LENGTH
+                or any(not (char.isalnum() or char in "-_") for char in message_id)):
+            raise RemoteProtocolError(
+                "message_id must contain 1-128 letters, digits, '-' or '_'",
+                status=400,
+            )
+        return message_id
+
+    def _prune_pre_cancelled(self, now_ms: int) -> None:
+        expired = [mid for mid, expires_at in self._pre_cancelled_messages.items()
+                   if expires_at <= now_ms]
+        for mid in expired:
+            del self._pre_cancelled_messages[mid]
+
+    def _close_on_durable_failure(self) -> None:
+        self._closed = True
+        self._heartbeat_stop.set()
+        self._condition.notify_all()
+
+    def _record_message_durable(self, message_id: str, fingerprint: str) -> bool:
+        if self._durable_store is None:
+            return True
+        try:
+            return self._durable_store.message(self._owner, message_id, fingerprint)
+        except (DurableStateError, sqlite3.Error, OSError) as exc:
+            if _is_transient_sqlite_error(exc):
+                _LOGGER.warning(
+                    "transient durable store error accepting message %s (%s)",
+                    message_id, type(exc).__name__)
+                raise RemoteProtocolError(
+                    "durable session store is temporarily unavailable",
+                    code="gateway_error",
+                    status=503,
+                ) from exc
+            self._close_on_durable_failure()
+            raise RemoteSessionClosed("durable message commit failed") from exc
+
+    def _complete_message_durable(self, message_id: str, *,
+                                  raise_on_irrecoverable: bool) -> None:
+        if not message_id or self._durable_store is None:
+            return
+        try:
+            self._durable_store.transition(self._owner, message_id, "completed")
+        except (DurableStateError, sqlite3.Error, OSError) as exc:
+            if _is_transient_sqlite_error(exc):
+                _LOGGER.warning(
+                    "transient durable store error completing message %s (%s)",
+                    message_id, type(exc).__name__)
+                return
+            self._close_on_durable_failure()
+            if raise_on_irrecoverable:
+                raise RemoteSessionClosed("durable message transition failed") from exc
+
     def accept_message(self, message: dict, *, lease_id: str) -> dict:
         with self._condition:
             self._ensure_open()
@@ -250,13 +315,7 @@ class ChannelIngress:
             if not isinstance(message, dict) or set(message) != allowed:
                 raise RemoteProtocolError("message requires exactly message_id, text, and page_url", status=400)
             message_id, text = message["message_id"], message["text"]
-            if (not isinstance(message_id, str) or not message_id
-                    or len(message_id) > _MAX_MESSAGE_ID_LENGTH
-                    or any(not (char.isalnum() or char in "-_") for char in message_id)):
-                raise RemoteProtocolError(
-                    "message_id must contain 1-128 letters, digits, '-' or '_'",
-                    status=400,
-                )
+            self._validate_message_id(message_id)
             if not isinstance(text, str) or not text.strip() or len(text) > 2000:
                 raise RemoteProtocolError("message text must contain 1-2000 characters", status=400)
             if (not isinstance(message["page_url"], str)
@@ -273,15 +332,31 @@ class ChannelIngress:
                 return {"accepted": True, "duplicate": True}
             if len(self._message_digests) >= self.limits.max_messages:
                 self._capacity_exhausted("message")
-            if len(self._messages) >= self.limits.max_queued_messages:
+            now_ms = self._now_ms()
+            self._prune_pre_cancelled(now_ms)
+            pre_cancelled = message_id in self._pre_cancelled_messages
+            if not pre_cancelled and len(self._messages) >= self.limits.max_queued_messages:
                 raise RemoteProtocolError(
                     "session message queue is full",
                     code="backpressure",
                     status=429,
                 )
-            if self._durable_store is not None and not self._durable_store.message(
-                    self._owner, message_id, fingerprint):
+            if not self._record_message_durable(message_id, fingerprint):
                 return {"accepted": True, "duplicate": True}
+            if pre_cancelled:
+                self._pre_cancelled_messages.pop(message_id, None)
+                self._message_digests[message_id] = fingerprint
+                self._cancelled_message_ids.add(message_id)
+                self._completed_message_ids.add(message_id)
+                self._complete_message_durable(
+                    message_id, raise_on_irrecoverable=True)
+                self._append_event("progress", {
+                    "state": "cancelled",
+                    "message": progress_message("cancelled"),
+                    "message_id": message_id,
+                }, turn_id=message_id)
+                self._condition.notify_all()
+                return {"accepted": True, "duplicate": False, "cancelled": True}
             self._message_digests[message_id] = fingerprint
             self._message_leases[message_id] = lease_id
             if self.turn_events is not None:
@@ -314,10 +389,21 @@ class ChannelIngress:
             if request.session_id != self.session_id:
                 raise RemoteProtocolError(
                     "cancellation belongs to another session", status=400)
+            self._validate_message_id(request.message_id)
             if request.message_id not in self._message_digests:
-                raise RemoteProtocolError(
-                    "cancellation names an unknown message",
-                    code="unknown_message", status=404)
+                now_ms = self._now_ms()
+                self._prune_pre_cancelled(now_ms)
+                if request.message_id in self._pre_cancelled_messages:
+                    self._pre_cancelled_messages[request.message_id] = (
+                        now_ms + self._pre_cancel_ttl_ms)
+                    return {"accepted": True, "duplicate": True, "pre_cancelled": True}
+                while len(self._pre_cancelled_messages) >= self._pre_cancel_max_entries:
+                    self._pre_cancelled_messages.pop(
+                        next(iter(self._pre_cancelled_messages)))
+                self._pre_cancelled_messages[request.message_id] = (
+                    now_ms + self._pre_cancel_ttl_ms)
+                self._condition.notify_all()
+                return {"accepted": True, "duplicate": False, "pre_cancelled": True}
             if request.message_id in self._completed_message_ids:
                 return {"accepted": False, "duplicate": False, "completed": True}
             duplicate = request.message_id in self._cancelled_message_ids
@@ -352,13 +438,8 @@ class ChannelIngress:
                     # turn that was never going to run.
                     self._messages.remove(queued)
                     self._completed_message_ids.add(request.message_id)
-                    if self._durable_store is not None:
-                        try:
-                            self._durable_store.transition(
-                                self._owner, request.message_id, "completed")
-                        except (DurableStateError, sqlite3.Error, OSError):
-                            self._closed = True
-                            self._heartbeat_stop.set()
+                    self._complete_message_durable(
+                        request.message_id, raise_on_irrecoverable=True)
                     self._append_event("progress", {
                         "state": "cancelled",
                         "message": progress_message("cancelled"),
@@ -404,16 +485,14 @@ class ChannelIngress:
                 self._ensure_open()
             except RemoteSessionClosed:
                 return True
+            except RemoteProtocolError:
+                pass
             return message_id in self._cancelled_message_ids
 
     def complete_message(self, message_id: str) -> None:
         with self._condition:
-            if message_id and self._durable_store is not None:
-                try:
-                    self._durable_store.transition(self._owner, message_id, "completed")
-                except (DurableStateError, sqlite3.Error, OSError):
-                    self._closed = True
-                    self._heartbeat_stop.set()
+            self._complete_message_durable(
+                message_id, raise_on_irrecoverable=False)
             if message_id:
                 self._completed_message_ids.add(message_id)
             if self._active_message_id == message_id:
@@ -488,3 +567,145 @@ class ChannelIngress:
             }, turn_id=request.turn_id)
             self._condition.notify_all()
             return {"accepted": True, "duplicate": False}
+
+    def _find_reconciliation_target(self, turn_id: str, proposal_digest: str) -> tuple[str, str]:
+        resolved_turn = turn_id
+        resolved_proposal = proposal_digest
+        if resolved_turn and not resolved_proposal:
+            resolved_proposal = self._turn_proposal_digests.get(resolved_turn, "")
+            if not resolved_proposal:
+                for event in reversed(self._events):
+                    if (event.kind == "progress" and event.turn_id == resolved_turn
+                            and event.payload.get("state") == "indeterminate"):
+                        candidate = event.payload.get("proposal_digest")
+                        if isinstance(candidate, str) and candidate:
+                            resolved_proposal = candidate
+                            break
+            if not resolved_proposal and self.recovered_history:
+                for record in reversed(self.recovered_history):
+                    payload = record.get("payload") or {}
+                    if (record.get("kind") == "progress"
+                            and record.get("turn_id") == resolved_turn
+                            and payload.get("state") == "indeterminate"):
+                        candidate = payload.get("proposal_digest")
+                        if isinstance(candidate, str) and candidate:
+                            resolved_proposal = candidate
+                            break
+        elif resolved_proposal and not resolved_turn:
+            for tid, digest in self._turn_proposal_digests.items():
+                if digest == resolved_proposal:
+                    resolved_turn = tid
+                    break
+            if not resolved_turn:
+                for event in reversed(self._events):
+                    if (event.kind == "progress"
+                            and event.payload.get("state") == "indeterminate"
+                            and event.payload.get("proposal_digest") == resolved_proposal):
+                        resolved_turn = event.turn_id
+                        break
+        elif resolved_turn and resolved_proposal:
+            known = self._turn_proposal_digests.get(resolved_turn)
+            if known and known != resolved_proposal:
+                raise RemoteProtocolError(
+                    "reconciliation turn_id does not match proposal_digest",
+                    code="invalid_message", status=400)
+        return resolved_turn, resolved_proposal
+
+    @staticmethod
+    def _normalize_reconciliation(raw: dict) -> dict:
+        if not isinstance(raw, dict):
+            raise RemoteProtocolError("reconciliation handler returned invalid response", status=500)
+        outcome = raw.get("outcome")
+        settled = raw.get("settled")
+        if outcome not in {"completed", "failed", "unknown"} or type(settled) is not bool:
+            raise RemoteProtocolError("reconciliation outcome is invalid", status=500)
+        if outcome == "unknown" and settled:
+            settled = False
+        labels = panel_contract()["label_keys"]
+        default_message = {
+            "completed": labels["reconcileCompleted"] if settled else labels["reconcileUnknown"],
+            "failed": labels["reconcileNotApplied"] if settled else labels["reconcileUnknown"],
+            "unknown": labels["reconcileUnknown"],
+        }[outcome]
+        raw_message = raw.get("message") or raw.get("reason") or default_message
+        text = redact_sensitive_assignments(redact_session_handoffs(str(raw_message)))
+        text = "".join(ch for ch in text if ch == "\n" or ord(ch) >= 32).strip()
+        text = text[:panel_limits()["notice_max_chars"]]
+        result: dict = {"outcome": outcome, "settled": settled}
+        if text:
+            result["message"] = text
+        return result
+
+    def accept_reconciliation(self, request: ReconciliationRequest, *, lease_id: str) -> dict:
+        """Run read-only reconciliation for an indeterminate write and update timeline state."""
+        with self._condition:
+            self._ensure_open()
+            self._require_lease(lease_id)
+            request = _copy_wire(request)
+            if request.session_id != self.session_id:
+                raise RemoteProtocolError(
+                    "reconciliation belongs to another session", status=400)
+            turn_id, proposal_digest = self._find_reconciliation_target(
+                request.turn_id, request.proposal_digest)
+            cached = (
+                (self._reconciliations.get(f"p:{proposal_digest}") if proposal_digest else None)
+                or (self._reconciliations.get(f"t:{turn_id}") if turn_id else None)
+            )
+            if cached is not None and cached.get("settled") is True:
+                return _copy_json(cached)
+            reconciler = self._reconciler
+
+        if reconciler is None:
+            labels = panel_contract()["label_keys"]
+            raw = {"outcome": "unknown", "settled": False, "message": labels["reconcileUnknown"]}
+        else:
+            resolved_req = ReconciliationRequest(
+                schema_version=request.schema_version,
+                session_id=request.session_id,
+                turn_id=turn_id,
+                proposal_digest=proposal_digest,
+            )
+            try:
+                raw = reconciler(resolved_req)
+            except RemoteProtocolError:
+                raise
+            except MutationJournalError as exc:
+                raise RemoteProtocolError(
+                    str(exc), code="unknown_reconciliation", status=404) from exc
+            except PrincipalError as exc:
+                raise RemoteProtocolError(
+                    "session principal is no longer valid",
+                    code="principal_expired", status=401) from exc
+
+        projection = self._normalize_reconciliation(raw)
+        with self._condition:
+            if proposal_digest:
+                self._reconciliations[f"p:{proposal_digest}"] = _copy_json(projection)
+            if turn_id:
+                self._reconciliations[f"t:{turn_id}"] = _copy_json(projection)
+            if turn_id and proposal_digest:
+                self._turn_proposal_digests[turn_id] = proposal_digest
+            for idx, event in enumerate(self._events):
+                if (event.kind == "progress"
+                        and event.payload.get("state") == "indeterminate"
+                        and ((turn_id and event.turn_id == turn_id)
+                             or (proposal_digest
+                                 and event.payload.get("proposal_digest") == proposal_digest))):
+                    updated_payload = {
+                        **event.payload,
+                        "reconciliation": _copy_json(projection),
+                        **({"proposal_digest": proposal_digest}
+                           if proposal_digest and not event.payload.get("proposal_digest")
+                           else {}),
+                    }
+                    self._events[idx] = replace(event, payload=updated_payload)
+            for entry in self._panel_entries:
+                if (entry.get("panel_state") == "indeterminate"
+                        and ((turn_id and entry.get("turn_id") == turn_id)
+                             or (proposal_digest
+                                 and entry.get("proposal_digest") == proposal_digest))):
+                    entry["reconciliation"] = _copy_json(projection)
+                    if proposal_digest and not entry.get("proposal_digest"):
+                        entry["proposal_digest"] = proposal_digest
+            self._condition.notify_all()
+        return _copy_json(projection)

@@ -69,7 +69,13 @@ class ApprovalWatch:
                  principal: PrincipalContext | None, session_id: str, turn_id: str,
                  business_approval=None, operation_confirmation=None,
                  cancelled: Callable[[], bool],
-                 approval_hold_s: int = 0, operation_hold_s: int = 0):
+                 approval_hold_s: int = 0, operation_hold_s: int = 0,
+                 initial_operation_granted: bool = False,
+                 on_operation_granted: Callable[[], None] | None = None):
+        if not isinstance(initial_operation_granted, bool):
+            raise TypeError("initial_operation_granted must be boolean")
+        if on_operation_granted is not None and not callable(on_operation_granted):
+            raise TypeError("on_operation_granted must be callable or None")
         self.ledger = ledger
         self.run_id = run_id
         self.principal = principal
@@ -78,6 +84,7 @@ class ApprovalWatch:
         self.business_approval = business_approval
         self.operation_confirmation = operation_confirmation
         self.cancelled = cancelled
+        self._on_operation_granted = on_operation_granted
         self.deadline_ms = 0
         #: The longest a person may take over each kind of answer, and how long they have
         #: taken this turn. Time spent waiting on a person is theirs, not the assistant's:
@@ -96,7 +103,7 @@ class ApprovalWatch:
         }
         self.operation_counts = {"requested": 0, "confirmed": 0, "not_confirmed": 0}
         #: Whether the person has let the assistant work the page during this turn.
-        self.operation_granted = False
+        self.operation_granted = initial_operation_granted
         #: The operation the card was answered for, until the next dispatch settles it.
         self.answered_for: tuple[str, str] | None = None
 
@@ -389,6 +396,8 @@ class ApprovalWatch:
         self.answered_for = (action, url)
         self.ledger.append("operation_confirmed", step=step, tool=action,
                            approval_id=str(getattr(grant, "approval_id", ""))[:200])
+        if self._on_operation_granted is not None:
+            self._on_operation_granted()
         return "", ""
 
     def answered_just_now(self, *, action: str, url: str) -> bool:

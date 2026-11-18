@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 import threading
@@ -204,6 +205,11 @@ class BusinessToolRuntime:
         self._mutation_lock = threading.RLock()
         self._prepared_mutations: dict[
             str, tuple[BusinessMutationProposal, int]] = {}
+
+    @property
+    def mutation_journal(self) -> MutationJournal:
+        """The mutation journal backing prepare/claim/finish and reconciliation."""
+        return self._mutation_journal
 
     @classmethod
     def from_registry(cls, registry, *, skill_registry=None, **kwargs):
@@ -579,8 +585,14 @@ class BusinessToolRuntime:
             if on_claimed is not None and not callable(on_claimed):
                 raise TypeError("on_claimed must be callable or None")
             try:
-                self._mutation_journal.claim(
-                    digest, proposal.operation_context_digest)
+                claim_params = inspect.signature(self._mutation_journal.claim).parameters
+                if "dispatch_lease_expires_at" in claim_params:
+                    self._mutation_journal.claim(
+                        digest, proposal.operation_context_digest,
+                        dispatch_lease_expires_at=prepared_entry[1])
+                else:
+                    self._mutation_journal.claim(
+                        digest, proposal.operation_context_digest)
             except MutationClaimError as exc:
                 raise BusinessMutationBlockedError(
                     str(exc), reason=exc.reason, state=exc.state) from exc

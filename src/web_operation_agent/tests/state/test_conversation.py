@@ -113,6 +113,19 @@ class ConversationStateTests(unittest.TestCase):
         self.assertNotIn(
             "prior_business_facts", state.model_context()["prior_turns"][0])
 
+    def test_page_operation_consent_stays_out_of_model_context_and_resets_on_clear(self):
+        state = ConversationState()
+        self.assertFalse(state.page_operation_granted)
+        state.grant_page_operation()
+        self.assertTrue(state.page_operation_granted)
+        self.assertIsNone(state.model_context())
+        state.record(
+            message_id="m1", user_text="Open orders", assistant_text="Opened.",
+            status="finished")
+        self.assertNotIn("page_operation_granted", state.model_context())
+        self.assertEqual(state.clear(), 1)
+        self.assertFalse(state.page_operation_granted)
+
 
 class DurableConversationStateTests(unittest.TestCase):
     def test_restart_restores_bounded_references_without_execution_authority(self):
@@ -186,6 +199,39 @@ class DurableConversationStateTests(unittest.TestCase):
                 path, "old-session").model_context())
             self.assertEqual(SQLiteConversationState(
                 path, "current-session").turn_count, 1)
+
+    def test_sqlite_persists_page_operation_granted_and_resets_on_clear(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "conversation.sqlite3"
+            state = SQLiteConversationState(path, "op-session")
+            self.assertFalse(state.page_operation_granted)
+            state.grant_page_operation()
+            self.assertTrue(state.page_operation_granted)
+
+            reopened = SQLiteConversationState(path, "op-session")
+            self.assertTrue(reopened.page_operation_granted)
+            self.assertIsNone(reopened.model_context())
+
+            reopened.clear()
+            self.assertFalse(reopened.page_operation_granted)
+            self.assertFalse(
+                SQLiteConversationState(path, "op-session").page_operation_granted)
+
+    def test_sqlite_upgrades_legacy_table_without_page_operation_column(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "legacy.sqlite3"
+            with sqlite3.connect(path) as db:
+                db.execute(
+                    "CREATE TABLE conversation_contexts ("
+                    "conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated INTEGER NOT NULL)")
+                db.execute(
+                    "INSERT INTO conversation_contexts VALUES (?, ?, ?)",
+                    ("legacy-session", '{"schema_version":1,"prior_turns":[]}', 1000))
+            state = SQLiteConversationState(path, "legacy-session")
+            self.assertFalse(state.page_operation_granted)
+            state.page_operation_granted = True
+            self.assertTrue(
+                SQLiteConversationState(path, "legacy-session").page_operation_granted)
 
 
 if __name__ == "__main__":

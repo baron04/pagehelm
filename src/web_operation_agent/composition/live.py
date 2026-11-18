@@ -22,8 +22,9 @@ from ..origins import validate_page_write_guard
 from ..privacy import redact_sensitive_assignments, redact_session_handoffs
 from ..execution.product import AgentTurnError
 from ..business.errors import BusinessToolAuthenticationError
+from ..business.operations import online_reconcile
 from ..transport.channel import RemoteSessionChannel, RemoteSessionLimits, SessionGrant
-from ..transport.protocol import RemoteSessionClosed
+from ..transport.protocol import RemoteProtocolError, RemoteSessionClosed
 from ..transport.registry import RemoteSessionRegistry
 from ..state.traceview import build_trace_case, render_trace_html, write_trace_bundle
 
@@ -95,8 +96,64 @@ class LiveConversationRunner:
             if channel.turn_events is not None and channel.turn_events is not events:
                 raise ValueError("the channel already has a different event collector")
             channel.turn_events = events
+        self._register_reconciler(channel)
         self._outcomes: queue.Queue[LiveTurnOutcome] = queue.Queue()
         self.turns_completed = 0
+
+    def _register_reconciler(self, channel: RemoteSessionChannel) -> None:
+        if self.executor is None or getattr(channel, "_reconciler", None) is not None:
+            return
+        application = getattr(self.executor, "application", None)
+        business_tools = getattr(self.executor, "business_tools", None)
+        journal = (getattr(business_tools, "mutation_journal", None)
+                   or getattr(business_tools, "_mutation_journal", None))
+        if application is None or journal is None:
+            return
+        config = getattr(self.executor, "config", None)
+        ledger_factory = getattr(self.executor, "ledger_factory", None)
+
+        def reconcile_request(request) -> dict:
+            proposal_digest = request.proposal_digest
+            if not proposal_digest:
+                raise RemoteProtocolError(
+                    "reconciliation requires a bound proposal_digest",
+                    code="unknown_reconciliation",
+                    status=404,
+                )
+            principal = channel.principal
+            result = online_reconcile(
+                journal,
+                proposal_digest,
+                application=application,
+                principal=principal,
+            )
+            if config is not None and callable(ledger_factory):
+                run_id = f"reconcile-{request.turn_id or proposal_digest[:12]}"
+                ledger = ledger_factory(
+                    config.ledger_path,
+                    run_id,
+                    base={
+                        "session_id": channel.session_id,
+                        "turn_id": request.turn_id,
+                        "tenant_digest": (
+                            principal.audit_projection().get("tenant_digest", "")
+                            if principal is not None else ""
+                        ),
+                    },
+                )
+                ledger.append(
+                    "business_mutation_reconciled",
+                    proposal_digest=proposal_digest,
+                    outcome=result["outcome"],
+                    settled=result["settled"],
+                    requires_human=result["requires_human"],
+                    dispatches=0,
+                )
+            return result
+
+        set_reconciler = getattr(channel, "set_reconciler", None)
+        if callable(set_reconciler):
+            set_reconciler(reconcile_request)
 
     def _execute_turn(self, message: dict, turn: int) -> object:
         if self.executor is not None:
@@ -170,6 +227,9 @@ class LiveConversationRunner:
                         # observes closure after any messages already accepted by the channel.
                         pass
                     continue
+                proposal_digest = getattr(result, "proposal_digest", "")
+                if proposal_digest and hasattr(self.channel, "record_turn_proposal"):
+                    self.channel.record_turn_proposal(message_id, proposal_digest)
                 outcomes.append(outcome)
                 self._record(outcome)
             finally:
@@ -348,7 +408,7 @@ class LiveProductSession:
         try:
             self.channel.validate_live()
             channel_ready = True
-        except RemoteSessionClosed:
+        except (RemoteSessionClosed, RemoteProtocolError):
             channel_ready = False
         ready = (not self._closed and channel_ready and thread is not None
                  and thread.is_alive() and self._error is None)

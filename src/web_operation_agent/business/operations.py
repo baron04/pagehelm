@@ -12,34 +12,37 @@ protocol from memory at two in the morning will get it wrong.
 
 What this module deliberately cannot do is resolve anything on its own. `reconcile` needs a
 bound application and a live principal -- an authorised read under the original actor -- and
-only a deployment has both, which is why the closing step lives in an application's own
-package (see `web_operation_agent_odoo.demo.settle`).
+only a deployment has both, which is why the adapter-specific reconciliation port lives in
+an application's own package.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import time
 from pathlib import Path
 
 from ..composition.binding import BoundApplication
 from ..state.identity import PrincipalContext
-from .mutation import MutationJournalError, SQLiteMutationJournal
+from .mutation import MutationJournal, MutationJournalError, SQLiteMutationJournal
 
 
-def reconcile(journal: SQLiteMutationJournal, proposal_digest: str, *,
-              application: BoundApplication, principal: PrincipalContext) -> dict:
+def reconcile(journal: MutationJournal, proposal_digest: str, *,
+              application: BoundApplication,
+              principal: PrincipalContext | None) -> dict:
     intent = journal.get(proposal_digest)
     if intent is None or intent.state not in {"dispatching", "indeterminate"}:
         raise MutationJournalError("reconciliation requires an unresolved intent")
     application.ports.identity.validate(
         principal, application_id=application.descriptor.application_id)
     metadata = json.loads(intent.reconciliation_json)
-    identity = principal.audit_projection()
+    identity = principal.audit_projection() if principal is not None else {}
     expected_identity = {key: identity[key] for key in
-                         ("tenant_digest", "workspace_digest", "actor_digest")}
+                         ("tenant_digest", "workspace_digest", "actor_digest")
+                         if key in identity}
     if (metadata.get("application_id") != application.descriptor.application_id
-            or metadata.get("identity") != expected_identity):
+            or metadata.get("identity", {}) != expected_identity):
         raise MutationJournalError("reconciliation identity does not match the original actor")
     verdict = application.ports.reconciliation.reconcile(
         metadata["tool"], metadata["args"], evidence={"result_digest": intent.result_digest},
@@ -49,6 +52,78 @@ def reconcile(journal: SQLiteMutationJournal, proposal_digest: str, *,
     return {"proposal_digest": proposal_digest, "updated_at": intent.updated_at,
             "outcome": verdict.outcome, "requires_human": verdict.requires_human,
             "reason": verdict.reason, "dispatches": 0, "journal_changed": False}
+
+
+def online_reconcile(journal: MutationJournal, proposal_digest: str, *,
+                     application: BoundApplication,
+                     principal: PrincipalContext | None,
+                     now_ms: int | None = None) -> dict:
+    """Run read-only reconciliation and settle via lease/CAS when safe and decisive."""
+    intent = journal.get(proposal_digest)
+    if intent is None:
+        raise MutationJournalError("reconciliation requires an existing intent")
+    if intent.state in {"completed", "failed"}:
+        return {
+            "proposal_digest": proposal_digest,
+            "outcome": intent.state,
+            "requires_human": False,
+            "settled": True,
+            "reason": "already settled",
+            "dispatches": 0,
+            "journal_changed": False,
+        }
+    report = reconcile(journal, proposal_digest, application=application, principal=principal)
+    outcome = report["outcome"]
+    requires_human = report["requires_human"]
+    reason = report["reason"]
+    settled = False
+    journal_changed = False
+    now = int(time.time() * 1000) if now_ms is None else now_ms
+    if outcome in {"completed", "failed"} and not requires_human:
+        lease_active = (
+            intent.state == "dispatching"
+            and (intent.dispatch_lease_expires_at == 0
+                 or intent.dispatch_lease_expires_at > now)
+        )
+        if not lease_active:
+            operator_digest = (
+                principal.binding_digest if principal is not None
+                else hashlib.sha256(b"anonymous-online-reconciliation").hexdigest()
+            )
+            evidence_payload = json.dumps({
+                "outcome": outcome,
+                "proposal_digest": proposal_digest,
+                "reason": reason,
+                "updated_at": report["updated_at"],
+            }, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+            evidence_digest = hashlib.sha256(evidence_payload).hexdigest()
+            try:
+                journal.resolve(
+                    proposal_digest,
+                    expected_updated_at=report["updated_at"],
+                    outcome=outcome,
+                    operator_digest=operator_digest,
+                    evidence_digest=evidence_digest,
+                    writer_stopped=False,
+                    now_ms=now,
+                    dry_run=False,
+                )
+                settled = True
+                journal_changed = True
+            except MutationJournalError:
+                latest = journal.get(proposal_digest)
+                if latest is not None and latest.state in {"completed", "failed"}:
+                    outcome = latest.state
+                    settled = True
+    return {
+        "proposal_digest": proposal_digest,
+        "outcome": outcome,
+        "requires_human": requires_human,
+        "settled": settled,
+        "reason": reason,
+        "dispatches": 0,
+        "journal_changed": journal_changed,
+    }
 
 
 def unresolved_report(intent, *, journal_path: Path) -> dict:
@@ -97,6 +172,8 @@ def main(argv=None) -> int:
     resolve.add_argument("--evidence", required=True, type=Path)
     resolve.add_argument("--writer-stopped", action="store_true",
                          help="attest that the old writer and upstream request can no longer execute")
+    resolve.add_argument("--lease-expired", action="store_true",
+                         help="allow CAS resolution when the dispatch lease has expired")
     resolve.add_argument("--apply", action="store_true", help="apply; default is dry-run")
     args = parser.parse_args(argv)
     if not args.journal.is_file():
@@ -106,6 +183,8 @@ def main(argv=None) -> int:
         result = [unresolved_report(item, journal_path=args.journal)
                   for item in journal.unresolved()]
     else:
+        if not args.writer_stopped and not args.lease_expired:
+            parser.error("provide --writer-stopped or --lease-expired")
         raw = args.evidence.read_bytes()
         if not raw or len(raw) > 1_048_576 or not args.operator.strip():
             parser.error("provide a nonempty operator and evidence file of at most 1 MiB")

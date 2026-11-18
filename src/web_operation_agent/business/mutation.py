@@ -73,6 +73,7 @@ class MutationIntent:
     result_digest: str = ""
     business_key: str = ""
     reconciliation_json: str = "{}"
+    dispatch_lease_expires_at: int = 0
 
     def __post_init__(self) -> None:
         if not _DIGEST.fullmatch(self.proposal_digest):
@@ -82,7 +83,7 @@ class MutationIntent:
             raise MutationJournalError("operation context digest is invalid")
         if self.state not in _STATES:
             raise MutationJournalError("mutation intent state is invalid")
-        for name in ("expires_at", "updated_at"):
+        for name in ("expires_at", "updated_at", "dispatch_lease_expires_at"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise MutationJournalError(f"{name} must be a non-negative integer")
@@ -118,6 +119,30 @@ def _now(value: int | None) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise MutationJournalError("now_ms must be a non-negative integer")
     return value
+
+
+def _resolve_dispatch_lease(
+    now: int,
+    *,
+    dispatch_lease_ms: int | None = None,
+    dispatch_lease_expires_at: int | None = None,
+) -> int:
+    if dispatch_lease_ms is not None and dispatch_lease_expires_at is not None:
+        raise MutationJournalError(
+            "supply at most one of dispatch_lease_ms and dispatch_lease_expires_at")
+    if dispatch_lease_expires_at is not None:
+        if (isinstance(dispatch_lease_expires_at, bool)
+                or not isinstance(dispatch_lease_expires_at, int)
+                or dispatch_lease_expires_at < 0):
+            raise MutationJournalError("dispatch_lease_expires_at must be a non-negative integer")
+        return dispatch_lease_expires_at
+    if dispatch_lease_ms is not None:
+        if (isinstance(dispatch_lease_ms, bool)
+                or not isinstance(dispatch_lease_ms, int)
+                or dispatch_lease_ms <= 0):
+            raise MutationJournalError("dispatch_lease_ms must be a positive integer")
+        return now + dispatch_lease_ms
+    return 0
 
 
 def merged_reconciliation(stored: str, addition: dict | None) -> str:
@@ -217,8 +242,15 @@ class MemoryMutationJournal:
                 expires_at, now, business_key=business_key, reconciliation_json=encoded)
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
-              now_ms: int | None = None) -> None:
+              now_ms: int | None = None,
+              dispatch_lease_ms: int | None = None,
+              dispatch_lease_expires_at: int | None = None) -> None:
         now = _now(now_ms)
+        lease_until = _resolve_dispatch_lease(
+            now,
+            dispatch_lease_ms=dispatch_lease_ms,
+            dispatch_lease_expires_at=dispatch_lease_expires_at,
+        )
         with self._lock:
             intent = _require_claimable(
                 self._records.get(proposal_digest), operation_context_digest, now)
@@ -230,7 +262,8 @@ class MemoryMutationJournal:
                     "business key has an in-flight or unresolved mutation",
                     reason="business_key_unresolved")
             self._records[proposal_digest] = replace(
-                intent, state="dispatching", updated_at=now)
+                intent, state="dispatching", updated_at=now,
+                dispatch_lease_expires_at=lease_until)
 
     def finish(self, proposal_digest: str, state: str, *,
                result_digest: str = "", reconciliation: dict | None = None,
@@ -242,10 +275,15 @@ class MemoryMutationJournal:
             intent = self._records.get(proposal_digest)
             if intent is None or intent.state != "dispatching":
                 raise MutationJournalError("only a dispatching mutation can finish")
+            lease_until = (
+                min(intent.dispatch_lease_expires_at, now)
+                if intent.dispatch_lease_expires_at > 0 else 0
+            )
             self._records[proposal_digest] = replace(
                 intent, state=state, updated_at=now, result_digest=result_digest,
                 reconciliation_json=merged_reconciliation(
-                    intent.reconciliation_json, reconciliation))
+                    intent.reconciliation_json, reconciliation),
+                dispatch_lease_expires_at=lease_until)
 
     def _evict(self, now: int, retain_resolved_ms: int) -> tuple[int, int]:
         expired = [digest for digest, intent in self._records.items()
@@ -275,6 +313,39 @@ class MemoryMutationJournal:
     def get(self, proposal_digest: str) -> MutationIntent | None:
         with self._lock:
             return self._records.get(proposal_digest)
+
+    def resolve(self, proposal_digest: str, *, expected_updated_at: int,
+                outcome: str, operator_digest: str, evidence_digest: str,
+                writer_stopped: bool = False, now_ms: int | None = None,
+                dry_run: bool = True) -> dict:
+        """CAS resolution under stopped writer or expired dispatch lease."""
+        if outcome not in {"completed", "failed"}:
+            raise MutationJournalError("resolution requires definite evidence")
+        if not isinstance(writer_stopped, bool) or not isinstance(dry_run, bool):
+            raise MutationJournalError("writer_stopped and dry_run must be boolean")
+        if not all(_DIGEST.fullmatch(value) for value in (operator_digest, evidence_digest)):
+            raise MutationJournalError("resolution requires operator and evidence digests")
+        now = _now(now_ms)
+        with self._lock:
+            intent = self._records.get(proposal_digest)
+            if intent is None or intent.state not in {"dispatching", "indeterminate"}:
+                raise MutationJournalError("resolution requires an unresolved intent")
+            lease_expired = (
+                intent.dispatch_lease_expires_at > 0
+                and intent.dispatch_lease_expires_at <= now
+            )
+            if not writer_stopped and not lease_expired:
+                raise MutationJournalError(
+                    "resolution requires definite evidence and a stopped writer or expired dispatch lease")
+            if intent.updated_at != expected_updated_at:
+                raise MutationJournalError("resolution evidence is stale")
+            plan = {"proposal_digest": proposal_digest, "from": intent.state,
+                    "to": outcome, "dry_run": dry_run, "dispatches": 0,
+                    "lease_expired": lease_expired}
+            if not dry_run:
+                self._records[proposal_digest] = replace(
+                    intent, state=outcome, updated_at=now, result_digest=evidence_digest)
+            return plan
 
 
 class SQLiteMutationJournal:
@@ -330,6 +401,9 @@ class SQLiteMutationJournal:
             if "reconciliation_json" not in columns:
                 connection.execute("ALTER TABLE mutation_intents ADD COLUMN "
                                    "reconciliation_json TEXT NOT NULL DEFAULT '{}'")
+            if "dispatch_lease_expires_at" not in columns:
+                connection.execute("ALTER TABLE mutation_intents ADD COLUMN "
+                                   "dispatch_lease_expires_at INTEGER NOT NULL DEFAULT 0")
             connection.execute("CREATE TABLE IF NOT EXISTS mutation_resolutions ("
                                "proposal_digest TEXT PRIMARY KEY, expected_updated_at INTEGER NOT NULL, "
                                "outcome TEXT NOT NULL, operator_digest TEXT NOT NULL, "
@@ -378,8 +452,15 @@ class SQLiteMutationJournal:
             connection.commit()
 
     def claim(self, proposal_digest: str, operation_context_digest: str, *,
-              now_ms: int | None = None) -> None:
+              now_ms: int | None = None,
+              dispatch_lease_ms: int | None = None,
+              dispatch_lease_expires_at: int | None = None) -> None:
         now = _now(now_ms)
+        lease_until = _resolve_dispatch_lease(
+            now,
+            dispatch_lease_ms=dispatch_lease_ms,
+            dispatch_lease_expires_at=dispatch_lease_expires_at,
+        )
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -398,9 +479,10 @@ class SQLiteMutationJournal:
                         "business key has an in-flight or unresolved mutation",
                         reason="business_key_unresolved")
             changed = connection.execute(
-                "UPDATE mutation_intents SET state = 'dispatching', updated_at = ? "
+                "UPDATE mutation_intents SET state = 'dispatching', updated_at = ?, "
+                "dispatch_lease_expires_at = ? "
                 "WHERE proposal_digest = ? AND state = 'prepared'",
-                (now, proposal_digest)).rowcount
+                (now, lease_until, proposal_digest)).rowcount
             if changed != 1:  # BEGIN IMMEDIATE makes this an internal invariant.
                 raise MutationJournalError("mutation claim lost its prepared row")
             connection.commit()
@@ -429,8 +511,11 @@ class SQLiteMutationJournal:
                 raise
             changed = connection.execute(
                 "UPDATE mutation_intents SET state = ?, updated_at = ?, result_digest = ?, "
-                "reconciliation_json = ? WHERE proposal_digest = ? AND state = 'dispatching'",
-                (state, now, result_digest, encoded, proposal_digest)).rowcount
+                "reconciliation_json = ?, "
+                "dispatch_lease_expires_at = CASE WHEN dispatch_lease_expires_at > 0 "
+                "THEN MIN(dispatch_lease_expires_at, ?) ELSE 0 END "
+                "WHERE proposal_digest = ? AND state = 'dispatching'",
+                (state, now, result_digest, encoded, now, proposal_digest)).rowcount
             if changed != 1:
                 connection.rollback()
                 raise MutationJournalError("only a dispatching mutation can finish")
@@ -482,36 +567,51 @@ class SQLiteMutationJournal:
 
     def resolve(self, proposal_digest: str, *, expected_updated_at: int,
                 outcome: str, operator_digest: str, evidence_digest: str,
-                writer_stopped: bool, dry_run: bool = True) -> dict:
-        """Operator-only CAS resolution; never retries a write or restores an approval.
+                writer_stopped: bool = False, now_ms: int | None = None,
+                dry_run: bool = True) -> dict:
+        """Operator or lease-expired online CAS resolution; never retries a write.
 
-        A verified stopped writer is required even for indeterminate records: a timed-out
-        upstream request may still complete. Evidence must establish a definitive result.
+        Resolution requires either a verified stopped writer or an expired dispatch lease
+        (`dispatch_lease_expires_at <= now_ms`), plus definite read-only evidence.
         """
-        if outcome not in {"completed", "failed"} or writer_stopped is not True:
-            raise MutationJournalError("resolution requires definite evidence and a stopped writer")
-        if not isinstance(dry_run, bool):
-            raise MutationJournalError("dry_run must be boolean")
+        if outcome not in {"completed", "failed"}:
+            raise MutationJournalError("resolution requires definite evidence")
+        if not isinstance(writer_stopped, bool) or not isinstance(dry_run, bool):
+            raise MutationJournalError("writer_stopped and dry_run must be boolean")
         if not all(_DIGEST.fullmatch(value) for value in (operator_digest, evidence_digest)):
             raise MutationJournalError("resolution requires operator and evidence digests")
+        now = _now(now_ms)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT * FROM mutation_intents WHERE proposal_digest = ?",
                                      (proposal_digest,)).fetchone()
             if row is None or row["state"] not in {"dispatching", "indeterminate"}:
                 raise MutationJournalError("resolution requires an unresolved intent")
+            lease_expired = (
+                row["dispatch_lease_expires_at"] > 0
+                and row["dispatch_lease_expires_at"] <= now
+            )
+            if not writer_stopped and not lease_expired:
+                raise MutationJournalError(
+                    "resolution requires definite evidence and a stopped writer or expired dispatch lease")
             if row["updated_at"] != expected_updated_at:
                 raise MutationJournalError("resolution evidence is stale")
             plan = {"proposal_digest": proposal_digest, "from": row["state"],
-                    "to": outcome, "dry_run": dry_run, "dispatches": 0}
+                    "to": outcome, "dry_run": dry_run, "dispatches": 0,
+                    "lease_expired": lease_expired}
             if not dry_run:
-                now = _now(None)
+                changed = connection.execute(
+                    "UPDATE mutation_intents SET state = ?, updated_at = ?, "
+                    "result_digest = ? WHERE proposal_digest = ? AND updated_at = ? "
+                    "AND state IN ('dispatching', 'indeterminate')",
+                    (outcome, now, evidence_digest, proposal_digest, expected_updated_at)
+                ).rowcount
+                if changed != 1:
+                    connection.rollback()
+                    raise MutationJournalError("resolution lost its CAS race")
                 connection.execute("INSERT INTO mutation_resolutions VALUES (?, ?, ?, ?, ?, ?)",
                                    (proposal_digest, expected_updated_at, outcome,
                                     operator_digest, evidence_digest, now))
-                connection.execute("UPDATE mutation_intents SET state = ?, updated_at = ?, "
-                                   "result_digest = ? WHERE proposal_digest = ?",
-                                   (outcome, now, evidence_digest, proposal_digest))
             connection.commit()
             return plan
 

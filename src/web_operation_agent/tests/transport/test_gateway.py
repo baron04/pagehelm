@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import dataclasses
+import gzip
+import hashlib
+import io
 import json
+import socket
+import tempfile
 import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
 from unittest import mock
 
 from web_operation_agent.transport import (BrowserExecutor, TransportError, TurnCancelled)
@@ -28,6 +34,7 @@ from web_operation_agent.schemas import (
     ElementRef,
     ObservationEnvelope,
     PageObservation,
+    ReconciliationRequest,
 )
 
 from web_operation_agent.tests.transport.support import (
@@ -454,6 +461,140 @@ class GatewayTests(unittest.TestCase):
         )
         self.assertEqual(normalized["pageControllerModule"],
                          "http://APP.TEST:80/page-controller.js")
+
+    def test_pre_cancellation_roundtrip_via_gateway(self):
+        sid = self.grant.session_id
+        _, _, raw_hello = self.request(
+            "POST", f"/v1/sessions/{sid}/hello", hello(sid).to_json())
+        self.lease = json.loads(raw_hello)["lease_id"]
+        cancel_body = CancellationRequest(1, sid, "race-http-1").to_json()
+        status, _, raw = self.request(
+            "POST", f"/v1/sessions/{sid}/cancellations", cancel_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw), {
+            "accepted": True, "duplicate": False, "pre_cancelled": True})
+        status, _, raw_msg = self.request(
+            "POST", f"/v1/sessions/{sid}/messages",
+            {"message_id": "race-http-1", "text": "Stop before start",
+             "page_url": ORIGIN + "/start"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw_msg), {
+            "accepted": True, "duplicate": False, "cancelled": True})
+        timeline = json.loads(self.request("GET", f"/v1/sessions/{sid}/timeline")[2])
+        self.assertEqual(timeline["entries"][-1]["panel_state"], "cancelled")
+
+    def test_reconciliation_endpoint_updates_timeline_for_all_outcomes(self):
+        sid = self.grant.session_id
+        _, _, raw_hello = self.request(
+            "POST", f"/v1/sessions/{sid}/hello", hello(sid).to_json())
+        self.lease = json.loads(raw_hello)["lease_id"]
+        proposal_digest = "a" * 64
+        self.channel.record_turn_proposal("turn-indet", proposal_digest)
+        self.channel.publish("progress", {
+            "state": "indeterminate",
+            "terminal_reason": "indeterminate_write",
+            "message": "结果不明",
+        }, turn_id="turn-indet")
+
+        verdicts = iter([
+            {"outcome": "unknown", "settled": False, "message": "仍需人工核对"},
+            {"outcome": "completed", "settled": True, "message": "已确认生效"},
+        ])
+        self.channel.set_reconciler(lambda _req: next(verdicts))
+
+        req_body = ReconciliationRequest(1, sid, turn_id="turn-indet").to_json()
+        status, _, raw1 = self.request(
+            "POST", f"/v1/sessions/{sid}/reconciliations", req_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw1), {
+            "outcome": "unknown", "settled": False, "message": "仍需人工核对"})
+
+        status, _, raw2 = self.request(
+            "POST", f"/v1/sessions/{sid}/reconciliations", req_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw2), {
+            "outcome": "completed", "settled": True, "message": "已确认生效"})
+
+        # Idempotent once settled.
+        status, _, raw3 = self.request(
+            "POST", f"/v1/sessions/{sid}/reconciliations", req_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw3), json.loads(raw2))
+
+        timeline = json.loads(self.request("GET", f"/v1/sessions/{sid}/timeline")[2])
+        entry = timeline["entries"][-1]
+        self.assertEqual(entry["proposal_digest"], proposal_digest)
+        self.assertEqual(entry["reconciliation"], json.loads(raw2))
+
+        # Mismatched turn_id and proposal_digest returns 400.
+        bad_status, _, _ = self.request(
+            "POST", f"/v1/sessions/{sid}/reconciliations",
+            ReconciliationRequest(1, sid, turn_id="turn-indet",
+                                  proposal_digest="b" * 64).to_json())
+        self.assertEqual(bad_status, 400)
+
+    def test_static_runtime_asset_etag_304_gzip_and_stat_invalidation(self):
+        from web_operation_agent.transport import gateway as embedded_gateway
+
+        with tempfile.TemporaryDirectory() as tmp:
+            asset = Path(tmp) / "assistant.js"
+            first_bytes = b"export const EmbeddedWebRuntime = 'v1';\n" * 40
+            asset.write_bytes(first_bytes)
+            first_etag = f'"{hashlib.sha256(first_bytes).hexdigest()}"'
+
+            with mock.patch.dict(embedded_gateway.RUNTIME_MODULES,
+                                 {"/v1/runtime/assistant.js": asset}):
+                status, headers, body = self.request("GET", "/v1/runtime/assistant.js")
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["ETag"], first_etag)
+                self.assertEqual(headers["Vary"], "Accept-Encoding")
+                self.assertNotIn("Content-Encoding", headers)
+                self.assertEqual(body, first_bytes)
+
+                status, headers, gz_body = self.request(
+                    "GET", "/v1/runtime/assistant.js",
+                    headers={"Accept-Encoding": "gzip, deflate"})
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Content-Encoding"], "gzip")
+                self.assertEqual(headers["Vary"], "Accept-Encoding")
+                self.assertEqual(headers["ETag"], first_etag)
+                self.assertEqual(gzip.decompress(gz_body), first_bytes)
+
+                status, headers, no_gz_body = self.request(
+                    "GET", "/v1/runtime/assistant.js",
+                    headers={"Accept-Encoding": "gzip;q=0"})
+                self.assertEqual(status, 200)
+                self.assertNotIn("Content-Encoding", headers)
+                self.assertEqual(no_gz_body, first_bytes)
+
+                status, headers, empty_body = self.request(
+                    "GET", "/v1/runtime/assistant.js",
+                    headers={"If-None-Match": first_etag})
+                self.assertEqual(status, 304)
+                self.assertEqual(headers["ETag"], first_etag)
+                self.assertEqual(empty_body, b"")
+
+                # Rebuilding/swapping asset invalidates cache via stat (st_mtime_ns, st_size).
+                second_bytes = b"export const EmbeddedWebRuntime = 'v2-rebuilt';\n" * 45
+                asset.write_bytes(second_bytes)
+                second_etag = f'"{hashlib.sha256(second_bytes).hexdigest()}"'
+                status, headers, body = self.request(
+                    "GET", "/v1/runtime/assistant.js",
+                    headers={"If-None-Match": first_etag})
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["ETag"], second_etag)
+                self.assertEqual(body, second_bytes)
+
+    def test_abrupt_client_disconnects_produce_zero_stderr_tracebacks(self):
+        host, port = self.gateway._server.server_address[:2]
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            for _ in range(5):
+                sock = socket.create_connection((host, port), timeout=2)
+                sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                sock.close()
+            time.sleep(0.05)
+        self.assertEqual(captured.getvalue(), "")
 
 
 if __name__ == "__main__":

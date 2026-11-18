@@ -33,10 +33,10 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-from web_operation_agent.transport.gateway import RUNTIME_PATH, EmbeddedGateway
+from web_operation_agent.transport.gateway import RUNTIME_PATH, EmbeddedGateway, _QuietThreadingHTTPServer
 from web_operation_agent.transport import RemoteSessionRegistry
 
 _PAGE_CONTROLLER_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
@@ -90,6 +90,18 @@ class _Host:
             def log_message(self, *_args):
                 return
 
+            def handle_one_request(self):
+                try:
+                    super().handle_one_request()
+                except (BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
+
+            def finish(self):
+                try:
+                    super().finish()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+
             def do_GET(self):
                 if self.path.startswith("/assistant/"):
                     return self.forward("GET")
@@ -134,10 +146,13 @@ class _Host:
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = _QuietThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
         self.gateway = EmbeddedGateway(
             registry, sse_wait_s=0.1,

@@ -22,7 +22,7 @@ from web_operation_agent.transport import (RemoteProtocolError, RemoteSessionClo
                                          RemoteSessionLimits, RemoteSessionRegistry)
 from web_operation_agent.schemas import (SCHEMA_VERSIONS, CancellationRequest,
                                          ClientHello, ElementRef, ObservationEnvelope,
-                                         PageObservation)
+                                         PageObservation, ReconciliationRequest)
 
 
 ORIGIN = "http://app.test"
@@ -356,6 +356,89 @@ class LiveProductSessionTests(unittest.TestCase):
         self.assertFalse(any(
             event.kind == "progress" and event.payload.get("state") == "task_failed"
             for event in events))
+
+    def test_live_conversation_runner_wires_read_only_reconciler_for_indeterminate_turn(self):
+        from types import SimpleNamespace
+        from web_operation_agent.business.mutation import SQLiteMutationJournal
+        from web_operation_agent.composition.ports import MutationReconciliation
+
+        now = int(time.time() * 1000)
+        actor = PrincipalContext(
+            schema_version=1, application_id="sample",
+            tenant_id="tenant-1", workspace_id="workspace-1",
+            actor_id="actor-1", delegation_id="delegation-1",
+            issued_at=now, expires_at=now + 60_000, scopes=("companies:write",))
+        identity = {k: v for k, v in actor.audit_projection().items()
+                    if k in {"tenant_digest", "workspace_digest", "actor_digest"}}
+        proposal_digest = "d" * 64
+        reconcile_calls = []
+
+        class _FakeReconciler:
+            def reconcile(self, name, business_key, *, evidence, principal):
+                reconcile_calls.append((name, business_key, evidence, principal.actor_id))
+                return MutationReconciliation("failed", False, "record not created")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = SQLiteMutationJournal(root / "mutations.sqlite3")
+            journal.register(
+                proposal_digest, "e" * 64, expires_at=now + 60_000, now_ms=now,
+                reconciliation={"application_id": "sample", "tool": "create_company",
+                                "args": {"name": "Acme"}, "identity": identity})
+            journal.claim(proposal_digest, "e" * 64, now_ms=now + 1,
+                          dispatch_lease_expires_at=now + 60_000)
+            journal.finish(proposal_digest, "indeterminate", now_ms=now + 2)
+
+            registry = RemoteSessionRegistry()
+            grant, channel = registry.create(
+                allowed_origins=[ORIGIN], session_id="live-reconcile", principal=actor)
+            lease = channel.accept_hello(ClientHello(
+                schema_version=SCHEMA_VERSIONS["ClientHello"],
+                session_id=grant.session_id,
+                client_id="tab-1",
+                runtime="test-runtime/1",
+                runtime_instance_id="doc-1",
+                capabilities=("dom.observe",),
+                page_origin=ORIGIN,
+                application_id="sample",
+                principal_digest=actor.binding_digest,
+            ))["lease_id"]
+
+            ledger_path = root / "session.jsonl"
+            from web_operation_agent.state.ledger import SessionLedger
+            executor = SimpleNamespace(
+                application=SimpleNamespace(
+                    descriptor=SimpleNamespace(application_id="sample"),
+                    ports=SimpleNamespace(
+                        identity=SimpleNamespace(validate=lambda *_a, **_kw: None),
+                        reconciliation=_FakeReconciler(),
+                    ),
+                ),
+                business_tools=SimpleNamespace(mutation_journal=journal),
+                config=SimpleNamespace(ledger_path=ledger_path),
+                ledger_factory=SessionLedger,
+                execute=lambda _msg: None,
+            )
+            runner = LiveConversationRunner(channel, executor=executor)
+            self.assertIsNotNone(runner)
+            channel.record_turn_proposal("m-indet", proposal_digest)
+            channel.publish("progress", {
+                "state": "indeterminate",
+                "terminal_reason": "indeterminate_write",
+                "message": "结果不明",
+            }, turn_id="m-indet")
+
+            reply = channel.accept_reconciliation(
+                ReconciliationRequest(1, grant.session_id, turn_id="m-indet"),
+                lease_id=lease)
+            self.assertEqual(reply, {
+                "outcome": "failed", "settled": True, "message": "record not created"})
+            self.assertEqual(journal.get(proposal_digest).state, "failed")
+            self.assertEqual(len(reconcile_calls), 1)
+            timeline = channel.panel_timeline(lease_id=lease)
+            self.assertEqual(timeline["entries"][-1]["proposal_digest"], proposal_digest)
+            self.assertEqual(timeline["entries"][-1]["reconciliation"], reply)
+            self.assertIn("business_mutation_reconciled", ledger_path.read_text(encoding="utf-8"))
 
     def test_legacy_per_turn_factory_remains_a_thin_compatibility_path(self):
         channel, lease = _channel_with_observation()
