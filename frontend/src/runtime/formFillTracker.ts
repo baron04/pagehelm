@@ -10,7 +10,6 @@ import browserContract from '@contract/browser_contract.json'
 import {listboxCombobox, selectedComboboxOption} from './combobox'
 import {formInstance} from './formInstance'
 import type {FormModelRead} from './formModel'
-import {ensureFormWritableAndOpen} from './pageForm'
 import {
   explicitAttribute, formControlLabel, formControlScope, formFieldName,
   isSensitiveFormControl, type ElementLike,
@@ -71,6 +70,19 @@ function isElementOpenAndVisible(node: Element): boolean {
     }
   }
   return true
+}
+
+function isElementWritableAndOpen(node: Element, allowReadonlyCombobox = false): boolean {
+  if (!isElementOpenAndVisible(node)) return false
+  const combobox = allowReadonlyCombobox && listboxCombobox(node as ElementLike)
+  const formEl = node as Partial<HTMLInputElement>
+  const ariaDisabled = node.getAttribute('aria-disabled') === 'true'
+  const ariaReadonly = node.getAttribute('aria-readonly') === 'true'
+  if (formEl.disabled || ariaDisabled || (!combobox && (formEl.readOnly || ariaReadonly))) {
+    return false
+  }
+  return !node.classList.contains('is-disabled') &&
+    !node.closest('fieldset:disabled,.is-disabled,[aria-disabled="true"]')
 }
 
 function isFocusableAndVisible(node: Element): boolean {
@@ -344,13 +356,7 @@ export class FormFillTracker {
       if (!entry.element.isConnected) return false
       if (entry.instance && formInstance(entry.element) !== entry.instance) return false
       if (entry.scope && formControlScope(entry.element) !== entry.scope) return false
-      try {
-        ensureFormWritableAndOpen(
-          entry.element as ElementLike,
-          'undo',
-          listboxCombobox(entry.element as ElementLike),
-        )
-      } catch {
+      if (!isElementWritableAndOpen(entry.element, listboxCombobox(entry.element as ElementLike))) {
         return false
       }
     }

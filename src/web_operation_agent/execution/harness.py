@@ -53,7 +53,6 @@ _OPTIONAL_NONE_KEYS = frozenset({
     "forced_summary_at",
     "pending_delivery",
     "pending_numeric_finish",
-    "pending_unbacked_claim",
     "settled_action_observation",
     "handoff",
     "prepared_knowledge",
@@ -61,7 +60,7 @@ _OPTIONAL_NONE_KEYS = frozenset({
     "handoff_target_key",
     "handoff_mark",
 })
-_OPTIONAL_FALSE_KEYS = frozenset({"review_completion", "unbacked_claim_sent_back"})
+_OPTIONAL_FALSE_KEYS = frozenset({"review_completion"})
 
 
 def _make_browser_client(channel, *, timeout_s: float, turn_id: str):
@@ -131,15 +130,9 @@ class ModelTurnState(MutableMapping[str, Any]):
     submit_started: bool = False
     submit_handoff_blocked: str = ""
     restored_form_labels: frozenset[str] = frozenset()
-    verified_empty_filters: set[Any] = field(default_factory=set)
-    failed_controls: dict[Any, Any] = field(default_factory=dict)
-    stable_control_repeats: int = 0
     settled_action_observation: dict[str, Any] | None = None
     form_field_outcomes: dict[str, Any] = field(default_factory=dict)
     finish_tables: dict[str, Any] = field(default_factory=dict)
-    issued_evidence_refs: set[str] = field(default_factory=set)
-    unbacked_claim_sent_back: bool = False
-    pending_unbacked_claim: tuple[dict[str, Any], str] | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
     _TYPED_FIELDS = frozenset({
@@ -147,7 +140,7 @@ class ModelTurnState(MutableMapping[str, Any]):
         "corrections", "final", "skills", "observation_cache", "sources", "prepared",
         "prepared_knowledge", "runtime_used", "issued_targets", "read_sequence", "read_only",
         "tool_texts", "model_calls", "tool_calls", "forced_summary_at", "forced_summary_kind",
-        "pending_delivery", "pending_numeric_finish", "pending_unbacked_claim",
+        "pending_delivery", "pending_numeric_finish",
         "delivery_corrections", "query_answers",
         "query_answer_sources", "query_answer_sequence", "empty_reads", "page_failures",
         "failure_counts", "blocked_failures", "failed_reads", "failed_repeats", "not_executed",
@@ -155,9 +148,8 @@ class ModelTurnState(MutableMapping[str, Any]):
         "source_ledger", "source_checked", "source_checked_values", "form_baselines",
         "form_record_baselines", "submit_targets", "unrestorable_forms", "handoff_target_key",
         "handoff_button", "handoff_mark", "submit_started", "submit_handoff_blocked",
-        "restored_form_labels", "verified_empty_filters", "failed_controls",
-        "stable_control_repeats", "settled_action_observation", "form_field_outcomes",
-        "finish_tables", "issued_evidence_refs", "unbacked_claim_sent_back",
+        "restored_form_labels", "settled_action_observation", "form_field_outcomes",
+        "finish_tables",
     })
 
     def _present(self, key: str) -> bool:

@@ -12,9 +12,8 @@ import {visibleElement} from './combobox'
 import {sleep} from './contain'
 import type {FormModelRead, RowRecordRead} from './formModel'
 import {
-  EnteredControlTracker, ensureHandoffFormOpenAndWritable, FormClosedOrReadonlyError,
-  formFieldMatches, inputFormControl, readPageFormModel, readPageRowRecord, selectFormControl,
-  verifyFormFields, verifyFormSubmit,
+  EnteredControlTracker, formFieldMatches, inputFormControl, readPageFormModel,
+  readPageRowRecord, selectFormControl, verifyFormFields, verifyFormSubmit,
   type ElementReadFn, type FormHandoffField, type FormSubmitTarget,
 } from './pageForm'
 import {guideSubmitControl, highlightControl, type PageHighlight} from './pageHighlight'
@@ -30,7 +29,7 @@ import {
 import type {Redactor} from './redaction'
 import type {ElementRef} from './types'
 
-export {FormClosedOrReadonlyError, formFieldMatches, type FormHandoffField, type FormSubmitTarget}
+export {formFieldMatches, type FormHandoffField, type FormSubmitTarget}
 export type {PageHighlight}
 export type {
   ActiveViewReader, BrowserState, ElementNavigationReader, FacetApplier,
@@ -269,11 +268,6 @@ export class Page {
   /** Check an adapter-issued draft against live controls without sending their values back. */
   verifyFormFields(fields: unknown, observed: ElementRef[]): boolean {
     return verifyFormFields(fields, observed, ref => this.element(ref), this.entered, this.redactor)
-  }
-
-  /** Throw `FormClosedOrReadonlyError` if any targeted handoff form/field closed, detached, or turned readonly. */
-  ensureHandoffOpenAndWritable(fields: unknown, observed: ElementRef[]): void {
-    ensureHandoffFormOpenAndWritable(fields, observed, ref => this.element(ref), this.entered)
   }
 
   /** Wait briefly for substantive DOM mutations and non-long-tail network requests to settle. */

@@ -11,26 +11,13 @@ import unittest
 from unittest.mock import patch
 
 from web_operation_agent.business.approvals import MutationApproval
-from web_operation_agent.business.draft_steps import DraftStepAdmission, DraftStepPermit
 from web_operation_agent.business.write_pipeline import WritePipeline
 from web_operation_agent.execution import form_tools, harness as harness_mod, turn as turn_mod
-from web_operation_agent.execution.answer_check import (
-    UNBACKED_BUSINESS_CLAIM_SPEC,
-    is_allowed_general_turn,
-)
-from web_operation_agent.execution.checks import record_check_fired
-from web_operation_agent.execution.draft_handoff import add_draft_lines, handoff_draft
+from web_operation_agent.execution.draft_handoff import handoff_draft
 from web_operation_agent.execution.harness import (
     HarnessTurnContext,
     ModelTurnState,
     TurnHarness,
-)
-from web_operation_agent.execution.loop_guard import (
-    STABLE_CONTROL_REPEATED_SPEC,
-    VERIFIED_EMPTY_FILTER_REPEATED_SPEC,
-    is_verified_empty_filter,
-    record_verified_empty_filter,
-    stable_control_identity,
 )
 from web_operation_agent.execution.model_loop import (
     CORE_CHECK_SPECS,
@@ -119,115 +106,6 @@ class _Wave3Fixture(LoopFixture):
         self.noted.append(facts)
 
 
-class Wave3Acc02Tests(unittest.TestCase):
-    def test_stable_control_identity_skips_second_failed_dispatch_with_candidates_and_stops_on_stall(self):
-        first_obs = _obs_with_controls(epoch=1, route="/orders")
-        # Element index shifted from e1 to e9, whitespace changed in value, epoch bumped
-        second_obs = PageObservation(
-            1,
-            2,
-            "https://synthetic.test/orders",
-            "Orders",
-            [],
-            [ElementRef("e9", "combobox", "Status", "combobox", 2, {"field_label": "Status", "form_scope": "dialog-1"})],
-            content="Orders refreshed",
-            render_state="ready",
-            page_route="/orders",
-        )
-        k1 = stable_control_identity("select", {"index": 1, "value": "  Invalid Status  "}, first_obs.elements[0], first_obs)
-        k2 = stable_control_identity("select", {"index": 9, "value": "Invalid Status"}, second_obs.elements[0], second_obs)
-        self.assertEqual(k1, ("select", "/orders", "dialog-1", "Status", "Invalid Status"))
-        self.assertEqual(k1, k2)
-
-        with tempfile.TemporaryDirectory() as tmp:
-            dispatched = []
-
-            def handler(fx, name, arguments):
-                dispatched.append((name, arguments))
-                r = ActionReceipt(
-                    1,
-                    "c1",
-                    "select",
-                    {"ref": "e1", "value": "Missing"},
-                    False,
-                    error_code="option_unavailable",
-                    no_effect=True,
-                    candidate_labels=("Open", "Closed"),
-                    observation=second_obs,
-                )
-                fx._tool_receipts.append(r)
-                return LoopToolResult("option not found", kind="page", state="refused", error_code="option_unavailable")
-
-            fx = _Wave3Fixture(
-                Path(tmp),
-                [
-                    reply(call("select", index=1, value="Missing")),
-                    reply(call("select", index=1, value="  Missing ")),
-                    reply(call("select", index=1, value="Missing")),
-                ],
-                handler,
-            )
-            answer = fx.run()
-            self.assertEqual(len(dispatched), 1)
-            self.assertIn("已停止执行", answer)
-            tool_msgs = [m["content"] for m in fx._messages if m["role"] == "tool"]
-            self.assertTrue(any("option_unavailable" in m and "Open、Closed" in m for m in tool_msgs))
-            checks = fx.ledger.of_kind("check_fired")
-            self.assertEqual(
-                [(c["check"], c["outcome"]) for c in checks],
-                [
-                    ("stable_control_repeated", "returned"),
-                    ("stable_control_repeated", "blocked"),
-                ],
-            )
-            self.assertEqual(fx.state.stop_reason, "stable_control_repeated")
-
-    def test_verified_empty_filters_monotonic_across_resets_and_blocks_duplicate_dispatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            calls = []
-
-            def handler(fx, name, arguments):
-                calls.append((name, arguments))
-                return LoopToolResult("0 rows", kind="read", read_key="orders", read_count=0)
-
-            fx = _Wave3Fixture(
-                Path(tmp),
-                [
-                    reply(call("search_records", route="/orders", tab="All", filters={"status": "  NONE  "})),
-                    reply(call("reset_form")),
-                    reply(call("search_records", route="/orders", tab="All", filters={"status": "NONE"})),
-                    reply(call("finish", status="cannot", answer="未查到记录")),
-                ],
-                handler,
-            )
-            fx.profile = NS(
-                procedures=(
-                    NS(kind="read", schema={"function": {"name": "search_records"}}, handler=NS()),
-                    NS(kind="page", schema={"function": {"name": "reset_form"}}, handler=NS()),
-                ),
-                render_page=lambda obs, _m: obs.content,
-            )
-            # Simulate a reset_form step clearing form fields while keeping verified_empty_filters monotonic
-            orig_handler = fx.handler
-
-            def mixed_handler(f, name, arguments):
-                if name == "reset_form":
-                    f.turn["touched"].clear()
-                    return LoopToolResult("form reset", kind="page")
-                return orig_handler(f, name, arguments)
-
-            fx.handler = mixed_handler
-            answer = fx.run("查订单")
-            self.assertEqual(answer, "未查到记录")
-            self.assertEqual(len([c for c in calls if c[0] == "search_records"]), 1)
-            self.assertTrue(is_verified_empty_filter(fx.turn, "/orders", "All", {"status": "NONE"}))
-            checks = fx.ledger.of_kind("check_fired")
-            self.assertEqual(
-                [(c["check"], c["outcome"]) for c in checks],
-                [("verified_empty_filter_repeated", "blocked")],
-            )
-
-
 class Wave3Acc05Tests(unittest.TestCase):
     def test_settled_action_updates_obs_feeds_summary_and_suppresses_immediate_observe(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -271,69 +149,8 @@ class Wave3Acc05Tests(unittest.TestCase):
             self.assertTrue(fx.ledger.of_kind("observe_suppressed"))
 
 
-class Wave3Acc07Tests(unittest.TestCase):
-    def test_general_four_categories_allowed_without_ev_citations(self):
-        cases = (
-            ("你好！", "你好，请问有什么可以帮你？"),
-            ("你能做什么？", "我可以帮你查询页面数据、打开目标页面或预填表单。"),
-            ("把这段话翻译成英文：欢迎使用助手", "Welcome to the assistant."),
-            ("计算 25 * 4 + 10 等于多少", "结果是 110。"),
-        )
-        for prompt, answer in cases:
-            with self.subTest(prompt=prompt):
-                self.assertTrue(is_allowed_general_turn(prompt, answer))
-                with tempfile.TemporaryDirectory() as tmp:
-                    fx = _Wave3Fixture(Path(tmp), [reply(call("finish", status="done", answer=answer))], lambda *_: None)
-                    fx.require_evidence_citations = True
-                    self.assertEqual(fx.run(prompt), answer)
-                    self.assertEqual(fx.ledger.of_kind("check_fired"), [])
-
-    def test_unbacked_business_claim_sent_back_once_and_blocked_on_second_failure(self):
-        # Disguised business summary/arithmetic without ev_ must be caught
-        self.assertFalse(is_allowed_general_turn("总结一下当前客户状态", "当前客户 Acme 状态为正常。"))
-        self.assertFalse(is_allowed_general_turn("计算订单 101 和 102 的金额", "合计 500 元。"))
-
-        with tempfile.TemporaryDirectory() as tmp:
-            fx = _Wave3Fixture(
-                Path(tmp),
-                [
-                    reply(call("finish", status="done", answer="当前客户 Acme 共有 3 条订单，状态为已审核。")),
-                    reply(call("finish", status="done", answer="仍是已审核状态。")),
-                ],
-                lambda *_: None,
-            )
-            fx.require_evidence_citations = True
-            result = fx.run("查一下客户 Acme 的订单状态")
-            self.assertIn("未能提供可核验的本轮工具回执", result)
-            self.assertEqual(fx.state.terminal_reason, "agent_refused")
-            self.assertEqual(fx.state.stop_reason, "unbacked_business_claim")
-            checks = fx.ledger.of_kind("check_fired")
-            self.assertEqual(
-                [(c["check"], c["outcome"], c["attempt"]) for c in checks],
-                [
-                    ("unbacked_business_claim", "returned", 1),
-                    ("unbacked_business_claim", "blocked", 2),
-                ],
-            )
-
-    def test_backed_business_claim_with_current_turn_ev_citation_passes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            fx = _Wave3Fixture(
-                Path(tmp),
-                [
-                    reply(call("query_orders")),
-                    reply(call("finish", status="done", answer="客户 Acme 订单状态为正常（依据 ev_abcdef123456_1）。")),
-                ],
-                lambda *_: LoopToolResult("orders=[1] 本轮工具回执：ev_abcdef123456_1", kind="read"),
-            )
-            fx.require_evidence_citations = True
-            answer = fx.run("查一下客户 Acme 的订单状态")
-            self.assertIn("ev_abcdef123456_1", answer)
-            self.assertEqual(fx.ledger.of_kind("check_fired"), [])
-
-
-class Wave3Acc06Acc13Tests(unittest.TestCase):
-    def test_form_closed_or_readonly_and_field_outcomes_propagate_without_masking(self):
+class Wave3Acc13Tests(unittest.TestCase):
+    def test_field_outcomes_propagate_without_masking(self):
         with tempfile.TemporaryDirectory() as tmp:
             def handler(fx, name, arguments):
                 after = _obs_with_controls(epoch=3)
@@ -343,131 +160,36 @@ class Wave3Acc06Acc13Tests(unittest.TestCase):
                     "fill",
                     {"ref": "e2", "value": "abc"},
                     False,
-                    error_code="form_closed_or_readonly",
+                    error_code="option_unavailable",
                     observation=after,
                     url_before=fx.state.obs.url,
                     url_after=after.url,
                     applied_fields={"Remark": "abc"},
-                    rejected_fields={"Status": "readonly"},
+                    rejected_fields={"Status": "option_unavailable"},
                     previous_fields={"Remark": "old"},
                     restricted_fields=("Password",),
                     candidate_labels=("Draft", "Active"),
                 )
                 fx._tool_receipts.append(receipt)
-                return LoopToolResult("form closed", kind="page", state="refused", error_code="form_closed_or_readonly")
+                return LoopToolResult("option unavailable", kind="page", state="refused", error_code="option_unavailable")
 
             fx = _Wave3Fixture(
                 Path(tmp),
                 [
                     reply(call("fill", index=2, value="abc")),
-                    reply(call("finish", status="cannot", answer="表单已关闭")),
+                    reply(call("finish", status="cannot", answer="字段选项不可用")),
                 ],
                 handler,
             )
             answer = fx.run("填写备注")
-            self.assertEqual(answer, "表单已关闭")
+            self.assertEqual(answer, "字段选项不可用")
             tool_msg = next(m["content"] for m in fx._messages if m["role"] == "tool")
-            self.assertIn("error_code=form_closed_or_readonly", tool_msg)
+            self.assertIn("error_code=option_unavailable", tool_msg)
             self.assertIn("applied_fields=", tool_msg)
             self.assertIn("rejected_fields=", tool_msg)
             self.assertIn("restricted_fields=Password", tool_msg)
             self.assertIn("candidates=Draft、Active", tool_msg)
             self.assertEqual(fx.turn["form_field_outcomes"]["previous_fields"], {"Remark": "old"})
-
-    def test_draft_handoff_and_native_submit_propagate_form_closed_or_readonly(self):
-        obs = _obs_with_controls(epoch=2)
-        receipt = ActionReceipt(
-            1,
-            "cmd-h",
-            "handoff_form",
-            {},
-            False,
-            error_code="form_closed_or_readonly",
-            observation=obs,
-            url_before=obs.url,
-            url_after=obs.url,
-        )
-        page_stub = NS(
-            checkpoint=lambda: None,
-            handoff=lambda _f, _s: PageActionOutcome("unverified", "acknowledged", "form_closed_or_readonly", json.dumps(receipt.to_json())),
-            execute=lambda *_a, **_kw: PageActionOutcome("unverified", "acknowledged", "form_closed_or_readonly", json.dumps(receipt.to_json())),
-        )
-        ctx = NS(obs=obs, page=page_stub, terminal_reason="", audit=lambda *_a, **_kw: None)
-        res = add_draft_lines(ctx, "Save", 1)
-        self.assertEqual(res.error_code, "form_closed_or_readonly")
-        res2 = handoff_draft(ctx, obs, [(("dialog-1", "", "textbox", "", "Remark", ""), "old")], "Save")
-        # When before/after untouched check passes only if fields match; check direct handoff receipt error_code path:
-        self.assertIn(res2.error_code, {"form_closed_or_readonly", "unverified"})
-
-        class _ClosedSubmit(NativeSubmitMixin):
-            native_submit = NS(contract=lambda: NS(volatile_keys=(), epoch_zone=None, line_key="id", record_key="id"))
-
-            def _dispatch(self, s, action, args, **kw):
-                return receipt
-
-            def _not_sent(self, s, code, detail=""):
-                return LoopToolResult(detail or code, kind="write", state="refused", error_code=code)
-
-            def _element(self, s, index):
-                return obs.elements[2]
-
-            def _submit_allowed(self, turn):
-                return True
-
-        sub = _ClosedSubmit()
-        s = NS(obs=obs, step=1, terminal_reason="", detail="", ledger=NS(append=lambda *_a, **_k: None))
-        out = sub._request_submit(s, {"index": 3}, {})
-        self.assertEqual(out.error_code, "form_closed_or_readonly")
-
-    def test_draft_steps_verify_no_effect_and_form_tools_acc01_widened(self):
-        class _ChoicePort:
-            application_id = "app.test"
-            required_scope = "records:read"
-            actions = frozenset({"select", "fill"})
-
-            def handles(self, intent):
-                return True
-
-            def prepare_step(self, intent, **_kw):
-                return DraftStepPermit(
-                    intent.binding_digest,
-                    "explicit-submit-review",
-                    "exact-field-value",
-                    "dialog-1",
-                    "inst-1",
-                    "enter_value",
-                    (("Status", intent.arguments["value"]),),
-                )
-
-            def verify_step(self, *_a, **_kw):
-                return True
-
-            def verify_no_effect(self, *_a, **_kw):
-                return True
-
-        # Verify DraftStepAdmission checks `intent.action not in {"select", "fill"}` (using select until schema integration)
-        admission = DraftStepAdmission(_ChoicePort(), "app.test")
-        before = _obs_with_controls(epoch=1)
-        after = _obs_with_controls(epoch=2)
-        ctx = test_context(application="app.test")
-        args = {"ref": "e1", "value": "Missing", "option_label": "Missing"}
-        intent, permit = admission.prepare("select", args, before, context=ctx, checkpoint=lambda: None)
-        admission.consume(intent, permit, before, context=ctx, checkpoint=lambda: None)
-        receipt = ActionReceipt(
-            1,
-            "cmd-sel",
-            "select",
-            _remote_args_echo({**args, "epoch": 1}),
-            False,
-            error_code="option_unavailable",
-            no_effect=True,
-            candidate_labels=("Open",),
-            observation=after,
-            url_before=before.url,
-            url_after=after.url,
-            write_guard_held=True,
-        )
-        admission.verify_no_effect(intent, permit, receipt, context=ctx, checkpoint=lambda: None)
 
 
 class Wave3Arc04Arc06Arc07UxTests(unittest.TestCase):

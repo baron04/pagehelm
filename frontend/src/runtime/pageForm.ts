@@ -6,10 +6,10 @@
  */
 import browserContract from '@contract/browser_contract.json'
 import {
-  ChoiceUnavailable, isComboboxClearedWithoutSelection, isTreeItemDisabled, listboxCombobox,
-  matchingTreeChoices, optionText, ownedListbox, ownedTree, ownTreeExpandToggle, ownTreeOption,
-  ownTreeRow, probeComboboxOptions, selectedComboboxOption, selectedOption,
-  treeSelectionMatches, visibleComboboxOptions, visibleElement,
+  ChoiceUnavailable, isTreeItemDisabled, listboxCombobox, matchingTreeChoices, optionText,
+  ownedListbox, ownedTree, ownTreeExpandToggle, ownTreeOption, ownTreeRow, probeComboboxOptions,
+  selectedComboboxOption, selectedOption, treeSelectionMatches, visibleComboboxOptions,
+  visibleElement,
 } from './combobox'
 import {sleep} from './contain'
 import {formInstance, localChoiceRemoval} from './formInstance'
@@ -169,70 +169,6 @@ export function readPageRowRecord(
   }
 }
 
-/** Structured error when a target form, dialog, or control is closed, detached, or read-only. */
-export class FormClosedOrReadonlyError extends Error {
-  readonly code = 'form_closed_or_readonly'
-  constructor(message: string) {
-    super(message)
-  }
-}
-
-/** Verify that a target control and its enclosing form/dialog are open, connected, visible, and writable. */
-export function ensureFormWritableAndOpen(
-  element: ElementLike | null | undefined,
-  actionLabel: string,
-  allowReadonlyCombobox = false,
-): asserts element is ElementLike {
-  if (!element || element.isConnected === false) {
-    throw new FormClosedOrReadonlyError(`form_closed_or_readonly: ${actionLabel} target is no longer on the page`)
-  }
-  const combobox = allowReadonlyCombobox && listboxCombobox(element)
-  const ariaDisabled = element.getAttribute?.('aria-disabled') === 'true'
-  const ariaReadonly = element.getAttribute?.('aria-readonly') === 'true'
-  if (element.disabled || ariaDisabled || (!combobox && (element.readOnly || ariaReadonly))) {
-    throw new FormClosedOrReadonlyError(`form_closed_or_readonly: ${actionLabel} target is disabled or read-only`)
-  }
-  if (typeof Element !== 'undefined' && element instanceof Element) {
-    if (element.classList.contains('is-disabled') ||
-        element.closest('[hidden],[aria-hidden="true"],[inert],fieldset:disabled,.is-disabled,[aria-disabled="true"]')) {
-      throw new FormClosedOrReadonlyError(`form_closed_or_readonly: ${actionLabel} target form is closed or disabled`)
-    }
-    const dialog = element.closest('[role="dialog"],dialog')
-    if (dialog && (!dialog.isConnected || (dialog.tagName === 'DIALOG' && !dialog.hasAttribute('open')))) {
-      throw new FormClosedOrReadonlyError(`form_closed_or_readonly: ${actionLabel} target dialog is closed`)
-    }
-    const view = element.ownerDocument?.defaultView ?? (typeof window !== 'undefined' ? window : null)
-    if (view?.getComputedStyle) {
-      for (let node: Element | null = element; node; node = node.parentElement) {
-        const style = view.getComputedStyle(node)
-        if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
-          throw new FormClosedOrReadonlyError(`form_closed_or_readonly: ${actionLabel} target form or dialog is hidden`)
-        }
-      }
-    }
-  }
-}
-
-function captureFormDraft(scope: string, instance: string): Array<{node: Element; state: string}> {
-  if (!scope || !instance || typeof document === 'undefined') return []
-  return [...document.querySelectorAll('input,textarea,select,[role="radiogroup"],[role="textbox"],[contenteditable="true"]')]
-    .filter(node => formControlScope(node) === scope && formInstance(node) === instance)
-    .map(node => ({node, state: JSON.stringify([
-      (node as HTMLInputElement).value ?? '', (node as HTMLInputElement).checked ?? false,
-      node.matches('[contenteditable="true"],[role="textbox"]') ? node.textContent : null,
-      node.getAttribute('aria-checked'), node.getAttribute('aria-selected'),
-      node instanceof HTMLInputElement && listboxCombobox(node) ? selectedComboboxOption(node) : null,
-    ])}))
-}
-
-function draftsMatch(
-  beforeDraft: Array<{node: Element; state: string}>,
-  afterDraft: Array<{node: Element; state: string}>,
-): boolean {
-  return beforeDraft.length === afterDraft.length &&
-    beforeDraft.every((item, i) => item.node === afterDraft[i]!.node && item.state === afterDraft[i]!.state)
-}
-
 export function inputFormControl(
   ref: unknown,
   element: ElementLike | null | undefined,
@@ -242,38 +178,22 @@ export function inputFormControl(
   entered: EnteredControlTracker,
   redactor: Redactor,
 ): Promise<unknown> {
-  ensureFormWritableAndOpen(element, 'fill', false)
-  const isCombo = listboxCombobox(element)
-  const comboScope = isCombo ? formControlScope(element) : null
-  const comboInstance = isCombo ? formInstance(element) : null
-  const beforeDraft = isCombo && comboScope && comboInstance
-    ? captureFormDraft(comboScope, comboInstance) : []
-  return Promise.resolve(bridge.inputIndex(refIndex(ref), text)).then(async result => {
+  if (!element || element.isConnected === false) {
+    throw new Error('bad_arguments: fill target is no longer on the page')
+  }
+  if (element.disabled || element.readOnly) {
+    throw new Error('bad_arguments: fill target is disabled or read-only')
+  }
+  return Promise.resolve(bridge.inputIndex(refIndex(ref), text)).then(result => {
     if (result && (result as {success?: unknown}).success === true) {
-      ensureFormWritableAndOpen(element, 'fill', false)
-      const candidatesWhileOpen = isCombo
-        ? visibleComboboxOptions(element, browserContract.choice_failure.max_candidates,
-          browserContract.choice_failure.max_label_chars)
-        : []
       // An application-issued form draft commits the local editor before its fresh
       // observation. Ordinary typing keeps suggestion lists open. No submit is used.
       if (commit && (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
-        ensureFormWritableAndOpen(element, 'fill', false)
+        if (!element.isConnected || element.disabled || element.readOnly) {
+          throw new Error('execution_failed: entered form control changed before local commit')
+        }
         element.dispatchEvent(new Event('change', {bubbles: true}))
         element.blur()
-        await Promise.resolve()
-      }
-      if (isCombo && text.trim() !== '' && isComboboxClearedWithoutSelection(element)) {
-        const candidatesAfter = visibleComboboxOptions(element, browserContract.choice_failure.max_candidates,
-          browserContract.choice_failure.max_label_chars)
-        const candidate_labels = candidatesAfter.length ? candidatesAfter : candidatesWhileOpen
-        const afterDraft = comboScope && comboInstance
-          ? captureFormDraft(comboScope, comboInstance) : []
-        const bound = Boolean(comboScope && comboInstance &&
-          formControlScope(element) === comboScope && formInstance(element) === comboInstance)
-        const unchanged = bound && draftsMatch(beforeDraft, afterDraft)
-        throw new ChoiceUnavailable(candidate_labels, unchanged,
-          !bound ? 'the form binding changed' : 'local field values changed')
       }
       entered.remember(element, redactor)
     }
@@ -292,12 +212,11 @@ export function selectFormControl(
   interrupted: () => boolean,
 ): Promise<unknown> {
   if (!element || element.isConnected === false) {
-    throw new FormClosedOrReadonlyError('form_closed_or_readonly: select target is no longer on the page')
+    throw new Error('bad_arguments: select target is no longer on the page')
   }
   if (optionLabel !== undefined) {
     const group = radioGroup(element)
     if (group) {
-      ensureFormWritableAndOpen(group, 'select', false)
       return selectRadioChoice(group, optionLabel, text, bridge, entered, redactor, interrupted)
     }
     if (!listboxCombobox(element) || !optionLabel.trim() ||
@@ -305,10 +224,11 @@ export function selectFormControl(
         isSensitiveFormControl(element, redactor)) {
       throw new Error('bad_arguments: select requires one enabled single-choice combobox')
     }
-    ensureFormWritableAndOpen(element, 'select', true)
     return selectComboboxChoice(refIndex(ref), element, optionLabel, bridge, entered, redactor, interrupted)
   }
-  ensureFormWritableAndOpen(element, 'select', false)
+  if (element.disabled || element.readOnly) {
+    throw new Error('bad_arguments: select target is disabled or read-only')
+  }
   if (String(element.tagName || '').toLowerCase() !== 'select' || !element.options) {
     throw new Error('bad_arguments: select target is not a native select')
   }
@@ -329,7 +249,6 @@ export function selectFormControl(
   }
   return Promise.resolve(bridge.selectIndex(refIndex(ref), label)).then(result => {
     if (result && (result as {success?: unknown}).success === true) {
-      ensureFormWritableAndOpen(element, 'select', false)
       entered.remember(element, redactor)
     }
     return result
@@ -373,11 +292,9 @@ async function selectRadioChoice(
   }
   const finishRemoval = localChoiceRemoval(group, entered.elementsForInstance(instance))
   try {
-    ensureFormWritableAndOpen(group, 'select', false)
     const result = await bridge.clickIndex(indexes[0]!)
     if (!result || (result as {success?: unknown}).success !== true) return result
     await sleep(50)
-    ensureFormWritableAndOpen(group, 'select', false)
     if (!current() || !radioSelectionMatches(group, label, value)) {
       throw new Error('execution_failed: radio selection was not verified')
     }
@@ -435,9 +352,7 @@ async function selectComboboxChoice(
   // that result once more; the final inspection may choose, but never scrolls.
   let probedEmpty = false
   for (let attempt = 0; attempt <= 8; attempt++) {
-    ensureFormWritableAndOpen(element, 'select', true)
     let state = await bridge.readState()
-    ensureFormWritableAndOpen(element, 'select', true)
     if (!current() || (tree ? ownedTree(element) !== tree : ownedListbox(element) !== list)) {
       throw new Error('execution_failed: combobox changed before selection')
     }
@@ -447,7 +362,6 @@ async function selectComboboxChoice(
         const populated = await probeComboboxOptions(element, {
           timeoutMs: 250, intervalMs: 50, interrupted,
         })
-        ensureFormWritableAndOpen(element, 'select', true)
         if (!current() || (tree ? ownedTree(element) !== tree : ownedListbox(element) !== list)) {
           throw new Error('execution_failed: combobox changed before selection')
         }
@@ -520,11 +434,12 @@ async function selectComboboxChoice(
             await sleep(50)
           }
         }
-        const afterDraft = draft()
-        const bound = current() && (tree ? ownedTree(element) === tree : ownedListbox(element) === list)
-        const unchanged = draftsMatch(beforeDraft, afterDraft)
-        throw new ChoiceUnavailable(candidate_labels, bound && unchanged,
-          !bound ? 'the form binding changed' : 'local field values changed')
+         const afterDraft = draft()
+         const bound = current() && (tree ? ownedTree(element) === tree : ownedListbox(element) === list)
+         const unchanged = beforeDraft.length === afterDraft.length &&
+           beforeDraft.every((item, i) => item.node === afterDraft[i]!.node && item.state === afterDraft[i]!.state)
+         throw new ChoiceUnavailable(candidate_labels, bound && unchanged,
+           !bound ? 'the form binding changed' : 'local field values changed')
       }
       const innerOption = tree && matches[0] ? ownTreeOption(matches[0]) : null
       const optionDisabled = tree && matches[0]
@@ -606,30 +521,10 @@ async function selectComboboxChoice(
       if (indexes.length !== 1 || !current()) {
         throw new Error('execution_failed: combobox option is not uniquely actionable')
       }
-      const openCandidatesBeforeClick = visibleComboboxOptions(
-        element,
-        browserContract.choice_failure.max_candidates,
-        browserContract.choice_failure.max_label_chars,
-      )
       const result = await bridge.clickIndex(indexes[0]!)
       if (!result || (result as {success?: unknown}).success !== true) return result
       await sleep(50)
-      ensureFormWritableAndOpen(element, 'select', true)
       if (!current() || (tree ? ownedTree(element) !== tree : ownedListbox(element) !== list) || !matchesCurrent()) {
-        if (isComboboxClearedWithoutSelection(element)) {
-          const candidatesAfter = visibleComboboxOptions(
-            element,
-            browserContract.choice_failure.max_candidates,
-            browserContract.choice_failure.max_label_chars,
-          )
-          const afterDraft = draft()
-          const bound = current() && (tree ? ownedTree(element) === tree : ownedListbox(element) === list)
-          throw new ChoiceUnavailable(
-            candidatesAfter.length ? candidatesAfter : openCandidatesBeforeClick,
-            bound && draftsMatch(beforeDraft, afterDraft),
-            !bound ? 'the form binding changed' : 'local field values changed',
-          )
-        }
         throw new Error('execution_failed: combobox selection was not verified')
       }
       entered.remember(element, redactor)
@@ -731,39 +626,4 @@ export function verifyFormSubmit(
       formControlScope(live) !== candidate.scope) return false
   const label = String(live.textContent || '').replace(/\s+/g, ' ').trim()
   return label === candidate.label
-}
-
-/**
- * Verify that every live control targeted by a handoff still belongs to an open,
- * connected, visible, and writable form/dialog. Throws `FormClosedOrReadonlyError`
- * if any resolved target control or its form/dialog closed, detached, or became
- * readonly/disabled.
- */
-export function ensureHandoffFormOpenAndWritable(
-  fields: unknown,
-  observed: ElementRef[],
-  lookupRef: (ref: string) => ElementLike | null | undefined,
-  entered: EnteredControlTracker,
-): void {
-  if (!Array.isArray(fields)) return
-  for (const item of fields) {
-    if (!item || typeof item !== 'object') continue
-    const binding = item as FormHandoffField
-    let live: ElementLike | null | undefined
-    if (binding.ref) {
-      const matches = observed.filter(element => formFieldMatches(element, binding))
-      if (matches.length !== 1 || matches[0]!.ref !== binding.ref) continue
-      try { live = lookupRef(binding.ref) } catch {
-        throw new FormClosedOrReadonlyError('form_closed_or_readonly: handoff form field is detached')
-      }
-      if (!live || live.isConnected === false) {
-        throw new FormClosedOrReadonlyError('form_closed_or_readonly: handoff form field is no longer on the page')
-      }
-    } else {
-      live = entered.find(binding, observed)
-      if (!live) continue
-    }
-    const target = binding.control === 'radiogroup' ? radioGroup(live) : live
-    ensureFormWritableAndOpen(target, 'handoff', Boolean(binding.option_label && listboxCombobox(target)))
-  }
 }

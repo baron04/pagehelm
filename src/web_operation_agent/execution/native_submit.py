@@ -67,7 +67,6 @@ MESSAGES = {
     "append_overwrite": "用户要求追加或补充内容，但当前填写覆盖了原有内容（{detail}）。"
                         "请保留该字段原有内容并在其后追加本次内容后再提交。",
     "conventions_undeclared": "当前集成没有声明应用的记录约定，不能由助手提交。",
-    "form_closed_or_readonly": "当前表单或弹窗已关闭或为只读状态，没有提交；请先确认页面状态。",
 }
 
 
@@ -431,8 +430,6 @@ class NativeSubmitMixin:
     def _read(self, s, element, kind, **extra):
         receipt = self._dispatch(s, "form_model", {"ref": element.ref, "kind": kind, **extra})
         if receipt is None or not receipt.ok or not isinstance(receipt.form_data, dict):
-            if receipt is not None and receipt.error_code == "form_closed_or_readonly":
-                raise ContractRefused("form_closed_or_readonly", "当前表单或弹窗已关闭或为只读状态")
             why = re.search(r"\(([a-z_]+)\)", getattr(receipt, "error_detail", "") or "")
             raise ContractRefused("form_data_unreadable", why.group(1) if why else "")
         return receipt.form_data
@@ -461,7 +458,7 @@ class NativeSubmitMixin:
             refused = self._not_sent(s, exc.code, exc.detail)
             if exc.code in {"dangerous_unconfirmed", "record_changed", "record_unreadable",
                             "validation", "no_change", "opening_changes", "credential_field",
-                            "value_not_from_user", "append_overwrite", "form_closed_or_readonly"}:
+                            "value_not_from_user", "append_overwrite"}:
                 turn["submit_handoff_blocked"] = exc.code
                 return refused
             return self._submit_handoff(s, element, turn, refused, form=form)

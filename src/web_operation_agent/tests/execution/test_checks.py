@@ -10,7 +10,6 @@ import unittest
 
 from web_operation_agent.execution.answer_check import (
     MODEL_DELIVERY_REJECTED_SPEC,
-    UNBACKED_BUSINESS_CLAIM_SPEC,
     UNTRACED_NUMBERS_SPEC,
 )
 from web_operation_agent.execution.checks import (
@@ -26,8 +25,6 @@ from web_operation_agent.execution.harness import (
 from web_operation_agent.execution.loop_guard import (
     FAILED_READ_REPEATED_SPEC,
     SAME_STEP_STALLED_SPEC,
-    STABLE_CONTROL_REPEATED_SPEC,
-    VERIFIED_EMPTY_FILTER_REPEATED_SPEC,
 )
 from web_operation_agent.execution.model_loop import (
     COMPLETION_REVIEW_SPEC,
@@ -274,13 +271,10 @@ class CoreCheckSpecTests(unittest.TestCase):
         expected = {
             "untraced_numbers": UNTRACED_NUMBERS_SPEC,
             "model_delivery_rejected": MODEL_DELIVERY_REJECTED_SPEC,
-            "unbacked_business_claim": UNBACKED_BUSINESS_CLAIM_SPEC,
             "completion_review": COMPLETION_REVIEW_SPEC,
             "slim_verify": SLIM_VERIFY_SPEC,
             "failed_read_repeated": FAILED_READ_REPEATED_SPEC,
             "same_step_stalled": SAME_STEP_STALLED_SPEC,
-            "stable_control_repeated": STABLE_CONTROL_REPEATED_SPEC,
-            "verified_empty_filter_repeated": VERIFIED_EMPTY_FILTER_REPEATED_SPEC,
             "model_answer_not_delivered": MODEL_ANSWER_NOT_DELIVERED_SPEC,
         }
         self.assertEqual(set(CORE_CHECK_SPECS), set(expected))

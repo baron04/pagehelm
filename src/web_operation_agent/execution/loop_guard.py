@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from urllib.parse import urlsplit
 
 from ..schemas import PageObservation
 from .checks import ProgramCheckSpec
@@ -21,20 +20,6 @@ SAME_STEP_STALLED_SPEC = ProgramCheckSpec(
     checks_what="the model does not repeat the identical page action with unchanged arguments on an unchanged observation",
     retry_guidance="skip duplicate page action up to three times and tell the model to try a different step or report cannot",
     terminal_delivery="stop turn as agent_refused once stalled count exceeds three and notify user the repeated step had no effect",
-)
-
-STABLE_CONTROL_REPEATED_SPEC = ProgramCheckSpec(
-    name="stable_control_repeated",
-    checks_what="a failed page control action is not repeatedly dispatched with the same stable control identity",
-    retry_guidance="skip the 2nd identical failed dispatch and return the exact failure reason and candidate labels to try another option or control",
-    terminal_delivery="stop cleanly as agent_refused once repeated identical failed control dispatches stall",
-)
-
-VERIFIED_EMPTY_FILTER_REPEATED_SPEC = ProgramCheckSpec(
-    name="verified_empty_filter_repeated",
-    checks_what="filter queries or page resets already verified empty in this turn are not re-dispatched",
-    retry_guidance="block duplicate empty filter dispatches before hitting the page or API and instruct the model to change filter criteria or report empty",
-    terminal_delivery="block duplicate empty filter dispatch and preserve already-verified empty findings",
 )
 
 #: Read failures that may not recur on an identical call; every other code does.
@@ -94,149 +79,21 @@ def action_label(name: str, args: dict, target) -> str:
     return target_name(target)[:40] if target is not None else ""
 
 
-def _obs_route(observation) -> str:
-    if observation is None:
-        return ""
-    route = str(getattr(observation, "page_route", "") or "").strip()
-    if route:
-        return route
-    url = str(getattr(observation, "url", "") or "").strip()
-    return (urlsplit(url).path or "") if url else ""
-
-
-def _normalize_control_value(value) -> str:
-    if value is None:
-        return ""
-    return " ".join(str(value).split())
-
-
-def stable_control_identity(name: str, arguments: dict, target, observation=None):
-    """Stable control identity `(action, route, form_scope, label_or_name, normalized_value)`."""
-    if name not in {"click", "input", "select", "fill_fields"}:
+def failure_base(name: str, arguments: dict, target):
+    """A turn-local retry key without epoch, route, or raw entered values."""
+    if name not in {"click", "input", "select", "fill_fields", "goto"}:
         return None
-    route = _obs_route(observation)
-    args = arguments if isinstance(arguments, dict) else {}
     if name == "fill_fields":
-        fields = args.get("fields") or ()
-        labels = tuple(str(item.get("label") or "").strip() for item in fields if isinstance(item, dict))
-        values = tuple(_normalize_control_value(item.get("value")) for item in fields if isinstance(item, dict))
-        form_scope = str(args.get("form_scope") or "").strip()
-        if not form_scope and observation is not None and labels:
-            for elem in getattr(observation, "elements", ()):
-                elem_label = str(
-                    elem.attrs.get("field_label")
-                    or elem.attrs.get("field")
-                    or elem.attrs.get("title")
-                    or elem.name
-                    or ""
-                ).strip()
-                if elem_label in labels and elem.attrs.get("form_scope"):
-                    form_scope = str(elem.attrs.get("form_scope") or "").strip()
-                    break
-        return ("fill_fields", route, form_scope, labels, values)
-    form_scope = (
-        str(target.attrs.get("form_scope") or "").strip()
-        if target is not None
-        else str(args.get("form_scope") or "").strip()
-    )
-    if target is not None:
-        label_or_name = str(
-            target.attrs.get("field_label")
-            or target.attrs.get("field")
-            or target.attrs.get("title")
-            or target.name
-            or target.role
-            or ""
-        ).strip()
+        fields = arguments.get("fields") or ()
+        labels = tuple(str(item.get("label") or "") for item in fields if isinstance(item, dict))
+        values = tuple(str(item.get("value") or "") for item in fields if isinstance(item, dict))
     else:
-        label_or_name = str(
-            args.get("label")
-            or args.get("path")
-            or args.get("url")
-            or f"index:{args.get('index')}"
-        ).strip()
-    raw_val = (
-        args.get("value")
-        if args.get("value") is not None
-        else args.get("text")
-        if args.get("text") is not None
-        else args.get("option_label")
-        if args.get("option_label") is not None
-        else args.get("option")
-    )
-    return (name, route, form_scope, label_or_name, _normalize_control_value(raw_val))
-
-
-def failure_base(name: str, arguments: dict, target, observation=None):
-    """A turn-local stable failure key without volatile element index or epoch."""
-    identity = stable_control_identity(name, arguments, target, observation)
-    if identity is not None:
-        return identity
-    if name == "goto":
-        args = arguments if isinstance(arguments, dict) else {}
-        dest = str(args.get("path") or args.get("url") or "").strip()
-        return ("goto", _obs_route(observation), "", dest, "")
-    return None
-
-
-def canonical_filter_key(
-    route: str = "",
-    active_view_or_tab: str = "",
-    filter_pairs=(),
-) -> tuple[str, str, tuple[tuple[str, str], ...]]:
-    """Canonical `(route, active_view_or_tab, canonical_filter_pairs)` key for empty filter dedup."""
-    clean_route = str(route or "").strip()
-    clean_view = " ".join(str(active_view_or_tab or "").split())
-    items: list[tuple[str, str]] = []
-    raw_items = filter_pairs.items() if isinstance(filter_pairs, dict) else (filter_pairs or ())
-    for entry in raw_items:
-        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
-            continue
-        k = str(entry[0] or "").strip()
-        v = _normalize_control_value(entry[1])
-        if k and v:
-            items.append((k, v))
-    items.sort()
-    return (clean_route, clean_view, tuple(items))
-
-
-def _verified_empty_filter_set(turn, *, create: bool) -> set | None:
-    if turn is None:
-        return None
-    if hasattr(turn, "get") and hasattr(turn, "setdefault"):
-        return turn.setdefault("verified_empty_filters", set()) if create else turn.get("verified_empty_filters")
-    bucket = getattr(turn, "verified_empty_filters", None)
-    if bucket is None and create:
-        bucket = set()
-        setattr(turn, "verified_empty_filters", bucket)
-    return bucket
-
-
-def record_verified_empty_filter(
-    turn,
-    route: str = "",
-    active_view_or_tab: str = "",
-    filter_pairs=(),
-) -> tuple[str, str, tuple[tuple[str, str], ...]]:
-    """Record a verified empty `(route, active_view_or_tab, filter_pairs)` monotonically per turn."""
-    key = canonical_filter_key(route, active_view_or_tab, filter_pairs)
-    bucket = _verified_empty_filter_set(turn, create=True)
-    if bucket is not None:
-        bucket.add(key)
-    return key
-
-
-def is_verified_empty_filter(
-    turn,
-    route: str = "",
-    active_view_or_tab: str = "",
-    filter_pairs=(),
-) -> bool:
-    """Return whether `(route, active_view_or_tab, filter_pairs)` was already verified empty this turn."""
-    bucket = _verified_empty_filter_set(turn, create=False)
-    if not bucket:
-        return False
-    return canonical_filter_key(route, active_view_or_tab, filter_pairs) in bucket
+        labels = (str((target.attrs.get("field_label") or target.name or target.role) if target else
+                      arguments.get("path") or arguments.get("url") or
+                      f"index:{arguments.get('index')}"),)
+        values = (arguments.get("value") or arguments.get("option") or "",)
+    digest = hashlib.sha256(json.dumps(values, ensure_ascii=False).encode()).hexdigest()
+    return name, labels, digest
 
 
 def format_observation_summary(summary: dict | None, *, max_chars: int = 600) -> str:

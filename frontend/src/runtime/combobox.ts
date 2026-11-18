@@ -246,13 +246,6 @@ export function visibleComboboxOptions(
   return out
 }
 
-/** True when a combobox input has an empty value and no selected option in its owned popup. */
-export function isComboboxClearedWithoutSelection(element: HTMLInputElement): boolean {
-  return listboxCombobox(element) &&
-    String(element.value || '').trim() === '' &&
-    selectedComboboxOption(element) === null
-}
-
 /**
  * When a combobox popup opens with an empty option list (e.g. async remote options),
  * wait briefly (~250ms bounded) for visible options to populate before concluding absence.

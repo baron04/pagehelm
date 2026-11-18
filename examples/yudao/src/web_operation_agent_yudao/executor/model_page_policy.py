@@ -658,7 +658,7 @@ class NativeDraftSteps:
     def verify_no_effect(self, permit, intent, receipt, *, observation, context, checkpoint):
         BoundDataReads(self.data, context, checkpoint)
         expected = self._prepared.get(intent.binding_digest)
-        if (expected is None or permit.step != "enter_value" or intent.action not in {"select", "fill"}
+        if (expected is None or permit.step != "enter_value" or intent.action != "select"
                 or not receipt.no_effect or self.data._client.read_generation != expected["generation"]
                 or self.forms._evidence.since(expected["mark"])
                 or observation.url != intent.observation.url

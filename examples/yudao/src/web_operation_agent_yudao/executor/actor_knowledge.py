@@ -126,8 +126,6 @@ class ActorKnowledge:
         #: read was refused or named no interface.
         self.last_read: dict | None = None
         self.last_keys: tuple[str, ...] = ()
-        self.last_filters: dict = {}
-        self.last_is_list: bool = False
         self.turn_targets: dict[str, set[str]] = {}
 
     def _load(self):
@@ -452,8 +450,6 @@ class ActorKnowledge:
             "has_last_read": False,
             "last_read": None,
             "last_keys": (),
-            "last_filters": {},
-            "last_is_list": False,
             "last_query_answer": None,
             "pages_read": pages_read,
         }
@@ -504,7 +500,6 @@ class ActorKnowledge:
                             params[k] = [f"{v[0]} 00:00:00", f"{v[1]} 23:59:59"]
             self._validate_params(path, params)
             filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
-            prepared["last_filters"] = dict(filters)
             relative, props, out = path[len("/admin-api/"):], self._row_schema(path), []
             if summary is not None:
                 from ..reads.read_summary import bind_native_conditions
@@ -524,7 +519,6 @@ class ActorKnowledge:
                 data, rows, total, whole, requests = self._pages(
                     relative, params, bool(fields), **pages_kw
                 )
-                prepared["last_is_list"] = rows is not None
                 declared_total = total if type(total) is int and total >= 0 else None
                 observed = rows if rows is not None else [data]
                 if (whole or rows is None) and all(isinstance(row, dict) for row in observed):
@@ -740,16 +734,12 @@ class ActorKnowledge:
         if prepared.get("reset_read"):
             self.last_read = None
             self.last_keys = ()
-            self.last_filters = {}
-            self.last_is_list = False
         if prepared.get("turn_targets_update") is not None:
             prefix, ids = prepared["turn_targets_update"]
             self.turn_targets.setdefault(prefix, set()).update(ids)
         if prepared.get("has_last_read"):
             self.last_read = prepared["last_read"]
             self.last_keys = prepared["last_keys"]
-            self.last_filters = dict(prepared.get("last_filters") or {})
-            self.last_is_list = bool(prepared.get("last_is_list"))
         if prepared.get("last_query_answer") is not None:
             self.last_query_answer = prepared["last_query_answer"]
         if "error" in prepared:

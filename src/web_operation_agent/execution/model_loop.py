@@ -61,18 +61,13 @@ from .read_summary import SummaryResult, render_summary
 from . import answer_check, loop_guard
 from .answer_check import (
     MODEL_DELIVERY_REJECTED_SPEC,
-    UNBACKED_BUSINESS_CLAIM_SPEC,
     UNTRACED_NUMBERS_SPEC,
-    check_unbacked_business_claim,
     history_messages,
-    record_issued_ev_citations,
 )
 from .checks import ProgramCheckSpec, record_check_fired
 from .loop_guard import (
     FAILED_READ_REPEATED_SPEC,
     SAME_STEP_STALLED_SPEC,
-    STABLE_CONTROL_REPEATED_SPEC,
-    VERIFIED_EMPTY_FILTER_REPEATED_SPEC,
     _ACTION_WORDS,
     _NOT_EXECUTED,
     _NOT_EXECUTED_EN,
@@ -80,11 +75,8 @@ from .loop_guard import (
     build_handoff_payload,
     format_observation_summary,
     format_receipt_field_details,
-    is_verified_empty_filter,
     merge_receipt_form_outcomes,
-    record_verified_empty_filter,
     settled_action_observation_valid,
-    stable_control_identity,
 )
 from .turn_trace import render_expanded_table_text
 
@@ -114,13 +106,10 @@ CORE_CHECK_SPECS: dict[str, ProgramCheckSpec] = {
     for spec in (
         UNTRACED_NUMBERS_SPEC,
         MODEL_DELIVERY_REJECTED_SPEC,
-        UNBACKED_BUSINESS_CLAIM_SPEC,
         COMPLETION_REVIEW_SPEC,
         SLIM_VERIFY_SPEC,
         FAILED_READ_REPEATED_SPEC,
         SAME_STEP_STALLED_SPEC,
-        STABLE_CONTROL_REPEATED_SPEC,
-        VERIFIED_EMPTY_FILTER_REPEATED_SPEC,
         MODEL_ANSWER_NOT_DELIVERED_SPEC,
     )
 }
@@ -241,7 +230,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
     api_history_chars = 12000
     program_read_delivery = True
     direct_skill_operations = False
-    require_evidence_citations = False
 
     def _finish_feedback(self, s, turn, args):
         """Return a user-safe reason to send a malformed delivery back to the model."""
@@ -264,36 +252,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         """The adapter's last word on an accepted finish: program work the turn still owes
         (a handoff it must leave in place) and what the reply must say about it."""
         return args
-
-    @staticmethod
-    def record_verified_empty_filter(turn, route: str = "", active_view_or_tab: str = "", filter_pairs=()):
-        """Record a verified empty `(route, active_view_or_tab, filter_pairs)` tuple on `turn`."""
-        return record_verified_empty_filter(turn, route=route, active_view_or_tab=active_view_or_tab, filter_pairs=filter_pairs)
-
-    @staticmethod
-    def is_verified_empty_filter(turn, route: str = "", active_view_or_tab: str = "", filter_pairs=()) -> bool:
-        """Return whether `(route, active_view_or_tab, filter_pairs)` was already verified empty this turn."""
-        return is_verified_empty_filter(turn, route=route, active_view_or_tab=active_view_or_tab, filter_pairs=filter_pairs)
-
-    def _filter_identity(self, s, name: str, args: dict, turn) -> tuple[str, str, object] | None:
-        """Extract canonical `(route, active_view_or_tab, filter_pairs)` for empty-filter dedup."""
-        if not isinstance(args, dict):
-            return None
-        procedures = getattr(getattr(self, "profile", None), "procedures", ())
-        procedure = next((p for p in procedures if p.schema["function"]["name"] == name), None)
-        if procedure is not None:
-            hook = getattr(getattr(procedure, "handler", None), "filter_identity", None)
-            if callable(hook):
-                return hook(args, getattr(s, "obs", None))
-        kind = self._procedure_kind(name)
-        if kind != "read" and name not in {"filter", "query", "search_records"}:
-            return None
-        raw_filters = args.get("filters") if args.get("filters") is not None else args.get("query")
-        if not isinstance(raw_filters, (dict, list, tuple)):
-            return None
-        route = str(args.get("route") or args.get("path") or self._query_line(s) or "").strip()
-        view = str(args.get("tab") or args.get("view") or args.get("active_tab") or "").strip()
-        return (route, view, raw_filters)
 
     @staticmethod
     def _verified_mutation_completion_summary(s, turn) -> str | None:
@@ -1140,8 +1098,8 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         return loop_guard.target_name(element)
 
     @staticmethod
-    def _failure_base(name, arguments, target, observation=None):
-        return loop_guard.failure_base(name, arguments, target, observation=observation)
+    def _failure_base(name, arguments, target):
+        return loop_guard.failure_base(name, arguments, target)
 
     def _forget_old_observations(self) -> None:
         loop_guard.forget_old_observations(self._messages, api_history_chars=self.api_history_chars)
@@ -1283,7 +1241,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         unseen: str,
         observation_delivered: bool,
         read_observation_available: bool,
-        before_obs=None,
         observe_suppressed: bool = False,
     ):
         harness = self._ensure_harness()
@@ -1308,29 +1265,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                 if failures >= 6 and "forced_summary_at" not in turn:
                     turn["forced_summary_at"] = taken
                     turn["forced_summary_kind"] = "page"
-                if result.error_code == "verified_empty_filter_repeated":
-                    record_check_fired(
-                        s.ledger,
-                        s=s,
-                        trace=trace,
-                        check=VERIFIED_EMPTY_FILTER_REPEATED_SPEC.name,
-                        outcome="blocked",
-                        attempt=1,
-                        answer_preserved=False,
-                    )
-                stable_key = stable_control_identity(name, args, target, before_obs)
-                if (stable_key is not None
-                        and result.error_code not in ({"stale_observation", "stale_binding", "unreviewed"} | _TRANSIENT_FAILURES)):
-                    candidates = tuple(
-                        label
-                        for r in receipts
-                        for label in (getattr(r, "candidate_labels", ()) or ())
-                    )
-                    turn.setdefault("failed_controls", {})[stable_key] = {
-                        "error_code": result.error_code,
-                        "candidates": candidates,
-                        "skips": 0,
-                    }
                 if failure_base is not None:
                     counts = turn.setdefault("failure_counts", {})
                     failure = failure_base, result.error_code
@@ -1373,9 +1307,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
             if result.read_count:
                 empty.pop(result.read_key, None)
             else:
-                filter_id = self._filter_identity(s, name, args, turn)
-                if filter_id is not None:
-                    record_verified_empty_filter(turn, *filter_id)
                 attempts = empty[result.read_key] = empty.get(result.read_key, 0) + 1
                 if attempts == 2:
                     text += ("\n同一数据来源已连续两次返回空列表。检查筛选条件；此前若有较宽查询"
@@ -1386,12 +1317,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     text += "\n连续四次空读，停止尝试这个数据来源；下一步只汇总已核实的事实。"
         if result.error_code:
             text += f"\nstate={result.state}; dispatch={result.dispatch}; error_code={result.error_code}"
-        if result.error_code == "form_closed_or_readonly" or any(
-            getattr(r, "error_code", "") == "form_closed_or_readonly" for r in receipts
-        ):
-            if "form_closed_or_readonly" not in text:
-                text += "\nerror_code=form_closed_or_readonly"
-            text += "\n当前表单或弹窗已关闭或为只读状态，未改动字段；请勿继续重试旧控件，请重新观察页面或说明原因。"
         outcomes_bucket = turn.setdefault("form_field_outcomes", {})
         for r in receipts:
             merge_receipt_form_outcomes(outcomes_bucket, r)
@@ -1476,7 +1401,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
         changed_page = changed_page or (changed and name != "observe")
         unwritten = unwritten or (result.kind == "write" and result.state != "completed")
         text = self._tool_feedback(s, turn, name, result, text)
-        record_issued_ev_citations(turn, text)
         answer = str(args.get("answer") or "").strip() if (name in ("goto", "highlight", "click")
                     or result.completion_command) else ""
         if answer:
@@ -1783,22 +1707,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         s.terminal_reason, s.detail = "agent_refused", "numeric delivery correction unavailable"
                         harness.set_stop_reason(s, "numeric_delivery_correction_unavailable", trace=trace)
                     return self._with_not_executed(s, turn, failed["answer"])
-                if turn.pop("pending_unbacked_claim", None) is not None:
-                    record_check_fired(
-                        s.ledger,
-                        s=s,
-                        trace=trace,
-                        check=UNBACKED_BUSINESS_CLAIM_SPEC.name,
-                        outcome="blocked",
-                        attempt=2,
-                        answer_preserved=False,
-                    )
-                    s.terminal_reason, s.detail = "agent_refused", "unbacked business claim unresolved"
-                    harness.set_stop_reason(s, "unbacked_business_claim", trace=trace)
-                    msg = ("未能提供可核验的本轮工具回执，已停止并如实说明无法确认。"
-                           if getattr(s, "chinese", True)
-                           else "Could not verify the business claim with current-turn evidence.")
-                    return self._with_not_executed(s, turn, msg)
                 cancelled = (
                     (callable(getattr(s, "cancelled", None)) and s.cancelled())
                     or getattr(exc, "code", "") == "provider_cancelled"
@@ -2074,64 +1982,9 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     position += 1
                     continue
                 acts = name in ("click", "input", "select", "scroll", "fill_fields")
-                before_obs = s.obs
                 target = (self._element(s, args.get("index")) if name in ("click", "input", "select", "highlight")
                           and isinstance(args.get("index"), int) else None)
-                filter_id = self._filter_identity(s, name, args, turn)
-                if filter_id is not None and is_verified_empty_filter(turn, *filter_id):
-                    record_check_fired(
-                        s.ledger,
-                        s=s,
-                        trace=trace,
-                        check=VERIFIED_EMPTY_FILTER_REPEATED_SPEC.name,
-                        outcome="blocked",
-                        attempt=1,
-                        answer_preserved=False,
-                    )
-                    unseen = unseen or name
-                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
-                        "未执行：同一路由、页签与筛选条件本轮已核实为空结果，程序不会重复派发。"
-                        "请放宽或更换筛选条件，或如实说明未查到匹配记录。error_code=verified_empty_filter_repeated"})
-                    position += 1
-                    continue
-                stable_key = stable_control_identity(name, args, target, before_obs)
-                if stable_key is not None and stable_key in turn.get("failed_controls", {}):
-                    ctrl_info = turn["failed_controls"][stable_key]
-                    ctrl_info["skips"] = ctrl_info.get("skips", 0) + 1
-                    turn["stable_control_repeats"] = turn.get("stable_control_repeats", 0) + 1
-                    if ctrl_info["skips"] >= 2 or turn["stable_control_repeats"] >= 3:
-                        record_check_fired(
-                            s.ledger,
-                            s=s,
-                            trace=trace,
-                            check=STABLE_CONTROL_REPEATED_SPEC.name,
-                            outcome="blocked",
-                            attempt=ctrl_info["skips"] + 1,
-                            answer_preserved=False,
-                        )
-                        s.terminal_reason, s.detail = "agent_refused", "a failed stable control action repeated and stalled"
-                        harness.set_stop_reason(s, "stable_control_repeated", trace=trace)
-                        return ("同一控件操作反复失败并停滞，已停止执行；请核对页面控件状态。"
-                                if getattr(s, "chinese", True)
-                                else "The same control action failed repeatedly and stalled.")
-                    record_check_fired(
-                        s.ledger,
-                        s=s,
-                        trace=trace,
-                        check=STABLE_CONTROL_REPEATED_SPEC.name,
-                        outcome="returned",
-                        attempt=ctrl_info["skips"],
-                        answer_preserved=False,
-                    )
-                    cands = ctrl_info.get("candidates") or ()
-                    cand_hint = f"；可用候选：{'、'.join(cands)}" if cands else ""
-                    unseen = unseen or name
-                    self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
-                        f"未执行：同一控件与参数此前已失败（error_code={ctrl_info['error_code']}）{cand_hint}。"
-                        "程序已跳过重复派发；请更换选项、切换控件，或用 cannot/need_input 说明。"})
-                    position += 1
-                    continue
-                failure_base = self._failure_base(name, args, target, before_obs)
+                failure_base = self._failure_base(name, args, target)
                 if failure_base is not None and failure_base in turn.get("blocked_failures", set()):
                     unseen = unseen or name
                     self._messages.append({"role": "tool", "tool_call_id": call.get("id"), "content":
@@ -2167,8 +2020,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         "按上次的错误说明改正参数、换用其它已发布的接口，或如实说明做不到。"})
                     position += 1
                     continue
-                dedup_key = stable_key if stable_key is not None else (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
-                where = (dedup_key, self._page_fingerprint(s.obs))
+                where = (name, json.dumps(args, sort_keys=True, ensure_ascii=False), self._page_fingerprint(s.obs))
                 if acts and where in turn["done"]:
                     # The same step from a page that shows the same: it led nowhere the first time.
                     turn["stalled"] += 1
@@ -2236,7 +2088,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     changed_page=changed_page, unwritten=unwritten, unseen=unseen,
                     observation_delivered=observation_delivered,
                     read_observation_available=read_observation_available,
-                    before_obs=before_obs,
                     observe_suppressed=observe_suppressed,
                 )
                 if terminal_exit is not None:
@@ -2278,21 +2129,6 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                     finish = self._finalize_untraced(s, turn, finish, untraced)
                     status, answer = finish["status"], finish["answer"]
             turn.pop("pending_numeric_finish", None)
-            if status == "done":
-                claim_verdict = check_unbacked_business_claim(self, s, prompt, turn, finish)
-                if claim_verdict == "retry":
-                    self._messages.append({"role": "user", "content":
-                        "刚才的 finish(done) 包含未引用本轮有效工具回执（ev_...）的业务数据/状态/规则主张。"
-                        "除非仅属于纯问候、能力说明、用户原文翻译/摘要或纯用户数字算术，否则必须先调用相应读取工具并引用本轮有效 ev_ 回执；"
-                        "若查不到或权限不足，请改用 finish(status=\"cannot\") 如实说明。"})
-                    return self._loop(s, prompt, turn, verified=verified)
-                if claim_verdict == "blocked":
-                    s.terminal_reason, s.detail = "agent_refused", "unbacked business claim without current-turn evidence"
-                    harness.set_stop_reason(s, "unbacked_business_claim", trace=trace)
-                    msg = ("未能提供可核验的本轮工具回执，无法确认该业务结论；请以本轮实际读取结果为准。"
-                           if getattr(s, "chinese", True)
-                           else "Cannot verify this business claim without current-turn tool evidence.")
-                    return self._with_not_executed(s, turn, msg)
             if status == "done" and turn.get("review_completion") and not turn.get("read_only"):
                 self._note(s, stage="check")
                 review = self._verify(s, prompt, answer, turn)
@@ -2382,7 +2218,7 @@ class ModelDrivenTurnExecutor(NativeSubmitMixin):
                         pass
             elif status == "cannot":
                 s.terminal_reason = "agent_refused"
-                harness.set_stop_reason(s, turn.pop("forced_stop_reason", None) or "agent_refused", trace=trace)
+                harness.set_stop_reason(s, "agent_refused", trace=trace)
             elif s.mutation_outcomes:
                 # Said outright, as the goal turn's Skill path says it: settlement names
                 # the verified writes ahead of the answer of any turn it is not told

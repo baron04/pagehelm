@@ -469,9 +469,6 @@ def apply_form_draft(
         merge_receipt_form_outcomes(outcomes, receipt)
         if receipt.error_code == "user_intervened":
             return receipt.observation or before, "user_cancelled", "the person took control"
-        if receipt.error_code == "form_closed_or_readonly":
-            return (receipt.observation or before, "agent_refused",
-                    "form_closed_or_readonly: the target form or dialog is closed or readonly")
         # Record the acknowledgement and write attribution before reporting a deadline.
         # A late receipt must never be discarded or invite replay of entered fields.
         reason, detail = stopped()
@@ -626,7 +623,7 @@ def apply_form_draft(
                     if shown == [midnight]:
                         completed[binding.field] = midnight
                 break
-            if last_code == "option_unavailable" and unoffered is not None and action in {"select", "fill"}:
+            if last_code == "option_unavailable" and unoffered is not None and action == "select":
                 unoffered.append((binding.label or binding.field, binding.option_label or binding.value))
                 left_out.add(binding.field)
                 again, reason, detail = look_again(current, 300)
@@ -634,8 +631,6 @@ def apply_form_draft(
                     return again or current, reason, detail
                 current = again or current
                 break
-            if last_code == "form_closed_or_readonly":
-                return current, "agent_refused", "form_closed_or_readonly: the target form or dialog is closed or readonly"
             if last_code != "stale_observation" or attempt == 2:
                 return current, reason, detail
             current, reason, detail = dispatch("observe", {}, "", current)

@@ -31,7 +31,6 @@ from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 
 from ..reads import bound_data_reads
 from ..reads.api_content import fenced, redacted
-from ..reads.live_filters import active_view_or_tab, canonical_filter_pairs, control_identity
 from ..reads.record_access import contact_can_edit, customer_can_edit
 from ..reads.turn_tables import TurnReadError, date_range
 from ..writes.live_forms import SUBMIT_WORDS, observed_radio_choices, plain
@@ -125,88 +124,6 @@ def _unrequested_draft_fields(
 def _new_form_draft_request(text: str) -> bool:
     """Distinguish a new draft from editing an existing record in this turn."""
     return _draft_only_request(text) and not re.search(r"编辑|修改|已有|原值|当前值|改成|改为", text)
-
-
-def _empty_filter_key(route: str, active_view: str = "", filter_pairs=()) -> tuple[str, str, tuple[tuple[str, str], ...]]:
-    return (str(route or ""), str(active_view or ""), canonical_filter_pairs(filter_pairs))
-
-
-def _verified_empty_store(ctx, policy_turn=None) -> set:
-    if isinstance(policy_turn, dict) or (policy_turn is not None and hasattr(policy_turn, "setdefault")):
-        store = policy_turn.setdefault("verified_empty_filters", set())
-        if isinstance(store, set):
-            return store
-    store = getattr(ctx, "verified_empty_filters", None) if ctx is not None else None
-    if not isinstance(store, set):
-        store = set()
-        if ctx is not None:
-            try:
-                setattr(ctx, "verified_empty_filters", store)
-            except Exception:
-                pass
-    return store
-
-
-def record_verified_empty_filter(ctx, policy_turn, *, route: str, active_view: str = "", filter_pairs=()):
-    key = _empty_filter_key(route, active_view, filter_pairs)
-    from web_operation_agent.execution import loop_guard
-    core_fn = getattr(loop_guard, "record_verified_empty_filter", None)
-    if callable(core_fn) and policy_turn is not None:
-        try:
-            core_fn(policy_turn, route=key[0], active_view_or_tab=key[1], filter_pairs=key[2])
-        except TypeError:
-            try:
-                core_fn(policy_turn, key[0], key[1], key[2])
-            except Exception:
-                pass
-    _verified_empty_store(ctx, policy_turn).add(key)
-    return key
-
-
-def is_verified_empty_filter(ctx, policy_turn, *, route: str, active_view: str = "", filter_pairs=()) -> bool:
-    key = _empty_filter_key(route, active_view, filter_pairs)
-    from web_operation_agent.execution import loop_guard
-    core_fn = getattr(loop_guard, "is_verified_empty_filter", None)
-    if callable(core_fn) and policy_turn is not None:
-        try:
-            if core_fn(policy_turn, route=key[0], active_view_or_tab=key[1], filter_pairs=key[2]):
-                return True
-        except TypeError:
-            try:
-                if core_fn(policy_turn, key[0], key[1], key[2]):
-                    return True
-            except Exception:
-                pass
-    return key in _verified_empty_store(ctx, policy_turn)
-
-
-def _current_page_query_filters(observation, overrides=None) -> tuple[tuple[str, str], ...]:
-    """Extract current visible query-control `(label, value)` pairs merged with optional overrides."""
-    merged: dict[str, str] = {}
-    if observation is not None:
-        for e in getattr(observation, "elements", ()) or ():
-            attrs = getattr(e, "attrs", {}) or {}
-            if attrs.get("page_control") != "query":
-                continue
-            label = str(attrs.get("field_label") or attrs.get("title") or "").strip().rstrip(":：").strip()
-            if not label:
-                continue
-            val = attrs.get("selected_option") if attrs.get("selected_option") is not None else attrs.get("value")
-            if isinstance(val, str) and val.strip():
-                merged[label] = val.strip()
-    if overrides:
-        for item in overrides:
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("label") or "").strip().rstrip(":：").strip()
-            if not label or label in _PAGING:
-                continue
-            val = str(item.get("value") or "").strip()
-            if val:
-                merged[label] = val
-            else:
-                merged.pop(label, None)
-    return canonical_filter_pairs(merged)
 
 
 def _is_settled_action_receipt(action: str, receipt, *, expected_path: str = "") -> bool:
@@ -484,14 +401,8 @@ class YudaoProceduresBase:
 
     def _act(self, s, action: str, args: dict, *, navigating: bool = False, complete_query=False) -> LoopToolResult | None:
         self._last_action_receipt = None
-        element = (next((e for e in s.obs.elements if e.ref == args.get("ref")), None)
-                   if getattr(s, "obs", None) is not None and args.get("ref") else None)
-        if element is not None and callable(getattr(s, "audit", None)):
-            try:
-                s.audit("page_control_identity", action=action, **control_identity(s.obs, element))
-            except TypeError:
-                pass
         if action == "select":
+            element = next((e for e in s.obs.elements if e.ref == args.get("ref")), None)
             if element is not None and element.role == "radiogroup":
                 choices = [c for c in observed_radio_choices(element) if c.label == args.get("option_label")]
                 if len(choices) != 1:
@@ -537,8 +448,6 @@ class YudaoProceduresBase:
             "stale_binding": "页面已变化，请根据最新观察重新选择。",
             "permission_denied": "当前账号没有执行这项操作的权限。",
             "expired": "本次动作授权已过期。",
-            "form_closed_or_readonly": "目标表单或弹窗已关闭、分离或为只读状态，请勿编造值或用旧控件序号重试；"
-                                       "请先核对当前页面观察，再决定是否重新打开表单或如实说明。",
         }
         feedback = ("未执行：" if outcome.dispatch == "not_dispatched" else
                     "操作已发出但结果未确认，不会自动重发：") + reasons.get(err_code, "请根据错误码和最新观察决定下一步。")
@@ -663,13 +572,6 @@ class YudaoProceduresBase:
             if not isinstance(params, dict):
                 raise ValueError("query parameters must be an object")
             called_path = "/admin-api/" + args["path"].removeprefix("/admin-api/").lstrip("/")
-            req_filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
-            if is_verified_empty_filter(ctx, policy_turn, route=called_path, active_view="", filter_pairs=req_filters):
-                self._emit_check(s, "verified_empty_filter_repeated")
-                return LoopToolResult(
-                    "未执行：同一接口与筛选条件在本轮已核验为空结果（total=0）；请勿重复相同查询，请更换条件或如实说明查无记录。",
-                    kind="read", state="refused", error_code="verified_empty_filter_repeated",
-                )
             with s.measure("business"):
                 try:
                     sink = {"row_sink": table_context[0].add} if table_context is not None else {}
@@ -699,13 +601,6 @@ class YudaoProceduresBase:
                         "还需要补充证据时，依据已发布的只读接口和当前账号范围寻找。",
                         kind="read", state="refused", error_code="permission_denied")
             if know.last_read:
-                if getattr(know, "last_is_list", False) and (
-                        know.last_read.get("declared_total") == 0 or know.last_read.get("count") == 0):
-                    record_verified_empty_filter(
-                        ctx, policy_turn,
-                        route=called_path, active_view="",
-                        filter_pairs=getattr(know, "last_filters", req_filters),
-                    )
                 def valid_key(key):
                     return isinstance(key, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key))
                 published_fields = know._row_schema(called_path)
@@ -804,26 +699,6 @@ class YudaoProceduresBase:
             if (element.role == "tab" and s.obs.record_route == urlsplit(s.obs.url).path
                     and not self._detail_handoff_target(s, ctx.current_request)):
                 review_completion = True
-            btn_plain = plain(element.name)
-            is_query_btn = element.attrs.get("page_control") == "query" or btn_plain in {"搜索", "查询", "重置"}
-            route = s.obs.page_route or urlsplit(s.obs.url).path
-            tab = active_view_or_tab(s.obs)
-            if is_query_btn and btn_plain in {"搜索", "查询"}:
-                cur_filters = _current_page_query_filters(s.obs)
-                if is_verified_empty_filter(ctx, policy_turn, route=route, active_view=tab, filter_pairs=cur_filters):
-                    self._emit_check(s, "verified_empty_filter_repeated")
-                    return LoopToolResult(
-                        "未执行：当前筛选条件在本轮已核验为空结果（0条）；请勿重复相同查询，请更换条件或如实说明查无记录。",
-                        kind="page", state="refused", error_code="verified_empty_filter_repeated",
-                    )
-            elif is_query_btn and btn_plain == "重置":
-                cur_filters = _current_page_query_filters(s.obs)
-                if not cur_filters and is_verified_empty_filter(ctx, policy_turn, route=route, active_view=tab, filter_pairs=()):
-                    self._emit_check(s, "verified_empty_filter_repeated")
-                    return LoopToolResult(
-                        "未执行：当前无筛选条件的结果在本轮已核验为空（0条）；请勿重复重置查询。",
-                        kind="page", state="refused", error_code="verified_empty_filter_repeated",
-                    )
             tree_query = element.role == "treeitem" and element.attrs.get("page_control") == "query"
             failed = self._act(s, "click", {"ref": element.ref}, complete_query=tree_query)
             if tree_query and failed is not None and failed.state == "completed":
@@ -832,15 +707,6 @@ class YudaoProceduresBase:
             if not failed:
                 if not _is_settled_action_receipt("click", click_receipt):
                     self._settled(s)
-                if is_query_btn and getattr(s.obs, "page_read", None) is not None:
-                    read_info = s.obs.page_read
-                    if read_info.get("total") == 0 or read_info.get("rows") == 0:
-                        record_verified_empty_filter(
-                            ctx, policy_turn,
-                            route=s.obs.page_route or urlsplit(s.obs.url).path,
-                            active_view=active_view_or_tab(s.obs),
-                            filter_pairs=_current_page_query_filters(s.obs),
-                        )
             text = ("已点开下拉。要选其中一项，用 select(index, option) 按选项文字选："
                     "展开的列表只显示了一部分，在里面点容易点错。") if _control_kind(element) == "〔下拉〕" else "已点击。"
             if not failed:
@@ -1017,18 +883,6 @@ class YudaoProceduresBase:
         if then_click and then_highlight:
             return LoopToolResult("筛选和表单交接不能同时执行。", kind="page", state="refused",
                                   error_code="invalid_arguments")
-        query_filter_pairs = ()
-        is_query_submit = bool(query_only or plain(then_click) in {"搜索", "查询"})
-        if is_query_submit:
-            query_filter_pairs = _current_page_query_filters(s.obs, fields)
-            route = getattr(s.obs, "page_route", "") or urlsplit(getattr(s.obs, "url", "") or "").path
-            tab = active_view_or_tab(s.obs)
-            if is_verified_empty_filter(ctx, policy_turn, route=route, active_view=tab, filter_pairs=query_filter_pairs):
-                self._emit_check(s, "verified_empty_filter_repeated")
-                return LoopToolResult(
-                    "未执行：同一页面筛选条件在本轮已核验为空结果（0条）；请勿重复相同筛选或重置后重查，请更换条件或如实说明查无记录。",
-                    kind="page", state="refused", error_code="verified_empty_filter_repeated",
-                )
         intent = ctx.write_intent
         form_batch = bool(then_highlight or add_lines) or any(
             _business_scope(e.attrs.get("form_scope"))
@@ -1185,8 +1039,6 @@ class YudaoProceduresBase:
                 failure = failure or failed
                 batch_rejected[label] = failed.error_code or "rejected"
                 said.append(f"{label}：{failed.feedback}")
-                if failed.error_code == "form_closed_or_readonly":
-                    break
             else:
                 if not dispatched_any:
                     batch_applied[label] = value
@@ -1211,8 +1063,6 @@ class YudaoProceduresBase:
                 previous=batch_previous,
                 restricted=batch_restricted,
             )
-        if failure is not None and failure.error_code == "form_closed_or_readonly":
-            return replace(failure, feedback="；".join(said) + "。")
         wanted = re.sub(r"\s+", "", then_click or "")
         if wanted and not incomplete and not failure:
             if locate is not None:
@@ -1230,15 +1080,6 @@ class YudaoProceduresBase:
             else:
                 result = self._act(s, "click", {"ref": buttons[0].ref}, complete_query=True)
                 if result.completion_command:
-                    read_info = getattr(s.obs, "page_read", None)
-                    if is_query_submit and isinstance(read_info, dict) and (
-                            read_info.get("total") == 0 or read_info.get("rows") == 0):
-                        record_verified_empty_filter(
-                            ctx, policy_turn,
-                            route=getattr(s.obs, "page_route", "") or urlsplit(getattr(s.obs, "url", "") or "").path,
-                            active_view=active_view_or_tab(s.obs),
-                            filter_pairs=query_filter_pairs,
-                        )
                     return replace(result, feedback="；".join(said) + "；" + result.feedback)
                 failed = result
                 incomplete = incomplete or bool(failed)
@@ -1615,15 +1456,7 @@ class YudaoProceduresBase:
                 if not isinstance(params, dict):
                     raise ValueError("query parameters must be an object")
                 called_path = "/admin-api/" + arguments["path"].removeprefix("/admin-api/").lstrip("/")
-                req_filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
-                ctx = self._ctx()
-                if is_verified_empty_filter(ctx, ctx.executor_turn, route=called_path, active_view="", filter_pairs=req_filters):
-                    return {
-                        "called_path": called_path,
-                        "params": params,
-                        "verified_empty_blocked": True,
-                    }
-                use_table_sink = ctx.turn_tables is not None
+                use_table_sink = self._ctx().turn_tables is not None
                 actor_digest = (
                     operation.principal.actor_authority_digest
                     if "summary" in arguments and operation is not None
@@ -1683,12 +1516,6 @@ class YudaoProceduresBase:
             know = self.knowledge
             called_path = prepared["called_path"]
             params = prepared["params"]
-            if prepared.get("verified_empty_blocked"):
-                self._emit_check(context, "verified_empty_filter_repeated")
-                return LoopToolResult(
-                    "未执行：同一接口与筛选条件在本轮已核验为空结果（total=0）；请勿重复相同查询，请更换条件或如实说明查无记录。",
-                    kind="read", state="refused", error_code="verified_empty_filter_repeated",
-                )
             self._note(context, stage="tool", tool=name, arguments=said)
             for page_no in prepared["api"].get("pages_read", ()):
                 self._publish_read_page(context, page_no)
@@ -1713,14 +1540,6 @@ class YudaoProceduresBase:
                     kind="read", state="refused", error_code="permission_denied",
                 )
             if know.last_read:
-                req_filters = {key: value for key, value in params.items() if key not in ("pageNo", "pageSize")}
-                if getattr(know, "last_is_list", False) and (
-                        know.last_read.get("declared_total") == 0 or know.last_read.get("count") == 0):
-                    record_verified_empty_filter(
-                        ctx, policy_turn,
-                        route=called_path, active_view="",
-                        filter_pairs=getattr(know, "last_filters", req_filters),
-                    )
                 def valid_key(key):
                     return isinstance(key, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key))
 

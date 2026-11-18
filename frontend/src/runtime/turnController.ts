@@ -18,8 +18,8 @@ import {
   recoveryProvesNavigation,
 } from './navigation'
 import {
-  FormClosedOrReadonlyError, formFieldMatches, type FormHandoffField, type FormSubmitTarget,
-  type Page, type PageHighlight, type PageOpener,
+  formFieldMatches, type FormHandoffField, type FormSubmitTarget, type Page,
+  type PageHighlight, type PageOpener,
 } from './page'
 import {summarizeObservation} from './pageSnapshot'
 import {classifyTransportError, type TransportVerdict} from './panelHost'
@@ -815,19 +815,10 @@ export async function dispatchAction(
         no_effect: error.no_effect,
         candidate_labels: error.candidate_labels}
     }
-    if (error instanceof FormClosedOrReadonlyError) {
-      const detail = results.safeErrorDetail(error.message, action.command, ctx.redactor)
-      if (isFieldAction && tracker && turnId && fieldKey) {
-        tracker.recordRejected(turnId, fieldKey, error.code, undefined, targetElement)
-      }
-      return {ok: false, code: error.code, detail}
-    }
     const detail = results.safeErrorDetail(
       String((error as Error)?.message || error), action.command, ctx.redactor)
-    const code = [
-      'origin_refused', 'bad_arguments', 'navigation_timeout', 'option_unavailable',
-      'form_closed_or_readonly',
-    ].find(prefix => detail.startsWith(prefix)) ?? 'page_error'
+    const code = ['origin_refused', 'bad_arguments', 'navigation_timeout', 'option_unavailable']
+      .find(prefix => detail.startsWith(prefix)) ?? 'page_error'
     if (isFieldAction && tracker && turnId && fieldKey) {
       tracker.recordRejected(turnId, fieldKey, code, undefined, targetElement)
     }
@@ -873,15 +864,8 @@ export async function settleAction(
         observation.observation.render_state !== 'ready' ||
         rebound.some(field => field === null) || !submitReady ||
         !ctx.page.verifyFormFields(rebound, observation.observation.elements)) {
-      let closedError: FormClosedOrReadonlyError | null = null
-      try {
-        ctx.page.ensureHandoffOpenAndWritable(fields, observation.observation.elements)
-      } catch (err) {
-        if (err instanceof FormClosedOrReadonlyError) closedError = err
-      }
-      outcome = closedError
-        ? {ok: false, code: 'form_closed_or_readonly', detail: closedError.message}
-        : {ok: false, code: 'stale_observation', detail: 'the form fields were no longer ready at handoff'}
+      outcome = {ok: false, code: 'stale_observation',
+        detail: 'the form fields were no longer ready at handoff'}
     }
   }
   if (executing.command.action === 'handoff_form' && !outcome.ok) {
@@ -942,10 +926,6 @@ export function executePageCommand(ctx: TurnControllerContext, command: ActionCo
     return Promise.resolve({success: true, message: 'control highlighted for the person'})
   }
   if (command.action === 'handoff_form') {
-    if (ctx.currentObservation) {
-      ctx.page.ensureHandoffOpenAndWritable(
-        command.args?.fields, ctx.currentObservation.observation.elements)
-    }
     if (!ctx.currentObservation || !ctx.page.verifyFormFields(
       command.args?.fields, ctx.currentObservation.observation.elements)) {
       throw new Error('bad_arguments: form fields do not match the current page')

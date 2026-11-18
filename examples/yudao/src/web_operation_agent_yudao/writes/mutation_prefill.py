@@ -73,13 +73,6 @@ def _refused(message="联系人草稿未通过核验，请核对当前表单。"
     return LoopToolResult(message, kind="page", state="unverified", error_code=error_code)
 
 
-def _form_closed_or_readonly_result():
-    return LoopToolResult(
-        "表单已关闭或为只读状态，无法继续预填；请先重新核对页面后再决定。",
-        kind="page", state="unverified", error_code="form_closed_or_readonly",
-    )
-
-
 def _is_restricted_element(element) -> bool:
     attrs = getattr(element, "attrs", None) or {}
     return bool(
@@ -432,8 +425,6 @@ class YudaoMutationPrefill:
             if len(openers) != 1:
                 return _refused("未找到唯一的表单入口按钮，未填写。")
             opened = context.page.execute("click", {"ref": openers[0].ref})
-            if _receipt_error_code(opened) == "form_closed_or_readonly":
-                return _form_closed_or_readonly_result()
             if opened.state != "completed" or opened.receipt is None:
                 return _refused("打开表单失败，未继续预填。")
             current = context.obs
@@ -467,14 +458,6 @@ class YudaoMutationPrefill:
             else:
                 args["commit"] = True
             outcome = context.page.execute(action, args)
-            if _receipt_error_code(outcome) == "form_closed_or_readonly":
-                _record_field_outcomes(context, applied=applied, rejected={**rejected, label: "form_closed_or_readonly"},
-                                       previous=previous, restricted=restricted)
-                self.last_handoff_facts = _attach_handoff_facts(
-                    context, applied_fields=applied, rejected_fields=rejected,
-                    restricted_controls=restricted, pending_fields=[*pending, label],
-                    restricted_refs=restricted_refs)
-                return _form_closed_or_readonly_result()
             _collect_receipt_outcomes(outcome, label, value, prev_val, applied, rejected, previous, restricted)
             if outcome.state != "completed":
                 pending.append(label)
@@ -524,9 +507,6 @@ class YudaoMutationPrefill:
         fence_mark = self.forms._evidence.mark()
         entry = self.forms.plan_entry(reference, current, context=context.operation)
         opened = context.page.execute("click", {"ref": entry.control.ref})
-        if _receipt_error_code(opened) == "form_closed_or_readonly":
-            self.forms.discard_entry(entry, context=context.operation)
-            return _form_closed_or_readonly_result()
         if opened.state != "completed" or opened.receipt is None:
             self.forms.discard_entry(entry, context=context.operation)
             return _refused()
@@ -581,14 +561,6 @@ class YudaoMutationPrefill:
                 else:
                     args["commit"] = True
                 outcome = context.page.execute("select" if item.option_label else "fill", args)
-                if _receipt_error_code(outcome) == "form_closed_or_readonly":
-                    _record_field_outcomes(context, applied=applied,
-                                           rejected={**rejected, item.label: "form_closed_or_readonly"},
-                                           previous=previous, restricted=restricted)
-                    _attach_handoff_facts(context, applied_fields=applied, rejected_fields=rejected,
-                                          restricted_controls=restricted,
-                                          pending_fields=[f.label for f in draft.fields[index:]])
-                    return _form_closed_or_readonly_result()
                 if (outcome.state == "completed" or attempt
                         or outcome.receipt is None
                         or outcome.receipt.error_code != "stale_observation"):

@@ -74,10 +74,6 @@ def add_draft_lines(context, button, count):
             return refused()
         outcome = context.page.execute("click", {"ref": target.ref})
         if outcome.state != "completed":
-            if outcome.error_code == "form_closed_or_readonly":
-                return LoopToolResult("当前表单或弹窗已关闭或为只读状态，明细建行未执行。", kind="page",
-                                      state=outcome.state, dispatch=outcome.dispatch,
-                                      error_code="form_closed_or_readonly")
             return LoopToolResult("明细建行未完成，请核对当前观察。", kind="page", state=outcome.state,
                                   dispatch=outcome.dispatch, error_code=outcome.error_code)
         after, current = context.obs, snapshot(context.obs)
@@ -247,10 +243,6 @@ def handoff_draft(context, before, expected, submit_label, *, blocked=None):
                        **({"option_label": option} if option is not None else {})})
     outcome = context.page.handoff(fields, {"ref": buttons[0].ref, "label": buttons[0].name, "scope": scope})
     if outcome.state != "completed" or outcome.receipt is None:
-        if outcome.error_code == "form_closed_or_readonly":
-            return LoopToolResult("当前表单或弹窗已关闭或为只读状态，未完成交接。", kind="page",
-                                  state=outcome.state, dispatch=outcome.dispatch,
-                                  error_code="form_closed_or_readonly")
         extra = format_receipt_field_details(outcome.receipt)
         msg = "表单交接未完成，请核对当前观察。" + (f"\n{extra}" if extra else "")
         return LoopToolResult(msg, kind="page", state=outcome.state,

@@ -8,13 +8,7 @@ from urllib.parse import urljoin, urlsplit
 
 from web_operation_agent.execution.model_loop_contracts import LoopToolResult
 from ..executor.page_prompts import _DEPTH, _SCROLL, _scroll_anchor, _tool
-from ..executor.procedures import (
-    _current_page_query_filters,
-    is_verified_empty_filter,
-    record_verified_empty_filter,
-)
 from ..executor.slim_loop import YudaoLoopProcedures
-from .live_filters import active_view_or_tab
 from web_operation_agent.schemas.browser import MAX_SCROLL_PAGES
 
 
@@ -236,32 +230,11 @@ class LocationProcedures(YudaoLoopProcedures):
                    and e.attrs.get("page_control") == "query"]
         if len(buttons) != 1 or re.search(r"删除|保存|提交|审核|确认|导出|重置", search):
             return refused("没有唯一可用的查询按钮，未填写。")
-        ctx = self._ctx()
-        policy_turn = ctx.executor_turn
-        route = getattr(s.obs, "page_route", "") or urlsplit(getattr(s.obs, "url", "") or "").path
-        tab = active_view_or_tab(s.obs)
-        query_filters = _current_page_query_filters(s.obs, fields)
-        if query_filters is not None and is_verified_empty_filter(
-                ctx, policy_turn, route=route, active_view=tab, filter_pairs=query_filters):
-            self._emit_check(s, "verified_empty_filter_repeated")
-            return LoopToolResult(
-                "未执行：当前筛选条件在本轮已核验为空结果（0条）；请勿重复相同查询，请更换条件或如实说明查无记录。",
-                kind="page", state="refused", error_code="verified_empty_filter_repeated",
-            )
         if fields:
             return self._fill_fields(s, fields, search, turn, query_only=True,
                                      locate=self._locate_query_control, choose=self._choose_query)
-        result = self._act(s, "click", {"ref": buttons[0].ref}, complete_query=True)
-        if not result:
-            read_info = getattr(s.obs, "page_read", None)
-            if isinstance(read_info, dict) and (read_info.get("total") == 0 or read_info.get("rows") == 0):
-                record_verified_empty_filter(
-                    ctx, policy_turn,
-                    route=getattr(s.obs, "page_route", "") or urlsplit(getattr(s.obs, "url", "") or "").path,
-                    active_view=active_view_or_tab(s.obs),
-                    filter_pairs=_current_page_query_filters(s.obs),
-                )
-        return result or LoopToolResult("查询动作已核验。", kind="page")
+        return (self._act(s, "click", {"ref": buttons[0].ref}, complete_query=True)
+                or LoopToolResult("查询动作已核验。", kind="page"))
 
     def _choose_query(self, s, element, value):
         """Use two admitted clicks for a native, exactly owned query listbox."""

@@ -172,28 +172,6 @@ export function readElSelectVisibleCandidates(element, maxCandidates = 12, maxCh
   return out
 }
 
-/** True when an Element Plus select input cleared without any selected item or tag. */
-export function isElSelectClearedWithoutSelection(element) {
-  if (!(element instanceof HTMLInputElement) || !element.isConnected) return false
-  if (String(element.value || '').trim() !== '') return false
-  const wrapper = element.closest('.el-select__wrapper, .el-select')
-  if (wrapper) {
-    const selectedItems = [...wrapper.querySelectorAll('.el-select__selected-item, .el-tag')]
-      .filter(node => !node.classList.contains('is-hidden') &&
-        !node.classList.contains('el-select__input-wrapper') &&
-        !node.classList.contains('el-select__placeholder') &&
-        !node.querySelector('input') &&
-        (node.textContent || '').trim() !== '')
-    if (selectedItems.length > 0) return false
-  }
-  const popup = findElOwnedPopup(element)
-  if (popup) {
-    const selected = popup.querySelectorAll('[aria-selected="true"], .el-select-dropdown__item.is-selected, .el-tree-node.is-current')
-    if (selected.length > 0) return false
-  }
-  return true
-}
-
 /** Bounded ~250ms async option probe when an Element Plus dropdown opens with an empty list. */
 export async function probeElSelectOptions(element, {timeoutMs = 250, intervalMs = 50} = {}) {
   if (readElSelectVisibleCandidates(element, 1).length > 0) return true

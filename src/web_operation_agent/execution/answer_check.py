@@ -26,47 +26,6 @@ MODEL_DELIVERY_REJECTED_SPEC = ProgramCheckSpec(
     terminal_delivery="mark failed items undelivered, force status=cannot, and append program check note to preserved model answer",
 )
 
-UNBACKED_BUSINESS_CLAIM_SPEC = ProgramCheckSpec(
-    name="unbacked_business_claim",
-    checks_what="a done finish claiming business records, status, or rules outside the four allowed general categories cites valid current-turn ev_ evidence",
-    retry_guidance="send back once instructing the model to cite valid current-turn ev_ tool receipts or switch to status=cannot when unverified",
-    terminal_delivery="block completion and stop safely with status=cannot when an unbacked business claim persists on the second attempt",
-)
-
-EV_CITATION_RE = re.compile(r"\bev_[0-9a-f]{6,32}_\d+\b")
-
-_GREETING_RE = re.compile(
-    r"^\s*(?:你好|您好|早上好|上午好|中午好|下午好|晚上好|嗨|哈喽|谢谢|多谢|感谢|再见|拜拜|"
-    r"hello|hi|hey|good\s+(?:morning|afternoon|evening)|thanks?|thank\s+you|bye)"
-    r"(?:\s*[，,]\s*(?:请问|我是|有什么).{0,20})?\s*[!！?？。.，,~～]*\s*$",
-    re.IGNORECASE,
-)
-_CAPABILITY_RE = re.compile(
-    r"(?:你能(?:做|干|帮我?做?)(?:什么|啥)|你可以(?:做|干|帮)(?:什么|啥)|"
-    r"你有(?:什么|哪些)(?:功能|能力|用处)|怎么使用你|介绍一下你自己|"
-    r"what\s+can\s+you\s+do|your\s+capabilities|how\s+can\s+you\s+help)",
-    re.IGNORECASE,
-)
-_TRANSLATE_SUMMARY_RE = re.compile(
-    r"(?:翻译|译成|翻成|总结(?:一下)?|概括(?:一下)?|提炼(?:一下)?|摘要(?:一下)?|润色|改写|"
-    r"\btranslate\b|\bsummarize\b|\bparaphrase\b)",
-    re.IGNORECASE,
-)
-_ARITHMETIC_PROMPT_RE = re.compile(
-    r"^\s*(?:(?:请)?(?:帮我)?(?:计算|算一下|求|compute|calculate)\s*)?"
-    r"[-+*/()（）\d.\s×÷%＝=]+(?:等于多少|是多少|[?？=＝])?\s*$",
-    re.IGNORECASE,
-)
-_ARITHMETIC_OP_RE = re.compile(r"\d\s*[+\-*/×÷=＝]\s*\d")
-_BUSINESS_CLAIM_SIGNAL = re.compile(
-    r"(?:客户|联系人|商机|合同|回款|订单|采购|销售|入库|出库|库存|仓库|商品|产品|物料|工单|"
-    r"审批|流程|规则|权限|角色|菜单|配置|参数|台账|单据|账单|发票|员工|部门|供应商|线索|"
-    r"记录数|状态[是为：:]|"
-    r"已(?:审核|审批|确认|完成|关闭|作废|发货|入库|出库|启用|停用)|"
-    r"\b(?:customer|order|invoice|inventory|stock|warehouse|permission|role|approval|rule|policy|config|contract|ledger)\b)",
-    re.IGNORECASE,
-)
-
 
 def history_messages(context) -> list[dict]:
     """Earlier turns of the conversation as the model reads them, from the bounded
@@ -131,11 +90,7 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
             s.ledger,
             s=s,
             trace=getattr(executor, "_trace", None),
-            check=(
-                UNBACKED_BUSINESS_CLAIM_SPEC.name
-                if issue.code == "unbacked_business_claim"
-                else MODEL_DELIVERY_REJECTED_SPEC.name
-            ),
+            check=MODEL_DELIVERY_REJECTED_SPEC.name,
             outcome="returned",
             attempt=1,
             answer_preserved=False,
@@ -152,24 +107,12 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
         if i < len(items):
             items[i]["status"] = "undelivered"
     labels = "、".join(f"第 {i + 1} 项" for i in indices) or "本轮交付"
-    # The reply goes out as the model wrote it, except unbacked business claims whose
-    # unverified assertions cannot be delivered without current-turn evidence.
+    # The reply goes out as the model wrote it. What failed the check is marked on its
+    # item and said once, after it; the model's words are never swapped for ours.
     original = str(args.get("answer") or "").strip()
-    if issue.code == "unbacked_business_claim":
-        answer = ("未能提供可核验的本轮工具回执，无法确认该业务结论；请以本轮实际读取结果为准。"
-                  if getattr(s, "chinese", True)
-                  else "Cannot verify this business claim without current-turn tool evidence.")
-        turn["forced_stop_reason"] = "unbacked_business_claim"
-        check_spec_name = UNBACKED_BUSINESS_CLAIM_SPEC.name
-        outcome_label = "blocked"
-        answer_preserved = False
-    else:
-        note = f"（程序核对：{labels}没有通过交付检查，标为未交付。{issue.message}）"
-        limit = getattr(getattr(executor, "config", None), "max_user_answer_chars", 4000)
-        answer = (original[:max(0, limit - len(note) - 2)] + "\n\n" + note) if original else note[:limit]
-        check_spec_name = MODEL_DELIVERY_REJECTED_SPEC.name
-        outcome_label = "annotated"
-        answer_preserved = bool(original)
+    note = f"（程序核对：{labels}没有通过交付检查，标为未交付。{issue.message}）"
+    limit = getattr(getattr(executor, "config", None), "max_user_answer_chars", 4000)
+    answer = (original[:max(0, limit - len(note) - 2)] + "\n\n" + note) if original else note[:limit]
     turn.pop("pending_delivery", None)
     s.ledger.append(
         "model_delivery_rejected",
@@ -178,16 +121,16 @@ def delivery_correction(executor, s, turn, args, feedback, *, terminal: bool = F
         attempt=int(returned_before),
         returned=False,
         terminal=True,
-        answer_kept=answer_preserved,
+        answer_kept=bool(original),
     )
     record_check_fired(
         s.ledger,
         s=s,
         trace=getattr(executor, "_trace", None),
-        check=check_spec_name,
-        outcome=outcome_label,
+        check=MODEL_DELIVERY_REJECTED_SPEC.name,
+        outcome="annotated",
         attempt=1 + int(returned_before),
-        answer_preserved=answer_preserved,
+        answer_preserved=bool(original),
     )
     return {
         **{key: value for key, value in args.items() if key != "read_answer"},
@@ -415,133 +358,3 @@ def repeat_fallback(executor, s, prompt: str, turn, name: str, code: str) -> str
             )
         break
     return head + (intro + found if found else no_result) + tail
-
-
-def record_issued_ev_citations(turn, text: str) -> None:
-    """Record any ``ev_...`` tool receipt references issued in this turn."""
-    if not isinstance(text, str) or "ev_" not in text:
-        return
-    refs = EV_CITATION_RE.findall(text)
-    if refs:
-        bucket = turn.setdefault("issued_evidence_refs", set())
-        bucket.update(refs)
-
-
-def has_current_turn_ev_citation(turn, args: dict) -> bool:
-    """Return True when ``finish`` cites at least one valid current-turn ``ev_`` receipt."""
-    cited: list[str] = []
-    items = args.get("items")
-    if isinstance(items, (list, tuple)):
-        for item in items:
-            if not isinstance(item, dict) or item.get("status") != "delivered":
-                continue
-            for ref in item.get("receipts") or ():
-                if isinstance(ref, str) and EV_CITATION_RE.fullmatch(ref.strip()):
-                    cited.append(ref.strip())
-    answer = str(args.get("answer") or "")
-    cited.extend(EV_CITATION_RE.findall(answer))
-    if not cited:
-        return False
-    issued = turn.get("issued_evidence_refs") if hasattr(turn, "get") else None
-    if issued:
-        return any(ref in issued for ref in cited)
-    tool_texts = (turn.get("tool_texts") if hasattr(turn, "get") else None) or ()
-    tool_issued = {ref for txt in tool_texts[1:] for ref in EV_CITATION_RE.findall(str(txt))}
-    return any(ref in tool_issued for ref in cited)
-
-
-def is_allowed_general_turn(prompt: str, answer: str) -> bool:
-    """Return True for the 4 general categories allowed without ``ev_`` citations:
-    1) greeting, 2) capability, 3) user-text translation/summary, 4) pure user-number arithmetic.
-    """
-    clean_prompt = str(prompt or "").strip()
-    clean_answer = str(answer or "").strip()
-    if _BUSINESS_CLAIM_SIGNAL.search(clean_prompt) or _BUSINESS_CLAIM_SIGNAL.search(clean_answer):
-        return False
-    if _GREETING_RE.match(clean_prompt):
-        return True
-    if _CAPABILITY_RE.search(clean_prompt):
-        return True
-    if _TRANSLATE_SUMMARY_RE.search(clean_prompt):
-        return True
-    if _ARITHMETIC_PROMPT_RE.match(clean_prompt):
-        return True
-    if _ARITHMETIC_OP_RE.search(clean_prompt):
-        return True
-    return False
-
-
-def check_unbacked_business_claim(executor, s, prompt: str, turn, args: dict) -> str | None:
-    """Verify non-general ``done`` claims carry valid current-turn ``ev_`` citations.
-
-    Returns ``None`` when allowed/backed, ``"retry"`` on first failure (sent back once),
-    or ``"blocked"`` on second failure or budget exhaustion.
-    """
-    if not isinstance(args, dict) or args.get("status") != "done":
-        return None
-    if args.get("read_answer"):
-        return None
-    if args.get("table_ref") and (
-        turn.get("finish_table") is not None
-        or str(args.get("table_ref")) in (turn.get("finish_tables") or {})
-    ):
-        return None
-    if args.get("source_conclusions") or turn.get("sources") is not None:
-        return None
-    if (getattr(s, "mutation_outcomes", None) or turn.get("written") or turn.get("handoff")
-            or turn.get("review_completion") or turn.get("touched")):
-        return None
-    items = args.get("items")
-    answer = str(args.get("answer") or "").strip()
-    business_signal = bool(_BUSINESS_CLAIM_SIGNAL.search(str(prompt or "")) or _BUSINESS_CLAIM_SIGNAL.search(answer))
-    if (
-        isinstance(items, list)
-        and items
-        and all(isinstance(it, dict) and it.get("kind") == "page" for it in items)
-        and not business_signal
-    ):
-        return None
-    if has_current_turn_ev_citation(turn, args):
-        turn.pop("pending_unbacked_claim", None)
-        return None
-    if is_allowed_general_turn(prompt, answer):
-        turn.pop("pending_unbacked_claim", None)
-        return None
-    ev_mode = bool(
-        getattr(executor, "require_evidence_citations", False)
-        or turn.get("require_evidence_citations")
-    )
-    if not ev_mode:
-        return None
-    sent_before = bool(turn.get("unbacked_claim_sent_back"))
-    budget = getattr(s, "budget", None)
-    remaining = budget.remaining() if budget is not None else 10.0
-    trace = getattr(executor, "_trace", None)
-    if (
-        not sent_before
-        and turn.get("model_calls", 0) < getattr(executor, "model_steps", 24)
-        and remaining > 1
-    ):
-        turn["unbacked_claim_sent_back"] = True
-        turn["pending_unbacked_claim"] = (dict(args), "unbacked_business_claim")
-        record_check_fired(
-            s.ledger,
-            s=s,
-            trace=trace,
-            check=UNBACKED_BUSINESS_CLAIM_SPEC.name,
-            outcome="returned",
-            attempt=1,
-            answer_preserved=False,
-        )
-        return "retry"
-    turn.pop("pending_unbacked_claim", None)
-    record_check_fired(
-        s.ledger,
-        s=s,
-        trace=trace,
-        check=UNBACKED_BUSINESS_CLAIM_SPEC.name,
-        outcome="blocked",
-        attempt=2 if sent_before else 1,
-        answer_preserved=False,
-    )
-    return "blocked"

@@ -1,10 +1,8 @@
 import {afterEach, describe, expect, it, vi} from 'vitest'
 import {DEFAULT_CONFIGURATION} from '../src/contract/panel'
 // @ts-expect-error Generic Element Plus modules ship as framework-free JS.
-import {findElRestrictedControls, focusElRestrictedControl, isElFormOpenAndWritable} from '../src/integrations/element-plus/form.js'
-// @ts-expect-error Generic Element Plus modules ship as framework-free JS.
-import {isElSelectClearedWithoutSelection, probeElSelectOptions, readElSelectVisibleCandidates} from '../src/integrations/element-plus/select.js'
-import {probeComboboxOptions, visibleComboboxOptions} from '../src/runtime/combobox'
+import {findElRestrictedControls, focusElRestrictedControl} from '../src/integrations/element-plus/form.js'
+import {probeComboboxOptions} from '../src/runtime/combobox'
 import {executeCommand} from '../src/runtime/executor'
 import {FormFillTracker} from '../src/runtime/formFillTracker'
 import {Page, type PageControllerApi} from '../src/runtime/page'
@@ -15,7 +13,7 @@ import {PanelHost, type PanelActions} from '../src/runtime/panelHost'
 import {createRedactor} from '../src/runtime/redaction'
 import {receipt} from '../src/runtime/results'
 import {EmbeddedWebRuntime} from '../src/runtime/runtime'
-import type {ActionEnvelope, ActionResultEnvelope, ElementRef, ObservationEnvelope} from '../src/runtime/types'
+import type {ActionEnvelope, ElementRef, ObservationEnvelope} from '../src/runtime/types'
 
 const redactor = createRedactor()
 
@@ -89,115 +87,6 @@ function makeObservation(epoch = 2, overrides: Partial<ObservationEnvelope['obse
 afterEach(() => {
   document.body.innerHTML = ''
   vi.restoreAllMocks()
-})
-
-describe('ACC-01: combobox cleared without selection emits option_unavailable + no_effect + visible candidates', () => {
-  it('detects cleared input on filterable combobox fill and reports only visible options', async () => {
-    const form = document.createElement('form')
-    form.id = 'order-form'
-    form.innerHTML = `
-      <label for="cust">客户</label>
-      <input id="cust" role="combobox" aria-haspopup="listbox" aria-controls="cust-pop" aria-expanded="true">
-      <ul id="cust-pop" role="listbox">
-        <li id="opt-vis" role="option">华南科技</li>
-        <li id="opt-hidden" role="option" style="display: none">隐藏客户</li>
-        <li id="opt-disabled" role="option" aria-disabled="true">禁用客户</li>
-      </ul>
-    `
-    document.body.append(form)
-    const input = document.getElementById('cust') as HTMLInputElement
-    const pop = document.getElementById('cust-pop')!
-    const optVis = document.getElementById('opt-vis')!
-    const optHidden = document.getElementById('opt-hidden')!
-    const optDisabled = document.getElementById('opt-disabled')!
-    for (const el of [input, pop, optVis, optDisabled]) {
-      el.getBoundingClientRect = () => ({width: 120, height: 24} as DOMRect)
-    }
-    optHidden.getBoundingClientRect = () => ({width: 0, height: 0} as DOMRect)
-
-    const api = mockController()
-    api.inputText = vi.fn(async () => {
-      // Simulate widget rejecting/clearing unmatched filter text on input/blur
-      input.value = ''
-      return {success: true}
-    })
-    const page = new Page(api, (_m, idx) => (idx === 1 ? input : null), redactor)
-
-    await expect(page.input('e1', '不存在客户', true)).rejects.toMatchObject({
-      code: 'option_unavailable',
-      no_effect: true,
-      candidate_labels: ['华南科技'],
-    })
-    expect(visibleComboboxOptions(input)).toEqual(['华南科技'])
-  })
-
-  it('emits option_unavailable + no_effect + candidate_labels on select when clicking clears value with no selection', async () => {
-    const form = document.createElement('form')
-    form.id = 'select-clear-form'
-    form.innerHTML = `
-      <label for="owner">负责人</label>
-      <input id="owner" role="combobox" readonly aria-haspopup="listbox" aria-controls="owner-pop" aria-expanded="true">
-      <ul id="owner-pop" role="listbox">
-        <li id="o1" role="option">Alice</li>
-        <li id="o2" role="option">Bob</li>
-      </ul>
-    `
-    document.body.append(form)
-    const input = document.getElementById('owner') as HTMLInputElement
-    const pop = document.getElementById('owner-pop')!
-    const o1 = document.getElementById('o1')!
-    const o2 = document.getElementById('o2')!
-    for (const el of [input, pop, o1, o2]) {
-      el.getBoundingClientRect = () => ({width: 120, height: 24} as DOMRect)
-    }
-    const api = mockController()
-    api.getBrowserState = vi.fn(async () => ({
-      url: location.href,
-      title: '',
-      content: '[1]<input />\n[2]<li role=option>Alice />\n[3]<li role=option>Bob />',
-    }))
-    // Click clears input and leaves no selected option
-    api.clickElement = vi.fn(async () => {
-      input.value = ''
-      o1.setAttribute('aria-selected', 'false')
-      return {success: true}
-    })
-    const page = new Page(api, (_m, idx) => (idx === 1 ? input : idx === 2 ? o1 : o2), redactor)
-
-    await expect(page.select('e1', '1', 'Alice')).rejects.toMatchObject({
-      code: 'option_unavailable',
-      no_effect: true,
-      candidate_labels: ['Alice', 'Bob'],
-    })
-  })
-
-  it('Element Plus select helpers detect cleared wrapper and visible dropdown options', async () => {
-    document.body.innerHTML = `
-      <div class="el-select">
-        <div class="el-select__wrapper">
-          <div class="el-select__selected-item el-select__placeholder is-transparent">请选择</div>
-          <input class="el-select__input" role="combobox" aria-haspopup="listbox" aria-controls="el-pop-1">
-        </div>
-      </div>
-      <div class="el-select-dropdown">
-        <ul id="el-pop-1" role="listbox">
-          <li class="el-select-dropdown__item">选项A</li>
-          <li class="el-select-dropdown__item" style="display: none">隐藏B</li>
-          <li class="el-select-dropdown__item is-disabled">禁用C</li>
-        </ul>
-      </div>
-    `
-    const input = document.querySelector('input') as HTMLInputElement
-    const items = document.querySelectorAll('.el-select-dropdown__item')
-    document.querySelector('.el-select-dropdown')!.getBoundingClientRect = () => ({width: 200, height: 120} as DOMRect)
-    items[0]!.getBoundingClientRect = () => ({width: 180, height: 32} as DOMRect)
-    items[1]!.getBoundingClientRect = () => ({width: 0, height: 0} as DOMRect)
-    items[2]!.getBoundingClientRect = () => ({width: 180, height: 32} as DOMRect)
-
-    expect(isElSelectClearedWithoutSelection(input)).toBe(true)
-    expect(readElSelectVisibleCandidates(input)).toEqual(['选项A'])
-    expect(await probeElSelectOptions(input, {timeoutMs: 80})).toBe(true)
-  })
 })
 
 describe('ACC-04(b,c,d): scroll room hints, async option probe, and resilient page settle', () => {
@@ -397,59 +286,6 @@ describe('ACC-05: observation_summary on settled click/select/goto receipts', ()
   })
 })
 
-describe('ACC-06: form_closed_or_readonly on closed/detached/readonly targets', () => {
-  it('returns structured form_closed_or_readonly receipt when dialog closes or field becomes readonly', async () => {
-    const dialog = document.createElement('div')
-    dialog.setAttribute('role', 'dialog')
-    dialog.innerHTML = '<form id="edit-f"><input name="title" /></form>'
-    document.body.append(dialog)
-    const input = dialog.querySelector('input') as HTMLInputElement
-
-    const api = mockController()
-    const page = new Page(api, () => input, redactor)
-    const before = makeObservation(1)
-    const after = makeObservation(2)
-    const sent: ActionResultEnvelope[] = []
-
-    const runtime = Object.assign(Object.create(EmbeddedWebRuntime.prototype, {
-      redactor: {value: redactor},
-      page: {value: page},
-    }), {
-      config: undefined,
-      stored: {pageWorked: true, activeMessageId: 'turn-1', inFlight: null},
-      writeGuardUntil: 0,
-      currentObservation: before,
-      _save: vi.fn(),
-      _mayNavigate: () => false,
-      _execute: (cmd: ActionEnvelope['command']) => executeCommand(cmd, () => page, {}),
-      observe: vi.fn(async () => after),
-      _deliver: vi.fn(async (res: ActionResultEnvelope) => { sent.push(res) }),
-    }) as {
-      _dispatch(...args: unknown[]): Promise<unknown>
-      _settle(...args: unknown[]): Promise<void>
-    }
-
-    // Close dialog via display: none
-    dialog.style.display = 'none'
-    const action = makeAction('fill', {ref: 'e1', value: 'Acme'})
-    const outcome = await runtime._dispatch(action, action, {})
-    await runtime._settle(action, before, outcome)
-
-    expect(sent[0]?.receipt).toMatchObject({
-      ok: false,
-      error_code: 'form_closed_or_readonly',
-    })
-    expect(api.inputText).not.toHaveBeenCalled()
-
-    // Element Plus helper also rejects hidden dialog & disabled wrapper
-    expect(isElFormOpenAndWritable(input)).toBe(false)
-    dialog.style.display = 'block'
-    expect(isElFormOpenAndWritable(input)).toBe(true)
-    input.readOnly = true
-    expect(isElFormOpenAndWritable(input)).toBe(false)
-  })
-})
-
 describe('ACC-13 + UX-03 + UX-05: form fill tracking, undoFormFill, restricted controls & auto-focus', () => {
   it('captures first-seen previous_fields, applied_fields, rejected_fields, restricted_fields, and supports undoFormFill & focusHandoffControl', async () => {
     const dialog = document.createElement('div')
@@ -598,77 +434,6 @@ describe('ACC-13 + UX-03 + UX-05: form fill tracking, undoFormFill, restricted c
     await expect(host.undoFormFill('turn-2')).resolves.toBe(false)
     expect(nameInput.value).toBe('新名字')
     runtime.stop()
-  })
-
-  it('propagates ACC-01 combobox fill option_unavailable + rejected_fields and ACC-06 closed handoff receipts end-to-end', async () => {
-    const dialog = document.createElement('div')
-    dialog.setAttribute('role', 'dialog')
-    dialog.id = 'acc01-dlg'
-    dialog.innerHTML = `
-      <form>
-        <label for="c-box">客户</label>
-        <input id="c-box" name="customerId" role="combobox" aria-haspopup="listbox"
-          aria-controls="c-box-pop" aria-expanded="true">
-        <ul id="c-box-pop" role="listbox">
-          <li role="option">蓝海集团</li>
-        </ul>
-      </form>
-    `
-    document.body.append(dialog)
-    const input = document.getElementById('c-box') as HTMLInputElement
-    const pop = document.getElementById('c-box-pop')!
-    const opt = pop.querySelector('li')!
-    for (const el of [input, pop, opt]) {
-      el.getBoundingClientRect = () => ({width: 100, height: 24} as DOMRect)
-    }
-
-    const api = mockController()
-    api.inputText = vi.fn(async () => {
-      input.value = ''
-      return {success: true}
-    })
-    const page = new Page(api, () => input, redactor)
-    const before = makeObservation(1, {
-      elements: [{
-        ref: 'e1', role: 'combobox', name: '客户', tag: 'input', epoch: 1,
-        attrs: {field: 'customerId', form_scope: 'dialog:acc01-dlg'},
-      }],
-    })
-    const after = makeObservation(2)
-    const sent: ActionResultEnvelope[] = []
-
-    const runtime = Object.assign(Object.create(EmbeddedWebRuntime.prototype, {
-      redactor: {value: redactor},
-      page: {value: page},
-    }), {
-      config: undefined,
-      stored: {pageWorked: true, activeMessageId: 'turn-e2e', inFlight: null},
-      writeGuardUntil: 0,
-      currentObservation: before,
-      _save: vi.fn(),
-      _mayNavigate: () => false,
-      _execute: (cmd: ActionEnvelope['command']) => executeCommand(cmd, () => page, {}),
-      observe: vi.fn(async () => after),
-      _deliver: vi.fn(async (res: ActionResultEnvelope) => { sent.push(res) }),
-    }) as {
-      _dispatch(...args: unknown[]): Promise<unknown>
-      _settle(...args: unknown[]): Promise<void>
-      formFillTracker: FormFillTracker
-    }
-
-    const fillAction = makeAction('fill', {ref: 'e1', value: '不存在', commit: true}, {turn_id: 'turn-e2e'})
-    const outcome = await runtime._dispatch(fillAction, fillAction, {})
-    await runtime._settle(fillAction, before, outcome)
-
-    expect(sent[0]?.receipt).toMatchObject({
-      ok: false,
-      error_code: 'option_unavailable',
-      no_effect: true,
-      candidate_labels: ['蓝海集团'],
-      rejected_fields: {
-        customerId: {reason: 'option_unavailable', candidates: ['蓝海集团']},
-      },
-    })
   })
 
   it('focusControl matches generic restricted kind sent by server adapters', () => {

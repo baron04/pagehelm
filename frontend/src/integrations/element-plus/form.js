@@ -351,30 +351,6 @@ export function installElOverlayOffset(doc = document, {styleId = 'woa-el-overla
   }
 }
 
-/** Verify an Element Plus form control and its enclosing dialog/drawer/form are open, visible, and writable. */
-export function isElFormOpenAndWritable(element, {allowReadonlyCombobox = false} = {}) {
-  if (!(element instanceof HTMLElement) || !element.isConnected) return false
-  if (element.disabled || element.getAttribute('aria-disabled') === 'true' || element.classList.contains('is-disabled')) {
-    return false
-  }
-  const isCombobox = element.getAttribute('role') === 'combobox'
-  if (element.readOnly && !(allowReadonlyCombobox && isCombobox)) return false
-  if (element.getAttribute('aria-readonly') === 'true' && !(allowReadonlyCombobox && isCombobox)) return false
-  if (element.closest('.is-disabled, [aria-disabled="true"], [inert], [hidden], [aria-hidden="true"], fieldset:disabled')) {
-    return false
-  }
-  const view = element.ownerDocument?.defaultView ?? window
-  for (let node = element; node; node = node.parentElement) {
-    const style = view.getComputedStyle(node)
-    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') {
-      return false
-    }
-  }
-  const dialog = element.closest('.el-dialog, .el-drawer, .el-overlay, [role="dialog"], dialog')
-  if (dialog && dialog.tagName === 'DIALOG' && !dialog.hasAttribute('open')) return false
-  return true
-}
-
 /** Collect restricted password/file controls inside an Element Plus form/dialog root. */
 export function findElRestrictedControls(root) {
   if (!(root instanceof Element) || !root.isConnected) return []

@@ -1,4 +1,4 @@
-"""Comprehensive unit tests for Yudao Wave 3 (ACC-02/05/06/07/13, ARC-04/06, UX-02/03/05)."""
+"""Comprehensive unit tests for Yudao Wave 3 (ACC-05/13, ARC-04/06, UX-02/03/05)."""
 from __future__ import annotations
 
 import contextlib
@@ -13,27 +13,16 @@ from unittest.mock import Mock, patch
 from web_operation_agent.business.tools.contracts import BusinessMutationProposal
 from web_operation_agent.execution.model_loop_contracts import PageActionOutcome, PageProcedureContext
 from web_operation_agent.privacy import BASELINE_SESSION_HANDOFFS, SessionHandoffPolicy
-from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
+from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation, TaskEvent
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
-from web_operation_agent_yudao.executor.actor_knowledge import ActorKnowledge
-from web_operation_agent_yudao.executor.model_page_policy import NativeDraftSteps
-from web_operation_agent_yudao.executor.page_prompts import SYSTEM_RULES
+from web_operation_agent.transport.panel_view import project_event, project_history_record
 from web_operation_agent_yudao.executor.procedures import (
     YudaoProceduresBase,
     build_handoff_facts,
-    is_verified_empty_filter,
-    record_verified_empty_filter,
 )
 from web_operation_agent_yudao.executor.slim_loop import (
-    YUDAO_CHECK_SPECS,
     YudaoLoopProcedures,
     YudaoTurnExecutor,
-    _is_allowed_direct_reply,
-)
-from web_operation_agent_yudao.reads.live_filters import (
-    active_view_or_tab,
-    canonical_filter_pairs,
-    control_identity,
 )
 from web_operation_agent_yudao.reads.turn_tables import TurnTables
 from web_operation_agent_yudao.tests.slim_loop_support import (
@@ -68,72 +57,7 @@ def _op_context(scopes=("yudao.read", "yudao.write")) -> OperationContext:
                                    deadline_ms=now + 30000)
 
 
-class Wave3Acc02Tests(unittest.TestCase):
-    def test_canonical_filter_pairs_and_control_identity_and_failure_base(self):
-        self.assertEqual(
-            canonical_filter_pairs({"pageNo": 2, "pageSize": 20, "status": 1, "name": " 星河 ", "empty": ""}),
-            (("name", "星河"), ("status", "1")),
-        )
-        obs = PageObservation(
-            1, 1, "http://synthetic.invalid/erp/sale/order", "Orders",
-            [], [
-                ElementRef("e1", "tab", "已审核", "div", 1, {"aria-selected": "true"}),
-                ElementRef("e2", "textbox", "", "input", 1, {"form_scope": "dialog:create", "field_label": "客户名称"}),
-            ],
-            "synthetic", render_state="ready", page_route="/erp/sale/order", active_view="待审批",
-        )
-        self.assertEqual(active_view_or_tab(obs), "待审批")
-        ident = control_identity(obs, obs.elements[1])
-        self.assertEqual(ident, {"route": "/erp/sale/order", "form_scope": "dialog:create", "label_or_name": "客户名称"})
-
-        ex = YudaoTurnExecutor.__new__(YudaoTurnExecutor)
-        ex._last_obs = obs
-        base_a = ex._failure_base("input", {"index": 2, "text": "X"}, obs.elements[1])
-        obs_other = replace(obs, page_route="/erp/purchase/order", url="http://synthetic.invalid/erp/purchase/order")
-        ex._last_obs = obs_other
-        base_b = ex._failure_base("input", {"index": 2, "text": "X"}, obs.elements[1])
-        self.assertNotEqual(base_a, base_b)
-        self.assertIn(base_a, {base_a})  # must remain hashable
-
-    def test_verified_empty_filter_blocks_repeated_call_api_and_page_query(self):
-        client = _ConcurrentTestClient()
-        replies = [
-            reply(call("call_api", path="orders/page", params='{"pageNo": 1, "pageSize": 10, "customerId": 999}')),
-            reply(call("call_api", path="orders/page", params='{"pageNo": 2, "pageSize": 20, "customerId": 999}')),
-            reply(call("finish", status="cannot", answer="按客户查询订单返回0条。", items=[
-                {"item": "查询", "kind": "data", "status": "undelivered", "receipts": []},
-            ])),
-        ]
-        # Make orders/page return empty list when customerId=999
-        orig_get = client.get
-
-        def empty_get(path, **kwargs):
-            if path == "orders/page" and str(kwargs.get("customerId")) == "999":
-                return {"list": [], "total": 0}
-            return orig_get(path, **kwargs)
-
-        client.get = empty_get
-        with tempfile.TemporaryDirectory() as tmp:
-            ex, ledger, principal, _ = _make_executor(client, replies=replies, ledger_dir=tmp)
-            run = _run_turn(ex, "查客户999的订单", ledger, principal)
-        tool_msgs = [m["content"] for m in run["messages"] if m.get("role") == "tool"]
-        self.assertTrue(any("已核验为空结果" in msg or "0条" in msg for msg in tool_msgs), tool_msgs)
-        events = [p for name, p in run["events"] if name == "check_fired" and p.get("check") == "verified_empty_filter_repeated"]
-        self.assertTrue(events, run["events"])
-
-        # Page filter (_fill_fields) also records and blocks identical empty query
-        ctx = ex._ctx()
-        turn = {"touched": [], "trace": []}
-        ctx.executor_turn = turn
-        record_verified_empty_filter(ctx, turn, route="/orders", active_view="全部",
-                                     filter_pairs=(("客户名称", "空客户"),))
-        self.assertTrue(is_verified_empty_filter(ctx, turn, route="/orders", active_view="全部",
-                                                 filter_pairs={"客户名称": "空客户"}))
-        self.assertFalse(is_verified_empty_filter(ctx, turn, route="/orders", active_view="全部",
-                                                  filter_pairs={"客户名称": "星河科技"}))
-
-
-class Wave3Acc05Acc06Tests(unittest.TestCase):
+class Wave3Acc05Tests(unittest.TestCase):
     def test_settled_click_select_goto_consumes_observation_and_summary_skips_settled(self):
         proc = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
         proc.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
@@ -171,90 +95,6 @@ class Wave3Acc05Acc06Tests(unittest.TestCase):
         self.assertEqual(settled_calls, [])  # skipped _settled because settled receipt brought observation
         self.assertEqual(state.obs.epoch, 2)
         self.assertIn("当前视图=已审核", res.feedback)
-
-    def test_form_closed_or_readonly_aborts_without_stale_retry_and_policy_allows_fill_no_effect(self):
-        proc = YudaoLoopProcedures.__new__(YudaoLoopProcedures)
-        proc.knowledge = NS(handoffs=SessionHandoffPolicy.extending(()))
-        proc._settled = lambda *a, **kw: None
-        calls = []
-        rcpt = ActionReceipt(1, "cmd-closed", "fill", {"ref": "e1", "value": "A"}, False,
-                             error_code="form_closed_or_readonly", no_effect=False)
-        fake_outcome = NS(state="refused", dispatch="not_dispatched", error_code="form_closed_or_readonly", receipt=rcpt)
-        el1 = ElementRef("e1", "textbox", "名称", "input", 1, {"form_scope": "dialog:create", "form_instance": "i1", "field_label": "名称"})
-        el2 = ElementRef("e2", "textbox", "编码", "input", 1, {"form_scope": "dialog:create", "form_instance": "i1", "field_label": "编码"})
-        obs = PageObservation(
-            1, 1, "http://synthetic.invalid/erp/supplier", "Supplier", [],
-            [el1, el2], content="[1]<input /> 名称\n[2]<input /> 编码",
-            render_state="ready", page_route="/erp/supplier",
-        )
-        state = NS(
-            obs=obs,
-            page=NS(execute=lambda action, args, navigating=False: (calls.append(args["ref"]) or fake_outcome)),
-            audit=lambda *a, **kw: None,
-            terminal_reason="",
-        )
-        res = proc._fill_fields(state, [{"label": "名称", "value": "A"}, {"label": "编码", "value": "B"}],
-                                "", {"touched": [], "trace": []})
-        self.assertEqual(res.error_code, "form_closed_or_readonly")
-        self.assertEqual(calls, ["e1"])  # did NOT touch second field e2 after form_closed_or_readonly
-
-        # NativeDraftSteps.verify_no_effect allows fill as well as select
-        draft_steps = NativeDraftSteps.__new__(NativeDraftSteps)
-        obs_after = replace(obs, epoch=1)
-        draft_steps.data = NS(_client=NS(
-            read_generation=1,
-            tenant="1",
-            read_window=lambda _check: contextlib.nullcontext(),
-            get=lambda path, **kw: {"user": {"id": 9, "deptId": 7}},
-        ))
-        draft_steps.forms = NS(_evidence=NS(since=lambda _m: ()))
-        intent = NS(action="fill", binding_digest="b1", observation=obs, args={"ref": "e1", "value": "X"})
-        draft_steps._prepared = {"b1": {"generation": 1, "mark": 0, "route": "/erp/supplier", "scope": "dialog:create"}}
-        fill_rcpt = NS(action="fill", no_effect=True, ok=False, error_code="option_unavailable")
-        self.assertTrue(draft_steps.verify_no_effect(
-            NS(step="enter_value"), intent, fill_rcpt, observation=obs_after,
-            context=_op_context(), checkpoint=lambda: None,
-        ))
-
-
-class Wave3Acc07Tests(unittest.TestCase):
-    def test_prompt_has_four_allowed_five_must_check_and_unbacked_business_claim_blocks(self):
-        self.assertIn("四允许、五必查", SYSTEM_RULES)
-        self.assertIn("items=[]", SYSTEM_RULES)
-        self.assertIn("ev_", SYSTEM_RULES)
-        self.assertIn("unbacked_business_claim", YUDAO_CHECK_SPECS)
-
-        self.assertTrue(_is_allowed_direct_reply("你好！", "你好！"))
-        self.assertTrue(_is_allowed_direct_reply("你能做什么", "我可以帮您查询并操作后台。"))
-        self.assertTrue(_is_allowed_direct_reply("请把下面这句话翻译成英文：欢迎使用", "Welcome"))
-        self.assertTrue(_is_allowed_direct_reply("15 + 27 等于多少", "42"))
-        self.assertFalse(_is_allowed_direct_reply("客户A现在是什么状态？", "正常"))
-        self.assertFalse(_is_allowed_direct_reply("帮我查一下权限配置", "默认全开放"))
-
-        client = _ConcurrentTestClient()
-        # General 4-allowed reply passes with items=[]
-        ok_exec, ok_ledger, ok_principal, _ = _make_executor(
-            client, replies=[reply(call("finish", status="done", answer="15 + 27 = 42。", items=[]))],
-        )
-        ok_run = _run_turn(ok_exec, "15 + 27 等于多少", ok_ledger, ok_principal)
-        self.assertIn("42", ok_run["outcome"])
-        self.assertFalse([p for name, p in ok_run["events"] if name == "check_fired"])
-
-        # Disguised business claim with items=[] and no ev_ receipt triggers unbacked_business_claim
-        bad_exec, bad_ledger, bad_principal, _ = _make_executor(
-            client,
-            replies=[
-                reply(call("finish", status="done", answer="客户星河科技目前余额为 5000 元。", items=[])),
-                reply(call("finish", status="cannot", answer="未调用查询工具核实余额。", items=[
-                    {"item": "客户余额", "kind": "data", "status": "undelivered", "receipts": []},
-                ])),
-            ],
-        )
-        bad_run = _run_turn(bad_exec, "顺便问下，星河科技的余额是多少？", bad_ledger, bad_principal)
-        self.assertTrue(any(
-            name == "check_fired" and p.get("check") == "unbacked_business_claim"
-            for name, p in bad_run["events"]
-        ))
 
 
 class Wave3Acc13Ux03Ux05Tests(unittest.TestCase):
@@ -456,13 +296,36 @@ class Wave3Arc04Arc06Ux02Tests(unittest.TestCase):
                 ])),
             ],
         )
+        published_step_payloads = []
         orig_pub = ex.channel.publish
         ex.channel.publish = lambda kind, payload, **kw: (
-            published_steps.append(payload.get("step")) if kind == "progress" and isinstance(payload, dict) and "step" in payload else None,
+            published_step_payloads.append(dict(payload))
+            if kind == "progress" and isinstance(payload, dict) and "step" in payload
+            else None,
             orig_pub(kind, payload, **kw),
         )[1]
         _run_turn(ex, "汇总所有订单", ledger, principal)
-        self.assertIn({"stage": "read_page", "page": 2}, published_steps)
+        published_steps = [p.get("step") for p in published_step_payloads]
+        self.assertIn({"stage": "read_page"}, published_steps)
+        read_page_payload = next(
+            p for p in published_step_payloads if p.get("step") == {"stage": "read_page"}
+        )
+        self.assertEqual(read_page_payload.get("state"), "step")
+        self.assertEqual(read_page_payload.get("message"), "正在翻页查看（第 2 页）")
+        projected_live = project_event(
+            TaskEvent(1, "e00000001", "s-1", 1, "progress", "t-1", read_page_payload),
+            at=1,
+        )
+        self.assertEqual(projected_live["kind"], "progress")
+        self.assertEqual(projected_live["text"], "正在翻页查看（第 2 页）")
+        self.assertEqual(projected_live["step"], {"stage": "read_page"})
+        projected_hist = project_history_record(
+            {"kind": "progress", "turn_id": "t-1", "at": 1, "payload": read_page_payload},
+            index=1,
+        )
+        self.assertEqual(projected_hist["kind"], "progress")
+        self.assertEqual(projected_hist["text"], "正在翻页查看（第 2 页）")
+        self.assertEqual(projected_hist["panel_state"], "acting")
 
         # UX-02: need_input with 2..4 structured options emits input_options + clarification.choices
         published_ux = []
@@ -477,7 +340,7 @@ class Wave3Arc04Arc06Ux02Tests(unittest.TestCase):
                         {"id": "c1", "label": "星河科技（#101）", "prompt": "查看编号 101 的星河科技"},
                         {"id": "c2", "label": "星河科技（#202）", "prompt": "查看编号 202 的星河科技"},
                     ],
-                    items=[],
+                    items=[{"item": "客户详情", "kind": "data", "status": "undelivered", "receipts": []}],
                 )),
             ],
         )
@@ -493,60 +356,6 @@ class Wave3Arc04Arc06Ux02Tests(unittest.TestCase):
         terminal_payloads = [p for k, p in published_ux if k == "progress" and isinstance(p, dict) and "terminal_reason" in p]
         self.assertEqual(len(terminal_payloads[-1]["input_options"]), 2)
         self.assertEqual(terminal_payloads[-1]["input_options"][0]["id"], "c1")
-
-    def test_acc07_repeated_unbacked_done_after_failed_api_cannot_bypass_or_leak_claim(self):
-        self.assertTrue(_is_allowed_direct_reply("你能做什么？", "我可以帮您查询客户、订单、库存数据并打开页面。"))
-        self.assertFalse(_is_allowed_direct_reply("你能做什么？", "客户 Acme 当前有 3 条订单。"))
-        client = _ConcurrentTestClient()
-        obs_page = PageObservation(
-            1, 1, "http://synthetic.invalid/crm/customer", "Customer", [], [],
-            "synthetic", render_state="ready", page_route="/crm/customer",
-        )
-        # After an observe page action + failed call_api (no ev_ receipt), twice-repeated
-        # finish(done, items=[]) must be blocked cleanly without preserving the unbacked claim.
-        exec_fail, ledger_fail, principal_fail, _ = _make_executor(
-            client,
-            replies=[
-                reply(call("observe")),
-                reply(call("call_api", path="broken/endpoint")),
-                reply(call("finish", status="done", answer="客户星河科技目前余额为 5000 元。", items=[])),
-                reply(call("finish", status="done", answer="客户星河科技目前余额为 5000 元。", items=[])),
-            ],
-        )
-        obs_receipt = ActionReceipt(1, "cmd-obs", "observe", {}, True, observation=obs_page)
-        exec_fail.control = NS(dispatch=lambda *a, **kw: PageActionOutcome(
-            "completed", "acknowledged", json.dumps(obs_receipt.to_json()), "",
-        ))
-        run = _run_turn(exec_fail, "查询星河科技余额", ledger_fail, principal_fail)
-        self.assertEqual(run["state"].terminal_reason, "agent_refused")
-        self.assertEqual(getattr(run["state"], "stop_reason", ""), "unbacked_business_claim")
-        self.assertNotIn("5000", run["outcome"])
-        self.assertIn("未能提供可核验的本轮工具回执", run["outcome"])
-        self.assertTrue(any(
-            name == "check_fired"
-            and p.get("check") == "unbacked_business_claim"
-            and p.get("outcome") == "blocked"
-            and p.get("answer_preserved") is False
-            for name, p in run["events"]
-        ))
-
-        # Smuggling an unbacked claim via kind="page" item is also caught and blocked on retry.
-        exec_page, ledger_page, principal_page, _ = _make_executor(
-            client,
-            replies=[
-                reply(call("observe")),
-                reply(call("finish", status="done", answer="该商机当前已成交。", items=[
-                    {"item": "当前页", "kind": "page", "status": "delivered", "receipts": []},
-                ])),
-                reply(call("finish", status="done", answer="该商机当前已成交。", items=[
-                    {"item": "当前页", "kind": "page", "status": "delivered", "receipts": []},
-                ])),
-            ],
-        )
-        run_page = _run_turn(exec_page, "这个商机现在是什么状态", ledger_page, principal_page)
-        self.assertEqual(run_page["state"].terminal_reason, "agent_refused")
-        self.assertEqual(getattr(run_page["state"], "stop_reason", ""), "unbacked_business_claim")
-        self.assertNotIn("已成交", run_page["outcome"])
 
     def test_ux05_restricted_file_kind_and_ux03_radiogroup_select_in_prefill(self):
         from web_operation_agent_yudao.writes.mutation_prefill import (

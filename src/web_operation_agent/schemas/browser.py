@@ -460,7 +460,7 @@ class ActionReceipt:
         _bool(self.relogin, "relogin")
         _bool(self.write_guard_held, "write_guard_held")
         _bool(self.no_effect, "no_effect")
-        _require(not self.no_effect or (self.action in {"select", "fill"} and not self.ok
+        _require(not self.no_effect or (self.action == "select" and not self.ok
                                       and self.error_code == "option_unavailable"),
                  "no_effect requires an unavailable selection")
         _require(isinstance(self.candidate_labels, tuple)
@@ -557,6 +557,4 @@ RECEIPT_ERRORS = frozenset({
     "user_intervened",
     # A choice list was open and did not offer the option asked for; nothing was chosen.
     "option_unavailable",
-    # A target form or field became closed, detached, or read-only before/during form fill.
-    "form_closed_or_readonly",
 })
