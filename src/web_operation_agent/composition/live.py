@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Protocol, cast
+from typing import Callable, Protocol
 
 from ..state.store import SQLiteSessionStore
 from ..transport.gateway import EmbeddedGateway
@@ -50,13 +50,6 @@ class AgentTurnExecutor(Protocol):
     def execute(self, message: dict, /) -> object: ...
 
 
-class _LegacyTurnRunner(Protocol):
-    def run_once(self, *, message: dict) -> object: ...
-
-
-LegacyTurnRunnerFactory = Callable[[dict, int], _LegacyTurnRunner]
-
-
 @dataclass(frozen=True)
 class LiveTurnOutcome:
     turn: int
@@ -66,30 +59,12 @@ class LiveTurnOutcome:
 
 
 class LiveConversationRunner:
-    """Host sequential panel turns and isolate one turn's failure from the next.
+    """Host sequential panel turns and isolate one turn's failure from the next."""
 
-    New product integrations supply one ``AgentTurnExecutor`` instance for the whole
-    conversation.  The optional factory path is a compatibility shim for older demos
-    that still construct a runner per turn.
-    """
-
-    def __init__(self, channel: RemoteSessionChannel,
-                 executor: AgentTurnExecutor | LegacyTurnRunnerFactory | None = None,
-                 *, runner_factory: LegacyTurnRunnerFactory | None = None):
-        if executor is not None and runner_factory is not None:
-            raise TypeError("supply executor or runner_factory, not both")
-        selected = executor if executor is not None else runner_factory
-        execute = getattr(selected, "execute", None)
-        if callable(execute):
-            self.executor: AgentTurnExecutor | None = cast(AgentTurnExecutor, selected)
-            self._legacy_runner_factory: LegacyTurnRunnerFactory | None = None
-        elif callable(selected):
-            # Preserve the former positional ``runner_factory`` API while keeping the
-            # turn counter and message dequeue in this host.
-            self.executor = None
-            self._legacy_runner_factory = cast(LegacyTurnRunnerFactory, selected)
-        else:
+    def __init__(self, channel: RemoteSessionChannel, executor: AgentTurnExecutor):
+        if not callable(getattr(executor, "execute", None)):
             raise TypeError("an AgentTurnExecutor is required")
+        self.executor: AgentTurnExecutor = executor
         self.channel = channel
         events = getattr(self.executor, "turn_events", None)
         if events is not None:
@@ -157,11 +132,7 @@ class LiveConversationRunner:
             set_reconciler(reconcile_request)
 
     def _execute_turn(self, message: dict, turn: int) -> object:
-        if self.executor is not None:
-            return self.executor.execute(message)
-        assert self._legacy_runner_factory is not None
-        runner = self._legacy_runner_factory(message, turn)
-        return runner.run_once(message=message)
+        return self.executor.execute(message)
 
     def _record(self, outcome: LiveTurnOutcome) -> None:
         self.turns_completed = outcome.turn
