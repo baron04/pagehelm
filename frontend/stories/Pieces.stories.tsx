@@ -6,7 +6,7 @@ import {Composer} from '../src/components/Composer'
 import {ExamplePrompts, WelcomeHeading} from '../src/components/EmptyState'
 import {InlineError} from '../src/components/InlineError'
 import {Launcher} from '../src/components/Launcher'
-import {APPROVAL, configuration, labels, limits} from './fixtures'
+import {APPROVAL, APPROVAL_WITH_DIFF, configuration, labels, limits} from './fixtures'
 import presentation from '../src/presentation.json'
 import {SAMPLE_EXAMPLES} from '../dev/examples'
 
@@ -50,6 +50,14 @@ export const ConfirmationNarrow = {
       labels={labels} limits={limits}
       visibility={presentation.approval_visibility} busy={false}
       onDecide={() => undefined} onRefused={() => undefined} />, 320),
+}
+
+export const ConfirmationWithDiff = {
+  render: () => frame(
+    <ApprovalCard approval={{...APPROVAL_WITH_DIFF, expires_at: Date.now() + 107_000}}
+                  labels={labels} limits={limits}
+                  visibility={presentation.approval_visibility} busy={false}
+                  onDecide={() => undefined} onRefused={() => undefined} />),
 }
 
 function WelcomePreview(): React.JSX.Element {

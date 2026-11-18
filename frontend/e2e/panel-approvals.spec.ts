@@ -81,6 +81,71 @@ test.describe('a confirmation', () => {
     expect(panel.errors).toEqual([])
   })
 
+  test('renders change diffs clearly, collapses preserved fields, and cycles Tab across all controls', async ({open}) => {
+    const panel = await open(snapshot())
+    await panel.raiseApproval({
+      offer_prefill: true,
+      effect: '更新 1 位客户的主要联系信息',
+      targets: ['客户：Acme Corporation', '编号：C-0042'],
+      details: [
+        {kind: 'change', label: '联系电话', text: '010-65001122 → 010-65008899'},
+        {kind: 'derived', label: '影响范围', text: '仅更新主档，不修改已签订单'},
+        {kind: 'preserved', label: '客户等级', text: 'VIP'},
+        {kind: 'preserved', label: '所属销售', text: '张敏'},
+      ],
+    })
+    const card = panel.page.locator('.woa-approval')
+    await expect(card).toContainText('更新 1 位客户的主要联系信息')
+    await expect(card).toContainText('客户：Acme Corporation')
+    await expect(card).toContainText('010-65001122 → 010-65008899')
+    await expect(card).toContainText('仅更新主档，不修改已签订单')
+
+    const diff = card.locator('.woa-approval__diff').first()
+    await expect(diff.locator('.woa-approval__diff-old')).toHaveText('010-65001122')
+    await expect(diff.locator('.woa-approval__diff-arrow')).toHaveText(' → ')
+    await expect(diff.locator('.woa-approval__diff-new')).toHaveText('010-65008899')
+
+    const toggle = card.getByTestId('woa-preserved-toggle')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(toggle).toHaveText(`${labels.approvalShowPreserved}（2）`)
+    await expect(card).not.toContainText('所属销售')
+    await expect(card).not.toContainText('张敏')
+
+    // First Tab from card focus lands on the disclosure toggle; cycle through every control and back.
+    await expect(panel.page.getByRole('alertdialog')).toBeFocused()
+    await panel.page.keyboard.press('Tab')
+    expect((await panel.active()).testid).toBe('woa-preserved-toggle')
+    await panel.page.keyboard.press('Tab')
+    expect((await panel.active()).testid).toBe('woa-deny')
+    await panel.page.keyboard.press('Tab')
+    expect((await panel.active()).testid).toBe('woa-prefill')
+    await panel.page.keyboard.press('Tab')
+    expect((await panel.active()).testid).toBe('woa-approve')
+    await panel.page.keyboard.press('Tab')
+    expect((await panel.active()).testid).toBe('woa-preserved-toggle')
+    await panel.page.keyboard.press('Shift+Tab')
+    expect((await panel.active()).testid).toBe('woa-approve')
+    await panel.page.keyboard.press('Shift+Tab')
+    expect((await panel.active()).testid).toBe('woa-prefill')
+    await panel.page.keyboard.press('Shift+Tab')
+    expect((await panel.active()).testid).toBe('woa-deny')
+    await panel.page.keyboard.press('Shift+Tab')
+    expect((await panel.active()).testid).toBe('woa-preserved-toggle')
+
+    // Click toggles preserved fields open and closed without breaking visibility or approval.
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(toggle).toHaveText(labels.approvalHidePreserved)
+    await expect(card).toContainText('所属销售')
+    await expect(card).toContainText('张敏')
+    await expect(card).toContainText('VIP')
+
+    await toggle.click()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(card).not.toContainText('张敏')
+    expect(panel.errors).toEqual([])
+  })
+
   test('leave to work the page can be given or declined, and locks an empty composer', async ({open}) => {
     // With no earlier draft, the card waits for an answer: 帮我操作, or 取消.
     const panel = await open(snapshot())

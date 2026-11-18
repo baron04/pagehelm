@@ -200,6 +200,93 @@
 .woa-approval__detail[data-kind="change"] .woa-approval__detail-value {
   font-weight: 500;
 }
+.woa-approval__diff {
+  display: inline;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.woa-approval__diff-old {
+  padding: 1px 5px;
+  border-radius: var(--woa-radius-inline);
+  background: var(--woa-danger-soft);
+  color: var(--woa-danger);
+  text-decoration: line-through;
+}
+.woa-approval__diff-old:empty {
+  display: none;
+}
+.woa-approval__diff-arrow {
+  color: var(--woa-ink-faint);
+  font-weight: 400;
+}
+.woa-approval__diff-new {
+  padding: 1px 5px;
+  border-radius: var(--woa-radius-inline);
+  background: var(--woa-success-soft);
+  color: var(--woa-success);
+  font-weight: 600;
+}
+.woa-approval__diff-new:empty {
+  display: none;
+}
+.woa-approval__preserved {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--woa-line);
+}
+.woa-approval__preserved-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  margin-left: -8px;
+  border-radius: var(--woa-radius-control);
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink-muted);
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing),
+    color var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-approval__preserved-toggle:hover {
+  background: var(--woa-surface-muted);
+  color: var(--woa-ink);
+}
+.woa-approval__preserved-toggle:focus-visible {
+  outline: 2px solid var(--woa-focus);
+  outline-offset: 2px;
+}
+.woa-approval__preserved-chevron {
+  flex: none;
+  color: var(--woa-ink-faint);
+  transition: transform var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-approval__preserved[data-open] .woa-approval__preserved-chevron {
+  transform: rotate(180deg);
+}
+.woa-approval__details--preserved {
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--woa-line);
+}
+.woa-approval__details--preserved .woa-approval__detail-value {
+  color: var(--woa-ink-muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .woa-approval,
+  .woa-approval__preserved-toggle,
+  .woa-approval__preserved-chevron {
+    animation: none;
+    transition: none;
+  }
+}
+@media (forced-colors: active) {
+  .woa-approval__details--preserved {
+    border: 1px solid CanvasText;
+  }
+}
 .woa-approval__detail[data-kind="side_effect"] {
   margin: 4px -8px 0;
   padding: 7px 8px;
