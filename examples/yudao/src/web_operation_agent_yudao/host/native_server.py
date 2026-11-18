@@ -159,6 +159,8 @@ class YudaoHostConfig:
     slim_skill_knowledge: bool = True
     #: Internal cold-start test switch; production CLI always warms actor metadata.
     warm_index: bool = True
+    #: Local development UI debug trace flag; must stay False in production/cloud.
+    local_dev_mode: bool = False
     #: Days each turn's record of what the model was given and answered is kept beside
     #: the session's audit (`runs/<session>/turns/`); 0 writes none.
     turn_trace_days: int = 14
@@ -218,6 +220,8 @@ class YudaoHostConfig:
             raise ValueError("warm_index is on or off")
         if not isinstance(self.runtime_source, bool):
             raise ValueError("runtime_source is on or off")
+        if type(self.local_dev_mode) is not bool:
+            raise ValueError("local_dev_mode must be explicit")
         if (isinstance(self.turn_trace_days, bool) or not isinstance(self.turn_trace_days, int)
                 or not 0 <= self.turn_trace_days <= 90):
             raise ValueError("turn_trace_days must be a whole number of days from 0 to 90")
@@ -673,6 +677,7 @@ class YudaoHost:
                              session_handoff_keys=bound.ports.routes.session_handoff_query_keys))
 
         def runner_factory(channel):
+            channel.local_dev_mode = self.config.local_dev_mode
             # The window every page this session is opened on works through is the one
             # the turn's own page carries; resolve it against the channel once it exists.
             page_window.channel = channel

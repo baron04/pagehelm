@@ -218,7 +218,10 @@ from testapps.contacts.model_loop import ContactsModelGoalPort, contacts_profile
 
 ORIGIN = "https://synthetic.test"
 TODAY = "2026-10-13"
-REGISTERED_ALLOWANCES = frozenset({"ops-03", "arc-08", "arc-09", "arc-12"})
+REGISTERED_ALLOWANCES = frozenset({"ops-03", "cln-08", "arc-08", "arc-09", "arc-12"})
+_CLN08_POLICY_MODULE_RE = re.compile(
+    r"^web_operation_agent_yudao\.(?:host|executor|reads|writes|rules|goal_compat)\.([A-Za-z0-9_]+)$"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +231,7 @@ REGISTERED_ALLOWANCES = frozenset({"ops-03", "arc-08", "arc-09", "arc-12"})
 _STRIP_TIMESTAMP_KEYS = frozenset({
     "t", "at", "timestamp", "created_at", "updated_at", "started_at", "finished_at",
     "decided_at", "expires_at", "issued_at", "observed_at",
-    "elapsed_s", "elapsed_ms", "wall_s", "wall_seconds", "duration_s", "duration_ms",
+    "elapsed_s", "elapsed_ms", "wall_s", "wall_seconds", "duration_s", "duration_ms", "seconds",
     "remaining_s", "waited_ms", "model_occupied_seconds", "occupied_seconds",
 })
 
@@ -299,6 +302,8 @@ class _ScenarioCanonicalizer:
                     out[k] = self.placeholder(v)
                 elif k == "state_sha256" and isinstance(v, str) and v:
                     out[k] = self.placeholder(v)
+                elif k == "stage_timings" and isinstance(v, dict):
+                    out[k] = {stage: "<DURATION>" for stage in sorted(v)}
                 else:
                     out[k] = self.normalize(v, key=k, parent_key=k, event=ev)
             return out
@@ -355,6 +360,12 @@ def apply_registered_allowances(capture: dict[str, Any], allow: set[str]) -> dic
                     continue
                 if "ops-03" in allow and ev == "business_mutation_indeterminate":
                     rec = {k: v for k, v in rec.items() if k != "proposal_digest"}
+                if "cln-08" in allow and ev == "action_effect_consumed":
+                    pm = rec.get("policy_module")
+                    if isinstance(pm, str):
+                        match = _CLN08_POLICY_MODULE_RE.match(pm)
+                        if match:
+                            rec = {**rec, "policy_module": f"web_operation_agent_yudao.{match.group(1)}"}
                 if "arc-08" in allow:
                     rec = {k: v for k, v in rec.items() if k not in _ARC08_KEYS}
                 filtered_audit.append(rec)

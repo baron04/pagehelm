@@ -263,6 +263,27 @@ class EquivalenceHarnessTests(unittest.TestCase):
         )["result"]["user_answer"] = "tampered"
         self.assertFalse(ce.compare_captures(self.capture_a, bad_answer, allow={"ops-03"})[0])
 
+    def test_allow_registered_cln08_scoping(self):
+        modified = copy.deepcopy(self.capture_a)
+        scen = next(s for s in modified["scenarios"] if s["scenario"] == "yudao_page_navigation")
+        action_evt = next(
+            r for r in scen["audit_records"] if r.get("event") == "action_effect_consumed"
+        )
+        old_mod = action_evt["policy_module"]
+        if ".executor." in old_mod:
+            action_evt["policy_module"] = old_mod.replace("web_operation_agent_yudao.executor.", "web_operation_agent_yudao.")
+        else:
+            action_evt["policy_module"] = old_mod.replace("web_operation_agent_yudao.", "web_operation_agent_yudao.executor.")
+
+        self.assertFalse(ce.compare_captures(self.capture_a, modified)[0])
+        ok_allowed, diff = ce.compare_captures(self.capture_a, modified, allow={"cln-08"})
+        self.assertTrue(ok_allowed, diff)
+
+        bad_type = copy.deepcopy(modified)
+        bad_scen = next(s for s in bad_type["scenarios"] if s["scenario"] == "yudao_page_navigation")
+        next(r for r in bad_scen["audit_records"] if r.get("event") == "action_effect_consumed")["policy_type"] = "Tampered"
+        self.assertFalse(ce.compare_captures(self.capture_a, bad_type, allow={"cln-08"})[0])
+
 
 if __name__ == "__main__":
     unittest.main()

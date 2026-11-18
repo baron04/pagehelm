@@ -210,6 +210,7 @@ def host_config(settings: Settings, env: dict) -> native.YudaoHostConfig:
         native_money_policy=cfg.POLICIES / "verified-money.json",
         native_filter_semantics=cfg.POLICIES / "filters.json", **native.native_write_options(env),
         native_edit_prefill=False,
+        local_dev_mode=True,
         model=env["AGENT_OPENAI_MODEL"], model_env=env, daily_allowance_cny=20.0)
 
 

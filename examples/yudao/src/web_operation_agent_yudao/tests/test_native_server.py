@@ -13,7 +13,8 @@ from unittest.mock import patch
 from web_operation_agent.schemas import ClientHello
 from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.goal.data import DataRefused
-from web_operation_agent.goal.executor import GoalTurnExecutor
+from web_operation_agent.execution.harness import TurnHarness
+from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent_yudao.host.application import SESSION_HANDOFF_KEYS, YudaoIdentityPort
 from web_operation_agent_yudao.reads.client import YudaoClient, YudaoReadRefused
@@ -185,7 +186,8 @@ class NativeHostTests(unittest.TestCase):
         host = self.host()
         host.bootstrap("synthetic-a", "1", "tab")
         executor = host._sessions[("1", "1", "tab")].session.runner.executor
-        self.assertIsInstance(executor, GoalTurnExecutor)
+        self.assertIsInstance(executor, ModelDrivenTurnExecutor)
+        self.assertIsInstance(executor.harness, TurnHarness)
         self.assertFalse(executor.config.source.runtime_source)
         self.assertIsNotNone(executor.goal_port)
         self.assertIn("submit", executor.config.disabled_actions)
@@ -399,7 +401,8 @@ class NativeHostTests(unittest.TestCase):
         host.bootstrap("synthetic-a", "1", "skill-write-host")
         active = host._sessions[("1", "1", "skill-write-host")]
         executor = active.session.runner.executor
-        self.assertIsInstance(executor, GoalTurnExecutor)
+        self.assertIsInstance(executor, ModelDrivenTurnExecutor)
+        self.assertIsInstance(executor.harness, TurnHarness)
         self.assertTrue(executor.config.allow_business_mutations)
         self.assertIn("submit", executor.config.disabled_actions)
         self.assertEqual(executor.application.business_tools.mutation_tool_names, frozenset({
@@ -780,6 +783,24 @@ class NativeHostTests(unittest.TestCase):
             with self.assertRaises(GuardRefused): self.host()
             proxy.return_value.start.return_value.close.assert_called_once()
             self.chat.assert_not_called()
+
+    def test_local_dev_mode_defaults_off_and_propagates_when_enabled(self):
+        self.assertFalse(self.config.local_dev_mode)
+        for bad in (1, "true", None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                replace(self.config, local_dev_mode=bad)
+        default_host = self.host()
+        default_host.bootstrap("synthetic-a", "1", "dev-off")
+        default_ch = default_host._sessions[("1", "1", "dev-off")].session.channel
+        self.assertFalse(default_ch.local_dev_mode)
+        self.assertFalse(default_ch._panel_configuration()["local_dev_mode"])
+
+        self.config = replace(self.config, local_dev_mode=True)
+        dev_host = self.host()
+        dev_host.bootstrap("synthetic-a", "1", "dev-on")
+        dev_ch = dev_host._sessions[("1", "1", "dev-on")].session.channel
+        self.assertTrue(dev_ch.local_dev_mode)
+        self.assertTrue(dev_ch._panel_configuration()["local_dev_mode"])
 
 
 class NativeCliTests(unittest.TestCase):
