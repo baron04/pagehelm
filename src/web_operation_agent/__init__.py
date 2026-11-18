@@ -6,7 +6,7 @@ The browser observes the current page and executes a fixed set of generic tools.
 """
 import sys
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 #: Tested interpreter range, as [minimum, first unsupported).
 #: Distribution metadata is checked against this range by test_supported_python.py.

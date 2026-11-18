@@ -9,7 +9,7 @@ from .route import (ODOO_ROUTE_PORT, ODOO_SESSION_HANDOFF_KEYS, ODOO_SOURCE_SCOP
                     odoo_route_identity)
 from .sourcemap import ODOO_SOURCE_POLICY, OdooCompiler
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "ODOO_ROUTE_PORT",
