@@ -3,16 +3,21 @@ import {
   AlertTriangle, ArrowDown, ArrowUpRight, ChevronDown, CircleAlert, CircleCheck, CircleSlash, CircleX,
   FileText, PanelTop, RefreshCw, RotateCcw,
 } from 'lucide-react'
-import type {AnswerTarget, Labels, PanelLimits, ReconciliationStatus, TimelineEntry} from '../contract/panel'
+import type {
+  AnswerTarget, HandoffRestrictedControl, Labels, PanelLimits, ReconciliationStatus, TimelineEntry,
+} from '../contract/panel'
 import type {PanelSnapshot} from '../bridge/host'
 import {plainText} from '../markdown/plain'
 import {formatFullTime, formatTime} from '../state/clock'
 import {Answer} from './Answer'
 import {CopyButton} from './CopyButton'
+import {DataTable, structuredTableToBlock} from './DataTable'
 import {DebugTracePanel} from './DebugTracePanel'
 import {guarded} from './ErrorBoundary'
+import {HandoffCard} from './HandoffCard'
 import {Skeleton} from './Skeleton'
 import {iconProps} from './icon'
+import {isAllowedOrigin} from './inline'
 
 /** Scroll back within this many pixels of the floor re-engages auto-follow. */
 const REATTACH_BOTTOM = 4
@@ -116,6 +121,8 @@ function mergeReadSteps(steps: TimelineEntry[]): TimelineEntry[] {
   return merged
 }
 
+const TRANSIENT_STEP_STAGES = new Set(['thinking', 'settle', 'awaiting_approval'])
+
 function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   const turns: Turn[] = []
   // A turn keeps its place even when another's lines arrive between its own -- two pages of
@@ -137,8 +144,10 @@ function group(entries: TimelineEntry[], busy: boolean): Turn[] {
   if (last && busy && last.outcome === null) last.running = true
   // A line that only says the assistant is working is true while nothing newer has happened.
   for (const turn of turns) {
-    const visible = turn.steps.filter((step, index) => !step.transient
-      || (turn.running && index === turn.steps.length - 1))
+    const visible = turn.steps.filter((step, index) => {
+      const isTransient = step.transient ?? TRANSIENT_STEP_STAGES.has(step.step?.stage ?? '')
+      return !isTransient || (turn.running && index === turn.steps.length - 1)
+    })
     turn.steps = mergeReadSteps(visible)
   }
   return turns
@@ -153,7 +162,7 @@ const STOPPED_STATE = 'cancelled'
 
 function statusOf(turn: Turn, index: number): NodeStatus {
   const step = turn.steps[index]!
-  if (step.kind === 'approval') {
+  if (step.kind === 'approval' || step.step?.stage === 'awaiting_approval') {
     // A confirmation node is only "waiting" while it is the newest thing that happened.
     return turn.running && index === turn.steps.length - 1 ? 'waiting' : 'done'
   }
@@ -251,7 +260,8 @@ const WorkProcess = memo(function WorkProcess({turn, labels, stopping}: {
   const current = turn.steps.at(-1)!
   // A stop takes effect at the next safe point, which can be seconds away. Until the turn
   // ends, the line says it heard the press rather than carrying on about the step.
-  const waiting = turn.running && !stopping && current.kind === 'approval'
+  const waiting = turn.running && !stopping
+    && (current.kind === 'approval' || current.step?.stage === 'awaiting_approval')
   const header = turn.running
     ? (
       <button type="button" className="woa-work__live" aria-expanded={open}
@@ -312,17 +322,29 @@ function Starting({labels}: {labels: Labels}): React.JSX.Element {
   )
 }
 
-function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget, onReconcile}: {
+function Outcome({
+  entry, labels, limits, live, allowedOrigins, optionsDisabled,
+  onOpenTarget, onReconcile, onSelectOption, onUndoFormFill, onFocusHandoffControl,
+}: {
   entry: TimelineEntry
   labels: Labels
   limits: PanelLimits
   live: boolean
   allowedOrigins: readonly string[]
+  optionsDisabled: boolean
   onOpenTarget?: ((target: AnswerTarget) => boolean) | undefined
   onReconcile?: ((turnId: string, proposalDigest?: string) => Promise<ReconciliationStatus> | void) | undefined
+  onSelectOption?: ((text: string) => void) | undefined
+  onUndoFormFill?: ((turnId: string) => Promise<boolean> | boolean) | undefined
+  onFocusHandoffControl?: ((control: HandoffRestrictedControl) => Promise<boolean> | boolean) | undefined
 }): React.JSX.Element {
   const [reconciling, setReconciling] = useState(false)
   const [localReconciliation, setLocalReconciliation] = useState<ReconciliationStatus | null>(null)
+  const allow = useMemo(() => isAllowedOrigin(allowedOrigins), [allowedOrigins])
+  const tableBlock = useMemo(
+    () => (entry.table && entry.table.columns.length > 0 ? structuredTableToBlock(entry.table) : null),
+    [entry.table],
+  )
   useEffect(() => {
     if (entry.reconciliation) setLocalReconciliation(null)
   }, [entry.reconciliation])
@@ -332,11 +354,44 @@ function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget, onR
   const kind = entry.panel_state === 'indeterminate' ? 'indeterminate'
     : entry.panel_state === 'refused' ? 'refused' : 'plain'
   if (kind === 'plain') {
+    const hasText = Boolean(entry.text)
     return (
       <div className="woa-result" data-entry-id={entry.id}>
-      <Answer text={entry.text.slice(0, limits.result_max_chars)}
-              authored={entry.authored ?? 'server'} live={live}
-              labels={labels} allowedOrigins={allowedOrigins} />
+      {hasText && (
+        <Answer text={entry.text.slice(0, limits.result_max_chars)}
+                authored={entry.authored ?? 'server'} live={live}
+                labels={labels} allowedOrigins={allowedOrigins} />
+      )}
+      {tableBlock && (
+        <div className="woa-result__table">
+          {entry.table?.title && <h4 className="woa-result__table-title">{entry.table.title}</h4>}
+          <DataTable block={tableBlock} labels={labels} allow={allow} />
+        </div>
+      )}
+      {entry.panel_state === 'needs_input' && entry.input_options?.length ? (
+        <div className="woa-input-options" role="group" aria-label={labels.statusNeedsInput}>
+          {entry.input_options.map(option => (
+            <button
+              key={option.id}
+              type="button"
+              className="woa-input-option"
+              disabled={optionsDisabled}
+              onClick={() => onSelectOption?.(option.prompt ?? option.label)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {entry.handoff && (
+        <HandoffCard
+          handoff={entry.handoff}
+          turnId={entry.turn_id}
+          labels={labels}
+          onUndoFormFill={onUndoFormFill}
+          onFocusHandoffControl={onFocusHandoffControl}
+        />
+      )}
       {entry.answer_targets?.length ? (
         <nav className="woa-answer-targets" aria-label={labels.relatedLinks}>
           <span>{labels.relatedLinks}</span>
@@ -356,17 +411,21 @@ function Outcome({entry, labels, limits, live, allowedOrigins, onOpenTarget, onR
           ))}</ul>
         </nav>
       ) : null}
-      <div className="woa-answer-actions">
-        <CopyButton text={() => plainText(entry.text.slice(0, limits.result_max_chars))}
-                    label={labels.copyAnswer} copiedLabel={labels.copied}
-                    className="woa-icon-button" />
-        {entry.at > 0 && (
-          <time className="woa-answer-time" dateTime={new Date(entry.at).toISOString()}
-                title={formatFullTime(entry.at, labels.locale)}>
-            {formatTime(entry.at, Date.now(), labels.locale)}
-          </time>
-        )}
-      </div>
+      {(hasText || entry.at > 0) && (
+        <div className="woa-answer-actions">
+          {hasText && (
+            <CopyButton text={() => plainText(entry.text.slice(0, limits.result_max_chars))}
+                        label={labels.copyAnswer} copiedLabel={labels.copied}
+                        className="woa-icon-button" />
+          )}
+          {entry.at > 0 && (
+            <time className="woa-answer-time" dateTime={new Date(entry.at).toISOString()}
+                  title={formatFullTime(entry.at, labels.locale)}>
+              {formatTime(entry.at, Date.now(), labels.locale)}
+            </time>
+          )}
+        </div>
+      )}
       </div>
     )
   }
@@ -437,6 +496,9 @@ export interface ThreadProps {
   onRetry: () => void
   onRetryTurn?: ((text: string) => void) | undefined
   onReconcile?: ((turnId: string, proposalDigest?: string) => Promise<ReconciliationStatus> | void) | undefined
+  onSelectOption?: ((text: string) => void) | undefined
+  onUndoFormFill?: ((turnId: string) => Promise<boolean> | boolean) | undefined
+  onFocusHandoffControl?: ((control: HandoffRestrictedControl) => Promise<boolean> | boolean) | undefined
   children?: React.ReactNode
   /** Rendered as the last thing in the conversation: a confirmation belongs where the
       work it is about is, and inside the one box that scrolls. */
@@ -687,7 +749,17 @@ export function Thread(props: ThreadProps): React.JSX.Element {
       )}
       {loading ? <Skeleton /> : historyUnavailable ? null : empty ? props.children : (
         <ol className="woa-turns">
-          {turns.map(turn => {
+          {turns.map((turn, turnIndex) => {
+            const isLatestTurn = turnIndex === turns.length - 1
+            const optionsDisabled = snapshot.connection.busy || snapshot.closed || !isLatestTurn
+            const hasOutcomeContent = Boolean(
+              turn.outcome && (
+                turn.outcome.text
+                || (turn.outcome.table && turn.outcome.table.columns.length > 0)
+                || turn.outcome.input_options?.length
+                || turn.outcome.handoff
+              ),
+            )
             const retryableFailure = !turn.running && Boolean(turn.goal?.text) && (
               turn.outcome
                 ? (turn.outcome.panel_state === 'error' && Boolean(turn.outcome.retryable))
@@ -708,11 +780,16 @@ export function Thread(props: ThreadProps): React.JSX.Element {
                                stopping={turn.running && snapshot.connection.stopping} />
                 )}
                 {/* The server supplies the outcome, including why a confirmation expired. */}
-                {turn.outcome?.text && (
+                {hasOutcomeContent && turn.outcome && (
                   <Outcome entry={turn.outcome} labels={labels} limits={limits}
                            live={!turn.outcome.replayed && !settledAtMount.current?.has(turn.outcome.id)}
-                           allowedOrigins={allowedOrigins} onOpenTarget={props.onOpenTarget}
-                           onReconcile={props.onReconcile} />
+                           allowedOrigins={allowedOrigins}
+                           optionsDisabled={optionsDisabled}
+                           onOpenTarget={props.onOpenTarget}
+                           onReconcile={props.onReconcile}
+                           onSelectOption={props.onSelectOption}
+                           onUndoFormFill={props.onUndoFormFill}
+                           onFocusHandoffControl={props.onFocusHandoffControl} />
                 )}
                 {retryableFailure && props.onRetryTurn && turn.goal?.text && (
                   <div className="woa-turn__actions">

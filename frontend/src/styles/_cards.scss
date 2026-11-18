@@ -127,6 +127,154 @@
   font-size: var(--woa-font-size-meta);
 }
 
+/* ─────────────────────────────────────────────── clarification option pills */
+.woa-input-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+.woa-input-option {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 12px;
+  border-radius: var(--woa-radius-pill);
+  background: var(--woa-surface-raised);
+  border: var(--woa-border-width) solid var(--woa-line-strong);
+  font-size: var(--woa-font-size-small);
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink);
+  text-align: start;
+  transition: background var(--woa-motion-fast) var(--woa-motion-easing),
+    border-color var(--woa-motion-fast) var(--woa-motion-easing),
+    color var(--woa-motion-fast) var(--woa-motion-easing);
+}
+.woa-input-option:hover:not(:disabled) {
+  background: var(--woa-accent-soft);
+  border-color: var(--woa-accent);
+  color: var(--woa-accent);
+}
+.woa-input-option:focus-visible {
+  outline: 2px solid var(--woa-focus);
+  outline-offset: 2px;
+}
+.woa-input-option:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+/* ─────────────────────────────────────────────── handoff summary card */
+.woa-handoff {
+  border-radius: var(--woa-radius-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--woa-surface-raised);
+  border: var(--woa-border-width) solid var(--woa-line-strong);
+}
+.woa-handoff__title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--woa-font-size-small);
+  font-weight: 600;
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink);
+}
+.woa-handoff__title > svg {
+  flex: none;
+  color: var(--woa-accent);
+}
+.woa-handoff__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.woa-handoff__section-title {
+  margin: 0;
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink-muted);
+}
+.woa-handoff__fields {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-surface);
+  box-shadow: inset 0 0 0 var(--woa-border-width) var(--woa-line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.woa-handoff__field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--woa-font-size-meta);
+  line-height: var(--woa-line-height);
+}
+.woa-handoff__field dt {
+  color: var(--woa-ink-muted);
+  font-weight: 500;
+}
+.woa-handoff__field dd {
+  margin: 0;
+  color: var(--woa-ink);
+  overflow-wrap: anywhere;
+}
+.woa-handoff__controls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.woa-handoff__control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--woa-radius-control);
+  background: var(--woa-warning-soft);
+  box-shadow: inset 0 0 0 var(--woa-border-width) color-mix(in srgb, var(--woa-warning) 24%, transparent);
+}
+.woa-handoff__control-label {
+  font-size: var(--woa-font-size-meta);
+  font-weight: 500;
+  color: var(--woa-warning);
+}
+.woa-handoff__locate,
+.woa-handoff__undo {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--woa-font-size-meta);
+}
+.woa-handoff__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.woa-handoff__undo[data-undone="true"] {
+  background: var(--woa-success-soft);
+  color: var(--woa-success);
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .woa-input-option {
+    transition: none;
+  }
+}
+
 /* ─────────────────────────────────────────────── approval */
 /* A confirmation is the one moment a write can happen, so it keeps a frame nothing in an
    answer can draw -- but a small one: a header line, what will happen, to what, and two
@@ -403,6 +551,7 @@
 
 .woa-approval__actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   /* When the card is taller than the window can show -- a narrow or zoomed one -- the two

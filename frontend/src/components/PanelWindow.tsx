@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {PanelRight, PictureInPicture2, Plus, X} from 'lucide-react'
-import {toneOf} from '../contract/panel'
+import {toneOf, type HandoffRestrictedControl} from '../contract/panel'
 import type {HostNotice, PanelHost} from '../bridge/host'
 import {useHostSnapshot} from '../state/useHost'
 import {loadOpen, rememberOpen, useWindowGeometry, type Handle} from '../state/geometry'
@@ -188,6 +188,18 @@ export function PanelWindow({host, allowedOrigins}: {
       : undefined),
     [host],
   )
+  const undoFormFill = useMemo(
+    () => (typeof host.undoFormFill === 'function'
+      ? (turnId: string) => host.undoFormFill!(turnId)
+      : undefined),
+    [host],
+  )
+  const focusHandoffControl = useMemo(
+    () => (typeof host.focusHandoffControl === 'function'
+      ? (control: HandoffRestrictedControl) => host.focusHandoffControl!(control)
+      : undefined),
+    [host],
+  )
 
   // The shortcut works wherever focus is. On the host page it reaches the document; inside
   // the panel it never gets there -- the panel seals its events at its own boundary -- so
@@ -315,6 +327,8 @@ export function PanelWindow({host, allowedOrigins}: {
                 onOpenTarget={target => host.openAnswerTarget?.(target) ?? false}
                 onLoadOlder={loadOlder} onRetry={retrySubmit}
                 onRetryTurn={submit} onReconcile={reconcile}
+                onSelectOption={submit} onUndoFormFill={undoFormFill}
+                onFocusHandoffControl={focusHandoffControl}
                 footer={pending && approvalLive && (
                   <ApprovalCard approval={pending} labels={labels} limits={limits}
                                 visibility={visibility} busy={deciding}

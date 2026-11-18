@@ -57,6 +57,16 @@ export function renderInline(
   return out
 }
 
+export function isAllowedOrigin(allowedOrigins: readonly string[]): (href: string) => boolean {
+  return (href: string) => {
+    try {
+      return allowedOrigins.includes(new URL(href, window.location.href).origin)
+    } catch {
+      return false
+    }
+  }
+}
+
 export function renderStaticInline(
   nodes: Inline[],
   allow: (href: string) => boolean,

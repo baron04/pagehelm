@@ -675,13 +675,15 @@ ul.woa-md__list {
 .woa-md__tablewrap {
   overflow-x: auto;
 }
-.woa-md table {
+.woa-md table,
+.woa-datatable__table {
   width: 100%;
   border-collapse: collapse;
   font-size: var(--woa-font-size-small);
   line-height: var(--woa-line-height);
 }
-.woa-md th {
+.woa-md th,
+.woa-datatable__table th {
   text-align: left;
   font-weight: 500;
   font-size: var(--woa-font-size-meta);
@@ -690,7 +692,8 @@ ul.woa-md__list {
   white-space: nowrap;
   border-bottom: 1px solid var(--woa-line-strong);
 }
-.woa-md td {
+.woa-md td,
+.woa-datatable__table td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--woa-line);
   font-variant-numeric: tabular-nums;
@@ -698,19 +701,38 @@ ul.woa-md__list {
      reader miss that the row beside it had more columns. Headers keep their line. */
   overflow-wrap: anywhere;
 }
-.woa-md tr:last-child td {
+.woa-md tr:last-child td,
+.woa-datatable__table tr:last-child td {
   border-bottom: 0;
 }
 .woa-md th:first-child,
-.woa-md td:first-child {
+.woa-md td:first-child,
+.woa-datatable__table th:first-child,
+.woa-datatable__table td:first-child {
   padding-inline-start: 0;
 }
 .woa-md th:last-child,
-.woa-md td:last-child {
+.woa-md td:last-child,
+.woa-datatable__table th:last-child,
+.woa-datatable__table td:last-child {
   padding-inline-end: 0;
 }
-.woa-md [data-align="right"] {
+.woa-md [data-align="right"],
+.woa-datatable__table [data-align="right"] {
   text-align: right;
+}
+
+.woa-result__table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.woa-result__table-title {
+  margin: 0;
+  font-size: var(--woa-font-size-small);
+  font-weight: 600;
+  line-height: var(--woa-line-height);
+  color: var(--woa-ink);
 }
 
 .woa-md__block {

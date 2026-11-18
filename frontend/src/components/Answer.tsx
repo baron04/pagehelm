@@ -5,7 +5,7 @@ import type {Labels} from '../contract/panel'
 import {useReveal} from '../state/typewriter'
 import {CopyButton} from './CopyButton'
 import {DataTable} from './DataTable'
-import {Budget, renderInline} from './inline'
+import {Budget, isAllowedOrigin, renderInline} from './inline'
 
 function CodeBlock({block, labels}: {block: Extract<Block, {type: 'code'}>; labels: Labels}): React.JSX.Element {
   const lines = block.value.split('\n')
@@ -85,13 +85,7 @@ export const Answer = memo(function Answer(props: AnswerProps): React.JSX.Elemen
   const blocks = useMemo(() => parseMarkdown(text), [text])
   const total = useMemo(() => countRevealCharacters(blocks), [blocks])
   const reveal = useReveal(total, live && authored === 'model')
-  const allow = useMemo(() => (href: string) => {
-    try {
-      return allowedOrigins.includes(new URL(href, window.location.href).origin)
-    } catch {
-      return false
-    }
-  }, [allowedOrigins])
+  const allow = useMemo(() => isAllowedOrigin(allowedOrigins), [allowedOrigins])
 
   const budget = new Budget(reveal.visible)
   return (

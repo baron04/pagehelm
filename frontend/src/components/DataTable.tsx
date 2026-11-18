@@ -1,7 +1,7 @@
 import {useMemo, useState} from 'react'
 import {ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download, Search} from 'lucide-react'
-import type {Labels} from '../contract/panel'
-import type {Block, Inline} from '../markdown/parse'
+import type {Labels, StructuredTable} from '../contract/panel'
+import {parseInline, type Block, type Inline} from '../markdown/parse'
 import {inlineText} from '../markdown/plain'
 import {CopyButton} from './CopyButton'
 import {iconProps} from './icon'
@@ -68,6 +68,18 @@ function downloadCsv(csv: string, filename = 'table.csv'): void {
   } finally {
     link.remove()
     window.setTimeout(() => URL.revokeObjectURL?.(url), 1000)
+  }
+}
+
+/** Convert a server-projected StructuredTable into a DataTable block using inline text parsing. */
+export function structuredTableToBlock(table: StructuredTable): TableBlock {
+  return {
+    type: 'table',
+    head: table.columns.map(column => parseInline(String(column ?? ''))),
+    rows: table.rows.map(row =>
+      table.columns.map((_, colIndex) => parseInline(String(row[colIndex] ?? ''))),
+    ),
+    align: table.columns.map(() => 'left'),
   }
 }
 
