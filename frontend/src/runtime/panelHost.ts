@@ -32,7 +32,7 @@ const RETRY_FLOOR_MS = 250
 const RETRY_CEILING_MS = 4000
 
 /** What a failed request carries, whatever threw it. */
-export interface TransportFailure {
+interface TransportFailure {
   code?: unknown
   status?: unknown
 }
@@ -63,7 +63,7 @@ const RETRYABLE_CODES = new Set([
   'bad_gateway', 'gateway_timeout', 'submit_failed', 'cancel_failed'])
 
 /** Whether offering the person a resend can help: transient faults yes, decided refusals no. */
-export function isRetryableFailure(code: string, status: number): boolean {
+function isRetryableFailure(code: string, status: number): boolean {
   if (RETRYABLE_STATUS.has(status)) return true
   if (status >= 400) return false
   if (RETRYABLE_CODES.has(code)) return true

@@ -18,9 +18,9 @@ import type {PanelSnapshot} from '../bridge/host'
 const KEY = 'woa.assistant.engagement.v1'
 const SESSION_KEY = 'woa.assistant.session.v1'
 
-export type Engagement = 'none' | 'engaged' | 'active'
+type Engagement = 'none' | 'engaged' | 'active'
 
-export interface EngagementRecord {
+interface EngagementRecord {
   read(): Engagement
   sessionId(): string
   remember(sessionId: string): void

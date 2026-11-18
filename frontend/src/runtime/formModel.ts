@@ -10,7 +10,7 @@
 import browserContract from '@contract/browser_contract.json'
 import {sleep} from './contain'
 
-export interface FormItemRead {prop: string; label: string; display: string}
+interface FormItemRead {prop: string; label: string; display: string}
 export interface FormModelRead {
   model: Record<string, unknown>
   items: FormItemRead[]
@@ -62,7 +62,7 @@ export function unreadableReason(raw: unknown): string {
  * answer fails closed -- a read without a vouched source reaches the server with
  * none, and no confirmation or settle handling exists at all.
  */
-export interface FormIntegration {
+interface FormIntegration {
   /** Whether the application vouches for `source` naming one of its own read
    * endpoints for this kind of read. Absent: no source is ever forwarded. */
   acceptReadSource?: ((source: string, kind: 'form' | 'row') => boolean) | undefined
@@ -114,12 +114,12 @@ export function normalizeRowRead(raw: unknown, integration?: FormIntegration): R
       ? {toggle: {...toggle, label: clip(toggle.label, 80)}} : {})}
 }
 
-export interface ConfirmBoxRead {open: boolean; title: string; text: string; buttons: string[]}
+interface ConfirmBoxRead {open: boolean; title: string; text: string; buttons: string[]}
 
 const CLOSED: ConfirmBoxRead = {open: false, title: '', text: '', buttons: []}
 
 /** An application's raw confirmation read, bounded like any page fact. */
-export function normalizeConfirmRead(raw: unknown): ConfirmBoxRead {
+function normalizeConfirmRead(raw: unknown): ConfirmBoxRead {
   const read = raw as {open?: unknown; title?: unknown; text?: unknown; buttons?: unknown} | null | undefined
   if (!read || read.open !== true) return CLOSED
   const buttons = (Array.isArray(read.buttons) ? read.buttons : [])

@@ -20,7 +20,7 @@ export interface PanelShell {
 }
 
 /** Verbs for a shell nothing answers yet: a Runtime that owns its shell binds before use. */
-export const INERT_ACTIONS: PanelActions = {
+const INERT_ACTIONS: PanelActions = {
   submit() {}, cancel() {}, decide() {}, newConversation() {}, loadOlder() {},
 }
 

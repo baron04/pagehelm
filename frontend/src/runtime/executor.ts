@@ -30,7 +30,7 @@ export interface CommandOutcome {
 }
 
 /** A link or a native form submission, as HTML would carry it out. */
-export type NativeNavigation =
+type NativeNavigation =
   | {kind: 'link'; url: string; target: string}
   | ({kind: 'form'; target: string} & NativeForm)
 
@@ -105,14 +105,14 @@ async function withSubmitEvidence(native: NativeForm,
  * The page is asked for only by the commands that touch it, so a Runtime whose page is not
  * loaded can still wait, navigate, and fail the rest as an ordinary `page_error`.
  */
-export type PageAccess = () => Page
+type PageAccess = () => Page
 
 /**
  * The application opening one of its own pages in this document: true only when it now
  * shows another address. The Runtime still proves the navigation by the address, as for
  * any other, and loads the page itself when the application answers anything else.
  */
-export type ApplicationOpen = (url: string) => Promise<boolean>
+type ApplicationOpen = (url: string) => Promise<boolean>
 
 export async function executeCommand(command: ActionCommand, access: PageAccess,
                                      config: Pick<RuntimeConfig, 'navigationMode'>,
@@ -257,7 +257,7 @@ export function navigationExpectation(command: ActionCommand, access: PageAccess
   return {kind: '', url: ''}
 }
 
-export interface NavigationOutcome {
+interface NavigationOutcome {
   navigated: boolean
   message: string
 }

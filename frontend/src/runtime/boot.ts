@@ -31,7 +31,7 @@ export const RETRY_MS: readonly number[] = [1000, 3000, 8000]
  * How long a session with nothing to do is kept before it is let go. The next thing the
  * person sends makes a new one; the conversation is the server's and comes back with it.
  */
-export const KEEP_ALIVE_MS = 5 * 60_000
+const KEEP_ALIVE_MS = 5 * 60_000
 /** How soon to ask again when a renewal could not happen yet. */
 export const RENEW_RETRY_MS = 5000
 /**
@@ -152,7 +152,7 @@ export interface Supervised {
   onStopped(listener: () => void): Cancel
 }
 
-export type BootState =
+type BootState =
   | {kind: 'idle'}
   | {kind: 'starting'; attempt: number}
   | {kind: 'running'; runtime: Supervised}
@@ -161,7 +161,7 @@ export type BootState =
   /** Over, with the panel left as the Runtime left it; it is the one that says why. */
   | {kind: 'settled'; reason: 'replaced' | 'not_renewable'}
 
-export interface SupervisorDeps {
+interface SupervisorDeps {
   source: SessionSource
   start(config: RuntimeConfig): Promise<Supervised | null>
   status: StartStatus
@@ -423,7 +423,7 @@ let epochMemory = 0
 let epochStorage = true
 
 /** The conversation counter this tab is on; 0 before its first "new conversation". */
-export function conversationEpoch(): number {
+function conversationEpoch(): number {
   if (!epochStorage) return epochMemory
   try {
     return Math.max(0, Math.floor(Number(sessionStorage.getItem(EPOCH_KEY) || 0)) || 0)
@@ -438,7 +438,7 @@ export function conversationEpoch(): number {
  * conversation it is on. It is what lets one person's two pages, browsers or devices
  * each hold their own session, and a reload rejoin its own.
  */
-export async function pageInstanceId(): Promise<string> {
+async function pageInstanceId(): Promise<string> {
   return `${await tabId()}.${conversationEpoch()}`
 }
 
@@ -476,7 +476,7 @@ function sameOrigin(value: string | undefined): string | null {
  * underneath may well carry its own tag. Otherwise a `<script data-woa-bootstrap>` tag names
  * the application's endpoints, which must be on the page's own origin.
  */
-export function sourceFromPage(doc: Document = document, win: Window = window): SessionSource | null {
+function sourceFromPage(doc: Document = document, win: Window = window): SessionSource | null {
   if (win.__WOA_EMBED_CONFIG__) return inlineSource(win.__WOA_EMBED_CONFIG__)
   const tag = doc.querySelector<HTMLScriptElement>('script[data-woa-bootstrap]')
   if (!tag) return null

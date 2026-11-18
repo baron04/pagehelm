@@ -8,7 +8,7 @@
 import {start as startText} from '../presentation.json'
 import type {PanelHost} from './panelHost'
 
-export type StartText = Omit<typeof startText, 'comment'>
+type StartText = Omit<typeof startText, 'comment'>
 export const START_TEXT: StartText = startText
 
 /** Why starting failed: an HTTP status when the server answered, `null` when it did not. */
