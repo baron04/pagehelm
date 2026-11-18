@@ -33,6 +33,7 @@ class ChannelPanel:
             "principal_expires_at": (self.principal.expires_at
                                      if self.principal is not None else 0),
             "read_only_mode": bool(getattr(self, "read_only_mode", False)),
+            "local_dev_mode": bool(getattr(self, "local_dev_mode", False)),
         }
 
     def panel_timeline(self, *, lease_id: str, after: str = "", before: str = "",

@@ -141,9 +141,9 @@ class PythonEntrypointTests(unittest.TestCase):
             path = cache / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
-        for name in ('frontend/src/integrations/yudao/page-facts.js',
-                     'frontend/src/integrations/yudao/yudao-page-controller.js',
-                     'frontend/src/integrations/yudao/form-surface.js',
+        for name in ('frontend/dist/integrations/yudao/page-facts.js',
+                     'frontend/dist/integrations/yudao/yudao-page-controller.js',
+                     'frontend/dist/integrations/yudao/form-surface.js',
                      'src/web_operation_agent/web_runtime/assistant.js',
                      'src/web_operation_agent/web_runtime/trace_replay.html'):
             path = self.root / name

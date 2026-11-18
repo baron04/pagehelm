@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
 DIST = FRONTEND / "dist" / "runtime"
+YUDAO_DIST = FRONTEND / "dist" / "integrations" / "yudao"
+YUDAO_ASSETS = ("page-facts.js", "yudao-page-controller.js", "form-surface.js")
 TARGET = ROOT / "src" / "web_operation_agent" / "web_runtime" / "assistant.js"
 #: Names earlier builds wrote. A leftover would ship in the wheel (`web_runtime/*.js`)
 #: as code nothing serves, so a build removes it.
@@ -48,10 +50,16 @@ def main() -> int:
         # fresh checkout has neither, and the bundle does not compile without them.
         run("npm", "run", "tokens")
         run("npm", "run", "build:runtime")
+        run("npm", "run", "build:yudao")
     built = DIST / "assistant.js"
     if not built.is_file():
         print(f"no build output at {built}", file=sys.stderr)
         return 1
+    for name in YUDAO_ASSETS:
+        asset = YUDAO_DIST / name
+        if not asset.is_file():
+            print(f"no yudao integration build output at {asset}", file=sys.stderr)
+            return 1
 
     TARGET.parent.mkdir(parents=True, exist_ok=True)
     TARGET.write_bytes(built.read_bytes())

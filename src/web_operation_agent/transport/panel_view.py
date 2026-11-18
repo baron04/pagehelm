@@ -115,6 +115,90 @@ def _reconciliation_projection(payload: dict, limits: dict[str, int]) -> dict | 
     return entry
 
 
+def _nonneg_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _debug_trace_projection(payload: dict) -> dict[str, Any] | None:
+    """Bound and redact an optional local-dev ARC-08 trace summary onto a terminal entry."""
+    raw = payload.get("debug_trace")
+    if not isinstance(raw, dict):
+        return None
+    projected: dict[str, Any] = {}
+    for key in ("first_route_kind", "stop_reason"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            projected[key] = _clip(value.strip(), 120)
+    for key in ("wall_ms", "model_calls"):
+        num = _nonneg_int(raw.get(key))
+        if num is not None:
+            projected[key] = num
+    raw_stages = raw.get("stage_ms")
+    if isinstance(raw_stages, dict):
+        stages: dict[str, int] = {}
+        for k, v in list(raw_stages.items())[:24]:
+            num = _nonneg_int(v)
+            if isinstance(k, str) and k.strip() and num is not None:
+                stages[_clip(k.strip(), 64)] = num
+        if stages:
+            projected["stage_ms"] = stages
+    raw_tokens = raw.get("tokens")
+    if isinstance(raw_tokens, dict):
+        tokens: dict[str, int] = {}
+        for tk in ("input", "output", "total"):
+            num = _nonneg_int(raw_tokens.get(tk))
+            if num is not None:
+                tokens[tk] = num
+        if tokens:
+            projected["tokens"] = tokens
+    raw_chain = raw.get("tool_chain")
+    if isinstance(raw_chain, list):
+        chain: list[dict[str, Any]] = []
+        for item in raw_chain[:40]:
+            if not isinstance(item, dict):
+                continue
+            tool = item.get("tool")
+            elapsed = _nonneg_int(item.get("elapsed_ms"))
+            if not isinstance(tool, str) or not tool.strip() or elapsed is None:
+                continue
+            entry: dict[str, Any] = {"tool": _clip(tool.strip(), 80), "elapsed_ms": elapsed}
+            step_num = _nonneg_int(item.get("step"))
+            if step_num is not None:
+                entry["step"] = step_num
+            if isinstance(item.get("ok"), bool):
+                entry["ok"] = item["ok"]
+            err = item.get("error_code")
+            if isinstance(err, str) and err.strip():
+                entry["error_code"] = _clip(err.strip(), 80)
+            chain.append(entry)
+        if chain:
+            projected["tool_chain"] = chain
+    raw_checks = raw.get("checks")
+    if isinstance(raw_checks, list):
+        checks: list[dict[str, Any]] = []
+        for item in raw_checks[:20]:
+            if not isinstance(item, dict):
+                continue
+            check = item.get("check")
+            outcome = item.get("outcome")
+            if not (isinstance(check, str) and check.strip()
+                    and isinstance(outcome, str) and outcome.strip()):
+                continue
+            entry: dict[str, Any] = {
+                "check": _clip(check.strip(), 80),
+                "outcome": _clip(outcome.strip(), 40),
+            }
+            attempt = _nonneg_int(item.get("attempt"))
+            if attempt is not None:
+                entry["attempt"] = attempt
+            if isinstance(item.get("answer_preserved"), bool):
+                entry["answer_preserved"] = item["answer_preserved"]
+            checks.append(entry)
+        if checks:
+            projected["checks"] = checks
+    return projected or None
+
+
 def _terminal_extras(payload: dict, limits: dict[str, int]) -> dict[str, Any]:
     extras: dict[str, Any] = {}
     if payload.get("retryable") is True:
@@ -125,6 +209,9 @@ def _terminal_extras(payload: dict, limits: dict[str, int]) -> dict[str, Any]:
     reconciliation = _reconciliation_projection(payload, limits)
     if reconciliation is not None:
         extras["reconciliation"] = reconciliation
+    debug_trace = _debug_trace_projection(payload)
+    if debug_trace is not None:
+        extras["debug_trace"] = debug_trace
     return extras
 
 

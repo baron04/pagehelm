@@ -4,7 +4,7 @@ import {execFileSync} from 'node:child_process'
 import {join} from 'node:path'
 
 const modules = process.env.WOA_YUDAO_UI_MODULES
-const facts = process.env.WOA_YUDAO_FACTS_MODULE ?? new URL('../src/integrations/yudao/page-facts.js', import.meta.url)
+const facts = process.env.WOA_YUDAO_FACTS_MODULE ?? new URL('../dist/integrations/yudao/page-facts.js', import.meta.url)
 interface SortReceipt {
   vue: string; element: string; props_order: number[]; rendered_order: number[]
   binding: {id: string; values: string[][]}; invoked: boolean; opened: number[]

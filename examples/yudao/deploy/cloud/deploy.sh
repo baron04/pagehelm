@@ -38,9 +38,9 @@ for f in "$JAR" "$YUDAO_CACHE/ui/dist-cloud/index.html" "$YUDAO_CACHE/woa/page-c
          "$YUDAO_CACHE/server/sql/mysql/quartz.sql"; do
   [ -f "$f" ] || { echo "missing build artifact: $f" >&2; exit 1; }
 done
-for f in "$REPO/frontend/src/integrations/yudao/page-facts.js" \
-         "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js" \
-         "$REPO/frontend/src/integrations/yudao/form-surface.js" \
+for f in "$REPO/frontend/dist/integrations/yudao/page-facts.js" \
+         "$REPO/frontend/dist/integrations/yudao/yudao-page-controller.js" \
+         "$REPO/frontend/dist/integrations/yudao/form-surface.js" \
          "$REPO/src/web_operation_agent/web_runtime/assistant.js" \
          "$REPO/src/web_operation_agent/web_runtime/trace_replay.html"; do
   [ -f "$f" ] || { echo "missing native page artifact: $f" >&2; exit 1; }
@@ -71,9 +71,9 @@ rsync -az "$STAGING/release.json" "$STAGING/runtime.sha256" "$TARGET:$DIR/"
 rsync -az --delete "$YUDAO_CACHE/ui/dist-cloud/" "$TARGET:$DIR/ui/"
 rsync -az --delete "$YUDAO_CACHE/woa/" "$TARGET:$DIR/woa/"
 rsync -az "$HERE/yudao-loader.js" "$TARGET:$DIR/woa/"
-rsync -az "$REPO/frontend/src/integrations/yudao/page-facts.js" \
-  "$REPO/frontend/src/integrations/yudao/yudao-page-controller.js" \
-  "$REPO/frontend/src/integrations/yudao/form-surface.js" "$TARGET:$DIR/woa/"
+rsync -az "$REPO/frontend/dist/integrations/yudao/page-facts.js" \
+  "$REPO/frontend/dist/integrations/yudao/yudao-page-controller.js" \
+  "$REPO/frontend/dist/integrations/yudao/form-surface.js" "$TARGET:$DIR/woa/"
 rsync -az "$WHEELS/" "$TARGET:$DIR/agent/wheels/"
 rsync -az "$HERE/agent.Dockerfile" "$TARGET:$DIR/agent/"
 rsync -az --delete "$HERE/native-policy/" "$TARGET:$DIR/native-policy/"

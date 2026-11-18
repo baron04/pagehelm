@@ -34,6 +34,41 @@ class TurnTrace:
         self._positions: dict[str, int] = {}
         self.calls: list[dict] = []
         self._deliveries: list[dict] = []
+        self.first_route_kind: str = ""
+        self.stop_reason: str = ""
+        self.stage_timings: dict[str, float] = {}
+        self.tool_timings: list[dict] = []
+
+    def note_first_route(self, route_kind: str) -> None:
+        """Record the first tool/route kind dispatched during this turn."""
+        if not self.first_route_kind and isinstance(route_kind, str) and route_kind.strip():
+            self.first_route_kind = route_kind.strip()[:80]
+
+    def set_stop_reason(self, reason: str) -> None:
+        """Record the programmatic termination/stop code for this turn."""
+        if isinstance(reason, str) and reason.strip():
+            self.stop_reason = reason.strip()[:120]
+
+    def record_stage(self, stage: str, seconds: float) -> None:
+        """Accumulate elapsed seconds for a named execution stage (ARC-08)."""
+        if not isinstance(stage, str) or not stage.strip():
+            return
+        key = stage.strip()[:64]
+        prev = self.stage_timings.get(key, 0.0)
+        self.stage_timings[key] = round(prev + max(0.0, float(seconds)), 3)
+
+    def record_tool_timing(self, *, step: int, tool: str, seconds: float,
+                           ok: bool = True, error_code: str = "") -> None:
+        """Append one structural tool-timing entry without free-form payload prose."""
+        entry: dict[str, object] = {
+            "step": int(step),
+            "tool": str(tool or "")[:80],
+            "seconds": round(max(0.0, float(seconds)), 3),
+            "ok": bool(ok),
+        }
+        if error_code:
+            entry["error_code"] = str(error_code)[:80]
+        self.tool_timings.append(entry)
 
     def record_delivery(self, *, reference: str, projection: dict, rendered_text: str,
                         presented_records: int, presentation_complete: bool,
@@ -86,6 +121,14 @@ class TurnTrace:
                   "messages": self._messages, "calls": self.calls}
         if self._deliveries:
             record["server_deliveries"] = self._deliveries
+        if self.first_route_kind:
+            record["first_route_kind"] = self._clean(self.first_route_kind)
+        if self.stop_reason:
+            record["stop_reason"] = self._clean(self.stop_reason)
+        if self.stage_timings:
+            record["stage_timings"] = dict(self.stage_timings)
+        if self.tool_timings:
+            record["tool_timings"] = list(self.tool_timings)
         if (self.handoffs.has_unredacted(record, url_decode_depth=3)
                 or has_unredacted_sensitive_assignment(record, url_decode_depth=3)):
             record = {**outcome, "withheld": "credential_form"}

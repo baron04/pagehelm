@@ -4,7 +4,7 @@ import {join} from 'node:path'
 
 const modules = process.env.WOA_YUDAO_UI_MODULES
 const generic = process.env.WOA_PAGE_CONTROLLER_MODULE
-const facts = process.env.WOA_YUDAO_FACTS_MODULE ?? new URL('../src/integrations/yudao/page-facts.js', import.meta.url)
+const facts = process.env.WOA_YUDAO_FACTS_MODULE ?? new URL('../dist/integrations/yudao/page-facts.js', import.meta.url)
 
 async function install(page: Page) {
   const requests: string[] = []
@@ -13,8 +13,8 @@ async function install(page: Page) {
     ['/element.js', join(modules!, 'element-plus/dist/index.full.min.js')],
     ['/element.css', join(modules!, 'element-plus/dist/index.css')],
     ['/woa/page-facts.js', facts],
-    ['/woa/yudao-page-controller.js', new URL('../src/integrations/yudao/yudao-page-controller.js', import.meta.url)],
-    ['/woa/form-surface.js', new URL('../src/integrations/yudao/form-surface.js', import.meta.url)],
+    ['/woa/yudao-page-controller.js', new URL('../dist/integrations/yudao/yudao-page-controller.js', import.meta.url)],
+    ['/woa/form-surface.js', new URL('../dist/integrations/yudao/form-surface.js', import.meta.url)],
     ...(generic ? [['/woa/page-controller.js', generic] as [string, string]] : []),
   ])
   await page.route('**/*', async route => {

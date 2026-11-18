@@ -131,6 +131,20 @@ class TurnTraceTests(unittest.TestCase):
         self.assertEqual((False, True, True, True),
                          (old.exists(), new.exists(), audit.exists(), other.exists()))
 
+    def test_arc08_route_stage_tool_and_stop_reason_fields_write_cleanly(self):
+        trace = TurnTrace(self.root / "turns", self.handoffs)
+        trace.note_first_route("table_read")
+        trace.note_first_route("other_later")
+        trace.record_stage("model", 0.25)
+        trace.record_stage("model", 0.15)
+        trace.record_tool_timing(step=1, tool="call_api", seconds=0.08, ok=True)
+        trace.set_stop_reason("agent_finished")
+        record = json.loads(self._write(trace).read_text())
+        self.assertEqual(record["first_route_kind"], "table_read")
+        self.assertEqual(record["stop_reason"], "agent_finished")
+        self.assertEqual(record["stage_timings"], {"model": 0.4})
+        self.assertEqual(record["tool_timings"], [{"step": 1, "tool": "call_api", "seconds": 0.08, "ok": True}])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@ from pathlib import Path
 
 _GENERIC_PATH = os.environ.get("WOA_PAGE_CONTROLLER_MODULE", "")
 GENERIC = Path(_GENERIC_PATH).expanduser() if _GENERIC_PATH else None
-OWNED = Path(__file__).resolve().parents[5] / "frontend" / "src" / "integrations" / "yudao"
+OWNED = Path(__file__).resolve().parents[5] / "frontend" / "dist" / "integrations" / "yudao"
 ORIGIN = "http://synthetic.test"
 
 PAGE = """<!doctype html><meta charset="utf-8"><body style="margin:40px">

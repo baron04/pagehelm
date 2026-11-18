@@ -228,6 +228,7 @@ export class PanelHost implements PanelHostContract {
       session_expires_at: server.session_expires_at,
       principal_expires_at: server.principal_expires_at,
       read_only_mode: Boolean(server.read_only_mode),
+      local_dev_mode: Boolean(server.local_dev_mode),
     }
     this.commit({})
   }

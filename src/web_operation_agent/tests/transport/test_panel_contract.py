@@ -132,6 +132,25 @@ class PanelContractTests(unittest.TestCase):
         self.assertEqual(indeterminate["reconciliation"], {
             "outcome": "completed", "settled": True, "message": "ok",
         })
+        traced = project_event(_event("progress", {
+            "state": "finished",
+            "message": "done",
+            "debug_trace": {
+                "first_route_kind": "table_read",
+                "stop_reason": "finish?token=secret123",
+                "wall_ms": 420,
+                "stage_ms": {"model": 300, "tools": 120},
+                "model_calls": 1,
+                "tokens": {"input": 10, "output": 5, "total": 15},
+                "tool_chain": [{"step": 1, "tool": "call_api", "elapsed_ms": 95, "ok": True}],
+                "checks": [{"check": "post_write", "outcome": "pass", "attempt": 1}],
+            },
+        }), at=3)
+        assert traced is not None
+        self.assertEqual(traced["debug_trace"]["first_route_kind"], "table_read")
+        self.assertEqual(traced["debug_trace"]["stop_reason"], "finish?token=[redacted]")
+        self.assertEqual(traced["debug_trace"]["stage_ms"], {"model": 300, "tools": 120})
+        self.assertEqual(traced["debug_trace"]["tokens"]["total"], 15)
 
     def test_panel_capacity_accepts_the_largest_supported_product_answer(self):
         from web_operation_agent.execution.product import AgentTurnConfig

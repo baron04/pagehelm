@@ -32,6 +32,32 @@ export interface ReconciliationStatus {
   message?: string
 }
 
+export interface TurnTraceToolStep {
+  step?: number
+  tool: string
+  elapsed_ms: number
+  ok?: boolean
+  error_code?: string
+}
+
+export interface TurnTraceCheckRecord {
+  check: string
+  outcome: string
+  attempt?: number
+  answer_preserved?: boolean
+}
+
+export interface TurnDebugTrace {
+  first_route_kind?: string
+  stop_reason?: string
+  wall_ms?: number
+  stage_ms?: Record<string, number>
+  model_calls?: number
+  tokens?: {input?: number; output?: number; total?: number}
+  tool_chain?: TurnTraceToolStep[]
+  checks?: TurnTraceCheckRecord[]
+}
+
 export interface TimelineEntry {
   id: string
   sequence: number
@@ -50,6 +76,8 @@ export interface TimelineEntry {
   proposal_digest?: string
   /** Latest read-only reconciliation state for an indeterminate write outcome. */
   reconciliation?: ReconciliationStatus
+  /** Optional ARC-08 diagnostic trace shown only in local-dev mode (UX-07). */
+  debug_trace?: TurnDebugTrace
   /** Stable ordering within a durable stream, independent of transport incarnation. */
   position?: {stream: string; sequence: number}
   step?: StepFacts
@@ -131,6 +159,7 @@ export interface PanelConfiguration {
   session_expires_at: number
   principal_expires_at: number
   read_only_mode?: boolean
+  local_dev_mode?: boolean
 }
 
 // One generated integer, shared with the Runtime (`runtime/panelHost.ts`) so the two sides
@@ -150,6 +179,7 @@ export const DEFAULT_CONFIGURATION: PanelConfiguration = {
   session_expires_at: 0,
   principal_expires_at: 0,
   read_only_mode: false,
+  local_dev_mode: false,
 }
 
 export function toneOf(state: PanelState): Tone {
