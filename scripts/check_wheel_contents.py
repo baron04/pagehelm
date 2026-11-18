@@ -25,6 +25,7 @@ DISTRIBUTIONS = {
             "web_operation_agent/composition/ports.py",
             "web_operation_agent/skills/artifacts.py",
             "web_operation_agent/business/tools/registry.py",
+            "web_operation_agent/business/write_pipeline.py",
             "web_operation_agent/business/write_service.py",
             "web_operation_agent/business/dispatch_evidence.py",
             "web_operation_agent/execution/events.py",
