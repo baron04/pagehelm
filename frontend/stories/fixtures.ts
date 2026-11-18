@@ -89,6 +89,25 @@ export const APPROVAL = {
   operation_id: 'operation-1',
 }
 
+export const APPROVAL_WITH_DIFF = {
+  schema_version: 1,
+  approval_id: 'approval-diff-1',
+  effect: '更新 1 位客户的主要联系信息',
+  targets: ['客户：Acme Corporation', '编号：C-0042'],
+  details: [
+    {kind: 'change', label: '联系电话', text: '010-65001122 → 010-65008899'},
+    {kind: 'change', label: '结算周期', text: '月结 30 天 → 月结 45 天'},
+    {kind: 'derived', label: '影响范围', text: '仅更新主档联系信息，不修改已签订单'},
+    {kind: 'preserved', label: '客户等级', text: 'VIP'},
+    {kind: 'preserved', label: '所属销售', text: '张敏'},
+    {kind: 'preserved', label: '税号', text: '91110105MA0001234X'},
+  ],
+  expires_at: Date.now() + 107_000,
+  principal_digest: '',
+  turn_id: 'turn-1',
+  operation_id: 'operation-diff-1',
+}
+
 export const WORKED_TURN: TimelineEntry[] = [
   entry('e1', 'goal', '把 Acme Corporation 的报价单 S00002 确认成销售订单'),
   entry('e2', 'progress', '正在思考', {tone: 'active', at: 1_757_000_000_000,

@@ -7,7 +7,7 @@
  */
 import type {Meta, StoryObj} from '@storybook/react'
 import {PanelWindow} from '../src/components/PanelWindow'
-import {APPROVAL, WORKED_TURN, entry, host, snapshot} from './fixtures'
+import {APPROVAL, APPROVAL_WITH_DIFF, WORKED_TURN, entry, host, snapshot} from './fixtures'
 import {DEFAULT_CONFIGURATION, type PanelState} from '../src/contract/panel'
 import type {PanelSnapshot} from '../src/bridge/host'
 
@@ -46,6 +46,14 @@ export const AwaitingConfirmation: Story = {
     connection: {state: 'acting', busy: true, stopping: false, online: true},
     entries: WORKED_TURN,
     pendingApproval: {...APPROVAL, expires_at: Date.now() + 107_000},
+  }),
+}
+
+export const AwaitingConfirmationDiff: Story = {
+  args: show({
+    connection: {state: 'acting', busy: true, stopping: false, online: true},
+    entries: WORKED_TURN,
+    pendingApproval: {...APPROVAL_WITH_DIFF, expires_at: Date.now() + 107_000},
   }),
 }
 

@@ -1,8 +1,49 @@
 import {useEffect, useRef, useState} from 'react'
-import {ShieldAlert, Clock, Route, Sparkles, TriangleAlert} from 'lucide-react'
+import {ChevronDown, Clock, Route, ShieldAlert, Sparkles, TriangleAlert} from 'lucide-react'
 import {declinable, type ApprovalChoice, type ApprovalRequest, type Labels, type PanelLimits} from '../contract/panel'
 import {useVisibilityGate} from '../state/visibility'
 import {iconProps} from './icon'
+
+const DIFF_ARROW = ' → '
+
+interface ApprovalDetail {
+  kind: string
+  label: string
+  text: string
+}
+
+function renderDetailValue(detail: ApprovalDetail): React.JSX.Element {
+  if (detail.kind === 'change') {
+    const arrowIndex = detail.text.indexOf(DIFF_ARROW)
+    if (arrowIndex !== -1) {
+      const oldValue = detail.text.slice(0, arrowIndex)
+      const newValue = detail.text.slice(arrowIndex + DIFF_ARROW.length)
+      return (
+        <span className="woa-approval__diff">
+          <span className="woa-approval__diff-old">{oldValue}</span>
+          <span className="woa-approval__diff-arrow">{DIFF_ARROW}</span>
+          <span className="woa-approval__diff-new">{newValue}</span>
+        </span>
+      )
+    }
+  }
+  return <pre>{detail.text}</pre>
+}
+
+function renderDetailRow(detail: ApprovalDetail, index: number): React.JSX.Element {
+  const multiline = detail.kind === 'body' || detail.text.includes('\n')
+  return (
+    <div className="woa-approval__detail"
+         data-kind={detail.kind}
+         data-layout={multiline ? 'block' : undefined}
+         key={index}>
+      <dt className="woa-approval__detail-label"><strong>{detail.label}</strong></dt>
+      <dd className="woa-approval__detail-value">
+        {renderDetailValue(detail)}
+      </dd>
+    </div>
+  )
+}
 
 function remaining(expiresAt: number): string {
   const left = Math.max(0, expiresAt - Date.now())
@@ -23,22 +64,29 @@ export interface ApprovalCardProps {
 export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
   const {approval, labels, visibility, busy, onDecide, onRefused} = props
   const card = useRef<HTMLElement>(null)
+  const preservedToggle = useRef<HTMLButtonElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
   const prefill = useRef<HTMLButtonElement>(null)
   const confirm = useRef<HTMLButtonElement>(null)
   const [countdown, setCountdown] = useState(() => remaining(approval.expires_at))
   const [blocked, setBlocked] = useState(false)
+  const [showPreserved, setShowPreserved] = useState(false)
   // Both kinds can be declined; a draft that predates a card for leave to work the page can
   // also replace the waiting turn from the composer.
   const canDecline = declinable(approval.kind)
   const operate = approval.kind === 'operate'
   const offerPrefill = !operate && approval.offer_prefill === true
+  const details = approval.details ?? []
+  const visibleDetails = details.filter(detail => detail.kind !== 'preserved')
+  const preservedDetails = details.filter(detail => detail.kind === 'preserved')
   const gate = useVisibilityGate({
     minVisibleRatio: visibility.min_visible_ratio,
     minVisibleMs: visibility.min_visible_ms,
   })
 
   useEffect(() => {
+    setShowPreserved(false)
+    setBlocked(false)
     gate.attach(card.current)
     // The conversation follows its own tail, which can leave the top of the card above the
     // fold -- unreadable, and below the ratio the visibility gate asks for. Bring the whole
@@ -82,29 +130,34 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
       return
     }
     if (event.key !== 'Tab') return
-    if (!canDecline) {
-      event.preventDefault()
-      confirm.current?.focus()
+    event.preventDefault()
+    const focusables = [
+      preservedToggle.current,
+      cancel.current,
+      prefill.current,
+      confirm.current,
+    ].filter((button): button is HTMLButtonElement => Boolean(button && !button.disabled))
+    if (focusables.length === 0) {
+      card.current?.focus({preventScroll: true})
       return
     }
     const root = card.current?.getRootNode() as ShadowRoot | Document | undefined
-    const active = (root as ShadowRoot | undefined)?.activeElement ?? document.activeElement
-    if (active === card.current) {
-      event.preventDefault()
-      ;(event.shiftKey ? confirm : cancel).current?.focus()
-    } else if (event.shiftKey && active === cancel.current) {
-      event.preventDefault()
-      confirm.current?.focus()
-    } else if (!event.shiftKey && active === confirm.current) {
-      event.preventDefault()
-      cancel.current?.focus()
+    const active = (root && 'activeElement' in root ? root.activeElement : null) ?? document.activeElement
+    const currentIndex = focusables.indexOf(active as HTMLButtonElement)
+    if (currentIndex === -1) {
+      const target = event.shiftKey ? focusables[focusables.length - 1] : focusables[0]
+      target?.focus()
+      return
     }
+    const nextIndex = (currentIndex + (event.shiftKey ? -1 : 1) + focusables.length) % focusables.length
+    focusables[nextIndex]?.focus()
   }
 
   const titleId = `woa-approval-${approval.approval_id.replace(/[^A-Za-z0-9_-]/g, '')}`
   const effectId = `${titleId}-effect`
   const targetsId = `${titleId}-targets`
   const hintId = `${titleId}-hint`
+  const preservedId = `${titleId}-preserved`
 
   return (
     <section className="woa-approval" ref={card} role="alertdialog" aria-modal="false" tabIndex={-1}
@@ -143,23 +196,33 @@ export function ApprovalCard(props: ApprovalCardProps): React.JSX.Element {
             <li key={`${index}-${target}`}>{target}</li>
           ))}
         </ul>
-        {approval.details && approval.details.length > 0 && (
+        {visibleDetails.length > 0 && (
           <dl className="woa-approval__details">
-            {approval.details.map((detail, index) => {
-              const multiline = detail.kind === 'body' || detail.text.includes('\n')
-              return (
-                <div className="woa-approval__detail"
-                     data-kind={detail.kind}
-                     data-layout={multiline ? 'block' : undefined}
-                     key={index}>
-                  <dt className="woa-approval__detail-label"><strong>{detail.label}</strong></dt>
-                  <dd className="woa-approval__detail-value">
-                    <pre>{detail.text}</pre>
-                  </dd>
-                </div>
-              )
-            })}
+            {visibleDetails.map(renderDetailRow)}
           </dl>
+        )}
+        {preservedDetails.length > 0 && (
+          <div className="woa-approval__preserved" data-open={showPreserved ? 'true' : undefined}>
+            <button type="button"
+                    ref={preservedToggle}
+                    className="woa-approval__preserved-toggle"
+                    data-testid="woa-preserved-toggle"
+                    aria-expanded={showPreserved}
+                    aria-controls={preservedId}
+                    onClick={() => setShowPreserved(open => !open)}>
+              <ChevronDown {...iconProps(14)} className="woa-approval__preserved-chevron" />
+              <span>
+                {showPreserved
+                  ? labels.approvalHidePreserved
+                  : `${labels.approvalShowPreserved}（${preservedDetails.length}）`}
+              </span>
+            </button>
+            {showPreserved && (
+              <dl className="woa-approval__details woa-approval__details--preserved" id={preservedId}>
+                {preservedDetails.map(renderDetailRow)}
+              </dl>
+            )}
+          </div>
         )}
         {blocked
           ? (
