@@ -5,9 +5,9 @@ compiled from the account's menus, the API documentation and the dictionaries, a
 optional reader of the admin UI's source. The core resolves; the core package imports
 none of it.
 """
-from .client import YudaoAccount, YudaoClient
-from .goal import YudaoGoalData
-from .ui_source import UiSource
+from .goal_compat.goal import YudaoGoalData
+from .reads.client import YudaoAccount, YudaoClient
+from .rules.ui_source import UiSource
 
 __version__ = "0.3.0"
 

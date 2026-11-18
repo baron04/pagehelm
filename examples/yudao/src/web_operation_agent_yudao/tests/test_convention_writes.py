@@ -15,11 +15,11 @@ from web_operation_agent.business.errors import (
 )
 from web_operation_agent.schemas import ElementRef
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
-from web_operation_agent_yudao.convention_writes import YudaoConventionWritePort
-from web_operation_agent_yudao.native_submit import _enrich_erp_line_totals
-from web_operation_agent_yudao.slim_loop import _unavailable_already_matches
-from web_operation_agent_yudao.source import YudaoSource
-from web_operation_agent_yudao.writes import native_tools
+from web_operation_agent_yudao.writes.convention_writes import YudaoConventionWritePort
+from web_operation_agent_yudao.writes.native_submit import _enrich_erp_line_totals
+from web_operation_agent_yudao.executor.slim_loop import _unavailable_already_matches
+from web_operation_agent_yudao.rules.source import YudaoSource
+from web_operation_agent_yudao.writes.writes import native_tools
 
 
 def _ctx(actor_id: str = "9") -> OperationContext:
@@ -605,7 +605,7 @@ class YudaoConventionWritesTests(unittest.TestCase):
             docs["paths"]["/admin-api/system/dept/update"] = docs["paths"]["/admin-api/hrm/employee/update"]
 
             # Also verify UiSource alone (source=None) still compiles labels/scales/dicts
-            from web_operation_agent_yudao.ui_source import UiSource
+            from web_operation_agent_yudao.rules.ui_source import UiSource
             ui_dir = root / "ui"
             (ui_dir / "src" / "router" / "modules").mkdir(parents=True)
             (ui_dir / "src" / "router" / "modules" / "remaining.ts").write_text("export default []\n", encoding="utf-8")
@@ -708,7 +708,7 @@ class YudaoConventionWritesTests(unittest.TestCase):
             r_props["fixedEndTerm"] = {"type": "integer"}
             r_props["validStartTime"] = {"type": "string"}
 
-            from web_operation_agent_yudao.ui_source import UiSource
+            from web_operation_agent_yudao.rules.ui_source import UiSource
             ui_dir = Path(tmp) / "ui"
             (ui_dir / "src" / "router" / "modules").mkdir(parents=True)
             (ui_dir / "src" / "router" / "modules" / "remaining.ts").write_text("export default []\n", encoding="utf-8")

@@ -20,8 +20,8 @@ from web_operation_agent.execution.events import TurnEvents
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.tests.support.skill_chat import SkillDeclarationChat
 from web_operation_agent.composition.sources import SourceCapability
-from web_operation_agent_yudao.client import YudaoAccount
-from web_operation_agent_yudao.demo import YudaoSession, _next_outcome, _session_sources
+from web_operation_agent_yudao.reads.client import YudaoAccount
+from web_operation_agent_yudao.host.demo import YudaoSession, _next_outcome, _session_sources
 
 
 class DemoSourceTests(unittest.TestCase):
@@ -31,7 +31,7 @@ class DemoSourceTests(unittest.TestCase):
         result = SimpleNamespace(message=SimpleNamespace(message_id="normal-turn"))
         outcome = SimpleNamespace(error="", result=result)
         conversation = SimpleNamespace(next_outcome=lambda **kwargs: outcome)
-        with patch("web_operation_agent_yudao.demo._observe_final_result", side_effect=TimeoutError):
+        with patch("web_operation_agent_yudao.host.demo._observe_final_result", side_effect=TimeoutError):
             returned = _next_outcome(None, conversation, 1, [], turn_events=events)
         self.assertIs(returned, outcome)
         facts = events.snapshot("normal-turn")

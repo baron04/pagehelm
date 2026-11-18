@@ -19,8 +19,8 @@ from web_operation_agent.business.errors import (
 )
 from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexRule
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
-from web_operation_agent_yudao.skill_packages import domain_playbooks, packaged_skills
-from web_operation_agent_yudao.slim_loop import (
+from web_operation_agent_yudao.rules.skill_packages import domain_playbooks, packaged_skills
+from web_operation_agent_yudao.executor.slim_loop import (
      SlimTurnExecutor,
     TABLE_READ_RULES,
     YudaoLoopProcedures,
@@ -28,7 +28,7 @@ from web_operation_agent_yudao.slim_loop import (
     _requires_page_delivery,
     system_text,
 )
-from web_operation_agent_yudao.writes import native_tools
+from web_operation_agent_yudao.writes.writes import native_tools
 
 
 class FakeClient:

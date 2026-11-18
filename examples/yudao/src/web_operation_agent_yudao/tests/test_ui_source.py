@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web_operation_agent_yudao.ui_source import UiSource, _literal_column_labels, _shown_units, _query_choices
+from web_operation_agent_yudao.rules.ui_source import UiSource, _literal_column_labels, _shown_units, _query_choices
 
 _PAGE = """<template>
   <el-table-column label="流程名称" prop="name" />

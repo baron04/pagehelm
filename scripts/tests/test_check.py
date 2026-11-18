@@ -162,14 +162,14 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn('documentation links', names)
 
     def test_local_yudao_source_change_runs_only_tests_that_import_it(self):
-        _, plan = self.names([check.YUDAO_SRC + 'web_operation_agent_yudao/write_special.py'], 'dev')
+        _, plan = self.names([check.YUDAO_SRC + 'web_operation_agent_yudao/writes/write_special.py'], 'dev')
         command = next(c['argv'] for c in plan['checks'] if c['name'] == 'Yudao contracts')
         modules = [command[i + 1] for i, value in enumerate(command) if value == '--module']
         self.assertIn('web_operation_agent_yudao.tests.test_special_writes', modules)
         self.assertNotIn('web_operation_agent_yudao.tests.test_deploy_commands', modules)
 
     def test_yudao_selection_falls_back_to_all_tests(self):
-        for paths, profile in [([check.YUDAO_SRC + 'web_operation_agent_yudao/write_special.py'], 'ci'),
+        for paths, profile in [([check.YUDAO_SRC + 'web_operation_agent_yudao/writes/write_special.py'], 'ci'),
                                (['examples/yudao/deploy/local/configuration.py'], 'dev'),
                                ([check.YUDAO_SRC + 'web_operation_agent_yudao/skills/query/SKILL.md'], 'dev'),
                                ([check.YUDAO_SRC + 'web_operation_agent_yudao/deleted.py'], 'dev')]:

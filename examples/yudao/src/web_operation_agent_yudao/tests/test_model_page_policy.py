@@ -11,10 +11,10 @@ from web_operation_agent.business.draft_steps import DraftStepAdmission
 from web_operation_agent.execution.action_admission import ActionAdmission, ActionAdmissionRefused, ActionResultPending
 from web_operation_agent.schemas import ElementRef, ActionReceipt
 from web_operation_agent.transport.protocol import _remote_args_echo
-from web_operation_agent_yudao.model_page_policy import (NativePageReview, NativeModelReadActions,
+from web_operation_agent_yudao.executor.model_page_policy import (NativePageReview, NativeModelReadActions,
     NativeDraftSteps, _unsafe_button)
-from web_operation_agent_yudao.method_fenced_actions import MethodFencedPageActions, MethodFencedPageReview
-from web_operation_agent_yudao.deployment_validation import validate_native_deployment
+from web_operation_agent_yudao.executor.method_fenced_actions import MethodFencedPageActions, MethodFencedPageReview
+from web_operation_agent_yudao.host.deployment_validation import validate_native_deployment
 from . import test_read_actions as read_fixture
 
 
@@ -481,8 +481,8 @@ class QueryTests(unittest.TestCase):
                           {"url": "https://fixture.test" + route})
 
     def test_meeting_room_field_admits_without_offscreen_submit(self):
-        from web_operation_agent_yudao.live_forms import FenceEvidence, LiveFormPort
-        from web_operation_agent_yudao.page_guard import NativePageGuard
+        from web_operation_agent_yudao.writes.live_forms import FenceEvidence, LiveFormPort
+        from web_operation_agent_yudao.host.page_guard import NativePageGuard
         actor, owner = "a" * 64, "c" * 64
         guard = NativePageGuard(frozenset(), writing_gets=frozenset())
         guard.begin(actor, owner)

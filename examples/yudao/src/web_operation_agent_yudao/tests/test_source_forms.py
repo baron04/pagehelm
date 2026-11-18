@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from web_operation_agent_yudao.repository import repository_tree
-from web_operation_agent_yudao.source_forms import SourceFormReader
+from web_operation_agent_yudao.rules.repository import repository_tree
+from web_operation_agent_yudao.writes.source_forms import SourceFormReader
 
 _PATH = "ui/src/views/demo/EntryForm.vue"
 _SOURCE = '''<template>

@@ -18,7 +18,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 from web_operation_agent.execution.native_submit import record_model, opening_values
-from web_operation_agent_yudao.native_submit import YUDAO_SUBMIT_CONVENTIONS as CONV
+from web_operation_agent_yudao.writes.native_submit import YUDAO_SUBMIT_CONVENTIONS as CONV
 from web_operation_agent.privacy import redact_sensitive_assignments
 
 from web_operation_agent.execution.submit_contract import (

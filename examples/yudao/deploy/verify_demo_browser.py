@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'examples/yudao/src')]
-from web_operation_agent_yudao.accounts import add_account_arguments, load_account  # noqa: E402
+from web_operation_agent_yudao.host.accounts import add_account_arguments, load_account  # noqa: E402
 
 
 def verify(base, account, tenant_name, menu_file, output):

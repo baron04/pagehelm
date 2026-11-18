@@ -5,10 +5,10 @@ import json
 import threading
 import unittest
 
-from web_operation_agent_yudao.native_submit import YUDAO_SUBMIT_CONVENTIONS
+from web_operation_agent_yudao.writes.native_submit import YUDAO_SUBMIT_CONVENTIONS
 from web_operation_agent.execution.submit_contract import FormData, SubmitPermit, build_card
-from web_operation_agent_yudao.guard_proxy import GUARD_PATH, NativeGuardProxy
-from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
+from web_operation_agent_yudao.host.guard_proxy import GUARD_PATH, NativeGuardProxy
+from web_operation_agent_yudao.host.page_guard import GuardRefused, NativePageGuard
 
 ACTOR = "a" * 64
 PREFIX = "/admin-api/crm/contact/"

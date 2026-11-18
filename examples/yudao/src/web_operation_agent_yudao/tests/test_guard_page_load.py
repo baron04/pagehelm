@@ -1,7 +1,7 @@
 """The page the assistant opens may load itself, even through a scan-listed GET; nothing else may."""
 import unittest
 
-from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
+from web_operation_agent_yudao.host.page_guard import GuardRefused, NativePageGuard
 
 A, OWNER = "a" * 64, "c" * 64
 LISTED = "/admin-api/project/project/{id}"          # a GET the release scan says may write

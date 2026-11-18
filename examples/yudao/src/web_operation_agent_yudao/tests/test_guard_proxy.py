@@ -9,8 +9,8 @@ import threading
 import unittest
 from pathlib import Path
 
-from web_operation_agent_yudao.guard_proxy import GUARD_PATH, NativeGuardProxy
-from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
+from web_operation_agent_yudao.host.guard_proxy import GUARD_PATH, NativeGuardProxy
+from web_operation_agent_yudao.host.page_guard import GuardRefused, NativePageGuard
 
 
 READ = "/admin-api/crm/customer/get"

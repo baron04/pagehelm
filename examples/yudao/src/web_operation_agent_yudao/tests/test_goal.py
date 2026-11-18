@@ -9,8 +9,8 @@ from web_operation_agent.goal.data import EVERYTHING, Compare, DataRefused, all_
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.goal.spec import GoalSpec
 
-from web_operation_agent_yudao.goal import YudaoGoalData
-from web_operation_agent_yudao.ui_source import ListView, UiSource
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
+from web_operation_agent_yudao.rules.ui_source import ListView, UiSource
 
 
 def _prop(kind, description, fmt=None):
@@ -320,10 +320,10 @@ class YudaoGoalDataTests(unittest.TestCase):
         self.assertEqual(len(broad), 2)
 
     def test_list_cache_expires_and_credential_change_invalidates_reads(self):
-        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=100):
+        with patch("web_operation_agent_yudao.goal_compat.goal.time.monotonic", return_value=100):
             self.data._fetch("crm/contract", EVERYTHING)
         calls = len(self.client.calls)
-        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=115):
+        with patch("web_operation_agent_yudao.goal_compat.goal.time.monotonic", return_value=115):
             self.data._fetch("crm/contract", EVERYTHING)
         self.assertEqual(len(self.client.calls), calls + 3)
         self.client.read_generation = 1
@@ -333,9 +333,9 @@ class YudaoGoalDataTests(unittest.TestCase):
 
     def test_cache_lifetime_starts_when_slow_read_finishes_and_is_bounded(self):
         self.data._keep_read(("slow",), (1,), 0)
-        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=200):
+        with patch("web_operation_agent_yudao.goal_compat.goal.time.monotonic", return_value=200):
             self.data._keep_read(("slow",), (2,), 0)
-        with patch("web_operation_agent_yudao.goal.time.monotonic", return_value=214):
+        with patch("web_operation_agent_yudao.goal_compat.goal.time.monotonic", return_value=214):
             self.assertEqual(self.data._cached_read(("slow",), 0), (2,))
         for i in range(130):
             self.data._keep_read((i,), (i,), 0)
@@ -481,7 +481,7 @@ class YudaoGoalDataTests(unittest.TestCase):
         self.assertEqual(YudaoGoalData(_Client(), DOCS).query_choices("/crm/contract/page"), {})
 
     def test_api_discovery_passes_relative_path_to_the_native_query_choice_provider(self):
-        from web_operation_agent_yudao.slim_loop import ActorKnowledge
+        from web_operation_agent_yudao.executor.slim_loop import ActorKnowledge
         view = ListView(endpoint="/crm/contract/page", query_choices=(("auditStatus", (("0", "Draft"), ("20", "Approved"))),))
         data = YudaoGoalData(_Client(), DOCS, ui=UiSource(views={"crm/contract/index": view}))
         knowledge = ActorKnowledge(_Client(), DOCS, query_choices=data.query_choices)
@@ -1149,7 +1149,7 @@ class TokenClientTests(unittest.TestCase):
     """A client made from a person's own token never logs in, and takes a newer token."""
 
     def test_an_expired_token_is_refused_not_logged_in_again(self):
-        from web_operation_agent_yudao.client import YudaoClient
+        from web_operation_agent_yudao.reads.client import YudaoClient
         client = YudaoClient.for_token("http://yudao.invalid", "t1", "1")
         seen = []
 
@@ -1284,7 +1284,7 @@ class ParentSelectionTests(unittest.TestCase):
 class RefusalReasonTests(unittest.TestCase):
     def test_transport_failures_are_classified_without_reading_error_bodies(self):
         import urllib.error
-        from web_operation_agent_yudao.client import YudaoClient
+        from web_operation_agent_yudao.reads.client import YudaoClient
         client = YudaoClient.for_token("http://synthetic.invalid", "synthetic-token", "1")
         errors = (urllib.error.HTTPError("http://synthetic.invalid", 503, "private body", {}, None),
                   urllib.error.URLError("private transport details"), TimeoutError())
@@ -1297,7 +1297,7 @@ class RefusalReasonTests(unittest.TestCase):
             self.assertNotIn("private", str(caught.exception))
 
     def test_response_codes_distinguish_service_denial_and_business_validation(self):
-        from web_operation_agent_yudao.client import YudaoClient
+        from web_operation_agent_yudao.reads.client import YudaoClient
         for code, denied, failed in ((403, True, False), (503, False, True), (400, False, False),
                                     (1020007001, False, False)):
             with self.subTest(code=code), self.assertRaises(DataRefused) as caught:
@@ -1317,7 +1317,7 @@ class RefusalReasonTests(unittest.TestCase):
     def test_a_refused_read_carries_the_application_s_own_sentence(self):
         # The application's own words ("请选择时间范围") are what a person can act on; the
         # endpoint and the code stay in the message for the audit.
-        from web_operation_agent_yudao.client import YudaoClient
+        from web_operation_agent_yudao.reads.client import YudaoClient
         client = YudaoClient.for_token("http://yudao.invalid", "t1", "1")
         client._request = lambda *a, **k: (400, {"code": 400, "msg": "请求参数不正确:请选择时间范围"})
         with self.assertRaises(DataRefused) as caught:
@@ -1328,9 +1328,9 @@ class RefusalReasonTests(unittest.TestCase):
     def test_a_transport_failure_carries_no_application_sentence(self):
         import urllib.error
         from unittest.mock import patch
-        from web_operation_agent_yudao.client import YudaoClient
+        from web_operation_agent_yudao.reads.client import YudaoClient
         client = YudaoClient.for_token("http://yudao.invalid", "t1", "1")
-        with patch("web_operation_agent_yudao.client.urllib.request.urlopen",
+        with patch("web_operation_agent_yudao.reads.client.urllib.request.urlopen",
                    side_effect=urllib.error.URLError("no route to host")):
             with self.assertRaises(DataRefused) as caught:
                 client.get("crm/customer/page")
@@ -1423,7 +1423,7 @@ class ReferenceConventionTests(unittest.TestCase):
 
 class NativePageGoalTests(unittest.TestCase):
     def test_native_lists_and_records_require_mount_proof_without_changing_reads(self):
-        from web_operation_agent_yudao.page_goals import NativePageGoalPort
+        from web_operation_agent_yudao.goal_compat.page_goals import NativePageGoalPort
 
         data = YudaoGoalData(_Client(), DOCS, ui=UiSource(
             records={"/crm/contract": "/crm/contract/detail/{id}"}))

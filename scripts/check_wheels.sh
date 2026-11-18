@@ -65,12 +65,12 @@ PY
     "${yudao_wheel}" || return 1
   ( cd "${smoke_cwd}" && env -u PYTHONPATH \
       "${smoke_venv}/bin/python" -I - <<'PYUD'
-from web_operation_agent_yudao.application import YudaoApplication
-from web_operation_agent_yudao.client import YudaoAccount
-from web_operation_agent_yudao.native_server import YudaoHost
+from web_operation_agent_yudao.host.application import YudaoApplication
+from web_operation_agent_yudao.reads.client import YudaoAccount
+from web_operation_agent_yudao.host.native_server import YudaoHost
 from web_operation_agent_yudao.conventions import REFERENCE_CONVENTIONS
-from web_operation_agent_yudao.repository import repository_source
-from web_operation_agent_yudao.skill_packages import domain_playbooks
+from web_operation_agent_yudao.rules.repository import repository_source
+from web_operation_agent_yudao.rules.skill_packages import domain_playbooks
 from importlib.resources import files
 app = YudaoApplication("http://127.0.0.1:48080", YudaoAccount("synthetic", "synthetic"), {})
 assert app.business_tools.tool_names == frozenset({

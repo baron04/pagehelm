@@ -10,9 +10,9 @@ from web_operation_agent.execution.action_admission import (
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.business.errors import BusinessToolIdentityError
-from web_operation_agent_yudao.client import YudaoClient
-from web_operation_agent_yudao.goal import YudaoGoalData
-from web_operation_agent_yudao.read_actions import NativeReadActions
+from web_operation_agent_yudao.reads.client import YudaoClient
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
+from web_operation_agent_yudao.reads.read_actions import NativeReadActions
 from .test_goal import _Client, DOCS
 from copy import deepcopy
 

@@ -5,10 +5,10 @@ from unittest.mock import patch
 from web_operation_agent.goal.index import ApplicationIndex, IndexEntity, IndexField
 from web_operation_agent.goal.ports import PagePlan, Resolution, Resolved
 from web_operation_agent.goal.spec import GoalSpec
-from web_operation_agent_yudao.live_forms import FenceEvidence, LiveFormPort, field_key
-from web_operation_agent_yudao.live_goals import LiveFormsGoalPort
-from web_operation_agent_yudao.page_goals import NativePageGoalPort
-from web_operation_agent_yudao.page_guard import NativePageGuard
+from web_operation_agent_yudao.writes.live_forms import FenceEvidence, LiveFormPort, field_key
+from web_operation_agent_yudao.goal_compat.live_goals import LiveFormsGoalPort
+from web_operation_agent_yudao.goal_compat.page_goals import NativePageGoalPort
+from web_operation_agent_yudao.host.page_guard import NativePageGuard
 
 INDEX = ApplicationIndex(entities=(IndexEntity("crm/contact", "联系人", fields=(
     IndexField("customerId", "客户", "link", aliases=("所属客户",)), IndexField("mobile", "手机", "text"))),),

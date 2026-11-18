@@ -18,7 +18,7 @@ import threading
 
 from . import stack as _stack
 from .stack import ROOT, login, serve, native  # noqa: F401  (serve and native come from the stack module)
-from web_operation_agent_yudao.client import YudaoClient
+from web_operation_agent_yudao.reads.client import YudaoClient
 
 POLICIES = ROOT / "examples/yudao/deploy/cloud/native-policy"
 

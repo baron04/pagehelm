@@ -15,7 +15,7 @@ from seed import Client
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'examples/yudao/src')]
-from web_operation_agent_yudao.accounts import add_account_arguments, load_account  # noqa: E402
+from web_operation_agent_yudao.host.accounts import add_account_arguments, load_account  # noqa: E402
 
 
 PAGES = {

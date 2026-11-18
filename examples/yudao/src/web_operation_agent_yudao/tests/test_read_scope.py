@@ -4,7 +4,7 @@ import unittest
 
 from web_operation_agent.execution.read_summary import SummaryRefused
 from web_operation_agent.tests.goal.test_data_read_tools import context
-from web_operation_agent_yudao.filter_semantics import FilterSemantics, LABELS
+from web_operation_agent_yudao.reads.filter_semantics import FilterSemantics, LABELS
 from web_operation_agent_yudao.tests.test_read_summary import knowledge
 
 

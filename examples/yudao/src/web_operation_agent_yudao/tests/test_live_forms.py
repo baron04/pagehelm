@@ -8,9 +8,9 @@ from web_operation_agent.business.errors import BusinessToolRequestError
 from web_operation_agent.business.forms import ApplicationFormValue
 from web_operation_agent.schemas import ActionReceipt, ElementRef, PageObservation
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
-from web_operation_agent_yudao.live_forms import (FenceEvidence, FenceReachPolicy, LiveFormPort,
+from web_operation_agent_yudao.writes.live_forms import (FenceEvidence, FenceReachPolicy, LiveFormPort,
                                                   LiveRequest, field_key, observed_radio_choices)
-from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
+from web_operation_agent_yudao.host.page_guard import GuardRefused, NativePageGuard
 
 ACTOR, OWNER = "a" * 64, "c" * 64
 DIALOG = {"form_scope": "dialog_describedby:el-1", "form_instance": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}

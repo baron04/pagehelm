@@ -4,8 +4,8 @@ import unittest
 
 from web_operation_agent.business.errors import (BusinessToolRequestError, BusinessMutationRefusedError,
     BusinessMutationIndeterminate)
-from web_operation_agent_yudao.writes import native_tools
-from web_operation_agent_yudao.write_special import read_pages
+from web_operation_agent_yudao.writes.writes import native_tools
+from web_operation_agent_yudao.writes.write_special import read_pages
 from .test_record_expansion import Records
 from .test_native_writes import Data, context
 

@@ -10,10 +10,10 @@ from web_operation_agent.execution.action_admission import ActionAdmissionRefuse
 from web_operation_agent.goal.resolve.service import DataGoalPort
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.business.errors import BusinessToolIdentityError
-from web_operation_agent_yudao.location import LocationProcedures, location_schemas
-from web_operation_agent_yudao.slim_loop import TOOLS, _requirements
-from web_operation_agent_yudao.slim_loop import YudaoLoopProcedures
-from web_operation_agent_yudao.tests.test_slim_loop import element, observation
+from web_operation_agent_yudao.reads.location import LocationProcedures, location_schemas
+from web_operation_agent_yudao.executor.slim_loop import TOOLS, _requirements
+from web_operation_agent_yudao.executor.slim_loop import YudaoLoopProcedures
+from web_operation_agent_yudao.tests.slim_loop_support import element, observation
 from web_operation_agent_yudao.tests import test_read_actions as read_fixture
 
 

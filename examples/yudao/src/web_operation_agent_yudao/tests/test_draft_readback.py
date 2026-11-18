@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from web_operation_agent.execution.draft_handoff import field_identity, handoff_draft
 from web_operation_agent.schemas import ElementRef, PageObservation
-from web_operation_agent_yudao.draft_readback import product_price_readback
+from web_operation_agent_yudao.writes.draft_readback import product_price_readback
 
 
 class ProductPriceReadbackTests(unittest.TestCase):
@@ -26,12 +26,12 @@ class ProductPriceReadbackTests(unittest.TestCase):
                             ([{"name": "Exact product", "salePrice": 99}], False),
                             ([{"name": "Exactproduct", "salePrice": 12.5}], False),
                             ([{"name": "Exact product", "salePrice": 12.5}] * 2, False)]:
-            with self.subTest(rows=rows), patch("web_operation_agent_yudao.draft_readback.BoundDataReads") as bound:
+            with self.subTest(rows=rows), patch("web_operation_agent_yudao.writes.draft_readback.BoundDataReads") as bound:
                 bound.return_value._invoke.return_value = rows
                 result = product_price_readback(context, before, expected, object())
                 self.assertEqual(2 if valid else 1, len(result))
                 if valid: self.assertEqual((field_identity(fields[1]), "12.5"), result[-1])
-        with patch("web_operation_agent_yudao.draft_readback.BoundDataReads") as bound:
+        with patch("web_operation_agent_yudao.writes.draft_readback.BoundDataReads") as bound:
             self.assertEqual(expected, product_price_readback(context, replace(before, page_route="/other"), expected, object()))
             self.assertEqual([], product_price_readback(context, before, [], object()))
             bound.assert_not_called()

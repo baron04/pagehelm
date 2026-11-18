@@ -5,7 +5,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from web_operation_agent_yudao.page_guard import GuardRefused, NativePageGuard
+from web_operation_agent_yudao.host.page_guard import GuardRefused, NativePageGuard
 
 
 A, B, OWNER, OTHER = "a" * 64, "b" * 64, "c" * 64, "d" * 64

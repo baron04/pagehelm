@@ -5,7 +5,7 @@ from unittest.mock import patch
 from web_operation_agent.business.errors import (BusinessToolPermissionError,
     BusinessToolRequestError, BusinessMutationIndeterminate)
 from web_operation_agent_yudao.tests.test_native_writes import Client, Data, context
-from web_operation_agent_yudao.writes import native_tools
+from web_operation_agent_yudao.writes.writes import native_tools
 
 
 class FollowUpRelations(TestCase):

@@ -2,7 +2,7 @@ import unittest
 from dataclasses import replace
 
 from web_operation_agent.schemas import ElementRef, PageObservation
-from web_operation_agent_yudao.native_tabs import NativeTabPolicy
+from web_operation_agent_yudao.writes.native_tabs import NativeTabPolicy
 
 
 class NativeTabPolicyTests(unittest.TestCase):
@@ -49,7 +49,7 @@ class NativeNavigationTests(unittest.TestCase):
     def test_actor_catalog_and_fresh_default_menu_facts_are_both_required(self):
         from dataclasses import replace
         from web_operation_agent.goal.index import ApplicationIndex, IndexPage
-        from web_operation_agent_yudao.native_tabs import NativeNavigationPolicy
+        from web_operation_agent_yudao.writes.native_tabs import NativeNavigationPolicy
         index = ApplicationIndex((), (IndexPage('/crm/customer', '客户', 'CRM / 客户'),))
         policy = NativeNavigationPolicy('https://fixture.test', lambda: index)
         item = ElementRef(ref='e1',role='menuitem',name='客户',tag='li',epoch=1,
@@ -74,7 +74,7 @@ class NativeNavigationTests(unittest.TestCase):
             self.assertTrue(policy.decide(replace(page,elements=[changed]),changed))
 
     def test_native_navigation_is_not_a_host_option(self):
-        from web_operation_agent_yudao.native_server import YudaoHostConfig
+        from web_operation_agent_yudao.host.native_server import YudaoHostConfig
         from pathlib import Path
         with self.assertRaises(TypeError):
             YudaoHostConfig('http://fixture.test','http://fixture.test',Path('/tmp/unused'),native_navigation=True)

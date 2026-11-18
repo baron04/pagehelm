@@ -41,7 +41,7 @@ from seed import ApiError
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT / 'src'), str(ROOT / 'examples/yudao/src')]
-from web_operation_agent_yudao.accounts import (  # noqa: E402
+from web_operation_agent_yudao.host.accounts import (  # noqa: E402
     add_account_arguments, load_account, read_accounts, save_account)
 
 MARK = '合成演示'

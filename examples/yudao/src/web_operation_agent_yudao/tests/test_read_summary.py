@@ -8,9 +8,9 @@ from web_operation_agent.execution.read_summary import SummaryRefused, render_su
 from web_operation_agent.state.identity import actor_authority_digest
 from web_operation_agent.tests.execution.test_product_model_loop import LoopFixture, call, reply
 from web_operation_agent.tests.goal.test_data_read_tools import context
-from web_operation_agent_yudao.money_review import VerifiedMoneyField, VerifiedMoneyReview
-from web_operation_agent_yudao.slim_loop import ActorKnowledge, QueryParametersError, YudaoLoopProcedures
-from web_operation_agent_yudao.tests.test_slim_loop import Client, DOCS, State
+from web_operation_agent_yudao.reads.money_review import VerifiedMoneyField, VerifiedMoneyReview
+from web_operation_agent_yudao.executor.slim_loop import ActorKnowledge, QueryParametersError, YudaoLoopProcedures
+from web_operation_agent_yudao.tests.slim_loop_support import Client, DOCS, State
 
 
 class Rows(Client):
@@ -235,9 +235,9 @@ class NativeSummaryTests(unittest.TestCase):
                 "measures": [{"op": "count_distinct", "column": "name", "as": "distinct"}]})
         self.assertEqual(caught.exception.code, "redacted_value")
 
-    def test_old_delivery_flag_does_not_conflict_with_explicit_summary_and_offsets_remain_refused(self):
+    def test_summary_offsets_remain_refused(self):
         know = knowledge([])
-        self.assertEqual((("0",),),self.read(know,["name"],COUNT,deliver=True).rows)
+        self.assertEqual((("0",),), self.read(know, ["name"], COUNT).rows)
         know = knowledge([])
         with self.assertRaises(QueryParametersError):
             self.read(know, ["name"], COUNT, row_offset=1)

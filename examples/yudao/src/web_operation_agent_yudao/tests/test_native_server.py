@@ -15,11 +15,11 @@ from web_operation_agent.state.identity import PrincipalError
 from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.executor import GoalTurnExecutor
 from web_operation_agent.modeling.egress import ProviderEgressPolicy
-from web_operation_agent_yudao.application import SESSION_HANDOFF_KEYS, YudaoIdentityPort
-from web_operation_agent_yudao.client import YudaoClient, YudaoReadRefused
-from web_operation_agent_yudao.native_server import BootstrapRefused, YudaoHost, YudaoHostConfig
-from web_operation_agent_yudao.guard_proxy import NativeGuardProxy as RealGuardProxy
-from web_operation_agent_yudao.read_only_window_actions import ReadOnlyWindowPageActions
+from web_operation_agent_yudao.host.application import SESSION_HANDOFF_KEYS, YudaoIdentityPort
+from web_operation_agent_yudao.reads.client import YudaoClient, YudaoReadRefused
+from web_operation_agent_yudao.host.native_server import BootstrapRefused, YudaoHost, YudaoHostConfig
+from web_operation_agent_yudao.host.guard_proxy import NativeGuardProxy as RealGuardProxy
+from web_operation_agent_yudao.executor.read_only_window_actions import ReadOnlyWindowPageActions
 
 
 class NativeHostTests(unittest.TestCase):
@@ -34,9 +34,9 @@ class NativeHostTests(unittest.TestCase):
             native_page_admission="reviewed")
         self.config = replace(self._fence(), native_page_policy=self._page_policy())
         self.addCleanup(patch.stopall)
-        patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy").start()
-        self.documents = patch("web_operation_agent_yudao.native_server._api_docs", return_value={}).start()
-        self.chat = patch("web_operation_agent_yudao.native_server.ChatModel").start()
+        patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy").start()
+        self.documents = patch("web_operation_agent_yudao.host.native_server._api_docs", return_value={}).start()
+        self.chat = patch("web_operation_agent_yudao.host.native_server.ChatModel").start()
         self.chat.return_value.model = "scripted/no-model"
         self.chat.return_value.egress_policy = ProviderEgressPolicy(
             session_handoff_keys=SESSION_HANDOFF_KEYS)
@@ -60,7 +60,7 @@ class NativeHostTests(unittest.TestCase):
             return 0, {"code": 0, "data": {"user": actor(kwargs["token"])}}
 
         patch.object(YudaoIdentityPort, "page_identity", page_identity).start()
-        patch("web_operation_agent_yudao.client.YudaoClient._request", request).start()
+        patch("web_operation_agent_yudao.reads.client.YudaoClient._request", request).start()
 
     def host(self):
         host = YudaoHost(self.config)
@@ -93,7 +93,7 @@ class NativeHostTests(unittest.TestCase):
 
     def test_native_source_answer_completes_without_browser_or_business_metadata(self):
         from web_operation_agent.tests.support.business import _Chat
-        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.rules.ui_source import UiSource
         root = Path(self.tmp.name) / "source"
         root.mkdir()
         self.config = replace(self.config, source_root=root, warm_index=False, runtime_source=True)
@@ -111,9 +111,9 @@ class NativeHostTests(unittest.TestCase):
         chat.model = "scripted/no-model"
         chat.egress_policy = ProviderEgressPolicy(session_handoff_keys=SESSION_HANDOFF_KEYS)
         self.chat.return_value = chat
-        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+        with patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource(
                 records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
-                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), patch(
+                "web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy"), patch(
                 "web_operation_agent.goal.executor.RemoteBrowserClient.start",
                 side_effect=AssertionError("browser transport is unavailable")):
             host = self.host()
@@ -213,8 +213,8 @@ class NativeHostTests(unittest.TestCase):
         self.chat.return_value.complete.assert_not_called()
 
     def test_optional_method_fence_selects_page_policy_and_blocks_every_scanned_write_get(self):
-        from web_operation_agent_yudao.method_fenced_actions import MethodFencedPageActions
-        from web_operation_agent_yudao.page_guard import GuardRefused
+        from web_operation_agent_yudao.executor.method_fenced_actions import MethodFencedPageActions
+        from web_operation_agent_yudao.host.page_guard import GuardRefused
 
         with self.assertRaises(ValueError):
             replace(self.config, native_page_admission="all-actions")
@@ -224,7 +224,7 @@ class NativeHostTests(unittest.TestCase):
         self.assertNotIn(writing_get, self.host()._fenced)
         self.config = replace(self.config, native_page_admission="method-fence",
                               native_page_disabled_handlers=frozenset({"paging"}))
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy") as proxy:
             host = self.host()
             host.bootstrap("synthetic-a", "1", "method-fence-tab")
         executor = host._sessions[("1", "1", "method-fence-tab")].session.runner.executor
@@ -244,7 +244,7 @@ class NativeHostTests(unittest.TestCase):
         self.chat.return_value.complete.assert_not_called()
 
     def test_read_only_window_uses_live_fence_without_route_or_handler_gates(self):
-        from web_operation_agent_yudao.page_guard import NativePageGuard
+        from web_operation_agent_yudao.host.page_guard import NativePageGuard
         writing_get="/admin-api/fixture/initializing-list"
         self.config=replace(self._fence(writing_gets=[writing_get],
             scan={"reasons":{writing_get:"FixtureMapper.insert"}}),
@@ -258,7 +258,7 @@ class NativeHostTests(unittest.TestCase):
         self.addCleanup(proxy.close)
         proxy.ingress_base=proxy.url
         proxy.verify_ingress()
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy",return_value=proxy):
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy",return_value=proxy):
             host=self.host()
             host.bootstrap("synthetic-a","1","isolated-tab")
         executor=host._sessions[("1","1","isolated-tab")].session.runner.executor
@@ -273,7 +273,7 @@ class NativeHostTests(unittest.TestCase):
         self.chat.return_value.complete.assert_not_called()
 
     def test_normal_host_budget_and_write_opt_in_reach_the_real_executor(self):
-        from web_operation_agent_yudao.page_guard import NativePageGuard
+        from web_operation_agent_yudao.host.page_guard import NativePageGuard
         self.config = replace(self.config, native_page_admission="read-only-window", native_writes=True,
                               native_edit_prefill=False)
         proxy = RealGuardProxy(upstream="http://127.0.0.1:9", origin="https://fixture.test",
@@ -281,7 +281,7 @@ class NativeHostTests(unittest.TestCase):
         self.addCleanup(proxy.close)
         proxy.ingress_base = proxy.url
         proxy.verify_ingress()
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy", return_value=proxy):
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy", return_value=proxy):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "normal-host-defaults")
         executor = host._sessions[("1", "1", "normal-host-defaults")].session.runner.executor
@@ -346,7 +346,7 @@ class NativeHostTests(unittest.TestCase):
         self.assertFalse(off._sessions[("1", "2", "tab")].session.runner.executor.turn_traces)
 
     def test_read_only_window_can_prepare_without_binding_or_dispatch(self):
-        from web_operation_agent_yudao.page_guard import NativePageGuard
+        from web_operation_agent_yudao.host.page_guard import NativePageGuard
         self.config = replace(self.config, native_page_admission="read-only-window",
                               native_write_preparation=True, location_bindings=False)
         guard = NativePageGuard(frozenset(), writing_gets=frozenset())
@@ -355,7 +355,7 @@ class NativeHostTests(unittest.TestCase):
         self.addCleanup(proxy.close)
         proxy.ingress_base = proxy.url
         proxy.verify_ingress()
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy", return_value=proxy):
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy", return_value=proxy):
             host = self.host()
             host.bootstrap("synthetic-a", "1", "preparation-window")
         executor = host._sessions[("1", "1", "preparation-window")].session.runner.executor
@@ -569,12 +569,12 @@ class NativeHostTests(unittest.TestCase):
                        source_release="fixture-release")
 
     def test_location_bindings_are_explicit_and_reach_the_runtime_and_real_profile(self):
-        from web_operation_agent_yudao.ui_source import UiSource
-        from web_operation_agent_yudao.location import LocationProcedures
+        from web_operation_agent_yudao.rules.ui_source import UiSource
+        from web_operation_agent_yudao.reads.location import LocationProcedures
         self.config = replace(self._fence(), location_bindings=True)
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
-                patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
-                patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy"), \
+                patch("web_operation_agent_yudao.host.page_guard.NativePageGuard"), \
+                patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource.none()):
             host = self.host()
             bootstrap = host.bootstrap("synthetic-a", "1", "native-tab")
             self.assertTrue(bootstrap["config"]["pageControllerModule"].endswith("?bindings=1"))
@@ -587,14 +587,14 @@ class NativeHostTests(unittest.TestCase):
             replace(self.config, native_writes=True)
 
     def test_method_fence_binds_live_forms_inside_the_applications_window(self):
-        from web_operation_agent_yudao.ui_source import UiSource
-        from web_operation_agent_yudao.live_filters import LivePageFilters
-        from web_operation_agent_yudao.live_forms import LiveFormPort
-        from web_operation_agent_yudao.live_goals import LiveFormsGoalPort
+        from web_operation_agent_yudao.rules.ui_source import UiSource
+        from web_operation_agent_yudao.reads.live_filters import LivePageFilters
+        from web_operation_agent_yudao.writes.live_forms import LiveFormPort
+        from web_operation_agent_yudao.goal_compat.live_goals import LiveFormsGoalPort
         self.config = self._fence()
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy, \
-                patch("web_operation_agent_yudao.page_guard.NativePageGuard") as guard, \
-                patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy") as proxy, \
+                patch("web_operation_agent_yudao.host.page_guard.NativePageGuard") as guard, \
+                patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource.none()):
             host = self.host()
             guard.assert_called_once()
             self.assertEqual(guard.call_args.args, (frozenset(),))
@@ -604,7 +604,7 @@ class NativeHostTests(unittest.TestCase):
             # The window is opened only when the application confirms its own.
             self.assertIs(proxy.call_args.kwargs["application_window"], True)
             bootstrap = host.bootstrap("synthetic-a", "1", "native-tab")
-            from web_operation_agent_yudao.guard_proxy import GUARD_PATH
+            from web_operation_agent_yudao.host.guard_proxy import GUARD_PATH
             self.assertEqual(bootstrap["config"]["pageWriteGuard"], GUARD_PATH)
             self.assertTrue(bootstrap["config"]["pageControllerModule"].endswith("/woa/yudao-page-controller.js"))
             executor = host._sessions[("1", "1", "native-tab")].session.runner.executor
@@ -669,11 +669,11 @@ class NativeHostTests(unittest.TestCase):
 
     def test_default_is_shared_loop_and_warmup_can_be_disabled(self):
         from web_operation_agent.execution.model_loop import ModelDrivenTurnExecutor
-        from web_operation_agent_yudao.slim_loop import TableReadTurnExecutor
-        from web_operation_agent_yudao.model_page_policy import ModelPageGoalPort
+        from web_operation_agent_yudao.executor.slim_loop import TableReadTurnExecutor
+        from web_operation_agent_yudao.executor.model_page_policy import ModelPageGoalPort
         self.config = replace(self._fence(), native_page_policy=self._page_policy(),
                                ui_source=None, source_root=None)
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy"), \
                 patch.object(YudaoHost, "_warm_index") as warm:
             host = self.host()
             host.bootstrap("synthetic-a", "1", "default")
@@ -696,8 +696,8 @@ class NativeHostTests(unittest.TestCase):
             dict(native_page_policy=None), dict(native_page_policy=missing), dict(native_page_policy=wrong),
             dict(source_release="wrong"), dict(native_money_policy=missing)]
         for number, changes in enumerate(variants):
-            with self.subTest(changes=changes), patch("web_operation_agent_yudao.native_server.UiSource.read") as source, \
-                    patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+            with self.subTest(changes=changes), patch("web_operation_agent_yudao.host.native_server.UiSource.read") as source, \
+                    patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy") as proxy:
                 directory = Path(self.tmp.name) / f"invalid-{number}"
                 with self.assertRaises(ValueError):
                     YudaoHost(replace(valid, state_dir=directory, **changes))
@@ -705,13 +705,13 @@ class NativeHostTests(unittest.TestCase):
                 source.assert_not_called(); proxy.assert_not_called(); self.chat.assert_not_called()
 
     def test_the_slim_turn_proposes_reviewed_writes_only_where_the_host_enables_them(self):
-        from web_operation_agent_yudao.slim_loop import SlimTurnExecutor
-        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.executor.slim_loop import SlimTurnExecutor
+        from web_operation_agent_yudao.rules.ui_source import UiSource
         for enabled in (False, True):
             with self.subTest(native_writes=enabled), \
-                    patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
-                    patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
-                    patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+                    patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy"), \
+                    patch("web_operation_agent_yudao.host.page_guard.NativePageGuard"), \
+                    patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource.none()):
                 self.config = replace(self._fence(), native_page_policy=self._page_policy(), native_writes=enabled,
                                       state_dir=Path(self.tmp.name) / str(enabled))
                 host = self.host()
@@ -730,9 +730,9 @@ class NativeHostTests(unittest.TestCase):
         # Where the host reads ahead, a slim turn's own menu and API description are read too.
         import threading
         read, done = [], threading.Event()
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
-                patch("web_operation_agent_yudao.page_guard.NativePageGuard"), \
-                patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()), \
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy"), \
+                patch("web_operation_agent_yudao.host.page_guard.NativePageGuard"), \
+                patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource.none()), \
                 patch.object(YudaoHost, "_warm_index",
                              staticmethod(lambda app, knowledge: (read.append(knowledge), done.set()))):
             self.config = replace(self._fence(), native_page_policy=self._page_policy(), warm_index=True,
@@ -744,16 +744,16 @@ class NativeHostTests(unittest.TestCase):
         self.chat.return_value.complete.assert_not_called()
 
     def test_inside_the_applications_window_only_reads_it_cannot_refuse_stay_fenced(self):
-        from web_operation_agent_yudao.ui_source import UiSource
+        from web_operation_agent_yudao.rules.ui_source import UiSource
         gets = ["/admin-api/pms/pm/project-group/list", "/admin-api/infra/redis/get-monitor-info",
                 "/admin-api/oa/untraced/get"]
         scan = {"get_handlers": 3, "reasons": {
             gets[0]: "PmsProjectGroupController.getProjectGroupList -> PmsProjectGroupMapper.insertBatch",
             gets[1]: "RedisController.getRedisMonitorInfo -> StringRedisTemplate.execute (unresolved)"}}
         self.config = self._fence(writing_gets=gets, scan=scan)
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"), \
-                patch("web_operation_agent_yudao.page_guard.NativePageGuard") as guard, \
-                patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource.none()):
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy"), \
+                patch("web_operation_agent_yudao.host.page_guard.NativePageGuard") as guard, \
+                patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource.none()):
             self.host()
             self.assertEqual(guard.call_args.kwargs["writing_gets"], frozenset(gets[1:]))
 
@@ -764,18 +764,18 @@ class NativeHostTests(unittest.TestCase):
                    self._fence(writing_gets="/admin-api/x"), self._fence(read_paths=[]),
                    replace(self._fence(), source_release=""),
                    replace(self._fence(), native_read_policy=reviewed)]
-        with patch("web_operation_agent_yudao.guard_proxy.NativeGuardProxy"):
+        with patch("web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy"):
             for config in invalid:
                 self.config = config
                 with self.subTest(policy=config.native_read_policy.read_text()[:80]), \
                         self.assertRaises(ValueError):
                     self.host()
     def test_failed_native_ingress_probe_prevents_host_startup(self):
-        from web_operation_agent_yudao.ui_source import UiSource
-        from web_operation_agent_yudao.page_guard import GuardRefused
-        with patch("web_operation_agent_yudao.native_server.UiSource.read", return_value=UiSource(
+        from web_operation_agent_yudao.rules.ui_source import UiSource
+        from web_operation_agent_yudao.host.page_guard import GuardRefused
+        with patch("web_operation_agent_yudao.host.native_server.UiSource.read", return_value=UiSource(
                 records={"/crm/customer": "/crm/customer/detail/{id}"})), patch(
-                "web_operation_agent_yudao.guard_proxy.NativeGuardProxy") as proxy:
+                "web_operation_agent_yudao.host.guard_proxy.NativeGuardProxy") as proxy:
             proxy.return_value.start.return_value.verify_ingress.side_effect = GuardRefused("guard_ingress_unverified")
             with self.assertRaises(GuardRefused): self.host()
             proxy.return_value.start.return_value.close.assert_called_once()
@@ -786,7 +786,7 @@ class NativeCliTests(unittest.TestCase):
     def test_policy_diagnostic_precedes_model_and_network(self):
         import contextlib
         import io
-        from web_operation_agent_yudao import native_server as native
+        from web_operation_agent_yudao.host import native_server as native
         with tempfile.TemporaryDirectory() as directory, patch.dict(native.os.environ, {}, clear=True), \
                 patch.object(native, "YudaoHost") as host:
             error = io.StringIO()
@@ -802,7 +802,7 @@ class NativeCliTests(unittest.TestCase):
     def test_removed_cli_options_are_rejected_before_startup(self):
         import contextlib
         import io
-        from web_operation_agent_yudao import native_server as native
+        from web_operation_agent_yudao.host import native_server as native
         base = ["--api-base", "http://synthetic.invalid", "--public-origin", "http://synthetic.invalid",
                 "--state-dir", "/synthetic/unused"]
         for option, value in (("--executor", "slim"), ("--native-form-policy", "old.json"),
@@ -822,7 +822,7 @@ class NativeCliTests(unittest.TestCase):
     def test_real_main_defaults_and_process_metadata_warmup(self):
         from types import SimpleNamespace as NS
         from unittest.mock import Mock
-        from web_operation_agent_yudao import native_server as native
+        from web_operation_agent_yudao.host import native_server as native
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fence = root / "fence.json"
@@ -862,7 +862,7 @@ class NativeCliTests(unittest.TestCase):
     def test_the_runtime_source_flag_reaches_the_host_config(self):
         from types import SimpleNamespace as NS
         from unittest.mock import Mock
-        from web_operation_agent_yudao import native_server as native
+        from web_operation_agent_yudao.host import native_server as native
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fence = root / "fence.json"

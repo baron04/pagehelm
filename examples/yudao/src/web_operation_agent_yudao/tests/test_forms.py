@@ -10,10 +10,10 @@ from web_operation_agent.business.errors import BusinessToolRequestError
 from web_operation_agent.business.forms import ApplicationFormTools
 from web_operation_agent.schemas import ElementRef, PageObservation
 from web_operation_agent.state.identity import PrincipalContext, OperationContext
-from web_operation_agent_yudao.forms import NativeFormState, YudaoFormPort
-from web_operation_agent_yudao.repository import repository_tree
-from web_operation_agent_yudao.source_forms import SourceFormReader
-from web_operation_agent_yudao.application import YudaoApplication
+from web_operation_agent_yudao.writes.forms import NativeFormState, YudaoFormPort
+from web_operation_agent_yudao.rules.repository import repository_tree
+from web_operation_agent_yudao.writes.source_forms import SourceFormReader
+from web_operation_agent_yudao.host.application import YudaoApplication
 from .test_source_forms import _SOURCE, _PATH
 from .test_goal import DOCS, _Client
 

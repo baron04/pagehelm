@@ -3,7 +3,7 @@ import json
 import unittest
 from pathlib import Path
 
-from web_operation_agent_yudao.filter_semantics import LABELS, SCHEMA, FilterSemantics, filter_policy
+from web_operation_agent_yudao.reads.filter_semantics import LABELS, SCHEMA, FilterSemantics, filter_policy
 
 _BASE = "server/yudao-module-demo/src/main/java/demo/"
 _SOURCES = {
@@ -409,7 +409,7 @@ class DeploymentWiringTests(unittest.TestCase):
 
     def _validate(self, root, filters_document):
         from types import SimpleNamespace as NS
-        from web_operation_agent_yudao.deployment_validation import validate_native_deployment
+        from web_operation_agent_yudao.host.deployment_validation import validate_native_deployment
         fence, pages = root / "fence.json", root / "pages.json"
         fence.write_text(json.dumps(self.FENCE))
         pages.write_text(json.dumps(self.PAGES))
@@ -437,7 +437,7 @@ class DeploymentWiringTests(unittest.TestCase):
     def test_the_filter_policy_stays_optional(self):
         import tempfile
         from types import SimpleNamespace as NS
-        from web_operation_agent_yudao.deployment_validation import validate_native_deployment
+        from web_operation_agent_yudao.host.deployment_validation import validate_native_deployment
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "fence.json").write_text(json.dumps(self.FENCE))

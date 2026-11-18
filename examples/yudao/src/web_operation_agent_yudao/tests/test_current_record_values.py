@@ -8,9 +8,9 @@ from web_operation_agent.goal.data import DataRefused
 from web_operation_agent.goal.ground import bind, ground
 from web_operation_agent.goal.spec import GoalSpec
 from web_operation_agent.schemas.browser import PageObservation
-from web_operation_agent_yudao.goal import YudaoGoalData
-from web_operation_agent_yudao.page_goals import NativePageGoalPort
-from web_operation_agent_yudao.ui_source import ListView, UiSource
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
+from web_operation_agent_yudao.goal_compat.page_goals import NativePageGoalPort
+from web_operation_agent_yudao.rules.ui_source import ListView, UiSource
 from .test_goal import DOCS, CONTRACTS, _Client
 
 

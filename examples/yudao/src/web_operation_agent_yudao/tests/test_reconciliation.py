@@ -13,8 +13,8 @@ from web_operation_agent.business.operations import reconcile
 from web_operation_agent.composition import bind_application
 from web_operation_agent.composition.ports import ApplicationMutationReconciler
 from web_operation_agent.state.identity import IdentityAssertion, PRINCIPAL_CONTEXT_VERSION, PrincipalError
-from web_operation_agent_yudao.application import APPLICATION_ID, YudaoApplication
-from web_operation_agent_yudao.client import YudaoClient, YudaoReadRefused
+from web_operation_agent_yudao.host.application import APPLICATION_ID, YudaoApplication
+from web_operation_agent_yudao.reads.client import YudaoClient, YudaoReadRefused
 
 
 class _FakeYudaoClient(YudaoClient):

@@ -9,7 +9,8 @@ from unittest.mock import patch
 from web_operation_agent.schemas import ActionReceipt
 from web_operation_agent.tests.execution.test_native_submit import observation
 from web_operation_agent.tests.transport.submit_wire import SubmitWire
-from web_operation_agent_yudao.slim_loop import YudaoLoopProcedures, _CURRENT_REQUEST, _EXECUTOR_TURN
+from web_operation_agent_yudao.executor.page_prompts import SlimTurnContext
+from web_operation_agent_yudao.executor.slim_loop import YudaoLoopProcedures
 
 PATH = "/admin-api/synthetic/entry/page"
 
@@ -39,7 +40,7 @@ class ReadTargetHandoffTests(unittest.TestCase):
         self.state = NS(obs=self.obs, operation=object(), audit=lambda *_a, **_kw: None,
                         page=NS(checkpoint=lambda: None, execute=self.execute))
         self.bound = NS(_invoke=lambda method, path, **params: self.listed)
-        self.patch = patch("web_operation_agent_yudao.bound_data_reads.BoundDataReads", return_value=self.bound)
+        self.patch = patch("web_operation_agent_yudao.reads.bound_data_reads.BoundDataReads", return_value=self.bound)
         self.patch.start()
         self.addCleanup(self.patch.stop)
 
@@ -94,14 +95,13 @@ class ReadTargetHandoffTests(unittest.TestCase):
         self.state.obs = replace(before, elements=[*before.elements[:-1], target], content=f"[3]<button>{label} />")
         self.wire = SubmitWire(self.state.obs)
         self.state.obs = self.wire.channel.wait_for_observation(timeout_s=0).observation
-        token = _CURRENT_REQUEST.set("处理本轮选出的那条记录")
         turn = {"marked": ""}
-        turn_token = _EXECUTOR_TURN.set(turn)
+        prev = self.proc.turn_context
+        self.proc.turn_context = SlimTurnContext(current_request="处理本轮选出的那条记录", executor_turn=turn)
         try:
             return self.proc._tool(self.state, "highlight", {"index": 3}, turn)
         finally:
-            _EXECUTOR_TURN.reset(turn_token)
-            _CURRENT_REQUEST.reset(token)
+            self.proc.turn_context = prev
 
     def test_unlisted_action_words_use_the_real_row_binding_before_highlight(self):
         for label in ("关闭", "作废", "禁用", "上架", "自定义状态动作"):

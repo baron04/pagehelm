@@ -4,8 +4,8 @@ from types import SimpleNamespace as NS
 
 from web_operation_agent.tests.execution.write_contract_suite import (
     Fixture, SharedSubmitContractSuite)
-from web_operation_agent_yudao.native_submit import YudaoSubmitPort
-from web_operation_agent_yudao.page_guard import NativePageGuard
+from web_operation_agent_yudao.writes.native_submit import YudaoSubmitPort
+from web_operation_agent_yudao.host.page_guard import NativePageGuard
 
 RECORD = {"id": 7, "name": "泵", "status": 1, "updatedTime": "2026-01-01 00:00:00",
           "lines": [{"id": 2, "qty": 1, "price": 5}]}

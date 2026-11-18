@@ -7,10 +7,10 @@ from web_operation_agent.business.errors import BusinessToolReferenceError
 from web_operation_agent.goal.ground import ground
 from web_operation_agent.goal.narrow import KnownReference, locate_names
 from web_operation_agent.schemas.browser import PageObservation
-from web_operation_agent_yudao.goal import YudaoGoalData
-from web_operation_agent_yudao.page_goals import NativePageGoalPort
-from web_operation_agent_yudao.ui_source import UiSource
-from web_operation_agent_yudao.writes import native_tools
+from web_operation_agent_yudao.goal_compat.goal import YudaoGoalData
+from web_operation_agent_yudao.goal_compat.page_goals import NativePageGoalPort
+from web_operation_agent_yudao.rules.ui_source import UiSource
+from web_operation_agent_yudao.writes.writes import native_tools
 from .test_goal import DOCS, _Client
 from .test_native_writes import context
 

@@ -15,8 +15,8 @@ from web_operation_agent.modeling.egress import ProviderEgressPolicy
 from web_operation_agent.state.identity import OperationContext, PrincipalContext
 from web_operation_agent.tests.execution.product_support import _Channel, _RemoteBrowser
 from web_operation_agent.tests.support.business import _Chat
-from web_operation_agent_yudao.application import YudaoApplication
-from web_operation_agent_yudao.repository import repository_source
+from web_operation_agent_yudao.host.application import YudaoApplication
+from web_operation_agent_yudao.rules.repository import repository_source
 from .test_goal import DOCS, _Client
 
 
