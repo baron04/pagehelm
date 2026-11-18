@@ -326,6 +326,8 @@ class PanelContractTests(unittest.TestCase):
         contract = panel_contract()
         self.assertEqual(configuration["limits"], contract["limits"])
         self.assertEqual(configuration["labels"], contract["label_keys"])
+        self.assertEqual(contract["label_keys"]["product"], "PageHelm")
+        self.assertEqual(contract["label_keys"]["emptyIntro"], "你好，我是 PageHelm")
         self.assertIn("approvalShowPreserved", configuration["labels"])
         self.assertIn("approvalHidePreserved", configuration["labels"])
         # The empty panel suggests nothing: fixed goals named records a deployment may not have.

@@ -35,6 +35,8 @@ describe('the contract is the server\'s, not a copy', () => {
 
   it('gives the composer limit words', () => {
     expect(DEFAULT_CONFIGURATION.labels.composerAtLimit).toBeTruthy()
+    expect(DEFAULT_CONFIGURATION.labels.product).toBe('PageHelm')
+    expect(DEFAULT_CONFIGURATION.labels.emptyIntro).toBe('你好，我是 PageHelm')
   })
 })
 
